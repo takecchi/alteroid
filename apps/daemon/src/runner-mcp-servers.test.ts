@@ -15,6 +15,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
+import { runnerAppDefaults } from './runner-app-defaults.test-support.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createHash } from 'node:crypto';
@@ -96,7 +97,7 @@ async function rig(
     queryFn: fn,
     env: { PATH: '/usr/bin' },
   });
-  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...runnerAppDefaults() });
   const posted: string[] = [];
 
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {

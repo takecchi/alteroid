@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -77,6 +78,7 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
 
       const first = await app.request('/events', { headers: bearer() });
@@ -130,6 +132,7 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
       const lines = await captureStderr(async () => {
         const res = await app.request('/events', { headers: bearer() });

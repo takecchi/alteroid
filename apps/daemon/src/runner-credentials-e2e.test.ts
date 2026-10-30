@@ -6,6 +6,7 @@ import {
   type RunnerHost,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
+import { runnerAppDefaults } from './runner-app-defaults.test-support.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createHash } from 'node:crypto';
@@ -55,7 +56,12 @@ async function rig(): Promise<{ client: RunnerClient }> {
     env: { PATH: process.env.PATH ?? '' },
     credentials,
   });
-  const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+  const app = createRunnerApp({
+    host,
+    outbox: new Outbox(),
+    tokenSha256: TOKEN_SHA256,
+    ...runnerAppDefaults(),
+  });
 
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.toString());

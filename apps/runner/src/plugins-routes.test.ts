@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 /**
  * `POST /plugins/:name` / `PUT /plugins`（daemon から runner へ plugin を送る口）の境界。
@@ -74,7 +75,12 @@ function makeApp() {
     env: { PATH: process.env.PATH ?? '' },
     pluginsRoot: join(base, 'alteroid-plugins'),
   });
-  return createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+  return createRunnerApp({
+    host,
+    outbox: new Outbox(),
+    tokenSha256: TOKEN_SHA256,
+    ...appDefaults(),
+  });
 }
 
 type App = ReturnType<typeof makeApp>;

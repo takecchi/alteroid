@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 import { connectedSubscriber } from './outbox-subscribers.test-support.js';
 
 const TOKEN = 'daemon-only-token';
@@ -114,6 +115,7 @@ describe('/events の finally: 畳んで戻したときも元の queuedAt を保
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
         sseWriteDeadlineMs: 20,
+        ...appDefaults(),
       });
 
       const response = await app.request('/events', { headers: bearer() });

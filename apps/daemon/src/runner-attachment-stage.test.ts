@@ -18,6 +18,7 @@ import {
   type ToolContext,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
+import { runnerAppDefaults } from './runner-app-defaults.test-support.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -100,7 +101,12 @@ async function rig(kind: 'http' | 'local'): Promise<Rig> {
       attachmentsRoot: root,
       scratchSweep: false,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     runner = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,

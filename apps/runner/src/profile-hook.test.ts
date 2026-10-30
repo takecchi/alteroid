@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'the-daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -55,7 +56,12 @@ function makeApp(dir: string) {
       withheldEnvKeys: WITHHELD_ENV_KEYS,
     }),
   });
-  return createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+  return createRunnerApp({
+    host,
+    outbox: new Outbox(),
+    tokenSha256: TOKEN_SHA256,
+    ...appDefaults(),
+  });
 }
 
 describe('POST /profile の hook（#1806）', () => {

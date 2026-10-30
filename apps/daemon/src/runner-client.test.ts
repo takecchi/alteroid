@@ -24,6 +24,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
+import { runnerAppDefaults } from './runner-app-defaults.test-support.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { execFileSync } from 'node:child_process';
@@ -195,7 +196,7 @@ async function rig(options: { stores?: Stores; sessionId?: string } = {}): Promi
     queryFn: fn,
     env: { PATH: '/usr/bin', ALTEROID_DATABASE_URL: 'postgres://secret@db/alteroid' },
   });
-  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...runnerAppDefaults() });
 
   const client = await createHttpRunner({
     baseUrl: 'http://runner.test',
@@ -392,7 +393,12 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
       emit: (event) => outbox.push(event),
       queryFn: fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const stores = createMemoryStores();
 
     const connect = async (): Promise<ManagerPool> => {
@@ -488,7 +494,12 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
       emit: (event) => outbox.push(event),
       queryFn: fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const server = createAdaptorServer({ fetch: app.fetch });
     await new Promise<void>((resolve) => server.listen({ path: socketPath }, resolve));
     chmodSync(socketPath, 0o600);
@@ -534,7 +545,12 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
       emit: (event) => outbox.push(event),
       queryFn: fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const stores = createMemoryStores();
     const inbox: InboxEvent[] = [];
 
@@ -722,7 +738,12 @@ describe('資源による配置の材料', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -879,7 +900,12 @@ describe('資源による配置の材料', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -902,7 +928,12 @@ describe('資源による配置の材料', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -1028,7 +1059,12 @@ describe('器の入れ替えの判定材料', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -1056,7 +1092,12 @@ describe('器の入れ替えの判定材料', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -1123,7 +1164,12 @@ describe('器の入れ替えの判定材料', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -1201,7 +1247,12 @@ describe('hello() が拾う版', () => {
       emit: (event) => outbox.push(event),
       queryFn: fakeSdk().fn,
     });
-    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,

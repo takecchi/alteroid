@@ -5,6 +5,7 @@ import { createRunnerHost, type RunnerHost } from '@alteroid/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token-stopping';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -115,7 +116,12 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     hosts.push(host);
     await host.start({ managerId, request: '最初の依頼', cwd: '/work/project' });
     await waitUntil(() => sdk.consumed.length > 0);
-    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
     const stopped = host.stop(managerId);
     expect(host.list().some((m) => m.managerId === managerId)).toBe(true);
     return { ...sdk, host, app, stopped };

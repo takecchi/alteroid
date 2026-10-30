@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 import { writeAll } from './outbox-subscribers.test-support.js';
 
 const TOKEN = 'daemon-only-token';
@@ -83,6 +84,7 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
 
       const first = await app.request('/events', { headers: bearer() });
@@ -146,6 +148,7 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
 
       const first = await app.request('/events', { headers: bearer() });
@@ -203,6 +206,7 @@ describe('runner の入れ替わり後の無音切断（#3036）', () => {
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
       const first = await app.request('/events', { headers: bearer() });
       const firstBody = first.body;
@@ -290,6 +294,7 @@ describe('Outbox の控え（書き終えた分）と Last-Event-ID の繋ぎ直
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
 
       const open = async (headers: Record<string, string>) => {
@@ -417,6 +422,7 @@ describe('/events へ書いた出来事の控えは、書き出した本文の�
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
+        ...appDefaults(),
       });
       const response = await app.request('/events', { headers: bearer() });
       const body = response.body;

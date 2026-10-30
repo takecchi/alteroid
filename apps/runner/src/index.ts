@@ -56,6 +56,7 @@ import {
 } from './tasks.js';
 
 export { createRunnerApp, Outbox } from './app.js';
+export { TaskBreakdownReader } from './tasks.js';
 
 /** 入口で作る HTTP サーバ。要求の期限と keep-alive の持ち時間を掛けて返す（試験で配線を縛るために入口から切り出した。#4915）。 */
 export function createRunnerHttpServer(
@@ -468,7 +469,7 @@ export async function main(): Promise<void> {
 
   const reclaimScan = reclaimScanOf(process.env, childUser, sessionView);
 
-  // 既定（`app.ts` 側の `new TaskBreakdownReader()`）に任せない: 降ろす UID を知らず、観測が動かないため。
+  // `createRunnerApp` は既定を持たず、ここで組んだものを必ず受ける: 既定の読み手は降ろす UID を知らず、観測が動かないため。
   // 引き取り手（#4494）も観測に載せる: 起動ログにしか出ないと、クローンから効いているかを確かめられないため。走査があるのは子の UID へ降ろす構成だけなので、`null` は「探したが無かった」である
   const taskBreakdownReader = new TaskBreakdownReader({
     ...(reclaimScan === undefined

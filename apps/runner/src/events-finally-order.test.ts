@@ -5,6 +5,7 @@ import * as core from '@alteroid/core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -65,6 +66,7 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
         outbox,
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 5,
+        ...appDefaults(),
       });
 
       const response = await app.request('/events', { headers: bearer() });
@@ -97,6 +99,7 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
       outbox,
       tokenSha256: TOKEN_SHA256,
       sseHeartbeatMs: 5,
+      ...appDefaults(),
     });
 
     const response = await app.request('/events', { headers: bearer() });

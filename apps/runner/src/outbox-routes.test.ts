@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -40,6 +41,7 @@ async function setup() {
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
+    ...appDefaults(),
   });
   const dir = prepareManagerOutbox({ root: outboxRoot, managerId: MANAGER });
   await writeFile(join(dir, 'a.txt'), 'hello outbox');

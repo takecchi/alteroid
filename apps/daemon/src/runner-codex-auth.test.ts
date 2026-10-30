@@ -16,6 +16,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
+import { runnerAppDefaults } from './runner-app-defaults.test-support.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -75,7 +76,7 @@ async function rig(options: { stores?: Stores; oldRunner?: boolean; oldDaemon?: 
     codexHome,
     codexAuthCheckIntervalMs: 20,
   });
-  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...runnerAppDefaults() });
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.toString());
     if (options.oldRunner === true && url.pathname.startsWith('/codex-auth')) {
