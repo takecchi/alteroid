@@ -35,7 +35,7 @@ function stubServer() {
       throw new TypeError(`Failed to fetch: ${request.url}`);
     if (request.method === 'PUT') {
       puts.push(await request.json());
-      return json({ credentials: [ROW], runners: [] });
+      return json({ credentials: [ROW], restartRequired: [], runners: [] });
     }
     return json({ credentials: [ROW] });
   }) as typeof fetch;
@@ -103,7 +103,7 @@ describe('環境変数の登録 — 同じ名前の既存の変数（#4032）', 
         throw new TypeError(`Failed to fetch: ${request.url}`);
       if (request.method === 'PUT') {
         puts.push(await request.json());
-        return json({ credentials: [ROW], runners: [] });
+        return json({ credentials: [ROW], restartRequired: [], runners: [] });
       }
       return json({ error: 'boom' }, 500);
     }) as typeof fetch;

@@ -35,7 +35,7 @@ function stubServer() {
       throw new TypeError(`Failed to fetch: ${request.url}`);
     if (request.method === 'PUT') {
       puts.push((await request.json()) as { credentials: { scope?: string }[] });
-      return json({ credentials: [ROW], runners: [] });
+      return json({ credentials: [ROW], restartRequired: [], runners: [] });
     }
     return json({ credentials: [ROW] });
   }) as typeof fetch;
