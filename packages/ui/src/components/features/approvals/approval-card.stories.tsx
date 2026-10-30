@@ -57,6 +57,17 @@ export const Default: Story = {
   render: () => <Unanswered />,
 };
 
+export const PermissionRequest: Story = {
+  args: {
+    ...base,
+    state: 'unanswered',
+    question: '`git push` を許可リストに入れてよいか。',
+    allowAnswer: '許可します',
+    allowRecordsPermission: true,
+    onSubmit: () => undefined,
+  },
+};
+
 export const Answered: Story = {
   args: {
     ...base,

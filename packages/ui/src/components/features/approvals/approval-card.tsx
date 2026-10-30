@@ -49,6 +49,8 @@ export function ApprovalCard({
   onSubmitQuestions,
   questionsDraft,
   onQuestionsDraftChange,
+  allowAnswer = APPROVAL_QUICK_ANSWERS.allow,
+  allowRecordsPermission = false,
 }: {
   state: ApprovalState;
   createdAt?: string;
@@ -72,6 +74,10 @@ export function ApprovalCard({
   onSubmitQuestions?: (answer: ApprovalQuestionsAnswer) => void;
   questionsDraft?: ApprovalQuestionsDraft;
   onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
+  // 「許可」で送る文は呼ぶ側が決める: 許可の承認は core が定める定型文でないと記録されず、ui は core を import しないため
+  allowAnswer?: string;
+  // 補助の文に「許可（Bash）の一覧に載る」を足すか: `allowAnswer` が許可の記録に効く文のときだけ true
+  allowRecordsPermission?: boolean;
 }) {
   const { body } = useDisplayText();
   const questionId = useId();
@@ -184,7 +190,7 @@ export function ApprovalCard({
               size="sm"
               disabled={busy}
               aria-describedby={questionId}
-              onClick={() => onSubmit?.(APPROVAL_QUICK_ANSWERS.allow)}
+              onClick={() => onSubmit?.(allowAnswer)}
             >
               許可
             </Button>
@@ -198,6 +204,9 @@ export function ApprovalCard({
             </Button>
             <SubmitHint action="回答" />
           </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {`「許可」は「${allowAnswer}」と${allowRecordsPermission ? '送り、許可（Bash）の一覧に載る' : '送る'}。「却下」は「${APPROVAL_QUICK_ANSWERS.deny}」と送る。`}
+          </p>
         </div>
       )}
 

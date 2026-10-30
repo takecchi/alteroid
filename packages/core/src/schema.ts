@@ -1661,8 +1661,7 @@ export function approvalUpdatedAt(
   return approval.withdrawnAt ?? approval.answeredAt ?? approval.createdAt;
 }
 
-// 定型文とちょうど一致した回答だけを許可として記録する: 定型文から外れた回答は、人間が実際に何を承認したのか機械的に確定できないため、記録しない側へ倒す
-export const PERMISSION_GRANT_CONSENT_PHRASE = '許可します';
+export { PERMISSION_GRANT_CONSENT_PHRASE } from './permission-grant-consent.js';
 
 // `principalKind` は `'account'` の1値にする: `operator` 経路の回答は `PermissionGrant` を作らない不変条件を型で運ぶため
 export const permissionGrantRouteSchema = z.object({

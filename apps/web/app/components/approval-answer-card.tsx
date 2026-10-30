@@ -1,4 +1,5 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import { PERMISSION_GRANT_CONSENT_PHRASE } from '@alteroid/core/permission-grant-consent';
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -193,6 +194,10 @@ export function ApprovalAnswerCard({
           : undefined
       }
       onSubmitQuestions={(answer) => void submitQuestions(answer)}
+      // 許可の承認だけ定型文を送る: core は答えがちょうどこの文のときだけ許可を記録するため（既定の「はい、進めてよい」では記録されない）
+      {...(approval.permissionRequest === undefined
+        ? {}
+        : { allowAnswer: PERMISSION_GRANT_CONSENT_PHRASE, allowRecordsPermission: true })}
       {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
         ? {}
         : { questionsDraft, onQuestionsDraftChange })}

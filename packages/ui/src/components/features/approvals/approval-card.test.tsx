@@ -160,6 +160,49 @@ describe('ApprovalCard: どの確認への操作かの区別', () => {
   });
 });
 
+describe('ApprovalCard: 「許可」「却下」が送る文（#5901）', () => {
+  it('既定: 「許可」は「はい、進めてよい」、「却下」は「いいえ、やらないで」を送る', () => {
+    const onSubmit = vi.fn();
+    render(<ApprovalCard {...base} onSubmit={onSubmit} />);
+    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    expect(onSubmit).toHaveBeenLastCalledWith('はい、進めてよい');
+    fireEvent.click(screen.getByRole('button', { name: '却下' }));
+    expect(onSubmit).toHaveBeenLastCalledWith('いいえ、やらないで');
+  });
+
+  it('allowAnswer を渡すと「許可」はその文を送り、「却下」は変わらない', () => {
+    const onSubmit = vi.fn();
+    render(<ApprovalCard {...base} onSubmit={onSubmit} allowAnswer="許可します" />);
+    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    expect(onSubmit).toHaveBeenLastCalledWith('許可します');
+    fireEvent.click(screen.getByRole('button', { name: '却下' }));
+    expect(onSubmit).toHaveBeenLastCalledWith('いいえ、やらないで');
+  });
+
+  it('既定: 補助の文が、送る文を出す', () => {
+    render(<ApprovalCard {...base} />);
+    expect(
+      screen.getByText(
+        '「許可」は「はい、進めてよい」と送る。「却下」は「いいえ、やらないで」と送る。',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('allowRecordsPermission: 補助の文に、許可（Bash）の一覧に載ることを足す', () => {
+    render(<ApprovalCard {...base} allowAnswer="許可します" allowRecordsPermission />);
+    expect(
+      screen.getByText(
+        '「許可」は「許可します」と送り、許可（Bash）の一覧に載る。「却下」は「いいえ、やらないで」と送る。',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('回答済みには補助の文を出さない', () => {
+    render(<ApprovalCard {...base} state="answered" answer="はい" />);
+    expect(screen.queryByText(/「許可」は/)).toBeNull();
+  });
+});
+
 describe('ApprovalCard: 外部の画像（#4039）', () => {
   it('質問・背景の画像は <img> にならず、押して開くリンクになる', () => {
     const { container } = render(
