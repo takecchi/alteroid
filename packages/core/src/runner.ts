@@ -3078,6 +3078,11 @@ class RunnerSession {
     }
     const run = (async (): Promise<void> => {
       try {
+        // 本体の先頭を `await` の後に置く: async 関数は最初の `await` まで同期に走るので、引数の組み立て
+        // （`#childEnv`・`#gitSpawnFn`）が同期に投げると `finally` が `this.#rescueRunning = run` より先に走って
+        // null にし、その後に解決済みの `run` が入って戻らず、以後の退避が走らなくなる。
+        // `finally` で `run` を読んで比べる形は、同期に投げた時点で `run` が未初期化（TDZ）なので使えない
+        await Promise.resolve();
         const childEnv = this.#childEnv();
         const worktrees = await runRescue(this.#cwd, {
           managerId: this.#id,
