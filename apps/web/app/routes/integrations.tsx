@@ -7,7 +7,7 @@ import { settingsDocumentTitle } from '~/lib/nav';
 import { useAction } from '~/lib/use-action';
 import { useNowMs } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 
 import {
@@ -399,15 +399,44 @@ function KeyRow({ view, now }: { view: IntegrationKeyView; now: number }) {
   const status = statusOf(view, now);
   const shown = STATUS_VIEW[status];
 
+  // 確認の欄は「失効する」のボタンを差し替えて出すので、閉じるとき押していたボタンごと消えて焦点が body に落ちる。閉じたあとの戻し先をここで持つ。
+  // ボタンに ref を渡さず行から引く: 共通の Button は ref を受けない型のため
+  const rowRef = useRef<HTMLLIElement>(null);
+  const refocusTrigger = useRef(false);
+  const revokedByThisRow = useRef(false);
+  const revoked = view.revokedAt !== null;
+  useEffect(() => {
+    if (!refocusTrigger.current || confirming) return;
+    refocusTrigger.current = false;
+    rowRef.current?.querySelector<HTMLElement>('[data-revoke-trigger]')?.focus();
+  }, [confirming]);
+  // 失効が通ると「失効する」のボタンが行から無くなるので、行そのものへ戻す
+  useEffect(() => {
+    if (!revoked || !revokedByThisRow.current) return;
+    revokedByThisRow.current = false;
+    rowRef.current?.focus();
+  }, [revoked]);
+
   function revoke() {
     return run(async () => {
-      await revokeKey(view.id);
+      // 呼ぶ前に立てる: revokeKey が一覧を取り直して revokedAt が変わる描き直しは、await が返るより先に来ることがある
+      revokedByThisRow.current = true;
+      try {
+        await revokeKey(view.id);
+      } catch (caught) {
+        revokedByThisRow.current = false;
+        throw caught;
+      }
       setConfirming(false);
     });
   }
 
   return (
-    <li className="border-b border-border px-4 py-3 last:border-b-0">
+    <li
+      ref={rowRef}
+      tabIndex={-1}
+      className="border-b border-border px-4 py-3 outline-none last:border-b-0"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium break-all">{view.name}</span>
         <Badge tone={shown.tone}>{shown.label}</Badge>
@@ -448,6 +477,7 @@ function KeyRow({ view, now }: { view: IntegrationKeyView; now: number }) {
                 variant="danger"
                 size="sm"
                 aria-label={`${view.name} を失効する`}
+                data-revoke-trigger
                 onClick={() => setConfirming(true)}
               >
                 失効する
@@ -471,7 +501,10 @@ function KeyRow({ view, now }: { view: IntegrationKeyView; now: number }) {
                   variant="ghost"
                   size="sm"
                   disabled={busy}
-                  onClick={() => setConfirming(false)}
+                  onClick={() => {
+                    refocusTrigger.current = true;
+                    setConfirming(false);
+                  }}
                 >
                   やめる
                 </Button>

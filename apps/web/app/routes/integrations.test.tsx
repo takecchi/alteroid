@@ -238,6 +238,18 @@ describe('/integrations 画面 — 発行', () => {
     });
   });
 
+  it('上限の2つの入力は、見出しと同じ名前で引ける（読み上げで無名にならない）', async () => {
+    stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+
+    // 畳んだ欄の中でも、名前はアクセシビリティの名前として付いている
+    expect(
+      screen.getByRole('textbox', { name: '本文の上限（バイト）', hidden: true }),
+    ).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: '1分あたりの回数', hidden: true })).toBeTruthy();
+  });
+
   it('入力の誤り（source の形・過去の期限・上限）は送らず、入力を残して言う', async () => {
     const stub = stubKeys();
     renderScreen();
@@ -363,6 +375,39 @@ describe('/integrations 画面 — 失効', () => {
     fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
     expect(stub.posts).toEqual([]);
     expect(screen.getByRole('button', { name: 'CI を失効する' })).toBeTruthy();
+  });
+
+  it('「やめる」で閉じたら、焦点は押していた「失効する」へ戻る（body に落ちない）', async () => {
+    stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+    const trigger = screen.getByRole('button', { name: 'CI を失効する' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const cancel = screen.getByRole('button', { name: 'やめる' });
+    cancel.focus();
+    fireEvent.click(cancel);
+
+    const back = screen.getByRole('button', { name: 'CI を失効する' });
+    await waitFor(() => expect(document.activeElement).toBe(back));
+  });
+
+  it('失効が通って「失効する」が無くなったら、焦点はその行へ移る（body に落ちない）', async () => {
+    const stub = stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+    fireEvent.click(screen.getByRole('button', { name: 'CI を失効する' }));
+    stub.setGet({
+      status: 200,
+      body: { keys: [view({ revokedAt: '2026-10-01T00:00:00.000Z' })] },
+    });
+    const confirm = screen.getByRole('button', { name: 'CI を本当に失効する' });
+    confirm.focus();
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'CI を失効する' })).toBeNull());
+    const row = screen.getByText('CI').closest('li');
+    await waitFor(() => expect(document.activeElement).toBe(row));
   });
 
   it('失効が失敗したら、その行に失敗を出し、一覧は残す', async () => {
