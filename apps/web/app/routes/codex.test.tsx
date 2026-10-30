@@ -58,6 +58,7 @@ const RUNNER: RunnerSummary = {
   credentialsProbe: { status: 'asked' },
   profileProbe: { status: 'asked' },
   revision: { status: 'unheard' },
+  managerPeers: { status: 'unknown' },
 };
 
 const CLOSED_REASON =
