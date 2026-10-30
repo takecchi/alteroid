@@ -1,8 +1,11 @@
+import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
+import { EditConflictBand } from '~/components/edit-conflict-band';
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { ReopenForm } from '~/components/reopen-form';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
+import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { useLatest } from '~/lib/use-latest';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
@@ -20,7 +23,6 @@ import {
   Card,
   CardHeader,
   CodeBlock,
-  ConfirmDialog,
   Empty,
   ErrorNote,
   FieldHint,
@@ -777,38 +779,22 @@ function CommitmentBodyEditor({
       </div>
 
       {conflict !== undefined && (
-        <div
-          role="alert"
-          className="mx-2 mb-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
+        <EditConflictBand
+          className="mx-2 mb-2"
+          heading="開いたあとに、裏でこの本文が変わった。"
+          retryLabel="いまの本文の上で、下書きを保存し直す"
+          discardLabel="下書きを捨てて、いまの本文にする"
+          busy={busy}
+          onRetry={() => save(adoptConflictVersion(conflict))}
+          onDiscard={() => {
+            adoptConflictVersion(conflict);
+            setDraft(undefined);
+          }}
         >
-          <p className="mb-2 break-words">
-            <strong>開いたあとに、裏でこの本文が変わった。</strong>
-            保存していない。下書きはそのまま残してある。
-          </p>
           <CodeBlock label="いまの本文" maxHeight="12rem">
             {redactBody(conflict.body)}
           </CodeBlock>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={busy}
-              onClick={() => save(adoptConflictVersion(conflict))}
-            >
-              いまの本文の上で、下書きを保存し直す
-            </Button>
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                adoptConflictVersion(conflict);
-                setDraft(undefined);
-              }}
-            >
-              下書きを捨てて、いまの本文にする
-            </Button>
-          </div>
-        </div>
+        </EditConflictBand>
       )}
       <ErrorNote error={failure} className="mx-2 mb-2" />
     </div>
@@ -949,30 +935,28 @@ function OpenRow({
   );
   // 編集の入口は origin で隠さず未了の行すべてに出す: 隠すと「なぜ直せないか」が画面から消える。
   // 誰が編集できるかの規則は画面に写さない（断るのはサーバで、403 の本文を ErrorNote に出す）。
-  const [editing, setEditing] = useState(false);
-  const [editDirty, setEditDirty] = useState(false);
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // 編集欄が閉じると押したボタンが消えてフォーカスが文書の先頭へ落ちるので、「本文を編集」のボタンへ戻す。
   const toggleRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLLIElement>(null);
   const restoreToggleFocus = useRef(false);
+  const {
+    editing,
+    setEditing,
+    setDirty: setEditDirty,
+    confirmingDiscard,
+    setConfirmingDiscard,
+    closeEditor,
+    requestCloseEditor,
+  } = useDiscardGuard(() => {
+    restoreToggleFocus.current = true;
+    track({ draft: undefined, editFailure: undefined });
+  });
   useEffect(() => {
     if (!editing && restoreToggleFocus.current) {
       restoreToggleFocus.current = false;
       toggleRef.current?.focus();
     }
   }, [editing]);
-  function closeEditor() {
-    restoreToggleFocus.current = true;
-    setEditing(false);
-    setEditDirty(false);
-    setConfirmingDiscard(false);
-    track({ draft: undefined, editFailure: undefined });
-  }
-  function requestCloseEditor() {
-    if (editDirty) setConfirmingDiscard(true);
-    else closeEditor();
-  }
 
   return (
     <li ref={rowRef} className="border-b border-border px-4 py-3 last:border-b-0">
@@ -1013,13 +997,9 @@ function OpenRow({
         <CommitmentBody commitment={commitment} />
       )}
 
-      <ConfirmDialog
+      <DiscardConfirmDialog
         open={confirmingDiscard}
         onOpenChange={setConfirmingDiscard}
-        title="保存していない変更があります"
-        description="編集をやめると、書きかけの内容は失われます。"
-        confirmLabel="破棄して閉じる"
-        destructive
         onConfirm={closeEditor}
       />
 
