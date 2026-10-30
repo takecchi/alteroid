@@ -11,8 +11,6 @@ import { collectRepoFiles } from './repo-scan-files.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
-
 // `.test.ts` / `.test.tsx` は対象外: テストが自分専用に書く `JournalStore` のスタブは本番の実装ではなく使い捨てのため。
 const CLASS_IMPLEMENTS = /class\s+\w+[^{;]*\bimplements\b[^{;]*\bJournalStore\b/g;
 const TYPED_OBJECT_LITERAL = /:\s*JournalStore\s*=\s*\{/g;
@@ -117,7 +115,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
   },
 };
 
-const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
+const allFiles = collectRepoFiles(ROOT);
 const detected = findJournalStoreImplementations(allFiles);
 
 describe('JournalStore 実装の一覧が with 契約の登録から漏れていない（issue #418 再発防止）', () => {

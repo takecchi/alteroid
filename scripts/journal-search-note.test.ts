@@ -14,7 +14,6 @@ import {
 import { collectRepoFiles } from './repo-scan-files.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 const SELF = 'scripts/journal-search-note.test.ts';
 const TABLE_FILE = 'packages/core/src/journal-search.ts';
 
@@ -51,7 +50,7 @@ describe('日誌の検索の断りの並びは、SEARCHABLE_FIELDS_BY_TYPE か�
   });
 
   it('並びを手書きし直した所が無い（テストと生成物を除くソース）', () => {
-    const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(
+    const files = collectRepoFiles(ROOT).filter(
       (rel) =>
         /\.(ts|tsx|mjs)$/.test(rel) &&
         !/\.test(-support)?\.(ts|tsx)$/.test(rel) &&

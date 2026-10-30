@@ -19,7 +19,7 @@ function write(root: string, rel: string, text = 'x\n'): void {
 }
 
 describe('collectRepoFiles（#2111）', () => {
-  it('.gitignore 済みの .scratch/ の中は拾わず、追跡済み・未追跡は拾い、excludeDirs と消えたファイルは外す', () => {
+  it('.gitignore 済みの .scratch/ の中は拾わず、追跡済み・未追跡は拾い、.vite と消えたファイルは外す', () => {
     const root = makeTempDirSync('repo-scan-files-');
     git(root, ['init', '-q']);
     git(root, ['config', 'user.email', 'test@example.com']);
@@ -34,7 +34,7 @@ describe('collectRepoFiles（#2111）', () => {
     write(root, 'src/untracked.ts');
     write(root, '.scratch/split/copy.ts');
 
-    const files = collectRepoFiles(root, new Set(['node_modules', '.vite']));
+    const files = collectRepoFiles(root);
 
     expect(files).not.toContain('.scratch/split/copy.ts');
     expect(files.some((f) => f.startsWith('.scratch/'))).toBe(false);

@@ -98,7 +98,7 @@ describe('pnpm test:shard-files（実物の vitest）', () => {
   function expectShardsCoverScope(): void {
     const first = runCli('1/2');
     const second = runCli('2/2');
-    const all = collectRepoFiles(ROOT, new Set(['node_modules']))
+    const all = collectRepoFiles(ROOT)
       .filter((f) => f.startsWith(`${SCOPE}/`) && f.endsWith('.test.ts'))
       .sort();
     expect(all.length).toBeGreaterThanOrEqual(2);

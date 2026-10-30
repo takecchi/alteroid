@@ -12,8 +12,6 @@ import { collectRepoFiles } from './repo-scan-files.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router']);
-
 function readWorkspaceGlobs(): string[] {
   const text = readFileSync(path.join(ROOT, 'pnpm-workspace.yaml'), 'utf8');
   const lines = text.split('\n');
@@ -65,7 +63,7 @@ const workspaceDirs = expandWorkspaceDirs(readWorkspaceGlobs());
 
 const includeGlobs = (rootVitestConfig as { test: { include: string[] } }).test.include;
 
-const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
+const allFiles = collectRepoFiles(ROOT);
 
 const testFiles = allFiles.filter((f) => includeGlobs.some((g) => path.matchesGlob(f, g)));
 
