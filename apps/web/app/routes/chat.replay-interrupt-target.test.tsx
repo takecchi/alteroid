@@ -47,8 +47,8 @@ afterEach(() => {
 type Pending = { clientMessageId: string; state: string }[];
 const NO_TARGET = '止める対象が分からないので、何も止めていません';
 
-/** 再読み込み後の再生。`pending` を省くと、運ばない古いデーモン。 */
-function setup(pending: Pending | undefined, outcome = 'interrupted') {
+/** 再読み込み後の再生。 */
+function setup(pending: Pending, outcome = 'interrupted') {
   return stubFetch((url, init) => {
     if (/\/chat\/[^/]+\/stream$/.test(url)) {
       return sse(
@@ -58,7 +58,7 @@ function setup(pending: Pending | undefined, outcome = 'interrupted') {
             data: {
               conversationId: ID,
               inProgress: true,
-              ...(pending === undefined ? {} : { pending }),
+              pending,
             },
           },
           { event: 'text', data: { type: 'text', text: '走っているターンの途中' } },
@@ -119,13 +119,6 @@ describe('再読み込み後・戻ってきた会話の再生中に「ターン�
       { clientMessageId: 'held-1', state: 'held' },
       { clientMessageId: 'queued-1', state: 'queued' },
     ]);
-    await press();
-    expect(await screen.findByText(new RegExp(NO_TARGET))).toBeTruthy();
-    expect(interrupts(stub)).toHaveLength(0);
-  });
-
-  it('pending を運ばない古いデーモンも、呼ばずに「止める対象が分からない」と言う', async () => {
-    const stub = setup(undefined);
     await press();
     expect(await screen.findByText(new RegExp(NO_TARGET))).toBeTruthy();
     expect(interrupts(stub)).toHaveLength(0);

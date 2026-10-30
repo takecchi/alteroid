@@ -98,7 +98,7 @@ describe('runner の peer（Codex に作業を頼めるか。#3940）', () => {
     expect(await screen.findByText(/Codex に作業を頼める（モデル: gpt-5.5）/)).toBeTruthy();
   });
 
-  it('名乗らない旧い runner は「不明」と出す', async () => {
+  it('頼めるかどうかを名乗らない・まだ名乗りを受けていない runner は「不明」と出す', async () => {
     renderSettings({
       runners: [{ ...BASE, managerPeers: { status: 'unknown' } }],
       daemonRevision: DAEMON_UNKNOWN,
@@ -379,7 +379,7 @@ describe('plugin の送り（pushHealth.plugins）', () => {
 
 describe('plugin の読み込み結果（Issue #3816）', () => {
   const NOTHING_SEEN =
-    /plugin の読み込み: まだ見ていない（この層のセッションがまだ始まっていないか、知らせない旧い版）/;
+    /plugin の読み込み: まだ見ていない（この層のセッションがまだ始まっていないか、観測がまだ届いていない）/;
   const AT = '2026-09-01T00:00:00.000Z';
 
   it('観測が無ければ、クローンも runner も「まだ見ていない」と言い、0件とも失敗とも言わない', async () => {

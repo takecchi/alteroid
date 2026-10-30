@@ -47,7 +47,7 @@ type CodexReach =
   | { kind: 'unknown' }
   | { kind: 'silent' };
 
-// unknown を「閉じている」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
+// unknown を「閉じている」と描かない: runner が未確定（まだ繋がっていない）か、頼めるかどうかを名乗らない runner は判定できないため
 function codexReachOf(view: RunnerSummary['managerPeers']): CodexReach {
   if (view === undefined || view.status === 'unknown') return { kind: 'unknown' };
   const open = view.peers.find((peer) => peer.provider === 'codex');
@@ -127,9 +127,13 @@ function ReachDetail({ view }: { view: CodexReach }) {
   }
   if (view.kind === 'closed') return <p className={note}>{view.reason}</p>;
   if (view.kind === 'unknown') {
-    return <p className={note}>名乗らない旧い版か、名乗りをまだ受けていない</p>;
+    return <p className={note}>頼めるかどうかを名乗っていないか、名乗りをまだ受けていない</p>;
   }
-  return <p className={note}>理由を名乗らない旧い版の実行環境（更新すると理由が出る）</p>;
+  return (
+    <p className={note}>
+      開いているとも閉じているとも名乗っていない（peer を配線しない構成か、peer を開いている途中）
+    </p>
+  );
 }
 
 function CodexAuthCard() {
