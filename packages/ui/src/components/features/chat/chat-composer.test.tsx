@@ -46,6 +46,11 @@ describe('ChatComposer: ボタンの名前とヒント', () => {
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 
+  it('入力欄は placeholder ではなく名前「メッセージ」で引ける（#5905）', () => {
+    setup();
+    expect(screen.getByRole('textbox', { name: 'メッセージ' })).toBeTruthy();
+  });
+
   it('キーボードのフォーカスでヒントが出る（[+]）', () => {
     setup();
     expect(screen.queryByRole('tooltip')).toBeNull();
