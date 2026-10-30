@@ -2,6 +2,7 @@ import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import type { ManagerSummary } from './manager.js';
 import { QUOTA_SESSION_WINDOW_KEY, QUOTA_STOP_MANAGER_IDS_KEY } from './quota-stop-notice.js';
 import type { InboxEvent } from './schema.js';
+import { sectionBlock } from './section-block.js';
 
 interface QuotaStopTargets {
   /** 到着順・重複なし。 */
@@ -89,11 +90,6 @@ function elapsedPhrase(fromIso: string, toMs: number): string {
   return `（${String(minutes)} 分前）`;
 }
 
-// 末尾の区切り（---）まで含めて返す: `describeSuperseded` と同じく、呼び出し側の連結に手を足さないため
-function block(lines: readonly string[]): string {
-  return [...lines, '', '---', ''].join('\n');
-}
-
 /**
  * 「枠に当たって止まった」の知らせを配る直前に、名指された担当がもう回復しているかを1節で添える。
  * 1本も回復していなければ空文字: 本文の「止まった」がそのまま今の状態なので、足す事実が無い。
@@ -107,7 +103,7 @@ export function describeQuotaRecovery(
   const now = new Date(nowMs).toISOString();
   const queued = `知らせが積まれたのは ${targets.earliestAt}${elapsedPhrase(targets.earliestAt, nowMs)}。`;
   if ('detail' in managers) {
-    return block([
+    return sectionBlock([
       `⚠ この「枠に当たって止まった」の知らせが名指す担当が、配る時点（${now}）で回復しているかを確かめられなかった（${managers.detail}）。` +
         queued,
     ]);
@@ -124,14 +120,14 @@ export function describeQuotaRecovery(
   const grounds =
     '回復と読んだ根拠は、live であること・枠で止まった印が降りていること・鍵の世代が現役と一致すること。';
   if (pending.length === 0) {
-    return block([
+    return sectionBlock([
       `✅ **配る時点（${now}）の担当一覧では、この知らせが名指す担当 ${String(recovered.length)} 本はすべて回復している**: ` +
         `${recovered.map((verdict) => verdict.line).join('、')}。${grounds}`,
       `${queued}**本文の「止まった」は積まれた時点の話で、いま止まっているとは読まないこと。** ` +
         '回復を確かめ直すために `manager_list` / `token_list` を引く必要は無い。',
     ]);
   }
-  return block([
+  return sectionBlock([
     `配る時点（${now}）の担当一覧では、この知らせが名指す担当 ${String(verdicts.length)} 本のうち ` +
       `**${String(recovered.length)} 本は回復している**: ${recovered.map((verdict) => verdict.line).join('、')}。${grounds}`,
     `まだ回復したと言えない ${String(pending.length)} 本: ${pending.map((verdict) => verdict.line).join('、')}。`,
@@ -191,7 +187,7 @@ export function recoveredNoticeFoldOf(
     // デーモン再起動の引き取り直し: 鍵の世代を記録しない回なので世代は見ない。live・枠停止の印なし・running のすべてが要る（倒れ側は届ける）
     if (found === undefined || !found.live || found.usageStoppedAt !== undefined) return null;
     if (found.status !== 'running') return null;
-    return block([
+    return sectionBlock([
       `✅ 配る時点（${new Date(nowMs).toISOString()}）の担当一覧では、デーモン再起動で引き取り直したこの担当 ${event.managerId} は live で \`running\`` +
         '（枠で止まった印なし）。runner の中で走り続けていると読み、本文（最後の報告の抜粋）は日誌に全文で残してある。',
       `知らせが積まれたのは ${event.at}${elapsedPhrase(event.at, nowMs)}。`,
@@ -201,7 +197,7 @@ export function recoveredNoticeFoldOf(
   const from = event.foldWhenBack.movedFromGeneration;
   if (from !== undefined && found.tokenGeneration === from) return null;
   const now = new Date(nowMs).toISOString();
-  return block([
+  return sectionBlock([
     `✅ 配る時点（${now}）の担当一覧では、この知らせが名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
       `（\`${found.status}\`・鍵の世代 ${String(found.tokenGeneration)}` +
       (from === undefined ? '' : `。知らせを積んだ時点の世代 ${String(from)} から移った`) +
