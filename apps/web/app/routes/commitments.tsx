@@ -3,6 +3,7 @@ import { EditConflictBand } from '~/components/edit-conflict-band';
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { ReopenForm } from '~/components/reopen-form';
+import { EditedBadge } from '~/components/task-parts';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useDiscardGuard } from '~/lib/use-discard-guard';
@@ -566,12 +567,6 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
   }
 }
 
-// editedAt の有無だけを見る: 書き換えを通すかはサーバが決めており、editedBy はラベルに使わない。ClosedRow にも出す（editedAt は片付けても消えない）。
-function EditedBadge({ commitment }: { commitment: Commitment }) {
-  if (commitment.editedAt === undefined) return null;
-  return <Badge tone="neutral">編集済み（{formatDateTime(commitment.editedAt)}）</Badge>;
-}
-
 // origin: 'human' にだけ出す: 他の origin には「クローンが人間へ返答したか」という概念が無く、「未着手」を貼ると当てはまらない。
 // InProgressBadge とは別のバッジのまま: 排他ではなく、1つの2値バッジへ畳むと両方が真の行を表せない。
 function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
@@ -962,7 +957,7 @@ function OpenRow({
     <li ref={rowRef} className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <OriginBadge commitment={commitment} />
-        <EditedBadge commitment={commitment} />
+        <EditedBadge editedAt={commitment.editedAt} />
         <AnsweredStateBadge commitment={commitment} />
         <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
@@ -1149,7 +1144,7 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px]">
         <Badge tone="ok">片付いた</Badge>
         <OriginBadge commitment={commitment} />
-        <EditedBadge commitment={commitment} />
+        <EditedBadge editedAt={commitment.editedAt} />
         <span>
           {formatDateTime(commitment.at)} → {formatDateTime(commitment.closedAt ?? '')}
         </span>
