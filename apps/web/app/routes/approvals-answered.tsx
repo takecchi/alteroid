@@ -5,9 +5,9 @@ import { approvalStateOf } from '~/components/approval-answer-card';
 import { ApprovalEntry } from '~/components/approval-entry';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { OlderFooter } from '~/components/older-footer';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import {
-  Button,
   Page,
   ListDetail,
   ListDetailItems,
@@ -127,35 +127,24 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
           }
           listFooter={
             selectedOutsideList || hasMore || olderError !== undefined ? (
-              <div className="flex flex-col gap-2 px-4 py-2">
-                {selectedOutsideList && (
-                  <p className="text-[11px] text-muted-foreground">
-                    開いている {date} は、この目次に読み込んだ日の中に無い（もっと古い日か、その日に
-                    決着した承認が無い）。
-                  </p>
-                )}
-                <LoadError
-                  what="もっと古い日"
-                  error={olderError}
-                  onRetry={loadOlder}
-                  retrying={isLoadingOlder}
-                />
-                {hasMore && (
-                  <>
+              <OlderFooter
+                noun="日"
+                unit="日"
+                loadedCount={dates.length}
+                hasMore={hasMore}
+                loading={isLoadingOlder}
+                error={olderError}
+                onLoadOlder={loadOlder}
+                notice={
+                  selectedOutsideList && (
                     <p className="text-[11px] text-muted-foreground">
-                      いま読んでいるのは {dates.length} 日ぶん。これより古い日があるかもしれない。
+                      開いている {date}{' '}
+                      は、この目次に読み込んだ日の中に無い（もっと古い日か、その日に
+                      決着した承認が無い）。
                     </p>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      loading={isLoadingOlder}
-                      onClick={loadOlder}
-                    >
-                      もっと古い日を読む
-                    </Button>
-                  </>
-                )}
-              </div>
+                  )
+                }
+              />
             ) : undefined
           }
           emptyDetail={

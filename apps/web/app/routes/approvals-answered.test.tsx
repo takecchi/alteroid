@@ -280,6 +280,19 @@ describe('もっと古い日を読む（#3297）', () => {
     expect(screen.getByRole('button', { name: 'もっと古い日を読む' })).toBeTruthy();
   });
 
+  it('但し書きは件数つきの1文で、ボタンはその直後に並ぶ', async () => {
+    stubApi({ dates: FULL });
+    renderAt('/approvals/answered');
+
+    const note = await screen.findByText(
+      'いま読んでいるのは 60 日ぶん。これより古い日があるかもしれない。',
+    );
+    expect(note.tagName).toBe('P');
+    expect(note.nextElementSibling).toBe(
+      screen.getByRole('button', { name: 'もっと古い日を読む' }),
+    );
+  });
+
   it('limit 未満なら「もっと古い日を読む」を出さない', async () => {
     stubApi({ dates: daysBack('2026-09-30', 59) });
     renderAt('/approvals/answered');
@@ -327,6 +340,20 @@ describe('もっと古い日を読む（#3297）', () => {
     for (const row of dateRows()) {
       expect(within(row).getByRole('link').getAttribute('aria-current')).toBeNull();
     }
+  });
+
+  it('目次の外の日の注記は、続きの但し書きの前に同じ枠で並ぶ', async () => {
+    stubApi({ dates: FULL, days: { '2026-01-05': [OLDER] } });
+    renderAt('/approvals/answered/2026-01-05');
+
+    const outside = await screen.findByText(
+      /開いている 2026-01-05 は、この目次に読み込んだ日の中に無い/,
+    );
+    const more = screen.getByText(
+      'いま読んでいるのは 60 日ぶん。これより古い日があるかもしれない。',
+    );
+    expect(outside.parentElement).toBe(more.parentElement);
+    expect(outside.nextElementSibling).toBe(more);
   });
 
   it('目次に載っている日を開いたときは、その注記を出さない', async () => {
