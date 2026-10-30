@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { captureStderr } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
@@ -17,7 +16,6 @@ import {
   listenPlanOf,
   RECLAIM_ENV_KEY,
   reclaimScanOf,
-  reportRetiredLayerProviderEnv,
   socketOwnerOf,
   tokenSha256Of,
 } from './index.js';
@@ -362,38 +360,6 @@ describe('childUserOf（#3807）', () => {
     expect(() =>
       childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(CHILD), ALTEROID_RUNNER_CHILD_GID: value }),
     ).toThrow(/ALTEROID_RUNNER_CHILD_GID は非負の整数/);
-  });
-});
-
-describe('reportRetiredLayerProviderEnv（もう読まない層の provider の変数。2026-10-07 の決定）', () => {
-  it('置かれていなければ何も書かない', async () => {
-    const lines = await captureStderr(() =>
-      reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_MODEL: 'opus' }),
-    );
-    expect(lines).toEqual([]);
-  });
-
-  it('ALTEROID_MANAGER_PROVIDER が残っていれば、名前を出して1行（値は出さない。起動は止めない）', async () => {
-    const lines = await captureStderr(() =>
-      reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_PROVIDER: 'codex' }),
-    );
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^alteroid-runner: ALTEROID_MANAGER_PROVIDER はもう読みません/);
-    expect(lines[0]).toContain('CODEX_API_KEY');
-    expect(lines[0]?.endsWith('\n')).toBe(true);
-  });
-
-  it('ALTEROID_MANAGER_PEERS が残っていても1行出す（2026-10-08 に退役。peer は Codex の資格で開く。#4118）', async () => {
-    const lines = await captureStderr(() =>
-      reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_PEERS: 'codex' }),
-    );
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^alteroid-runner: ALTEROID_MANAGER_PEERS はもう読みません/);
-  });
-
-  it('runner の起動はこれを呼ぶ（配線）', () => {
-    const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-    expect(source).toContain('reportRetiredLayerProviderEnv(process.env);');
   });
 });
 

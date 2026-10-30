@@ -52,7 +52,6 @@ import {
   reasonOf,
   redactErrorText,
   resolveCloneModel,
-  retiredLayerProviderNotices,
   staleObservedRecoveryForBlockedKey,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
@@ -369,14 +368,6 @@ function assertTokenRotationEventHandled(event: never): never {
   throw new Error(`alteroidd: 認証トークンの日誌で未知の event: ${String(event)}`);
 }
 
-// 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
-export function reportRetiredLayerProviderEnv(
-  env: NodeJS.ProcessEnv,
-  write: (line: string) => void = writeStderrSync,
-): void {
-  for (const notice of retiredLayerProviderNotices(env, 'alteroidd')) write(`${notice}\n`);
-}
-
 export async function main(): Promise<void> {
   // 読めない port は黙って既定やランダムな port へ倒さず断る: 設定の誤りが成功に見えるため。
   const resolvedPort = resolvePort(process.env);
@@ -595,8 +586,6 @@ export async function main(): Promise<void> {
         `実際にセッションへ渡すのは runner なので、効いているかは runner の起動ログで確かめてください\n`,
     );
   }
-
-  reportRetiredLayerProviderEnv(process.env);
 
   // プロファイルからは伏せる名前を置かせない: 開けると、保存の入口を通ったものがそのまま runner へ降り、下の層の境界を上書きできてしまうため。
   const profile = createProfileApplier({
