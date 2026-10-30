@@ -73,6 +73,7 @@ export const PROGRESS_BODY = {
     commitmentsOpened: 14,
     commitmentsClosed: 12,
     delegationsEnded: { count: 4, basis: 'updatedAt' },
+    mayBeUndercounted: false,
   },
   forecast: { state: 'not_converging', basis: {} },
   github: { state: 'not_observed', reason: 'なし' },

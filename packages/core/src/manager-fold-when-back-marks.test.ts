@@ -38,11 +38,11 @@ function fakeRunner(): FakeRunner {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -102,6 +102,7 @@ async function setup(managerId: string): Promise<Setup> {
   };
   await stores.jobs.putJob(job);
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId,
     status: 'running',
     cwd: '/work/project',

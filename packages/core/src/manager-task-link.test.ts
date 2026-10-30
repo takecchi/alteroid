@@ -50,11 +50,11 @@ function fakeRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -341,6 +341,7 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     // 再起動した別のプール。runner は done のセッションを持っている
     const rebooted = fakeRunner();
     rebooted.alive.push({
+      liveBackgroundTasks: 0,
       managerId: started.managerId,
       status: 'done',
       cwd: '/work/project',

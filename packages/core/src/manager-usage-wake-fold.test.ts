@@ -46,7 +46,8 @@ function fakeRunner() {
   const stops: string[] = [];
   const counters = { lists: 0 };
   const behavior: {
-    background: number | 'absent';
+    // `unreadable` は、欄の無い応答（古い runner）が一覧でスキーマに落ちた形（`unreadableIds` に載り、`states` には載らない。#5763）
+    background: number | 'unreadable';
     peers: number | undefined;
     // 背景処理のうち作業者（`local_agent`）の本数。`undefined` は欄を返さない（古い runner）
     agents: number | undefined;
@@ -66,7 +67,7 @@ function fakeRunner() {
   const stateOf = (base: RunnerManagerState): RunnerManagerState => ({
     ...base,
     waiting: behavior.waiting,
-    ...(behavior.background === 'absent' ? {} : { liveBackgroundTasks: behavior.background }),
+    liveBackgroundTasks: behavior.background === 'unreadable' ? 0 : behavior.background,
     ...(behavior.peers === undefined ? {} : { liveBackgroundPeers: behavior.peers }),
     ...(behavior.agents === undefined ? {} : { liveBackgroundAgents: behavior.agents }),
     ...(behavior.commands === undefined ? {} : { backgroundTaskCommands: behavior.commands }),
@@ -80,20 +81,22 @@ function fakeRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       behavior.onResume?.();
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -101,7 +104,7 @@ function fakeRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId, text) {
       sends.push({ managerId, text });
@@ -117,7 +120,16 @@ function fakeRunner() {
     },
     async list() {
       counters.lists += 1;
-      return alive.map(stateOf);
+      return behavior.background === 'unreadable' ? [] : alive.map(stateOf);
+    },
+    // `list` を経由する: 試験が `list` を差し替えて待たせる（#5207）ので、読み方の口が増えても同じ待ちを通す
+    async listWithUnreadable() {
+      const states = await runner.list();
+      return {
+        states,
+        unreadableIds:
+          behavior.background === 'unreadable' ? alive.map((state) => state.managerId) : [],
+      };
     },
     async transcript() {
       return null;
@@ -490,9 +502,9 @@ describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景�
     await s.pool.stop();
   });
 
-  it('(c2) 背景処理の本数が分からない（古い runner）担当も、畳まない（今どおり）', async () => {
+  it('(c2) 状態が読めない（欄の無い古い runner）担当も、畳まない（今どおり。#5763）', async () => {
     const s = await setup(async () => 'cooling');
-    s.fake.behavior.background = 'absent';
+    s.fake.behavior.background = 'unreadable';
 
     expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
 
@@ -668,8 +680,8 @@ describe('背景処理が作業者だけで、抱えている鍵が使えない�
 describe('起こし直しが届かなかったら、掃きが間隔を伸ばして挑み直す（#4850 直し方3）', () => {
   it('⭐ (d) 1分・2分・4分と間隔が伸び、成功したら止む', async () => {
     const s = await setup(async () => 'cooling');
-    // 本数が分からない間は断られる（空振り）
-    s.fake.behavior.background = 'absent';
+    // 状態が読めない間は断られる（空振り）
+    s.fake.behavior.background = 'unreadable';
     expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
     const jobs = await s.stores.jobs.listJobs();
     expect(jobs[0]?.usageStoppedAt).toBeDefined();

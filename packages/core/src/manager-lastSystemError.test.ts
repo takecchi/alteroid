@@ -37,11 +37,11 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -133,6 +133,7 @@ async function runningManualSetup(managerId = 'mgr-quota'): Promise<ManualSetup>
 
   const fake = manualRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',
@@ -215,6 +216,7 @@ describe('台帳の lastSystemError が、実際に立ち・下りる（#713 段
       expect(afterClosed.lastSystemError).toBeDefined();
 
       fake.alive.push({
+        liveBackgroundTasks: 0,
         managerId: 'mgr-stale',
         status: 'running',
         cwd: '/work/project',
@@ -246,6 +248,7 @@ describe('台帳の lastSystemError が、実際に立ち・下りる（#713 段
       expect((await listedOf(pool, 'mgr-stale-failure')).lastSystemError).toBeDefined();
 
       fake.alive.push({
+        liveBackgroundTasks: 0,
         managerId: 'mgr-stale-failure',
         status: 'running',
         cwd: '/work/project',

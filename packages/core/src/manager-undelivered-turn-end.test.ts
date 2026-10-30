@@ -46,11 +46,11 @@ class LivingRunner implements RunnerClient {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
     });
   }
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(): Promise<{ cwd?: string }> {
-    return {};
+  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;
@@ -103,6 +103,7 @@ async function harness() {
   const runner = new LivingRunner();
   runner.alive = [
     {
+      liveBackgroundTasks: 0,
       managerId: JOB.id,
       status: 'running',
       cwd: '/work/project',

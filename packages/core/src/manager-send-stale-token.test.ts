@@ -36,8 +36,9 @@ function staleRunner() {
   const resumes: RunnerResumeCommand[] = [];
   const stops: string[] = [];
   const stopOptions: ({ keepPeers?: boolean } | undefined)[] = [];
+  // `unreadable` は、欄の無い応答（古い runner）が一覧でスキーマに落ちた形（`unreadableIds` に載り、`states` には載らない）
   const behavior: {
-    background: number | 'absent';
+    background: number | 'unreadable';
     stopIgnored: boolean;
     waiting: RunnerManagerState['waiting'];
   } = { background: 0, stopIgnored: false, waiting: [] };
@@ -45,7 +46,7 @@ function staleRunner() {
   const stateOf = (base: RunnerManagerState): RunnerManagerState => ({
     ...base,
     waiting: behavior.waiting,
-    ...(behavior.background === 'absent' ? {} : { liveBackgroundTasks: behavior.background }),
+    liveBackgroundTasks: behavior.background === 'unreadable' ? 0 : behavior.background,
   });
 
   const runner: RunnerClient = {
@@ -56,19 +57,21 @@ function staleRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -76,7 +79,7 @@ function staleRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId, text) {
       sends.push({ managerId, text });
@@ -93,7 +96,12 @@ function staleRunner() {
       if (at >= 0) alive.splice(at, 1);
     },
     async list() {
-      return alive.map(stateOf);
+      return behavior.background === 'unreadable' ? [] : alive.map(stateOf);
+    },
+    async listWithUnreadable() {
+      return behavior.background === 'unreadable'
+        ? { states: [], unreadableIds: alive.map((state) => state.managerId) }
+        : { states: alive.map(stateOf), unreadableIds: [] };
     },
     async transcript() {
       return null;
@@ -252,10 +260,10 @@ describe('done の委譲へ send するとき、世代が食い違っていた�
     await s.pool.stop();
   });
 
-  it('⚠️ 欄の無い古い runner（本数が分からない）も畳まず・流さず、「分からない」と言って断る', async () => {
+  it('⚠️ 欄の無い古い runner（状態が読めない）も畳まず・流さず、「分からない」と言って断る（#5763）', async () => {
     const s = await setup();
     s.rotate();
-    s.fake.behavior.background = 'absent';
+    s.fake.behavior.background = 'unreadable';
 
     const result = await s.pool.send('mgr-stale', '続きを');
 
@@ -523,9 +531,12 @@ describe('版が混ざる窓: runner と daemon は別々にデプロイされ�
     waiting: [],
   };
 
-  it('新しい daemon は、欄の無い古い runner の応答を読める（本数は「分からない」）', () => {
-    const parsed = runnerManagerStateSchema.parse(base);
-    expect(parsed.liveBackgroundTasks).toBeUndefined();
+  it('欄の無い応答は、スキーマが落とす（0 本とも「分からない」とも読まない。#5763）', () => {
+    const parsed = runnerManagerStateSchema.safeParse(base);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+      'liveBackgroundTasks',
+    ]);
   });
 
   it('新しい daemon は、欄付きの応答を読める', () => {

@@ -182,6 +182,20 @@ describe('マネージャーから頼めるか（実行環境ごと。#4118）',
     expect(screen.getByText('閉じている')).toBeTruthy();
   });
 
+  it('開閉のどちらにも codex が居ない実行環境は、どちらとも名乗っていないと言う（peer を配線しない構成・開く途中でも起きる）', async () => {
+    stub({
+      status: LOGGED_IN,
+      login: PENDING,
+      runners: [{ ...RUNNER, managerPeers: { status: 'named', peers: [] } }],
+    });
+    renderPage();
+    expect(
+      await screen.findByText(
+        /開いているとも閉じているとも名乗っていない（peer を配線しない構成か/,
+      ),
+    ).toBeTruthy();
+  });
+
   it('開いている実行環境は「頼める」とモデルつきで出し、警告は出さない', async () => {
     stub({
       status: LOGGED_IN,

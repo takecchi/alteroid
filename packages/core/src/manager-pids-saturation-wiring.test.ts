@@ -104,12 +104,13 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string }> {
+      async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,
@@ -117,7 +118,7 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
           waiting: [],
           sessionId: command.sessionId,
         });
-        return {};
+        return { cwd: command.cwd };
       },
       async send() {
         return true;

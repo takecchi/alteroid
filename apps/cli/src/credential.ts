@@ -30,8 +30,8 @@ interface CredentialsView {
 
 interface CredentialsUpdateView {
   credentials: CredentialFingerprint[];
-  // 古いデーモンの応答には無い欄（#4830）
-  restartRequired?: string[];
+  // デーモンの再起動まで効かない名前（#4830）。無ければ空
+  restartRequired: string[];
   runners: { runnerId: string; ok: boolean; error?: string }[];
 }
 
@@ -190,7 +190,7 @@ export async function credentialRemoveCommand(
 
 // stderr へ出す: stdout の出力の形（他の道具が読みうる）を変えないため（#4830）
 function reportRestartRequired(view: CredentialsUpdateView): void {
-  const names = view.restartRequired ?? [];
+  const names = view.restartRequired;
   if (names.length === 0) return;
   stderr.write(`${names.join(', ')} はデーモンの再起動で効く（それまでは前の値のまま動く）\n`);
 }

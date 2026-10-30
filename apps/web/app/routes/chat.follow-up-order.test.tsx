@@ -72,43 +72,18 @@ const question: Message = {
 };
 const follow: Message = { id: 'm3', at: '2026-10-10T01:00:20.000Z', role: 'inbound', text: FOLLOW };
 
-describe.each([
-  {
-    label: '割るデーモン（#4391 以降）',
-    split: true,
-    whenQueued: [
-      question,
-      { id: 'm2', at: '2026-10-10T01:00:19.000Z', role: 'outbound', text: REPLY },
-      follow,
-    ] as Message[],
-    whenDone: [
-      question,
-      { id: 'm2', at: '2026-10-10T01:00:19.000Z', role: 'outbound', text: REPLY },
-      follow,
-      {
-        id: 'm4',
-        at: '2026-10-10T01:00:40.000Z',
-        role: 'outbound',
-        text: `${TAIL}\n\n${AFTER_TOOL}`,
-      },
-    ] as Message[],
-  },
-  {
-    label: '割らない古いデーモン',
-    split: false,
-    whenQueued: [question, follow] as Message[],
-    whenDone: [
-      question,
-      follow,
-      {
-        id: 'm4',
-        at: '2026-10-10T01:00:40.000Z',
-        role: 'outbound',
-        text: `${REPLY}${TAIL}\n\n${AFTER_TOOL}`,
-      },
-    ] as Message[],
-  },
-])('ターン中の追送: $label', ({ split, whenQueued, whenDone }) => {
+// デーモンは追送（人間の発言）の所で返信を割って日誌へ書き、道具の境目は空行でつないで1発言にする（#4391・#4392）
+const whenQueued: Message[] = [
+  question,
+  { id: 'm2', at: '2026-10-10T01:00:19.000Z', role: 'outbound', text: REPLY },
+  follow,
+];
+const whenDone: Message[] = [
+  ...whenQueued,
+  { id: 'm4', at: '2026-10-10T01:00:40.000Z', role: 'outbound', text: `${TAIL}\n\n${AFTER_TOOL}` },
+];
+
+describe('ターン中の追送', () => {
   it('返信は追送の前と後に分かれて出て、確定しても写しが残らない', async () => {
     const queued = gate();
     const tail = gate();
@@ -190,14 +165,12 @@ describe.each([
     messages = whenQueued;
     queued.open();
     recorded.open();
-    if (split) {
-      await waitFor(() => {
-        const shown = items();
-        expect(countOf(shown, FOLLOW)).toBe(1);
-        expect(countOf(shown, REPLY)).toBe(1);
-        expect(indexOf(shown, REPLY)).toBeLessThan(indexOf(shown, FOLLOW));
-      });
-    }
+    await waitFor(() => {
+      const shown = items();
+      expect(countOf(shown, FOLLOW)).toBe(1);
+      expect(countOf(shown, REPLY)).toBe(1);
+      expect(indexOf(shown, REPLY)).toBeLessThan(indexOf(shown, FOLLOW));
+    });
 
     tail.open();
     await waitFor(() => {
@@ -213,11 +186,9 @@ describe.each([
       expect(countOf(shown, TAIL)).toBe(1);
       expect(countOf(shown, AFTER_TOOL)).toBe(1);
       expect(countOf(shown, FOLLOW)).toBe(1);
-      if (split) {
-        expect(indexOf(shown, QUESTION)).toBeLessThan(indexOf(shown, REPLY));
-        expect(indexOf(shown, REPLY)).toBeLessThan(indexOf(shown, FOLLOW));
-        expect(indexOf(shown, FOLLOW)).toBeLessThan(indexOf(shown, TAIL));
-      }
+      expect(indexOf(shown, QUESTION)).toBeLessThan(indexOf(shown, REPLY));
+      expect(indexOf(shown, REPLY)).toBeLessThan(indexOf(shown, FOLLOW));
+      expect(indexOf(shown, FOLLOW)).toBeLessThan(indexOf(shown, TAIL));
     };
 
     // 日誌に残りの返信が載った（`done` はまだ）: 手元の写しは履歴と照合して引き取られる。

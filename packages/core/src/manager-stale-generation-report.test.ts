@@ -54,15 +54,14 @@ class Runner implements RunnerClient {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
     });
   }
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(
-    command: RunnerResumeCommand,
-  ): Promise<{ cwd?: string; sessionGeneration?: string }> {
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string; sessionGeneration?: string }> {
     this.resumes.push(command);
     this.alive = [
       {
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -71,7 +70,7 @@ class Runner implements RunnerClient {
         sessionId: command.sessionId,
       },
     ];
-    return { sessionGeneration: NEW };
+    return { cwd: command.cwd, sessionGeneration: NEW };
   }
   async send(): Promise<boolean> {
     return true;

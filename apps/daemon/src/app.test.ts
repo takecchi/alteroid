@@ -74,6 +74,7 @@ import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 import { createHttpRunner } from './runner-client.js';
 import {
+  credentialsUpdateResponseSchema,
   managerSummarySchema,
   practiceListResponseSchema,
   practiceReadResponseSchema,
@@ -10094,6 +10095,15 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
 
     const plain = await put(withVault, [{ name: 'GH_TOKEN', value: 'other-value' }]);
     expect(((await plain.json()) as { restartRequired?: string[] }).restartRequired).toEqual([]);
+  });
+
+  it('PUT の応答の restartRequired は必須の欄で、無い応答はスキーマを通らない（#5772）', async () => {
+    const response = await put(withCredentials(), [{ name: 'GH_TOKEN', value: DUMMY_VALUE }]);
+    const body: unknown = await response.json();
+    expect(credentialsUpdateResponseSchema.safeParse(body).success).toBe(true);
+    const withoutField: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+    delete withoutField.restartRequired;
+    expect(credentialsUpdateResponseSchema.safeParse(withoutField).success).toBe(false);
   });
 
   it('⭐ 外したとき・runner へ狭めたときも restartRequired に載る。runner だけの行は載らない（#4830）', async () => {

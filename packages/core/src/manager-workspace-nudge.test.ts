@@ -38,12 +38,13 @@ function swappableRunner(runnerId = 'runner-primary') {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       state.resumes.push(command);
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -51,7 +52,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -445,6 +446,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
       await stores.jobs.putJob(job);
       const fake = swappableRunner();
       fake.state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: job.id,
         status: 'running',
         cwd: '/work/project',

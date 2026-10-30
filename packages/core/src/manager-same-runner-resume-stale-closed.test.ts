@@ -93,12 +93,13 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string; sessionGeneration?: string }> {
+      async resume(command): Promise<{ cwd: string; sessionGeneration?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,
@@ -106,7 +107,9 @@ describe('同じ runner への復帰の最中に届く closed', () => {
           waiting: [],
           sessionId: command.sessionId,
         });
-        return sessionGeneration === undefined ? {} : { sessionGeneration };
+        return sessionGeneration === undefined
+          ? { cwd: command.cwd }
+          : { cwd: command.cwd, sessionGeneration };
       },
       async send() {
         return true;
@@ -321,18 +324,50 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       await pool.stop();
     });
 
-    it('世代を持たない closed(lost) は、従来どおり lost にする（古い runner との後方互換）', async () => {
+    it('追っている世代があるのに世代を持たない closed(lost) は、食い違いと同じに捨てて running のまま（#5764）', async () => {
       const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
       runnerA.emit?.(lostClosed());
       await settle();
       const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
-      expect(after?.status).toBe('lost');
+      expect(after?.status).toBe('running');
+      await pool.stop();
+    });
+
+    it('追っている世代があるのに世代を持たない report は、新しい世代が出た後なら lastReport を書き換えない（#5764）', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
+      const lastReport = async (): Promise<string | undefined> =>
+        (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same')?.lastReport;
+      runnerA.emit?.({
+        type: 'report',
+        managerId: 'mgr-same',
+        status: 'done',
+        text: '新しいセッションの報告',
+        sessionGeneration: 'gen-new',
+      });
+      await settle();
+      runnerA.emit?.({
+        type: 'report',
+        managerId: 'mgr-same',
+        status: 'done',
+        text: '世代なしの報告',
+      });
+      await settle();
+      expect(await lastReport()).toBe('新しいセッションの報告');
       await pool.stop();
     });
 
     it('resume の応答が世代を名乗らない（古い runner）なら、追っている世代を持たず、世代付きの closed(lost) も従来どおり効く', async () => {
       const { pool, stores, runnerA } = await resumedOnSameRunner({});
       runnerA.emit?.(lostClosed('gen-whatever'));
+      await settle();
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
+      expect(after?.status).toBe('lost');
+      await pool.stop();
+    });
+
+    it('追っている世代が無い間（応答が世代を名乗らない）は、世代を持たない closed(lost) も世代を見ずに効く（#5764 後も残す分岐）', async () => {
+      const { pool, stores, runnerA } = await resumedOnSameRunner({});
+      runnerA.emit?.(lostClosed());
       await settle();
       const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
       expect(after?.status).toBe('lost');
@@ -360,7 +395,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       await pool.stop();
     });
 
-    it('古い世代の report は、台帳の lastReport を書き換えない。新しい世代・世代なしの report は従来どおり書く', async () => {
+    it('古い世代の report は、台帳の lastReport を書き換えない。世代なしの report も同じに書き換えない（#5764）', async () => {
       const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
       const report = (text: string, sessionGeneration?: string): RunnerEvent => ({
         type: 'report',
@@ -379,9 +414,10 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       runnerA.emit?.(report('古いセッションの報告', 'gen-old'));
       await settle();
       expect(await lastReport()).toBe('新しいセッションの報告');
+      // 世代なしの report は、追っている世代があれば食い違いと同じに捨てる（#5764）
       runnerA.emit?.(report('世代なしの報告'));
       await settle();
-      expect(await lastReport()).toBe('世代なしの報告');
+      expect(await lastReport()).toBe('新しいセッションの報告');
       await pool.stop();
     });
   });

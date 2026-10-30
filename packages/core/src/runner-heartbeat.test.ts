@@ -43,11 +43,11 @@ class FakeRunner implements RunnerClient {
     this.stages ?? {};
 
   async connect(): Promise<void> {}
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(): Promise<{ cwd?: string }> {
-    return {};
+  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;
@@ -69,9 +69,7 @@ class FakeRunner implements RunnerClient {
       cwd: '/work/project',
       request: '',
       waiting: [],
-      ...(Object.hasOwn(this.backgroundToReturn, managerId)
-        ? { liveBackgroundTasks: this.backgroundToReturn[managerId] }
-        : {}),
+      liveBackgroundTasks: this.backgroundToReturn[managerId] ?? 0,
       ...(Object.hasOwn(this.fingerprintToReturn, managerId)
         ? { tokenFingerprint: this.fingerprintToReturn[managerId] }
         : {}),
@@ -443,10 +441,10 @@ describe('runner が抱えているセッションの観測（#579）', () => {
     await registry.stop();
   });
 
-  it('list() が返した背景処理の本数を、欄を名乗った委譲だけ sessionBackgroundTasks に載せる（#2851。0 を捏造しない）', async () => {
+  it('list() が返した背景処理の本数を、委譲ごとに sessionBackgroundTasks に載せる（#2851。欄は必須になった: #5763）', async () => {
     vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
     const runner = new FakeRunner('runner-a');
-    runner.sessionsToReturn = ['mgr-new', 'mgr-zero', 'mgr-old'];
+    runner.sessionsToReturn = ['mgr-new', 'mgr-zero'];
     runner.backgroundToReturn = { 'mgr-new': 2, 'mgr-zero': 0 };
     const registry = createRunnerRegistry([]);
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
@@ -455,7 +453,6 @@ describe('runner が抱えているセッションの観測（#579）', () => {
 
     const [entry] = registry.entries();
     expect(entry?.sessionBackgroundTasks).toEqual({ 'mgr-new': 2, 'mgr-zero': 0 });
-    expect(entry?.sessionBackgroundTasks).not.toHaveProperty('mgr-old');
 
     await registry.stop();
   });

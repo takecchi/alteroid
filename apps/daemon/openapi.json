@@ -34948,7 +34948,7 @@
                       }
                     }
                   },
-                  "required": ["credentials", "runners"],
+                  "required": ["credentials", "restartRequired", "runners"],
                   "additionalProperties": false
                 }
               }

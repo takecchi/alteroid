@@ -650,7 +650,7 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     expect(await screen.findByText(/何かを任せると、ここに出る/)).toBeTruthy();
   });
 
-  it('閉じた件数は、数え落としうるとき（mayBeUndercounted が真）だけ「以上」と言う。偽・欄が無いときは言わない（#3698）', async () => {
+  it('閉じた件数は、数え落としうるとき（mayBeUndercounted が真）だけ「以上」と言う。偽なら言わない（#3698）', async () => {
     renderHome({
       progress: {
         ...PROGRESS_BODY,
@@ -666,10 +666,6 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
         throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: false },
       },
     });
-    expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
-    cleanup();
-
-    renderHome();
     expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
   });
 

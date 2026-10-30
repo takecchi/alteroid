@@ -52,6 +52,7 @@ class LeasedRunner implements RunnerClient {
 
   hold(managerId: string): void {
     this.sessions.set(managerId, {
+      liveBackgroundTasks: 0,
       managerId,
       status: 'running',
       cwd: this.workspacePath,
@@ -66,14 +67,14 @@ class LeasedRunner implements RunnerClient {
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     this.emit = onEvent;
   }
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
     if (this.resumeFailure !== undefined) throw this.resumeFailure;
     this.resumes.push(command);
     this.hold(command.managerId);
-    return {};
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     if (this.sendFailure !== undefined) throw this.sendFailure;

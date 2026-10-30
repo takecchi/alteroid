@@ -665,6 +665,7 @@ describe('runner への問い合わせ（kind / askedAt を持つ /managers 応�
                   askedAt: '2026-08-24T00:00:00.000Z',
                 },
               ],
+              liveBackgroundTasks: 0,
             },
           ],
         });
@@ -1001,6 +1002,57 @@ describe('許可確認の回答の応答から decision を読む', () => {
     const outcome = await client.answer('mgr-x', { requestId: 'req-gone', message: 'よい' });
 
     expect(outcome).toEqual({ delivered: false });
+  });
+});
+
+describe('start / resume の応答の cwd は必須（#5751）', () => {
+  const startCommand = { managerId: 'mgr-x', request: '確認', cwd: '/workspace/mgr-x' };
+  const resumeCommand = { ...startCommand, sessionId: 'sess-x' };
+
+  async function clientReplying(body: unknown) {
+    return createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () => Response.json(body)) as typeof fetch,
+    });
+  }
+
+  it('cwd の無い start の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true });
+
+    await expect(client.start(startCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd が文字列でない start の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true, cwd: 42 });
+
+    await expect(client.start(startCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd の無い resume の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true, reusedLiveSession: false });
+
+    await expect(client.resume(resumeCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd が文字列でない resume の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true, cwd: null });
+
+    await expect(client.resume(resumeCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd を返す応答は今までどおり読める（回帰なし）', async () => {
+    const client = await clientReplying({
+      ok: true,
+      cwd: '/workspace/mgr-x',
+      sessionGeneration: 'gen-1',
+    });
+
+    expect(await client.start(startCommand)).toEqual({
+      cwd: '/workspace/mgr-x',
+      sessionGeneration: 'gen-1',
+    });
+    expect(await client.resume(resumeCommand)).toMatchObject({ cwd: '/workspace/mgr-x' });
   });
 });
 

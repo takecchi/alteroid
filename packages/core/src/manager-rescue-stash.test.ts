@@ -10,6 +10,8 @@ import {
   type RunnerEvent,
   type RunnerManagerState,
   type RunnerOutboxContent,
+  type RunnerResumeCommand,
+  type RunnerStartCommand,
 } from './runner-protocol.js';
 import {
   RESCUE_STASH_MAX_BYTES_PER_JOB,
@@ -57,11 +59,11 @@ function fakeRunner(names: boolean): Fake {
         } as RunnerEvent),
       );
     },
-    async start() {
-      return {};
+    async start(command: RunnerStartCommand) {
+      return { cwd: command.cwd };
     },
-    async resume() {
-      return {};
+    async resume(command: RunnerResumeCommand) {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -115,6 +117,7 @@ function fakeRunner(names: boolean): Fake {
     },
   } as unknown as RunnerClient;
   alive.push({
+    liveBackgroundTasks: 0,
     managerId: 'mgr-s',
     status: 'running',
     cwd: '/work/project',

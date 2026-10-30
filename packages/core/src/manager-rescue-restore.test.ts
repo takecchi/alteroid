@@ -40,6 +40,7 @@ function fakeRunner(
     cwd: '/work/project',
     request: 'r',
     waiting: [],
+    liveBackgroundTasks: 0,
     sessionId: `sess-${id}`,
   }));
   const runner = {
@@ -61,11 +62,12 @@ function fakeRunner(
     },
     async start(command: RunnerStartCommand) {
       starts.push(command);
-      return {};
+      return { cwd: command.cwd };
     },
     async resume(command: RunnerResumeCommand) {
       resumes.push(command);
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -73,7 +75,7 @@ function fakeRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId: string, text: string, attachments?: RunnerAttachment[]) {
       sent.push({ managerId, text, attachments: attachments ?? [] });

@@ -1,3 +1,4 @@
+import { RESET_CONFIRM_GROUPS } from '@alteroid/core/cli-light';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConfirmIo } from './confirm.js';
@@ -9,8 +10,7 @@ vi.mock('./target.js', async (importOriginal) => ({
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
 }));
 
-const { resetCommand, buildConfirmMessage, RESET_CONFIRM_GROUPS_FOR_TEST, SUMMARY_LABELS } =
-  await import('./reset.js');
+const { resetCommand, buildConfirmMessage, SUMMARY_LABELS } = await import('./reset.js');
 
 interface Reply {
   status: number;
@@ -163,9 +163,7 @@ describe('確認の文（buildConfirmMessage） — issue #2196', () => {
   });
 
   it('消した後の報告の見出し（SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
-    const covered = new Set(
-      RESET_CONFIRM_GROUPS_FOR_TEST.flatMap((group: { keys: string[] }) => group.keys),
-    );
+    const covered = new Set<string>(RESET_CONFIRM_GROUPS.flatMap((group) => group.keys));
     const labelKeys = SUMMARY_LABELS.map(([key]: [string, string]) => key);
 
     for (const key of labelKeys) {

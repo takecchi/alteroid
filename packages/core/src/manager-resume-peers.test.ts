@@ -23,12 +23,12 @@ class RecordingRunner implements RunnerClient {
   readonly resumes: RunnerResumeCommand[] = [];
 
   async connect(): Promise<void> {}
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
     this.resumes.push(command);
-    return {};
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;

@@ -42,11 +42,11 @@ function neverAliveRunner(runnerId = 'runner-primary'): RunnerClient {
     workspacePath: '/work/project',
     workspacePathKnown: true,
     async connect() {},
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -94,14 +94,14 @@ function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void
     workspacePath: '/work/project',
     workspacePathKnown: true,
     async connect() {},
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumeCalls.push(command);
       if (options?.resumeGate) await options.resumeGate;
       sessions.add(command.managerId);
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -120,6 +120,7 @@ function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void
         cwd: '/work/project',
         request: '調べ物',
         waiting: [],
+        liveBackgroundTasks: 0,
       }));
     },
     async transcript() {
@@ -323,11 +324,11 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       workspacePath: '/work/project',
       workspacePathKnown: true,
       async connect() {},
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(): Promise<{ cwd?: string }> {
-        return {};
+      async resume(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
       async send() {
         return true;
@@ -341,6 +342,7 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       async list(): Promise<RunnerManagerState[]> {
         return [
           {
+            liveBackgroundTasks: 0,
             managerId,
             status: 'running',
             cwd: '/work/project',
@@ -420,14 +422,14 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       workspacePath: '/work/project',
       workspacePathKnown: true,
       async connect() {},
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string }> {
+      async resume(command): Promise<{ cwd: string }> {
         resumeCalls.push(command);
         await abortSettled.promise;
         sessions.add(command.managerId);
-        return {};
+        return { cwd: command.cwd };
       },
       async send() {
         return true;
@@ -446,6 +448,7 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
           cwd: '/work/project',
           request: '調べ物',
           waiting: [],
+          liveBackgroundTasks: 0,
         }));
       },
       async transcript() {

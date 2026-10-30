@@ -22,11 +22,11 @@ function fakeRunner() {
     async connect(listener) {
       onEvent = listener;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -45,6 +45,7 @@ function fakeRunner() {
           cwd: '/work/mgr-a',
           request: '調べて',
           waiting: [],
+          liveBackgroundTasks: 0,
           sessionId: 'sess-a',
         },
       ];

@@ -33,11 +33,11 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
@@ -131,6 +131,7 @@ async function runningManualSetup(
 
   const fake = manualRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',
@@ -207,6 +208,7 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     });
     const fake = manualRunner();
     fake.alive.push({
+      liveBackgroundTasks: 0,
       managerId: 'mgr-n',
       status: 'running',
       cwd: '/work/project',
@@ -269,10 +271,10 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     const enteredResume = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    fake.runner.resume = async () => {
+    fake.runner.resume = async (command) => {
       entered();
       await gate;
-      return {};
+      return { cwd: command.cwd };
     };
     const sending = pool.send('mgr-inflight', '続きを');
     await enteredResume;

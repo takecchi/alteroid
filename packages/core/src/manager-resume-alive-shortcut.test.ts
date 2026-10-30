@@ -49,9 +49,7 @@ function shortcutRunner(
           ...(session.tokenFingerprint === undefined
             ? {}
             : { tokenFingerprint: session.tokenFingerprint }),
-          ...(session.liveBackgroundTasks === undefined
-            ? {}
-            : { liveBackgroundTasks: session.liveBackgroundTasks }),
+          liveBackgroundTasks: session.liveBackgroundTasks ?? 0,
         },
       ]
     : [];
@@ -67,8 +65,8 @@ function shortcutRunner(
     async connect() {
       /* この検証では使わない */
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async resume(command): Promise<RunnerResumeResult> {
       if (alive.some((state) => state.managerId === command.managerId)) {
@@ -80,6 +78,7 @@ function shortcutRunner(
       }
       spawned.push(command);
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -87,7 +86,9 @@ function shortcutRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
-      return report === 'absent' ? {} : { reusedLiveSession: false };
+      return report === 'absent'
+        ? { cwd: command.cwd }
+        : { cwd: command.cwd, reusedLiveSession: false };
     },
     async send() {
       return true;
@@ -279,19 +280,6 @@ describe('再起動後の done を、起動時に掴んだ鍵の指紋で見る�
 
     expect(s.result.outcome).toBe('held');
     expect(asked).toHaveLength(0);
-    expect(s.fake.stops).toHaveLength(0);
-    expect(s.fake.pushedToLiveProcess).toHaveLength(0);
-    await s.pool.stop();
-  });
-
-  it('⚠️ 指紋が食い違い、背景処理の本数が分からない（欄の無い runner）なら、「分からない」と言って預かる', async () => {
-    const s = await sendAfterRestart('true', true, {
-      session: { tokenFingerprint: OLD_FP },
-      activeFingerprint: NEW_FP,
-    });
-
-    expect(s.result.outcome).toBe('held');
-    expect(s.result.detail).toContain('分からない');
     expect(s.fake.stops).toHaveLength(0);
     expect(s.fake.pushedToLiveProcess).toHaveLength(0);
     await s.pool.stop();

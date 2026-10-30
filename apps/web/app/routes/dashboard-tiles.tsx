@@ -38,12 +38,11 @@ export function HomeTiles() {
 // 刈られた完了済みの行を数えない: 未了の数に影響しないため
 function progressPartial(progress: Progress): boolean {
   const { completeness } = progress.backlog;
-  const unreadableJobs = (completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
-  return completeness.unreadable !== 0 || unreadableJobs !== 0;
+  return completeness.unreadable !== 0 || completeness.unreadableJobs !== 0;
 }
 
 function closedUndercounted(progress: Progress): boolean {
-  return (progress.throughput as { mayBeUndercounted?: boolean }).mayBeUndercounted === true;
+  return progress.throughput.mayBeUndercounted;
 }
 
 function windowText(hours: number): string {

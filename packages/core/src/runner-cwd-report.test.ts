@@ -20,8 +20,9 @@ function fakeRunner(runnerId = 'runner-primary') {
     startCalls: [] as RunnerStartCommand[],
     resumeCalls: [] as RunnerResumeCommand[],
     sendCalls: [] as { managerId: string; text: string }[],
-    startResults: [] as { cwd?: string }[],
-    resumeResults: [] as { cwd?: string }[],
+    startResults: [] as { cwd: string }[],
+    // `Error` は「runner は resume を受けてセッションを起こしたが、応答だけが返らなかった」回
+    resumeResults: [] as ({ cwd: string } | Error)[],
   };
   const runner: RunnerClient = {
     runnerId,
@@ -33,11 +34,12 @@ function fakeRunner(runnerId = 'runner-primary') {
     },
     async start(command) {
       state.startCalls.push(command);
-      const result = state.startResults.shift() ?? {};
+      const result = state.startResults.shift() ?? { cwd: command.cwd };
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
-        cwd: result.cwd ?? command.cwd,
+        cwd: result.cwd,
         request: command.request,
         waiting: [],
       });
@@ -45,15 +47,17 @@ function fakeRunner(runnerId = 'runner-primary') {
     },
     async resume(command) {
       state.resumeCalls.push(command);
-      const result = state.resumeResults.shift() ?? {};
+      const result = state.resumeResults.shift() ?? { cwd: command.cwd };
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
-        cwd: result.cwd ?? command.cwd,
+        cwd: result instanceof Error ? command.cwd : result.cwd,
         request: command.request,
         waiting: [],
         sessionId: command.sessionId,
       });
+      if (result instanceof Error) throw result;
       return result;
     },
     async send(managerId, text) {
@@ -163,21 +167,6 @@ describe('manager_start: 実際の cwd の報告（Issue #1814）', () => {
 
     await pool.stop();
   });
-
-  it('(3) 応答が cwd を返さない（古い runner）: cwd は頼んだ値のまま、cwdConfirmed は立たない——頼んだ値を実際の値として名乗らない', async () => {
-    const stores = createMemoryStores();
-    const fake = fakeRunner();
-    fake.state.startResults.push({});
-    const { pool } = setup(stores, fake.runner);
-
-    const started = await pool.start({ request: '調べて', cwd: '/work/project' });
-
-    expect(started.cwd).toBe('/work/project');
-    expect(started.cwdConfirmed).toBeUndefined();
-    expect(started.requestedCwd).toBeUndefined();
-
-    await pool.stop();
-  });
 });
 
 describe('resume（移送・器の入れ替え）: 実際の cwd の報告（Issue #1814）', () => {
@@ -243,13 +232,13 @@ describe('resume（移送・器の入れ替え）: 実際の cwd の報告（Iss
     await pool.stop();
   });
 
-  it('(3) 応答が cwd を返さない（古い runner）: 台帳は頼んだ値のまま、追加の一言も送らない——未確認を頼んだ値で埋めない', async () => {
+  it('(3) 応答が返らず一覧で引き取った回（cwd を受け取れない）: 台帳は頼んだ値のまま、追加の一言も送らない——未確認を頼んだ値で埋めない', async () => {
     const stores = createMemoryStores();
     const job = jobWith('mgr-unconfirmed', '/work/project');
     await stores.jobs.putJob(job);
     const fake = fakeRunner();
     fake.state.resumeResults.push({ cwd: '/work/project' });
-    fake.state.resumeResults.push({});
+    fake.state.resumeResults.push(new Error('応答が返らなかった'));
     const { pool } = setup(stores, fake.runner);
 
     await pool.restore();

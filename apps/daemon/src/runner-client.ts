@@ -852,16 +852,17 @@ class HttpRunner implements RunnerClient {
   }
 
   // この1つだけ期限を付けない: 付けると期限切れ（＝不明）が呼ぶ側で確定的な失敗に化け、`Pool.start` が `#records` から消して台帳にも残さず、runner 側で走り出していても `manager_list` から消えて止める手も残らない（無期限に待つより悪い）ため
-  // 戻り値の `cwd` を「頼んだ値のまま」で埋めない: ローリング再デプロイの窓では、この変更前の runner が `{ ok: true }` だけを返すため。1欄ずつ検証し、他欄の形崩れに巻き込まれない
-  async start(command: RunnerStartCommand): Promise<{ cwd?: string; sessionGeneration?: string }> {
+  // `cwd` の欄が無い・形が崩れた応答は投げる（「頼んだ値のまま」で埋めない）: 作業場が確かめられないまま「開けた」と読まないため。`sessionGeneration` は1欄ずつ検証し、他欄の形崩れに巻き込まれない
+  async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration?: string }> {
     const response = await this.#callWithoutDeadline('POST', '/managers', command);
     const body = (await response.json()) as { cwd?: unknown; sessionGeneration?: unknown };
     const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
+    if (!cwd.success) throw new Error('runner の応答を読めなかった（start の cwd）');
     const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
       body.sessionGeneration,
     );
     return {
-      ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
+      cwd: cwd.data,
       ...(generation.success && generation.data !== undefined
         ? { sessionGeneration: generation.data }
         : {}),
@@ -880,6 +881,7 @@ class HttpRunner implements RunnerClient {
       sessionGeneration?: unknown;
     };
     const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
+    if (!cwd.success) throw new Error('runner の応答を読めなかった（resume の cwd）');
     const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
       body.sessionGeneration,
     );
@@ -888,7 +890,7 @@ class HttpRunner implements RunnerClient {
       body.reusedLiveSession,
     );
     return {
-      ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
+      cwd: cwd.data,
       reusedLiveSession: reused.success && reused.data === true,
       ...(generation.success && generation.data !== undefined
         ? { sessionGeneration: generation.data }

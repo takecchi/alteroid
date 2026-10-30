@@ -290,8 +290,6 @@ interface Line {
   turnFailure?: 'failed' | 'held';
   turnFailureKind?: TurnFailureKind;
   replyGroup?: string;
-  // 返信の途中に人間の発言が届いて（`queued`）分けた行の印: デーモンはそこで返信を割って日誌へ書くので、割らない古いデーモンの本文と照合するときはこの境目に区切りを入れない
-  splitByHuman?: true;
   journalId?: string;
   attachments?: readonly MessageAttachment[];
   clientMessageId?: string;
@@ -414,8 +412,8 @@ function claimedFailedGroups(
   return claimed;
 }
 
-// 分かれた返信の行を日誌の1発言へ連結するときの区切り: 区切りあり（デーモンが境目に入れる空行）→ なし（古いデーモン）の順
-const REPLY_SEGMENT_JOINERS = ['\n\n', ''] as const;
+// 分かれた返信の行を日誌の1発言へ連結するときの区切り: デーモンが境目に入れる空行
+const REPLY_SEGMENT_JOINER = '\n\n';
 
 // 一致が確認できた行だけを落とす: 一致が無ければ理由を問わず残す。履歴の再取得が空を返す窓で、届いたばかりの行を消さないため
 export function pendingOwnLines(
@@ -486,18 +484,10 @@ export function pendingOwnLines(
       let next = start + 1;
       for (let end = members.length; end > start + 1; end -= 1) {
         const run = members.slice(start, end);
-        // 区切りあり（メッセージの境目に空行）と区切りなし（古いデーモン）の両方を受ける: Web とデーモンは版がずれる。
-        // 区切りありを先に当てる。どちらも履歴に在るなら、区切りありのほうが新しい形
-        const candidates = REPLY_SEGMENT_JOINERS.map(
-          (joiner) =>
-            `clone\u0000${run.map((member, index) => (index === 0 || member.splitByHuman === true ? '' : joiner) + member.text).join('')}`,
-        );
+        const joined = `clone\u0000${run.map((member) => member.text).join(REPLY_SEGMENT_JOINER)}`;
         // 見えている履歴を先に当て、無ければ畳まれた返答に当てる
-        const key =
-          candidates.find((candidate) => (remaining.get(candidate) ?? 0) > 0) ??
-          candidates.find((candidate) => (folded.get(candidate) ?? 0) > 0);
-        if (key === undefined) continue;
-        take(key, true);
+        if ((remaining.get(joined) ?? 0) <= 0 && (folded.get(joined) ?? 0) <= 0) continue;
+        take(joined, true);
         for (const member of run) absorbedKeys.add(member.key);
         next = end;
         break;
@@ -811,12 +801,8 @@ interface Stream {
 }
 
 // held・queued は選ばない（own を除く）: 走っているターンが pending に無い別の起点のとき、順番待ちを選ぶと別の発言を取り下げてしまう。
-// pending を返さない古いデーモンも null（対象を省くと先客のターンを止めうる）
-function pickResumeTarget(
-  pending: ChatStreamPending[] | undefined,
-  own?: ReadonlySet<string>,
-): string | null {
-  if (!Array.isArray(pending)) return null;
+// 決められないときは null（対象を省くと先客のターンを止めうる）
+function pickResumeTarget(pending: ChatStreamPending[], own?: ReadonlySet<string>): string | null {
   for (const state of ['running', 'starting'] as const) {
     const found = pending.find((entry) => entry.state === state);
     if (found !== undefined) return found.clientMessageId;
@@ -1791,11 +1777,8 @@ export function ChatPane({
           : new Map(previous).set(replyGroup, { of: stream.id, kind, baseline }),
       );
     };
-    // 道具を挟まずに人間の発言で分けたときだけ立てる: 道具を挟んだ境目は、割らない古いデーモンでも区切りの空行が入る
-    let splitByHuman = false;
     const endReply = () => {
       replyKey = undefined;
-      splitByHuman = false;
     };
     const dropTransients = (previous: Line[]) =>
       previous.filter((line) => !(line.transient === true && line.of === stream.id));
@@ -1844,31 +1827,18 @@ export function ChatPane({
         unfinishedReplyRef.current.set(stream.id, unfinished);
       }
       setActiveReplyKeys((keys) => new Set(keys).add(key));
-      const split = splitByHuman;
-      splitByHuman = false;
       setLines((previous) => [
         ...dropTransients(previous),
-        {
-          key,
-          role: 'clone',
-          text: '',
-          of: stream.id,
-          replyGroup,
-          ...(split ? { splitByHuman: true as const } : {}),
-        },
+        { key, role: 'clone', text: '', of: stream.id, replyGroup },
       ]);
     };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
         // 返信の行をここで分ける:デーモンは人間の発言を記録するとき、それまでの返信を先に日誌へ書く。続きを同じ行へ足すと、その発言より上に出るうえ、日誌の本文とも合わない
-        case 'queued': {
-          // 続けて届いた2通目でも印を落とさない: 1通目で行は既に閉じている
-          const split = replyKey !== undefined || splitByHuman;
+        case 'queued':
           endReply();
-          splitByHuman = split;
           setTransient('順番を待っている…');
           break;
-        }
         case 'thinking':
           setTransient('考えている…');
           break;
@@ -1952,14 +1922,15 @@ export function ChatPane({
       let stream: Stream | undefined;
       let writer: ReturnType<typeof createStreamWriter> | undefined;
       let sawTerminal = false;
-      let pending: ChatStreamPending[] | undefined;
+      let pending: ChatStreamPending[] = [];
       let busy = false;
       let aborted: boolean | undefined;
       let closedEarly = false;
       try {
         for await (const message of getChatStream(api, id, { signal: controller.signal })) {
           if (message.event === 'open') {
-            pending = message.data.pending;
+            // `?? []` は型のため: api-client の `pending` は optional のまま（daemon は常に載せる）。空なら pickResumeTarget は null を返す
+            pending = message.data.pending ?? [];
             if (!message.data.inProgress) {
               // 流れが切れた後の張り直しで、ターンが既に終わっていたら、受け取った分と「途中で切れた」をそのまま残す: 確定した本文が履歴に載ったら、切れた返信の後片付けが入れ替える
               if (options.afterCut === true) break;
@@ -2690,7 +2661,7 @@ export function ChatPane({
       setInterrupting({ conversationId: pressedConversationId });
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
-      // 対象を省かない: 省くと、順番待ちの間に押しても先客のターンを止めてしまう。決められないとき・古いデーモンは呼ばずに言う
+      // 対象を省かない: 省くと、順番待ちの間に押しても先客のターンを止めてしまう。決められないときは呼ばずに言う
       const running = streamRef.current;
       const here =
         running !== undefined && running.id === pressedConversationId ? running : undefined;
