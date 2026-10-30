@@ -2,12 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useSWRConfig } from 'swr';
 
 import { useApiContext } from '../api';
-import type { JournalEntry } from '@alteroid/logic';
+import { sseRetryDelay, type JournalEntry } from '@alteroid/logic';
 
 import { isKeyOfType, KEY } from './queries';
-
-const RETRY_BASE_MS = 1000;
-const RETRY_MAX_MS = 30_000;
 
 const RECENT_LIMIT = 200;
 
@@ -67,7 +64,7 @@ export function useJournalLive(enabled = true): JournalLive {
 
       setStatus('offline');
       lost = true;
-      const wait = Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_MAX_MS);
+      const wait = sseRetryDelay(attempt);
       attempt += 1;
       timer = setTimeout(() => void connect(), wait);
     }
