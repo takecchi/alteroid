@@ -51,6 +51,20 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
     expect(result).not.toHaveProperty('reusedLiveSession');
   });
 
+  it('欄なしは false と同じに読む（欄が無いことを古い runner の印にしない。#5718）', async () => {
+    expect(await resumeWith({ ok: true, cwd: '/workspace' })).toEqual({
+      cwd: '/workspace',
+      reusedLiveSession: false,
+    });
+  });
+
+  it('形が崩れた欄も false と同じに読み、他欄を巻き込まない（#5718）', async () => {
+    expect(await resumeWith({ ok: true, cwd: '/workspace', reusedLiveSession: 'yes' })).toEqual({
+      cwd: '/workspace',
+      reusedLiveSession: false,
+    });
+  });
+
   it('形が崩れた欄は「分からない」として捨てる（他欄を巻き込まない）', async () => {
     expect(await resumeWith({ ok: true, cwd: '/workspace', reusedLiveSession: 'yes' })).toEqual({
       cwd: '/workspace',

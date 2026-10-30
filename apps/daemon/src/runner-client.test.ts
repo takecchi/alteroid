@@ -1229,6 +1229,22 @@ describe('hello() が拾う版', () => {
 
     expect(client.revision).toBeUndefined();
   });
+
+  it('/health に revision が無い runner は、「訊けたが分からない」（unknown）として読む（#5718）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId: 'runner-old',
+          workspacePath: '/workspace',
+        })) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+
+    expect(client.revision).toEqual({ status: 'unknown' });
+  });
 });
 
 describe('死んだ runner への SSE 再接続（バックオフ）', () => {
