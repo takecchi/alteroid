@@ -46,7 +46,7 @@ describe('/dropped 画面 — 跡の行は鍵を伏せる', () => {
         </MemoryRouter>
       </Providers>,
     );
-    await screen.findByText('失敗の一覧');
+    await screen.findByText('記録の失敗の一覧');
 
     const row = await screen.findByText(/記録できませんでした/);
     expect(row.textContent).toContain('理由の文');

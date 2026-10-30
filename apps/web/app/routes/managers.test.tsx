@@ -62,7 +62,7 @@ describe('読めない委譲（#2345）', () => {
   it('読めた行が0件でも「まだマネージャーはいません」と言わず、件数と id を断る', async () => {
     renderManagers([], [{ id: 'mgr-bad', reason: '不正な欄: status' }]);
 
-    const note = await screen.findByText(/読めない委譲が 1 件ある/);
+    const note = await screen.findByText(/読めないマネージャーが 1 件ある/);
     expect(note.textContent).toContain('id: mgr-bad');
     expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
     expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
@@ -72,7 +72,7 @@ describe('読めない委譲（#2345）', () => {
   it('読めた行が在るときは、一覧の上に断りを出し、読めた行もそのまま出る', async () => {
     renderManagers([{ ...BASE }], [{ reason: '不正な行' }]);
 
-    const note = await screen.findByText(/読めない委譲が 1 件ある/);
+    const note = await screen.findByText(/読めないマネージャーが 1 件ある/);
     expect(note.textContent).not.toContain('id:');
     expect(screen.getByText('PR を出して')).toBeTruthy();
   });
@@ -81,7 +81,7 @@ describe('読めない委譲（#2345）', () => {
     renderManagers([]);
 
     expect(await screen.findByText(/まだマネージャーはいません/)).toBeTruthy();
-    expect(screen.queryByText(/読めない委譲/)).toBeNull();
+    expect(screen.queryByText(/読めないマネージャー/)).toBeNull();
   });
 });
 
@@ -106,7 +106,7 @@ describe('全体が0件のときの空表示（#2789）', () => {
   it('読めない行が在るときは「居ない」と言えないので、チップを隠さない', async () => {
     renderManagers([], [{ reason: '不正な行' }]);
 
-    expect(await screen.findByText(/読めない委譲が 1 件ある/)).toBeTruthy();
+    expect(await screen.findByText(/読めないマネージャーが 1 件ある/)).toBeTruthy();
     expect(screen.getByRole('button', { name: '実行中' })).toBeTruthy();
   });
 });
@@ -409,26 +409,26 @@ describe('セッションが無いことは、`live` も状態も置き換えず
   it('「失われた」と言い切らず、完遂後に畳まれた回も同じ形に見えることを言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
 
-    expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーが失われたという意味ではない/)).toBeTruthy();
     expect(
       screen.getByText(
         /完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える/,
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/同じ仕事が2本になる/)).toBeTruthy();
+    expect(screen.getByText(/同じ作業をするマネージャーが2体になる/)).toBeTruthy();
   });
 
   it('欄が無いマネージャーには何も足さない（雑音にしない）', async () => {
     renderManagers([{ ...BASE, status: 'running', live: true }]);
 
     expect(await screen.findByText('実行中')).toBeTruthy();
-    expect(screen.queryByText(/この委譲のセッションを持っていなかった/)).toBeNull();
+    expect(screen.queryByText(/このマネージャーのセッションを持っていなかった/)).toBeNull();
   });
 
   it('時刻は相対表示で、ISO をそのまま出さない', async () => {
     renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
 
-    expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーのセッションを持っていなかった/)).toBeTruthy();
     expect(screen.queryByText(new RegExp(MISSING))).toBeNull();
   });
 
@@ -476,7 +476,7 @@ describe('セッションが無いことは、`live` も状態も置き換えず
       },
     ]);
 
-    expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーのセッションを持っていなかった/)).toBeTruthy();
     expect(screen.queryByText(/resume でも入り直せなかった/)).toBeNull();
     expect(screen.queryByText(/名簿に載っていなかった/)).toBeNull();
     expect(screen.queryByText(/不明/)).toBeNull();
@@ -493,7 +493,7 @@ describe('セッションが無いことは、`live` も状態も置き換えず
       },
     ]);
 
-    expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーのセッションを持っていなかった/)).toBeTruthy();
     expect(screen.queryByText(/future-kind/)).toBeNull();
   });
 });
@@ -532,7 +532,7 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
   it('「失われた」と言い切らず、器の中でまだ走っている可能性を潰さない', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
 
-    expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーが失われたという意味ではない/)).toBeTruthy();
     expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
     expect(row().queryByText('セッションへ戻れず')).toBeNull();
   });
@@ -558,7 +558,7 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText('セッション切断')).toBeTruthy();
     expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    expect(screen.getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(screen.getByText(/このマネージャーのセッションを持っていなかった/)).toBeTruthy();
   });
 });
 
@@ -742,7 +742,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
       expect(row().getByText('req-mgr-0')).toBeTruthy();
     });
     expect(screen.queryByRole('button', { name: /もっと見る/ })).toBeNull();
-    expect(screen.getByText(/これより古い委譲は無い（全 2 件）/)).toBeTruthy();
+    expect(screen.getByText(/これより古いマネージャーは無い（全 2 件）/)).toBeTruthy();
   });
 
   it('「もっと見る」が失敗したら、終端と混ぜずに理由と押し直しを出す', async () => {
@@ -774,7 +774,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
 
     expect(await screen.findByText(/自動では進めない/)).toBeTruthy();
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
     expect(screen.getByText(/全部読み終えたのではない/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'もう一度試す' })).toBeTruthy();
     expect(row().getByText('req-mgr-0')).toBeTruthy();
@@ -819,7 +819,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     expect(row().getByText(/billing_error/)).toBeTruthy();
     expect(row().getByText(/手が空いたのではない/)).toBeTruthy();
     expect(row().getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    expect(row().getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(row().getByText(/このマネージャーのセッションを持っていなかった/)).toBeTruthy();
     expect(row().getByText(/名簿に載っていなかった/)).toBeTruthy();
   });
 

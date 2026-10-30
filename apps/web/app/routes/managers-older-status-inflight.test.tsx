@@ -176,7 +176,7 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     await waitFor(() => {
       expect(stub.calls.some((u) => afterIdOf(u) === 'mgr-49')).toBe(true);
     });
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
     expect(buttonByText(/^読み込み中/)).toBeTruthy();
 
     loadOlderGate.resolve();
@@ -188,7 +188,7 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
         ),
       ).toBeTruthy();
     });
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
   });
 
   it('取り直しの応答が届くまでに頁が足された（最後の頁の錨が変わった）ら olderStatus を動かさない', async () => {
@@ -247,6 +247,6 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
         ),
       ).toBeTruthy();
     });
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
   });
 });
