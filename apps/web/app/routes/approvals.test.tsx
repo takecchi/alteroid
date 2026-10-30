@@ -736,7 +736,7 @@ describe('メタ行の job id が委譲の詳細へのリンクになる（issue
 
     const link = await screen.findByRole('link', { name: '詳細を見る' });
     expect(link.getAttribute('href')).toBe('/managers/mgr-42');
-    expect(link.parentElement?.textContent).toBe('委譲: 詳細を見る');
+    expect(link.parentElement?.textContent).toBe('マネージャー: 詳細を見る');
     expect(document.body.textContent).not.toContain('mgr-42');
   });
 

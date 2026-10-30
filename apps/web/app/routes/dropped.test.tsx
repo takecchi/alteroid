@@ -43,11 +43,20 @@ async function renderDropped() {
       </MemoryRouter>
     </Providers>,
   );
-  await screen.findByText('失敗の一覧');
+  await screen.findByText('記録の失敗の一覧');
   return view;
 }
 
 describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜない', () => {
+  it('カードの名前は「記録の失敗の一覧」で、ナビの「失敗」と紛れる素の「失敗の一覧」とは言わない（#5907）', async () => {
+    stubDropped({ body: { origin: 'daemon', since: SINCE, limit: 200, total: 0, traces: [] } });
+
+    await renderDropped();
+
+    expect(screen.getByText('記録の失敗の一覧')).toBeTruthy();
+    expect(screen.queryByText('失敗の一覧')).toBeNull();
+  });
+
   it('0件なら describeDroppedTraceEmptyNote() の文言を出す', async () => {
     stubDropped({ body: { origin: 'daemon', since: SINCE, limit: 200, total: 0, traces: [] } });
 
