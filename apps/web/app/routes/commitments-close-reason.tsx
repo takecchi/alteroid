@@ -1,4 +1,4 @@
-import { useReportDirty } from '~/lib/leave-guard';
+import { useIsMounted, useReportDirty } from '~/lib/leave-guard';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { Button, ErrorNote, FieldHint, Input } from '@alteroid/ui';
@@ -23,13 +23,10 @@ export function CloseReasonForm({
   const closeCommitment = useCloseCommitment();
   // 外れたあとの後始末は片付けの途中だったときだけ動かす。応答が外れより先なら応答のほうで動かす。
   const closing = useRef<(() => void) | null>(null);
-  const mounted = useRef(true);
+  // 下の後始末より前に呼ぶ: unmount では宣言順に片付くので、`mounted` を偽にしてから後始末を呼ぶ順が保たれる。
+  const mounted = useIsMounted();
   useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      closing.current?.();
-    };
+    return () => closing.current?.();
   }, []);
   const reasonId = useId();
   const reasonHintId = useId();
