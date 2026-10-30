@@ -258,7 +258,7 @@ export interface FailedTurn {
   baseline: number | undefined;
 }
 
-function claimedFailedGroups(
+export function claimedFailedGroups(
   failedTurns: ReadonlyMap<string, FailedTurn> | undefined,
   shownId: string | undefined,
   historyLines: Line[],

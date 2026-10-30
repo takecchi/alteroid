@@ -9,6 +9,8 @@ export class TurnFailedError extends Error {
   constructor(
     message: string,
     readonly failureKind: TurnFailureKind,
+    // このターンの手元の返信の組（FailedTurn の鍵）。履歴に同じ失敗が載ったかを引くのに使う
+    readonly replyGroup?: string,
   ) {
     super(message);
   }
