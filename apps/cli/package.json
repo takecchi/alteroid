@@ -19,16 +19,11 @@
     "@alteroid/daemon": "workspace:*",
     "@alteroid/storage-fs": "workspace:*",
     "commander": "catalog:",
-    "hono": "catalog:",
-    "ink": "catalog:",
-    "marked": "catalog:",
-    "react": "catalog:",
-    "string-width": "catalog:"
+    "hono": "catalog:"
   },
   "devDependencies": {
     "@alteroid/logic": "workspace:*",
     "@types/node": "catalog:",
-    "@types/react": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"
   }

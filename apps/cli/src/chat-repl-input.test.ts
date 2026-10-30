@@ -468,7 +468,7 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello']);
   });
 
-  it('// で始めた行は、先頭の / を 1 つ外した発言として送る（TUI と同じ。#3768）', async () => {
+  it('// で始めた行は、先頭の / を 1 つ外した発言として送る（#3768）', async () => {
     useStdin(false);
     const calls = recordFetch(() => sse(OK_REPLY));
     const out = captureStdout();

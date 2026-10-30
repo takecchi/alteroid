@@ -1,6 +1,5 @@
 import { redactErrorText, redactSecretsInBody } from '@alteroid/core/redact';
 
-// TUI でも Ink の掃除に頼らない: Ink は SGR と OSC を残し、BEL・BS・NUL・`\r`・C1 の OSC を素通しにするため
 // `\r` も落とす: 同じ行の前の文字を上書きして偽の表示を作れるため
 const TERMINAL_CONTROL_SEQUENCES =
   // eslint-disable-next-line no-control-regex -- 制御文字の検出そのものが目的

@@ -594,12 +594,12 @@ export async function attachmentsListCommand(options: AttachmentsListOptions): P
   }
 }
 
-// CLI と TUI（/keep・/unkeep・/rm）で同じ文にする
+// CLI（/keep・/unkeep・/rm）で同じ文にする
 export function attachmentNotFoundMessage(id: string): string {
   return `そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`;
 }
 
-// 確認の見出しも CLI（rm）と TUI（/rm）で同じ文にする
+// 確認の見出しも CLI（rm・/rm）で同じ文にする
 export function attachmentRemoveSummary(id: string): string {
   return `添付を消します（保存中のものも消えます）: ${id}`;
 }

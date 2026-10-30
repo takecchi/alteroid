@@ -1,4 +1,4 @@
-// CLI の chat（chat.ts）と TUI（tui/）が同じ規則で読むために、ここ1か所に置く。
+// CLI の chat（chat.ts）の読み方の規則を、ここ1か所に置く。
 // 余分な語・知らない語は使い方の誤りとして断る: 黙って捨てたり既定へ倒したりすると、綴り違いが別の意味で通るため。
 
 export function isKeyword(token: string | undefined, keyword: string): boolean {

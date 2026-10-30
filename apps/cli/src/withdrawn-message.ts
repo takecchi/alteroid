@@ -1,4 +1,4 @@
-// 取り下げた発言（`GET /conversations/:id` の `delivery: 'withdrawn'`）の出し方。CLI の `/conversation`・`conversations show`・TUI の履歴が共有する: 入口ごとに言い方がずれないため
+// 取り下げた発言（`GET /conversations/:id` の `delivery: 'withdrawn'`）の出し方。CLI の `/conversation`・`conversations show`が共有する: 入口ごとに言い方がずれないため
 // Web の `ChatWithdrawnMessage`（packages/ui）と同じ「（取り下げた発言）」の語を使う。apps 同士はパッケージを共有しないので、ここに書き写している
 export const WITHDRAWN_MESSAGE_LABEL = '（取り下げた発言）';
 

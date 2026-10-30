@@ -6,7 +6,6 @@ import { createClient } from './client.js';
 import { normalizeCommandWord, parseCountArg } from './command-args.js';
 import type { Target } from './target.js';
 import { captureStdout, slashArgs } from './test-support.js';
-import { surplusRefusal } from './tui/app.js';
 
 const target: Target = {
   baseUrl: 'http://127.0.0.1:4517',
@@ -69,7 +68,7 @@ describe('件数・分の数は /^\\d+$/ と上限で読む', () => {
     expect(parseCountArg('11', 10).ok).toBe(false);
   });
 
-  it('/journal の件数（CLI の chat と TUI が共有する読み方）は 1e1 を断る', () => {
+  it('/journal の件数（CLI の chat の読み方）は 1e1 を断る', () => {
     expect(parseJournalSearchTokens(['1e1']).ok).toBe(false);
     expect(parseJournalSearchTokens(['10'])).toMatchObject({ ok: true, limit: '10' });
   });
@@ -110,24 +109,5 @@ describe('余分な語・知らない語は、使い方の誤りとして断り�
     expect(out).toContain(message);
     expect(failed).toHaveLength(1);
     expect(urls).toEqual([]);
-  });
-});
-
-describe('TUI も同じ規則で断る', () => {
-  it('引数を取らないコマンドに語が付いたら断る', () => {
-    expect(surplusRefusal('new', 'x')).toBe(
-      '使わない語です: x（使えるのは /new だけ。引数は取りません）',
-    );
-    expect(surplusRefusal('memory', 'x')).toBe(
-      '使わない語です: x（使えるのは /memory だけ。引数は取りません）',
-    );
-    expect(surplusRefusal('new', '')).toBeUndefined();
-  });
-
-  it('参照を1つだけ取るコマンドに語が余ったら断る', () => {
-    expect(surplusRefusal('resume', 'c1 extra')).toBe(
-      '使わない語です: extra（使えるのは /resume、/resume <id>）',
-    );
-    expect(surplusRefusal('approvals', 'a1')).toBeUndefined();
   });
 });

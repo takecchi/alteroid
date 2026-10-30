@@ -531,14 +531,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(names).toContain('chat');
   });
 
-  it('tui の説明は TABS の全画面の名前を挙げ、「順に足していく」を含まない', async () => {
-    const { TABS } = await import('./tui/layout.js');
-    const description = program.commands.find((c) => c.name() === 'tui')?.description() ?? '';
-    for (const tab of TABS) expect(description).toContain(tab.label);
-    expect(description).toContain(`${TABS.length} 画面`);
-    expect(description).not.toContain('順に足していく');
-  });
-
   // list が「読めない行」に出す id を指す: デーモンの stderr の跡は、コンテナでは `docker logs` を掘ることになるため
   it.each([
     ['access', 'アカウント'],

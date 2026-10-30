@@ -519,7 +519,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 
 - **`AttachmentStore` は記憶（`PersonaStore`）から独立している。** 中身（bytes）は記憶・日誌・受信箱のどこにも書かない。日誌の `exchange` と受信箱の発言に載るのは控え（`AttachmentRef`: id・名前・種類・大きさ・sha256）だけで、中身が保持期間で消えても控えが残る
 - **検証は3実装（インメモリ・fs・pg）で同じ関数を通る**（`prepareAttachment`）。名前の正規化・MIME の正規化・画像のマジックバイト照合・上限・sha256 の計算・id の払い出しは core が持ち、ドライバは置くだけである。契約は `attachment-contract.ts` で3実装を同じ形で測る
-- **0バイトの添付は core が `empty` として断る**（`prepareAttachment` を通るので3実装に同じに効く）。`POST /attachments` は 400（`code: empty`）を返し、Web・CLI・TUI は送る前に同じ文（「空のファイルは添えられない」）で断る
+- **0バイトの添付は core が `empty` として断る**（`prepareAttachment` を通るので3実装に同じに効く）。`POST /attachments` は 400（`code: empty`）を返し、Web・CLI は送る前に同じ文（「空のファイルは添えられない」）で断る
 - **中身が画像でも、画像の上限（既定 5 MiB）を超える添付は、ターンで画像として渡さない**（宣言が画像以外なら、その他の上限で受け付けはする）。通知行で理由と開け方を言う。開け方は、クローンは `attachment_fetch`、担い手は置き場の path を `Read`
 - **大きすぎる画像は、上げる時点でサーバーが断る**（`POST /attachments`。大きさの超過は 413、寸法の超過は 400）。断る文には、何が超えたかを書く。実際の値は、分かるときに書く
   - 添付1つの上限（既定 25 MiB）を超えて受け取りの途中で切るときは、実際の大きさが分からないので上限だけを言う
@@ -540,7 +540,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **担い手からの受け取りは、デーモンが runner から取りに行く**（下の「runner API」）。取った中身は `prepareAttachment` を通して置き場へ入れ（`uploadedBy: manager:<managerId>`、保存の印なし）、報告の受信箱と日誌（`manager_message`）には控えだけを書く
 - **中身の置き場は、pg の構成で S3 互換のストレージが設定されていれば、そちらである**（#4128 段2。`ALTEROID_ATTACHMENT_S3_*`。設定が無ければ今までどおり pg の `bytea`）。S3 API で一般に書き、特定の事業者に寄せない（本番は Railway Buckets の予定）。口は core の `AttachmentBlobStore`（`put` / `open` / `remove`）で、実装は `packages/storage-pg` の S3 クライアント（`put` は長さ不明のストリームの multipart）。`attachments` 表は控えと `blob_key`（`attachments/<id>`、設定の prefix があれば前に付く）を持ち、`bytes` と `blob_key` は**どちらか一方だけ**が入る（表の制約）。設定があれば、**新しく入るものは全部**（画像も）blob へ置く。`putStream` は blob へ流しながら大きさと sha256 を数え、上限を超えた・本文が投げた・INSERT が落ちたときは blob を消す。画像は先頭と寸法の検査に中身が要るので、集めて検査してから置く。設定を外すと、`blob_key` の行の中身は読めない（`get` / `open` は「無い」と答え、stderr に1行）。fs の構成は使わない（設定しても無視し、stderr に1行）。設定が不正なら（鍵の欠け・https でない endpoint）起動は続けるが使わず、理由を stderr に1行出す（値は載せない）。資格の環境変数は担い手の子プロセスへ配らない
 - **削除は、行を先に消してから blob を消す。**（`remove` / `prune` / `clear`。行を `returning` で取った `blob_key` を、行の削除の後でまとめて消す）。**blob の削除に落ちても行の削除は戻さない**（stderr に件数と理由を1行。key は載せない）。この順にするのは、行が残って中身が無い（読めないのに一覧に在る）状態を作らないためで、代わりに**blob が残りうる**（削除の失敗・行を消した直後のプロセスの死）。残った blob は**掃除の仕組み**が後で消す（#4314）。pg の置き場（`sweepOrphanBlobs`）が `<prefix>attachments/` の下を列挙し、**次の3つをすべて満たすものだけ**を `remove` する。(1) key が `attachmentBlobKey(id, prefix)` の形に**完全に**合う（id は `randomUUID()` の形の小文字の UUID。入れ子・別の名前・大文字・末尾の余分には触れない）。(2) `lastModified + 24 時間 <= now`（上げの1リクエストの持ち時間 1 時間より長い猶予。置いてから行を INSERT するまでの blob を消さない。ちょうどは消す側）。(3) `attachments` 表に同じ `blob_key` の行が**無い**（期限切れでまだ prune されていない行も「有る」に数える。行が在る間は消さず、行が消えるときに行の削除の側で blob を消す）。列挙は事業者によって有料なので、デーモンは既存の添付の掃除の周期（既定60分）の中で、**前回から 24 時間経っていなければ呼ばない**（最後に呼んだ時刻はメモリだけに持つ。起動直後の1回目は呼ぶ）。掃除を止めていれば（`ALTEROID_ATTACHMENT_PRUNE_EVERY=off`）これも止まる。外部ストレージが未設定なら何もしない（列挙もしない）。消した件数・失敗があれば stderr に1行（key は載せない）。削除に落ちても投げず、次の回に回る。**⚠️ 判定は「自分の pg に控えが無い」なので、1つのバケットを prefix を分けずに複数の alteroid で共有すると、互いの中身を消し合う**（コードからは見分けられない）。共有するなら `ALTEROID_ATTACHMENT_S3_PREFIX` を必ず分ける
-- **大きいファイルの別枠は、外部ストレージが有効なときだけ効く。** `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`（既定 2 GiB）。画像以外の1つの上限は `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`（画像は `maxImageBytes` のまま）で、core の検査（`validateAttachmentInput`・`planAttachmentStream`・`file_put` の事前 stat・担い手の報告の取り出しの事前の断り・`GET /attachments/limits`）と Web・CLI・TUI の先行検査は全部これに揃う。**`maxFileBytes` を超える画像以外のファイル（大きいファイル）は、1発言（と担い手の1報告）の合計 `maxTotalBytes` に数えない**（個数 `maxPerMessage` には数える）。合計の上限は、bytea と base64 の本文が1度にメモリへ載る負荷を抑えるためのもので、外部ストレージの大きいファイルはストリームで流れるので、その負荷にならない。`POST /attachments` は、content-length が上限を超えるときだけ先に 413 で断り、それ以外は溜めずに置き場へ流して、超過を `putStream` が `too_large`（413）で断る（`hono/body-limit` は chunked の本文を上限まで溜めるので、この枠では使わない）。上限は置き場の実際の構成から決める（外部ストレージを実際に使わないなら 0）ので、デーモンは置き場・`createApp`・クローンの道具・担い手のプールへ同じ値を渡す
+- **大きいファイルの別枠は、外部ストレージが有効なときだけ効く。** `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`（既定 2 GiB）。画像以外の1つの上限は `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`（画像は `maxImageBytes` のまま）で、core の検査（`validateAttachmentInput`・`planAttachmentStream`・`file_put` の事前 stat・担い手の報告の取り出しの事前の断り・`GET /attachments/limits`）と Web・CLI の先行検査は全部これに揃う。**`maxFileBytes` を超える画像以外のファイル（大きいファイル）は、1発言（と担い手の1報告）の合計 `maxTotalBytes` に数えない**（個数 `maxPerMessage` には数える）。合計の上限は、bytea と base64 の本文が1度にメモリへ載る負荷を抑えるためのもので、外部ストレージの大きいファイルはストリームで流れるので、その負荷にならない。`POST /attachments` は、content-length が上限を超えるときだけ先に 413 で断り、それ以外は溜めずに置き場へ流して、超過を `putStream` が `too_large`（413）で断る（`hono/body-limit` は chunked の本文を上限まで溜めるので、この枠では使わない）。上限は置き場の実際の構成から決める（外部ストレージを実際に使わないなら 0）ので、デーモンは置き場・`createApp`・クローンの道具・担い手のプールへ同じ値を渡す
 - **大きいファイルは、担い手へは別口のストリームで下ろす**（#4128 段3a。上の「runner API」の「大きいファイル」）。`loadManagerAttachments` は大きいファイルの中身を読まず、`staged: true` の参照（と `staged` の控え）として返す。送る側（`ManagerPool`）が runner の別口へ押してから命令を送る。相手が受け取りを名乗らない・上限に収まらない・押す口が無い・押すのに失敗した、のどれでも、理由を言って何も送らない。押す1つずつに期限（`outboxFetchDeadlineMs`）を掛け、切れたら命令を送らずに断る（段3b）。担い手から人間へ返す側（出し箱）の大きいファイルは、上の「担い手からの成果物」の節（段3b）
 
 ### 会話の一覧の頁送り
@@ -648,7 +648,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 | スキーマ | zod | エスカレーション・プロトコルの型付きメッセージの実体 |
 | DB（クラウド段） | PostgreSQL + drizzle | マイグレーション込みで軽量 |
 | テスト | vitest | — |
-| CLI | commander + SSE ストリーミング | chat は readline ベースで開始。TUI 化は後から可能 |
+| CLI | commander + SSE ストリーミング | chat は readline ベース |
 
 ## Web UI — 画面とデーモンのオリジンが違うこと
 
@@ -703,7 +703,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
 
-**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxLargeFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す（`maxLargeFileBytes` は外部ストレージが有効なときだけ 0 でない）。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ（404・接続失敗・壊れた応答のどれでも）core の既定値で検査し、覚えずに次の機会に取り直す。最終判断はサーバの 4xx に任せる。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
+**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxLargeFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す（`maxLargeFileBytes` は外部ストレージが有効なときだけ 0 でない）。CLI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ（404・接続失敗・壊れた応答のどれでも）core の既定値で検査し、覚えずに次の機会に取り直す。最終判断はサーバの 4xx に任せる。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
 
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**
