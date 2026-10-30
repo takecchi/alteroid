@@ -334,6 +334,19 @@ describe('参照で受け取れるデーモンには、退避の本文を SSE �
       expect(lines.some((line) => line.includes(BODY))).toBe(false);
     }
   });
+
+  // 名乗りは何も切り替えない（#5701）: 本文はいつも預けて参照で送り、本文は stderr にも出さない
+  it('デーモンが何も名乗らなくても、本文は SSE に載せずに預けて参照を送る', async () => {
+    let shipped: Awaited<ReturnType<typeof shipWith>> | undefined;
+    const lines = await captureStderr(async () => {
+      shipped = await shipWith(undefined);
+    });
+    const archive = shipped?.archive;
+    expect(archive?.body).toBeUndefined();
+    expect(archive?.ref?.chars).toBe(BODY.length);
+    expect(shipped?.host.readArchive('mgr-archive-ref', archive?.ref?.id ?? '')).toBe(BODY);
+    expect(lines.some((line) => line.includes(BODY))).toBe(false);
+  });
 });
 
 // 器の入れ替えの直前に預けた退避を、デーモンが取りに行った時には新しいプロセスに無く、生ログが失われた（#4896）
