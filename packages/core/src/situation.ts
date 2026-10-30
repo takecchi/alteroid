@@ -282,7 +282,7 @@ export function describeTokenSituation(input: {
     }
     if (active === null) {
       // 「1本目が現役」と書かない（TokenPoolStore.readActive の doc）
-      return '現役の指名は**まだ一度も無い**（器の環境変数のまま走っている）';
+      return '現役の指名は**まだ一度も無い**（プールからまだ一度も回していないので、鍵は撒かれていない）';
     }
     const row = input.tokens.find((token) => token.id === active.tokenId);
     if (row === undefined) {

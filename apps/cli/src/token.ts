@@ -82,7 +82,8 @@ export function describeActive(view: TokensView): string {
     return `現役の指名は読めない（${view.activeUnreadable.reason}）。下の一覧のどれが現役かは言えない。\n`;
   }
   if (view.activeNever === true) {
-    return '現役の指名: まだ一度も無い（器の環境変数のまま走っている）\n';
+    // 器の環境変数へは倒れない（2026-09-14 から）: 指名が無い間、回し手は何も撒かない
+    return '現役の指名: まだ一度も無い（プールからまだ一度も回していないので、鍵は撒かれていない）\n';
   }
   return '';
 }
@@ -196,9 +197,9 @@ export async function tokenListCommand(): Promise<void> {
   if (view.tokens.length === 0) {
     stdout.write('トークンは登録されていません。\n');
     stdout.write(
-      '**この状態では、認証は器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）に頼るしかなく、' +
-        '枠に当たっても記録が残りません。** トークンプールは100% DB 駆動である——' +
-        '登録するまで、プール側の自動切替は一切効きません。\n',
+      '**この状態では、クローンもマネージャーも走れません。** ' +
+        '2026-09-14 から、認証は器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）では持たず、' +
+        'トークンプール（DB）だけが出所です。\n',
     );
     stdout.write('登録するには: alteroid token add --label <名前> --file <path>\n');
     return;

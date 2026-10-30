@@ -10191,7 +10191,7 @@ export function createApp(deps: AppDeps) {
           '消されたトークンではない。** `tokens` が空でも `rowsUnreadable` が在れば' +
           '「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。' +
           '現役の指名（いま効いている鍵）は3つの状態を別の欄で返す: 在るとき `active`' +
-          '（`tokenId`・`generation`・`rotatedAt`）、まだ一度も無い（器の環境変数のまま走っている）ときは' +
+          '（`tokenId`・`generation`・`rotatedAt`）、まだ一度も無い（何も撒いていない。器の環境変数へは倒れない）ときは' +
           ' `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない' +
           '古いデーモン。読めなくても一覧は道連れにしない。',
         responses: {

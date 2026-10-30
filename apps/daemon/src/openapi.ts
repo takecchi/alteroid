@@ -1531,7 +1531,7 @@ export const tokensResponseSchema = z.object({
 });
 
 // `GET /tokens` だけが持つ現役の指名（道具 `token_list` の「現役の指名」と同じ読み口）。3つの状態を別の欄で言う:
-// `active` = 指名が在る / `activeNever: true` = まだ一度も無い（器の環境変数のまま） / `activeUnreadable` = 読めない。
+// `active` = 指名が在る / `activeNever: true` = まだ一度も無い（何も撒いていない。器の環境変数へは倒れない） / `activeUnreadable` = 読めない。
 // どれも無い応答は、現役を返さない古いデーモンのもの（「無い」と読まない）。0 や空の指名では偽らない。
 // PUT 系の応答（`tokensResponseSchema` を継ぐ）へは足さない: 書いた直後の応答に載せると、読み直した値かどうかが曖昧になるため。
 export const tokensListResponseSchema = tokensResponseSchema.extend({
