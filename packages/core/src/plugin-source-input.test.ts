@@ -3,22 +3,98 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import * as fromPlugins from './plugins.js';
-import * as fromInput from './plugin-source-input.js';
+import {
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_SHA_PATTERN,
+  validatePluginFilePath,
+  validatePluginRepoUrl,
+  validatePluginSourceRef,
+} from './plugin-source-input.js';
+import {
+  pluginNameSchema,
+  pluginPreviewRequestSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
+  pluginSourceRefSchema,
+  pluginSourceShaSchema,
+} from './plugins.js';
 
-describe('plugin-source-input（web の送る前の検査が使う小さな入口。#5903）', () => {
-  it('plugins.ts から出す規則は、この入口のものと同一（検査が2つに分かれない）', () => {
-    expect(fromPlugins.pluginNameSchema).toBe(fromInput.pluginNameSchema);
-    expect(fromPlugins.pluginSourceShaSchema).toBe(fromInput.pluginSourceShaSchema);
-    expect(fromPlugins.pluginRepoUrlSchema).toBe(fromInput.pluginRepoUrlSchema);
-    expect(fromPlugins.pluginRelativePathSchema).toBe(fromInput.pluginRelativePathSchema);
-    expect(fromPlugins.pluginPreviewRequestSchema).toBe(fromInput.pluginPreviewRequestSchema);
-    expect(fromPlugins.validatePluginFilePath).toBe(fromInput.validatePluginFilePath);
-    expect(fromPlugins.PLUGIN_LIMITS).toBe(fromInput.PLUGIN_LIMITS);
+// zod のスキーマと zod なしの規則が、同じ入力で同じ判定になること（#5903）。
+// web は zod なしの規則だけを使い、daemon は zod のスキーマを使う
+const NAMES = ['demo', 'my plugin', 'demo.v2', 'a'.repeat(64), 'a'.repeat(65), '', 'あ', 'a-b_C9'];
+const SHAS = ['a'.repeat(40), 'a'.repeat(39), 'A'.repeat(40), 'main', '', 'g'.repeat(40)];
+const URLS = [
+  'https://example.com/o/r',
+  'http://example.com/o/r',
+  'https://user:pw@example.com/o/r',
+  'https://example.com/o/r?x=1',
+  'https://example.com/o/r#x',
+  'https://example.com/o/r?',
+  'https://example.com/o r',
+  'https:///x',
+  'not a url',
+  '',
+  `https://example.com/${'a'.repeat(2100)}`,
+];
+const PATHS = [
+  'a/b',
+  '/abs',
+  'a/../b',
+  'a//b',
+  'C:\\x',
+  'C:x',
+  'a\\b',
+  '',
+  'a'.repeat(255),
+  'a'.repeat(256),
+  'あ'.repeat(85),
+  'あ'.repeat(86),
+  `a${'/b'.repeat(300)}`,
+  'a\u0000b',
+  'a\tb',
+  './x',
+];
+const REFS = ['main', 'v1.2.3', '-x', 'a b', '', 'a'.repeat(256), 'a'.repeat(257), 'a\tb', 'あ'];
+
+describe('plugin-source-input（zod なしの規則）と zod のスキーマの突き合わせ（#5903）', () => {
+  it('plugin 名', () => {
+    for (const v of NAMES) {
+      expect(PLUGIN_NAME_PATTERN.test(v), v).toBe(pluginNameSchema.safeParse(v).success);
+    }
   });
 
-  it('取り元の指定: 通る形と、断る形', () => {
-    const schema = fromInput.pluginPreviewRequestSchema;
+  it('SHA', () => {
+    for (const v of SHAS) {
+      expect(PLUGIN_SHA_PATTERN.test(v), v).toBe(pluginSourceShaSchema.safeParse(v).success);
+    }
+  });
+
+  it('URL', () => {
+    for (const v of URLS) {
+      expect(validatePluginRepoUrl(v) === null, v.slice(0, 40)).toBe(
+        pluginRepoUrlSchema.safeParse(v).success,
+      );
+    }
+  });
+
+  it('path', () => {
+    for (const v of PATHS) {
+      expect(validatePluginFilePath(v) === null, v.slice(0, 40)).toBe(
+        pluginRelativePathSchema.safeParse(v).success,
+      );
+    }
+  });
+
+  it('ref', () => {
+    for (const v of REFS) {
+      expect(validatePluginSourceRef(v) === null, v.slice(0, 40)).toBe(
+        pluginSourceRefSchema.safeParse(v).success,
+      );
+    }
+  });
+
+  it('取り元の指定の全体（zod）が、欄の規則と同じ向きで通す・断る', () => {
+    const schema = pluginPreviewRequestSchema;
     expect(schema.safeParse({ kind: 'marketplace', plugin: 'demo_plugin-2' }).success).toBe(true);
     expect(schema.safeParse({ kind: 'marketplace', plugin: 'my plugin' }).success).toBe(false);
     expect(
@@ -30,7 +106,6 @@ describe('plugin-source-input（web の送る前の検査が使う小さな入�
         sha: 'a'.repeat(40),
       }).success,
     ).toBe(true);
-    expect(schema.safeParse({ kind: 'url', url: 'http://example.com/o/r' }).success).toBe(false);
     expect(
       schema.safeParse({ kind: 'url', url: 'https://example.com/o/r', ref: '-x' }).success,
     ).toBe(false);
@@ -39,21 +114,13 @@ describe('plugin-source-input（web の送る前の検査が使う小さな入�
     ).toBe(false);
   });
 
-  it('セグメントの長さは UTF-8 のバイト数で見る（255 バイトまで）', () => {
-    expect(fromInput.validatePluginFilePath('a'.repeat(255))).toBeNull();
-    expect(fromInput.validatePluginFilePath('a'.repeat(256))).not.toBeNull();
-    // 「あ」は UTF-8 で 3 バイト: 85 文字で 255 バイト、86 文字で 258 バイト
-    expect(fromInput.validatePluginFilePath('あ'.repeat(85))).toBeNull();
-    expect(fromInput.validatePluginFilePath('あ'.repeat(86))).not.toBeNull();
-  });
-
-  it('node: の組み込み・Buffer・plugins.js を使わない（ブラウザの束に入れられる）', () => {
+  it('入口は zod も node: も Buffer も plugins.js も import しない（ブラウザの束に入れられる）', () => {
     const source = readFileSync(
       fileURLToPath(new URL('./plugin-source-input.ts', import.meta.url)),
       'utf8',
     );
-    expect(source).not.toMatch(/from\s+'node:/);
+    expect(source).not.toMatch(/^import /m);
+    expect(source).not.toMatch(/from\s+'(zod|node:)/);
     expect(source).not.toMatch(/\bBuffer\./);
-    expect(source).not.toMatch(/from\s+'\.\/plugins\.js'/);
   });
 });

@@ -4,11 +4,15 @@ import { z } from 'zod';
 
 import { compareCodeUnits } from './code-unit-order.js';
 import {
-  httpsUrlSchema,
   PLUGIN_LIMITS,
-  pluginNameSchema,
-  pluginSourceShaSchema,
-  relativePathSchema,
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_NAME_RULE,
+  PLUGIN_SHA_PATTERN,
+  PLUGIN_SHA_RULE,
+  PLUGIN_SOURCE_REF_MAX_LENGTH,
+  validatePluginFilePath,
+  validatePluginRepoUrl,
+  validatePluginSourceRefChars,
 } from './plugin-source-input.js';
 import { ENV_PROFILE_SCOPES } from './store.js';
 
@@ -21,17 +25,47 @@ import { ENV_PROFILE_SCOPES } from './store.js';
  * 拒む文言には値（path・URL など）を載せず、どの欄かだけを書く。
  */
 
-// 取り元の指定の形（名前・SHA・URL・path・ref・上限）は plugin-source-input.ts（ブラウザの束にも入れられる小さな入口）。ここから再び出す: 既存の import 先を変えないため
-export {
-  PLUGIN_LIMITS,
-  pluginNameSchema,
-  pluginPreviewRequestSchema,
-  pluginRelativePathSchema,
-  pluginRepoUrlSchema,
-  pluginSourceRefSchema,
-  pluginSourceShaSchema,
-  validatePluginFilePath,
-} from './plugin-source-input.js';
+// 取り元の指定の形（名前・SHA・URL・path・ref・上限）の規則は plugin-source-input.ts（zod なし。web の束にも入れられる）。
+// ここの zod のスキーマは、その定数・関数から組む。既存の import 先を変えないため、規則そのものもここから再び出す
+export { PLUGIN_LIMITS, validatePluginFilePath };
+
+export const pluginNameSchema = z.string().regex(PLUGIN_NAME_PATTERN, PLUGIN_NAME_RULE);
+
+export const pluginSourceShaSchema = z.string().regex(PLUGIN_SHA_PATTERN, PLUGIN_SHA_RULE);
+
+const relativePathSchema = z.string().superRefine((path, ctx) => {
+  const reason = validatePluginFilePath(path);
+  if (reason !== null) ctx.addIssue({ code: 'custom', message: reason });
+});
+
+const httpsUrlSchema = z.string().superRefine((value, ctx) => {
+  const reason = validatePluginRepoUrl(value);
+  if (reason !== null) ctx.addIssue({ code: 'custom', message: reason });
+});
+
+export const pluginRepoUrlSchema = httpsUrlSchema;
+export const pluginRelativePathSchema = relativePathSchema;
+
+export const pluginSourceRefSchema = z
+  .string()
+  .min(1)
+  .max(PLUGIN_SOURCE_REF_MAX_LENGTH)
+  .superRefine((value, ctx) => {
+    const reason = validatePluginSourceRefChars(value);
+    if (reason !== null) ctx.addIssue({ code: 'custom', message: reason });
+  });
+
+// 未知の欄は拒む: 綴り違いが「効かない指定」にならないようにするため。
+export const pluginPreviewRequestSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('url'),
+    url: pluginRepoUrlSchema,
+    path: pluginRelativePathSchema.optional(),
+    ref: pluginSourceRefSchema.optional(),
+    sha: pluginSourceShaSchema.optional(),
+  }),
+  z.strictObject({ kind: z.literal('marketplace'), plugin: pluginNameSchema }),
+]);
 
 export const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
 
