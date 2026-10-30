@@ -60,14 +60,15 @@ async function setup(stageLimit = 1_000_000) {
     workspacePath: '/workspace',
     emit: () => undefined,
     queryFn: fakeSdk(),
-    env: { PATH: '/usr/bin' },
+    env: { PATH: '/usr/bin', ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: String(stageLimit) },
     attachmentsRoot: root,
-    attachmentStageLimit: stageLimit,
     scratchSweep: false,
     cwdExistsFn: () => true,
     readCgroupEventCountersFn: async () => ({}),
     finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
   });
+  // env 経由で読めたこと（既定の 2 GiB へ倒れていないこと）
+  expect(host.attachmentStageLimit).toBe(stageLimit);
   const app = createRunnerApp({
     host,
     outbox: new Outbox(),
