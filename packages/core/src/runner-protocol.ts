@@ -2116,17 +2116,60 @@ interface RegistryEntry {
   pendingEventsObservedAt?: string;
   pendingEventsInstanceId?: string;
   /**
-   * `undefined`（まだ聞けていない）と空集合（答えたが1本も無かった）を畳まない。`#probeSessions` は聞けた回にしか書かず、
+   * `undefined`（まだ聞けていない）と空（答えたが1本も無かった）を畳まない。`#probeSessions` は聞けた回にしか書かず、
    * 失敗した回は前の観測を残す（消すと「聞けなかった」が「1本も無い」に化ける）。
    */
-  sessions?: ReadonlySet<string>;
-  sessionsObservedAt?: string;
-  sessionBackgroundTasks?: ReadonlyMap<string, number>;
-  sessionClassifierDenials?: ReadonlyMap<string, readonly ClassifierDenialOverLimit[]>;
-  sessionPeerApprovals?: ReadonlyMap<string, PendingPeerApprovals>;
-  sessionTokenFingerprints?: ReadonlyMap<string, string>;
+  sessionObservation?: RegistrySessionObservation;
   /** 周期より遅い応答を積み上げないための錠: `true` の間はこの entry へ次の探りを投げない。 */
   sessionsProbing?: boolean;
+}
+
+/** 1回の `client.list()` から切り出した観測。5つの欄は同じ回の結果で、必ず一緒に置き換わる（時刻と対）。 */
+interface RegistrySessionObservation {
+  /** 聞きに行った周の時刻（応答が返った時刻ではない: `#probeSessions` の注記）。 */
+  readonly observedAt: string;
+  /** キーが `sessions`（抱えている委譲の一覧）。 */
+  readonly sessions: ReadonlyMap<string, RegistrySessionState>;
+}
+
+interface RegistrySessionState {
+  readonly backgroundTasks: number;
+  /** 欄を名乗った委譲だけに在る: 無いのは「分からない」（空配列は「居ない」）。 */
+  readonly classifierDenials?: readonly ClassifierDenialOverLimit[];
+  /** 待っている peer が無い委譲は無い（欄が無い = 0 本）。 */
+  readonly peerApprovals?: PendingPeerApprovals;
+  readonly tokenFingerprint?: string;
+}
+
+/** 公開の形（`RunnerEntry` の観測の欄）へ書き出す。欄ごとに「名乗った委譲だけ」を載せる。 */
+function sessionObservationFieldsOf(
+  observation: RegistrySessionObservation | undefined,
+): Pick<
+  RunnerEntry,
+  | 'sessions'
+  | 'sessionsObservedAt'
+  | 'sessionBackgroundTasks'
+  | 'sessionClassifierDenials'
+  | 'sessionPeerApprovals'
+  | 'sessionTokenFingerprints'
+> {
+  if (observation === undefined) return {};
+  const states = [...observation.sessions];
+  const pick = <T>(read: (state: RegistrySessionState) => T | undefined): Record<string, T> =>
+    Object.fromEntries(
+      states.flatMap(([managerId, state]): [string, T][] => {
+        const value = read(state);
+        return value === undefined ? [] : [[managerId, value]];
+      }),
+    );
+  return {
+    sessions: states.map(([managerId]) => managerId),
+    sessionsObservedAt: observation.observedAt,
+    sessionBackgroundTasks: pick((state) => state.backgroundTasks),
+    sessionClassifierDenials: pick((state) => state.classifierDenials),
+    sessionPeerApprovals: pick((state) => state.peerApprovals),
+    sessionTokenFingerprints: pick((state) => state.tokenFingerprint),
+  };
 }
 
 /**
@@ -2254,22 +2297,8 @@ class Registry implements RunnerRegistry {
               ? {}
               : { pendingEventsInstanceId: entry.pendingEventsInstanceId }),
           }),
-      // `sessionsObservedAt` と対でしか渡さない: 観測時刻の無い一覧は、`manager.ts` 側が「この委譲が置かれる前の観測」を捨てられなくなる。
-      ...(entry.sessions === undefined || entry.sessionsObservedAt === undefined
-        ? {}
-        : { sessions: [...entry.sessions], sessionsObservedAt: entry.sessionsObservedAt }),
-      ...(entry.sessionBackgroundTasks === undefined || entry.sessionsObservedAt === undefined
-        ? {}
-        : { sessionBackgroundTasks: Object.fromEntries(entry.sessionBackgroundTasks) }),
-      ...(entry.sessionClassifierDenials === undefined || entry.sessionsObservedAt === undefined
-        ? {}
-        : { sessionClassifierDenials: Object.fromEntries(entry.sessionClassifierDenials) }),
-      ...(entry.sessionPeerApprovals === undefined || entry.sessionsObservedAt === undefined
-        ? {}
-        : { sessionPeerApprovals: Object.fromEntries(entry.sessionPeerApprovals) }),
-      ...(entry.sessionTokenFingerprints === undefined || entry.sessionsObservedAt === undefined
-        ? {}
-        : { sessionTokenFingerprints: Object.fromEntries(entry.sessionTokenFingerprints) }),
+      // 観測時刻と対でしか渡さない: 観測時刻の無い一覧は、`manager.ts` 側が「この委譲が置かれる前の観測」を捨てられなくなる。
+      ...sessionObservationFieldsOf(entry.sessionObservation),
       ...(entry.client?.legState === undefined ? {} : { legState: entry.client.legState }),
     }));
   }
@@ -2746,12 +2775,7 @@ class Registry implements RunnerRegistry {
       // 0本と答えた回は `/managers` を引かない: `managers` は `/managers` と同じ源（`host.list()`）の件数なので0は一覧が空の確定で、
       // 往復を払っても分かることは増えない。「聞けなかった」ではなく答えた結果なので、空集合として記録してよい。
       if (identity?.managers === 0) {
-        entry.sessions = new Set();
-        entry.sessionBackgroundTasks = new Map();
-        entry.sessionClassifierDenials = new Map();
-        entry.sessionPeerApprovals = new Map();
-        entry.sessionTokenFingerprints = new Map();
-        entry.sessionsObservedAt = new Date(at).toISOString();
+        entry.sessionObservation = { observedAt: new Date(at).toISOString(), sessions: new Map() };
         return;
       }
       // 待たずに投げる: 遅い1台の `/managers` が次の周期の生死判定を遅らせないため。
@@ -2777,29 +2801,27 @@ class Registry implements RunnerRegistry {
       );
       if (this.#stopped) return;
       if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
-      entry.sessions = new Set(states.map((state) => state.managerId));
-      entry.sessionBackgroundTasks = new Map(
-        states.map((state): [string, number] => [state.managerId, state.liveBackgroundTasks]),
-      );
-      // 待っている peer が無い委譲は載せない（欄が無い = 0 本）。一覧が前の観測の本数を残さないよう、毎回作り直す
-      entry.sessionPeerApprovals = new Map(
-        states.flatMap((state): [string, PendingPeerApprovals][] =>
-          state.pendingPeerApprovals === undefined
-            ? []
-            : [[state.managerId, state.pendingPeerApprovals]],
+      // 一覧が前の観測の欄を残さないよう、毎回丸ごと作り直す。欄が無い委譲（待っている peer が無い・欄を返さない古い runner）は欄を載せない。
+      entry.sessionObservation = {
+        observedAt: new Date(at).toISOString(),
+        sessions: new Map(
+          states.map((state): [string, RegistrySessionState] => [
+            state.managerId,
+            {
+              backgroundTasks: state.liveBackgroundTasks,
+              ...(state.classifierDenials === undefined
+                ? {}
+                : { classifierDenials: state.classifierDenials }),
+              ...(state.pendingPeerApprovals === undefined
+                ? {}
+                : { peerApprovals: state.pendingPeerApprovals }),
+              ...(state.tokenFingerprint === undefined
+                ? {}
+                : { tokenFingerprint: state.tokenFingerprint }),
+            },
+          ]),
         ),
-      );
-      entry.sessionTokenFingerprints = new Map(
-        states.flatMap((state): [string, string][] =>
-          state.tokenFingerprint === undefined ? [] : [[state.managerId, state.tokenFingerprint]],
-        ),
-      );
-      entry.sessionClassifierDenials = new Map(
-        states.flatMap((state): [string, readonly ClassifierDenialOverLimit[]][] =>
-          state.classifierDenials === undefined ? [] : [[state.managerId, state.classifierDenials]],
-        ),
-      );
-      entry.sessionsObservedAt = new Date(at).toISOString();
+      };
     } catch {
       // 何も書かない（前の観測を残す）。
     } finally {

@@ -24,6 +24,8 @@ class FakeRunner implements RunnerClient {
   backgroundToReturn: Record<string, number> = {};
   fingerprintToReturn: Record<string, string> = {};
   denialsToReturn: Record<string, NonNullable<RunnerManagerState['classifierDenials']>> = {};
+  peerApprovalsToReturn: Record<string, { count: number; oldestSince: string }> = {};
+  identity?: RunnerClient['identity'];
   listCalls = 0;
   lastListSignal: AbortSignal | undefined;
 
@@ -75,6 +77,9 @@ class FakeRunner implements RunnerClient {
         : {}),
       ...(Object.hasOwn(this.denialsToReturn, managerId)
         ? { classifierDenials: this.denialsToReturn[managerId] }
+        : {}),
+      ...(Object.hasOwn(this.peerApprovalsToReturn, managerId)
+        ? { pendingPeerApprovals: this.peerApprovalsToReturn[managerId] }
         : {}),
     }));
   }
@@ -532,6 +537,130 @@ describe('runner が抱えているセッションの観測（#579）', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(registry.entries()[0]).not.toHaveProperty('sessions');
     expect(registry.entries()[0]).not.toHaveProperty('sessionsObservedAt');
+
+    await registry.stop();
+  });
+
+  it('確認待ちの peer は、居る委譲だけが sessionPeerApprovals に載る（キーが無いのは「居ない」）', async () => {
+    vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-wait', 'mgr-quiet'];
+    runner.peerApprovalsToReturn = {
+      'mgr-wait': { count: 2, oldestSince: '2026-10-04T23:00:00.000Z' },
+    };
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const [entry] = registry.entries();
+    expect(entry?.sessionPeerApprovals).toEqual({
+      'mgr-wait': { count: 2, oldestSince: '2026-10-04T23:00:00.000Z' },
+    });
+    expect(entry?.sessions).toEqual(['mgr-wait', 'mgr-quiet']);
+
+    await registry.stop();
+  });
+
+  it('聞けた回は5つの観測を全部作り直す（前の回にあって今回の応答に無い欄・委譲は残らない）', async () => {
+    vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-1', 'mgr-2'];
+    runner.backgroundToReturn = { 'mgr-1': 3 };
+    runner.fingerprintToReturn = { 'mgr-1': 'aaaaaaaaaaaa', 'mgr-2': 'bbbbbbbbbbbb' };
+    runner.denialsToReturn = { 'mgr-1': [] };
+    runner.peerApprovalsToReturn = {
+      'mgr-1': { count: 1, oldestSince: '2026-10-05T00:00:00.000Z' },
+    };
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(registry.entries()[0]).toMatchObject({
+      sessions: ['mgr-1', 'mgr-2'],
+      sessionBackgroundTasks: { 'mgr-1': 3, 'mgr-2': 0 },
+      sessionTokenFingerprints: { 'mgr-1': 'aaaaaaaaaaaa', 'mgr-2': 'bbbbbbbbbbbb' },
+      sessionClassifierDenials: { 'mgr-1': [] },
+      sessionPeerApprovals: { 'mgr-1': { count: 1, oldestSince: '2026-10-05T00:00:00.000Z' } },
+      sessionsObservedAt: '2026-10-05T00:00:10.000Z',
+    });
+
+    runner.sessionsToReturn = ['mgr-2'];
+    runner.backgroundToReturn = {};
+    runner.fingerprintToReturn = {};
+    runner.denialsToReturn = {};
+    runner.peerApprovalsToReturn = {};
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const [entry] = registry.entries();
+    expect(entry?.sessions).toEqual(['mgr-2']);
+    expect(entry?.sessionBackgroundTasks).toEqual({ 'mgr-2': 0 });
+    expect(entry?.sessionTokenFingerprints).toEqual({});
+    expect(entry?.sessionClassifierDenials).toEqual({});
+    expect(entry?.sessionPeerApprovals).toEqual({});
+    expect(entry?.sessionsObservedAt).toBe('2026-10-05T00:00:20.000Z');
+
+    await registry.stop();
+  });
+
+  it('list() が投げた回は5つの観測のどれも消さず、観測の時刻も進めない', async () => {
+    vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-1'];
+    runner.backgroundToReturn = { 'mgr-1': 1 };
+    runner.fingerprintToReturn = { 'mgr-1': 'aaaaaaaaaaaa' };
+    runner.denialsToReturn = { 'mgr-1': [] };
+    runner.peerApprovalsToReturn = {
+      'mgr-1': { count: 1, oldestSince: '2026-10-05T00:00:00.000Z' },
+    };
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const before = registry.entries()[0];
+
+    runner.listReply = 'error';
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    const after = registry.entries()[0];
+    expect(after?.sessions).toEqual(before?.sessions);
+    expect(after?.sessionBackgroundTasks).toEqual({ 'mgr-1': 1 });
+    expect(after?.sessionTokenFingerprints).toEqual({ 'mgr-1': 'aaaaaaaaaaaa' });
+    expect(after?.sessionClassifierDenials).toEqual({ 'mgr-1': [] });
+    expect(after?.sessionPeerApprovals).toEqual({
+      'mgr-1': { count: 1, oldestSince: '2026-10-05T00:00:00.000Z' },
+    });
+    expect(after?.sessionsObservedAt).toBe(before?.sessionsObservedAt);
+
+    await registry.stop();
+  });
+
+  it('/health が managers: 0 と答えた回は list() を引かず、5つの観測を空で記録する（前の観測は消える）', async () => {
+    vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-1'];
+    runner.backgroundToReturn = { 'mgr-1': 1 };
+    runner.fingerprintToReturn = { 'mgr-1': 'aaaaaaaaaaaa' };
+    runner.peerApprovalsToReturn = {
+      'mgr-1': { count: 1, oldestSince: '2026-10-05T00:00:00.000Z' },
+    };
+    runner.identity = async () => ({ managers: 1 });
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.listCalls).toBe(1);
+    expect(registry.entries()[0]?.sessions).toEqual(['mgr-1']);
+
+    runner.identity = async () => ({ managers: 0 });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(runner.listCalls).toBe(1);
+    const [entry] = registry.entries();
+    expect(entry?.sessions).toEqual([]);
+    expect(entry?.sessionBackgroundTasks).toEqual({});
+    expect(entry?.sessionClassifierDenials).toEqual({});
+    expect(entry?.sessionPeerApprovals).toEqual({});
+    expect(entry?.sessionTokenFingerprints).toEqual({});
+    expect(entry?.sessionsObservedAt).toBe('2026-10-05T00:00:20.000Z');
 
     await registry.stop();
   });
