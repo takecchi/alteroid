@@ -10,7 +10,6 @@ import {
   withoutQueueNotice,
 } from './clone-test-harness.js';
 import type { ScriptedStep } from './clone-test-harness.js';
-import { migrateCommitmentsToTasks } from './commitment-task-migration.js';
 import type { ManagerPool, ManagerStartInput, ManagerSummary } from './manager.js';
 import type { RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -178,14 +177,13 @@ async function decisions(stores: Stores): Promise<string[]> {
   return rows.map((row) => `${row.decision}\n${row.grounds}`);
 }
 
-describe('人間の依頼は、受信箱の合図と同じ id の Task として積まれる（台帳へは書かない。#5923）', () => {
-  it('human_message: id・source は合図のとおり、起点の会話・queued・title は先頭行・置き場所は P2 の既定。台帳の行は開かない', async () => {
+describe('人間の依頼は、受信箱の合図と同じ id の Task として積まれる（#5923）', () => {
+  it('human_message: id・source は合図のとおり、起点の会話・queued・title は先頭行・置き場所は P2 の既定', async () => {
     const s = boot(() => say('受けた'));
     s.clone.post(human('evt-a', '最初の依頼です\n詳細は2行目'));
     await waitFor(async () => (await s.stores.tasks.get('evt-a')) !== null, 'Task が積まれる');
 
     const created = await s.stores.tasks.get('evt-a');
-    expect(await s.stores.commitments.get('evt-a')).toBeNull();
     expect(created).toMatchObject({
       id: 'evt-a',
       origin: 'human',
@@ -214,7 +212,7 @@ describe('人間の依頼は、受信箱の合図と同じ id の Task として
     await s.clone.stop();
   });
 
-  it('human_answer: 台帳にも Task にも何も開かない（回答は新しい依頼ではない）', async () => {
+  it('human_answer: Task に何も開かない（回答は新しい依頼ではない）', async () => {
     const s = boot(() => say('承認の回答を受けた'));
     s.clone.post({
       type: 'human_answer',
@@ -226,13 +224,11 @@ describe('人間の依頼は、受信箱の合図と同じ id の Task として
     });
     await waitForTerminal(s.events);
 
-    expect(await s.stores.commitments.get('ans-1')).toBeNull();
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
     expect((await s.stores.tasks.list({ includeClosed: true })).entries).toEqual([]);
     await s.clone.stop();
   });
 
-  it('manager_message・external は受信箱には届くが、台帳にも Task にも積まれない', async () => {
+  it('manager_message・external は受信箱には届くが、Task には積まれない', async () => {
     const inputs: string[] = [];
     const s = boot((_turn, input) => {
       inputs.push(input);
@@ -254,11 +250,10 @@ describe('人間の依頼は、受信箱の合図と同じ id の Task として
     );
 
     expect((await s.stores.tasks.list({ includeClosed: true })).entries).toEqual([]);
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
     await s.clone.stop();
   });
 
-  it('同じ id の Task が既に在れば二重に作らず、既存の行を書き換えない（配り直し・P7a の移行との共存）', async () => {
+  it('同じ id の Task が既に在れば二重に作らず、既存の行を書き換えない（配り直しとの共存）', async () => {
     const stores = createMemoryStores();
     await stores.tasks.add(seeded('evt-dup', { title: '先に在った行', keep: true }));
     const s = boot(() => say('受けた'), { stores });
@@ -268,38 +263,6 @@ describe('人間の依頼は、受信箱の合図と同じ id の Task として
     const all = (await stores.tasks.list({ includeClosed: true })).entries;
     expect(all.filter((task) => task.id === 'evt-dup')).toHaveLength(1);
     expect((await stores.tasks.get('evt-dup'))?.title).toBe('先に在った行');
-    await s.clone.stop();
-  });
-
-  it('P7a の移行は、自動で積んだ Task を existed として扱い、（以前の版が開いた）台帳の行を閉じるだけにする', async () => {
-    // 以前の版が人間の発言を台帳へ開いていた行を、アップグレード前の状態として置く。いまのクローンは台帳へ書かない
-    const stores = createMemoryStores();
-    await stores.commitments.open({
-      id: 'evt-mig',
-      at: new Date().toISOString(),
-      origin: 'human',
-      source: 'conv-1',
-      body: '移行と共存する依頼',
-    });
-    const s = boot(() => [], { stores });
-    s.clone.post(human('evt-mig', '移行と共存する依頼'));
-    await waitFor(async () => (await s.stores.tasks.get('evt-mig')) !== null, 'Task');
-
-    const now = new Date().toISOString();
-    const plan = await migrateCommitmentsToTasks(s.stores, { dryRun: true, now });
-    const report = await migrateCommitmentsToTasks(s.stores, {
-      dryRun: false,
-      now,
-      expectedFingerprint: plan.fingerprint,
-    });
-
-    expect(report.summary.closeOnly).toBe(1);
-    expect(report.summary.toTask).toBe(0);
-    expect(
-      (await s.stores.tasks.list({ includeClosed: true })).entries.filter(
-        (task) => task.id === 'evt-mig',
-      ),
-    ).toHaveLength(1);
     await s.clone.stop();
   });
 });

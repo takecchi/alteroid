@@ -5,14 +5,13 @@ import type { TurnNoticeKey } from './clone-notices.js';
 
 const TURN_NOTICE_KEYS: readonly TurnNoticeKey[] = [
   'redelivery',
-  'superseded',
   'validity',
   'mergedBatchTruncation',
   'commitment',
   'situation',
 ];
 
-describe('CloneNotices — 1反復ぶんの断り書き6本（set / forTurn / clearTurn）', () => {
+describe('CloneNotices — 1反復ぶんの断り書き5本（set / forTurn / clearTurn）', () => {
   it('forTurn は set した値をそのまま返す', () => {
     const notices = new CloneNotices();
     notices.set('redelivery', 'これは配り直しである');
@@ -23,12 +22,11 @@ describe('CloneNotices — 1反復ぶんの断り書き6本（set / forTurn / cl
     expect(forTurn.redelivery).toBe('これは配り直しである');
     expect(forTurn.commitment).toBe('未了が1件ある');
     expect(forTurn.situation).toBe('いまの全体');
-    expect(forTurn.superseded).toBe('');
     expect(forTurn.validity).toBe('');
     expect(forTurn.mergedBatchTruncation).toBe('');
   });
 
-  it('clearTurn は6本全部を空文字へ戻す', () => {
+  it('clearTurn は5本全部を空文字へ戻す', () => {
     const notices = new CloneNotices();
     for (const key of TURN_NOTICE_KEYS) notices.set(key, `${key}-値`);
 
@@ -44,14 +42,14 @@ describe('CloneNotices — 1反復ぶんの断り書き6本（set / forTurn / cl
   it('set は他のキーへ影響しない', () => {
     const notices = new CloneNotices();
     notices.set('redelivery', 'A');
-    notices.set('superseded', 'B');
+    notices.set('validity', 'B');
 
     expect(notices.forTurn().redelivery).toBe('A');
-    expect(notices.forTurn().superseded).toBe('B');
+    expect(notices.forTurn().validity).toBe('B');
 
     notices.set('redelivery', 'A2');
     expect(notices.forTurn().redelivery).toBe('A2');
-    expect(notices.forTurn().superseded).toBe('B');
+    expect(notices.forTurn().validity).toBe('B');
   });
 });
 

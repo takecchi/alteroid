@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { fakeSdk, waitFor, type FakeCall } from './clone-test-harness.js';
-import { commitmentFor, createClone } from './clone.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
+import { opensHumanTask } from './task-auto-done.js';
 import { createMemoryStores } from './testing.js';
 
 // #5015: 手を打つ必要のない知らせを台帳に積まない（起こし直しの知らせ）／担当が戻った枠の知らせの行を器が閉じる。
@@ -139,35 +140,35 @@ async function waitForTurnWith(s: ReturnType<typeof boot>, needle: string): Prom
   );
 }
 
-describe('commitmentFor: manager_message は印の有無によらず台帳に開かない（#5469 P5。commitmentExempt の歯の置き換え）', () => {
+describe('manager_message は印の有無によらず Task を開かない（#5469 P5。commitmentExempt の歯の置き換え）', () => {
   it('印のある知らせも、印の無い知らせも null（以前は印の無い知らせだけが行になった）', () => {
-    expect(commitmentFor(rewokenNotice('e-exempt'))).toBeNull();
-    expect(commitmentFor(plainReport('e-plain'))).toBeNull();
-    expect(commitmentFor(rewokenNotice('e-rewoken', false))).toBeNull();
-    expect(commitmentFor(weeklyNotice('e-weekly'))).toBeNull();
+    expect(opensHumanTask(rewokenNotice('e-exempt'))).toBe(false);
+    expect(opensHumanTask(plainReport('e-plain'))).toBe(false);
+    expect(opensHumanTask(rewokenNotice('e-rewoken', false))).toBe(false);
+    expect(opensHumanTask(weeklyNotice('e-weekly'))).toBe(false);
   });
 });
 
-describe('起こし直しの知らせは台帳に開かない（#5015 → #5469 P5 で印の有無によらず開かない）', () => {
-  it('受信箱には届くが、台帳の行は1件も増えない', async () => {
+describe('起こし直しの知らせは Task を開かない（#5015 → #5469 P5 で印の有無によらず開かない）', () => {
+  it('受信箱には届くが、Task は1件も増えない', async () => {
     const s = boot(stubPool(() => Promise.resolve([summary()])));
 
     s.clone.post(rewokenNotice('evt-r1'));
     await waitForTurnWith(s, 'REWOKEN-evt-r1');
 
-    expect((await s.stores.commitments.get('evt-r1')) === null).toBe(true);
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toHaveLength(0);
+    expect((await s.stores.tasks.get('evt-r1')) === null).toBe(true);
+    expect((await s.stores.tasks.list({ includeClosed: true })).entries).toHaveLength(0);
 
     await s.clone.stop();
   });
 
-  it('印の無い同じ知らせ（後継がつながった回・withheld を運んだ回）も台帳に開かず、ターンには届く', async () => {
+  it('印の無い同じ知らせ（後継がつながった回・withheld を運んだ回）も Task を開かず、ターンには届く', async () => {
     const s = boot(stubPool(() => Promise.resolve([summary()])));
 
     s.clone.post(rewokenNotice('evt-r2', false));
     await waitForTurnWith(s, 'REWOKEN-evt-r2');
 
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toHaveLength(0);
+    expect((await s.stores.tasks.list({ includeClosed: true })).entries).toHaveLength(0);
     expect(
       (await exchangeTexts(s.stores)).some((text) => text.includes('台帳に開かなかった')),
     ).toBe(false);
