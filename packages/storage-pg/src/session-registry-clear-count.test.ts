@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
@@ -21,15 +21,36 @@ describe('PgSessionRegistry.clear() — 4つの欄だけを数え、数えた欄
 
   it('4つの欄をすべて置くと 4 を返し、4つとも空になる', async () => {
     await stores.sessions.setCloneSessionId('s1');
-    await stores.sessions.setTranscriptGrave({ archiveId: 'a1' });
-    await stores.sessions.setLostSessionGrave({ projectKey: 'pk', sessionId: 's0' });
+    await stores.sessions.addTranscriptGrave({ archiveId: 'a1' });
+    await stores.sessions.addLostSessionGrave({ projectKey: 'pk', sessionId: 's0' });
     await stores.sessions.setProjectKey('pk');
 
     expect(await stores.sessions.clear()).toBe(4);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
-    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
     expect(await stores.sessions.getProjectKey()).toBeNull();
+  });
+
+  it('墓標を1つだけ置いていた古い行は読まず、clear() も触らない（#5869）', async () => {
+    await db.insert(daemonState).values([
+      { key: 'clone_transcript_grave', value: '{"archiveId":"arc-legacy"}' },
+      { key: 'clone_lost_session', value: '{"projectKey":"pk","sessionId":"s-legacy"}' },
+    ]);
+
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
+    expect(await stores.sessions.clearTranscriptGraveIf('arc-legacy')).toBe(false);
+    expect(await stores.sessions.clearLostSessionGraveIf('s-legacy')).toBe(false);
+    await stores.sessions.addTranscriptGrave({ archiveId: 'arc-new' });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId: 'arc-new' }]);
+    await stores.sessions.clear();
+
+    const left = await db
+      .select({ key: daemonState.key })
+      .from(daemonState)
+      .where(inArray(daemonState.key, ['clone_transcript_grave', 'clone_lost_session']));
+    expect(left).toHaveLength(2);
   });
 
   it('migrate が置いた「旧プロファイルを写し終えた」印は消さない', async () => {

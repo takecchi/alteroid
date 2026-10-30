@@ -3231,18 +3231,6 @@ describe('FsSessionRegistry', () => {
     await verifySessionRegistryGraveQueueContract(stores.sessions);
   });
 
-  it('古い形（1枠だけのファイル）で保存された墓標も、列の先頭として読める（#4884）', async () => {
-    await stores.sessions.clear();
-    await stores.sessions.setTranscriptGrave({ archiveId: 'arc-legacy' });
-    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId: 'arc-legacy' }]);
-    await stores.sessions.addTranscriptGrave({ archiveId: 'arc-new' });
-    expect((await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId)).toEqual([
-      'arc-legacy',
-      'arc-new',
-    ]);
-    await stores.sessions.clear();
-  });
-
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
 

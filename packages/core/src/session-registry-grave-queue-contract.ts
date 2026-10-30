@@ -3,7 +3,7 @@ import type { SessionRegistry } from './store.js';
 
 /**
  * 墓標を上書きせずに複数持てること（#4884）を、器（メモリ・fs・pg）で同じに測る。
- * 枠の1つ（`getTranscriptGrave`）は古い方のまま残り、足した順（古い順）で並び、下ろすのは id 単位で、上限を超えたら古い方から落ちる。
+ * 足した順（古い順）で並び、下ろすのは id 単位で、上限を超えたら古い方から落ちる。
  */
 export async function verifySessionRegistryGraveQueueContract(
   registry: SessionRegistry,
@@ -28,9 +28,9 @@ export async function verifySessionRegistryGraveQueueContract(
     fail('列の墓標を下ろした後の並びが違う');
   }
   await registry.addTranscriptGrave({ archiveId: 'arc-C' });
-  if (!(await registry.clearTranscriptGraveIf('arc-A'))) fail('枠の墓標を下ろせない');
+  if (!(await registry.clearTranscriptGraveIf('arc-A'))) fail('先頭の墓標を下ろせない');
   if ((await registry.listTranscriptGraves()).map((g) => g.archiveId).join(',') !== 'arc-C') {
-    fail('枠を下ろした後に列の墓標が消えた');
+    fail('先頭を下ろした後に残りの墓標が消えた');
   }
   await registry.clearTranscriptGraveIf('arc-C');
 
@@ -53,7 +53,7 @@ export async function verifySessionRegistryGraveQueueContract(
     fail('捨てたセッションの墓標の並びが違う');
   }
   if (!(await registry.clearLostSessionGraveIf('s-B'))) fail('列の捨てたセッションを下ろせない');
-  if (!(await registry.clearLostSessionGraveIf('s-A'))) fail('枠の捨てたセッションを下ろせない');
+  if (!(await registry.clearLostSessionGraveIf('s-A'))) fail('先頭の捨てたセッションを下ろせない');
   if ((await registry.listLostSessionGraves()).length !== 0) fail('下ろし切っても残っている');
 
   await registry.clear();

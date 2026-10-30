@@ -1,64 +1,38 @@
 /**
  * 墓標を上書きせずに複数持つための、3つの器（fs / pg / メモリ）で共通の純粋な計算（#4884）。
  *
- * 墓標の1枠（`SessionRegistry.getTranscriptGrave` など）は残したまま、その後ろに順番待ちの列を持つ:
- * 枠が埋まっているところへ別の墓標が立つと、上書きすると前の区間が二度と記憶へ移らない。
- * 蒸留が枠で落ちる時期は墓標が続けて立つ時期そのものなので、上書きは現実に起こる。
+ * 墓標は上書きせず、古い順の1本の列で持つ:
+ * 墓標が残っているところへ別の墓標が立つと、上書きすると前の区間が二度と記憶へ移らない。
+ * 蒸留が利用枠で落ちる時期は墓標が続けて立つ時期そのものなので、上書きは現実に起こる。
+ * 墓標を1つだけ置く別の口は持たない（本番の経路が使わないので外した。#5869）。
  */
 
-/** 枠と列を合わせた上限。超えたら古い方（枠が先頭、次に列の先頭）から落とし、呼び出し側が日誌に残す。 */
+/** 列の上限。超えたら古い方（先頭）から落とし、呼び出し側が日誌に残す。 */
 export const MAX_PENDING_GRAVES = 20;
 
-export interface GraveQueueState<T> {
-  primary: T | null;
-  queue: T[];
-}
-
 /**
- * `grave` を足す。枠が空なら枠へ、同じ墓標が既に在れば何もせず、それ以外は列の末尾へ。
+ * `grave` を足す。同じ墓標が既に在れば何もせず、それ以外は末尾へ。
  * 上限を超えた分は古い方から落として `dropped` で返す（捨てたことを黙らせない）。
  */
 export function addGrave<T>(
-  state: GraveQueueState<T>,
+  queue: readonly T[],
   grave: T,
   same: (a: T, b: T) => boolean,
   cap: number = MAX_PENDING_GRAVES,
-): GraveQueueState<T> & { dropped: T[] } {
-  // 枠が空で列だけ残っている（古い版が書いた形）なら、足す前に先頭を枠へ昇格させる: 昇格させずに足すと、いちばん新しいものが枠（先頭）になり、上限で落とすのが最古でなくなる（#4898）
-  const base = promoteHead(state);
-  if (base.primary !== null && same(base.primary, grave)) return { ...base, dropped: [] };
-  if (base.queue.some((queued) => same(queued, grave))) return { ...base, dropped: [] };
-  if (base.primary === null) return { primary: grave, queue: [], dropped: [] };
-
-  const all = [base.primary, ...base.queue, grave];
+): { queue: T[]; dropped: T[] } {
+  if (queue.some((queued) => same(queued, grave))) return { queue: [...queue], dropped: [] };
+  const all = [...queue, grave];
   const overflow = Math.max(0, all.length - cap);
-  const dropped = all.slice(0, overflow);
-  const kept = all.slice(overflow);
-  const [primary, ...queue] = kept;
-  return { primary: primary ?? null, queue, dropped };
+  return { queue: all.slice(overflow), dropped: all.slice(0, overflow) };
 }
 
-/** 枠が空で列に残りがあるときだけ、列の先頭を枠へ上げる。 */
-function promoteHead<T>(state: GraveQueueState<T>): GraveQueueState<T> {
-  if (state.primary !== null || state.queue.length === 0) return state;
-  const [head, ...rest] = state.queue;
-  return { primary: head ?? null, queue: rest };
-}
-
-/** 枠 → 列の順（古い順）。 */
-export function listGraves<T>(state: GraveQueueState<T>): T[] {
-  return state.primary === null ? [...state.queue] : [state.primary, ...state.queue];
-}
-
-/** 枠か列から `match` に当たるものを下ろす。下ろしたら `removed: true`。 */
+/** `match` に当たるものを下ろす。下ろしたら `removed: true`。 */
 export function removeGrave<T>(
-  state: GraveQueueState<T>,
+  queue: readonly T[],
   match: (grave: T) => boolean,
-): GraveQueueState<T> & { removed: boolean } {
-  const primaryHit = state.primary !== null && match(state.primary);
-  const queue = state.queue.filter((queued) => !match(queued));
-  const removed = primaryHit || queue.length !== state.queue.length;
-  return { ...promoteHead({ primary: primaryHit ? null : state.primary, queue }), removed };
+): { queue: T[]; removed: boolean } {
+  const kept = queue.filter((queued) => !match(queued));
+  return { queue: kept, removed: kept.length !== queue.length };
 }
 
 /**
