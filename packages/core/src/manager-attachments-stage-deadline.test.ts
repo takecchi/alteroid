@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_ATTACHMENT_LIMITS, type AttachmentLimits } from './attachment.js';
 import { MemoryAttachmentStore } from './attachment-memory.js';
 import { createManagerPool } from './manager.js';
+import { OUTBOX_FETCH_FILE_TIMEOUT_MS, outboxFetchDeadlineMs } from './manager-outbox-fetch.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -16,7 +17,8 @@ import {
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
-// 期限は注入（stageDeadlineMs）で短くする: 実時間の待ち（`setTimeout` の定数待ち）を作らない
+// 期限は既定の値（`outboxFetchDeadlineMs`）のまま、偽の時計で進める。本体は `AbortSignal.timeout` で期限を作るが、
+// これは `vi.useFakeTimers` で止まらないので、`setTimeout` で abort する signal に差し替える（実時間の待ちを作らない）
 const LIMITS: AttachmentLimits = {
   ...DEFAULT_ATTACHMENT_LIMITS,
   maxImageBytes: 10,
@@ -27,7 +29,27 @@ const LIMITS: AttachmentLimits = {
 };
 const BIG = Buffer.alloc(500, 7);
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 async function setup(onStage: (signal: AbortSignal | undefined) => Promise<void>) {
+  const requested: number[] = [];
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    requested.push(ms);
+    const controller = new AbortController();
+    setTimeout(() => {
+      controller.abort(
+        new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      );
+    }, ms);
+    return controller.signal;
+  });
   const runnerId = 'runner-x';
   const base = createLocalRunner({ runnerId, workspacePath: '/work/project', env: {} });
   const log: string[] = [];
@@ -74,15 +96,10 @@ async function setup(onStage: (signal: AbortSignal | undefined) => Promise<void>
     attachments: new MemoryAttachmentStore({ limits: LIMITS }),
   };
   const registry = createRunnerRegistry([runner]);
-  const requested: number[] = [];
   const pool = createManagerPool({
     stores,
     post: () => undefined,
     runners: registry,
-    stageDeadlineMs: (size) => {
-      requested.push(size);
-      return 20;
-    },
   });
   const context: ToolContext = {
     stores,
@@ -122,12 +139,20 @@ describe('(f) 押す処理の期限（#4128 段3b）', () => {
       seen.push(signal);
       return new Promise<void>(() => undefined); // 本文を読まず、永遠に返らない
     });
-    const out = await call('manager_start', { request: '調べて', attachments: [big.id] });
+    const calling = call('manager_start', { request: '調べて', attachments: [big.id] });
+    let settled = false;
+    void calling.finally(() => (settled = true));
+    // 小さいファイルの既定の期限（30 秒）の1ms 手前では、まだ待っている
+    await vi.advanceTimersByTimeAsync(OUTBOX_FETCH_FILE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const out = await calling;
     expect(out).toContain('時間の上限');
     expect(out).toContain('runner へ下ろせなかった');
     expect(out).toContain('マネージャーは起こしていない');
     expect(log).toEqual(['stage']);
-    expect(requested).toEqual([500]);
+    expect(requested).toEqual([outboxFetchDeadlineMs(500)]);
+    expect(outboxFetchDeadlineMs(500)).toBe(OUTBOX_FETCH_FILE_TIMEOUT_MS);
     expect(seen[0]).toBeInstanceOf(AbortSignal);
     expect(seen[0]?.aborted).toBe(true);
     await stop();
@@ -140,7 +165,9 @@ describe('(f) 押す処理の期限（#4128 段3b）', () => {
           signal?.addEventListener('abort', () => reject(new Error('This operation was aborted')));
         }),
     );
-    const out = await call('manager_start', { request: '調べて', attachments: [big.id] });
+    const calling = call('manager_start', { request: '調べて', attachments: [big.id] });
+    await vi.advanceTimersByTimeAsync(OUTBOX_FETCH_FILE_TIMEOUT_MS);
+    const out = await calling;
     expect(out).toContain('時間の上限');
     expect(log).toEqual(['stage']);
     await stop();

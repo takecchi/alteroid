@@ -11987,7 +11987,7 @@ describe('parseAllowedOrigins', () => {
 
 describe('runner の生死', () => {
   it('繋がっていない runner も、宛先と状態付きで並ぶ', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner:4518',
       open: () => Promise.reject(new Error('fetch failed')),
@@ -12033,7 +12033,7 @@ describe('runner の生死', () => {
   });
 
   it('繋がっていても runnerId を聞けていない runner は、runnerId を出さない（#330）', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: '旧版の runner',
       open: async () => fakeRunner('runner-primary', { runnerIdKnown: false }) as never,
@@ -12058,7 +12058,7 @@ describe('runner の生死', () => {
   });
 
   it('繋がっていても workspacePath を聞けていない runner は、workspacePath を出さない（#389）', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: '旧版の runner',
       open: async () => fakeRunner('runner-primary', { workspacePathKnown: false }) as never,
@@ -12083,7 +12083,7 @@ describe('runner の生死', () => {
   });
 
   it('workspacePath を聞けていて、それが空文字なら、空文字のまま出す（#389）', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: '空の作業ディレクトリを名乗る runner',
       open: async () =>
@@ -12150,7 +12150,7 @@ describe('runner の生死', () => {
   });
 
   it('繋がっていない runner は、聞いたことにしない', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner-unreachable:4518',
       open: () => Promise.reject(new Error('fetch failed')),
@@ -12181,7 +12181,7 @@ describe('runner の生死', () => {
   });
 
   it('叩いて失敗したら、失敗として残る', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner-failing:4518',
       open: async () =>
@@ -12219,7 +12219,7 @@ describe('runner の生死', () => {
   });
 
   it('叩いて0件なら、0件だと言う', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner-empty:4518',
       open: async () => fakeRunner('runner-empty') as never,
