@@ -5245,13 +5245,14 @@ describe('chat の /conversations と /conversation', () => {
       expect(text).not.toMatch(/未読のある会話 \d+ 件/);
     });
 
-    it('古いデーモン（404）でも一覧は出し、口が無いと言う', async () => {
+    it('総数の口が 404 でも一覧は出し、HTTP 404 で取れなかったと言う（#5843）', async () => {
       const read = captureStdout();
       const { client } = stubClient({ unreadCountStatus: 404 });
       await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
       const text = read();
       expect(text).toContain('会話はまだありません');
-      expect(text).toContain('古い版');
+      expect(text).toContain('未読のある会話の総数は取れませんでした（HTTP 404）');
+      expect(text).not.toContain('古い版');
     });
 
     it('通信が途切れて総数だけ失敗しても、一覧は出す', async () => {

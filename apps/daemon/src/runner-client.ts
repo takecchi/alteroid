@@ -340,6 +340,30 @@ function executionResourcesOf(value: unknown): RunnerExecutionResources {
   return picked as RunnerExecutionResources;
 }
 
+type HealthPlacementFields = Pick<
+  RunnerPlacementResources,
+  'managers' | 'pendingEvents' | 'oldestPendingAt'
+>;
+
+// `/health` 直下の3欄を1つずつ検証する: まとめて弾くと、1欄の形が崩れただけで残りまで落ち、値を出している runner が「何も報告しない器」に見えるため
+// `identity()`（心拍）と `resources()` が同じ読みを使う: 写すと、片方だけ欄の扱いが変わるため
+// 取れなかった欄は作らず 0 で埋めない: 件数を名乗らない器に対して `GET /managers` を引かなくなるため
+function healthPlacementFieldsOf(body: HealthBody): HealthPlacementFields {
+  const shape = runnerPlacementResourcesSchema.shape;
+  const managers = shape.managers.safeParse(body.managers);
+  const pendingEvents = shape.pendingEvents.safeParse(body.pendingEvents);
+  const oldestPendingAt = shape.oldestPendingAt.safeParse(body.oldestPendingAt);
+  return {
+    ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
+    ...(pendingEvents.success && pendingEvents.data !== undefined
+      ? { pendingEvents: pendingEvents.data }
+      : {}),
+    ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
+      ? { oldestPendingAt: oldestPendingAt.data }
+      : {}),
+  };
+}
+
 function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
@@ -512,25 +536,14 @@ class HttpRunner implements RunnerClient {
   // `revision` は常に返す（`known` か `unknown`）: 「応答は返ってきたのに版の状態が分からない」を作らず、名簿が `unheard` と混同しないため
   // 欄を1つずつ `safeParse` する: まとめて弾くと、この欄の形が崩れただけで `runnerId` / `instanceId` / `revision` まで道連れになるため
   async identity(options?: { signal?: AbortSignal }): Promise<
-    | {
-        runnerId?: string;
-        instanceId?: string;
-        revision: RunnerRevisionReport;
-        pendingEvents?: number;
-        oldestPendingAt?: string;
-        managers?: number;
-      }
-    | undefined
+    {
+      runnerId?: string;
+      instanceId?: string;
+      revision: RunnerRevisionReport;
+    } & HealthPlacementFields
   > {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
-    const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
-      body.pendingEvents,
-    );
-    const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
-    const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
-      body.oldestPendingAt,
-    );
     return {
       ...(typeof body.runnerId === 'string' && body.runnerId.length > 0
         ? { runnerId: body.runnerId }
@@ -539,14 +552,7 @@ class HttpRunner implements RunnerClient {
         ? { instanceId: body.instanceId }
         : {}),
       revision: revisionReportOf(body.revision),
-      ...(pendingEvents.success && pendingEvents.data !== undefined
-        ? { pendingEvents: pendingEvents.data }
-        : {}),
-      ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
-        ? { oldestPendingAt: oldestPendingAt.data }
-        : {}),
-      // 取れなかった回を 0 で埋めない: 件数を名乗らない器に対して `GET /managers` を引かなくなるため
-      ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
+      ...healthPlacementFieldsOf(body),
     };
   }
   // 採るのは資源だけにする（`runnerId` / `workspacePath` を採らず、心拍の `identity()` に相乗りさせない）: 器が入れ替わったとき台帳の鎖が黙って繋ぎ変わるため
@@ -555,24 +561,8 @@ class HttpRunner implements RunnerClient {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
     const resources = executionResourcesOf(body.resources);
-    const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
-    // `/health` 直下から1つずつ検証する: まとめて弾くと、`resources` の形が崩れただけでこの2欄まで落ち、値を出している runner が「何も報告しない器」に見えるため
-    const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
-      body.pendingEvents,
-    );
-    const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
-      body.oldestPendingAt,
-    );
-    return {
-      ...resources,
-      ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
-      ...(pendingEvents.success && pendingEvents.data !== undefined
-        ? { pendingEvents: pendingEvents.data }
-        : {}),
-      ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
-        ? { oldestPendingAt: oldestPendingAt.data }
-        : {}),
-    };
+    // `resources` の形が崩れても、この3欄は落とさない（`/health` 直下から別に読む）
+    return { ...resources, ...healthPlacementFieldsOf(body) };
   }
 
   // 切れても繋ぎ直す: 諦めると、誰も答えられない確認が runner に残り、マネージャーが永久に止まるため

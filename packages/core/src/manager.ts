@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
+import { shouldEscalateDenial } from './denial-escalation.js';
 import { redactSecretsInText } from './denial-input-head.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
@@ -1780,10 +1781,6 @@ export interface ManagerPoolOptions {
   outboxFetchTotalTimeoutMs?: number;
   /** 預けた退避を取りに行くやり直しの待ち（既定 {@link ARCHIVE_FETCH_RETRY_DELAYS_MS}）。試験が短くするための口。 */
   archiveFetchRetryDelaysMs?: readonly number[];
-  /** 生ログの写しを預けるやり直しの待ち（既定 {@link MIRROR_APPEND_RETRY_DELAYS_MS}）。試験が短くするための口。 */
-  mirrorAppendRetryDelaysMs?: readonly number[];
-  /** 大きいファイルを runner の別口へ押す1つの期限（ms。引数は大きさ）。既定 `outboxFetchDeadlineMs`。主にテスト用。 */
-  stageDeadlineMs?: (size: number) => number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -2529,13 +2526,6 @@ const REPORTED_FORGOTTEN_BUDGET = 2_000;
 
 /** 道具の名前の種類なので、実際にはまず届かない（届いたら、それ自体が異常である）。 */
 const DENIED_TOOL_LIMIT = 64;
-
-/**
- * 1 から始める。拒否の重要度は繰り返し回数と相関せず、一度きりで取り返しのつかない行為ほど繰り返されない
- * ので、3 から数えると件数が 1 で止まって永久に上がらない。
- * 刻み（3倍ごと）は動かさない: 「N 件で N 通」にすると受信箱が埋まりクローンの判断が雑音で鈍る。
- */
-const DENIED_ESCALATE_AT = 1;
 
 /**
  * **この合図そのものには答える先が無い。** 答えられるのは、runner が分類器の拒否から別に上げる「この1回だけ許可しますか」の確認
@@ -3517,8 +3507,6 @@ class Pool implements ManagerPool {
   readonly #archiveRefOutcomes = new Map<string, Promise<boolean>>();
   // 本文で（送り直しで）届いた退避の id。参照の取り寄せが「無い」で落ちても落とした扱いにしないため
   readonly #inlineArchiveIds = new Set<string>();
-  readonly #mirrorAppendRetryDelaysMs: readonly number[];
-  readonly #stageDeadlineMs: (size: number) => number;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -3594,12 +3582,8 @@ class Pool implements ManagerPool {
     outboxFetchFileTimeoutMs,
     outboxFetchTotalTimeoutMs,
     archiveFetchRetryDelaysMs,
-    mirrorAppendRetryDelaysMs,
-    stageDeadlineMs,
   }: ManagerPoolOptions) {
     this.#archiveFetchRetryDelaysMs = archiveFetchRetryDelaysMs ?? ARCHIVE_FETCH_RETRY_DELAYS_MS;
-    this.#mirrorAppendRetryDelaysMs = mirrorAppendRetryDelaysMs ?? MIRROR_APPEND_RETRY_DELAYS_MS;
-    this.#stageDeadlineMs = stageDeadlineMs ?? outboxFetchDeadlineMs;
     this.#attachmentLimits = attachmentLimits;
     this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
     this.#outboxFetchTotalTimeoutMs = outboxFetchTotalTimeoutMs;
@@ -5718,7 +5702,7 @@ class Pool implements ManagerPool {
       const stage = runner.stageAttachment?.bind(runner);
       if (stage === undefined) return `大きいファイル ${label} を押す口が無い`;
       // 期限は1つずつのファイルに掛ける。応答しない runner を最長1時間（runner 側の持ち時間）待たない
-      const deadlineMs = this.#stageDeadlineMs(item.size);
+      const deadlineMs = outboxFetchDeadlineMs(item.size);
       const signal = AbortSignal.timeout(deadlineMs);
       const timedOut = `大きいファイル ${label} を runner へ下ろせなかった: 時間の上限（${Math.round(deadlineMs / 100) / 10} 秒）を超えた`;
       let opened: Awaited<ReturnType<AttachmentStore['open']>>;
@@ -9354,7 +9338,7 @@ class Pool implements ManagerPool {
     for (const { event, fromRunnerId } of held) {
       // 同じ runner への復帰の窓: 受理されたなら、窓の間に届いた `closed` は resume の前のセッションの畳みなので日誌にだけ残して捨てる。
       if (sameRunner !== undefined) {
-        // 新しいセッション自身の出来事だと分かるなら古い世代として捨てない。`report` は世代が無い（古い runner）ときも処理し直し、`closed` は世代が一致するときだけ。
+        // 新しいセッション自身の出来事だと分かるなら古い世代として捨てない。`report` は追っている世代が無い（`unknown`）ときも処理し直し、`closed` は世代が一致するときだけ。
         const record = this.#records.get(managerId);
         const generation =
           record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
@@ -10152,7 +10136,7 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 生ログの写しを PG へ預ける。落ちたら `#mirrorAppendRetryDelaysMs` の間を置いてやり直す（#4657）。
+   * 生ログの写しを PG へ預ける。落ちたら `MIRROR_APPEND_RETRY_DELAYS_MS` の間を置いてやり直す（#4657）。
    * 順番は崩れない: 同じ会話の後ろの塊は、この預けが終わるのを `#mirrorTurns` で待っている。
    * やり直しで二重に積まれうるのは uuid の無い行だけ（`append` は1つのトランザクションで、uuid の有る行は衝突を無視する）。抜けるより害が小さい。
    * やり直し切れなかったら日誌にも残す: 標準エラーだけだと、resume した会話のどこが抜けたかを後から辿れないため。
@@ -10161,7 +10145,7 @@ class Pool implements ManagerPool {
     store: NonNullable<Stores['sessionStore']>,
     event: Extract<RunnerEvent, { type: 'mirror' }>,
   ): Promise<void> {
-    const delays = this.#mirrorAppendRetryDelaysMs;
+    const delays = MIRROR_APPEND_RETRY_DELAYS_MS;
     const detail =
       `managerId=${event.managerId} projectKey=${event.key.projectKey} ` +
       `sessionId=${event.key.sessionId} entries=${event.entries.length}`;
@@ -10877,6 +10861,7 @@ class Pool implements ManagerPool {
         (record.deniedLastRequestId ??= new Map()).set(key, event.toolUseId);
 
         // escalation は layer 別ではなく道具ごとの合計で判定する: 層ごとだと頻度が下がりすぎてクローンに1件も上がらず「止まっていることが見える」を裏切る。合計は拒否1件ごとにちょうど1ずつ増えるので、`shouldEscalateDenial` の exact-equality（`step === count`）にそのまま渡せる。
+        // 入力の中身ではなく道具の名前で束ねる: 1文字違う `Edit` を別物と数えると、同じファイルの編集が何度も拒否される形を取り逃す。
         const toolTotal = denied
           .entries()
           .reduce((sum, [k, v]) => (decodeDenialKey(k).tool === event.tool ? sum + v : sum), 0);
@@ -13751,16 +13736,6 @@ class Pool implements ManagerPool {
       return null;
     }
   }
-}
-
-// 上げ続けない: 止められ続けている1本が受信箱を埋めると他の判断材料が押し流される。黙りもしない: 続けば次の桁でもう一度出る。
-// 入口（1）と刻み（3倍）は別の判断: 入口を上げると一度きりの拒否が黙り、刻みを詰めると1件ずつ流す形に戻る。
-// 入力の中身ではなく道具の名前で束ねる: 1文字違う `Edit` を別物と数えると、同じファイルの編集が何度も拒否される形を取り逃す。
-function shouldEscalateDenial(count: number): boolean {
-  if (count < DENIED_ESCALATE_AT) return false;
-  let step = DENIED_ESCALATE_AT;
-  while (step < count) step *= 3;
-  return step === count;
 }
 
 // `claimableAt` の有無では言い方を変えない: 台帳の書き込み失敗（`persist-failed`）まで「人間が `ALTEROID_RUNNER_ID` を直すまで解けない」側に倒れる。

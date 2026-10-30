@@ -223,33 +223,6 @@ describe('plugin を配る（apply / syncRunner）', () => {
     }
   });
 
-  it('フラグの欄が無い古い runner の指紋は「差あり」として送り直す', async () => {
-    await s.stores.plugins.put(pluginInput('p-all'));
-    await s.service.apply();
-    const real = s.runner.plugins?.bind(s.runner);
-    s.runner.plugins = async () => {
-      const found = await real!();
-      return found === undefined
-        ? undefined
-        : {
-            ...found,
-            plugins: found.plugins.map(({ name, sha, contentSha256 }) => ({
-              name,
-              sha,
-              contentSha256,
-            })),
-          };
-    };
-    let sent = 0;
-    const realSet = s.runner.setPlugin?.bind(s.runner);
-    s.runner.setPlugin = async (plugin) => {
-      sent += 1;
-      return realSet!(plugin);
-    };
-    await s.service.syncRunner(s.runner);
-    expect(sent).toBe(1);
-  });
-
   it('差のある plugin だけを1本ずつ送り、最後に残す名前の一覧を送る', async () => {
     await s.stores.plugins.put(pluginInput('p-one'));
     await s.stores.plugins.put(pluginInput('p-two'));
@@ -476,6 +449,8 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
       name: plugin.name,
       sha: plugin.sourceSha,
       contentSha256: plugin.contentSha256,
+      enableHooks: plugin.enableHooks,
+      enableMcp: plugin.enableMcp,
     });
     s.runner.retainPlugins = async () => undefined;
     await s.pool.reattachRunner('runner-test');

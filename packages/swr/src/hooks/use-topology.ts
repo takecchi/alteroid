@@ -1,12 +1,9 @@
-import type { TopologySnapshot } from '@alteroid/logic';
+import { sseRetryDelay, type TopologySnapshot } from '@alteroid/logic';
 import { useEffect, useState } from 'react';
 
 import { useApiContext } from '../api';
 
 import type { LiveStatus } from './use-journal-live';
-
-const RETRY_BASE_MS = 1000;
-const RETRY_MAX_MS = 30_000;
 
 export interface TopologyLive {
   snapshot?: TopologySnapshot;
@@ -50,7 +47,7 @@ export function useTopology(): TopologyLive {
       if (stopped || controller.signal.aborted) return;
 
       setState((previous) => ({ ...previous, status: 'offline' }));
-      const wait = Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_MAX_MS);
+      const wait = sseRetryDelay(attempt);
       attempt += 1;
       timer = setTimeout(() => void connect(), wait);
     }

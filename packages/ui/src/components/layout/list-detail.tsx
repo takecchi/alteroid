@@ -142,7 +142,6 @@ export interface ListDetailItem {
   className?: string;
   children: ReactNode;
   // 行の一部だけをリンクにする: 行全体がリンクだと、中の文字をドラッグで選べないため
-  extra?: ReactNode;
   lead?: ReactNode;
 }
 
@@ -189,7 +188,7 @@ export function ListDetailItems({
   return (
     <ul ref={listRef} aria-label={label} onKeyDown={onKeyDown}>
       {items.map((item) =>
-        item.extra !== undefined || item.lead !== undefined ? (
+        item.lead !== undefined ? (
           <li
             key={item.key}
             className={cn(
@@ -209,7 +208,6 @@ export function ListDetailItems({
                 onClick: onNavigate,
               })}
             </div>
-            {item.extra}
           </li>
         ) : (
           <li key={item.key}>

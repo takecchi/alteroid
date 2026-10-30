@@ -1,10 +1,10 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import { describeGithubCi } from '@alteroid/core/github-ci-format';
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
 import { redactBody } from './redact.js';
 import {
   GITHUB_CI_COUNT_LABEL,
-  GITHUB_CI_COUNT_ORDER,
   GITHUB_OPEN_LABEL,
   GITHUB_TRUNCATED_NOTE,
   githubObservedByLabel,
@@ -12,42 +12,6 @@ import {
 import type { JournalEntry } from './types.js';
 
 export type JournalSummaryStyle = 'raw' | 'localized';
-
-// core の `describeGithubCi` を import せず写す: 本体の値 import はサーバ専用の層をブラウザバンドルへ入れるため。
-export function describeGithubCiText(
-  ok: {
-    ci?: {
-      pulls: number;
-      success: number;
-      failure: number;
-      pending: number;
-      checks: string;
-      truncated?: boolean;
-    };
-    ciUnavailable?: string;
-  },
-  style: JournalSummaryStyle = 'raw',
-): string {
-  if (ok.ci !== undefined) {
-    const ci = ok.ci;
-    const counted = ci.success + ci.failure + ci.pending;
-    const axes =
-      style === 'localized'
-        ? GITHUB_CI_COUNT_ORDER.map((k) => `${GITHUB_CI_COUNT_LABEL[k]} ${String(ci[k])}`).join(
-            ' / ',
-          )
-        : `success ${String(ci.success)} / failure ${String(ci.failure)} / pending ${String(ci.pending)}`;
-    return (
-      `CI: ${String(ci.pulls)} 件の PR を確認 — ${axes}` +
-      (counted < ci.pulls ? `（チェックが無い等で未集計 ${String(ci.pulls - counted)} 件）` : '') +
-      `（数えたもの: ${ci.checks}）` +
-      (ci.truncated === true ? '（打ち切り。数は下限）' : '')
-    );
-  }
-  if (ok.ciUnavailable !== undefined)
-    return `CI: 取れなかった — ${ok.ciUnavailable}（0 件ではない）`;
-  return 'CI: 観測していない（0 件ではない）';
-}
 
 // 一行に出す名前の数。超えた分は件数だけにする（一行が際限なく伸びないため。全件は行を開くか journal_read id=<id>）
 const ATTACHMENT_NOTE_NAMES = 3;
@@ -126,7 +90,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
         ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +
             (entry.result.truncated ? GITHUB_TRUNCATED_NOTE[style] : '') +
             by(entry.observedBy) +
-            ` / ${describeGithubCiText(entry.result, style)}`
+            ` / ${describeGithubCi(entry.result, style === 'localized' ? GITHUB_CI_COUNT_LABEL : undefined)}`
         : `${entry.repo}: 取れなかった${by(entry.observedBy)}: ${entry.result.reason}`;
     case 'subagent_stall': {
       // `text` をそのまま出さない: 複数行で、この種別だけ一覧の1行が極端に長くなるため。

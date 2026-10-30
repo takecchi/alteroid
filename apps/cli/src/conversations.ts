@@ -90,9 +90,6 @@ export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string
     `未読のある会話の総数は取れませんでした（${reason}）`;
   try {
     const response = await client.conversations['unread-count'].$get();
-    if (response.status === 404) {
-      return unavailable('このデーモンは総数の口を持たない。古い版かもしれない');
-    }
     if (!response.ok) return unavailable(`HTTP ${String(response.status)}`);
     const body: Partial<Awaited<ReturnType<typeof response.json>>> = await response.json();
     if (typeof body.count !== 'number' || body.readStateUnreadable !== undefined) {

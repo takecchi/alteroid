@@ -4,7 +4,6 @@ import type { AnsweredViaLike } from './answered-via.js';
 import type { CgroupEventsDeltaLike } from './cgroup-events-format.js';
 import { cgroupEventsDeltaSchema, type CgroupEventsDelta } from './cgroup-events.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
-import type { JobStatusLike } from './job-status-running.js';
 import type { JournalDiagnosticsEntryLike } from './journal-diagnostics-format.js';
 import { stripNul } from './nul-guard.js';
 import type { SystemErrorFactsLike } from './system-error-format.js';
@@ -1184,11 +1183,6 @@ export const jobStatusSchema = z.enum([
 ]);
 
 export type JobStatus = z.infer<typeof jobStatusSchema>;
-
-// `JobStatus` をそのまま使わず手で写す: 軽い口（`job-status-running.ts`）は zod を import できないため
-export type _AssertJobStatusMatchesRunningLikeType = AssertTrue<
-  [JobStatus] extends [JobStatusLike] ? ([JobStatusLike] extends [JobStatus] ? true : false) : false
->;
 
 export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
   z.object({

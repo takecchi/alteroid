@@ -14,8 +14,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Long: Story = {
   args: {
-    text: Array.from({ length: 400 }, (_, i) => `line ${i} ${'x'.repeat(40)}`).join('\n'),
-    chunkChars: 4000,
+    text: Array.from({ length: 4000 }, (_, i) => `line ${i} ${'x'.repeat(40)}`).join('\n'),
   },
 };
 

@@ -37,7 +37,6 @@ function Demo({ initial, saveable = true }: { initial: string; saveable?: boolea
         onChange={setValue}
         onSave={saveable ? () => setSavedAt(new Date().toLocaleTimeString('ja-JP')) : undefined}
         hint="ここで書き換えたものは memory_update（cause: human）として日誌に残る。"
-        minHeight="20rem"
       />
       {savedAt !== null && (
         <p className="mt-2 text-xs text-muted-foreground">
@@ -60,7 +59,7 @@ export const Split: Story = {
     const [value, setValue] = useState(MEMORY);
     return (
       <div className="flex h-[640px] max-w-5xl flex-col">
-        <MarkdownEditor value={value} onChange={setValue} defaultMode="split" minHeight="20rem" />
+        <MarkdownEditor value={value} onChange={setValue} defaultMode="split" />
       </div>
     );
   },
@@ -81,7 +80,6 @@ export const Plain: Story = {
           saveHint={null}
           emptyPreview={null}
           placeholder=""
-          minHeight="20rem"
         />
       </div>
     );

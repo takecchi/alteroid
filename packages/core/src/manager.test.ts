@@ -7227,7 +7227,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   it('state は5値のまま渡す（connected へ畳まない）', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner:later',
       open: () => Promise.reject(new Error('fetch failed')),
@@ -7330,7 +7330,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   it('fingerprints: true でも繋がっていない runner には聞きに行かず、probe は unheard になる', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner:later',
       open: () => Promise.reject(new Error('fetch failed')),
@@ -7476,7 +7476,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
   it('訊けなかった器は resources が undefined、訊けたが pids の無い器は resources はあるが pids が無い', async () => {
     const stores = createMemoryStores();
-    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'runner-unreachable',
       open: () => Promise.reject(new Error('fetch failed')),
@@ -7500,7 +7500,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   describe('resourcesProbe（Issue #2426）', () => {
     it('繋がっていない・失敗した・口を持たない・取れた を別の状態で返し、失敗は理由つき', async () => {
       const stores = createMemoryStores();
-      const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+      const registry = createRunnerRegistry();
       await registry.register({
         label: 'runner-unreachable',
         open: () => Promise.reject(new Error('fetch failed')),

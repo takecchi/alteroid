@@ -63,7 +63,7 @@ function start(
   const api = fakeApi();
   setup(api);
   const controller = new ChatController(api);
-  const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+  const feed = new HeaderFeed(api);
   const approvals = new ApprovalsController(api, { debounceMs: 10 });
   approvals.attach(feed);
   const managers = new ManagersController(api, { debounceMs: 10 });
@@ -629,7 +629,7 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
         request: '新しい方の依頼',
         startedAt: '2026-10-02T02:00:00.000Z',
         updatedAt: new Date().toISOString(),
-        waiting: [{ requestId: 'r1', summary: 'デプロイしてよいか', kind: 'question' }],
+        waiting: [{ requestId: 'r1', summary: 'デプロイしてよいか' }],
       }),
       managerRow('mgr-old', {
         status: 'done',

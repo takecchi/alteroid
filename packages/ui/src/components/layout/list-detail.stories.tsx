@@ -127,12 +127,6 @@ function PartialDemo() {
               current: e.id === selected,
               lead: <span className="mr-1.5 shrink-0 text-[10px] text-muted-foreground">前提</span>,
               children: e.title,
-              extra: (
-                <>
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">{e.id}</p>
-                  <p className="text-[11px] text-muted-foreground">{e.date}</p>
-                </>
-              ),
             }))}
             renderLink={(props) => (
               <a

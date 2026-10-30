@@ -36,6 +36,7 @@ import type { MemorySummary } from '../memory.js';
 import { type Target } from '../target.js';
 import { redactError } from '../redact.js';
 import { readSSE } from '../sse-frame.js';
+import type { TurnFailureKind } from '../turn-failure.js';
 import type { InterruptOutcome, InterruptTarget } from './interrupt-outcome.js';
 
 export type ChatEvent =
@@ -51,7 +52,7 @@ export type ChatEvent =
     }
   | { type: 'usage_limited'; message: string }
   // `kind` は古いデーモンだと付かない（その場合は `other` 扱い）
-  | { type: 'error'; message: string; kind?: 'auth' | 'quota' | 'other' }
+  | { type: 'error'; message: string; kind?: TurnFailureKind }
   | { type: 'done' };
 
 // 型の持ち主は `conversations.ts`（`alteroid conversations` と同じ応答を読むため）。
@@ -79,7 +80,7 @@ export interface ManagerRow {
   lastReport?: string;
   lastReportAt?: string;
   lastFailure?: { code: string; via: string; at: string };
-  waiting: { requestId: string; summary: string; kind?: string }[];
+  waiting: { requestId: string; summary: string }[];
   runnerLostSince?: string;
   runnerVanished?: boolean;
   sessionMissingSince?: string;

@@ -8,12 +8,12 @@ import {
   type PendingLogin,
 } from '@alteroid/logic';
 
-export const CLAIM_INTERVAL_MS = 1500;
+const CLAIM_INTERVAL_MS = 1500;
 
-export const CLAIM_MAX_RETRIES = 4;
+const CLAIM_MAX_RETRIES = 4;
 
 /** 1回の claim の期限（ms。#4706）。デーモンは手元の状態を読むだけで、普段は1秒もかからない。CLI の `LOGIN_REQUEST_TIMEOUT_MS` と同じ値。 */
-export const CLAIM_REQUEST_TIMEOUT_MS = 10_000;
+const CLAIM_REQUEST_TIMEOUT_MS = 10_000;
 
 /** 通信の失敗の直後に 400 が返ったときに添える案内（#4751）。CLI の `alteroid login` の同じ場面の案内と揃える。 */
 const CLAIM_AFTER_TRANSIENT_HINT =
@@ -57,7 +57,7 @@ export type ClaimOutcome =
   | { status: 'failed'; message: string };
 
 // HTTP の番号ではなく本文の `status` で分岐する: 202 と 200 は同じ union で、番号で分けると片方が変わったとき黙って壊れる
-export async function claimOnce(
+async function claimOnce(
   client: AlteroidClient,
   pending: Pick<PendingLogin, 'requestId' | 'claimSecret'>,
   signal?: AbortSignal,
@@ -97,15 +97,8 @@ export async function claimOnce(
 export async function claimUntilReady(
   client: AlteroidClient,
   pending: Omit<PendingLogin, 'baseUrl'>,
-  options: {
-    signal?: AbortSignal;
-    sleep?: (ms: number) => Promise<void>;
-    /** 1回の claim の期限（試験が縮めるための口）。既定 {@link CLAIM_REQUEST_TIMEOUT_MS}。 */
-    requestTimeoutMs?: number;
-  } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<ClaimOutcome> {
-  const sleep =
-    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const deadline = Date.parse(pending.expiresAt);
 
   let failures = 0;
@@ -120,7 +113,7 @@ export async function claimUntilReady(
 
     try {
       // 1回ごとに期限を掛ける（#4706）: 返らない claim に当たると、ログインの期限の判定まで戻らずに止まるため。期限切れは通信の失敗と同じく撃ち直す
-      const timeout = AbortSignal.timeout(options.requestTimeoutMs ?? CLAIM_REQUEST_TIMEOUT_MS);
+      const timeout = AbortSignal.timeout(CLAIM_REQUEST_TIMEOUT_MS);
       const outcome = await claimOnce(
         client,
         pending,
@@ -144,7 +137,7 @@ export async function claimUntilReady(
       }
     }
 
-    await sleep(CLAIM_INTERVAL_MS);
+    await new Promise<void>((resolve) => setTimeout(resolve, CLAIM_INTERVAL_MS));
   }
 }
 

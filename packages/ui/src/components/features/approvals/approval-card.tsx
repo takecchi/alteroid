@@ -30,7 +30,6 @@ export const APPROVAL_QUICK_ANSWERS = {
 export function ApprovalCard({
   state,
   createdAt,
-  createdLabel,
   time,
   jobLink,
   question,
@@ -53,7 +52,6 @@ export function ApprovalCard({
 }: {
   state: ApprovalState;
   createdAt?: string;
-  createdLabel?: string;
   time?: ReactNode;
   jobLink?: ReactNode;
   question: string;
@@ -93,11 +91,7 @@ export function ApprovalCard({
         >
           {state === 'withdrawn' ? '取り下げ済' : state === 'answered' ? '回答済' : '未回答'}
         </Badge>
-        {time !== undefined ? (
-          time
-        ) : createdAt !== undefined ? (
-          <Timestamp at={createdAt} label={createdLabel} />
-        ) : null}
+        {time !== undefined ? time : createdAt !== undefined ? <Timestamp at={createdAt} /> : null}
         {jobLink !== undefined && <span className="font-mono">{jobLink}</span>}
       </div>
 

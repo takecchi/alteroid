@@ -2,11 +2,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { cutAt, WindowedText } from './windowed-text';
+import { cutAt, WindowedText, WINDOWED_TEXT_CHUNK_CHARS } from './windowed-text';
 
 afterEach(cleanup);
 
+// 窓の幅は props では変えられないので、既定の窓（WINDOWED_TEXT_CHUNK_CHARS）を何度かまたぐ長さにする
 const lines = (count: number) => Array.from({ length: count }, (_, i) => `L${i}`).join('\n');
+const LONG_LINES = 60_000;
 
 describe('cutAt', () => {
   it('行の切れ目（改行の直後）で切る', () => {
@@ -34,12 +36,12 @@ describe('WindowedText', () => {
   });
 
   it('長ければ先頭の窓だけ出し、「続きを表示」で伸びて、最後はボタンが消える', () => {
-    const text = lines(30);
-    render(<WindowedText text={text} chunkChars={20} testId="t" />);
+    const text = lines(LONG_LINES);
+    render(<WindowedText text={text} testId="t" />);
     const first = screen.getByTestId('t').textContent ?? '';
-    expect(first.length).toBeLessThanOrEqual(20);
+    expect(first.length).toBeLessThanOrEqual(WINDOWED_TEXT_CHUNK_CHARS);
     expect(text.startsWith(first)).toBe(true);
-    expect(screen.getByText(/全体 \d+ 文字を表示しています/)).toBeTruthy();
+    expect(screen.getByText(/全体 [\d,]+ 文字を表示しています/)).toBeTruthy();
 
     let previous = first.length;
     for (let guard = 0; guard < 100 && screen.queryByText('続きを表示'); guard += 1) {
@@ -54,18 +56,18 @@ describe('WindowedText', () => {
   });
 
   it('text が入れ替わっても、広げた窓は縮まない', () => {
-    const text = lines(30);
-    const { rerender } = render(<WindowedText text={text} chunkChars={20} testId="t" />);
+    const text = lines(LONG_LINES);
+    const { rerender } = render(<WindowedText text={text} testId="t" />);
     fireEvent.click(screen.getByText('続きを表示'));
     const widened = (screen.getByTestId('t').textContent ?? '').length;
-    rerender(<WindowedText text={`${text}\nlast`} chunkChars={20} testId="t" />);
+    rerender(<WindowedText text={`${text}\nlast`} testId="t" />);
     expect((screen.getByTestId('t').textContent ?? '').length).toBe(widened);
   });
 
   it('text が縮んだら上限だけ詰める', () => {
-    const { rerender } = render(<WindowedText text={lines(30)} chunkChars={20} testId="t" />);
+    const { rerender } = render(<WindowedText text={lines(LONG_LINES)} testId="t" />);
     fireEvent.click(screen.getByText('続きを表示'));
-    rerender(<WindowedText text="short" chunkChars={20} testId="t" />);
+    rerender(<WindowedText text="short" testId="t" />);
     expect(screen.getByTestId('t').textContent).toBe('short');
     expect(screen.queryByText('続きを表示')).toBeNull();
   });
