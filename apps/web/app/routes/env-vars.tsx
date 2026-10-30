@@ -1,3 +1,4 @@
+import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
@@ -404,15 +405,11 @@ function EditEnvVarDialog({
             保存
           </Button>
         </DialogFooter>
-        <ConfirmDialog
+        <DiscardConfirmDialog
           open={confirmingDiscard}
           onOpenChange={setConfirmingDiscard}
-          title="書きかけの編集があります"
-          description="このまま閉じると、いま書いている内容は失われます。"
-          confirmLabel="破棄して閉じる"
           // 既定の「やめる」にしない: 下の窓の「やめる」（閉じる側）と同じ語になり、どちらへ倒れるのか読めないため
           cancelLabel="編集に戻る"
-          destructive
           onConfirm={() => {
             setConfirmingDiscard(false);
             onOpenChange(false);

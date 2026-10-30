@@ -1,3 +1,4 @@
+import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { describeScope, SCOPE_OPTIONS } from '~/lib/scope-labels';
@@ -11,7 +12,6 @@ import {
   Button,
   Card,
   CardHeader,
-  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -154,19 +154,17 @@ function ProfileBody() {
           </Card>
         )}
       </div>
-      <ConfirmDialog
+      <DiscardConfirmDialog
         open={pending !== null}
         onOpenChange={(open) => {
           if (!open) setPending(null);
         }}
-        title="書きかけの編集があります"
         description={
           pending?.kind === 'switch'
-            ? `別の行（${pending.entry.name}）に切り替えると、いま書いている内容は失われます。`
-            : 'このまま閉じると、いま書いている内容は失われます。'
+            ? `別の行（${pending.entry.name}）に切り替えると、書きかけの内容は失われます。`
+            : undefined
         }
-        confirmLabel={pending?.kind === 'switch' ? '破棄して切り替える' : '破棄して閉じる'}
-        destructive
+        confirmLabel={pending?.kind === 'switch' ? '破棄して切り替える' : undefined}
         onConfirm={() => {
           if (pending?.kind === 'switch') openEntry(pending.entry);
           else setEditor(null);

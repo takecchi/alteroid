@@ -80,7 +80,8 @@ describe('環境変数の編集の窓 — 書きかけを確認なしに捨て�
     fireEvent.keyDown(dialog, { key: 'Escape' });
 
     const confirm = await screen.findByRole('alertdialog');
-    expect(within(confirm).getByText('書きかけの編集があります')).toBeTruthy();
+    expect(within(confirm).getByText('保存していない変更があります')).toBeTruthy();
+    expect(within(confirm).getByText('編集をやめると、書きかけの内容は失われます。')).toBeTruthy();
     fireEvent.click(within(confirm).getByRole('button', { name: '編集に戻る' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(screen.getByRole('dialog')).toBe(dialog);
