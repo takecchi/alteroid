@@ -5,7 +5,7 @@ export { describeGithubCi } from './progress-github.js';
 export { ARCHIVE_REMOVED_BYTES_UNIT_NOTE } from './archive-removed-bytes.js';
 export { RESET_CONFIRM_GROUPS } from './workspace-reset.js';
 export { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
-export { codePointBoundary } from './excerpt.js';
+export { clipWithEllipsis, codePointBoundary } from './excerpt.js';
 export { JOURNAL_SEARCH_UNCOVERED_LIST, matchesJournalSearch } from './journal-search.js';
 export {
   describeSelectionsViolation,
