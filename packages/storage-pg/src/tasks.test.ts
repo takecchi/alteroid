@@ -1,4 +1,8 @@
-import { UnreadableTaskError, verifyTaskStoreContract } from '@alteroid/core';
+import {
+  UnreadableTaskError,
+  verifyTaskRemoveForConversationContract,
+  verifyTaskStoreContract,
+} from '@alteroid/core';
 import type { Task } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -41,6 +45,14 @@ describe('TaskStore（pg）', () => {
           rank: 1,
           task: { id, createdAt: NOW, status: 'weird' },
         });
+      },
+    });
+  });
+
+  it('removeForConversation の契約（#5899。3実装で同じことを測る。読めない行を含む）', async () => {
+    await verifyTaskRemoveForConversationContract(stores.tasks, {
+      plantUnreadable: async (id, fields) => {
+        await db.insert(tasks).values({ id, rank: 1, task: fields });
       },
     });
   });

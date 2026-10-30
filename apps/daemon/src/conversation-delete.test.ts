@@ -103,6 +103,7 @@ interface DeleteBody {
   hiddenCount: number;
   attachmentsRemoved: number;
   commitmentsRemoved: number;
+  tasksRemoved: number;
   queuedDropped: number;
   approvalsLinked: number;
   incomplete: string[];
@@ -240,6 +241,43 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(
       await (await request(app, 'GET', '/commitments?includeClosed=true')).text(),
     ).not.toContain(SECRET);
+  });
+
+  it('その会話から開いた Task（人間の発言の全文を本文に持つ）を物理的に消し、tasksRemoved で件数を返す。ほかの会話の Task は残る（#5899）', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-secret', SECRET);
+    await seedConversation(stores, 'conv-keep', '残す');
+    const at = '2026-10-08T10:00:00.000Z';
+    await stores.tasks.add({
+      id: 'task-secret',
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'human',
+      source: 'conv-secret',
+      originConversationId: 'conv-secret',
+      title: 'secret',
+      body: SECRET,
+    });
+    await stores.tasks.add({
+      id: 'task-keep',
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'human',
+      source: 'conv-keep',
+      originConversationId: 'conv-keep',
+      title: 'keep',
+      body: '残す',
+    });
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-secret')
+    ).json()) as DeleteBody;
+
+    expect(body.tasksRemoved).toBe(1);
+    expect(await stores.tasks.get('task-secret')).toBeNull();
+    expect(await stores.tasks.get('task-keep')).not.toBeNull();
   });
 
   it('消した会話へは送れず（POST /chat は 404）、途中経過の SSE も 404', async () => {
