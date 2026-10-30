@@ -31,25 +31,25 @@ describe('pendingOwnLines の失敗の印（#3705）', () => {
   ];
 
   it('履歴に同じ種類の知らせが現れたら、そのターンの行を落とす（ほかのターンは残す）', () => {
-    const pending = pendingOwnLines(lines, C, [note('failed')], turn());
+    const pending = pendingOwnLines(lines, C, [note('failed')], turn(), []);
     expect(pending.map((l) => l.key)).toEqual(['other']);
   });
 
   it('受信中（知らせがまだ履歴に無い）は見せたままにする', () => {
-    expect(pendingOwnLines(lines, C, [], turn())).toHaveLength(3);
+    expect(pendingOwnLines(lines, C, [], turn(), [])).toHaveLength(3);
   });
 
   it('印を付けた時点で履歴にあった知らせは、このターンのものではない', () => {
-    expect(pendingOwnLines(lines, C, [note('failed')], turn({ baseline: 1 }))).toHaveLength(3);
-    expect(pendingOwnLines(lines, C, [note('failed')], turn({ baseline: undefined }))).toHaveLength(
-      3,
-    );
+    expect(pendingOwnLines(lines, C, [note('failed')], turn({ baseline: 1 }), [])).toHaveLength(3);
+    expect(
+      pendingOwnLines(lines, C, [note('failed')], turn({ baseline: undefined }), []),
+    ).toHaveLength(3);
   });
 
   it('種類が違う知らせは引き取らない。held は held の知らせで引き取る', () => {
-    expect(pendingOwnLines(lines, C, [note('held')], turn())).toHaveLength(3);
+    expect(pendingOwnLines(lines, C, [note('held')], turn(), [])).toHaveLength(3);
     expect(
-      pendingOwnLines(lines, C, [note('held')], turn({ kind: 'held' })).map((l) => l.key),
+      pendingOwnLines(lines, C, [note('held')], turn({ kind: 'held' }), []).map((l) => l.key),
     ).toEqual(['other']);
   });
 
@@ -59,8 +59,8 @@ describe('pendingOwnLines の失敗の印（#3705）', () => {
       ['g2', { of: C, kind: 'failed', baseline: 1 }],
     ]);
     const history = [note('failed')];
-    expect(pendingOwnLines(lines, C, history, two).map((l) => l.key)).toEqual(['other']);
-    expect(pendingOwnLines(lines, C, [...history, note('failed')], two)).toHaveLength(0);
+    expect(pendingOwnLines(lines, C, history, two, []).map((l) => l.key)).toEqual(['other']);
+    expect(pendingOwnLines(lines, C, [...history, note('failed')], two, [])).toHaveLength(0);
   });
 });
 

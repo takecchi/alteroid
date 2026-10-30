@@ -260,17 +260,19 @@ describe('履歴との突き合わせ（日誌は本文を1発言に連結して
 
   it('分かれた行の連結が履歴の1発言と一致したら、手元の行は全部引き取られる', () => {
     const lines = [line('c-1', '前半です', 'g-1'), line('c-2', '後半です', 'g-1')];
-    expect(pendingOwnLines(lines, ID, [history('前半です後半です')])).toEqual([]);
+    expect(pendingOwnLines(lines, ID, [history('前半です後半です')], undefined, [])).toEqual([]);
   });
 
   it('一致が確認できないあいだは、どの行も落とさない', () => {
     const lines = [line('c-1', '前半です', 'g-1'), line('c-2', '後半です', 'g-1')];
-    expect(pendingOwnLines(lines, ID, [])).toHaveLength(2);
-    expect(pendingOwnLines(lines, ID, [history('前半です')])).toHaveLength(1);
+    expect(pendingOwnLines(lines, ID, [], undefined, [])).toHaveLength(2);
+    expect(pendingOwnLines(lines, ID, [history('前半です')], undefined, [])).toHaveLength(1);
   });
 
   it('別のターン（別の印）の行は、連結に混ぜない', () => {
     const lines = [line('c-1', '前半です', 'g-1'), line('c-2', '後半です', 'g-2')];
-    expect(pendingOwnLines(lines, ID, [history('前半です後半です')])).toHaveLength(2);
+    expect(pendingOwnLines(lines, ID, [history('前半です後半です')], undefined, [])).toHaveLength(
+      2,
+    );
   });
 });

@@ -27,9 +27,9 @@ export function omitKey<T>(record: Record<string, T>, key: string): Record<strin
 }
 
 /** 答えが通った承認の控えに載せる、本文と設問。 */
-export type ApprovalLeftoverBase = Pick<ApprovalLeftoverSource, 'question' | 'questions'>;
+type ApprovalLeftoverBase = Pick<ApprovalLeftoverSource, 'question' | 'questions'>;
 
-export interface ApprovalDraftState {
+interface ApprovalDraftState {
   /** 各カードの下書き（自由記述と設問の選択）。 */
   drafts: ApprovalDrafts;
   /**

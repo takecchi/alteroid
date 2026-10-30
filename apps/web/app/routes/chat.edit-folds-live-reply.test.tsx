@@ -240,6 +240,6 @@ describe('pendingOwnLines は、編集で畳まれた返答と同じ本文の手
 
   it('対照: 畳まれた返答を渡さなければ、今までどおり残す', () => {
     const lines = [clone('c1', '途中の返答')];
-    expect(pendingOwnLines(lines, C, []).map((line) => line.key)).toEqual(['c1']);
+    expect(pendingOwnLines(lines, C, [], undefined, []).map((line) => line.key)).toEqual(['c1']);
   });
 });
