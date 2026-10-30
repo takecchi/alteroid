@@ -50,7 +50,17 @@ interface Server {
   /** usage.byIntegrationKey の中身 */
   byIntegrationKey: Record<string, { count: number; totalBytes: number }>;
   log: { method: string; url: URL; body?: unknown }[];
+  /** GET /attachments/limits の保持日数。undefined なら 404（読めない） */
+  retentionDays: number | undefined;
 }
+
+const MIB = 1024 * 1024;
+const LIMITS = {
+  maxImageBytes: 5 * MIB,
+  maxFileBytes: 25 * MIB,
+  maxPerMessage: 10,
+  maxTotalBytes: 50 * MIB,
+};
 
 let server: Server;
 let originalFetch: typeof fetch;
@@ -81,6 +91,7 @@ beforeEach(() => {
     pageSize: 50,
     byIntegrationKey: {},
     log: [],
+    retentionDays: undefined,
   };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : null;
@@ -88,7 +99,11 @@ beforeEach(() => {
     const method = request?.method ?? init?.method ?? 'GET';
     const entry: Server['log'][number] = { method, url };
     server.log.push(entry);
-    if (url.pathname === '/attachments/limits') return json({ error: 'none' }, 404);
+    if (url.pathname === '/attachments/limits') {
+      return server.retentionDays === undefined
+        ? json({ error: 'none' }, 404)
+        : json({ ...LIMITS, retentionDays: server.retentionDays });
+    }
     if (url.pathname === '/attachments' && method === 'GET') {
       if (server.failList > 0) {
         server.failList -= 1;
@@ -185,7 +200,7 @@ const listCalls = () =>
 const rowOf = (name: string) => screen.getByText(name).closest('li')!;
 
 describe('ファイル画面: 一覧と使用量', () => {
-  it('行に名前・種類・大きさ・出所・保存中か消える日・作成日時を出し、使用量を上に出す', async () => {
+  it('行に名前・種類・大きさ・出所・期限なしか消える日・作成日時を出し、容量を上に出す', async () => {
     server.items = [
       item('a', {
         name: 'report.pdf',
@@ -200,23 +215,51 @@ describe('ファイル画面: 一覧と使用量', () => {
     await screen.findByText('report.pdf');
 
     const kept = rowOf('report.pdf');
-    expect(within(kept).getByText('保存中')).toBeTruthy();
+    expect(within(kept).getByText('期限なし')).toBeTruthy();
     expect(kept.textContent).toContain('application/pdf');
     expect(kept.textContent).toContain('2.0 KB');
     expect(kept.textContent).toContain('出所: 人間');
     const expiring = rowOf('note.txt');
     expect(expiring.textContent).toContain('出所: クローン');
     expect(expiring.textContent).toMatch(/に消える/);
-    expect(expiring.textContent).not.toContain('保存中');
+    expect(expiring.textContent).not.toContain('期限なし');
     expect(rowOf('mystery.bin').textContent).toContain('出所: 不明');
 
-    // 使用量: 合計と出所ごと
+    // 容量: 合計と出所ごと
     const usageCard = screen.getByTestId('usage');
     expect(usageCard.textContent).toContain('合計');
     expect(usageCard.textContent).toContain('3');
     for (const label of ['人間', 'クローン', 'マネージャー', '連携', '不明']) {
       expect(within(usageCard).getByText(label)).toBeTruthy();
     }
+  });
+
+  it('「使用量」とは言わず「容量」と言う。「保存中」「保存の印」とも言わない（#5906）', async () => {
+    server.byIntegrationKey = { 'key-01': { count: 1, totalBytes: 100 } };
+    server.items = [
+      item('a', { name: 'a.txt', keptAt: '2026-10-02T00:00:00.000Z', expiresAt: undefined }),
+      item('b', { name: 'b.txt' }),
+    ];
+    renderFiles();
+    await screen.findByText('a.txt');
+
+    expect(screen.getByText('容量')).toBeTruthy();
+    expect(screen.getByLabelText('連携の鍵別の容量')).toBeTruthy();
+    expect(screen.getByText(/期限なしのものは消えず/)).toBeTruthy();
+    expect(
+      screen.getByText('上げたファイルは期限なしで預かります（消すのは人間かクローンです）'),
+    ).toBeTruthy();
+    const text = document.body.textContent!;
+    for (const word of ['使用量', '保存中', '保存の印', '保存を外', '保存していない']) {
+      expect(text, word).not.toContain(word);
+    }
+  });
+
+  it('容量の空の文も「容量」と言う', async () => {
+    server.failList = 1;
+    renderFiles();
+    expect(await screen.findByText('容量は一覧を読み込むと出ます')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('使用量');
   });
 
   describe('連携の鍵ごとの内訳', () => {
@@ -303,6 +346,19 @@ describe('ファイル画面: 一覧と使用量', () => {
 });
 
 describe('ファイル画面: 絞り込み', () => {
+  it('期限の有無の絞り込みは「すべて／期限なし／期限あり」で、読み上げ名は「期限の有無で絞り込む」', async () => {
+    server.items = [item('a', { name: 'a.txt' })];
+    renderFiles();
+    await screen.findByText('a.txt');
+    expect(screen.queryByLabelText('保存の有無で絞り込む')).toBeNull();
+    const select = screen.getByLabelText('期限の有無で絞り込む') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', 'すべて'],
+      ['1', '期限なし'],
+      ['0', '期限あり'],
+    ]);
+  });
+
   it('保存の有無・出所・会話（URL）・名前（debounce）がクエリに載り、URL にも残る', async () => {
     server.items = [
       item('a', {
@@ -318,7 +374,7 @@ describe('ファイル画面: 絞り込み', () => {
     expect(screen.queryByText('b.txt')).toBeNull();
     expect(listCalls().at(-1)!.url.searchParams.get('conversationId')).toBe('c-1');
 
-    fireEvent.change(screen.getByLabelText('保存の有無で絞り込む'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('期限の有無で絞り込む'), { target: { value: '1' } });
     await waitFor(() => {
       expect(listCalls().at(-1)!.url.searchParams.get('kept')).toBe('1');
     });
@@ -353,22 +409,52 @@ describe('ファイル画面: 絞り込み', () => {
 });
 
 describe('ファイル画面: 操作', () => {
-  it('保存する／外すは PATCH し、応答で行を差し替える（一覧は取り直さない）', async () => {
+  it('期限をなくす／付けるは PATCH し、応答で行を差し替える（一覧は取り直さない）', async () => {
+    server.retentionDays = 30;
     server.items = [item('a', { name: 'a.txt' })];
     renderFiles();
     await screen.findByText('a.txt');
     const before = listCalls().length;
 
-    fireEvent.click(screen.getByRole('button', { name: 'a.txt の保存をする' }));
-    await within(rowOf('a.txt')).findByText('保存中');
+    fireEvent.click(screen.getByRole('button', { name: 'a.txt の期限をなくす' }));
+    await within(rowOf('a.txt')).findByText('期限なし');
     expect(server.log.find((c) => c.method === 'PATCH')!.body).toEqual({ kept: true });
     expect(listCalls()).toHaveLength(before);
 
-    fireEvent.click(screen.getByRole('button', { name: 'a.txt の保存を外す' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'a.txt に期限を付ける（30日後に消える）' }),
+    );
     await waitFor(() => {
       expect(rowOf('a.txt').textContent).toMatch(/に消える/);
     });
     expect(server.log.filter((c) => c.method === 'PATCH').at(-1)!.body).toEqual({ kept: false });
+  });
+
+  it.each([30, 7])(
+    '期限を付けるボタンの文字と読み上げ名に、保持日数 %i 日が見える',
+    async (days) => {
+      server.retentionDays = days;
+      server.items = [item('a', { name: 'a.txt', keptAt: '2026-10-02T00:00:00.000Z' })];
+      renderFiles();
+      await screen.findByText('a.txt');
+      const button = await screen.findByRole('button', {
+        name: `a.txt に期限を付ける（${days}日後に消える）`,
+      });
+      expect(button.textContent).toBe(`期限を付ける（${days}日後に消える）`);
+    },
+  );
+
+  it('保持日数が読めないときは、ボタンに数字を出さない', async () => {
+    server.retentionDays = undefined;
+    server.items = [item('a', { name: 'a.txt', keptAt: '2026-10-02T00:00:00.000Z' })];
+    renderFiles();
+    await screen.findByText('a.txt');
+    const button = await screen.findByRole('button', {
+      name: 'a.txt に期限を付ける（保持日数が過ぎたら消える）',
+    });
+    expect(button.textContent).toBe('期限を付ける（保持日数が過ぎたら消える）');
+    expect(button.textContent).not.toMatch(/\d/);
+    expect(button.getAttribute('aria-label')).not.toMatch(/\d/);
   });
 
   it('削除は確認を挟む。やめれば消さず、削除すれば消えて使用量も取り直す', async () => {
@@ -379,7 +465,7 @@ describe('ファイル画面: 操作', () => {
     fireEvent.click(screen.getByRole('button', { name: 'a.txt を削除' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('取り消せません');
-    expect(dialog.textContent).toContain('保存中のものでも消えます');
+    expect(dialog.textContent).toContain('期限なしのものでも消えます');
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => {
       expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -413,11 +499,14 @@ describe('ファイル画面: 操作', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
-  it('「保存を外す」を押したあと、焦点は同じ位置のボタンへ戻る（実行中の disabled で body に落ちない）', async () => {
+  it('「期限を付ける」を押したあと、焦点は同じ位置のボタンへ戻る（実行中の disabled で body に落ちない）', async () => {
+    server.retentionDays = 30;
     server.items = [item('a', { name: 'a.txt', keptAt: '2026-10-02T00:00:00.000Z' })];
     renderFiles();
     await screen.findByText('a.txt');
-    const button = screen.getByRole('button', { name: 'a.txt の保存を外す' });
+    const button = await screen.findByRole('button', {
+      name: 'a.txt に期限を付ける（30日後に消える）',
+    });
     // jsdom は disabled になった要素から焦点を外さないので、ブラウザの振る舞い（focus fixup）を真似る
     // （jsdom は disabled の要素から焦点を外せないので、一瞬だけ disabled を戻して外す）
     const target = button as HTMLButtonElement;
@@ -432,7 +521,7 @@ describe('ファイル画面: 操作', () => {
     fireEvent.click(button);
 
     await waitFor(() => expect(rowOf('a.txt').textContent).toMatch(/に消える/));
-    const after = screen.getByRole('button', { name: 'a.txt の保存をする' });
+    const after = screen.getByRole('button', { name: 'a.txt の期限をなくす' });
     await waitFor(() => expect(document.activeElement).toBe(after));
   });
 
@@ -516,8 +605,8 @@ describe('ファイル画面: アップロード', () => {
     expect(posts[0]!.url.searchParams.get('keep')).toBe('1');
     expect(posts[0]!.url.searchParams.get('name')).toBe('hello.txt');
     expect(await screen.findByText('empty.txt: 空のファイルは添えられない')).toBeTruthy();
-    expect(screen.getByText('1 件を上げました（保存中）')).toBeTruthy();
-    expect(within(rowOf('hello.txt')).getByText('保存中')).toBeTruthy();
+    expect(screen.getByText('1 件を上げました（期限なし）')).toBeTruthy();
+    expect(within(rowOf('hello.txt')).getByText('期限なし')).toBeTruthy();
   });
 
   it('ドロップでも上げる', async () => {

@@ -24,6 +24,7 @@ import {
   ATTACHMENT_FROM_ORDER,
   attachmentFromOf,
   attachmentMediaType,
+  attachmentSetExpiryLabel,
   checkAttachments,
   describeAttachmentLifetime,
   formatBytes,
@@ -131,14 +132,14 @@ export default function Files() {
               />
             </div>
             <Select
-              aria-label="保存の有無で絞り込む"
+              aria-label="期限の有無で絞り込む"
               className="sm:w-40"
               value={kept === undefined ? '' : kept ? '1' : '0'}
               onChange={(event) => setParam(KEPT_PARAM, event.target.value)}
             >
               <option value="">すべて</option>
-              <option value="1">保存中</option>
-              <option value="0">保存していない</option>
+              <option value="1">期限なし</option>
+              <option value="0">期限あり</option>
             </Select>
             <Select
               aria-label="出所で絞り込む"
@@ -243,11 +244,11 @@ function UsageCard({
   return (
     <Card>
       <CardHeader
-        title="使用量"
-        subtitle="期限内の全体です（絞り込みには左右されません）。保存したものに期限は無く、全体の上限もありません"
+        title="容量"
+        subtitle="期限内の全体です（絞り込みには左右されません）。期限なしのものは消えず、全体の上限もありません"
       />
       {usage === undefined ? (
-        <Empty inset="card">使用量は一覧を読み込むと出ます</Empty>
+        <Empty inset="card">容量は一覧を読み込むと出ます</Empty>
       ) : (
         <div
           data-testid="usage"
@@ -274,7 +275,7 @@ function UsageCard({
       {usage !== undefined && keys.rows.length > 0 && (
         <div data-testid="usage-by-key" className="border-t border-border p-4 text-xs">
           <p className="font-medium">連携の鍵別</p>
-          <ul aria-label="連携の鍵別の使用量" className="mt-2 flex flex-col gap-1">
+          <ul aria-label="連携の鍵別の容量" className="mt-2 flex flex-col gap-1">
             {keys.rows.map((row) => (
               <li
                 key={row.id}
@@ -346,7 +347,7 @@ function UploadCard() {
     <Card>
       <CardHeader
         title="アップロード"
-        subtitle="上げたファイルは保存の印つきで預かります（期限なし。消すのは人間かクローンです）"
+        subtitle="上げたファイルは期限なしで預かります（消すのは人間かクローンです）"
       />
       <div
         data-testid="file-drop"
@@ -383,7 +384,7 @@ function UploadCard() {
         </Button>
         {result !== undefined && (
           <div role="status" className="flex min-w-0 flex-col gap-1 text-xs">
-            {result.done > 0 && <p>{result.done} 件を上げました（保存中）</p>}
+            {result.done > 0 && <p>{result.done} 件を上げました（期限なし）</p>}
             {result.problems.map((problem, index) => (
               <p key={`${problem}-${index}`} className="break-words text-destructive">
                 {problem}
@@ -405,6 +406,9 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
   const [confirming, setConfirming] = useState(false);
 
   const life = describeAttachmentLifetime(item);
+  // 保持日数はデーモンの値（取得前・失敗のときは日数を言わない文にする）
+  const { data: limits } = useAttachmentLimits();
+  const setExpiryLabel = attachmentSetExpiryLabel(limits?.retentionDays);
   const fromLabel = ATTACHMENT_FROM_LABELS[attachmentFromOf(item.uploadedBy)];
 
   // 押したボタンは実行中 disabled になり、ブラウザは disabled になった要素から焦点を外して body へ落とす。終わったら押したボタンへ戻す
@@ -468,7 +472,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
             size="sm"
             loading={busy === 'kept'}
             disabled={busy !== undefined}
-            aria-label={`${item.name} の保存を${life.kept ? '外す' : 'する'}`}
+            aria-label={`${item.name} ${life.kept ? `に${setExpiryLabel}` : 'の期限をなくす'}`}
             data-file-action="kept"
             onClick={() =>
               void guarded('kept', async () => {
@@ -476,7 +480,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
               })
             }
           >
-            {life.kept ? '保存を外す' : '保存する'}
+            {life.kept ? setExpiryLabel : '期限をなくす'}
           </Button>
           <Button
             size="sm"
@@ -493,7 +497,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
             open={confirming}
             onOpenChange={setConfirming}
             title="ファイルを削除しますか"
-            description={`「${item.name}」を削除します。取り消せません。保存中のものでも消えます。`}
+            description={`「${item.name}」を削除します。取り消せません。期限なしのものでも消えます。`}
             confirmLabel="削除する"
             destructive
             onConfirm={() => void guarded('delete', () => remove(item.id))}
