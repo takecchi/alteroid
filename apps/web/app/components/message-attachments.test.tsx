@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MessageAttachment } from '@alteroid/logic';
 
-import { Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import MessageAttachments from './message-attachments';
 
@@ -85,6 +85,62 @@ describe('ダウンロードの失敗の文', () => {
         }),
     );
     expect(await downloadAndReadAlert()).toBe('取り出せなかった: boom');
+  });
+});
+
+describe('画像の添付のプレビュー', () => {
+  const IMAGE: MessageAttachment = {
+    id: 'img-1',
+    name: 'shot.png',
+    mediaType: 'image/png',
+    size: 3,
+    sha256: 'y',
+  };
+
+  function renderImage() {
+    return render(
+      <Providers>
+        <MessageAttachments attachments={[IMAGE]} />
+      </Providers>,
+    );
+  }
+
+  it('取り出した中身を blob: URL にして出し、画面から外れたら解放する', async () => {
+    const view = renderImage();
+    const image = await screen.findByAltText('shot.png');
+    expect(image.getAttribute('src')).toBe('blob:test-url');
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-url');
+  });
+
+  it('取り出せなかったら、失敗の文を出し、URL は作らない', async () => {
+    stubFetch(() => new Response('{}', { status: 404 }));
+    renderImage();
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'shot.png: 取り出せない（期限切れの可能性）',
+    );
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('外れたあとに届いた中身では URL を作らない（作ると誰も解放しない）', async () => {
+    const hold = holdRequests(({ url }) => url.includes('/attachments/img-1'));
+    const view = renderImage();
+    await act(async () => {
+      await vi.waitFor(() => expect(hold.held()).toBe(1));
+    });
+
+    view.unmount();
+    await act(async () => {
+      hold.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 });
 
