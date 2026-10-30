@@ -8,8 +8,4 @@ describe('describeWaitingKind', () => {
     expect(describeWaitingKind('question')).toBe('質問');
     expect(describeWaitingKind('permission')).toBe('実行許可');
   });
-
-  it('欠けていれば「種別不明」（実行許可へ倒さない）', () => {
-    expect(describeWaitingKind(undefined)).toBe('種別不明');
-  });
 });

@@ -804,9 +804,8 @@ export const commitmentCloseManyStoppedResponseSchema = journalWriteFailedRespon
 const managerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
-  // `kind` / `askedAt` は `.optional()`: 版のずれで旧 runner の応答に乗らない窓があり、ここで既定値を作ると経路によって値の意味が変わるため。
-  kind: waitingKindSchema.optional(),
-  askedAt: isoDateTimeSchema.optional(),
+  kind: waitingKindSchema,
+  askedAt: isoDateTimeSchema,
 });
 
 const managerDenialSchema = z.object({
@@ -1105,9 +1104,9 @@ const topologyWorkerSchema = z.object({
 
 const topologyWaitingSchema = z.object({
   requestId: z.string(),
-  kind: waitingKindSchema.optional(),
+  kind: waitingKindSchema,
   summary: z.string(),
-  askedAt: isoDateTimeSchema.optional(),
+  askedAt: isoDateTimeSchema,
 });
 
 const topologyManagerSchema = z.object({

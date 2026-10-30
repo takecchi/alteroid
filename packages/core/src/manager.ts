@@ -10720,8 +10720,8 @@ class Pool implements ManagerPool {
           requestId: event.requestId,
           summary: event.summary,
           kind: event.kind,
-          // 取れなければキーごと書かない（`askedAt: undefined` は JSON を通ると同じ形にならない）。デーモン側で `new Date().toISOString()` を作らない: 値の意味が経路によって変わる。
-          ...(event.askedAt === undefined ? {} : { askedAt: event.askedAt }),
+          // デーモン側で `new Date().toISOString()` を作らない: 値の意味が経路によって変わる。
+          askedAt: event.askedAt,
         });
         // 終端を `waiting_human` で書き戻さない: 待つ間に `closed(failed / lost)` が書いていると、台帳が非終端へ戻り `lost` の引き取りの契機も消える。
         if (record.job.status !== 'failed' && record.job.status !== 'lost') {
@@ -12548,11 +12548,9 @@ class Pool implements ManagerPool {
     return 'ambiguous';
   }
 
-  // `item.askedAt` が取れない回は前後を比べられないので当てない側（true）に倒す: 許可・拒否の推測では、当てて誤るより `requestId` を聞き直す方が安い。
   #predatesLastDenialRenotify(record: ManagerRecord, item: RunnerWaiting): boolean {
     const last = record.lastDenialRenotify;
     if (last === undefined) return false;
-    if (item.askedAt === undefined) return true;
     return item.askedAt < last.at;
   }
 
@@ -12610,10 +12608,8 @@ class Pool implements ManagerPool {
     for (const waiting of record.waiting) {
       if (asked.has(waiting.requestId)) continue;
       asked.set(waiting.requestId, true);
-      // 欠けた `kind`（旧 runner）は `question` として配る: `permission` に倒すと、答えたあとの断りを確かめられないまま足すことになるため
-      const kind = waiting.kind ?? 'question';
-      const delivered = askDeliveryOf(kind, waiting.summary);
-      this.#emit(record.job.id, kind, delivered.text, waiting.requestId, delivered.markup);
+      const delivered = askDeliveryOf(waiting.kind, waiting.summary);
+      this.#emit(record.job.id, waiting.kind, delivered.text, waiting.requestId, delivered.markup);
     }
   }
 

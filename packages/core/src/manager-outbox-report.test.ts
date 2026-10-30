@@ -674,6 +674,7 @@ describe('器が畳まれて捨てる確認要求（#4719）', () => {
       requestId: 'req-dropped',
       kind: 'permission',
       summary: 'Bash の実行許可（器と一緒に消える確認）',
+      askedAt: '2026-10-30T00:00:00.000Z',
     } as RunnerEvent);
     await vi.waitFor(async () => {
       const job = (await stores.jobs.listJobs()).find((j) => j.id === MANAGER_ID);
