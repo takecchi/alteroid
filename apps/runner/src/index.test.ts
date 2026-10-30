@@ -237,45 +237,42 @@ describe('socketOwnerOf', () => {
 });
 
 describe('childUserOf（#3807）', () => {
-  // 自身の UID を明示する: 実行ユーザーに左右されないため。
-  const ROOT = 0;
+  // runner 自身の UID は本物（process.getuid()）。降ろす先は、それと必ず食い違う値にする: 実行ユーザーに左右されないため。
+  const OWN = process.getuid?.() ?? 0;
+  const CHILD = OWN + 1000;
 
   it('未設定なら降ろさない', () => {
-    expect(childUserOf({}, ROOT)).toBeUndefined();
-    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '' }, ROOT)).toBeUndefined();
+    expect(childUserOf({})).toBeUndefined();
+    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '' })).toBeUndefined();
   });
 
   it('正しい値は通す。GID は UID に揃え、別々に置けばそのまま使う', () => {
-    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000' }, ROOT)).toEqual({
-      uid: 1000,
-      gid: 1000,
+    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(CHILD) })).toEqual({
+      uid: CHILD,
+      gid: CHILD,
     });
     expect(
-      childUserOf(
-        {
-          ALTEROID_RUNNER_CHILD_UID: '1000',
-          ALTEROID_RUNNER_CHILD_GID: '2000',
-          ALTEROID_RUNNER_CHILD_HOME: '/home/child',
-        },
-        ROOT,
-      ),
-    ).toEqual({ uid: 1000, gid: 2000, home: '/home/child' });
+      childUserOf({
+        ALTEROID_RUNNER_CHILD_UID: String(CHILD),
+        ALTEROID_RUNNER_CHILD_GID: '2000',
+        ALTEROID_RUNNER_CHILD_HOME: '/home/child',
+      }),
+    ).toEqual({ uid: CHILD, gid: 2000, home: '/home/child' });
   });
 
-  it('runner 自身と同じ UID（0）は、境界にならないので断る', () => {
-    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: '0' }, ROOT)).toThrow(/自身の UID/);
-    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000' }, 1000)).toThrow(/自身の UID/);
+  it('runner 自身と同じ UID は、境界にならないので断る', () => {
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(OWN) })).toThrow(/自身の UID/);
   });
 
   it.each(['abc', '-1', '1.5', '0x10', '1e3'])('UID が非負の整数でない（%s）なら断る', (value) => {
-    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: value }, ROOT)).toThrow(
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: value })).toThrow(
       /ALTEROID_RUNNER_CHILD_UID は非負の整数/,
     );
   });
 
   it.each(['abc', '-1', '1.5'])('GID が非負の整数でない（%s）なら断る', (value) => {
     expect(() =>
-      childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000', ALTEROID_RUNNER_CHILD_GID: value }, ROOT),
+      childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(CHILD), ALTEROID_RUNNER_CHILD_GID: value }),
     ).toThrow(/ALTEROID_RUNNER_CHILD_GID は非負の整数/);
   });
 });

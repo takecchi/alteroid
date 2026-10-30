@@ -25,6 +25,12 @@ import {
 // 以前（#629）は「自分の待ち行列」と「購読側（一度も無い／いま／切れている）」の2か所に分けて書いていた。
 // 守る事故: #629（7時間半詰まって未送出 477 件のまま焼き直した。畳むとき何が失われるかを名指しする）。
 
+// 時刻（Date）だけを偽にする（`Outbox` の queuedAt は `new Date()` から付く）
+function setClock(iso: string): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(iso));
+}
+
 function session(id: string): RunnerEvent {
   return { type: 'session', managerId: `mgr-${id}`, sessionId: `sess-${id}` };
 }
@@ -60,10 +66,10 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#629）', ()
   });
 
   it('同じ種別・managerId の複数件は1組にまとまり、いちばん古い queuedAt を持つ', () => {
-    let now = new Date('2026-01-01T00:00:00.000Z');
-    const outbox = new Outbox(() => now.toISOString());
+    setClock('2026-01-01T00:00:00.000Z');
+    const outbox = new Outbox();
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '1件目' });
-    now = new Date('2026-01-01T00:00:10.000Z');
+    setClock('2026-01-01T00:00:10.000Z');
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '2件目' });
 
     const snapshot = outbox.describeForShutdown();
@@ -110,7 +116,8 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#629）', ()
 
   describe('購読の有無で内訳が変わらない（以前は「購読側は件数不明・内訳は取れない」だった。#629）', () => {
     it('読まなくなった購読が付いたままでも、届けていない分は内訳つきで名指しされる', () => {
-      const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
+      setClock('2026-01-01T00:00:00.000Z');
+      const outbox = new Outbox();
       const stuck = stuckSubscriber(outbox);
       outbox.push(session('1'));
       outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログの控え' });
@@ -157,7 +164,8 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#629）', ()
     });
 
     it('繋ぎ直しで読み返している最中の分も、届けていない分として数える（pending と同じ範囲）', () => {
-      const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
+      setClock('2026-01-01T00:00:00.000Z');
+      const outbox = new Outbox();
       outbox.push(session('1'));
       outbox.push(session('2'));
       outbox.push(session('3'));
@@ -307,7 +315,8 @@ describe('drainAndReportOutbox（#629）', () => {
 
   it('購読が付いていれば 3 秒待ってから、捌けなかった分を名指しして書く', async () => {
     vi.useFakeTimers();
-    const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログ' });
 
@@ -379,6 +388,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
 });

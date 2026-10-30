@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 import { appDefaults } from './app-defaults.test-support.js';
@@ -17,6 +17,16 @@ const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 function bearer(extra?: Record<string, string>): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream', ...extra };
 }
+
+// 時刻（Date）だけを偽にする: SSE の締め切りなど他のタイマーは本物のまま
+function setClock(iso: string): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(iso));
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function newHost(): RunnerHost {
   return createRunnerHost({
@@ -143,12 +153,12 @@ describe('書き込みが締め切りを越えて畳まれたあとの繋ぎ直�
 
 describe('繋ぎ直しの最中の溜まり（#358 の計器。購読中は、その接続がこれから書く分を数える）', () => {
   it('Last-Event-ID で読み返している最中の分も pending / oldestPendingAt に数え、書き終えたら減る', () => {
-    let clock = 'T1';
-    const outbox = new Outbox(() => clock);
+    setClock('2026-01-01T00:00:01.000Z');
+    const outbox = new Outbox();
     outbox.push(sessionEvent('1'));
-    clock = 'T2';
+    setClock('2026-01-01T00:00:02.000Z');
     outbox.push(sessionEvent('2'));
-    clock = 'T3';
+    setClock('2026-01-01T00:00:03.000Z');
     outbox.push(sessionEvent('3'));
     const detachAll = connectedSubscriber(outbox, () => undefined);
     expect(outbox.pending).toBe(0);
@@ -158,28 +168,28 @@ describe('繋ぎ直しの最中の溜まり（#358 の計器。購読中は、�
 
     const subscription = outbox.subscribe({ lastEventId: 0, wake: () => undefined });
     expect(outbox.pending).toBe(3);
-    expect(outbox.oldestPendingAt).toBe('T1');
+    expect(outbox.oldestPendingAt).toBe('2026-01-01T00:00:01.000Z');
     const first = subscription.peek();
     if (first === undefined) throw new Error('読み返す1件目が無い');
     expect(first.seq).toBe(1);
     subscription.wrote(first);
     expect(outbox.pending).toBe(2);
-    expect(outbox.oldestPendingAt).toBe('T2');
+    expect(outbox.oldestPendingAt).toBe('2026-01-01T00:00:02.000Z');
     subscription.detach();
     // 外れたら、書き終えた連番の後ろ（まだ書いていない分）だけ
     expect(outbox.pending).toBe(0);
   });
 
   it('書けなかった（書き終えていない）分は、接続が外れたあとも溜まりに残り、queuedAt は積んだときのまま', () => {
-    let clock = 'OLD';
-    const outbox = new Outbox(() => clock);
+    setClock('2020-01-01T00:00:00.000Z');
+    const outbox = new Outbox();
     outbox.push(sessionEvent('1'));
-    clock = 'NEW';
+    setClock('2099-01-01T00:00:00.000Z');
     const subscription = outbox.subscribe({ wake: () => undefined });
     expect(subscription.peek()?.seq).toBe(1);
     subscription.detach();
     expect(outbox.pending).toBe(1);
-    expect(outbox.oldestPendingAt).toBe('OLD');
+    expect(outbox.oldestPendingAt).toBe('2020-01-01T00:00:00.000Z');
   });
 });
 

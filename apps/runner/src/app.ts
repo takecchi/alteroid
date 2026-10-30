@@ -161,7 +161,6 @@ export class Outbox {
   // 連番の昇順の1本の列。連番が `#written` 以下は書いた分（控え）、より大きいのはまだ書いていない分。
   readonly #log: OutboxItem[] = [];
   #current: SubscriptionState | null = null;
-  readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
   // 書き終えた連番の最大。接続が変わっても持ち越す（次の接続は、ここより後ろから書き始める）。
   #written: OutboxSeq = 0;
@@ -179,13 +178,9 @@ export class Outbox {
    */
   static readonly SENT_HISTORY_MAX_CHARS = 16_000_000;
 
-  constructor(now: () => string = () => new Date().toISOString()) {
-    this.#now = now;
-  }
-
   push(event: RunnerEvent): OutboxSeq {
     const seq = this.#nextSeq++;
-    this.#log.push({ event, queuedAt: this.#now(), seq });
+    this.#log.push({ event, queuedAt: new Date().toISOString(), seq });
     this.#current?.wake();
     return seq;
   }
