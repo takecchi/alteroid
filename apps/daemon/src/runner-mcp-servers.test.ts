@@ -7,7 +7,7 @@ import {
   createRunnerRegistry,
   mcpServersFingerprintOf,
   runnerEventSchema,
-  RunnerMcpServersUnsupportedError,
+  RunnerHttpError,
   type ManagerPool,
   type McpServers,
   type RunnerClient,
@@ -229,7 +229,7 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
     expect(r.pool.pushHealthOf('runner-primary')?.mcpServers).toBeUndefined();
   });
 
-  it('古い runner（口が無い＝404）は「口なし」と記録され、委譲は止まらない', async () => {
+  it('口が 404 の runner は、ほかの HTTP の失敗と同じく失敗と記録され、委譲は止まらない', async () => {
     const stores = createMemoryStores();
     await stores.mcpServers.write(REGISTRATION);
     const r = await rig({ stores, oldRunner: true });
@@ -239,7 +239,7 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
     expect(r.started).toHaveLength(1);
     const outcome = r.pool.pushHealthOf('runner-primary')?.mcpServers;
     expect(outcome?.status).toBe('failed');
-    expect(outcome?.error).toContain('MCP の登録を受け取る口を持たない');
+    expect(outcome?.error).toContain('(404)');
 
     const journal = await stores.journal.list({});
     const line = journal.find(
@@ -249,12 +249,10 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
     expect(JSON.stringify(journal)).not.toContain('SECRET');
   });
 
-  it('HttpRunner: 古い runner の 404 は RunnerMcpServersUnsupportedError に、/health の欠けは undefined になる', async () => {
+  it('HttpRunner: 古い runner の 404 は RunnerHttpError のまま、/health の欠けは undefined になる', async () => {
     const r = await rig({ oldRunner: true, oldDaemon: true });
 
-    await expect(r.client.setMcpServers?.(REGISTRATION)).rejects.toBeInstanceOf(
-      RunnerMcpServersUnsupportedError,
-    );
+    await expect(r.client.setMcpServers?.(REGISTRATION)).rejects.toBeInstanceOf(RunnerHttpError);
     expect(await r.client.mcpServers?.()).toBeUndefined();
   });
 
@@ -296,11 +294,5 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
 describe('runner のプロトコル（#325 段3。新旧の組）', () => {
   it('hello は capabilities を持たない古い形のまま読める（段3 は新しい出来事を足していない）', () => {
     expect(runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r' }).success).toBe(true);
-  });
-
-  it('RunnerMcpServersUnsupportedError は runnerId を名乗り、値を持たない', () => {
-    const error = new RunnerMcpServersUnsupportedError('runner-old');
-    expect(error.message).toContain('runner-old');
-    expect(error.name).toBe('RunnerMcpServersUnsupportedError');
   });
 });

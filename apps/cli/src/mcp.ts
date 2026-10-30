@@ -42,7 +42,6 @@ interface McpServersRunnerResult {
   runnerId: string;
   ok: boolean;
   mcpServers?: { names: string[]; sha256: string };
-  unsupported?: true;
   error?: string;
 }
 
@@ -294,9 +293,7 @@ export function renderMcpUpdate(result: McpServersUpdateView, beforeNames: strin
   for (const runner of result.runners) {
     if (!runner.ok) {
       lines.push(
-        runner.unsupported === true
-          ? `  ${runner.runnerId}: 受け取る口がありません（古い runner） — ${runner.error === undefined ? '理由不明' : redactError(runner.error)}`
-          : `  ${runner.runnerId}: 届けられませんでした — ${runner.error === undefined ? '理由不明' : redactError(runner.error)}`,
+        `  ${runner.runnerId}: 届けられませんでした — ${runner.error === undefined ? '理由不明' : redactError(runner.error)}`,
       );
       continue;
     }

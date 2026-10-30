@@ -6,11 +6,7 @@ import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { createMcpServerService } from './mcp-server-service.js';
 import { mcpServersFingerprintOf, type McpServers } from './mcp-servers.js';
 import { createLocalRunner } from './runner-local.js';
-import {
-  createRunnerRegistry,
-  RunnerMcpServersUnsupportedError,
-  type RunnerClient,
-} from './runner-protocol.js';
+import { createRunnerRegistry, RunnerHttpError, type RunnerClient } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
@@ -120,18 +116,6 @@ describe('MCP の登録を置いて配る（apply）', () => {
     expect((await s.runner.mcpServers?.())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
   });
 
-  it('古い runner は unsupported として返し、一時障害と混ぜない', async () => {
-    s.runner.setMcpServers = async () => {
-      throw new RunnerMcpServersUnsupportedError('runner-test');
-    };
-    const result = await s.service.apply(REGISTRATION);
-    expect(result.runners[0]).toMatchObject({
-      runnerId: 'runner-test',
-      ok: false,
-      unsupported: true,
-    });
-  });
-
   it('口を持たない実装（setMcpServers が無い）へは配ったとも失敗したとも言わない', async () => {
     // メソッドは prototype に在るので、delete ではなく own の undefined で覆う。
     (s.runner as { setMcpServers?: unknown }).setMcpServers = undefined;
@@ -171,23 +155,21 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     await s.pool.stop();
   });
 
-  it('古い runner（口が無い）は記録するが、挑み直しに数えない（日誌を積み続けない）', async () => {
+  it('口が 404 の runner も、ほかの HTTP の失敗と同じく記録し、挑み直しに数える', async () => {
     const s = await setup();
     await s.stores.mcpServers.write(REGISTRATION);
     let attempts = 0;
     s.runner.setMcpServers = async () => {
       attempts += 1;
-      throw new RunnerMcpServersUnsupportedError('runner-test');
+      throw new RunnerHttpError('404 Not Found', 404);
     };
 
     await s.pool.start({ request: '走る' });
-    const outcome = s.pool.pushHealthOf('runner-test')?.mcpServers;
-    expect(outcome?.status).toBe('failed');
-    expect(outcome?.error).toContain('MCP の登録を受け取る口を持たない');
+    expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('failed');
     const afterConnect = attempts;
 
     await vi.advanceTimersByTimeAsync(180_000);
-    expect(attempts).toBe(afterConnect);
+    expect(attempts).toBeGreaterThan(afterConnect);
 
     s.runner.setMcpServers = async () => ({
       sha256: mcpServersFingerprintOf(REGISTRATION),
@@ -196,23 +178,7 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     });
     await s.pool.reattachRunner('runner-test');
     expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
-
-    const lines = (await s.stores.journal.list({})).filter(
-      (e) => e.type === 'exchange' && e.text.includes('MCP サーバの登録を降ろせなかった'),
-    );
-    const isSummary = (t: string) => t.includes('同じ合図が続いたので畳んだ');
-    const raw = lines.filter((e) => e.type === 'exchange' && !isSummary(e.text));
-    const suppressed = lines.reduce(
-      (sum, e) =>
-        sum +
-        (e.type === 'exchange' && isSummary(e.text)
-          ? Number(/2回目以降を (\d+) 回ぶん/.exec(e.text)?.[1] ?? 0)
-          : 0),
-      0,
-    );
-    expect(raw).toHaveLength(1);
-    expect(raw.length + suppressed).toBe(afterConnect);
-    expect(JSON.stringify(lines)).not.toContain('SECRET');
+    expect(JSON.stringify(await s.stores.journal.list({}))).not.toContain('SECRET');
 
     await s.pool.stop();
   });

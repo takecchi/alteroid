@@ -10,7 +10,7 @@ import {
   createPluginDistributionService,
   createRunnerHost,
   createRunnerRegistry,
-  RunnerPluginsUnsupportedError,
+  RunnerHttpError,
   type ManagerPool,
   type RunnerClient,
   type RunnerHost,
@@ -223,14 +223,10 @@ describe('HttpRunner: plugin の送り', () => {
     expect(r.host.plugins()).toBeUndefined();
   });
 
-  it('古い runner の 404 は RunnerPluginsUnsupportedError に、/health の欠けは undefined になる', async () => {
+  it('古い runner の 404 は RunnerHttpError のまま、/health の欠けは undefined になる', async () => {
     const r = await rig({ oldRunner: true });
-    await expect(r.client.setPlugin?.(plugin('p-one'))).rejects.toBeInstanceOf(
-      RunnerPluginsUnsupportedError,
-    );
-    await expect(r.client.retainPlugins?.([])).rejects.toBeInstanceOf(
-      RunnerPluginsUnsupportedError,
-    );
+    await expect(r.client.setPlugin?.(plugin('p-one'))).rejects.toBeInstanceOf(RunnerHttpError);
+    await expect(r.client.retainPlugins?.([])).rejects.toBeInstanceOf(RunnerHttpError);
     expect(await r.client.plugins?.()).toBeUndefined();
   });
 
@@ -245,7 +241,7 @@ describe('HttpRunner: plugin の送り', () => {
     const bad = plugin('p-one', { contentSha256: 'f'.repeat(64) });
     const error = await r.client.setPlugin?.(bad).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(Error);
-    expect(error).not.toBeInstanceOf(RunnerPluginsUnsupportedError);
+    expect((error as RunnerHttpError).status).toBe(400);
     expect(r.host.plugins()?.plugins[0]?.contentSha256).toBe(plugin('p-one').contentSha256);
   });
 });
@@ -275,7 +271,7 @@ describe('名乗りでの plugin の降ろし（HTTP 経由）', () => {
     expect(r.pool.pushHealthOf('runner-primary')?.plugins?.status).toBe('ok');
   });
 
-  it('古い runner（404）は unsupported として記録され、委譲は止まらない', async () => {
+  it('口が 404 の runner は、ほかの HTTP の失敗と同じく失敗と記録され、委譲は止まらない', async () => {
     const stores = createMemoryStores();
     await stores.plugins.put({
       name: 'p-all',
@@ -290,6 +286,6 @@ describe('名乗りでの plugin の降ろし（HTTP 経由）', () => {
 
     const outcome = r.pool.pushHealthOf('runner-primary')?.plugins;
     expect(outcome?.status).toBe('failed');
-    expect(outcome?.error).toContain('plugin を受け取る口を持たない');
+    expect(outcome?.error).toContain('(404)');
   });
 });

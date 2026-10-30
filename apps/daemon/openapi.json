@@ -33470,10 +33470,6 @@
                             "required": ["sha256", "names", "updatedAt"],
                             "additionalProperties": false
                           },
-                          "unsupported": {
-                            "type": "boolean",
-                            "const": true
-                          },
                           "error": {
                             "type": "string"
                           }
@@ -34062,10 +34058,6 @@
                             },
                             "required": ["sha256", "plugins", "updatedAt"],
                             "additionalProperties": false
-                          },
-                          "unsupported": {
-                            "type": "boolean",
-                            "const": true
                           },
                           "error": {
                             "type": "string"
@@ -34726,10 +34718,6 @@
                             },
                             "required": ["sha256", "plugins", "updatedAt"],
                             "additionalProperties": false
-                          },
-                          "unsupported": {
-                            "type": "boolean",
-                            "const": true
                           },
                           "error": {
                             "type": "string"

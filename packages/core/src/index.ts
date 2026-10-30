@@ -1079,9 +1079,6 @@ export {
   isRetryableRunnerError,
   RunnerFenceError,
   RunnerHttpError,
-  RunnerMcpServersUnsupportedError,
-  RunnerPermissionRulesUnsupportedError,
-  RunnerPluginsUnsupportedError,
   RUNNER_PLUGIN_RETAIN_MAX_NAMES,
   runnerPluginFileWireSchema,
   runnerPluginFingerprintEntrySchema,
@@ -1529,7 +1526,6 @@ export {
   type CodexChatgptAuthServiceOptions,
   type CodexLoginView,
 } from './codex-chatgpt-auth-service.js';
-export { RunnerCodexAuthUnsupportedError } from './runner-protocol.js';
 export {
   CODEX_DEVICE_LOGIN_TIMEOUT_MS,
   startCodexDeviceLogin,

@@ -1385,38 +1385,6 @@ export class RunnerHttpError extends Error {
   }
 }
 
-/** 挑み直しに数えない: 古い版の runner（404）は挑み直しても同じ答えで、数えると同じ失敗が日誌へ積まれ続けるため。 */
-export class RunnerMcpServersUnsupportedError extends Error {
-  constructor(runnerId: string) {
-    super(
-      `${runnerId} は MCP の登録を受け取る口を持たない（古い版の runner。` +
-        'この runner で起こすマネージャー・作業者は記憶ストアの登録を持たずに走る。runner を上げれば次の名乗りで降りる）',
-    );
-    this.name = 'RunnerMcpServersUnsupportedError';
-  }
-}
-
-/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
-export class RunnerPluginsUnsupportedError extends Error {
-  constructor(runnerId: string) {
-    super(
-      `${runnerId} は plugin を受け取る口を持たない（古い版の runner。runner を上げれば次の名乗りで降りる）`,
-    );
-    this.name = 'RunnerPluginsUnsupportedError';
-  }
-}
-
-/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
-export class RunnerPermissionRulesUnsupportedError extends Error {
-  constructor(runnerId: string) {
-    super(
-      `${runnerId} は委譲先の許可規則を受け取る口を持たない（古い版の runner。` +
-        'この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載らない。runner を上げれば次の名乗りで降りる）',
-    );
-    this.name = 'RunnerPermissionRulesUnsupportedError';
-  }
-}
-
 /** `null` は外す。 */
 export const runnerSetCodexAuthCommandSchema = z.object({
   codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
@@ -1431,17 +1399,6 @@ export const runnerCodexAuthWriteBackSchema = z.object({
   baseRevision: z.string(),
   fingerprint: z.string(),
 });
-
-/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
-export class RunnerCodexAuthUnsupportedError extends Error {
-  constructor(runnerId: string) {
-    super(
-      `${runnerId} は Codex の ChatGPT ログインを受け取る口を持たない（古い版の runner。` +
-        'この runner の peer の Codex は CODEX_API_KEY が無ければ認証を持たずに走る。runner を上げれば次の名乗りで降りる）',
-    );
-    this.name = 'RunnerCodexAuthUnsupportedError';
-  }
-}
 
 /** runner は 409 で返す。500 にしない: 5xx は「待てば直る」に分類され、古い世代の命令が延々と挑み直されるため。 */
 export class RunnerFenceError extends Error {
@@ -1739,25 +1696,25 @@ export interface RunnerClient {
   /**
    * 空の `{}` は登録を外す。runner が繋ぎ直すたびに降ろし直す（登録はプロセスのメモリにしか無い）。
    * 効くのはこれから開くセッションから（SDK の `mcpServers` は `query()` の起動時に1度だけ渡る）。
-   * 口を持たない古い runner には `RunnerMcpServersUnsupportedError` を投げ、省略した実装へは降ろさない。
+   * 省略した実装へは降ろさない。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
   /**
    * 委譲先の許可規則の一覧を丸ごと置き直す（#4952）。空の配列は全部外す。runner が繋ぎ直すたびに降ろし直す（一覧はプロセスのメモリにしか無い）。
    * 走行中のセッションへも置き直す（`setMcpServers` と違い、次に開くセッションを待たない）。
-   * 口を持たない古い runner には `RunnerPermissionRulesUnsupportedError` を投げ、省略した実装へは降ろさない。
+   * 省略した実装へは降ろさない。
    */
   setPermissionRules?(rules: readonly string[]): Promise<RunnerPermissionRulesResult>;
   /**
-   * 持っていなければ `undefined`。口を持たない古い runner も `undefined`（区別は `setPlugin` の 404）。
+   * 持っていなければ `undefined`（`/health` に欄が無い runner も同じ）。
    * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。
    */
   plugins?(): Promise<RunnerPluginsFingerprint | undefined>;
-  /** 同名は置き換え。口を持たない相手には `RunnerPluginsUnsupportedError` を投げる。 */
+  /** 同名は置き換え。 */
   setPlugin?(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
-  /** 一覧に無いものを runner はメモリから外す。口を持たない相手には `RunnerPluginsUnsupportedError`。 */
+  /** 一覧に無いものを runner はメモリから外す。 */
   retainPlugins?(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
-  /** `null` は外す。runner が繋ぎ直すたびに降ろし直す。口を持たない相手には `RunnerCodexAuthUnsupportedError` を投げる。 */
+  /** `null` は外す。runner が繋ぎ直すたびに降ろし直す。 */
   setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
   /** 指紋が一致するものが無ければ `null`。 */
   takeCodexAuthWriteBack?(

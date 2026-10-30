@@ -1238,12 +1238,7 @@ async function applyPlugins(deps: {
 }
 
 function describePluginDelivery(runners: ApplyPluginsResult['runners']): string {
-  const text = runners
-    .map(
-      (r) =>
-        `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
-    )
-    .join(', ');
+  const text = runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
   return text.length === 0 ? '配る先なし' : text;
 }
 
@@ -9495,10 +9490,7 @@ export function createApp(deps: AppDeps) {
         }
         // 差し替え自体はもう効いているので、後で分かった配布結果は2行目として足す（落ちても 500 にしない。値は書かない）。
         const delivered = applied.runners
-          .map(
-            (r) =>
-              `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
-          )
+          .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
           .join(', ');
         await appendJournalOrDrop(
           deps.stores,

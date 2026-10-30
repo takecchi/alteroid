@@ -69,7 +69,6 @@ interface PluginRow {
 interface RunnerResult {
   runnerId: string;
   ok: boolean;
-  unsupported?: true;
   error?: string;
 }
 
@@ -331,9 +330,7 @@ function runnerLines(runners: RunnerResult[]): string[] {
   return runners.map((runner) => {
     if (runner.ok) return `  ${runner.runnerId}: 届きました`;
     const reason = runner.error === undefined ? '理由不明' : redactError(runner.error);
-    return runner.unsupported === true
-      ? `  ${runner.runnerId}: 受け取る口がありません（古い runner） — ${reason}`
-      : `  ${runner.runnerId}: 届けられませんでした — ${reason}`;
+    return `  ${runner.runnerId}: 届けられませんでした — ${reason}`;
   });
 }
 

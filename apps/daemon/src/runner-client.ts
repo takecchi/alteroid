@@ -42,15 +42,11 @@ import { SseFrameSplitter } from './sse-frames.js';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
-  RunnerMcpServersUnsupportedError,
-  RunnerPermissionRulesUnsupportedError,
-  RunnerPluginsUnsupportedError,
   encodeRunnerPlugin,
   runnerPermissionRulesResultSchema,
   type RunnerPermissionRulesResult,
   runnerPluginFingerprintEntrySchema,
   runnerPluginsFingerprintSchema,
-  RunnerCodexAuthUnsupportedError,
   buildRevisionSchema,
   codePointBoundary,
   reasonOf,
@@ -1022,18 +1018,9 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  // 404 は「口を持たない（古い版）」に変える: 一時障害と混ぜると、呼び出し側が挑み直しを積み続けるため
   // 応答の形が読めなかったときは投げる: 戻り値は指紋だけで、読めないことを表す場所が例外しかなく、「置けた」と読んで指紋を作らないため
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
-    let response: Response;
-    try {
-      response = await this.#call('POST', '/mcp-servers', { mcpServers: servers });
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) {
-        throw new RunnerMcpServersUnsupportedError(this.runnerId);
-      }
-      throw error;
-    }
+    const response = await this.#call('POST', '/mcp-servers', { mcpServers: servers });
     const body = (await response.json()) as { ok?: unknown; mcpServers?: unknown };
     if (body.ok !== true) throw new Error('runner の応答を読めなかった（MCP の登録）');
     if (body.mcpServers === undefined) return undefined;
@@ -1042,18 +1029,9 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  // 404 は「口を持たない（古い版）」に変える（`setMcpServers` と同じ理由）
   // 応答の形が読めなかったときは投げる: 「置けた」と読んで件数を日誌に書かないため
   async setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult> {
-    let response: Response;
-    try {
-      response = await this.#call('POST', '/permission-rules', { rules: [...rules] });
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) {
-        throw new RunnerPermissionRulesUnsupportedError(this.runnerId);
-      }
-      throw error;
-    }
+    const response = await this.#call('POST', '/permission-rules', { rules: [...rules] });
     const body = (await response.json()) as { ok?: unknown };
     if (body.ok !== true) throw new Error('runner の応答を読めなかった（委譲先の許可規則）');
     const parsed = runnerPermissionRulesResultSchema.safeParse(body);
@@ -1072,25 +1050,17 @@ class HttpRunner implements RunnerClient {
   }
 
   async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
-    let response: Response;
-    try {
-      // 期限を本文の大きさに見合うぶんだけ延ばす: 本文は base64 で約 4/3 倍になるため
-      const bodyBytes = Math.ceil(
-        (plugin.files.reduce((sum, file) => sum + file.content.byteLength, 0) * 4) / 3,
-      );
-      response = await this.#call(
-        'POST',
-        `/plugins/${encodeURIComponent(plugin.name)}`,
-        encodeRunnerPlugin(plugin),
-        undefined,
-        pluginPushDeadlineMs(this.#deadlineMs, bodyBytes),
-      );
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) {
-        throw new RunnerPluginsUnsupportedError(this.runnerId);
-      }
-      throw error;
-    }
+    // 期限を本文の大きさに見合うぶんだけ延ばす: 本文は base64 で約 4/3 倍になるため
+    const bodyBytes = Math.ceil(
+      (plugin.files.reduce((sum, file) => sum + file.content.byteLength, 0) * 4) / 3,
+    );
+    const response = await this.#call(
+      'POST',
+      `/plugins/${encodeURIComponent(plugin.name)}`,
+      encodeRunnerPlugin(plugin),
+      undefined,
+      pluginPushDeadlineMs(this.#deadlineMs, bodyBytes),
+    );
     const body = (await response.json()) as { ok?: unknown; plugin?: unknown };
     if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin）');
     const parsed = runnerPluginFingerprintEntrySchema.safeParse(body.plugin);
@@ -1099,15 +1069,7 @@ class HttpRunner implements RunnerClient {
   }
 
   async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
-    let response: Response;
-    try {
-      response = await this.#call('PUT', '/plugins', { names });
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) {
-        throw new RunnerPluginsUnsupportedError(this.runnerId);
-      }
-      throw error;
-    }
+    const response = await this.#call('PUT', '/plugins', { names });
     const body = (await response.json()) as { ok?: unknown; plugins?: unknown };
     if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin の一覧）');
     if (body.plugins === undefined) return undefined;
@@ -1116,18 +1078,9 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  // 404 は「口を持たない（古い版）」に変える: 一時障害と混ぜると呼び出し側が挑み直しを積み続けるため
   // 値は例外の文にも載せない: 秘密のため
   async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
-    let response: Response;
-    try {
-      response = await this.#call('POST', '/codex-auth', { codexAuth: push });
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) {
-        throw new RunnerCodexAuthUnsupportedError(this.runnerId);
-      }
-      throw error;
-    }
+    const response = await this.#call('POST', '/codex-auth', { codexAuth: push });
     const body = (await response.json()) as { ok?: unknown };
     if (body.ok !== true)
       throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
@@ -1136,13 +1089,7 @@ class HttpRunner implements RunnerClient {
   async takeCodexAuthWriteBack(
     fingerprint: string,
   ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
-    let response: Response;
-    try {
-      response = await this.#call('POST', '/codex-auth/write-back', { fingerprint });
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) return null;
-      throw error;
-    }
+    const response = await this.#call('POST', '/codex-auth/write-back', { fingerprint });
     const body = (await response.json()) as { ok?: unknown; writeBack?: unknown };
     if (body.ok !== true) throw new Error('runner の応答を読めなかった（Codex の書き戻し）');
     if (body.writeBack === null || body.writeBack === undefined) return null;

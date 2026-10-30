@@ -191,7 +191,7 @@ describe('alteroid mcp set / clear', () => {
             mcpServers: { names: ['github', 'notion'], sha256: 'abcdefabcdef' },
           },
           { runnerId: 'runner-b', ok: false, error: 'ECONNRESET' },
-          { runnerId: 'runner-c', ok: false, unsupported: true, error: '404' },
+          { runnerId: 'runner-c', ok: false, error: '404' },
           {
             runnerId: 'runner-d',
             ok: true,
@@ -228,7 +228,7 @@ describe('alteroid mcp set / clear', () => {
     expect(text).toContain('  置き直した: github');
     expect(text).toContain('  runner-a: 届きました（sha256 abcdefabcdef）');
     expect(text).toContain('  runner-b: 届けられませんでした — ECONNRESET');
-    expect(text).toContain('  runner-c: 受け取る口がありません（古い runner） — 404');
+    expect(text).toContain('  runner-c: 届けられませんでした — 404');
     expect(text).toContain(
       '  runner-d: 届きましたが指紋が違います（runner 000000000000 / 保存 abcdefabcdef）',
     );

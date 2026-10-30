@@ -7,7 +7,6 @@ import {
 } from './delegated-permission-rules.js';
 import {
   createRunnerRegistry,
-  RunnerPermissionRulesUnsupportedError,
   type RunnerClient,
   type RunnerPermissionRulesResult,
 } from './runner-protocol.js';
@@ -126,7 +125,7 @@ describe('runner の側の検め直し（parseDelegatedPermissionRules）', () =
 
 function fakeRunner(
   runnerId: string,
-  behavior: 'ok' | 'fail' | 'unsupported' = 'ok',
+  behavior: 'ok' | 'fail' = 'ok',
 ): RunnerClient & { placed: string[][] } {
   const placed: string[][] = [];
   let last = '';
@@ -135,7 +134,6 @@ function fakeRunner(
     placed,
     async setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult> {
       if (behavior === 'fail') throw new Error('runner に繋がらない（テスト）');
-      if (behavior === 'unsupported') throw new RunnerPermissionRulesUnsupportedError(runnerId);
       placed.push([...rules]);
       const key = JSON.stringify(rules);
       const changed = key !== last;
@@ -179,10 +177,9 @@ describe('配るサービス（#4952）', () => {
     await stores.permissionGrants.put(grant('g1', 'Bash(make test)'));
     const ok = fakeRunner('runner-ok');
     const broken = fakeRunner('runner-broken', 'fail');
-    const old = fakeRunner('runner-old', 'unsupported');
     const service = createDelegatedPermissionRuleService({
       stores,
-      runners: createRunnerRegistry([ok, broken, old]),
+      runners: createRunnerRegistry([ok, broken]),
     });
     const pushed: unknown[] = [];
     service.onPushed?.((results) => pushed.push(results));
@@ -193,10 +190,6 @@ describe('配るサービス（#4952）', () => {
     expect(results.find((r) => r.runnerId === 'runner-broken')).toMatchObject({
       ok: false,
       error: expect.stringContaining('runner に繋がらない（テスト）'),
-    });
-    expect(results.find((r) => r.runnerId === 'runner-old')).toMatchObject({
-      ok: false,
-      unsupported: true,
     });
     expect(pushed).toHaveLength(1);
     const text = JSON.stringify(await stores.journal.list({}));
