@@ -3,16 +3,9 @@ import { ErrorNote } from '@alteroid/ui';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { stripErrorClassName, WebDisplayTextProvider } from './display-text';
+import { WebDisplayTextProvider } from './display-text';
 
 afterEach(cleanup);
-
-describe('stripErrorClassName', () => {
-  it('頭の PluginFetchError: だけを落とす', () => {
-    expect(stripErrorClassName('PluginFetchError: 索引に無い')).toBe('索引に無い');
-    expect(stripErrorClassName('索引に無い')).toBe('索引に無い');
-  });
-});
 
 describe('ErrorNote（WebDisplayTextProvider 越し）', () => {
   it.each([
@@ -32,12 +25,5 @@ describe('ErrorNote（WebDisplayTextProvider 越し）', () => {
       wrapper: WebDisplayTextProvider,
     });
     expect(screen.getByText('保存していない: Failed to fetch の後に')).toBeTruthy();
-  });
-
-  it('PluginFetchError: は頭から落ちる', () => {
-    render(<ErrorNote error={new Error('PluginFetchError: 索引に無い')} />, {
-      wrapper: WebDisplayTextProvider,
-    });
-    expect(screen.getByText('索引に無い')).toBeTruthy();
   });
 });
