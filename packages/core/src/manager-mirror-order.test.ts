@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import {
@@ -143,7 +143,10 @@ describe('同じ生ログへの mirror の預けは、届いた順に1つずつ�
   });
 });
 
-async function bootWith(stores: Stores, mirrorAppendRetryDelaysMs: readonly number[]) {
+/** 預けのやり直しの待ち（既定の 1 秒・5 秒・30 秒）。試験は偽の時計でこの値のまま進める。 */
+const MIRROR_RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const;
+
+async function bootWith(stores: Stores) {
   await stores.jobs.putJob({
     id: 'mgr-a',
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -161,13 +164,19 @@ async function bootWith(stores: Stores, mirrorAppendRetryDelaysMs: readonly numb
     stores,
     post: () => undefined,
     runners: createRunnerRegistry([fake.runner]),
-    mirrorAppendRetryDelaysMs,
   });
   await pool.restore();
   return { fake, pool };
 }
 
 describe('生ログの写しの預けが落ちても、やり直して抜けを作らない（#4657）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('⭐ 預けが2回落ちても3回目で預け、後の塊はその後に順番どおり預ける', async () => {
     const appended: string[] = [];
     let failures = 0;
@@ -185,11 +194,19 @@ describe('生ログの写しの預けが落ちても、やり直して抜けを�
         load: async () => null,
       },
     };
-    const { fake, pool } = await bootWith(stores, [10, 10]);
+    const { fake, pool } = await bootWith(stores);
     try {
       fake.emit(mirror('first'));
       fake.emit(mirror('second'));
-      await vi.waitFor(() => expect(appended).toEqual(['first', 'second']), WAIT);
+      // 1回目の失敗の後は 1 秒、2回目の失敗の後は 5 秒置く。その手前では次を始めない
+      await vi.advanceTimersByTimeAsync(MIRROR_RETRY_DELAYS_MS[0] - 1);
+      expect(failures).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(failures).toBe(2);
+      await vi.advanceTimersByTimeAsync(MIRROR_RETRY_DELAYS_MS[1] - 1);
+      expect(appended).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(appended).toEqual(['first', 'second']);
       expect(failures).toBe(2);
     } finally {
       await pool.stop();
@@ -214,12 +231,17 @@ describe('生ログの写しの預けが落ちても、やり直して抜けを�
         load: async () => null,
       },
     };
-    const { fake, pool } = await bootWith(stores, [10]);
+    const { fake, pool } = await bootWith(stores);
     try {
       fake.emit(mirror('first'));
       fake.emit(mirror('second'));
+      // 既定は3回やり直す（計4回試す）。全部の待ちを進めきるまでは、後の塊は預けない
+      const total = MIRROR_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
+      await vi.advanceTimersByTimeAsync(total - 1);
+      expect(appended).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
       await vi.waitFor(() => expect(appended).toEqual(['second']), WAIT);
-      expect(attempts).toBe(2);
+      expect(attempts).toBe(MIRROR_RETRY_DELAYS_MS.length + 1);
       await vi.waitFor(async () => {
         const rows = await base.journal.list({ types: ['exchange'] });
         expect(
