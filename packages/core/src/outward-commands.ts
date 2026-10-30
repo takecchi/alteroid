@@ -23,16 +23,17 @@ export const OUTWARD_COMMANDS: readonly (readonly string[])[] = [
 const GIT_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(['-k', '-s', '--kill-after', '--signal']);
 
-function basenameOf(token: string): string {
+export function commandBasename(token: string): string {
   const at = token.lastIndexOf('/');
   return at === -1 ? token : token.slice(at + 1);
 }
 
-// 先頭の `NAME=value` と `timeout <オプション> <秒>` を外す: 器の作法でコマンドの頭に付くことが多く、外さないと当たらないため
-function stripPrefixes(tokens: readonly string[]): string[] {
+// 先頭の `NAME=value` と `timeout <オプション> <秒>` を外す: 器の作法でコマンドの頭に付くことが多く、外さないと当たらないため。
+// `git-worktree-hints.ts` も同じ1本を使う: 写すと片方だけ直るため
+export function stripCommandPrefixes(tokens: readonly string[]): string[] {
   let rest = [...tokens];
   while (rest.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0] ?? '')) rest = rest.slice(1);
-  if (basenameOf(rest[0] ?? '') === 'timeout') {
+  if (commandBasename(rest[0] ?? '') === 'timeout') {
     rest = rest.slice(1);
     while ((rest[0] ?? '').startsWith('-')) {
       // `-k 5` / `-s KILL` は値を取る（`--kill-after=5` の形は1語）
@@ -47,7 +48,7 @@ function stripPrefixes(tokens: readonly string[]): string[] {
 function commandWords(tokens: readonly string[]): string[] {
   const [head, ...rest] = tokens;
   if (head === undefined) return [];
-  const words = [basenameOf(head)];
+  const words = [commandBasename(head)];
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i] ?? '';
     if (token.startsWith('-')) {
@@ -66,7 +67,7 @@ function commandWords(tokens: readonly string[]): string[] {
 export function outwardCommandsIn(command: string): string[] {
   const found: string[] = [];
   for (const segment of command.split(/&&|\|\||;|\||\n/)) {
-    const words = commandWords(stripPrefixes(segment.trim().split(/\s+/).filter(Boolean)));
+    const words = commandWords(stripCommandPrefixes(segment.trim().split(/\s+/).filter(Boolean)));
     for (const outward of OUTWARD_COMMANDS) {
       if (outward.every((word, index) => words[index] === word)) {
         const label = outward.join(' ');
