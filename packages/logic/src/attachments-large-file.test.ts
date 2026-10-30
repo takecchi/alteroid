@@ -43,6 +43,25 @@ describe('checkAttachments: 大きいファイルの別枠（#4128 段2）', () 
     expect(accepted).toHaveLength(1);
   });
 
+  it('maxLargeFileBytes が 0（別枠なし）なら maxFileBytes まで（#5719）', () => {
+    const { accepted, rejected } = checkAttachments(
+      [],
+      [file('a.bin', 100), file('b.bin', 101)],
+      { ...LIMITS, maxLargeFileBytes: 0 },
+    );
+    expect(accepted.map((f) => f.name)).toEqual(['a.bin']);
+    expect(rejected.map((r) => r.name)).toEqual(['b.bin']);
+  });
+
+  it('上限を渡さないときの既定でも、別枠は無く maxFileBytes まで（#5719）', () => {
+    const { accepted, rejected } = checkAttachments([], [
+      file('a.bin', 25 * 1024 * 1024),
+      file('b.bin', 25 * 1024 * 1024 + 1),
+    ]);
+    expect(accepted.map((f) => f.name)).toEqual(['a.bin']);
+    expect(rejected.map((r) => r.name)).toEqual(['b.bin']);
+  });
+
   it('maxLargeFileBytes を名乗らない（旧い）サーバの上限では、今までどおり maxFileBytes まで', () => {
     const old: AttachmentCheckLimits = {
       maxImageBytes: LIMITS.maxImageBytes,
