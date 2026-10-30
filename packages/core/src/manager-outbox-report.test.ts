@@ -129,7 +129,7 @@ interface Setup {
   fake: Fake;
 }
 
-async function setup(options: { names?: boolean; fileTimeoutMs?: number } = {}): Promise<Setup> {
+async function setup(options: { names?: boolean } = {}): Promise<Setup> {
   const job: Job = {
     id: MANAGER_ID,
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -159,8 +159,6 @@ async function setup(options: { names?: boolean; fileTimeoutMs?: number } = {}):
     post: (event) => inbox.push(event),
     runners: createRunnerRegistry([fake.runner]),
     synthesizedNoticeWindowMs: 60_000,
-    outboxFetchFileTimeoutMs: options.fileTimeoutMs ?? 50,
-    outboxFetchTotalTimeoutMs: 20_000,
   });
   await pool.restore();
   await vi.waitFor(() => {
@@ -291,7 +289,24 @@ describe('担い手の報告に添えられたファイル — プール（#4126
       },
     }));
 
-    fake.raw(reportWithFiles([{ fileId: 'b'.repeat(32), name: 'slow.txt', bytes }]));
+    // 1つの取り出しの期限（既定 30 秒）は偽の時計で進める。`AbortSignal.timeout` は偽の時計で止まらないので、`setTimeout` で abort する signal に差し替える。
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort(
+          new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        );
+      }, ms);
+      return controller.signal;
+    });
+    try {
+      fake.raw(reportWithFiles([{ fileId: 'b'.repeat(32), name: 'slow.txt', bytes }]));
+      await vi.advanceTimersByTimeAsync(30_000);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
     await vi.waitFor(() => expect(reportMessages(inbox)).toHaveLength(1));
 
     expect(reportMessages(inbox)[0]!.rejectedAttachments?.[0]?.reason).toContain('時間切れ');
@@ -314,7 +329,7 @@ describe('担い手の報告に添えられたファイル — プール（#4126
   });
 
   it('取り出している間に届いた closed は、報告を追い越さずに処理される', async () => {
-    const { pool, stores, inbox, fake } = await setup({ fileTimeoutMs: 10_000 });
+    const { pool, stores, inbox, fake } = await setup();
     const bytes = encode('遅い');
     let release!: (content: RunnerOutboxContent) => void;
     const gate = new Promise<RunnerOutboxContent>((resolve) => {
@@ -538,8 +553,6 @@ describe('古い世代として捨てる報告に添えられたファイル（#
       post: (event) => inbox.push(event),
       runners: createRunnerRegistry([fake.runner]),
       synthesizedNoticeWindowMs: 60_000,
-      outboxFetchFileTimeoutMs: 50,
-      outboxFetchTotalTimeoutMs: 20_000,
     });
     await pool.restore();
     const { managerId } = await pool.start({ request: '調べて' });
@@ -597,8 +610,6 @@ describe('移った後の古い runner から届いた報告に添えられた�
       post: (event) => inbox.push(event),
       runners: createRunnerRegistry([current.runner, old.runner]),
       synthesizedNoticeWindowMs: 60_000,
-      outboxFetchFileTimeoutMs: 50,
-      outboxFetchTotalTimeoutMs: 20_000,
     });
     await pool.restore();
     const bytes = encode('古い runner の成果物');

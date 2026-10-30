@@ -1961,11 +1961,6 @@ export interface RunnerRegistryOptions {
    */
   onPlacementDecision?: (decision: PlacementDecision) => void;
   /**
-   * 既定は `Date.now`。主にテスト用: `vi.useFakeTimers()` だと名乗りを聞きに行く `setInterval` と `withDeadline` の `setTimeout` まで止まり、
-   * 測りたい窓（`PLACEMENT_FAILURE_MEMORY_MS`）以外の時計が巻き込まれる。本番の起動経路は渡さない。
-   */
-  now?: () => number;
-  /**
    * 名乗りの確認を投げた時点から、失敗した時点までのデーモン側の観測を測る口（試験で差し替える）。
    * 既定は `node:perf_hooks` の実時間とイベントループ使用率。
    */
@@ -2175,7 +2170,8 @@ class Registry implements RunnerRegistry {
   readonly #failures = new Map<string, number[]>();
   readonly #saturationSigns = new Map<string, { at: number; sign: PidsSaturationSign }[]>();
   readonly #livePidsAtLimit = new Map<string, { at: number; current: number; max: number }>();
-  readonly #now: () => number;
+  // 呼ぶたびに `Date.now` を引く: 試験が `vi.useFakeTimers({ toFake: ['Date'] })` で差し替えても追従させるため。
+  readonly #now = (): number => Date.now();
   readonly #measureProbeLoop: () => () => ProbeLoopObservation;
   readonly #measureThreadpoolWait: () => Promise<ThreadpoolWait | undefined>;
   /** `stop()` で必ず畳む（残すとテストがハングする）。 */
@@ -2188,7 +2184,6 @@ class Registry implements RunnerRegistry {
     this.#onSwap = options.onSwap;
     this.#onPlacementResources = options.onPlacementResources;
     this.#onPlacementDecision = options.onPlacementDecision;
-    this.#now = options.now ?? Date.now;
     this.#measureProbeLoop = options.measureProbeLoop ?? measureProbeLoopDefault;
     this.#measureThreadpoolWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
 

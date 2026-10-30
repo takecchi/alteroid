@@ -1777,10 +1777,6 @@ export interface ManagerPoolOptions {
   /** resume が戻れたかの確定を待つ時間（既定 {@link RESUME_CONFIRM_TIMEOUT_MS}）。試験が短くするための口。 */
   resumeConfirmTimeoutMs?: number;
   attachmentLimits?: AttachmentLimits;
-  outboxFetchFileTimeoutMs?: number;
-  outboxFetchTotalTimeoutMs?: number;
-  /** 預けた退避を取りに行くやり直しの待ち（既定 {@link ARCHIVE_FETCH_RETRY_DELAYS_MS}）。試験が短くするための口。 */
-  archiveFetchRetryDelaysMs?: readonly number[];
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -3500,9 +3496,6 @@ class Pool implements ManagerPool {
    */
   readonly #reportFetchGates = new Map<string, Promise<void>>();
   readonly #attachmentLimits: AttachmentLimits | undefined;
-  readonly #outboxFetchFileTimeoutMs: number | undefined;
-  readonly #outboxFetchTotalTimeoutMs: number | undefined;
-  readonly #archiveFetchRetryDelaysMs: readonly number[];
   // 参照で届いた退避の id ごとに、置き場へ入れられたか（送り直しの本文との二重を防ぐ。#4899）。キーは `managerId/id`
   readonly #archiveRefOutcomes = new Map<string, Promise<boolean>>();
   // 本文で（送り直しで）届いた退避の id。参照の取り寄せが「無い」で落ちても落とした扱いにしないため
@@ -3579,14 +3572,8 @@ class Pool implements ManagerPool {
     onWorkerToolEvent,
     workspace,
     attachmentLimits,
-    outboxFetchFileTimeoutMs,
-    outboxFetchTotalTimeoutMs,
-    archiveFetchRetryDelaysMs,
   }: ManagerPoolOptions) {
-    this.#archiveFetchRetryDelaysMs = archiveFetchRetryDelaysMs ?? ARCHIVE_FETCH_RETRY_DELAYS_MS;
     this.#attachmentLimits = attachmentLimits;
-    this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
-    this.#outboxFetchTotalTimeoutMs = outboxFetchTotalTimeoutMs;
     this.#onWorkerToolEvent = onWorkerToolEvent;
     this.#stores = stores;
     this.#post = post;
@@ -6748,9 +6735,6 @@ class Pool implements ManagerPool {
           store: this.#stores.attachments,
           limits,
           swapNote: () => this.#swapNote(fromRunnerId, instanceBefore),
-          ...(this.#outboxFetchFileTimeoutMs === undefined
-            ? {}
-            : { timeoutMs: this.#outboxFetchFileTimeoutMs }),
         });
       } catch (error) {
         outcome = { ok: false as const, reason: `取り出しの処理が失敗した: ${reasonOf(error)}` };
@@ -10075,7 +10059,7 @@ class Pool implements ManagerPool {
    * `fromRunnerId` を見るのは `case 'closed'` / `case 'resume_failed'` だけ: 古い runner から遅れて届いた出来事が、別の runner へ移った後の委譲の台帳・貸し出しを巻き戻すのを防ぐ。`RunnerEvent` 自身は `runnerId` を運ばない。
    */
   /**
-   * runner に預けた退避の本文を取りに行く。器が名簿に居ない・取りに行く呼び出しが落ちた回は、`#archiveFetchRetryDelaysMs` の間を置いてやり直す。
+   * runner に預けた退避の本文を取りに行く。器が名簿に居ない・取りに行く呼び出しが落ちた回は、`ARCHIVE_FETCH_RETRY_DELAYS_MS` の間を置いてやり直す。
    * やり直すのは、そのうち取れる見込みのある失敗だけ: 本文が無い（期限切れ・既に消された）・口を持たない器は、何度聞いても同じ答えなので、すぐ投げる。
    */
   #swapNote(runnerId: string, before: string | undefined): string {
@@ -10093,7 +10077,7 @@ class Pool implements ManagerPool {
     archiveId: string,
     fromRunnerId: string,
   ): Promise<{ body: string; runner: RunnerClient }> {
-    const delays = this.#archiveFetchRetryDelaysMs;
+    const delays = ARCHIVE_FETCH_RETRY_DELAYS_MS;
     const instanceBefore = this.#sighting(fromRunnerId).instanceId;
     for (let attempt = 0; ; attempt += 1) {
       let failure: unknown;
@@ -10203,7 +10187,7 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 計測・生ログのような状態を動かさない出来事は待たせない。門は `outboxFetchTotalTimeoutMs` で必ず開く。
+   * 計測・生ログのような状態を動かさない出来事は待たせない。門は `OUTBOX_FETCH_TOTAL_TIMEOUT_MS` で必ず開く。
    */
   #enterReportFetchGate(event: RunnerEvent): {
     wait: Promise<void> | undefined;
@@ -10291,12 +10275,6 @@ class Pool implements ManagerPool {
         store: this.#stores.attachments,
         limits: this.#attachmentLimits ?? readAttachmentLimits().limits,
         swapNote: () => this.#swapNote(fromRunnerId, instanceBefore),
-        ...(this.#outboxFetchFileTimeoutMs === undefined
-          ? {}
-          : { fileTimeoutMs: this.#outboxFetchFileTimeoutMs }),
-        ...(this.#outboxFetchTotalTimeoutMs === undefined
-          ? {}
-          : { totalTimeoutMs: this.#outboxFetchTotalTimeoutMs }),
       });
     } catch (error) {
       return fallbackReason(`受け取れなかった（取り出しの処理が失敗した: ${reasonOf(error)}）`);
