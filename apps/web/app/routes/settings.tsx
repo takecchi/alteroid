@@ -4,9 +4,11 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useLogout } from '~/lib/use-logout';
 import { describeRevisionStatus } from '@alteroid/core/revision';
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useState } from 'react';
 
 import { ConnectionCard } from '~/components/connection';
+import { DangerDialog } from '~/components/danger-dialog';
+import { useDangerDialog, useDangerRun } from '~/lib/use-danger-run';
 import {
   Page,
   Badge,
@@ -445,17 +447,16 @@ function Runners() {
 function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: boolean }) {
   const vacate = useVacateRunner();
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [done, setDone] = useState<{ skipped: string | null } | null>(null);
+  const { busy, failure, done, run } = useDangerRun(() => vacate(runnerId));
 
-  if (done !== null) {
+  if (done !== undefined) {
+    const skipped = done.handshakeSkipped?.message ?? null;
     return (
       <p className="mt-2 text-[11px] break-words text-muted-foreground">
-        {done.skipped === null
+        {skipped === null
           ? '仕事を他へ移す指示を出した。まだ終わってはいない——この実行環境で動いている委譲は他の実行環境へ移る。進み具合はこの一覧の状態で見える。'
           : // 握手を飛ばした回は成功の文を出さない: 委譲を移していないのに「移る」と読めてしまうため（CLI の `runners vacate` と同じ言い方）
-            `仕事を他へ移す指示は立てたが、握手は飛ばした（委譲はまだ移していない）。 ⚠️ 動いている委譲への引き継ぎの連絡は飛ばした（${done.skipped}）。もう一度指示すると連絡をやり直す（この一覧は移している最中の実行環境には押すボタンを出さないので、コマンドラインから指示し直す）。`}
+            `仕事を他へ移す指示は立てたが、握手は飛ばした（委譲はまだ移していない）。 ⚠️ 動いている委譲への引き継ぎの連絡は飛ばした（${skipped}）。もう一度指示すると連絡をやり直す（この一覧は移している最中の実行環境には押すボタンを出さないので、コマンドラインから指示し直す）。`}
       </p>
     );
   }
@@ -471,14 +472,7 @@ function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: bool
             size="sm"
             disabled={busy}
             aria-label={`${runnerId} から仕事を移すのを確定する`}
-            onClick={() => {
-              setBusy(true);
-              setError(null);
-              vacate(runnerId)
-                .then((result) => setDone({ skipped: result.handshakeSkipped?.message ?? null }))
-                .catch((reason: unknown) => setError(reason))
-                .finally(() => setBusy(false));
-            }}
+            onClick={() => void run()}
           >
             本当に移す
           </Button>
@@ -502,7 +496,7 @@ function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: bool
           この実行環境から仕事を移す
         </Button>
       )}
-      <ErrorNote error={error} />
+      <ErrorNote error={failure} />
     </div>
   );
 }
@@ -573,34 +567,10 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
 // 押した後は最小限の表示にする: デーモンが止まるのでこの画面自身の接続も切れ、引き直しても意味のある応答が返らないため
 function ShutdownDaemon() {
   const shutdownDaemon = useShutdownDaemon();
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [confirmText, setConfirmText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const [done, setDone] = useState(false);
-
-  const canConfirm = confirmText.trim().toLowerCase() === 'stop';
-
-  function openDialog() {
-    setConfirmText('');
-    setFailure(undefined);
-    setDone(false);
-    dialogRef.current?.showModal();
-  }
-
-  async function runShutdown() {
-    if (!canConfirm) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await shutdownDaemon();
-      setDone(true);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const dialog = useDangerDialog(async () => {
+    await shutdownDaemon();
+    return true;
+  }, 'stop');
 
   return (
     <Card>
@@ -619,22 +589,16 @@ function ShutdownDaemon() {
           （止まったままにはならない）。止めた瞬間、この画面自身の接続も切れる。
         </p>
         <div className="mt-3">
-          <Button variant="danger" size="sm" onClick={openDialog}>
+          <Button variant="danger" size="sm" onClick={dialog.open}>
             alteroid のサーバを止める
           </Button>
         </div>
       </div>
 
-      <dialog
-        ref={dialogRef}
-        // 実行中は Esc でも閉じない: 「やめる」が押せないのと揃えるため
-        onCancel={(event) => {
-          if (busy) event.preventDefault();
-        }}
-        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
-      >
-        <div className="p-4">
-          <h2 className="text-sm font-semibold">本当に止めますか？</h2>
+      <DangerDialog
+        dialog={dialog}
+        title="本当に止めますか？"
+        description={
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             alteroid のサーバを止めます。
             <strong className="text-foreground">記憶も各種の記録も消えません</strong>
@@ -643,49 +607,14 @@ function ShutdownDaemon() {
             <strong className="text-foreground">再起動として働きます</strong>
             （止まったままにはなりません）。止めた直後、この画面の接続も切れます。
           </p>
-
-          {!done ? (
-            <>
-              <label className="mt-3 block text-xs text-muted-foreground">
-                続けるなら <code className="rounded bg-muted px-1 font-mono">stop</code> と入力
-                <Input
-                  autoFocus
-                  className="mt-1"
-                  value={confirmText}
-                  onChange={(event) => setConfirmText(event.target.value)}
-                  placeholder="stop"
-                />
-              </label>
-              <ErrorNote error={failure} className="mt-3" />
-              <div className="mt-4 flex justify-end gap-2">
-                <Button size="sm" disabled={busy} onClick={() => dialogRef.current?.close()}>
-                  やめる
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={!canConfirm}
-                  loading={busy}
-                  onClick={() => void runShutdown()}
-                >
-                  止める
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="mt-3 text-xs font-medium text-ok">
-                止めました。この画面との接続は切れます。
-              </p>
-              <div className="mt-4 flex justify-end">
-                <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
-                  閉じる
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      </dialog>
+        }
+        confirmLabel="止める"
+        doneBody={() => (
+          <p className="mt-3 text-xs font-medium text-ok">
+            止めました。この画面との接続は切れます。
+          </p>
+        )}
+      />
     </Card>
   );
 }
@@ -730,30 +659,9 @@ const REOPEN_REASON_MAX = 500;
 // 確認語は打たせない: 生ログは消さず退避するので、reset と違い取り返しがつく（CLI も `--yes` で省ける確認である）
 function ReopenCloneSession() {
   const reopenCloneSession = useReopenCloneSession();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const [reason, setReason] = useState('');
   const [distill, setDistill] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const [result, setResult] = useState<ReopenCloneSessionResult | null>(null);
-
-  function openDialog() {
-    setFailure(undefined);
-    setResult(null);
-    dialogRef.current?.showModal();
-  }
-
-  async function runReopen() {
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      setResult(await reopenCloneSession({ distill, reason }));
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const dialog = useDangerDialog(() => reopenCloneSession({ distill, reason }));
 
   return (
     <Card>
@@ -794,22 +702,16 @@ function ReopenCloneSession() {
           </span>
         </label>
         <div className="mt-3">
-          <Button variant="danger" size="sm" onClick={openDialog}>
+          <Button variant="danger" size="sm" onClick={dialog.open}>
             開き直す
           </Button>
         </div>
       </div>
 
-      <dialog
-        ref={dialogRef}
-        // 実行中は Esc でも閉じない: 「やめる」が押せないのと揃えるため
-        onCancel={(event) => {
-          if (busy) event.preventDefault();
-        }}
-        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
-      >
-        <div className="p-4">
-          <h2 className="text-sm font-semibold">クローンのセッションを開き直しますか？</h2>
+      <DangerDialog
+        dialog={dialog}
+        title="クローンのセッションを開き直しますか？"
+        description={
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             古いセッションの生ログは消さず、アーカイブへ退避します（会話の記録も残ります）。
             <strong className="text-foreground">
@@ -820,37 +722,18 @@ function ReopenCloneSession() {
               ? '古いセッションの末尾を記憶へ蒸留します。'
               : '古いセッションの末尾は記憶へ蒸留しません（既定）。'}
           </p>
-
-          {result === null ? (
-            <>
-              <ErrorNote error={failure} className="mt-3" />
-              <div className="mt-4 flex justify-end gap-2">
-                <Button size="sm" disabled={busy} onClick={() => dialogRef.current?.close()}>
-                  やめる
-                </Button>
-                <Button variant="danger" size="sm" loading={busy} onClick={() => void runReopen()}>
-                  本当に開き直す
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mt-3 space-y-1 text-xs font-medium text-ok">
-                {describeReopenResult(result)
-                  .split('\n')
-                  .map((line) => (
-                    <p key={line}>{line}</p>
-                  ))}
-              </div>
-              <div className="mt-4 flex justify-end">
-                <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
-                  閉じる
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      </dialog>
+        }
+        confirmLabel="本当に開き直す"
+        doneBody={(result) => (
+          <div className="mt-3 space-y-1 text-xs font-medium text-ok">
+            {describeReopenResult(result)
+              .split('\n')
+              .map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+          </div>
+        )}
+      />
     </Card>
   );
 }
@@ -859,33 +742,7 @@ function ReopenCloneSession() {
 // ボタンは常に出す: 隠すと「なぜ押せないか」が消えるため
 function ResetWorkspace() {
   const resetWorkspace = useResetWorkspace();
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [confirmText, setConfirmText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const [cleared, setCleared] = useState<WorkspaceResetSummary | null>(null);
-
-  const canConfirm = confirmText.trim().toLowerCase() === 'reset';
-
-  function openDialog() {
-    setConfirmText('');
-    setFailure(undefined);
-    setCleared(null);
-    dialogRef.current?.showModal();
-  }
-
-  async function runReset() {
-    if (!canConfirm) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      setCleared(await resetWorkspace());
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const dialog = useDangerDialog(() => resetWorkspace(), 'reset');
 
   return (
     <Card>
@@ -901,70 +758,31 @@ function ResetWorkspace() {
           </strong>
         </p>
         <div className="mt-3">
-          <Button variant="danger" size="sm" onClick={openDialog}>
+          <Button variant="danger" size="sm" onClick={dialog.open}>
             リセットする
           </Button>
         </div>
       </div>
 
-      <dialog
-        ref={dialogRef}
-        // 実行中は Esc でも閉じない: 「やめる」が押せないのと揃えるため
-        onCancel={(event) => {
-          if (busy) event.preventDefault();
-        }}
-        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
-      >
-        <div className="p-4">
-          <h2 className="text-sm font-semibold">本当に削除しますか？</h2>
+      <DangerDialog
+        dialog={dialog}
+        title="本当に削除しますか？"
+        description={
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             {RESET_CONFIRM_SUMMARY}
             を全部消します。登録した認証トークン・マネージャーへ渡す環境変数・この
             ログインアカウントは消しません。
             <strong className="text-foreground">取り消せません。</strong>
           </p>
-
-          {cleared === null ? (
-            <>
-              <label className="mt-3 block text-xs text-muted-foreground">
-                続けるなら <code className="rounded bg-muted px-1 font-mono">reset</code> と入力
-                <Input
-                  autoFocus
-                  className="mt-1"
-                  value={confirmText}
-                  onChange={(event) => setConfirmText(event.target.value)}
-                  placeholder="reset"
-                />
-              </label>
-              <ErrorNote error={failure} className="mt-3" />
-              <div className="mt-4 flex justify-end gap-2">
-                <Button size="sm" disabled={busy} onClick={() => dialogRef.current?.close()}>
-                  やめる
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={!canConfirm}
-                  loading={busy}
-                  onClick={() => void runReset()}
-                >
-                  本当に削除する
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="mt-3 text-xs font-medium text-ok">リセットしました。</p>
-              <ResetSummaryView cleared={cleared} />
-              <div className="mt-4 flex justify-end">
-                <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
-                  閉じる
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      </dialog>
+        }
+        confirmLabel="本当に削除する"
+        doneBody={(cleared) => (
+          <>
+            <p className="mt-3 text-xs font-medium text-ok">リセットしました。</p>
+            <ResetSummaryView cleared={cleared} />
+          </>
+        )}
+      />
     </Card>
   );
 }
