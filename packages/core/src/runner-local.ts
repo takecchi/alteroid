@@ -132,8 +132,7 @@ class LocalRunner implements RunnerClient {
         ? {}
         : { contextUsageTimeoutMs: options.contextUsageTimeoutMs }),
     });
-    // 同じプロセスのデーモンは、預けた退避を下の `fetchArchive` で取りに来られる（#4485。退避の本文は名乗りを問わず預ける）
-    this.#host.setDaemonAcceptsArchiveRef(true);
+    // 同じプロセスのデーモンは、預けた退避を下の `fetchArchive` で取りに来られる（#4485）
   }
 
   // 預けた退避の本文を渡す・消す（#4485）: 退避は名乗りを問わず参照で送るので、口が無いと同じプロセスの構成で退避が取れない

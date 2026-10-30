@@ -40,8 +40,6 @@ import { RunnerHttpTransport } from './runner-http-transport.js';
 import { SseFrameSplitter } from './sse-frames.js';
 
 import {
-  ARCHIVE_REF_ACCEPT_HEADER,
-  ARCHIVE_REF_ACCEPT_TOKEN,
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
@@ -726,8 +724,6 @@ class HttpRunner implements RunnerClient {
           accept: 'text/event-stream',
           authorization: `Bearer ${this.#token}`,
           ...(this.#lastEventId === null ? {} : { 'last-event-id': String(this.#lastEventId) }),
-          // 生ログの退避を参照で受け取れると名乗る（#4485）: runner は本文を SSE の1行に載せず、`fetchArchive` で取りに来るのを待つ
-          [ARCHIVE_REF_ACCEPT_HEADER]: ARCHIVE_REF_ACCEPT_TOKEN,
         },
         signal: controller.signal,
       });

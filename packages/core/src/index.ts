@@ -475,12 +475,7 @@ export {
   type JournalStoreConversationIdContractSubject,
 } from './journal-conversation-id-contract.js';
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
-export {
-  ARCHIVE_REF_ACCEPT_HEADER,
-  ARCHIVE_REF_ACCEPT_TOKEN,
-  acceptsArchiveRef,
-  isArchiveRefId,
-} from './archive-ref.js';
+export { isArchiveRefId } from './archive-ref.js';
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
 // Task（#5469 P2）。状態遷移・並び・行の操作は純関数で、メモリ・fs・pg の3実装が共有する
 export {

@@ -274,10 +274,12 @@ describe('#shipArchive() は report / ask と同じ1本の脚（emit）を通る
 });
 
 // 2026-10-12T03:20Z、6〜35MB の archive の出来事が SSE の1行で届き、デーモンのループが 1.2〜1.4 秒ずつ塞がった（#4485）
-describe('参照で受け取れるデーモンには、退避の本文を SSE に載せず預ける（#4485）', () => {
+// 2026-10-13T16:54Z、名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、デーモンのループが 3.8 秒塞がった
+// （ヒープ 1722/1759MB）。そのため名乗り（`x-alteroid-accepts`）に関わらず預けるようにし、名乗り自体を消した（#5701）
+describe('退避の本文は SSE に載せず預け、参照（id と文字数）だけを送る（#4485）', () => {
   const BODY = '大きな生ログ（参照で運ぶ）';
 
-  async function shipWith(accepts: boolean | undefined) {
+  async function ship() {
     const events: RunnerEvent[] = [];
     const { fn, sessions } = fakeSdk();
     const host = createRunnerHost({
@@ -287,7 +289,6 @@ describe('参照で受け取れるデーモンには、退避の本文を SSE �
       queryFn: fn,
     });
     hosts.push(host);
-    if (accepts !== undefined) host.setDaemonAcceptsArchiveRef(accepts);
     await host.start({ managerId: 'mgr-archive-ref', request: '調べて', cwd: '/work/project' });
     const session = sessions[0];
     if (session === undefined) throw new Error('セッションが開いていない');
@@ -305,8 +306,8 @@ describe('参照で受け取れるデーモンには、退避の本文を SSE �
     return { host, archive };
   }
 
-  it('名乗ったデーモンには参照（id と文字数）だけを送り、本文は預かりから読め、消せば読めない', async () => {
-    const { host, archive } = await shipWith(true);
+  it('参照（id と文字数）だけを送り、本文は預かりから読め、消せば読めない', async () => {
+    const { host, archive } = await ship();
     expect(archive?.body).toBeUndefined();
     expect(archive?.ref?.chars).toBe(BODY.length);
     const id = archive?.ref?.id ?? '';
@@ -317,29 +318,11 @@ describe('参照で受け取れるデーモンには、退避の本文を SSE �
     expect(host.readArchive('mgr-archive-ref', id)).toBeUndefined();
   });
 
-  // 2026-10-13T16:54Z、名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、デーモンのループが 3.8 秒塞がった
-  // （ヒープ 1722/1759MB）。名乗りの有無に関わらず、本文は SSE に載せない（#4485）
-  it('名乗りを覚えていない回も、本文は SSE に載せずに預けて参照を送り、そのことを stderr に残す', async () => {
-    for (const accepts of [undefined, false]) {
-      let shipped: Awaited<ReturnType<typeof shipWith>> | undefined;
-      const lines = await captureStderr(async () => {
-        shipped = await shipWith(accepts);
-      });
-      const archive = shipped?.archive;
-      expect(archive?.body).toBeUndefined();
-      expect(archive?.ref?.chars).toBe(BODY.length);
-      expect(shipped?.host.readArchive('mgr-archive-ref', archive?.ref?.id ?? '')).toBe(BODY);
-      expect(lines.some((line) => line.includes('参照を受けると名乗っていない'))).toBe(true);
-      // 本文は stderr にも出さない
-      expect(lines.some((line) => line.includes(BODY))).toBe(false);
-    }
-  });
-
   // 名乗りは何も切り替えない（#5701）: 本文はいつも預けて参照で送り、本文は stderr にも出さない
   it('デーモンが何も名乗らなくても、本文は SSE に載せずに預けて参照を送る', async () => {
-    let shipped: Awaited<ReturnType<typeof shipWith>> | undefined;
+    let shipped: Awaited<ReturnType<typeof ship>> | undefined;
     const lines = await captureStderr(async () => {
-      shipped = await shipWith(undefined);
+      shipped = await ship();
     });
     const archive = shipped?.archive;
     expect(archive?.body).toBeUndefined();
@@ -363,7 +346,6 @@ describe('畳むとき、取られていない預けた退避を待ち、取ら�
       queryFn: fn,
     });
     hosts.push(host);
-    host.setDaemonAcceptsArchiveRef(true);
     await host.start({ managerId: 'mgr-archive-sd', request: '調べて', cwd: '/work/project' });
     const session = sessions[0];
     if (session === undefined) throw new Error('セッションが開いていない');

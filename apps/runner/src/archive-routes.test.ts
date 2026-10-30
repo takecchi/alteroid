@@ -86,17 +86,3 @@ describe('GET / DELETE /managers/:id/archive/:archiveId（#4485）', () => {
     expect(res.status).toBe(401);
   });
 });
-
-describe('GET /events は、接続のたびに「参照で受け取れるか」を書き直す（#4485）', () => {
-  it('ヘッダで archive-ref を名乗った接続では true、名乗らない接続では false', async () => {
-    const { host, call } = setup();
-    const set = vi.spyOn(host, 'setDaemonAcceptsArchiveRef');
-
-    const first = await call('GET', '/events', { 'x-alteroid-accepts': 'archive-ref' });
-    await first.body?.cancel();
-    const second = await call('GET', '/events');
-    await second.body?.cancel();
-
-    expect(set.mock.calls).toEqual([[true], [false]]);
-  });
-});

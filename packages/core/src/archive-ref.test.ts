@@ -1,22 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  acceptsArchiveRef,
-  ArchiveStash,
-  isArchiveRefId,
-  type ArchiveStashDrop,
-} from './archive-ref.js';
+import { ArchiveStash, isArchiveRefId, type ArchiveStashDrop } from './archive-ref.js';
 
-describe('acceptsArchiveRef / isArchiveRefId（#4485）', () => {
-  it('カンマ区切りの名前の並びに archive-ref が在るときだけ受け取れると読む', () => {
-    expect(acceptsArchiveRef('archive-ref')).toBe(true);
-    expect(acceptsArchiveRef('foo, archive-ref ,bar')).toBe(true);
-    expect(acceptsArchiveRef('archive-refs')).toBe(false);
-    expect(acceptsArchiveRef('')).toBe(false);
-    expect(acceptsArchiveRef(undefined)).toBe(false);
-    expect(acceptsArchiveRef(null)).toBe(false);
-  });
-
+describe('isArchiveRefId（#4485）', () => {
   it('id は randomUUID の形だけを通す（パスの部品になるため）', () => {
     expect(isArchiveRefId('0b5c6e1a-2f3d-4a7b-9c8d-1e2f3a4b5c6d')).toBe(true);
     expect(isArchiveRefId('../etc/passwd')).toBe(false);

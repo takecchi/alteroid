@@ -10,8 +10,6 @@ import type {
   RunnerManagerPeersAnnouncement,
 } from '@alteroid/core';
 import {
-  ARCHIVE_REF_ACCEPT_HEADER,
-  acceptsArchiveRef,
   DEFAULT_SSE_HEARTBEAT_MS,
   isArchiveRefId,
   isOutboxFileId,
@@ -708,8 +706,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。
     .get('/events', (c) => {
-      // 接続のたびに書き直す（#4485）: 退避の本文を参照で送るのは、いま繋がっているデーモンが受け取れると名乗ったときだけ
-      host.setDaemonAcceptsArchiveRef(acceptsArchiveRef(c.req.header(ARCHIVE_REF_ACCEPT_HEADER)));
       return streamSSE(c, async (stream) => {
         const queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
         let wake: (() => void) | null = null;

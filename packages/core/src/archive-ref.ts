@@ -6,22 +6,10 @@ import { randomUUID } from 'node:crypto';
  * 2026-10-12T03:20Z、担当が一斉に畳まれたとき、6〜35MB の `archive` の出来事が SSE の1行で届き、デーモンのループが
  * 1.2〜1.4 秒ずつ6回塞がり、ヒープが 1.2GB まで膨らんだ（クローン teto の観測）。
  *
- * デーモンは SSE（`GET /events`）を開くときに {@link ARCHIVE_REF_ACCEPT_HEADER} で {@link ARCHIVE_REF_ACCEPT_TOKEN} を名乗る。
- * runner は、いま繋がっているデーモンが名乗っていれば本文を預けて参照だけを送り、名乗っていなければこれまでどおり本文を載せる
- * （版のずれた組でも、退避を黙って落とさない）。
+ * runner は本文をいつも預けて参照だけを送る。2026-10-13T16:54Z、デーモンの名乗り（`x-alteroid-accepts: archive-ref`）を
+ * 覚えていない回に 155MB の本文が SSE の1行で届き、ループが 3.8 秒塞がったため、名乗りで切り替えるのをやめ、名乗り自体も消した（#5701）。
+ * 本文を載せる形（`archive.body`）は、畳むときに取られなかった退避を送り直す道（#4896）だけで使う。
  */
-
-export const ARCHIVE_REF_ACCEPT_HEADER = 'x-alteroid-accepts';
-export const ARCHIVE_REF_ACCEPT_TOKEN = 'archive-ref';
-
-/** ヘッダの値（カンマ区切りの名前の並び）が `archive-ref` を含むか。 */
-export function acceptsArchiveRef(headerValue: string | undefined | null): boolean {
-  if (headerValue === undefined || headerValue === null) return false;
-  return headerValue
-    .split(',')
-    .map((token) => token.trim())
-    .includes(ARCHIVE_REF_ACCEPT_TOKEN);
-}
 
 const ARCHIVE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
