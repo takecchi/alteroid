@@ -94,7 +94,7 @@ import {
   interleaveApprovals,
 } from './conversation-approvals.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
-import { errorReason, formatElapsedAgo, oneLine } from './format.js';
+import { errorReason, oneLine } from './format.js';
 import {
   describeInterruptOutcome,
   requestInterruptOutcome,

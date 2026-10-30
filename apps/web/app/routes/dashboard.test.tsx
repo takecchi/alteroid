@@ -690,7 +690,9 @@ describe('「作業の進捗」カード', () => {
     };
     renderHome({ progress: empty });
 
-    expect(await screen.findByText(/いま動いているマネージャーも、待ち行列の未了も無い/)).toBeTruthy();
+    expect(
+      await screen.findByText(/いま動いているマネージャーも、待ち行列の未了も無い/),
+    ).toBeTruthy();
     expect(screen.queryByText(/数は下限/)).toBeNull();
   });
 

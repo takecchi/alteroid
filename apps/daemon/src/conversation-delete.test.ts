@@ -275,7 +275,9 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('設定の「クローンのセッションを開き直す」');
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
-    expect(joined).toContain('旧台帳（廃止した。データベースにはテーブルが残っている）のこの会話の行');
+    expect(joined).toContain(
+      '旧台帳（廃止した。データベースにはテーブルが残っている）のこの会話の行',
+    );
   });
 
   it('remainsIn は画面にそのまま出るので、内部の名前（表名・道具名・SDK・Issue 番号）を言わない（#5905）', async () => {

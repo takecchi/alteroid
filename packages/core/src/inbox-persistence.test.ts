@@ -866,7 +866,6 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-429-1');
-
   });
 
   it('token-pool の再現: 同一 payload の external（source: token-pool）を3連投しても、受信箱の未読は1件', async () => {

@@ -1270,8 +1270,6 @@ describe('renderReport / renderReportLine', () => {
   });
 });
 
-const NOW = Date.parse('2026-08-19T12:00:00.000Z');
-
 interface ConversationSummaryLike {
   conversationId: string;
   startedAt: string;

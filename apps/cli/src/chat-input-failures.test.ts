@@ -113,7 +113,7 @@ describe('#3683: 本文の改行・インデント・連続した空白を潰さ
     const listed = {
       approvals: [],
       managerAnchors: {},
-        conversations: [],
+      conversations: [],
       managers: [],
       waiting: [],
       messages: ['m1'],
@@ -193,7 +193,7 @@ describe('#3685: 非 TTY の /edit・/resume・/attach・/detach の失敗で止
         {
           approvals: [],
           managerAnchors: {},
-                conversations: [],
+          conversations: [],
           managers: [],
           waiting: [],
           messages: [],

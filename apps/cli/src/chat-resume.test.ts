@@ -305,7 +305,7 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
       ...slashArgs(createClient(target.baseUrl, target.headers), {
         approvals: [],
         managerAnchors: {},
-            conversations: [],
+        conversations: [],
         managers: [],
         waiting: [],
         messages: [],

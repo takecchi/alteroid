@@ -32,7 +32,7 @@ const TARGET_RELATIVE_PATHS: readonly string[] = [
   'clone-sdk-error-and-pending.test.ts',
   'clone-turn-queue.test.ts',
   'clone-manager-report-batching.test.ts',
-  'clone-interrupt-and-ledger.test.ts',
+  'clone-interrupt-and-redelivery-count.test.ts',
   'clone-credentials.test.ts',
   'clone-usage-observation-and-recycle.test.ts',
   'clone-distill-timing.test.ts',

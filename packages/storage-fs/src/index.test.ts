@@ -41,12 +41,7 @@ import {
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
-import type {
-  InboxEvent,
-  JournalEntry,
-  OAuthProfile,
-  OAuthProvider,
-} from '@alteroid/core';
+import type { InboxEvent, JournalEntry, OAuthProfile, OAuthProvider } from '@alteroid/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

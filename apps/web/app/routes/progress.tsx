@@ -356,7 +356,10 @@ function InProgressCard({ progress }: { progress: Progress }) {
   ];
   return (
     <Card>
-      <CardHeader title="動いているマネージャー" subtitle="依頼文を渡したマネージャーのうち、動いているもの" />
+      <CardHeader
+        title="動いているマネージャー"
+        subtitle="依頼文を渡したマネージャーのうち、動いているもの"
+      />
       <Section>
         <StatRow>
           <Stat label="実行中" value={count(inProgress.running)} unit="件" />

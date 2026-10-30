@@ -113,7 +113,12 @@ export interface CloseManyChunkHooks {
 
 /** 塊ごとに閉じる口。実装は `taskStatusManyStore`（Task の `setStatus` を1件ずつ回す）。実際に閉じた id だけを返すこと。 */
 export interface CloseManyStore {
-  closeMany(ids: readonly string[], at: string, reason: string, by: TaskClosedBy): Promise<string[]>;
+  closeMany(
+    ids: readonly string[],
+    at: string,
+    reason: string,
+    by: TaskClosedBy,
+  ): Promise<string[]>;
 }
 
 /**

@@ -468,7 +468,9 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
   it('対照: unreadableJobs が 0 なら、委譲の欠けの但し書きは出ない（#2345）', async () => {
     stubProgress();
     renderPage();
-    expect(within(await card('動いているマネージャー')).queryByText(/読み取れなかった依頼/)).toBeNull();
+    expect(
+      within(await card('動いているマネージャー')).queryByText(/読み取れなかった依頼/),
+    ).toBeNull();
   });
 
   it('GitHub の記録が1件も無い間は、欄も区切りも出さない（#2970。0 を作らず、未観測の文も出さない）', async () => {
