@@ -102,7 +102,6 @@ interface DeleteBody {
   tombstoneId: string;
   hiddenCount: number;
   attachmentsRemoved: number;
-  commitmentsRemoved: number;
   tasksRemoved: number;
   queuedDropped: number;
   approvalsLinked: number;
@@ -212,37 +211,6 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(await stores.attachments.get(kept.id)).toBeDefined();
   });
 
-  it('台帳のその会話の行（人間の本文そのもの）を物理的に消す。ほかの会話の行は残る', async () => {
-    const { app, stores } = setupApp();
-    await seedConversation(stores, 'conv-secret', SECRET);
-    await seedConversation(stores, 'conv-keep', '残す');
-    await stores.commitments.open({
-      id: 'evt-secret',
-      at: '2026-10-08T10:00:00.000Z',
-      origin: 'human',
-      source: 'conv-secret',
-      body: SECRET,
-    });
-    await stores.commitments.open({
-      id: 'evt-keep',
-      at: '2026-10-08T10:00:01.000Z',
-      origin: 'human',
-      source: 'conv-keep',
-      body: '残す',
-    });
-
-    const body = (await (
-      await request(app, 'DELETE', '/conversations/conv-secret')
-    ).json()) as DeleteBody;
-
-    expect(body.commitmentsRemoved).toBe(1);
-    expect(await stores.commitments.get('evt-secret')).toBeNull();
-    expect(await stores.commitments.get('evt-keep')).not.toBeNull();
-    expect(
-      await (await request(app, 'GET', '/commitments?includeClosed=true')).text(),
-    ).not.toContain(SECRET);
-  });
-
   it('その会話から開いた Task（人間の発言の全文を本文に持つ）を物理的に消し、tasksRemoved で件数を返す。ほかの会話の Task は残る（#5899）', async () => {
     const { app, stores } = setupApp();
     await seedConversation(stores, 'conv-secret', SECRET);
@@ -307,8 +275,7 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('設定の「クローンのセッションを開き直す」');
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
-    expect(joined).toContain('台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し');
-    expect(joined).toContain('台帳をまとめて片付けた日誌の行');
+    expect(joined).toContain('旧台帳（廃止した。データベースにはテーブルが残っている）のこの会話の行');
   });
 
   it('remainsIn は画面にそのまま出るので、内部の名前（表名・道具名・SDK・Issue 番号）を言わない（#5905）', async () => {
@@ -325,69 +292,5 @@ describe('DELETE /conversations/:id（#4218）', () => {
     }
     expect(joined).not.toMatch(/#\d+/);
     expect(joined).not.toMatch(/会話 id/);
-  });
-
-  it('その会話から生まれた台帳の行（人間の手・クローン）と、本文を写した日誌の行は、どの読む口からも出ない（#4355）', async () => {
-    const { app, stores } = setupApp();
-    await seedConversation(stores, 'conv-x', `鍵は ${SECRET}`);
-    await seedConversation(stores, 'conv-keep', '残る会話');
-
-    // 台帳へ積む口は外れた（段2b）ので、かつて人間の手で積んだ行とその日誌の行（古い日誌）を直に置く
-    await stores.commitments.open({
-      id: 'human-1',
-      at: new Date().toISOString(),
-      origin: 'human',
-      source: 'conv-x',
-      body: `鍵 ${SECRET} を確認`,
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: `人間が引き受けた仕事を台帳へ積んだ（human-1）: 鍵 ${SECRET} を確認`,
-      grounds: '人間が直接 API から積んだ',
-    });
-    // decision の文は道具が書くのと同じ形にする: 外す側は台帳の行の id をこの形から拾うため
-    await stores.commitments.open({
-      id: 'self-1',
-      at: new Date().toISOString(),
-      origin: 'self',
-      source: 'conv-x',
-      body: `鍵 ${SECRET} を忘れずに`,
-    });
-    const selfCopy = await stores.journal.append({
-      type: 'decision',
-      decision: `引き受けた仕事として台帳に載せた（self-1）: 鍵 ${SECRET} を忘れずに`,
-      grounds: 'クローン自身が commitment_open で載せた',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: `引き受けた仕事の本文を直した（self-1）: 編集前「鍵 ${SECRET}」→ 編集後「鍵を確認」`,
-      grounds: '自分で載せた行の本文を自分で直した',
-    });
-    await stores.commitments.open({
-      id: 'human-keep',
-      at: new Date().toISOString(),
-      origin: 'human',
-      source: 'conv-keep',
-      body: '残る仕事',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '人間が引き受けた仕事を台帳へ積んだ（human-keep）: 残る仕事',
-      grounds: '人間が直接 API から積んだ',
-    });
-
-    expect((await request(app, 'DELETE', '/conversations/conv-x')).status).toBe(200);
-
-    const commitments = await (await request(app, 'GET', '/commitments?includeClosed=true')).text();
-    expect(commitments).not.toContain(SECRET);
-    expect(commitments).toContain('残る仕事');
-    const journal = await (await request(app, 'GET', '/journal?limit=500')).text();
-    expect(journal).not.toContain(SECRET);
-    expect(journal).toContain('残る仕事');
-    expect((await request(app, 'GET', `/journal/${selfCopy.id}`)).status).toBe(404);
-    const searched = await (
-      await request(app, 'GET', `/journal?q=${encodeURIComponent('秘密の鍵')}&limit=50`)
-    ).text();
-    expect(searched).not.toContain(SECRET);
   });
 });

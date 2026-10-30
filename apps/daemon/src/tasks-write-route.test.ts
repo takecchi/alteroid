@@ -163,13 +163,6 @@ describe('GET /tasks/:id', () => {
     expect(entry.status).toBe('done');
     expect((await send('GET', '/tasks/none')).status).toBe(404);
   });
-
-  it('固定のパス /tasks/migration-plan は :id に食われない', async () => {
-    const { send } = build();
-    const res = await send('GET', '/tasks/migration-plan');
-    expect(res.status).toBe(200);
-    expect(await res.json()).toHaveProperty('dryRun', true);
-  });
 });
 
 describe('POST /tasks/:id/close', () => {

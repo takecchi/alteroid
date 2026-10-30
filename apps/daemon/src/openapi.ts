@@ -6,8 +6,6 @@ import {
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
   CREDENTIAL_NAME,
-  commitmentOriginSchema,
-  commitmentSchema,
   createMemoryStores,
   INBOX_EVENT_TYPE_ORDER,
   integrationSourceSchema,
@@ -44,7 +42,6 @@ import {
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
-  unreadableCommitmentSchema,
   unreadableInboxEventSchema,
   unreadableJobSchema,
   unreadablePracticeSchema,
@@ -323,7 +320,6 @@ export const conversationDeleteResponseSchema = z.object({
   deletedAt: z.string(),
   hiddenCount: z.number().int(),
   attachmentsRemoved: z.number().int(),
-  commitmentsRemoved: z.number().int(),
   tasksRemoved: z.number().int(),
   queuedDropped: z.number().int(),
   approvalsLinked: z.number().int(),
@@ -337,7 +333,7 @@ export const conversationsResponseSchema = z.object({
   // `GET /conversations/:id` と同じ意味・同じ名前で揃える（`@alteroid/core` の `reachedStart`）。
   reachedStart: z.boolean(),
   hiddenByLimit: z.number().int(),
-  // `/approvals` / `/commitments` の `nextCursor` と同じ名前・同じ形（無ければ鍵ごと無い）。
+  // `/approvals` の `nextCursor` と同じ名前・同じ形（無ければ鍵ごと無い）。
   nextCursor: z.string().optional(),
   readStateUnreadable: readStateUnreadableSchema,
 });
@@ -587,37 +583,8 @@ export const scheduleListResponseSchema = z.object({
   unreadable: z.array(unreadableScheduleSchema).optional(),
 });
 
-// 外向きの view を別に書かない: 伏せるものが無く、別 view にすると人間が API で見る台帳とクローンが `commitment_list` で見る台帳がずれるため。
-// `updatedAt` は `commitmentUpdatedAt` で導く: 受け手に `closedAt ?? at` を書き直させないため。
-// 一覧（`GET /commitments`）と詳細（`GET /commitments/{id}`）で同じ形にする
-export const commitmentViewSchema = commitmentSchema.extend({
-  updatedAt: isoDateTimeSchema,
-  respondedAt: isoDateTimeSchema.optional(),
-  activeManagerIds: z.array(z.string()).optional(),
-});
-
-export const commitmentListResponseSchema = z.object({
-  entries: z.array(
-    commitmentViewSchema.extend({
-      // 一覧で片付いた行の本文・閉じた理由を先頭に切ったときだけ付く（#5089）。全文は `GET /commitments/{id}`
-      bodyTruncated: z.literal(true).optional(),
-      closedReasonTruncated: z.literal(true).optional(),
-    }),
-  ),
-  // 窓（`limit`/`cursor`）では切らず、常に全件を返す。
-  unreadable: z.array(unreadableCommitmentSchema),
-  trimmedClosed: z.number().int().nonnegative(),
-  // 読めない委譲がどの台帳の行に紐づくかは、行が壊れているので言えない: だから行へは紐づけない。1件でも在るときだけ載る。
-  unreadableJobs: z.array(unreadableJobSchema).optional(),
-  // `total` / `nextCursor` は `limit` / `cursor` のいずれかを渡したときだけ載る（既定の呼びでは鍵ごと無い）: 既存の呼び手（画面・CLI・クローンの `commitment_list`）の応答を変えないため。
-  total: z.number().int().optional(),
-  nextCursor: z.string().optional(),
-});
-
-export const commitmentDetailResponseSchema = z.object({ entry: commitmentViewSchema });
-
 // 位置は行の欄ではなく並び（`entries` の順序）で表す: 数値の優先度を外へ出すと、器が順序を数値で決めているように読める。
-// 台帳（`commitmentListResponseSchema`）と違い窓・導出値を持たない: P2 は読むだけの口で、足すのは必要が出てからでよい。
+// 窓・導出値を持たない: 足すのは必要が出てからでよい。
 export const taskListResponseSchema = z.object({
   entries: z.array(taskSchema),
   // 窓では切らない: 読めない行は「無い」でも「終わった」でもない第3の状態
@@ -632,101 +599,6 @@ export const taskAddedResponseSchema = z.object({ ok: z.literal(true), id: z.str
 
 // `current` は読んだ後に変わった行。`ifMatch` の版は `editedAt ?? createdAt`
 export const taskConflictResponseSchema = z.object({ error: z.string(), current: taskSchema });
-
-// 台帳→Task の移行（#5469 P7）。計画（dry-run。P7a）と、指紋つきの実行（P7b）。
-// 行ごとの本文は載せない（タイトルと id だけ。全文は台帳に在る）。読めない台帳の行は id だけで、理由も出さない。
-const taskMigrationCountsSchema = z.object({
-  toTask: z.number().int().nonnegative(),
-  closeOnly: z.number().int().nonnegative(),
-  retire: z.number().int().nonnegative(),
-  skipClosed: z.number().int().nonnegative(),
-});
-
-const taskMigrationBaseShape = {
-  fingerprint: z
-    .string()
-    .describe('計画の指紋。dry-run の値を `POST /tasks/migrate` の `fingerprint` へそのまま渡す'),
-  summary: z.object({
-    total: z.number().int().nonnegative(),
-    toTask: z.number().int().nonnegative(),
-    closeOnly: z.number().int().nonnegative(),
-    retire: z.number().int().nonnegative(),
-    skipClosed: z.number().int().nonnegative(),
-    byOrigin: z.object({
-      human: taskMigrationCountsSchema,
-      manager: taskMigrationCountsSchema,
-      external: taskMigrationCountsSchema,
-      self: taskMigrationCountsSchema,
-    }),
-    originConversation: z
-      .object({
-        fromConversation: z.number().int().nonnegative(),
-        fromApproval: z.number().int().nonnegative(),
-        unresolved: z.number().int().nonnegative(),
-      })
-      .describe(
-        '`toTask` の行の起点の会話の引き方の内訳（会話 id から・承認から・引けない。合計が `toTask`）',
-      ),
-    oldestAt: isoDateTimeSchema.nullable(),
-    newestAt: isoDateTimeSchema.nullable(),
-  }),
-  items: z.array(
-    z.object({
-      id: z.string(),
-      action: z.enum(['task', 'close-only', 'retire', 'skip-closed']),
-      origin: commitmentOriginSchema,
-      at: isoDateTimeSchema,
-      title: z.string().optional(),
-      originConversation: z
-        .object({ conversationId: z.string(), via: z.enum(['conversation', 'approval']) })
-        .optional(),
-    }),
-  ),
-  unresolvedOriginIds: z
-    .array(z.string())
-    .describe('`task` の行のうち、起点の会話を引けなかった行の id（付けずに移す）'),
-  unreadableCommitments: z.array(z.object({ id: z.string().optional() })),
-  unreadableTasks: z.number().int().nonnegative(),
-  unreadableTaskCollisions: z.array(z.string()),
-};
-
-export const taskMigrationPlanResponseSchema = z.object({
-  dryRun: z.literal(true),
-  ...taskMigrationBaseShape,
-});
-
-// 本文・例外のメッセージは載せない（`failed[].error` は例外の型名だけ）
-export const taskMigrationResultResponseSchema = z.object({
-  dryRun: z.literal(false),
-  ...taskMigrationBaseShape,
-  execution: z.object({
-    migrated: z.number().int().nonnegative(),
-    closeOnly: z.number().int().nonnegative(),
-    retired: z.number().int().nonnegative(),
-    alreadyClosed: z.number().int().nonnegative(),
-    ids: z.object({
-      migrated: z.array(z.string()),
-      closeOnly: z.array(z.string()),
-      retired: z.array(z.string()),
-      alreadyClosed: z.array(z.string()),
-    }),
-    originConversation: z.object({
-      fromConversation: z.number().int().nonnegative(),
-      fromApproval: z.number().int().nonnegative(),
-      unresolvedIds: z.array(z.string()),
-    }),
-    failed: z.array(
-      z.object({ id: z.string(), step: z.enum(['task', 'journal', 'close']), error: z.string() }),
-    ),
-  }),
-});
-
-export const taskMigrateRequestSchema = z.object({
-  fingerprint: z
-    .string()
-    .min(1)
-    .describe('dry-run（`GET /tasks/migration-plan`）が返した計画の指紋。必須'),
-});
 
 const managerWaitingSchema = z.object({
   requestId: z.string(),
@@ -1819,7 +1691,6 @@ export const resetResponseSchema = z.object({
     schedules: z.number().int(),
     schedulePhases: z.number().int(),
     inbox: z.number().int(),
-    commitments: z.number().int(),
     tasks: z.number().int(),
     // ここへ足し忘れると静かに落ちる: zod は未知のキーを黙って捨て、器は消したのに申告には出ない形になるため。
     practices: z.number().int(),
@@ -1881,12 +1752,6 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     },
     { name: 'events', description: '外部イベントの入口（仕事の起点③）' },
     { name: 'schedule', description: '時間起点のジョブ（起点②④）の一覧と手動起動' },
-    {
-      name: 'commitments',
-      description:
-        '引き受けたまま終わっていない仕事の旧台帳。読むだけで、クローンにも人間にも書く口は無い' +
-        '（仕事は task で持つ）。クローンの commitment_list と同じものを人間の側から読める',
-    },
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },
     { name: 'topology', description: '稼働の地図（各層の状態と、線の最後の活動。SSE あり）' },
