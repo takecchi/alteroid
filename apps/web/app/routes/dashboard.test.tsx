@@ -553,12 +553,33 @@ describe('「次の自動実行」カード', () => {
     expect(screen.getByRole('link', { name: '予定へ' }).getAttribute('href')).toBe('/schedule');
   });
 
-  it('description が truncate で切られていても title で全文が引ける', async () => {
+  it('description は title にも全文を持つ', async () => {
     renderHome({
       schedule: { entries: [entry(LONG_DESCRIPTION, '2026-08-15T05:00:00.000Z')] },
     });
 
     expect(await screen.findByTitle(LONG_DESCRIPTION)).toBeTruthy();
+  });
+
+  it('description は途中で切らず（truncate しない）、既定の仕込みの内部の語は画面の言葉で出る', async () => {
+    renderHome({
+      schedule: {
+        entries: [
+          {
+            ...entry('x', '2026-08-15T05:00:00.000Z'),
+            kind: 'self_initiative',
+            description:
+              '動ける仕事（待ち行列の queued / needs_decision・旧台帳の未了）があるとき、発意 tick を回す',
+          },
+        ],
+      },
+    });
+
+    const label = await screen.findByText(
+      '動ける仕事（待ち行列の順番待ち・判断待ち・旧台帳の未了）があるとき、発意のターンを回す',
+    );
+    expect(label.closest('div')?.className).not.toMatch(/truncate/);
+    expect(screen.queryByText(/queued|needs_decision|tick/)).toBeNull();
   });
 
   it('いちばん近い1件を出し、残りは件数で言う（並びの先頭ではなく時刻で選ぶ）', async () => {

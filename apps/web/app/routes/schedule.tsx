@@ -1,6 +1,7 @@
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { describeScheduleText } from '~/lib/schedule-text';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useIsReportedDirty, useReportDirty } from '~/lib/leave-guard';
@@ -281,7 +282,14 @@ function ScheduleRow({
       {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
       <div className="min-w-[min(14rem,100%)] flex-1">
         {/* 描く所だけ伏せる: 依頼の本文は人間かクローンが書いた自由文で、約束の一覧も同じ種類の本文を伏せるため（編集欄は再送する本文なので伏せない） */}
-        <p className="text-sm">{redactBody(entry.description)}</p>
+        {/* 言い換えは既定の仕込み（request の無い行）だけ: 人が書いた依頼の本文は書き換えない */}
+        <p className="text-sm">
+          {redactBody(
+            entry.request === undefined
+              ? describeScheduleText(entry.description)
+              : entry.description,
+          )}
+        </p>
         {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
         {entry.request !== undefined && (
           <p className="mt-0.5 text-[11px] break-words text-muted-foreground">

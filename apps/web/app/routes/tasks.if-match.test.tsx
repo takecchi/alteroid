@@ -29,9 +29,9 @@ const SELF_AT = '2026-09-04T00:00:00.000Z';
 async function openEditor(path = '/tasks/t-1') {
   renderTasksAt(path);
   await screen.findByText('もとの本文');
-  fireEvent.click(screen.getByRole('button', { name: 'title / 本文を編集' }));
+  fireEvent.click(screen.getByRole('button', { name: 'タイトルと本文を編集' }));
   return {
-    title: (await screen.findByLabelText('title')) as HTMLInputElement,
+    title: (await screen.findByLabelText('タイトル')) as HTMLInputElement,
     body: screen.getByLabelText('本文') as HTMLTextAreaElement,
   };
 }
@@ -74,7 +74,7 @@ describe('task の編集と版の照合', () => {
     fireEvent.change(body, { target: { value: '自分の下書き' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    expect(await screen.findByText(/開いたあとに、裏でこの task が変わった/)).toBeTruthy();
+    expect(await screen.findByText(/開いたあとに、裏でこの仕事が変わった/)).toBeTruthy();
     const alert = screen.getByRole('alert');
     expect(within(alert).getByText('裏で書き換えられた本文')).toBeTruthy();
     // 上書きしていない・下書きは残っている

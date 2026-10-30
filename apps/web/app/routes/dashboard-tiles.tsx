@@ -15,6 +15,7 @@ import { useProgress, useSchedule, useUsage } from '@alteroid/swr';
 import { formatRelative, redactBody, usageHref, type Progress } from '@alteroid/logic';
 
 import { StaleNote } from '~/components/stale-note';
+import { describeScheduleText } from '~/lib/schedule-text';
 import { useMinuteNow } from '~/lib/use-now';
 import { shiftedUsageDate } from '~/lib/usage-dates';
 
@@ -106,6 +107,13 @@ function NextRunTile() {
       undefined,
     );
   const shown = next ?? entries?.[0];
+  // 切らずに折り返して全文を読ませる（途中で切ると「queu…」のように何の語か読めない）。言い換えは既定の仕込みだけ
+  const shownDescription =
+    shown === undefined
+      ? ''
+      : redactBody(
+          shown.request === undefined ? describeScheduleText(shown.description) : shown.description,
+        );
   return (
     <HomeTile
       icon={CalendarClock}
@@ -133,16 +141,14 @@ function NextRunTile() {
             </p>
           ) : (
             <Stat
-              label={
-                <span title={redactBody(shown.description)}>{redactBody(shown.description)}</span>
-              }
+              label={<span title={shownDescription}>{shownDescription}</span>}
               value={formatRelative(shown.nextAt)}
               hint={
                 schedule.data.entries.length > 1
                   ? `ほか ${schedule.data.entries.length - 1} 件`
                   : undefined
               }
-              className="[&_p:first-child]:truncate"
+              className="[&_p:first-child]:break-words"
             />
           )}
         </>
