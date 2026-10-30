@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode, SetStateAction } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import {
@@ -50,26 +50,19 @@ import {
   isPreviewableImage,
   chatDraftEpoch,
   describeApprovalLeftover,
-  isEmptyQuestionsDraft,
-  loadApprovalDrafts,
-  loadApprovalLeftoverSources,
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
   loadPendingAttachmentsNote,
   newClientMessageId,
-  saveApprovalDrafts,
   saveApprovalLeftoverSources,
   saveChatDraft,
   saveChatDraftMark,
-  settleApprovalDraft,
   saveEditDraft,
   savePendingAttachmentsNote,
   redactError,
 } from '@alteroid/logic';
 import type {
-  ApprovalDrafts,
-  ApprovalLeftoverSources,
   ChatDraftMark,
   ConversationDeleteResult,
   ConversationMessage,
@@ -88,6 +81,7 @@ import {
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import { useApprovalDraftState, usePersistApprovalDrafts } from '~/lib/use-approval-draft-state';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -558,13 +552,6 @@ interface EditedVersion {
   attachments?: readonly MessageAttachment[];
 }
 
-function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
-  if (!(key in record)) return record;
-  const rest = { ...record };
-  delete rest[key];
-  return rest;
-}
-
 function isSettledApproval(approval: PendingApproval): boolean {
   return isApprovalAnswered(approval) || isApprovalWithdrawn(approval);
 }
@@ -883,12 +870,9 @@ export function ChatPane({
   // 送信で空にするのは draft だけでよい。新しい会話で送ると離れるときの鍵は undefined ではなく確定した id に替わるので、入ってくる会話の鍵は読み出した時点で消す（鍵 undefined に送る前の値が残るため）
   const [drafts, setDrafts] = useState<Map<string | undefined, string>>(new Map());
   const [sending, setSending] = useState(false);
-  const [approvalDrafts, setApprovalDraftsState] = useState<ApprovalDrafts>(loadApprovalDrafts);
-  const approvalDraftsEpoch = useRef(chatDraftEpoch());
-  const setApprovalDrafts = useCallback((update: SetStateAction<ApprovalDrafts>) => {
-    approvalDraftsEpoch.current = chatDraftEpoch();
-    setApprovalDraftsState(update);
-  }, []);
+  // 承認カードの下書き・残った下書きの控えの持ち方（epoch・畳み方）は承認の画面と同じ `useApprovalDraftState` が持つ
+  const approvalDraftState = useApprovalDraftState();
+  const { drafts: approvalDrafts, leftoverSources } = approvalDraftState;
   /**
    * 回答を送っている途中の承認 id。カードの送信中の印（busy・sendingRef）はカードの中にしか無く、
    * 会話を移るとカードごと作り直されて消える。戻ったときに同じ承認へ2本目を送らないよう、画面の側でも持つ（承認の画面の sendingIds と同じ役目）。
@@ -903,9 +887,6 @@ export function ChatPane({
       return next;
     });
   }, []);
-  const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
-    loadApprovalLeftoverSources,
-  );
   // 会話 id ごとの Map にする: 1つだけ持つと、切り替えのたびに別の会話へ向かう途中の失敗まで消える。
   // キー undefined の失敗を確定した id へ移さない: followUp は open の後にしか投函せず、open を見ないまま終わったストリームに後から open は届かず、サーバは open を最初に書いて error で抜けるため、到達しない
   const [failures, setFailures] = useState<Map<string | undefined, unknown>>(new Map());
@@ -1220,18 +1201,11 @@ export function ChatPane({
       ),
     [conversationApprovals.data],
   );
-  useEffect(() => {
-    const keep = (id: string) => !settledApprovalIds.has(id) || id in leftoverSources;
-    saveApprovalDrafts(
-      {
-        texts: Object.fromEntries(Object.entries(approvalDrafts.texts).filter(([id]) => keep(id))),
-        questions: Object.fromEntries(
-          Object.entries(approvalDrafts.questions).filter(([id]) => keep(id)),
-        ),
-      },
-      approvalDraftsEpoch.current,
-    );
-  }, [approvalDrafts, settledApprovalIds, leftoverSources]);
+  const keepApprovalDraft = useCallback(
+    (id: string) => !settledApprovalIds.has(id) || id in leftoverSources,
+    [settledApprovalIds, leftoverSources],
+  );
+  usePersistApprovalDrafts(approvalDraftState, keepApprovalDraft);
   useEffect(() => {
     saveApprovalLeftoverSources(
       Object.fromEntries(
@@ -1253,16 +1227,7 @@ export function ChatPane({
         .filter((entry) => entry.text !== ''),
     [leftoverSources, settledApprovalIds, approvalDrafts],
   );
-  const discardLeftover = useCallback(
-    (id: string) => {
-      setApprovalDrafts((previous) => ({
-        texts: omitKey(previous.texts, id),
-        questions: omitKey(previous.questions, id),
-      }));
-      setLeftoverSources((previous) => omitKey(previous, id));
-    },
-    [setApprovalDrafts],
-  );
+  const discardLeftover = approvalDraftState.discard;
   const refetchApprovalsRef = useRef<() => void>(() => {});
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -3046,52 +3011,23 @@ export function ChatPane({
                           onSendingChange={(sending) => setApprovalSending(approvalId, sending)}
                           showSettledAt
                           draft={approvalDrafts.texts[approvalId] ?? ''}
-                          onDraftChange={(text) =>
-                            setApprovalDrafts((previous) => ({
-                              ...previous,
-                              texts:
-                                text === ''
-                                  ? omitKey(previous.texts, approvalId)
-                                  : { ...previous.texts, [approvalId]: text },
-                            }))
-                          }
+                          onDraftChange={(text) => approvalDraftState.setText(approvalId, text)}
                           questionsDraft={
                             approvalDrafts.questions[approvalId] ?? EMPTY_QUESTIONS_DRAFT
                           }
                           onQuestionsDraftChange={(next) =>
-                            setApprovalDrafts((previous) => ({
-                              ...previous,
-                              questions: isEmptyQuestionsDraft(next)
-                                ? omitKey(previous.questions, approvalId)
-                                : { ...previous.questions, [approvalId]: next },
-                            }))
+                            approvalDraftState.setQuestions(approvalId, next)
                           }
                           onAnswered={(sent) => {
                             focusIntentRef.current = { kind: 'approval', approvalId };
-                            setApprovalDrafts((previous) =>
-                              settleApprovalDraft(previous, approvalId, sent),
-                            );
-                            setLeftoverSources((previous) => ({
-                              ...previous,
-                              [approvalId]: {
-                                question,
-                                questions: questions ?? undefined,
-                              },
-                            }));
+                            approvalDraftState.settle(approvalId, { question, questions }, sent);
                             void conversationApprovals.mutate();
                           }}
                           hideFailureWhenSettled
                           onFailed={(caught) => {
                             if (caught instanceof ApiError && caught.status === 409) {
                               // 書いた答えを残りの下書きへ移す: 取り直しで決着済みと分かると、控えに無い下書きは掃除で落ち、答えが黙って消えるため（承認の画面と同じ）
-                              setLeftoverSources((previous) => ({
-                                ...previous,
-                                [approvalId]: {
-                                  origin: 'conflict',
-                                  question,
-                                  questions: questions ?? undefined,
-                                },
-                              }));
+                              approvalDraftState.noteConflict(approvalId, { question, questions });
                               void conversationApprovals.mutate();
                             }
                           }}
