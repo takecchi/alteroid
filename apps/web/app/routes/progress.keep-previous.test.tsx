@@ -35,7 +35,7 @@ function body(total: number, hours: number) {
         buckets: { under1h: 0, under24h: 0, under7d: total, over7d: 0 },
       },
       byState: { untouched: total, responded: 0, delegated: 0, notApplicable: 0 },
-      completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
+      completeness: { unreadable: 0, unreadableJobs: 0 },
     },
     inProgress: {
       running: 0,
@@ -44,8 +44,8 @@ function body(total: number, hours: number) {
       lastReport: { oldestAt: null, newestAt: null, withoutReport: 0 },
     },
     throughput: {
-      commitmentsOpened: 0,
-      commitmentsClosed: 0,
+      tasksOpened: 0,
+      tasksClosed: 0,
       delegationsEnded: { count: 0, basis: 'updatedAt' },
     },
     forecast: { state: 'unavailable', reason: 'closed_too_few' },

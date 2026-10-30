@@ -134,7 +134,7 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     fillReason('数千件の写しが積もったので畳む');
     fireEvent.click(screen.getByRole('button', { name: '試算する' }));
 
-    expect(await screen.findByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeTruthy();
+    expect(await screen.findByText(/未処理 120 件中 40 件が絞り込みに一致/)).toBeTruthy();
     expect(screen.getByText(/持ち越し 0 件/)).toBeTruthy();
     expect(screen.getByText('evt-1')).toBeTruthy();
     expect(screen.getByText('evt-2')).toBeTruthy();
@@ -208,13 +208,39 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     fillReason('数千件の写しが積もったので畳む');
     fireEvent.click(screen.getByRole('button', { name: '試算する' }));
 
-    expect(await screen.findByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeTruthy();
+    expect(await screen.findByText(/未処理 120 件中 40 件が絞り込みに一致/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /実行する/ })).toBeTruthy();
 
     checkType(/定期ジョブ/);
 
-    expect(screen.queryByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeNull();
+    expect(screen.queryByText(/未処理 120 件中 40 件が絞り込みに一致/)).toBeNull();
     expect(screen.queryByRole('button', { name: /実行する/ })).toBeNull();
+  });
+
+  it('試算の対象が 0 件なら「実行する」を出さず、押すよう促す文も出さない（#5904）', async () => {
+    const sent = stubInboxRemove(() => ({
+      status: 200,
+      payload: dryRunPayload({ matched: 0, targeted: 0, removedIds: [] }),
+    }));
+    renderInbox();
+
+    checkType(/人間の発言/);
+    fillReason('古い発言を畳む');
+    fireEvent.click(screen.getByRole('button', { name: '試算する' }));
+
+    expect(await screen.findByText('対象になる合図は無い。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /実行する/ })).toBeNull();
+    expect(screen.queryByText(/「実行する」を押してください/)).toBeNull();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('消すと何が失われるかを、押す前に画面の説明で言う（#5904）', () => {
+    stubInboxRemove(() => ({ status: 200, payload: dryRunPayload() }));
+    renderInbox();
+
+    expect(
+      screen.getByText(/消した合図はクローンが処理しないまま無くなり、元に戻せない/),
+    ).toBeTruthy();
   });
 });
 

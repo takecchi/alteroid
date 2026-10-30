@@ -209,12 +209,12 @@ export {
 export type {
   ProgressAgeBuckets,
   ProgressBacklog,
-  ProgressCommitmentRow,
-  ProgressCommitments,
   ProgressForecast,
   ProgressForecastBasis,
   ProgressInProgress,
   ProgressSummary,
+  ProgressTaskRow,
+  ProgressTasks,
   ProgressThroughput,
   ProgressUnavailableReason,
   ProgressWindow,
@@ -226,6 +226,7 @@ export {
   InvalidProgressWindowError,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
+  readRepliesByConversation,
   readUnreadableJobsForCommitments,
 } from './progress-read.js';
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
@@ -483,6 +484,7 @@ export {
   editTaskRow,
   taskBodyVersion,
   isTaskClosed,
+  isTaskOfConversation,
   listTaskRows,
   moveTaskRow,
   placeTask,
@@ -507,6 +509,7 @@ export type {
   TaskTransition,
 } from './task.js';
 export { verifyTaskStoreContract } from './task-store-contract.js';
+export { verifyTaskRemoveForConversationContract } from './task-remove-for-conversation-contract.js';
 export { TASK_TITLE_MAX, describeTaskPlacement } from './task-tools.js';
 // 台帳 → Task の移行（#5469 P7。純関数・dryRun・指紋つきの実行。起動時・道具には繋がない）
 export {

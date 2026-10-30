@@ -823,6 +823,7 @@ describe('alteroid conversations delete（#4218）', () => {
     hiddenCount: 12,
     attachmentsRemoved: 2,
     commitmentsRemoved: 1,
+    tasksRemoved: 2,
     queuedDropped: 3,
     approvalsLinked: 4,
     incomplete: [],

@@ -120,14 +120,15 @@ describe('/archive/:id', () => {
     ).toBeTruthy();
   });
 
-  it('一覧に在る行なら、使用量を読める単位で見出しに出す（生のバイト数にしない）', async () => {
+  it('一覧に在る行なら、容量を読める単位で見出しに出す（生のバイト数にしない）', async () => {
     stub(
       () => text('x'),
       [{ id: 'entry-1', sessionId: 's', at: '2026-09-01T00:00:00.000Z', storedBytes: 11452 }],
     );
     renderPage();
 
-    expect(await screen.findByText('使用量 11.2 KB')).toBeTruthy();
+    expect(await screen.findByText('容量 11.2 KB')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('使用量');
     expect(screen.queryByText(/11452/)).toBeNull();
   });
 

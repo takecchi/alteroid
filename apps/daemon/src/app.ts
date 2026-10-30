@@ -3744,7 +3744,7 @@ export function createApp(deps: AppDeps) {
           '`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・' +
           'クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。' +
           '**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。' +
-          'その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行（人間の手で積んだ行とクローンが載せた行）は物理的に消す。台帳の本文を写した日誌の行（積んだ・直した・片付けた `decision`）は、墓標の `hiddenEntryIds` で読む口から外す（行は書き換えない）。' +
+          'その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行（人間の手で積んだ行とクローンが載せた行）と、Task（`task_list`）のその会話を起点とする行（未了・閉じた行とも。件数は `tasksRemoved`）は物理的に消す。台帳の本文を写した日誌の行（積んだ・直した・片付けた `decision`）は、墓標の `hiddenEntryIds` で読む口から外す（行は書き換えない）。' +
           '受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。' +
           '消した会話へは書けない（`POST /chat` は 404）。' +
           '**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。' +
@@ -11160,16 +11160,16 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 取れない行を 0 に丸めない: `unreadable` / `trimmedClosed` はストアが返したまま core へ渡す。`github` は観測の記録を返すだけ（デーモンは GitHub を見に行かない）。
+    // 取れない行を 0 に丸めない: `unreadable` はストアが返したまま core へ渡す（Task は閉じた行を刈らないので、刈りの件数は無い）。`github` は観測の記録を返すだけ（デーモンは GitHub を見に行かない）。
     .get(
       '/progress',
       describeRoute({
         tags: ['progress'],
         summary: '作業の進捗（積み上がり・実施中・片付いた速度・見込み）',
         description:
-          '台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 ' +
+          'Task（待ち行列の行。`GET /tasks`）と委譲（Job）の行を数え直した集計。台帳（`GET /commitments`）の行は数えない。`windowHours`（既定 ' +
           `${DEFAULT_PROGRESS_WINDOW_HOURS}）は速度と見込みを数える窓の長さ（時間、有限の正数）。` +
-          '**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。' +
+          '**率（%）は出さない**（task に総量が無く、分母が定まらない）。' +
           '`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず ' +
           '`null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。' +
           '`github` は観測の記録（`POST /github-observations`）を返すだけで、デーモンは GitHub を見に行かない。' +

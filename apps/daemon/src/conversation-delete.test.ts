@@ -103,6 +103,7 @@ interface DeleteBody {
   hiddenCount: number;
   attachmentsRemoved: number;
   commitmentsRemoved: number;
+  tasksRemoved: number;
   queuedDropped: number;
   approvalsLinked: number;
   incomplete: string[];
@@ -242,6 +243,43 @@ describe('DELETE /conversations/:id（#4218）', () => {
     ).not.toContain(SECRET);
   });
 
+  it('その会話から開いた Task（人間の発言の全文を本文に持つ）を物理的に消し、tasksRemoved で件数を返す。ほかの会話の Task は残る（#5899）', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-secret', SECRET);
+    await seedConversation(stores, 'conv-keep', '残す');
+    const at = '2026-10-08T10:00:00.000Z';
+    await stores.tasks.add({
+      id: 'task-secret',
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'human',
+      source: 'conv-secret',
+      originConversationId: 'conv-secret',
+      title: 'secret',
+      body: SECRET,
+    });
+    await stores.tasks.add({
+      id: 'task-keep',
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
+      origin: 'human',
+      source: 'conv-keep',
+      originConversationId: 'conv-keep',
+      title: 'keep',
+      body: '残す',
+    });
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-secret')
+    ).json()) as DeleteBody;
+
+    expect(body.tasksRemoved).toBe(1);
+    expect(await stores.tasks.get('task-secret')).toBeNull();
+    expect(await stores.tasks.get('task-keep')).not.toBeNull();
+  });
+
   it('消した会話へは送れず（POST /chat は 404）、途中経過の SSE も 404', async () => {
     const { app, stores } = setupApp();
     await seedConversation(stores, 'conv-secret', SECRET);
@@ -255,7 +293,7 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(((await stream.json()) as { code: string }).code).toBe('conversation_deleted');
   });
 
-  it('消せないもの（生ログ・#4173・記憶・承認の本文）を remainsIn で言う', async () => {
+  it('消せないもの（生ログ・セッションの開き直し・記憶・承認の本文）を remainsIn で言う', async () => {
     const { app, stores } = setupApp();
     await seedConversation(stores, 'conv-secret', SECRET);
 
@@ -264,12 +302,29 @@ describe('DELETE /conversations/:id（#4218）', () => {
     ).json()) as DeleteBody;
 
     const joined = body.remainsIn.join('\n');
-    expect(joined).toContain('session_entries');
-    expect(joined).toContain('#4173');
+    expect(joined).toContain('生ログ');
+    // 開き直す先は設定の節の名前で言う: 画面にそのまま出る文なので、Issue 番号では辿れないため
+    expect(joined).toContain('設定の「クローンのセッションを開き直す」');
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
     expect(joined).toContain('台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し');
     expect(joined).toContain('台帳をまとめて片付けた日誌の行');
+  });
+
+  it('remainsIn は画面にそのまま出るので、内部の名前（表名・道具名・SDK・Issue 番号）を言わない（#5905）', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-words', '消す会話');
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-words')
+    ).json()) as DeleteBody;
+
+    const joined = body.remainsIn.join('\n');
+    for (const word of ['session_entries', 'archive', 'ask_human', 'request_permission', 'SDK']) {
+      expect(joined).not.toContain(word);
+    }
+    expect(joined).not.toMatch(/#\d+/);
+    expect(joined).not.toMatch(/会話 id/);
   });
 
   it('その会話から生まれた台帳の行（人間の手・クローン）と、本文を写した日誌の行は、どの読む口からも出ない（#4355）', async () => {

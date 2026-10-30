@@ -257,7 +257,7 @@ describe('載せきれなかった委譲・読めない委譲', () => {
 
     expect(await screen.findByText(/読めない行が 1 件ある。居ないとは限らない/)).toBeTruthy();
     expect(screen.queryByText('走っているマネージャーはいません')).toBeNull();
-    const note = await screen.findByText(/読めない委譲が 1 件ある/);
+    const note = await screen.findByText(/読めないマネージャーが 1 件ある/);
     expect(note.textContent).toContain('id: mgr-bad');
     expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
   });
@@ -275,7 +275,7 @@ describe('載せきれなかった委譲・読めない委譲', () => {
     });
 
     await within(mapCard()).findByRole('button', { name: /マネージャー/ });
-    expect(await screen.findByText(/読めない委譲が 2 件ある/)).toBeTruthy();
+    expect(await screen.findByText(/読めないマネージャーが 2 件ある/)).toBeTruthy();
   });
 
   it('一覧（/managers）は読まない。読めない行は /topology の snapshot から（#2705）', async () => {
@@ -291,7 +291,7 @@ describe('載せきれなかった委譲・読めない委譲', () => {
     });
 
     expect(await screen.findByText('走っているマネージャーはいません')).toBeTruthy();
-    expect(screen.queryByText(/読めない委譲/)).toBeNull();
+    expect(screen.queryByText(/読めないマネージャー/)).toBeNull();
   });
 
   it('マネージャー一覧へのリンクがある', async () => {

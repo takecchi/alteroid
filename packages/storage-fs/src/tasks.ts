@@ -5,6 +5,7 @@ import {
   addTaskRow,
   editTaskRow,
   hasNul,
+  isTaskOfConversation,
   listTaskRows,
   moveTaskRow,
   prepareTask,
@@ -183,6 +184,26 @@ export class FsTaskStore implements TaskStore {
       next: { rows: [], unreadable: [] },
       result: file.rows.length + file.unreadable.length,
     }));
+  }
+
+  async removeForConversation(conversationId: string): Promise<number> {
+    if (hasNul(conversationId)) return 0;
+    // 読んで・選んで・書くを同じ排他区間で行う: 分けると、間に足された行を巻き込むか取りこぼすため
+    return this.#update((file) => {
+      const rows = file.rows.filter((row) => !isTaskOfConversation(row.task, conversationId));
+      // 読めない行も、生の値の欄が一致すれば消す: pg は jsonb の欄をそのまま見るので、3実装で答えを揃えるため
+      const unreadable = file.unreadable.filter(
+        (row) =>
+          !(
+            typeof row.value === 'object' &&
+            row.value !== null &&
+            isTaskOfConversation(row.value, conversationId)
+          ),
+      );
+      const removed = file.rows.length - rows.length + (file.unreadable.length - unreadable.length);
+      if (removed === 0) return { next: file, result: 0 };
+      return { next: { rows, unreadable }, result: removed };
+    });
   }
 
   // 読めない行は書き直さない（本文が読める形へ戻る保証が無い）。`get` と同じく投げる

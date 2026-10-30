@@ -1,5 +1,5 @@
 /**
- * 率（%）は作らない: 台帳に総量が無く分母が定まらないから。取れないものは 0 と書かない。
+ * 率（%）は作らない: task に総量が無く分母が定まらないから。取れないものは 0 と書かない。
  * Node 専用のものは持ち込まない: web 向けバンドルに載りうるから。
  */
 import { formatElapsedAgo } from './format-elapsed.js';
@@ -10,8 +10,7 @@ const NONE = '—';
 
 const UNAVAILABLE_REASONS: Record<string, string> = {
   closed_too_few: '窓の中で閉じた件数が少なすぎる',
-  ledger_younger_than_window: '台帳の最古の行が窓より新しい',
-  history_incomplete: '古い片付き行が刈り取られていて、窓の中の消化を数え落としうる',
+  tasks_younger_than_window: 'task の最古の行が窓より新しい',
 };
 
 function hours(value: number | null): string {
@@ -43,7 +42,7 @@ export function describeProgress(view: ProgressView, fold: ProgressFold = FULL):
 
   lines.push(
     '',
-    `${fold('progress:head-backlog', '積み上がり（台帳の未了）', '未了')}: ${String(backlog.total)} 件`,
+    `${fold('progress:head-backlog', '積み上がり（task の未了）', '未了')}: ${String(backlog.total)} 件`,
   );
   const origin = backlog.byOrigin;
   lines.push(
@@ -95,7 +94,7 @@ export function describeProgress(view: ProgressView, fold: ProgressFold = FULL):
     fold('progress:head-window', `窓の中の消化（直近 ${windowSpan}`, `窓（直近 ${windowSpan}`),
   );
   lines.push(
-    `  台帳: 受けた ${String(throughput.commitmentsOpened)} 件 / 閉じた ${String(throughput.commitmentsClosed)} 件`,
+    `  task: 受けた ${String(throughput.tasksOpened)} 件 / 閉じた ${String(throughput.tasksClosed)} 件`,
   );
   const endedBasis = throughput.delegationsEnded.basis;
   lines.push(
@@ -137,12 +136,9 @@ export function describeProgress(view: ProgressView, fold: ProgressFold = FULL):
     ),
   );
 
-  const { unreadable, trimmedClosed, unreadableJobs } = backlog.completeness;
-  if (unreadable !== 0 || trimmedClosed !== 0) {
-    lines.push(
-      '',
-      `※ 数が欠けうる（読めなかった行 ${String(unreadable)} 件 / 刈り取られた片付き行 ${String(trimmedClosed)} 件）`,
-    );
+  const { unreadable, unreadableJobs } = backlog.completeness;
+  if (unreadable !== 0) {
+    lines.push('', `※ 数が欠けうる（読めなかった行 ${String(unreadable)} 件）`);
   }
   if (unreadableJobs !== 0) {
     lines.push(

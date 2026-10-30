@@ -102,7 +102,9 @@ describe('日誌の1行: 開いたとき', () => {
 
     fireEvent.click(button);
 
-    expect(within(root).getByRole('link', { name: /委譲 mgr-abc12345 の詳細/ })).toBeTruthy();
+    expect(
+      within(root).getByRole('link', { name: /マネージャー mgr-abc12345 の詳細/ }),
+    ).toBeTruthy();
     const pre = root.querySelector('pre');
     expect(pre?.textContent).toBe(JSON.stringify(DECISION, null, 2));
     expect(within(root).getAllByText('判断')).toHaveLength(1);
