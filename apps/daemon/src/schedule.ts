@@ -2,13 +2,14 @@ import {
   dailyReportEntry,
   memoryTidyEntry,
   parseTimeOfDay,
+  placedEnvValue,
   SCHEDULE_EVERY_MINUTES_MAX,
   selfInitiativeEntry,
   type ScheduleEntry,
   type TimeOfDay,
 } from '@alteroid/core';
 
-import { envValue, OFF_SPELLINGS } from './env-every-minutes.js';
+import { OFF_SPELLINGS } from './env-every-minutes.js';
 
 export interface ScheduleConfig {
   dailyReportAt: TimeOfDay | null;
@@ -38,9 +39,9 @@ export const MAX_REPORT_LOOKBACK_DAYS = 365;
 export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): ScheduleConfig {
   const notes: string[] = [];
 
-  const rawAt = envValue(env.ALTEROID_DAILY_REPORT_AT);
+  const rawAt = placedEnvValue(env, 'ALTEROID_DAILY_REPORT_AT');
   let dailyReportAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_DAILY_REPORT_AT);
-  if (rawAt !== undefined) {
+  if (rawAt !== null) {
     if (OFF_SPELLINGS.has(rawAt.toLowerCase())) {
       dailyReportAt = null;
     } else {
@@ -55,9 +56,9 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  const rawTidyAt = envValue(env.ALTEROID_MEMORY_TIDY_AT);
+  const rawTidyAt = placedEnvValue(env, 'ALTEROID_MEMORY_TIDY_AT');
   let memoryTidyAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_MEMORY_TIDY_AT);
-  if (rawTidyAt !== undefined) {
+  if (rawTidyAt !== null) {
     if (OFF_SPELLINGS.has(rawTidyAt.toLowerCase())) {
       memoryTidyAt = null;
     } else {
@@ -72,9 +73,9 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  const rawEvery = envValue(env.ALTEROID_INITIATIVE_EVERY);
+  const rawEvery = placedEnvValue(env, 'ALTEROID_INITIATIVE_EVERY');
   let initiativeEveryMinutes: number | null = DEFAULT_INITIATIVE_EVERY_MINUTES;
-  if (rawEvery !== undefined) {
+  if (rawEvery !== null) {
     if (OFF_SPELLINGS.has(rawEvery.toLowerCase())) {
       initiativeEveryMinutes = null;
     } else {
@@ -104,9 +105,9 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  const rawLookback = envValue(env.ALTEROID_REPORT_LOOKBACK_DAYS);
+  const rawLookback = placedEnvValue(env, 'ALTEROID_REPORT_LOOKBACK_DAYS');
   let reportLookbackDays = DEFAULT_REPORT_LOOKBACK_DAYS;
-  if (rawLookback !== undefined) {
+  if (rawLookback !== null) {
     const parsed = Number(rawLookback);
     if (!Number.isFinite(parsed) || parsed < 0) {
       notes.push(

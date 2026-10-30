@@ -1314,6 +1314,7 @@ export {
   normalizeEventSource,
 } from './daemon-self-notice.js';
 export { resolveModelTier } from './model-tier.js';
+export { placedEnvValue } from './placed-env.js';
 export {
   ANTHROPIC_ROUTE_NONE_LINE,
   describeAnthropicRoute,

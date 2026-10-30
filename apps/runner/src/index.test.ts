@@ -51,6 +51,13 @@ describe('tokenSha256Of', () => {
       undefined,
     );
   });
+
+  it('空白だけは未指定と同じ・前後の空白は落としてから畳む', () => {
+    expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: ' ', ALTEROID_RUNNER_TOKEN_SHA256: '\t' })).toBe(
+      undefined,
+    );
+    expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: ` ${TOKEN}\n` })).toBe(TOKEN_SHA256);
+  });
 });
 
 describe('器の起動スクリプト', () => {
@@ -224,7 +231,7 @@ describe('doneTreeReapAfterMsOf（終わって久しい done の担当の木を�
     expect(doneTreeReapAfterMsOf({ [key]: '90' })).toBe(90 * 60_000);
   });
 
-  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', ' 10', '1e3', '99999999999999999999'])(
+  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', '1 0', '1e3', '99999999999999999999'])(
     '正の整数でも off でもない値（%s）は黙って既定へ倒さず落とす',
     (value) => {
       expect(() => doneTreeReapAfterMsOf({ [key]: value })).toThrow(/知らない値/);
@@ -255,7 +262,7 @@ describe('socketOwnerOf', () => {
     ).toEqual({ uid: 1000, gid: 1000 });
   });
 
-  it.each(['abc', '1.5', '-1', ' 1000', '1e3', '99999999999999999999'])(
+  it.each(['abc', '1.5', '-1', '10 00', '1e3', '99999999999999999999'])(
     'UID が非負の整数でない値（%s）なら、黙って chown を飛ばさず落とす',
     (value) => {
       expect(() => socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: value })).toThrow(
@@ -281,6 +288,26 @@ describe('listenPlanOf（待ち受けの口）', () => {
     });
   });
 
+  it('空白だけのポート・BIND は置いていないのと同じ（既定の 4518・127.0.0.1）', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '  ', ALTEROID_RUNNER_BIND: ' ' })).toEqual({
+      kind: 'tcp',
+      port: 4518,
+      hostname: '127.0.0.1',
+    });
+  });
+
+  it('前後の空白は落として読む（ポート・BIND・ソケット）', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: ' 4600 ', ALTEROID_RUNNER_BIND: ' :: ' })).toEqual({
+      kind: 'tcp',
+      port: 4600,
+      hostname: '::',
+    });
+    expect(listenPlanOf({ ALTEROID_RUNNER_SOCKET: ' /run/x.sock ' })).toMatchObject({
+      kind: 'socket',
+      path: '/run/x.sock',
+    });
+  });
+
   it('1〜65535 の整数はそのまま使い、BIND は置かない・空文字なら 127.0.0.1', () => {
     expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '1', ALTEROID_RUNNER_BIND: '' })).toMatchObject({
       port: 1,
@@ -291,7 +318,7 @@ describe('listenPlanOf（待ち受けの口）', () => {
     ).toMatchObject({ port: 65535, hostname: '::' });
   });
 
-  it.each(['0', '65536', '-1', 'abc', '4518.5', ' 4518', '1e3', '04518'])(
+  it.each(['0', '65536', '-1', 'abc', '4518.5', '45 18', '1e3', '04518'])(
     '1〜65535 の整数でないポート（%s）は落とす',
     (value) => {
       expect(() => listenPlanOf({ ALTEROID_RUNNER_PORT: value })).toThrow(

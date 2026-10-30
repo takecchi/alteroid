@@ -28,6 +28,7 @@ import {
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
   agentProviderOf,
+  placedEnvValue,
   placedManagerModels,
   reasonOf,
   readExecutionResources,
@@ -75,7 +76,7 @@ export function createRunnerHttpServer(
 
 // ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
 export function runnerIdOf(env: NodeJS.ProcessEnv): string {
-  return envValue(env, 'ALTEROID_RUNNER_ID') ?? 'runner-primary';
+  return placedEnvValue(env, 'ALTEROID_RUNNER_ID') ?? 'runner-primary';
 }
 
 // 猶予は `railway/runner.json` の `drainingSeconds` と `compose.yaml` の `stop_grace_period` の写し: 実行中のプロセスからは読めないため。デーモン側と共有しない: Service ごとの設定で、片方だけ延ばす日があるため。
@@ -195,19 +196,14 @@ export async function shutdownHandingOver(deps: {
   }
 }
 
-function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
-  const value = env[key];
-  return value !== undefined && value.length > 0 ? value : undefined;
-}
-
 // 両方置かれて食い違うときは黙って片方を選ばず落とす: 人間は「置いた」、runner は 401 を返し続け、どちらも正しいまま噛み合わないため。
 export function tokenSha256Of(env: NodeJS.ProcessEnv): string | undefined {
-  const given = envValue(env, 'ALTEROID_RUNNER_TOKEN_SHA256');
-  const raw = envValue(env, 'ALTEROID_RUNNER_TOKEN');
-  if (raw === undefined) return given;
+  const given = placedEnvValue(env, 'ALTEROID_RUNNER_TOKEN_SHA256');
+  const raw = placedEnvValue(env, 'ALTEROID_RUNNER_TOKEN');
+  if (raw === null) return given ?? undefined;
 
   const folded = createHash('sha256').update(raw, 'utf8').digest('hex');
-  if (given !== undefined && given !== folded) {
+  if (given !== null && given !== folded) {
     throw new Error(
       'ALTEROID_RUNNER_TOKEN と ALTEROID_RUNNER_TOKEN_SHA256 が食い違っている' +
         '（どちらか一方だけを置くこと。既定はデーモンと同じ ALTEROID_RUNNER_TOKEN）',
@@ -228,9 +224,9 @@ function idOf(name: string, raw: string): number {
 // UID が runner 自身と同じなら落とす: 境界にならず、孤児の回収が runner 自身まで候補に入れるため。
 export function childUserOf(env: NodeJS.ProcessEnv): RunnerChildUser | undefined {
   const ownUid = process.getuid?.();
-  const uid = envValue(env, 'ALTEROID_RUNNER_CHILD_UID');
-  if (uid === undefined) return undefined;
-  const gid = envValue(env, 'ALTEROID_RUNNER_CHILD_GID') ?? uid;
+  const uid = placedEnvValue(env, 'ALTEROID_RUNNER_CHILD_UID');
+  if (uid === null) return undefined;
+  const gid = placedEnvValue(env, 'ALTEROID_RUNNER_CHILD_GID') ?? uid;
   const uidNumber = idOf('ALTEROID_RUNNER_CHILD_UID', uid);
   const gidNumber = idOf('ALTEROID_RUNNER_CHILD_GID', gid);
   if (ownUid !== undefined && uidNumber === ownUid) {
@@ -239,31 +235,31 @@ export function childUserOf(env: NodeJS.ProcessEnv): RunnerChildUser | undefined
         '降ろす先が自分と同じでは境界にならないので起動しない（root と別の UID を置くこと）。',
     );
   }
-  const home = envValue(env, 'ALTEROID_RUNNER_CHILD_HOME');
+  const home = placedEnvValue(env, 'ALTEROID_RUNNER_CHILD_HOME');
   return {
     uid: uidNumber,
     gid: gidNumber,
-    ...(home === undefined ? {} : { home }),
+    ...(home === null ? {} : { home }),
   };
 }
 
 // `Number(env ?? '')` で読まない: `Number('')` は 0 で、UID 未設定でも uid 0 へ chown しに行くため。
 // 不正な値は黙って chown を飛ばさず落とす: 持ち主が変わらないソケットにデーモンが繋げず、「置いた」と「効いている」が食い違ったまま残るため。
 export function socketOwnerOf(env: NodeJS.ProcessEnv): { uid: number; gid: number } | undefined {
-  const rawUid = envValue(env, 'ALTEROID_RUNNER_SOCKET_UID');
-  if (rawUid === undefined) return undefined;
+  const rawUid = placedEnvValue(env, 'ALTEROID_RUNNER_SOCKET_UID');
+  if (rawUid === null) return undefined;
   const uid = idOf('ALTEROID_RUNNER_SOCKET_UID', rawUid);
-  const rawGid = envValue(env, 'ALTEROID_RUNNER_SOCKET_GID');
-  return { uid, gid: rawGid === undefined ? uid : idOf('ALTEROID_RUNNER_SOCKET_GID', rawGid) };
+  const rawGid = placedEnvValue(env, 'ALTEROID_RUNNER_SOCKET_GID');
+  return { uid, gid: rawGid === null ? uid : idOf('ALTEROID_RUNNER_SOCKET_GID', rawGid) };
 }
 
 const DEFAULT_RUNNER_PORT = 4518;
 
-// 空文字は「置いていない」と同じに読む: `Number('')` は 0 で、任意のポートに待ち受けてデーモンから届かなくなるため。
+// 空文字・空白だけは「置いていない」と同じに読む: `Number('')` は 0 で、任意のポートに待ち受けてデーモンから届かなくなるため。
 // `0` も落とす: デーモンは決まったポートへ繋ぐので、任意のポートでは届かない。
 function runnerPortOf(env: NodeJS.ProcessEnv): number {
-  const raw = envValue(env, 'ALTEROID_RUNNER_PORT');
-  if (raw === undefined) return DEFAULT_RUNNER_PORT;
+  const raw = placedEnvValue(env, 'ALTEROID_RUNNER_PORT');
+  if (raw === null) return DEFAULT_RUNNER_PORT;
   const port = Number(raw);
   if (!/^[1-9]\d*$/.test(raw) || port > 65535) {
     throw new Error(
@@ -279,12 +275,12 @@ type ListenPlan =
 
 // ソケットを使う構成では、TCP の変数（PORT・BIND）は読まない（今までどおり）。
 export function listenPlanOf(env: NodeJS.ProcessEnv): ListenPlan {
-  const path = envValue(env, 'ALTEROID_RUNNER_SOCKET');
-  if (path !== undefined) return { kind: 'socket', path, owner: socketOwnerOf(env) };
+  const path = placedEnvValue(env, 'ALTEROID_RUNNER_SOCKET');
+  if (path !== null) return { kind: 'socket', path, owner: socketOwnerOf(env) };
   return {
     kind: 'tcp',
     port: runnerPortOf(env),
-    hostname: envValue(env, 'ALTEROID_RUNNER_BIND') ?? '127.0.0.1',
+    hostname: placedEnvValue(env, 'ALTEROID_RUNNER_BIND') ?? '127.0.0.1',
   };
 }
 
@@ -298,7 +294,7 @@ export function reclaimScanOf(
   // 委譲の引き取り手（`delegationSubreaperOf`）。探したが無ければ `null`
   delegationSubreaper: string | null,
 ): ReclaimScanOptions | undefined {
-  const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
+  const raw = placedEnvValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
   if (raw === 'off') return undefined;
   // 知らない値は既定へ倒さず落とす: `Off` と書いて観測が動き続けると、「置いた」と「効いている」が食い違ったまま気づけないため。
   if (raw !== 'observe' && raw !== 'reclaim') {
@@ -320,8 +316,8 @@ const DEFAULT_DONE_TREE_REAP_AFTER_MINUTES = 360;
 // 終わって久しい done の担当の CLI の木を回収が撃ち始めるまでの期限（ms。#5157）。`off`（`undefined`）は撃たない旧来の挙動。
 // 知らない値は既定へ倒さず落とす: `0` や `6h` と書いて旧来のまま溜まり続けても、「置いた」と「効いている」が食い違ったまま気づけないため。
 export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv): number | undefined {
-  const raw = envValue(env, DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY);
-  if (raw === undefined) return DEFAULT_DONE_TREE_REAP_AFTER_MINUTES * 60_000;
+  const raw = placedEnvValue(env, DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY);
+  if (raw === null) return DEFAULT_DONE_TREE_REAP_AFTER_MINUTES * 60_000;
   if (raw === 'off') return undefined;
   const minutes = Number(raw);
   if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(minutes)) {
@@ -341,7 +337,7 @@ export function delegationSubreaperOf(
   childUser: RunnerChildUser | undefined,
 ): string | undefined {
   if (childUser === undefined) return undefined;
-  for (const dir of (envValue(env, 'PATH') ?? '').split(delimiter)) {
+  for (const dir of (placedEnvValue(env, 'PATH') ?? '').split(delimiter)) {
     if (!isAbsolute(dir)) continue;
     const candidate = join(dir, 'tini');
     if (executableFile(candidate)) return candidate;
@@ -360,7 +356,7 @@ function executableFile(path: string): boolean {
 
 export async function main(): Promise<void> {
   const runnerId = runnerIdOf(process.env);
-  const workspacePath = envValue(process.env, 'ALTEROID_WORKSPACE') ?? process.cwd();
+  const workspacePath = placedEnvValue(process.env, 'ALTEROID_WORKSPACE') ?? process.cwd();
 
   // 待ち受けの口は最初に読む: 不正な値で落ちるとき、器を組み立てたりソケットを作ったりした後にしないため。
   const listenPlan = listenPlanOf(process.env);
@@ -384,9 +380,9 @@ export async function main(): Promise<void> {
   }
 
   const childUserReader = childUserIds(childUser);
-  const credentialDir = envValue(process.env, 'ALTEROID_CREDENTIAL_DIR');
+  const credentialDir = placedEnvValue(process.env, 'ALTEROID_CREDENTIAL_DIR');
   const credentials = createCredentialStore({
-    ...(credentialDir === undefined ? {} : { dir: credentialDir }),
+    ...(credentialDir === null ? {} : { dir: credentialDir }),
     ...(childUserReader === undefined ? {} : { reader: childUserReader }),
     // 自分の env を種にしない: 冷却中の死んだ鍵が器に載り、デーモンが上書きするまでの窓で使われるため。空を渡すのは「省略」（`process.env`）と意味が違う。
     seed: {},
@@ -402,7 +398,7 @@ export async function main(): Promise<void> {
     }\n`,
   );
 
-  const profilePath = envValue(process.env, 'ALTEROID_PROFILE_FILE') ?? DEFAULT_PROFILE_PATH;
+  const profilePath = placedEnvValue(process.env, 'ALTEROID_PROFILE_FILE') ?? DEFAULT_PROFILE_PATH;
   // 前の器の置き土産を引き継がない: volume にファイルが残り、デーモンが降ろす前の一瞬だけ古いプロファイルが効くため。
   rmSync(profilePath, { force: true });
   const profile = createProfileVessel({
@@ -412,7 +408,8 @@ export async function main(): Promise<void> {
   });
 
   // 展開先を `/workspace` に置かない: 子の持ち物のため。置き場が volume の構成では前の器の展開物が残るので、起動時にまとめて消す
-  const pluginsRoot = envValue(process.env, 'ALTEROID_PLUGINS_DIR') ?? defaultRunnerPluginsRoot();
+  const pluginsRoot =
+    placedEnvValue(process.env, 'ALTEROID_PLUGINS_DIR') ?? defaultRunnerPluginsRoot();
   // 置き場が信頼できなければ片づけない: root 権限で他人が差し替えられるディレクトリの中を chmod・削除しないため
   const prunedPlugins = await pruneRunnerPluginsOnBoot(
     pluginsRoot,
