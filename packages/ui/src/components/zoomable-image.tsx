@@ -31,11 +31,14 @@ export function ZoomableImage({
   src,
   alt,
   title,
+  triggerLabel,
   className,
 }: {
   src: string;
   alt: string;
   title?: string;
+  // 押すと何が起きるかを読み上げる名前。無ければ画像の alt が名前になる
+  triggerLabel?: string;
   className?: string;
 }) {
   // boolean にしない: src が変わったとき（添付の再取得で blob: が替わる）に effect で戻す手間を避けるため
@@ -50,7 +53,8 @@ export function ZoomableImage({
         <button
           type="button"
           title={title}
-          className="block max-w-full cursor-zoom-in rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          aria-label={triggerLabel}
+          className="block max-w-full cursor-zoom-in rounded-md hover:ring-2 hover:ring-ring/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <img src={src} alt={alt} className={className} onError={() => setFailedSrc(src)} />
         </button>

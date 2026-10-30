@@ -17,6 +17,21 @@ describe('ZoomableImage（#4043 読み込み失敗）', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy();
   });
 
+  it('triggerLabel があれば、押すと何が起きるかを button の名前にする（alt ではなく）', () => {
+    render(<ZoomableImage src="https://example.com/a.png" alt="図" triggerLabel="図 を大きく見る" />);
+
+    expect(screen.getByRole('button', { name: '図 を大きく見る' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '図' })).toBeNull();
+  });
+
+  it('button はホバーで枠が出て、拡大できるカーソルになる', () => {
+    render(<ZoomableImage src="https://example.com/a.png" alt="図" />);
+
+    const className = screen.getByRole('button', { name: '図' }).className;
+    expect(className).toContain('cursor-zoom-in');
+    expect(className).toContain('hover:ring-2');
+  });
+
   it('読み込みに失敗したら button をやめ、alt の文字・リンク・読めなかった旨になる', () => {
     render(<ZoomableImage src="https://example.com/a.png" alt="図" />);
 

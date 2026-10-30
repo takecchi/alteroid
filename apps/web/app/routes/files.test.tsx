@@ -506,6 +506,19 @@ describe('ファイル画面: アップロード', () => {
 });
 
 describe('ファイル画面: サムネ', () => {
+  it('取れた画像のサムネは「<ファイル名> を大きく見る」という名前の button で、押すと窓が開く', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:thumb-zoom');
+    URL.revokeObjectURL = vi.fn();
+    server.items = [item('p1', { name: 'one.png', mediaType: 'image/png' })];
+    renderFiles();
+    await screen.findByText('one.png');
+
+    const button = await screen.findByRole('button', { name: 'one.png を大きく見る' });
+    expect(button.className).toContain('cursor-zoom-in');
+    fireEvent.click(button);
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+  });
+
   it('画像は見えている行だけ中身を取り、画面から外れたら blob: URL を解放する', async () => {
     const observed = new Map<Element, (entries: { isIntersecting: boolean }[]) => void>();
     class FakeObserver {
