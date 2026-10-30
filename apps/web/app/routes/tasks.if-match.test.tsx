@@ -74,7 +74,7 @@ describe('task の編集と版の照合', () => {
     fireEvent.change(body, { target: { value: '自分の下書き' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
-    expect(await screen.findByText(/開いたあとに、裏でこの仕事が変わった/)).toBeTruthy();
+    expect(await screen.findByText(/開いたあとに、裏でこの行が変わった/)).toBeTruthy();
     const alert = screen.getByRole('alert');
     expect(within(alert).getByText('裏で書き換えられた本文')).toBeTruthy();
     // 上書きしていない・下書きは残っている

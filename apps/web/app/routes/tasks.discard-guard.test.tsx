@@ -34,7 +34,7 @@ async function openEditor() {
 
 const cancel = () => screen.getByRole('button', { name: 'やめる' });
 
-describe('仕事の編集をやめる確認', () => {
+describe('task の編集をやめる確認', () => {
   it('書きかけが無ければ確認なしで閉じる', async () => {
     await openEditor();
 

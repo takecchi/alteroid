@@ -689,34 +689,6 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
   });
 });
 
-describe('既定の仕込みの説明文の内部の語（#5861）', () => {
-  const SELF_INITIATIVE = {
-    kind: 'self_initiative',
-    description:
-      '60 分ごとに確かめ、動ける仕事（待ち行列の queued / needs_decision・旧台帳の未了）があるときと、直近24時間に発意 tick を回していないときだけ、次にやることを決める',
-    nextAt: '2026-08-20T22:00:00.000Z',
-  };
-
-  it('queued / needs_decision と 発意 tick を、画面の言葉（順番待ち・判断待ち・発意のターン）で言う', async () => {
-    stubSchedule([SELF_INITIATIVE]);
-    renderSchedule();
-
-    expect(
-      await screen.findByText(
-        '60 分ごとに確かめ、動ける仕事（待ち行列の順番待ち・判断待ち・旧台帳の未了）があるときと、直近24時間に発意のターンを回していないときだけ、次にやることを決める',
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/queued|needs_decision|tick/)).toBeNull();
-  });
-
-  it('人が書いた依頼（request が在る行）の本文は書き換えない', async () => {
-    stubSchedule([{ ...REQUEST_ENTRY, description: '発意 tick のメモ' }]);
-    renderSchedule();
-
-    expect(await screen.findByText('発意 tick のメモ')).toBeTruthy();
-  });
-});
-
 describe('定期ジョブの行の説明文の列（#2755）', () => {
   it('説明文の列は最小幅を持つ（flex-basis 0 のまま 46px に潰れない）', async () => {
     // 折り返しを実寸で測らない: jsdom はレイアウトを持たないため

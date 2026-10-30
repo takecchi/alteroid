@@ -27,7 +27,7 @@ const THREE = () => [
 ];
 
 function openTitles(): string[] {
-  const list = screen.getByRole('list', { name: '開いている仕事（優先順）' });
+  const list = screen.getByRole('list', { name: '開いている行（優先順）' });
   return within(list)
     .getAllByRole('listitem')
     .map((item) => within(item).getAllByRole('link')[0]!.textContent ?? '');
@@ -97,7 +97,7 @@ describe('/tasks 一覧', () => {
     expect(await screen.findByText(/読めない行が 1 件ある/)).toBeTruthy();
     expect(screen.getByText(/broken-1/)).toBeTruthy();
     expect(screen.getByText('閉じたのではない。')).toBeTruthy();
-    expect(screen.getByText('読めた範囲では、開いている仕事はない。')).toBeTruthy();
+    expect(screen.getByText('読めた範囲では、開いている行はない。')).toBeTruthy();
   });
 
   it('各行のタイトルから詳細へ移り、全文と優先順の位置が見える', async () => {
@@ -147,26 +147,26 @@ describe('「編集済み（日時）」の印', () => {
   });
 });
 
-describe('仕事の詳細の画面名', () => {
-  it('画面名は「仕事」で、編集の入口は「タイトルと本文を編集」と言う（task・title は出さない）', async () => {
+describe('詳細の画面名', () => {
+  it('画面名は「待ち行列の1行」で、編集の入口は「タイトルと本文を編集」と言う（task・title は出さない）', async () => {
     stubTasksServer(THREE());
     renderTasksAt('/tasks/t-a');
     await screen.findByText('最初の本文');
 
-    expect(screen.getByRole('heading', { name: '仕事' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '待ち行列の1行' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'タイトルと本文を編集' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'task' })).toBeNull();
     expect(screen.queryByText(/title \/ 本文/)).toBeNull();
   });
 });
 
-describe('仕事を積む', () => {
-  it('見出しは「仕事を積む」で、内部の名前（task）を出さない', async () => {
+describe('task を積む', () => {
+  it('見出しは「待ち行列に積む」で、内部の名前（task）を出さない', async () => {
     stubTasksServer(THREE());
     renderTasksAt('/tasks');
     await screen.findByText('先にやる仕事');
 
-    expect(screen.getByText('仕事を積む')).toBeTruthy();
+    expect(screen.getByText('待ち行列に積む')).toBeTruthy();
     expect(screen.queryByText(/task を積む/)).toBeNull();
   });
 
