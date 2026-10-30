@@ -230,9 +230,10 @@ describe('runner の入れ替わり後の無音切断（#3036）', () => {
   });
 });
 
-// #5692 段2: 控えは「書き終えた分」として列に残る。試験専用の口（recordSent）は無く、本番と同じ `subscribe` の `wrote` で書き終える（writeAll）。
-describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => {
-  it('sentSince は lastEventId より新しい分だけを古い順に返す', () => {
+// #5692: 控えは「書き終えた分」として列に残る。試験専用の口（recordSent・sentSince）は無く、本番と同じ `subscribe` で書き終え（writeAll）、
+// 繋ぎ直し（`lastEventId` つきの subscribe = HTTP の Last-Event-ID と同じ入口）で何が流れてくるかを見る。
+describe('Outbox の控え（書き終えた分）と Last-Event-ID の繋ぎ直し（#275）', () => {
+  it('Last-Event-ID より新しい分だけが古い順に流れる', () => {
     const outbox = new Outbox();
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
     const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
@@ -242,9 +243,9 @@ describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => 
     const s3 = outbox.push(e3);
     writeAll(outbox);
 
-    expect(outbox.sentSince(s1).map((i) => i.seq)).toEqual([s2, s3]);
-    expect(outbox.sentSince(s3)).toEqual([]);
-    expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([s1, s2, s3]);
+    expect(writeAll(outbox, { lastEventId: s1 })).toEqual([s2, s3]);
+    expect(writeAll(outbox, { lastEventId: s3 })).toEqual([]);
+    expect(writeAll(outbox, { lastEventId: 0 })).toEqual([s1, s2, s3]);
   });
 
   it('同じ連番を2度記録しても控えには1件しか入らない。間に新しい連番があっても同じ（#3808）', () => {
@@ -257,7 +258,7 @@ describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => 
     // 読み返して同じ連番をもう一度書き終えても、控えは増えない
     writeAll(outbox, { lastEventId: 0 });
     writeAll(outbox, { lastEventId: 0 });
-    expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([1, 2]);
+    expect(writeAll(outbox, { lastEventId: 0 })).toEqual([1, 2]);
   });
 
   it('読み返しの書き込みも無音で切れ続けても、3本目で同じ連番は1回だけ流れ、控えは増えない（#3808）', async () => {
@@ -306,14 +307,15 @@ describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => 
       cancelCurrent = () => second.cancel();
       await expect.poll(() => eventWrites, { timeout: 1000 }).toBe(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(outbox.sentSince(seq - 1).map((i) => i.seq)).toEqual([seq]);
+      expect(writeAll(outbox, { lastEventId: seq - 1 })).toEqual([seq]);
 
       const third = await open(bearer({ 'Last-Event-ID': String(seq - 1) }));
       const seen = await readUntil(third, JSON.stringify(event), 1000);
       expect(seen.split(JSON.stringify(event)).length - 1).toBe(1);
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(outbox.sentSince(seq - 1).map((i) => i.seq)).toEqual([seq]);
       await third.cancel();
+      await expect.poll(() => outbox.subscribed, { timeout: 1000 }).toBe(false);
+      expect(writeAll(outbox, { lastEventId: seq - 1 })).toEqual([seq]);
     } finally {
       spy.mockRestore();
       await host.shutdown();
@@ -328,10 +330,10 @@ describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => 
     const s2 = outbox.push(e2);
     writeAll(outbox);
 
-    expect(outbox.sentSince(50).map((i) => i.seq)).toEqual([s1, s2]);
-    expect(outbox.sentSince(s2 + 1).map((i) => i.seq)).toEqual([s1, s2]);
-    expect(outbox.sentSince(s2)).toEqual([]);
-    expect(outbox.sentSince(s1).map((i) => i.seq)).toEqual([s2]);
+    expect(writeAll(outbox, { lastEventId: 50 })).toEqual([s1, s2]);
+    expect(writeAll(outbox, { lastEventId: s2 + 1 })).toEqual([s1, s2]);
+    expect(writeAll(outbox, { lastEventId: s2 })).toEqual([]);
+    expect(writeAll(outbox, { lastEventId: s1 })).toEqual([s2]);
   });
 
   it('SENT_HISTORY_LIMIT を超えた分は古い方から捨てる', () => {
@@ -342,10 +344,10 @@ describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => 
       outbox.push(event);
     }
     writeAll(outbox);
-    const all = outbox.sentSince(0);
+    const all = writeAll(outbox, { lastEventId: 0 });
     expect(all.length).toBe(limit);
-    expect(all[0]?.seq).toBe(6);
-    expect(all[all.length - 1]?.seq).toBe(limit + 5);
+    expect(all[0]).toBe(6);
+    expect(all[all.length - 1]).toBe(limit + 5);
   });
 });
 
@@ -357,7 +359,7 @@ describe('Outbox の送信済みの控えは字数でも締める（#4669）', (
     const outbox = new Outbox();
     for (let seq = 1; seq <= 20; seq += 1) outbox.push(mirrorOf(seq));
     writeAll(outbox, { chars: () => 1_000_000 });
-    const kept = outbox.sentSince(0).map((item) => item.seq);
+    const kept = writeAll(outbox, { lastEventId: 0 });
     expect(kept).toEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
   });
 
@@ -366,7 +368,7 @@ describe('Outbox の送信済みの控えは字数でも締める（#4669）', (
     outbox.push(mirrorOf(1));
     outbox.push(mirrorOf(2));
     writeAll(outbox, { chars: (seq) => (seq === 1 ? 10 : Outbox.SENT_HISTORY_MAX_CHARS + 1) });
-    expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([2]);
+    expect(writeAll(outbox, { lastEventId: 0 })).toEqual([2]);
   });
 
   it('字数を渡さなければ、出来事を直列化した字数で数える', () => {
@@ -380,7 +382,7 @@ describe('Outbox の送信済みの控えは字数でも締める（#4669）', (
     outbox.push(big);
     outbox.push(big);
     writeAll(outbox);
-    expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([3]);
+    expect(writeAll(outbox, { lastEventId: 0 })).toEqual([3]);
   });
 
   it('字数で落とした分より前を繋ぎ直しで求められたら、送り直せないことを標準エラーに残す。落としていない範囲では黙る', async () => {
@@ -388,11 +390,11 @@ describe('Outbox の送信済みの控えは字数でも締める（#4669）', (
     for (let seq = 1; seq <= 20; seq += 1) outbox.push(mirrorOf(seq));
     writeAll(outbox, { chars: () => 1_000_000 });
     const dropped = await captureStderr(() => {
-      expect(outbox.sentSince(2).map((item) => item.seq)[0]).toBe(5);
+      expect(writeAll(outbox, { lastEventId: 2 })[0]).toBe(5);
     });
     expect(dropped.join('')).toContain('控えの字数の上限で落としてあり、送り直せない');
     const silent = await captureStderr(() => {
-      outbox.sentSince(10);
+      writeAll(outbox, { lastEventId: 10 });
     });
     expect(silent).toEqual([]);
   });
@@ -429,11 +431,11 @@ describe('/events へ書いた出来事の控えは、書き出した本文の�
         seen += decoder.decode(next.value, { stream: true });
         seen = seen.slice(-64);
       }
-      await expect
-        .poll(() => outbox.sentSince(0).length, { timeout: 1000 })
-        .toBeLessThanOrEqual(16);
-      expect(outbox.sentSince(0).at(-1)?.seq).toBe(20);
       await reader.cancel();
+      await expect.poll(() => outbox.subscribed, { timeout: 1000 }).toBe(false);
+      const kept = writeAll(outbox, { lastEventId: 0 });
+      expect(kept.length).toBeLessThanOrEqual(16);
+      expect(kept.at(-1)).toBe(20);
     } finally {
       await host.shutdown();
     }

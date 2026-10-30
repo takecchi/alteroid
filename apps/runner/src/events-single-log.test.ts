@@ -5,7 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
-import { connectedSubscriber } from './outbox-subscribers.test-support.js';
+import { connectedSubscriber, writeAll } from './outbox-subscribers.test-support.js';
 
 // #5692（段1）: まだ書いていない分を、`Outbox` の連番つきの1本の列にした。接続が持つのは「次に書く連番」だけで、
 // 書き込みが成功したときだけ進む。差し戻しが無いので、書けなかった出来事は同じ連番のまま列に残る。
@@ -192,12 +192,11 @@ describe('控えの上限は、まだ書いていない分を落とさない（#
       subscription.wrote(item);
     }
     // 書き終えたのは total-2 まで。上限（1000件）を超えた古い分だけが落ち、後ろの2件は書いていないので残る
-    expect(outbox.sentSince(0).map((item) => item.seq)[0]).toBe(
-      total - 2 - Outbox.SENT_HISTORY_LIMIT + 1,
-    );
     expect(outbox.pending).toBe(2);
     subscription.detach();
     expect(outbox.pending).toBe(2);
+    // 先頭の側（控え）は上限で落ちている: 0 から読み返すと、残っている最古の連番から流れる
+    expect(writeAll(outbox, { lastEventId: 0 })[0]).toBe(total - 2 - Outbox.SENT_HISTORY_LIMIT + 1);
   });
 
   it('まだ書いていない分は、件数がいくつ溜まっても落とさない（上限を置かない）', () => {
@@ -231,10 +230,11 @@ describe('置き換え（#630 (C)）: 古い接続は何も持たず、書き終
     expect(older.superseded).toBe(true);
 
     older.wrote(item);
-    expect(outbox.sentSince(0)).toEqual([]);
     expect(newer.peek()?.seq).toBe(1);
     expect(outbox.pending).toBe(1);
     newer.detach();
+    // 古い接続の書き込みで書き終えたことになっていれば、外れたあとの溜まり（書き終えた後ろ）は 0 になる
+    expect(outbox.pending).toBe(1);
   });
 
   it('新しい接続が来たら、古い接続は畳まれる（古い応答が終わる）。止まっていた1件は新しい接続が同じ連番で書く', async () => {

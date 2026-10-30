@@ -184,9 +184,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(outbox.pending).toBe(0);
 
-      // バイト読みより先に控えを見る: 読み側のタイミング次第で「読み切れなかった」と「記録されていない」を区別しづらくなるため。
-      expect(outbox.sentSince(0)).toHaveLength(1);
-
       // `readUntil` で `hello` だけ見て打ち切らない: 直後に来るはずの2件目を読む前に終わるため。
       const third = await app.request('/events', {
         headers: bearer({ 'Last-Event-ID': '0' }),
@@ -212,7 +209,8 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       const needle = JSON.stringify(event);
       const firstIndex = redelivered.indexOf(needle);
       const occurrences = firstIndex === -1 ? 0 : redelivered.split(needle).length - 1;
-      expect(occurrences).toBeLessThanOrEqual(1);
+      // 控えに二重に積まれていれば2回流れる（#4154）。列には連番ごとに1件しか無いので、ちょうど1回
+      expect(occurrences).toBe(1);
 
       await thirdReader.cancel();
       await secondReader.cancel();

@@ -253,15 +253,16 @@ export class Outbox {
     }
   }
 
-  // 古い方から落とすのは、書き終えていて、かつ購読中の接続が次に書く連番より前の分だけ: まだ書いていない分と、繋ぎ直しで読み返している最中の分は落とさない。
+  // 古い方から落とすのは、書き終えた分（先頭の塊）だけ: まだ書いていない分は落とさない。
+  // 繋ぎ直しで読み返している最中の分を落とさない条件は要らない: 書き終えた分が増えるのは `wrote` が `#written` を進めたときだけで、
+  // そのとき cursor は書いた連番の次へ進んでいて書き終えた分は全部その手前に居る。読み返しの間は `#written` が進まず控えも増えないので、ここは回らない。
   #trim(): void {
-    const floor = this.#current?.cursor ?? Number.POSITIVE_INFINITY;
     while (
       this.#sentCount > Outbox.SENT_HISTORY_LIMIT ||
       (this.#sentChars > Outbox.SENT_HISTORY_MAX_CHARS && this.#sentCount > 1)
     ) {
       const first = this.#log[0];
-      if (first === undefined || first.seq >= floor) break;
+      if (first === undefined) break;
       this.#log.shift();
       this.#sentCount -= 1;
       this.#sentChars -= first.chars ?? 0;
@@ -300,17 +301,6 @@ export class Outbox {
     if (lastEventId >= this.#nextSeq) return this.#log[0]?.seq ?? this.#nextSeq;
     this.#noteDroppedBefore(lastEventId);
     return lastEventId + 1;
-  }
-
-  sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
-    const sent = this.#log.slice(0, this.#sentCount);
-    if (lastEventId >= this.#nextSeq) {
-      return sent.map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
-    }
-    this.#noteDroppedBefore(lastEventId);
-    return sent
-      .filter((item) => item.seq > lastEventId)
-      .map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
   }
 
   // 購読中は、その接続がこれから書く分（読み返しの最中の分を含む）。購読が無いときは、書き終えた後ろ。

@@ -99,7 +99,8 @@ describe('runner の /events: 控えから読み返した分を、書き切れ�
       const reader1 = await openReader(app, bearer());
       await readUntil(reader1, JSON.stringify(second), 1000);
       await reader1.cancel();
-      await expect.poll(() => outbox.sentSince(0).length, { timeout: 1000 }).toBe(2);
+      // 2件とも書き終えた（cursor が2件目の先へ進み、書いていない分が無い）ことを、溜まりが0になることで見る
+      await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
       expect(outbox.pending).toBe(0);
 
       // 2本目: 0 から読み返し、2件目の書き込みが締め切りを超えて畳まれる。
@@ -161,7 +162,8 @@ describe('runner の /events: 控えから読み返した分を、書き切れ�
       const reader1 = await openReader(app, bearer());
       await readUntil(reader1, JSON.stringify(second), 1000);
       await reader1.cancel();
-      await expect.poll(() => outbox.sentSince(0).length, { timeout: 1000 }).toBe(2);
+      // 2件とも書き終えた（cursor が2件目の先へ進み、書いていない分が無い）ことを、溜まりが0になることで見る
+      await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
       // 2本目: 読み返しの2件目で固まる（締め切りは長いので畳まれない）。
       control.hangId = String(secondSeq);
