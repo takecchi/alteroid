@@ -7,7 +7,7 @@ import { makeTempDir } from '../../../../vitest.tmpdir.js';
 
 import { AttachmentMissingError } from '../attachments.js';
 import { NotDeliveredError, type ConversationMessage } from './api.js';
-import { ChatController, EDIT_EMPTY_MESSAGE } from './chat-controller.js';
+import { ChatController } from './chat-controller.js';
 import { resolveCommand } from './commands.js';
 import { fakeApi, gate } from './fake-api.js';
 
@@ -205,7 +205,10 @@ describe('TUI /edit: 確定', () => {
     controller.detach('all');
     expect(await controller.send('')).toBe(true);
     expect(api.chatCalls).toEqual([]);
-    expect(texts('system').at(-1)).toBe(EDIT_EMPTY_MESSAGE);
+    // chat（端末）と同じ文・同じ丁寧さで言う（#5856）
+    expect(texts('system').at(-1)).toBe(
+      '本文も添付も無いので送っていません（本文を打つか、/attach で添付を足してください。やめるなら /edit-cancel）',
+    );
     expect(controller.isEditing()).toBe(true);
   });
 
