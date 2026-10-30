@@ -26,6 +26,7 @@ import {
 } from '~/lib/leave-guard';
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { GoneAfterReadNote } from '~/components/gone-after-read-note';
+import { isNotFound } from '~/lib/is-not-found';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/memory-detail';
@@ -70,7 +71,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const dirty = draft !== undefined && draft !== loaded;
   const latestDraft = useLatest(draft);
 
-  const notFound = error !== undefined && (error as { status?: number }).status === 404;
+  const notFound = isNotFound(error);
   const missing = notFound && data === undefined;
   const goneAfterRead = notFound && data !== undefined;
 

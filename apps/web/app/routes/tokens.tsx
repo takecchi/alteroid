@@ -1,5 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { formatEpochMs, formatEpochMsRelative } from '~/lib/format-epoch-ms';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useEffect, useRef, useState } from 'react';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
@@ -34,7 +35,7 @@ import {
   TokenNotFoundError,
   TokenPoolChangedError,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, TOKEN_ID_PARAM } from '@alteroid/logic';
+import { formatDateTime, TOKEN_ID_PARAM } from '@alteroid/logic';
 import type {
   AgentTokenView,
   TokenAvailability,
@@ -311,14 +312,6 @@ function describeRecovery(recovery: TokenRecovery): string {
       // 投げない: 送られてくる値で、サーバのほうが新しい窓を先に持つため
       return describeUnknown(recovery, '回復の見込み');
   }
-}
-
-function formatEpochMs(ms: number): string {
-  return formatDateTime(new Date(ms).toISOString());
-}
-
-function formatEpochMsRelative(ms: number): string {
-  return formatRelative(new Date(ms).toISOString());
 }
 
 function PoolCard({

@@ -1107,6 +1107,43 @@ describe('利用者に内部表現を見せない・入力欄に名前が在る�
     expect(document.body.textContent).not.toContain(CONV_ID);
   });
 
+  describe('会話の名前にした書き出しの秘密は、会話一覧・CLI と同じく伏せて出す', () => {
+    const SECRET = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+
+    it('直近の一覧から名前を取るとき', async () => {
+      stubConversations({
+        recent: [{ conversationId: CONV_ID, preview: `鍵 ${SECRET}` }],
+        detail: () => json({ error: 'not found' }, 404),
+      });
+      renderPageWithRouter();
+
+      const link = await screen.findByRole('link', { name: /会話「鍵 / });
+      expect(link.textContent).not.toContain('sk-ant-api03');
+    });
+
+    it('1件引いた会話の本文から名前を取るとき', async () => {
+      stubConversations({
+        recent: [],
+        detail: (id) =>
+          json({
+            conversationId: id,
+            messages: [
+              { id: 'm1', at: '2026-01-01T00:00:00.000Z', role: 'outbound', text: `鍵 ${SECRET}` },
+            ],
+            readThrough: null,
+            unreadCount: 0,
+            scanned: 1,
+            reachedStart: true,
+            supersededCount: 0,
+          }),
+      });
+      renderPageWithRouter();
+
+      const link = await screen.findByRole('link', { name: /会話「鍵 / });
+      expect(link.textContent).not.toContain('sk-ant-api03');
+    });
+  });
+
   function stubConversations(opts: {
     recent: { conversationId: string; preview: string }[];
     detail: (id: string) => Response;

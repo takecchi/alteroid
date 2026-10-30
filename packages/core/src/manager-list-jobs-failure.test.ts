@@ -126,6 +126,7 @@ function fakeRunner(runnerId: string): {
   };
   const hold = (managerId: string) =>
     sessions.set(managerId, {
+      liveBackgroundTasks: 0,
       managerId,
       status: 'running',
       cwd: '/work/project',

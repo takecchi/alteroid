@@ -1501,8 +1501,8 @@ export const credentialsUpdateRequestSchema = z.object({
 
 export const credentialsUpdateResponseSchema = z.object({
   credentials: z.array(credentialFingerprintWithMetaSchema),
-  // 今回の変更でクローン側（scope が app / all。外した・runner へ狭めたときを含む）に関わった名前のうち、デーモンの再起動まで効かないもの。無ければ空。古いデーモンの応答には無い欄: 受け手は任意として読む（#4830）
-  restartRequired: z.array(z.string()).optional(),
+  // 今回の変更でクローン側（scope が app / all。外した・runner へ狭めたときを含む）に関わった名前のうち、デーモンの再起動まで効かないもの。無ければ空（#4830）
+  restartRequired: z.array(z.string()),
   // 台ごとに返す: 畳んで1つの成否にしない。
   runners: z.array(
     z.object({

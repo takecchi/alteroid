@@ -110,6 +110,7 @@ async function runningSetup(managerId: string, instanceId: string, now: () => nu
 
   const fake = manualRunner(instanceId);
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

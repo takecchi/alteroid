@@ -53,6 +53,7 @@ function fakeRunner() {
       resumes.push(command);
       if (control.failResume) throw new Error('この検証が仕込んだ resume の失敗');
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

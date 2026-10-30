@@ -25,7 +25,6 @@ import {
   useSendManagerMessage,
   useManager,
   useManagerTranscript,
-  ApiError,
 } from '@alteroid/swr';
 import {
   formatBytes,
@@ -36,6 +35,7 @@ import {
 } from '@alteroid/logic';
 import { RemovedBody } from '~/components/load-error';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
+import { isNotFound } from '~/lib/is-not-found';
 import { LeaveGuardScope, useIsMounted, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
 
@@ -123,7 +123,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
     );
   }
   // 「見つからない」は 404 のときだけ言う: 500・409（壊れているだけ）で言うと、読めていないのに委譲が存在しないように読める。
-  const notFound = data === undefined && error instanceof ApiError && error.status === 404;
+  const notFound = data === undefined && isNotFound(error);
   const detailUnavailable = data === undefined && error !== undefined && !notFound;
 
   return (
@@ -1238,7 +1238,7 @@ function Transcript({ id }: { id: string }) {
   // 取れなかったのを空と描かない: 「(空)」を出すと、セッションログが空だったように読める。
   const transcriptUnavailable = data === undefined && error !== undefined;
   // 404 は下で日本語で言う: 応答の素の文（英語の `not found`）を赤い帯に出さないため（アーカイブの本文と同じ）
-  const noTranscript = transcriptUnavailable && error instanceof ApiError && error.status === 404;
+  const noTranscript = transcriptUnavailable && isNotFound(error);
   // 伏せ字は全体に一度だけ掛け、窓で切るのはその後にする: 切れ目をまたぐ秘密を取りこぼさない。数 MB になりうるので `data` が変わったときだけ計算する。
   const redacted = useMemo(() => {
     if (data?.kind !== 'body' || data.body === '') return undefined;

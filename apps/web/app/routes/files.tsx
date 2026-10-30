@@ -2,11 +2,12 @@ import { File as FileIcon, Search } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 
 import { LoadError } from '~/components/load-error';
+import { describeAttachmentFailure } from '~/lib/error-text';
+import { isNotFound } from '~/lib/is-not-found';
 import { saveBlob } from '~/lib/save-blob';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import {
-  ApiError,
   AttachmentGoneError,
   fetchAttachment,
   useApi,
@@ -28,7 +29,6 @@ import {
   formatDateTime,
   isAttachmentFrom,
   isPreviewableImage,
-  redactError,
 } from '@alteroid/logic';
 import type { AttachmentFrom, AttachmentItem } from '@alteroid/logic';
 import {
@@ -54,16 +54,8 @@ const FROM_PARAM = 'from';
 const SEARCH_PARAM = 'q';
 const CONVERSATION_PARAM = 'conversation';
 
-function describeFailure(error: unknown): string {
-  return error instanceof AttachmentGoneError
-    ? '取り出せない（期限切れの可能性）'
-    : redactError(error instanceof Error ? error.message : String(error));
-}
-
 function isGone(error: unknown): boolean {
-  return (
-    error instanceof AttachmentGoneError || (error instanceof ApiError && error.status === 404)
-  );
+  return error instanceof AttachmentGoneError || isNotFound(error);
 }
 
 export default function Files() {
@@ -330,7 +322,7 @@ function UploadCard() {
           await upload(file, attachmentMediaType(file));
           done += 1;
         } catch (caught) {
-          problems.push(`${file.name}: ${describeFailure(caught)}`);
+          problems.push(`${file.name}: ${describeAttachmentFailure(caught)}`);
         }
       }
     } finally {

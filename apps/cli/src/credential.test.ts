@@ -190,6 +190,7 @@ describe('alteroid credential set', () => {
           { runnerId: 'runner-1', ok: true },
           { runnerId: 'runner-2', ok: false, error: 'つながらない' },
         ],
+        restartRequired: [],
       },
     });
     const read = captureStdout();
@@ -215,6 +216,7 @@ describe('alteroid credential set', () => {
       body: {
         credentials: [{ name: 'NPM_TOKEN', sha256: 'cccccccccccc', updatedAt: 'now' }],
         runners: [{ runnerId: 'runner-1', ok: true }],
+        restartRequired: [],
       },
     });
     const read = captureStdout();
@@ -277,10 +279,6 @@ describe('alteroid credential set', () => {
     const readQuiet = captureStderr();
     await credentialRemoveCommand('TZ', { yes: true });
     expect(readQuiet()).toBe('');
-
-    setReply('PUT', '/credentials', { status: 200, body: { credentials: [], runners: [] } });
-    await credentialRemoveCommand('TZ', { yes: true });
-    expect(readQuiet()).toBe('');
   });
 
   it('名前の形が誤りなら、値（空の標準入力でも）より先に、名前の誤りを言う', async () => {
@@ -307,7 +305,7 @@ describe('alteroid credential set', () => {
     await writeFile(path, 'a b  c\n', 'utf8');
     setReply('PUT', '/credentials', {
       status: 200,
-      body: { credentials: [], runners: [] },
+      body: { credentials: [], runners: [], restartRequired: [] },
     });
     captureStdout();
 
@@ -321,7 +319,7 @@ describe('alteroid credential set', () => {
     await writeFile(path, 'Asia/Tokyo', 'utf8');
     setReply('PUT', '/credentials', {
       status: 200,
-      body: { credentials: [], runners: [] },
+      body: { credentials: [], runners: [], restartRequired: [] },
     });
     captureStdout();
 
@@ -337,7 +335,7 @@ describe('alteroid credential set', () => {
     await writeFile(path, DUMMY, 'utf8');
     setReply('PUT', '/credentials', {
       status: 200,
-      body: { credentials: [], runners: [] },
+      body: { credentials: [], runners: [], restartRequired: [] },
     });
     captureStdout();
 
@@ -456,7 +454,7 @@ describe('alteroid credential remove', () => {
     });
     setReply('PUT', '/credentials', {
       status: 200,
-      body: { credentials: [], runners: [{ runnerId: 'runner-1', ok: true }] },
+      body: { credentials: [], runners: [{ runnerId: 'runner-1', ok: true }], restartRequired: [] },
     });
     const read = captureStdout();
 
@@ -476,6 +474,7 @@ describe('alteroid credential remove', () => {
       body: {
         credentials: [],
         runners: [{ runnerId: 'runner-broken', ok: false, error: 'つながらない' }],
+        restartRequired: [],
       },
     });
     const read = captureStdout();
@@ -518,7 +517,7 @@ describe('alteroid credential set の上書き確認（#3201）', () => {
   };
   const putOk = {
     status: 200,
-    body: { credentials: [], runners: [{ runnerId: 'runner-1', ok: true }] },
+    body: { credentials: [], runners: [{ runnerId: 'runner-1', ok: true }], restartRequired: [] },
   };
 
   function fakeIo(over: { isTTY: boolean; answer?: string }) {

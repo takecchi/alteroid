@@ -61,6 +61,7 @@ class Runner implements RunnerClient {
     this.resumes.push(command);
     this.alive = [
       {
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

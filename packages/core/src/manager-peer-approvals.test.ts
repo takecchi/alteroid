@@ -26,6 +26,7 @@ const job: Job = {
 
 function fakeRunner(pending: RunnerManagerState['pendingPeerApprovals']): RunnerClient {
   const state: RunnerManagerState = {
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

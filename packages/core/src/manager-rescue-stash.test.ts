@@ -117,6 +117,7 @@ function fakeRunner(names: boolean): Fake {
     },
   } as unknown as RunnerClient;
   alive.push({
+    liveBackgroundTasks: 0,
     managerId: 'mgr-s',
     status: 'running',
     cwd: '/work/project',

@@ -82,6 +82,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     alive,
     revive(managerId) {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId,
         status: 'running',
         cwd: '/work/project',
@@ -124,6 +125,7 @@ async function runningManualSetup(managerId: string) {
 
   const fake = manualRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

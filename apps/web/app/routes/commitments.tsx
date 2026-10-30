@@ -7,6 +7,7 @@ import { ReopenForm } from '~/components/reopen-form';
 import { EditedBadge } from '~/components/task-parts';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { duplicateParamNotice } from '~/lib/duplicate-param-notice';
+import { isNotFound } from '~/lib/is-not-found';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -395,7 +396,7 @@ function HumanConversationBadge({ label, source }: { label: string; source: stri
     return <UnconfirmedBadge label={label} />;
   }
   if (single.error !== undefined) {
-    if (single.error instanceof ApiError && single.error.status === 404) {
+    if (isNotFound(single.error)) {
       return <Badge tone="accent">{label}</Badge>;
     }
     return <UnconfirmedBadge label={label} />;
@@ -420,7 +421,8 @@ function ConversationLink({
   source: string;
   preview: string;
 }) {
-  const flat = preview.replace(/\s+/g, ' ').trim();
+  // 伏せてから切る: 会話の書き出しは人間の発言で秘密を含みうる（会話一覧の display.body・CLI と同じ redactBody）
+  const flat = redactBody(preview).replace(/\s+/g, ' ').trim();
   const title =
     flat.length > CONVERSATION_TITLE_MAX ? `${flat.slice(0, CONVERSATION_TITLE_MAX)}…` : flat;
   return (

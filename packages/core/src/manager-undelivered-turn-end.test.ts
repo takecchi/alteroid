@@ -103,6 +103,7 @@ async function harness() {
   const runner = new LivingRunner();
   runner.alive = [
     {
+      liveBackgroundTasks: 0,
       managerId: JOB.id,
       status: 'running',
       cwd: '/work/project',

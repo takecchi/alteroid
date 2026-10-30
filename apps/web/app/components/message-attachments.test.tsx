@@ -60,6 +60,34 @@ async function clickDownload() {
   return view;
 }
 
+describe('ダウンロードの失敗の文', () => {
+  async function downloadAndReadAlert() {
+    render(
+      <Providers>
+        <MessageAttachments attachments={[ATTACHMENT]} />
+      </Providers>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'report.pdf をダウンロード' }));
+    return (await screen.findByRole('alert')).textContent;
+  }
+
+  it('404 は接頭辞なしの固定文で出す', async () => {
+    stubFetch(() => new Response('{}', { status: 404 }));
+    expect(await downloadAndReadAlert()).toBe('取り出せない（期限切れの可能性）');
+  });
+
+  it('それ以外の失敗は「取り出せなかった: 」を付けて、サーバの文を出す', async () => {
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ error: 'boom' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    expect(await downloadAndReadAlert()).toBe('取り出せなかった: boom');
+  });
+});
+
 describe('ダウンロードの URL の取り消し', () => {
   it('click の時点では取り消さず、猶予のあとに取り消す', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

@@ -13,6 +13,7 @@ import {
   TaskStatusBadge,
   isTaskClosed,
 } from '~/components/task-parts';
+import { isNotFound } from '~/lib/is-not-found';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
@@ -31,7 +32,7 @@ import {
   SubmitHint,
   Textarea,
 } from '@alteroid/ui';
-import { ApiError, TaskConflictError, useEditTask, useTask, useTasks } from '@alteroid/swr';
+import { TaskConflictError, useEditTask, useTask, useTasks } from '@alteroid/swr';
 import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { Task } from '@alteroid/logic';
 
@@ -64,7 +65,7 @@ function Body({ id }: { id: string }) {
   const { data, error, isLoading, isValidating, mutate } = useTask(id);
   // 並びの位置と、並べ替えの基準に選べる行は一覧から取る: 位置は行の欄ではなく `entries` の順で表すため。
   const list = useTasks(false);
-  const notFound = error instanceof ApiError && error.status === 404;
+  const notFound = isNotFound(error);
 
   if (notFound && data === undefined) return <NotFound />;
   return (

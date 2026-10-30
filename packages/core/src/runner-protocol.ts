@@ -64,10 +64,10 @@ export const runnerManagerStateSchema = z.object({
   waiting: z.array(runnerWaitingSchema),
   sessionId: z.string().optional(),
   /**
-   * `undefined` は「0 本」ではなく「分からない」: 欄を持たない古い runner が居る窓があり、0 と読むと
-   * 背景処理を抱えた古い runner のセッションを黙って畳むため。
+   * 必須にしてある（#5763）: 欄の無い応答（古い runner）は読めない委譲として落ち、`unreadableIds` に載って「runner に居る」側に数えられる。
+   * 0 とは読まない（0 と読むと、背景処理を抱えた古い runner のセッションを黙って畳むため）。
    */
-  liveBackgroundTasks: z.number().int().nonnegative().optional(),
+  liveBackgroundTasks: z.number().int().nonnegative(),
   /**
    * `liveBackgroundTasks` のうち、背景で流れている peer（Codex）のターンの本数（内数）。peer は鍵の回転の畳み（`keepPeers`）で閉じずに預けられ、止まりどころが起こし直した担当へ届く（#4734）ので、
    * 本当に畳まれる背景処理と分けて断り書きに書く（#4881）。`undefined` は「分からない」（古い runner）で、デーモンは 0 本として扱う（今までどおり全部を畳んだと書く）。
@@ -2802,11 +2802,7 @@ class Registry implements RunnerRegistry {
       if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
       entry.sessions = new Set(states.map((state) => state.managerId));
       entry.sessionBackgroundTasks = new Map(
-        states.flatMap((state): [string, number][] =>
-          state.liveBackgroundTasks === undefined
-            ? []
-            : [[state.managerId, state.liveBackgroundTasks]],
-        ),
+        states.map((state): [string, number] => [state.managerId, state.liveBackgroundTasks]),
       );
       // 待っている peer が無い委譲は載せない（欄が無い = 0 本）。一覧が前の観測の本数を残さないよう、毎回作り直す
       entry.sessionPeerApprovals = new Map(

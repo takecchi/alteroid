@@ -856,6 +856,7 @@ describe('古い daemon の schema が、tokenFingerprint 付きの応答を落�
       cwd: '/work/project',
       request: '調べて',
       waiting: [],
+      liveBackgroundTasks: 0,
       tokenFingerprint: 'aaaaaaaaaaaa',
       someFutureField: 'まだ誰も知らない欄',
     };

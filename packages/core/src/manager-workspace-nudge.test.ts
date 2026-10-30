@@ -44,6 +44,7 @@ function swappableRunner(runnerId = 'runner-primary') {
     async resume(command): Promise<{ cwd: string }> {
       state.resumes.push(command);
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -445,6 +446,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
       await stores.jobs.putJob(job);
       const fake = swappableRunner();
       fake.state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: job.id,
         status: 'running',
         cwd: '/work/project',
