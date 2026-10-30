@@ -52,10 +52,6 @@ export interface RunnerAppDeps {
   outbox: Outbox;
   // 鍵そのものではなくハッシュだけ持つ: 素の鍵を環境変数に置くとマネージャーが読めて、自分宛の許可確認に自分で allow を返せるため。
   tokenSha256: string;
-  // 環境変数にしない: テストで短くする以外に差し替える理由が無いため。
-  sseHeartbeatMs?: number;
-  // 書き込みに期限を切る: 読まなくなった接続の `writeSSE` は返らず、1件の詰まりが後続の配送を全部止めるため。
-  sseWriteDeadlineMs?: number;
   // 既定を持たない: 降ろす UID を知らない読み手は観測が動かないため、起動の側（`index.ts`）が組んで渡す。
   taskBreakdownReader: TaskBreakdownReader;
   // hello で名乗るモデル（既定の帯で埋めず、起動の側が env から決めた値を載せる）。
@@ -358,9 +354,10 @@ export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): st
 // createRunnerApp の中で作らない: テストが app を作り直すたびに変わり、器の入れ替わりに見えるため。
 const INSTANCE_ID = randomUUID();
 
+// 書き込みに期限を切る: 読まなくなった接続の `writeSSE` は返らず、1件の詰まりが後続の配送を全部止めるため。
 // デーモンの無音の見張り（`RUNNER_STREAM_SILENCE_TIMEOUT_MS`）と同じ式にする。
-// `deps.sseHeartbeatMs` から導かない: テストで heartbeat を縮めても、書き込みの締め切りまで縮める理由は無いため。
-const DEFAULT_SSE_WRITE_DEADLINE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
+// 環境変数にしない: 差し替える理由が無いため（試験は偽の時計で進める）。
+export const SSE_WRITE_DEADLINE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 
 // デーモンの名乗りの確認の期限（`runner-protocol.ts` の `HEARTBEAT_PROBE_MS` = 5000ms）の写しではない: 期限に届く前の兆しを残したいので、その半分から出す。
 const SLOW_HEALTH_MS = 2_500;
@@ -430,8 +427,6 @@ function validated<Target extends 'json' | 'query', Schema extends z.ZodType>(
 
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
-  const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
-  const sseWriteDeadlineMs = deps.sseWriteDeadlineMs ?? DEFAULT_SSE_WRITE_DEADLINE_MS;
   const revision = resolveBuildRevision();
   const { taskBreakdownReader } = deps;
   const attachmentBodyMax = runnerAttachmentBodyLimit(readAttachmentLimits().limits);
@@ -713,20 +708,20 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   ...helloManagerPeers(host.managerPeers()),
                 }),
               }),
-            sseWriteDeadlineMs,
+            SSE_WRITE_DEADLINE_MS,
           );
           if (subscription.superseded) {
             // 何もしない: 書き終えていない分は列に残っていて、新しい接続が書く。
           } else if (helloResult.outcome === 'deadline-exceeded') {
             writeStderrLine(
-              `alteroid-runner: /events への hello 書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
+              `alteroid-runner: /events への hello 書き込みが ${String(SSE_WRITE_DEADLINE_MS)}ms を超えたため接続を畳みます` +
                 `（この接続が抱えていた ${String(subscription.pending())} 件を箱へ戻します）\n`,
             );
             stream.abort();
             return;
           }
 
-          stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+          stopHeartbeat = startSseHeartbeat(stream, DEFAULT_SSE_HEARTBEAT_MS, () => wake?.());
 
           for (;;) {
             if (closed || stream.aborted || stream.closed || subscription.superseded) break;
@@ -747,7 +742,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   data,
                   id: String(item.seq),
                 }),
-              sseWriteDeadlineMs,
+              SSE_WRITE_DEADLINE_MS,
             );
             if (subscription.superseded) {
               // `result` を読まずに抜ける: 書き終えていない分は新しい接続が書いており、進むと二重に書く。
@@ -757,7 +752,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               // cursor は進めない: 書きかけの1件も後続も列に残り、次の接続が書く。
               // `break` だけで済ませず `stream.abort()` を呼ぶ: pending の書き込みがある間は `close()` が解決せず、応答が終わらないため。
               writeStderrLine(
-                `alteroid-runner: /events への書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
+                `alteroid-runner: /events への書き込みが ${String(SSE_WRITE_DEADLINE_MS)}ms を超えたため接続を畳みます` +
                   `（書きかけの1件を含め ${String(subscription.pending())} 件を箱へ戻します）\n`,
               );
               stream.abort();

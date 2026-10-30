@@ -40,7 +40,6 @@ async function setup() {
     host,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    sseHeartbeatMs: 60_000,
     ...appDefaults(),
   });
   const dir = prepareManagerOutbox({ root: outboxRoot, managerId: MANAGER });

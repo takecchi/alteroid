@@ -54,7 +54,6 @@ describe('Outbox.pending: listener が付いたままでも溜まりが見える
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
 
@@ -84,7 +83,6 @@ describe('Outbox.pending: listener が付いたままでも溜まりが見える
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
 

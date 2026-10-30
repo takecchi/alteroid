@@ -83,7 +83,6 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
 
@@ -147,7 +146,6 @@ describe('runner の /events: 無音切断（writeSSE が投げずに戻る）�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
 
@@ -205,7 +203,6 @@ describe('runner の入れ替わり後の無音切断（#3036）', () => {
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
       const first = await app.request('/events', { headers: bearer() });
@@ -293,7 +290,6 @@ describe('Outbox の控え（書き終えた分）と Last-Event-ID の繋ぎ直
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
 
@@ -421,7 +417,6 @@ describe('/events へ書いた出来事の控えは、書き出した本文の�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
       const response = await app.request('/events', { headers: bearer() });
