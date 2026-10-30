@@ -10,6 +10,7 @@ import {
   type RunnerRegistry,
 } from './runner-protocol.js';
 import type { PermissionGrant } from './schema.js';
+import { createSerialQueue } from './serial-queue.js';
 import { sessionAllowRuleShapeOf } from './session-allow-rules.js';
 import type { Stores } from './store.js';
 
@@ -142,15 +143,7 @@ export function createDelegatedPermissionRuleService(
   const pushListeners = new Set<(results: readonly PermissionRulesRunnerResult[]) => void>();
 
   // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
-  let tail: Promise<unknown> = Promise.resolve();
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   async function journal(decision: string, grounds: string): Promise<void> {
     try {

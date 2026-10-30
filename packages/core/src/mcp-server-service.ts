@@ -12,6 +12,7 @@ import {
   type RunnerMcpServersFingerprint,
   type RunnerRegistry,
 } from './runner-protocol.js';
+import { createSerialQueue } from './serial-queue.js';
 import type { Stores } from './store.js';
 
 // インスタンスは1つだけ作って全経路へ渡す: 人間の口と runner の降ろし直しを同じ列に入れて直列化するので、
@@ -52,15 +53,7 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
   const pushListeners = new Set<(results: readonly McpServersRunnerResult[]) => void>();
 
   // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
-  let tail: Promise<unknown> = Promise.resolve();
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   return {
     read: () => stores.mcpServers.read(),
