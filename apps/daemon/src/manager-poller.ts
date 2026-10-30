@@ -1,5 +1,7 @@
 import { notePhase, type ManagerPool } from '@alteroid/core';
 
+import { startPeriodicRun } from './periodic-runner.js';
+
 // `Registry#beat()` に相乗りしない: 生ログは最大 1.7MB で読みに行くコストが heartbeat と桁違いに重いため。
 export const MANAGER_POLL_INTERVAL_MS = 60_000;
 
@@ -16,19 +18,6 @@ export interface ManagerPoller {
 
 export function startManagerPolling(options: ManagerPollerOptions): ManagerPoller {
   const interval = options.intervalMs ?? MANAGER_POLL_INTERVAL_MS;
-
-  let inFlight: Promise<void> | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
-
-  const stop = () => {
-    stopped = true;
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  options.signal?.addEventListener('abort', stop, { once: true });
 
   // 段ごとに印を打つ（#4485）: 見回りは印の無いまま 60 秒ごとに5段を回すので、どれかの段の同期の処理がループを止めても、
   // 止まった窓の「直前の印」が直前に通った別の出来事（runner の tool_use など）に見えていたため
@@ -47,36 +36,23 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
   };
 
   const probe = (): Promise<void> => {
-    if (inFlight !== null) return inFlight;
     // `sweepRescueRefs()` は連鎖に繋がない: 削除は runner へ1本ずつ待つ（最大約1分）ので、繋ぐと他の関心事の次の周期が止まるため。
     void step('rescue-refs', () => options.managers.sweepRescueRefs?.());
     // `autoFoldUnderPressure()` も連鎖に繋がない: 各 runner へ資源を問い合わせる往復（最大 5 秒 × 台数）で遅れても、他の段の周期を止めないため。30 分の間引きは pool 側。
     void step('auto-fold', () => options.managers.autoFoldUnderPressure?.());
-    inFlight = step('turn-ends', () => options.managers.probeTurnEnds())
-      // `settleStalledUsageWakes()` は `probeTurnEnds()` より後に置く: 読む `record.turnEndedAt` が同じ回に計算し直した値でないと古い助言で判定するため。
-      .then(() => step('withheld-reports', () => options.managers.flushWithheldReports()))
-      .then(() => step('usage-wakes', () => options.managers.settleStalledUsageWakes()))
-      .then(() => step('denials', () => options.managers.renotifyStalledDenials()))
-      .then(() => step('held-messages', () => options.managers.deliverHeldMessages?.()))
-      .finally(() => {
-        notePhase('poller:done');
-        inFlight = null;
-      });
-    return inFlight;
+    return (
+      step('turn-ends', () => options.managers.probeTurnEnds())
+        // `settleStalledUsageWakes()` は `probeTurnEnds()` より後に置く: 読む `record.turnEndedAt` が同じ回に計算し直した値でないと古い助言で判定するため。
+        .then(() => step('withheld-reports', () => options.managers.flushWithheldReports()))
+        .then(() => step('usage-wakes', () => options.managers.settleStalledUsageWakes()))
+        .then(() => step('denials', () => options.managers.renotifyStalledDenials()))
+        .then(() => step('held-messages', () => options.managers.deliverHeldMessages?.()))
+        .finally(() => {
+          notePhase('poller:done');
+        })
+    );
   };
 
-  const schedule = (delay: number) => {
-    if (stopped) return;
-    timer = setTimeout(() => {
-      void probe().then(() => schedule(interval));
-    }, delay);
-    timer.unref?.();
-  };
-
-  void probe().then(() => schedule(interval));
-
-  return {
-    refresh: probe,
-    stop,
-  };
+  // 重ねない・止める・次の予約は `startPeriodicRun` が持つ: 走っている間の `refresh` は同じ回を返す
+  return startPeriodicRun({ intervalMs: interval, signal: options.signal, run: probe });
 }

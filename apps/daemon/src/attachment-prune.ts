@@ -1,6 +1,7 @@
 import { pruneAttachmentCopies, reasonOf, writeStderrLine, type Stores } from '@alteroid/core';
 
 import { readEveryMinutes, type EveryMinutesConfig } from './env-every-minutes.js';
+import { startPeriodicRun } from './periodic-runner.js';
 
 export const ATTACHMENT_PRUNE_EVERY_ENV = 'ALTEROID_ATTACHMENT_PRUNE_EVERY';
 
@@ -59,19 +60,6 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     MAX_ATTACHMENT_PRUNE_INTERVAL_MS,
   );
 
-  let inFlight: Promise<number | null> | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
-
-  const stop = () => {
-    stopped = true;
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  options.signal?.addEventListener('abort', stop, { once: true });
-
   const pruneCopies = async (): Promise<void> => {
     if (options.copiesDir === undefined) return;
     try {
@@ -121,36 +109,21 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     }
   };
 
-  const runOnce = (): Promise<number | null> => {
-    if (inFlight !== null) return inFlight;
-    // 本体の prune の成否にかかわらず写しの掃除も走らせる: 本体が落ちている間も写しを溜めないため。
-    // 中身（blob）の掃除も同じ作法: 行の掃除が落ちていても、控えの無い blob は別の話のため。
-    inFlight = (async (): Promise<number | null> => {
-      let pruned: number | null = null;
-      try {
-        pruned = await options.stores.attachments.prune(options.now?.() ?? new Date());
-      } catch (error: unknown) {
-        writeStderrLine(`alteroidd: 添付ファイルの掃除に失敗しました: ${reasonOf(error)}\n`);
-      }
-      await pruneCopies();
-      await sweepOrphanBlobs();
-      if (pruned !== null) options.onResult?.(pruned);
-      return pruned;
-    })().finally(() => {
-      inFlight = null;
-    });
-    return inFlight;
+  // 本体の prune の成否にかかわらず写しの掃除も走らせる: 本体が落ちている間も写しを溜めないため。
+  // 中身（blob）の掃除も同じ作法: 行の掃除が落ちていても、控えの無い blob は別の話のため。
+  const pruneOnce = async (): Promise<number | null> => {
+    let pruned: number | null = null;
+    try {
+      pruned = await options.stores.attachments.prune(options.now?.() ?? new Date());
+    } catch (error: unknown) {
+      writeStderrLine(`alteroidd: 添付ファイルの掃除に失敗しました: ${reasonOf(error)}\n`);
+    }
+    await pruneCopies();
+    await sweepOrphanBlobs();
+    if (pruned !== null) options.onResult?.(pruned);
+    return pruned;
   };
 
-  const schedule = (delay: number) => {
-    if (stopped) return;
-    timer = setTimeout(() => {
-      void runOnce().then(() => schedule(interval));
-    }, delay);
-    timer.unref?.();
-  };
-
-  void runOnce().then(() => schedule(interval));
-
-  return { refresh: runOnce, stop };
+  // 重ねない・止める・次の予約は `startPeriodicRun` が持つ
+  return startPeriodicRun({ intervalMs: interval, signal: options.signal, run: pruneOnce });
 }
