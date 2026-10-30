@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { fingerprintOf } from './credentials.js';
 import { nonBlankString } from './non-blank-string.js';
+import { tokenCooldownMsSchema } from './token-cooldown-ms.js';
 import { limitRecoveryOf, limitRecoverySchema, type LimitRecovery } from './usage-limits.js';
 
 // 失効（invalidatedAt）を回す契機に含めない（人間の決定）: 現役が失効しても全層が止まったままになり、人間が手で外すまで復旧しない。「未実装」ではなくそう決めたもの
@@ -17,7 +18,7 @@ export const DEFAULT_TOKEN_COOLDOWN_MS = 5 * 60 * 60 * 1000;
 
 export const tokenRotationSettingsSchema = z.object({
   rotateOn: tokenRotationPolicySchema,
-  cooldownMs: z.number().int().positive(),
+  cooldownMs: tokenCooldownMsSchema,
   updatedAt: z.string().optional(),
 });
 export type TokenRotationSettings = z.infer<typeof tokenRotationSettingsSchema>;
