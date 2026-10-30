@@ -5,6 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -50,7 +51,12 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     host.resume = async () => {
       throw new Error(secretish);
     };
-    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
 
     let res!: Response;
     const lines = await captureStderr(async () => {
@@ -76,7 +82,12 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     host.resume = async () => {
       throw new HTTPException(418, { message: 'teapot' });
     };
-    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
 
     let res!: Response;
     const lines = await captureStderr(async () => {
@@ -93,7 +104,12 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     host.resume = async () => {
       throw new RunnerFenceError({ managerId: 'mgr-1', expected: 2, given: 1 });
     };
-    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
 
     let res!: Response;
     const lines = await captureStderr(async () => {

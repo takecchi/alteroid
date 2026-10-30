@@ -194,7 +194,7 @@ function RunnerResults({ runners, appliesFrom }: { runners: Runners; appliesFrom
             {/* 伏せる: runner の失敗文は自由文で、CLI の plugin も redactError を通して出すため */}
             {runner.ok
               ? `${runner.runnerId}: 届いた`
-              : `${runner.runnerId}: ${runner.unsupported === true ? '受け取る機能が無い（古い実行環境）' : '届かなかった'} — ${redactError(runner.error ?? '理由不明')}`}
+              : `${runner.runnerId}: 届かなかった — ${redactError(runner.error ?? '理由不明')}`}
           </li>
         ))}
       </ul>

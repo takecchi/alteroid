@@ -4,6 +4,7 @@ import { createRunnerHost, type RunnerHost } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 // 退避の本文を SSE の1行で運ばず、デーモンが取りに来る口（#4485）。
 const TOKEN = 'daemon-only-token';
@@ -30,6 +31,7 @@ function setup() {
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
+    ...appDefaults(),
   });
   const call = (method: string, path: string, headers: Record<string, string> = {}) =>
     app.request(path, { method, headers: { authorization: `Bearer ${TOKEN}`, ...headers } });

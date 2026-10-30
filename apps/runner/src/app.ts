@@ -2,13 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
-import type {
-  AttachmentLimits,
-  BuildRevision,
-  RunnerEvent,
-  RunnerHost,
-  RunnerManagerPeersAnnouncement,
-} from '@alteroid/core';
+import type { RunnerEvent, RunnerHost, RunnerManagerPeersAnnouncement } from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   isArchiveRefId,
@@ -50,7 +44,7 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 
-import { TaskBreakdownReader } from './tasks.js';
+import type { TaskBreakdownReader } from './tasks.js';
 
 // 逆向きのコールバックを足さない: runner の中の子プロセス（マネージャー）がその経路で記憶へ届くようになるため。
 export interface RunnerAppDeps {
@@ -58,16 +52,15 @@ export interface RunnerAppDeps {
   outbox: Outbox;
   // 鍵そのものではなくハッシュだけ持つ: 素の鍵を環境変数に置くとマネージャーが読めて、自分宛の許可確認に自分で allow を返せるため。
   tokenSha256: string;
-  revision?: BuildRevision;
   // 環境変数にしない: テストで短くする以外に差し替える理由が無いため。
   sseHeartbeatMs?: number;
   // 書き込みに期限を切る: 読まなくなった接続の `writeSSE` は返らず、1件の詰まりが後続の配送を全部止めるため。
   sseWriteDeadlineMs?: number;
-  taskBreakdownReader?: TaskBreakdownReader;
-  attachmentLimits?: AttachmentLimits;
-  // hello で名乗るモデル。渡さなければ欄ごと載せない（既定の帯で埋めない）。
-  managerModel?: string;
-  workerModel?: string;
+  // 既定を持たない: 降ろす UID を知らない読み手は観測が動かないため、起動の側（`index.ts`）が組んで渡す。
+  taskBreakdownReader: TaskBreakdownReader;
+  // hello で名乗るモデル（既定の帯で埋めず、起動の側が env から決めた値を載せる）。
+  managerModel: string;
+  workerModel: string;
 }
 
 const TRANSCRIPT_TAIL_MAX_CHARS = 2_000_000;
@@ -444,11 +437,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
   const sseWriteDeadlineMs = deps.sseWriteDeadlineMs ?? DEFAULT_SSE_WRITE_DEADLINE_MS;
-  const revision = deps.revision ?? resolveBuildRevision();
-  const taskBreakdownReader = deps.taskBreakdownReader ?? new TaskBreakdownReader();
-  const attachmentBodyMax = runnerAttachmentBodyLimit(
-    deps.attachmentLimits ?? readAttachmentLimits().limits,
-  );
+  const revision = resolveBuildRevision();
+  const { taskBreakdownReader } = deps;
+  const attachmentBodyMax = runnerAttachmentBodyLimit(readAttachmentLimits().limits);
   const tooLarge = (c: Context) =>
     c.json(
       { ok: false, error: `本文が大きすぎる（${attachmentBodyMax} バイトまで。置いていない）` },
@@ -717,8 +708,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   capabilities: RUNNER_CAPABILITIES,
                   // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
                   // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
-                  ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
-                  ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
+                  managerModel: deps.managerModel,
+                  workerModel: deps.workerModel,
                   attachmentBodyLimit: attachmentBodyMax,
                   attachmentStageLimit: host.attachmentStageLimit,
                   // 接続のたびにいまの実効の env から読む: 鍵・プロファイルが降りるたびに変わるため（その後の変化は `anthropic_route`）

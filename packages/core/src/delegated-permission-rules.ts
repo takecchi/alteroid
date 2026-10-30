@@ -5,7 +5,6 @@ import {
 import { noteDroppedRecord, reasonOf } from './dropped-record.js';
 import { parsePermissionRule } from './permission-rule.js';
 import {
-  RunnerPermissionRulesUnsupportedError,
   type RunnerClient,
   type RunnerPermissionRulesResult,
   type RunnerRegistry,
@@ -112,8 +111,6 @@ export interface PermissionRulesRunnerResult {
   ok: boolean;
   count?: number;
   changed?: boolean;
-  /** 一時障害と混ぜない: 疑う先が「待てば直る」ではなく「runner の版」だから。 */
-  unsupported?: true;
   error?: string;
 }
 
@@ -241,9 +238,6 @@ export function createDelegatedPermissionRuleService(
                 return {
                   runnerId: runner.runnerId,
                   ok: false,
-                  ...(error instanceof RunnerPermissionRulesUnsupportedError
-                    ? { unsupported: true as const }
-                    : {}),
                   error: reasonOf(error),
                 };
               }

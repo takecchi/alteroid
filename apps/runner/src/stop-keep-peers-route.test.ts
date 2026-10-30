@@ -4,6 +4,7 @@ import type { RunnerHost } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token-keep-peers';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -17,7 +18,12 @@ describe('DELETE /managers/:id の keepPeers（#4734）', () => {
         calls.push({ managerId, options });
       },
     } as unknown as RunnerHost;
-    return createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    return createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
   }
   const del = (app: ReturnType<typeof appWith>, path: string) =>
     app.request(path, { method: 'DELETE', headers: { authorization: `Bearer ${TOKEN}` } });

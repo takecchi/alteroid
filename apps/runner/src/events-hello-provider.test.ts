@@ -13,6 +13,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
+import { appDefaults } from './app-defaults.test-support.js';
 import { createRunnerApp, Outbox } from './app.js';
 
 const TOKEN = 'daemon-only-token';
@@ -37,6 +38,7 @@ async function helloFrame(
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
+    ...appDefaults(),
     ...models,
   });
   const response = await app.request('/events', {
@@ -93,19 +95,10 @@ describe('runner の hello', () => {
     expect(hello).not.toHaveProperty('managerProviders');
   });
 
-  it('モデルを渡せば managerModel / workerModel で名乗り、渡さなければ欄を載せない（旧い runner と同じ形。#3921）', async () => {
-    const named = await helloFrame({ managerModel: 'opus', workerModel: 'sonnet' });
-    expect(named).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
-    const none = await helloFrame();
-    expect(none).not.toHaveProperty('managerModel');
-    expect(none).not.toHaveProperty('workerModel');
-    expect(none).not.toHaveProperty('models');
-  });
-
-  it('片方だけ渡されたら、渡された側だけ名乗る（もう一方を既定で埋めない）', async () => {
-    const hello = await helloFrame({ workerModel: 'sonnet' });
-    expect(hello).toMatchObject({ workerModel: 'sonnet' });
-    expect(hello).not.toHaveProperty('managerModel');
+  it('渡されたモデルを managerModel / workerModel で名乗る（#3921）', async () => {
+    const named = await helloFrame({ managerModel: 'haiku', workerModel: 'fable' });
+    expect(named).toMatchObject({ managerModel: 'haiku', workerModel: 'fable' });
+    expect(named).not.toHaveProperty('models');
   });
 
   it('添付を運ぶ口の本文の上限を attachmentBodyLimit で名乗る（#3111 段3。デーモンが送る前に検める）', async () => {
