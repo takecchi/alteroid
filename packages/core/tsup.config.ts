@@ -19,6 +19,7 @@ export default defineConfig({
     'src/attachment-wording.ts',
     'src/attachment-usage-keys.ts',
     'src/redact.ts',
+    'src/plugin-source-input.ts',
     'src/manager-activity.ts',
     'src/cgroup-events-format.ts',
     'src/system-error-format.ts',

@@ -48,6 +48,10 @@
       "types": "./dist/redact.d.ts",
       "import": "./dist/redact.js"
     },
+    "./plugin-source-input": {
+      "types": "./dist/plugin-source-input.d.ts",
+      "import": "./dist/plugin-source-input.js"
+    },
     "./attachment-wording": {
       "types": "./dist/attachment-wording.d.ts",
       "import": "./dist/attachment-wording.js"
