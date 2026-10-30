@@ -71,8 +71,9 @@ import {
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import { errorText } from '~/lib/error-text';
-import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import { LeaveGuardScope, useIsMounted, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { useFollowScroll } from '~/lib/use-follow-scroll';
+import { useLatest } from '~/lib/use-latest';
 import { useApprovalDraftState, usePersistApprovalDrafts } from '~/lib/use-approval-draft-state';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -266,7 +267,6 @@ export function ChatPane({
   const [startedHere, setStartedHere] = useState<ReadonlySet<string>>(() => new Set());
   const [lines, setLines] = useState<Line[]>([]);
   const [failedTurns, setFailedTurns] = useState<ReadonlyMap<string, FailedTurn>>(new Map());
-  const historyLinesRef = useRef<Line[]>([]);
   const [draft, setDraft] = useState(() => loadChatDraft(routeId));
   // 会話ごとの Map にする: 持たないと、切り替えるたびに他の会話の下書きへ触れずに済ませられない。
   // 送信で空にするのは draft だけでよい。新しい会話で送ると離れるときの鍵は undefined ではなく確定した id に替わるので、入ってくる会話の鍵は読み出した時点で消す（鍵 undefined に送る前の値が残るため）
@@ -509,6 +509,8 @@ export function ChatPane({
       conversationId,
       historyLinesRef.current.filter((line) => line.role === 'clone').length,
     );
+    // historyLinesRef を依存に入れない: useLatest は historyLines を算出した後（下）で呼ぶ必要があり、ここで依存配列に書くと宣言前の参照になる。ref の同一性は変わらない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // 受信の途中からも読める: 後片付けの判断は非同期の奥で、閉じ込めた shownId は古くなっている
   const shownIdRef = useRef(shownId);
@@ -624,13 +626,7 @@ export function ChatPane({
   );
   const discardLeftover = approvalDraftState.discard;
   const refetchApprovalsRef = useRef<() => void>(() => {});
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const mountedRef = useIsMounted();
   refetchApprovalsRef.current = () => {
     if (!mountedRef.current) return;
     try {
@@ -756,9 +752,7 @@ export function ChatPane({
     });
   }
 
-  useEffect(() => {
-    historyLinesRef.current = historyLines;
-  }, [historyLines]);
+  const historyLinesRef = useLatest(historyLines);
   // 新しい受信が走っているあいだは何もしない: その受信の行を捨てないため
   useEffect(() => {
     if (shownId === undefined) return;
@@ -791,10 +785,7 @@ export function ChatPane({
     ];
   }, [historyLines, lines, shownId, failedTurns, foldedLines]);
 
-  const allRef = useRef<Line[]>([]);
-  useEffect(() => {
-    allRef.current = all;
-  }, [all]);
+  const allRef = useLatest(all);
   // 鉛筆を押した時点の元の発言を持つ: いま画面に無い会話の発言でも、元のままかを見分けるため。
   const editOriginals = useRef(new Map<string, Line>());
   const pendingEditSave = useRef<{ drafts: ReadonlyMap<string, EditDraft>; epoch: number } | null>(
@@ -821,7 +812,7 @@ export function ChatPane({
             },
       );
     }
-  }, []);
+  }, [allRef]);
   useEffect(() => {
     pendingEditSave.current = { drafts: editDrafts, epoch: chatDraftEpoch() };
     const timer = setTimeout(flushEditSave, DRAFT_SAVE_DELAY_MS);
@@ -1308,6 +1299,8 @@ export function ChatPane({
       }
     };
     return { setTransient, apply };
+    // historyLinesRef を依存に入れない: 入れると useCallback の本体ぜんぶが字下げし直されて差分が読めなくなる。ref の同一性は変わらない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const followUpIdsRef = useRef(new Map<string, Set<string>>());
@@ -2201,7 +2194,7 @@ export function ChatPane({
         setDeletingConversation(undefined);
       }
     },
-    [deleteConversation, navigate, dropEditDraft],
+    [deleteConversation, navigate, dropEditDraft, allRef],
   );
 
   const visibleUploading = (uploading.get(shownId) ?? 0) > 0;
