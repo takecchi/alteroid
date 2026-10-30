@@ -436,8 +436,6 @@ export interface AppDeps {
   shutdown: () => void;
   now?: () => Date;
   attachmentLimits?: AttachmentLimits;
-  /** 連携の鍵の預かりの知らせの閾値（バイト。#4005）。無ければ `ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES`（既定 1 GiB） */
-  integrationAttachmentNoticeBytes?: number;
   /** 要求ごとの時間の受け手（#5089）。無くても `Server-Timing` は付ける */
   httpTiming?: HttpTimingRecorder;
   scheduler?: Scheduler;
@@ -468,24 +466,12 @@ export interface AppDeps {
   pluginFetcher?: PluginFetcher;
   // マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。
   pluginDistribution?: PluginDistributionService;
-  pluginPreviewNow?: () => number;
   // マネージャーのプールと同じインスタンスを渡す（`profile` と同じ理由）。
   codexAuth?: CodexChatgptAuthService;
   // 回さない: ここが生やすのは器の読み書きの口だけで、検知・切替は無い。
   tokens?: TokenPoolService;
-  // 環境変数は増やさない: テストで短くする以外に差し替える理由が無い。
-  sseHeartbeatMs?: number;
-  /** SSE の書き出し1回の期限（既定は心拍の3倍。runner の `/events` と同じ）。試験が短くするための口（#4671）。 */
-  sseWriteDeadlineMs?: number;
-  // 環境変数は増やさない（`sseHeartbeatMs` と同じ）: テストで溢れさせる以外に差し替える理由が無い（#4617）。
-  journalStreamQueueLimits?: { maxEntries?: number; maxChars?: number };
-  /** `/chat` 系の SSE の購読者1本あたりの送り待ちの上限（#4662）。試験が小さくするための口。 */
-  chatStreamQueueLimits?: { maxEvents?: number; maxChars?: number };
   // 無ければ `storage.state` は `unknown`: 確かめる手段が無いことを `ok` に化けさせない。毎リクエストでは叩かない。
   storageProbe?: () => Promise<void>;
-  // 環境変数は増やさない（`sseHeartbeatMs` と同じ）。
-  topologyTickMs?: number;
-  topologyDebounceMs?: number;
   clearSessionLog?: () => Promise<number>;
   // 省略すれば写しは消さない: 写しは本体から取り出し直せる。
   attachmentCopiesDir?: string;
@@ -1769,9 +1755,8 @@ async function probe(
 
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
-  const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
-  // `deps.sseHeartbeatMs` から導かない: 試験で心拍を縮めても、書き出しの期限まで縮める理由は無いため（runner と同じ）
-  const sseWriteDeadlineMs = deps.sseWriteDeadlineMs ?? DEFAULT_SSE_HEARTBEAT_MS * 3;
+  const sseHeartbeatMs = DEFAULT_SSE_HEARTBEAT_MS;
+  const sseWriteDeadlineMs = DEFAULT_SSE_HEARTBEAT_MS * 3;
   // SSE の口はすべてここを通す: 書き出しに期限を掛け、読まない受け手の接続を畳む（#4671）。口ごとに掛けると、足した口だけ守りが漏れるため
   const streamSSE: typeof honoStreamSSE = (c, cb, onError) =>
     honoStreamSSE(
@@ -1788,8 +1773,7 @@ export function createApp(deps: AppDeps) {
       onError,
     );
   const attachmentLimits = deps.attachmentLimits ?? readAttachmentLimits().limits;
-  const integrationAttachmentNoticeBytes =
-    deps.integrationAttachmentNoticeBytes ?? readIntegrationAttachmentNoticeBytes().bytes;
+  const integrationAttachmentNoticeBytes = readIntegrationAttachmentNoticeBytes().bytes;
   const attachmentBodyMax = attachmentBodyMaxBytes(attachmentLimits);
   // `hono/body-limit` を使わない: chunked の本文を上限まで溜めるので 2 GiB の枠では使えない。content-length があって超えるときだけ断り、それ以外は溜めずに流しながら数える（置き場の上限と食い違ってもここの上限は必ず効く）。
   const attachmentUploadSizeGate = createMiddleware(async (c, next) => {
@@ -2105,8 +2089,8 @@ export function createApp(deps: AppDeps) {
     modelsOf: (summary) => managerModelsOf(clone.managers, summary),
     ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
   });
-  const topologyTickMs = deps.topologyTickMs ?? 2000;
-  const topologyDebounceMs = deps.topologyDebounceMs ?? 200;
+  const topologyTickMs = 2000;
+  const topologyDebounceMs = 200;
 
   const authPlan: AuthPlan = deps.auth?.plan ?? {
     enabled: false,
@@ -2169,10 +2153,7 @@ export function createApp(deps: AppDeps) {
   }
   // ループを2本の口で別々に持たない: 資格が尽きたときの閉じ方や心拍の扱いが片方だけ変わる。購読は呼び出し側で済ませてからここへ来る（`try` を購読の直後から始めるため）。
   function chatEventPump() {
-    const queue = new SseSendQueue<ChatStreamEvent>({
-      maxItems: deps.chatStreamQueueLimits?.maxEvents,
-      maxChars: deps.chatStreamQueueLimits?.maxChars,
-    });
+    const queue = new SseSendQueue<ChatStreamEvent>();
     let wake: (() => void) | null = null;
     let finished = false;
     return {
@@ -2236,8 +2217,8 @@ export function createApp(deps: AppDeps) {
                 const summary =
                   `/chat の流れの受け手が読むのに追いつかず、送り待ちが上限を超えた` +
                   `（${String(overflow.items)} 件・${String(overflow.chars)} 字。上限 ` +
-                  `${String(deps.chatStreamQueueLimits?.maxEvents ?? SSE_SEND_QUEUE_MAX_ITEMS)} 件・` +
-                  `${String(deps.chatStreamQueueLimits?.maxChars ?? SSE_SEND_QUEUE_MAX_CHARS)} 字）。` +
+                  `${String(SSE_SEND_QUEUE_MAX_ITEMS)} 件・` +
+                  `${String(SSE_SEND_QUEUE_MAX_CHARS)} 字）。` +
                   '溜めた分を捨ててこの流れを切った。クローンのターンは止めていない（#4662）。';
                 void stores.journal
                   .append({ type: 'external_event', source: 'chat-stream', summary })
@@ -2388,9 +2369,7 @@ export function createApp(deps: AppDeps) {
   });
 
   // 確定は取り直さず預かったものをそのまま保存する: 確認から確定までに取り元が動いても、見せたものと入れるものがずれない。
-  const pluginPreviews = createPluginPreviewStore(
-    deps.pluginPreviewNow === undefined ? {} : { now: deps.pluginPreviewNow },
-  );
+  const pluginPreviews = createPluginPreviewStore();
 
   // 二重の門: `authenticate` が既定で拒否するが、配線のずれ・将来の変更で鍵が管理の口へ入れないよう口の側でも断る（鍵が仲間の鍵を発行・失効できたら配布範囲の境界が崩れる）。
   const humanOnly = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
@@ -3870,10 +3849,7 @@ export function createApp(deps: AppDeps) {
           .filter((value) => value.length > 0);
 
         return streamSSE(c, async (stream) => {
-          const queue = new SseSendQueue<JournalEntry>({
-            maxItems: deps.journalStreamQueueLimits?.maxEntries,
-            maxChars: deps.journalStreamQueueLimits?.maxChars,
-          });
+          const queue = new SseSendQueue<JournalEntry>();
           let wake: (() => void) | null = null;
           let closed = false;
 
@@ -3915,8 +3891,8 @@ export function createApp(deps: AppDeps) {
                   const summary =
                     `日誌の流れ（/journal/stream）の購読者が読むのに追いつかず、待ち行列が上限を超えた` +
                     `（${String(overflow.items)} 件・${String(overflow.chars)} 字。上限 ` +
-                    `${String(deps.journalStreamQueueLimits?.maxEntries ?? SSE_SEND_QUEUE_MAX_ITEMS)} 件・` +
-                    `${String(deps.journalStreamQueueLimits?.maxChars ?? SSE_SEND_QUEUE_MAX_CHARS)} 字）。` +
+                    `${String(SSE_SEND_QUEUE_MAX_ITEMS)} 件・` +
+                    `${String(SSE_SEND_QUEUE_MAX_CHARS)} 字）。` +
                     '溜めた分を捨ててこの購読を切った。受け手は張り直して表示中のデータを取り直す。';
                   await stream.write(`: ${summary}\n\n`).catch(() => undefined);
                   void stores.journal

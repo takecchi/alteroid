@@ -143,13 +143,6 @@ const NEGATIVE_WAIT_EXCEPTIONS: Readonly<Record<string, { count: number; reason:
       '（同じ出来事が2回現れない）」を見るので、早期終了すると「まだ来ていない」と「来ない」が' +
       '区別できず、窓を外すと読み切る条件が無くなる',
   },
-  'apps/daemon/src/auth.test.ts': {
-    count: 1,
-    reason:
-      '`readForWindow`（負の待ち。#2537）。「ログアウトしていない／operator の資格の流れが、' +
-      '心拍が来ても閉じないまま」を 200ms 見る対照2本。窓を外すと閉じない流れを永久に読む。' +
-      '「閉じる」ことを待つ正の待ち（`readUntilEnd` / `readUntilText`）は窓を持たない',
-  },
 };
 
 function walkTestFiles(absoluteDir: string, relativeDir: string): string[] {

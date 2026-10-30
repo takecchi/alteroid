@@ -44,6 +44,7 @@ import {
   createProfileVessel,
   createRunnerRegistry,
   createTokenPoolService,
+  DEFAULT_SSE_HEARTBEAT_MS,
   droppedTraceLedgerSince,
   fingerprintOf,
   JOURNAL_ENTRY_TYPES,
@@ -83,6 +84,7 @@ import {
   progressResponseSchema,
   scheduleStatusSchema,
 } from './openapi.js';
+import { SSE_SEND_QUEUE_MAX_ITEMS } from './sse-send-queue.js';
 import { startUsagePolling } from './usage-poller.js';
 
 function fakeClone() {
@@ -701,22 +703,15 @@ describe('HTTP API', () => {
     });
 
     it('受け手が読むのに追いつかず送り待ちが上限を超えたら、溜めた分を捨て、終端の出来事を送らずにコメント行で理由を残して閉じ、日誌に1行残す（#4662・#4663 の続き）', async () => {
-      const capped = createApp({
-        clone: fake.clone,
-        stores,
-        token: 'test-token',
-        shutdown: () => undefined,
-        scheduler: schedule.scheduler,
-        journalEvents: journalBus,
-        chatStreamQueueLimits: { maxEvents: 2 },
-      });
       fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
-      const response = await capped.request('/chat/conv-a/stream');
+      const response = await app.request('/chat/conv-a/stream');
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       // 購読が始まったことを確かめる。以後は読まない（遅い受け手）
       let seen = await readUntil(reader, 'event: thinking');
 
-      for (let i = 0; i < 6; i += 1)
+      // 本番の既定の上限（件数）を超える件数を積む。上限ちょうどでは溢れず、1件超えた分で溢れる
+      const overflowAt = SSE_SEND_QUEUE_MAX_ITEMS;
+      for (let i = 0; i <= overflowAt + 1; i += 1)
         fake.emit('conv-a', { type: 'text', text: `溜まる${String(i)}` });
       const decoder = new TextDecoder();
       for (;;) {
@@ -730,7 +725,7 @@ describe('HTTP API', () => {
       expect(frames(seen).map((frame) => frame.event)).not.toContain('done');
       expect(seen).toContain(': この接続が読むのに追いつかず、送り待ちの出来事が上限を超えた');
       // 溢れた後に積まれた分（最後の1件）は流さない
-      expect(seen).not.toContain('溜まる5');
+      expect(seen).not.toContain(`溜まる${String(overflowAt + 1)}`);
       // 手放すのは購読だけ
       expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
       await vi.waitFor(async () => {
@@ -743,30 +738,32 @@ describe('HTTP API', () => {
     });
 
     it('⭐ 受け手が読まずに書き出しが返らなければ、期限で流れを畳み、購読を外す（#4671）', async () => {
-      const guarded = createApp({
-        clone: fake.clone,
-        stores,
-        token: 'test-token',
-        shutdown: () => undefined,
-        scheduler: schedule.scheduler,
-        journalEvents: journalBus,
-        sseWriteDeadlineMs: 50,
-      });
-      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
-      const response = await guarded.request('/chat/conv-a/stream');
-      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-      // 購読が始まったことを確かめる。以後は読まない（受け手が止まった）
-      await readUntil(reader, 'event: thinking');
-      expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(1);
+      // 偽の時計で既定の期限（心拍の3倍）を進める。ストリームの読み書きは本物のまま
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+      try {
+        const deadlineMs = DEFAULT_SSE_HEARTBEAT_MS * 3;
+        fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+        const response = await app.request('/chat/conv-a/stream');
+        const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+        // 購読が始まったことを確かめる。以後は読まない（受け手が止まった）
+        await readUntil(reader, 'event: thinking');
+        expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(1);
 
-      // 書き出しが詰まるまで出来事を積む（大きい本文で、読まない受け手の手前の溜めを埋める）
-      for (let i = 0; i < 20; i += 1) {
-        fake.emit('conv-a', { type: 'text', text: `詰まる${String(i)}${'あ'.repeat(200_000)}` });
+        // 書き出しが詰まるまで出来事を積む（大きい本文で、読まない受け手の手前の溜めを埋める）
+        for (let i = 0; i < 20; i += 1) {
+          fake.emit('conv-a', { type: 'text', text: `詰まる${String(i)}${'あ'.repeat(200_000)}` });
+        }
+        const lines = await captureStderr(async () => {
+          await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+          expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(1);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
+        });
+        expect(lines.join('')).toContain(`${String(deadlineMs)}ms`);
+        await reader.cancel().catch(() => undefined);
+      } finally {
+        vi.useRealTimers();
       }
-      await vi.waitFor(() => expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0), {
-        timeout: 5_000,
-      });
-      await reader.cancel().catch(() => undefined);
     });
 
     it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
@@ -822,22 +819,20 @@ describe('HTTP API', () => {
     });
 
     it('クローンが黙っていても heartbeat のコメント行を流す（POST /chat と同じ骨）', async () => {
-      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
-      const beating = createApp({
-        clone: fake.clone,
-        stores,
-        token: 'test-token',
-        shutdown: () => (shutdowns += 1),
-        scheduler: schedule.scheduler,
-        journalEvents: journalBus,
-        sseHeartbeatMs: 5,
-      });
-      const response = await beating.request('/chat/conv-a/stream');
-      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-      const seen = await readUntil(reader, ': hb');
-      expect(seen).toContain('event: open');
-      expect(seen).toContain(': hb');
-      await reader.cancel();
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+      try {
+        fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+        const response = await app.request('/chat/conv-a/stream');
+        const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+        const opened = await readUntil(reader, 'event: thinking');
+        await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
+        const seen = opened + (await readUntil(reader, ': hb'));
+        expect(seen).toContain('event: open');
+        expect(seen).toContain(': hb');
+        await reader.cancel();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('attach を持たない器では 503（黙って空を返さない）', async () => {
@@ -869,73 +864,76 @@ describe('HTTP API', () => {
   });
 
   it('/chat はクローンが黙っていても heartbeat のコメント行を流す', async () => {
-    fake.setReply([{ type: 'text', text: 'やあ' }]);
-    const beating = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => (shutdowns += 1),
-      scheduler: schedule.scheduler,
-      journalEvents: journalBus,
-      sseHeartbeatMs: 5,
-    });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      fake.setReply([{ type: 'text', text: 'やあ' }]);
 
-    const response = await beating.request('/chat', json({ text: 'やあ' }));
-    const body = response.body;
-    if (body === null) throw new Error('SSE の応答に本文が無い');
+      const response = await app.request('/chat', json({ text: 'やあ' }));
+      const body = response.body;
+      if (body === null) throw new Error('SSE の応答に本文が無い');
 
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let seen = '';
-    // `: hb` だけを待たない: hb と text のどちらが先に届くかは混み具合で変わり、hb が先だと text を読む前に抜けて落ちるため
-    while (!(seen.includes(': hb') && seen.includes('event: text'))) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      seen += decoder.decode(value, { stream: true });
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      let seen = '';
+      // 偽のクローンは返事を setTimeout(0) で出す: 偽の時計を 0 進めて出させる
+      await vi.advanceTimersByTimeAsync(0);
+      while (!seen.includes('event: text')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+      await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
+      while (!seen.includes(': hb')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+
+      expect(seen).toContain(': hb');
+      expect(seen).toContain('event: open');
+      expect(seen).toContain('event: text');
+      expect(seen).not.toMatch(/data:[^\n]*: hb/);
+
+      await reader.cancel();
+    } finally {
+      vi.useRealTimers();
     }
-
-    expect(seen).toContain(': hb');
-    expect(seen).toContain('event: open');
-    expect(seen).toContain('event: text');
-    expect(seen).not.toMatch(/data:[^\n]*: hb/);
-
-    await reader.cancel();
   });
 
-  it('間隔より短いあいだは heartbeat は流れない（上の試験が周期を見ている証拠）', async () => {
-    fake.setReply([{ type: 'text', text: 'やあ' }]);
-    const quiet = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => (shutdowns += 1),
-      scheduler: schedule.scheduler,
-      journalEvents: journalBus,
-      sseHeartbeatMs: 60_000,
-    });
+  it('間隔より短いあいだは heartbeat は流れず、間隔ちょうどで流れる（上の試験が周期を見ている証拠）', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      fake.setReply([{ type: 'text', text: 'やあ' }]);
 
-    const response = await quiet.request('/chat', json({ text: 'やあ' }));
-    const body = response.body;
-    if (body === null) throw new Error('SSE の応答に本文が無い');
+      const response = await app.request('/chat', json({ text: 'やあ' }));
+      const body = response.body;
+      if (body === null) throw new Error('SSE の応答に本文が無い');
 
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let seen = '';
-    while (!seen.includes('event: text')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      seen += decoder.decode(value, { stream: true });
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      let seen = '';
+      // 偽のクローンは返事を setTimeout(0) で出す: 偽の時計を 0 進めて出させる
+      await vi.advanceTimersByTimeAsync(0);
+      while (!seen.includes('event: text')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+
+      let next: string | undefined;
+      const pending = reader.read().then(({ value }) => {
+        next = decoder.decode(value);
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS - 1);
+      expect(next).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(next).toContain(': hb');
+
+      await reader.cancel();
+    } finally {
+      vi.useRealTimers();
     }
-
-    const next = await Promise.race([
-      reader.read().then(({ value }) => decoder.decode(value)),
-      new Promise<'まだ何も来ていない'>((resolve) =>
-        setTimeout(() => resolve('まだ何も来ていない'), 100),
-      ),
-    ]);
-    expect(next).toBe('まだ何も来ていない');
-
-    await reader.cancel();
   });
 
   it('会話終了で蒸留が促される', async () => {
@@ -8972,55 +8970,48 @@ describe('会話・出来事・マネージャーへの手出し', () => {
   });
 
   it('日誌が無音でも heartbeat のコメント行が流れる（承認待ちを待つ長時間接続）', async () => {
-    const beating = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => (shutdowns += 1),
-      scheduler: schedule.scheduler,
-      journalEvents: journalBus,
-      sseHeartbeatMs: 5,
-    });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const response = await app.request('/journal/stream');
+      expect(response.status).toBe(200);
 
-    const response = await beating.request('/journal/stream');
-    expect(response.status).toBe(200);
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let seen = '';
+      while (!seen.includes('event: open')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+      await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
+      while (!seen.includes(': hb')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
 
-    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
-    let seen = '';
-    while (!seen.includes(': hb')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      seen += decoder.decode(value, { stream: true });
+      expect(seen).toContain(': hb');
+      // 先に open の存在を確かめる: 無いと indexOf が -1 になり、下の順序の比較が素通りするため。
+      expect(seen).toContain('event: open');
+      expect(seen.indexOf('event: open')).toBeLessThan(seen.indexOf(': hb'));
+
+      await reader.cancel();
+    } finally {
+      vi.useRealTimers();
     }
-
-    expect(seen).toContain(': hb');
-    // 先に open の存在を確かめる: 無いと indexOf が -1 になり、下の順序の比較が素通りするため。
-    expect(seen).toContain('event: open');
-    expect(seen.indexOf('event: open')).toBeLessThan(seen.indexOf(': hb'));
-
-    await reader.cancel();
   });
 
   it('購読者が読むのに追いつかず待ち行列が上限を超えたら、溜めた分を捨て、コメント行で理由を残して閉じ、日誌に1行残す（#4617）', async () => {
-    const capped = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      scheduler: schedule.scheduler,
-      journalEvents: journalBus,
-      journalStreamQueueLimits: { maxEntries: 2 },
-    });
-
-    const response = await capped.request('/journal/stream?type=decision');
+    const response = await app.request('/journal/stream?type=decision');
     expect(response.status).toBe(200);
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     // open を読んで購読が始まったことを確かめる。以後は読まない（遅い受け手）
     expect(decoder.decode((await reader.read()).value)).toContain('event: open');
 
-    for (let i = 0; i < 6; i += 1) {
+    // 本番の既定の上限（件数）を超える件数を積む。読まない受け手でも、書き出しの途中の数件は送り待ちの外に出るので、余裕を見て上限より多く積む。最後の1件は溢れた後に積まれる
+    const last = SSE_SEND_QUEUE_MAX_ITEMS + 20;
+    for (let i = 0; i <= last; i += 1) {
       await stores.journal.append({
         type: 'decision',
         decision: `溜まる判断${String(i)}`,
@@ -9038,7 +9029,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(seen).toContain(': 日誌の流れ（/journal/stream）の購読者が読むのに追いつかず');
     expect(seen).toContain('この購読を切った');
     // 溢れた後に積まれた分（最後の1件）は流さない
-    expect(seen).not.toContain('溜まる判断5');
+    expect(seen).not.toContain(`溜まる判断${String(last)}`);
     await vi.waitFor(async () => {
       const entries = await stores.journal.list({ types: ['external_event'] });
       const cut = entries.find(
