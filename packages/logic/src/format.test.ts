@@ -16,6 +16,9 @@ import {
   describeMemoryDescriptionDrift,
   formatBytes,
   formatDateTime,
+  formatMemoryDescriptionDrift,
+  formatMemoryDescriptionDriftAtLeast,
+  formatMemoryStaleness,
   formatRelative,
 } from './format.js';
 
@@ -88,6 +91,62 @@ describe('formatBytes', () => {
     expect(formatBytes(1048525)).toBe('1.0 MB');
     expect(formatBytes(1048575)).toBe('1.0 MB');
     expect(formatBytes(1048576)).toBe('1.0 MB');
+  });
+});
+
+describe('formatMemoryStaleness', () => {
+  it('秒・分・時間・日の境界で単位を上げる', () => {
+    expect(formatMemoryStaleness(59_999)).toBe('59秒');
+    expect(formatMemoryStaleness(60_000)).toBe('1分');
+    expect(formatMemoryStaleness(3_599_999)).toBe('59分');
+    expect(formatMemoryStaleness(3_600_000)).toBe('1時間');
+    expect(formatMemoryStaleness(86_399_999)).toBe('23時間');
+    expect(formatMemoryStaleness(86_400_000)).toBe('1日');
+  });
+
+  it('負の値は 0 秒に丸める（信頼境界の外の JSON を信じない）', () => {
+    expect(formatMemoryStaleness(-5000)).toBe('0秒');
+  });
+});
+
+describe('formatMemoryDescriptionDrift / AtLeast', () => {
+  it('減ったことは「-」で出し、% を添える', () => {
+    expect(
+      formatMemoryDescriptionDrift({ describedBytes: 1000, currentBytes: 500, deltaBytes: -500 }),
+    ).toBe('本文は-500バイト（-50%）変わった');
+  });
+
+  it('桁区切りを入れる', () => {
+    expect(
+      formatMemoryDescriptionDrift({
+        describedBytes: 1000,
+        currentBytes: 2_001_000,
+        deltaBytes: 2_000_000,
+      }),
+    ).toBe('本文は+2,000,000バイト（+200,000%）変わった');
+  });
+
+  it('describedBytes が 0 のときは % を出さない', () => {
+    expect(
+      formatMemoryDescriptionDrift({ describedBytes: 0, currentBytes: 30, deltaBytes: 30 }),
+    ).toBe('本文は+30バイト変わった');
+  });
+
+  it('AtLeast は符号つきで、% も「本文は」も出さない', () => {
+    expect(
+      formatMemoryDescriptionDriftAtLeast({
+        baselineBytes: 1000,
+        currentBytes: 1200,
+        deltaBytes: 1200,
+      }),
+    ).toBe('+1,200バイト以上変わった');
+    expect(
+      formatMemoryDescriptionDriftAtLeast({
+        baselineBytes: 1000,
+        currentBytes: 700,
+        deltaBytes: -300,
+      }),
+    ).toBe('-300バイト以上変わった');
   });
 });
 
