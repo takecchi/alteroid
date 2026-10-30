@@ -313,8 +313,8 @@ alteroid の開発は、alteroid 自身（クローン・マネージャー・�
 pnpm verify         # 検証一式を正しい順序で通す。通し直しは指紋一致で無料になる
 ```
 
-中身は build → `check:web-bundle-node-traces` → `check:web-bundle-size` →
-`check:web-css-comment-classnames` → `check:web-css-no-inline-fonts` → `apps/daemon/openapi.json` の一致 →
+中身は build → `check:web-build-output` → `check:web-bundle-size` →
+`apps/daemon/openapi.json` の一致 →
 `check:sdk-quotes` → `check:stale-token-restart-advice` → `check:restart-before-check-advice` →
 `typecheck` → `lint` → `format:check` → `test` の順で、**build が先です**。個別に打つこともできます。
 

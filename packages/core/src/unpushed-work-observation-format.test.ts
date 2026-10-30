@@ -4,7 +4,28 @@ import {
   describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
+  formatUnpushedWorkObservationWorktrees,
 } from './unpushed-work-observation-format.js';
+
+// core（manager_list）と CLI が同じ1本を使う（#5679）
+describe('formatUnpushedWorkObservationWorktrees', () => {
+  it('0本なら「見つかった作業ツリー0本」', () => {
+    expect(formatUnpushedWorkObservationWorktrees([])).toBe('見つかった作業ツリー0本');
+  });
+
+  it('あれば「<相対パス>: branch=<枝>」を / でつなぐ（取れない枝・引き継いだ枝もそのまま言う）', () => {
+    expect(
+      formatUnpushedWorkObservationWorktrees([
+        { relativePath: 'a', branch: 'main' },
+        { relativePath: 'b', branch: null },
+        { relativePath: 'c', branch: 'fix/1', branchCarriedFromAt: '2026-10-10T00:05:00.000Z' },
+      ]),
+    ).toBe(
+      'a: branch=main / b: branch=null（取れなかった） / ' +
+        'c: branch=fix/1（この観測では取れず、2026-10-10T00:05:00.000Z 時点の観測から引き継いだ）',
+    );
+  });
+});
 
 describe('describeObservedWorktreeBranch（Issue #1266）', () => {
   it('引き継いだ枝名には、どの時刻の観測から引き継いだかを添える', () => {

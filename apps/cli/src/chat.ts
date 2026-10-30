@@ -15,6 +15,7 @@ import {
   describeSessionMissingKind,
   describeToolUseStall,
   describeTurnEnd,
+  describeWaitingKind,
   describeUnobservedOutcome,
   isFoldedTurnReport,
   JOURNAL_ENTRY_TYPES,
@@ -53,10 +54,10 @@ import {
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
 import {
-  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  formatUnpushedWorkObservationWorktrees,
   isEmptyCompleteUnpushedWorkObservation,
 } from '@alteroid/core/unpushed-work-observation-format';
 import { JOURNAL_MAX_LIMIT, readThroughUnreadable } from '@alteroid/logic';
@@ -3222,21 +3223,6 @@ function resetTimeSkewLine(
   );
 }
 
-// core の `formatUnpushedWorkObservationWorktrees`（`tools.ts`、export されていない）と同じ判断の複製。
-function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly {
-    relativePath: string;
-    branch: string | null;
-    branchCarriedFromAt?: string;
-  }[],
-): string {
-  return worktrees.length === 0
-    ? '見つかった作業ツリー0本'
-    : worktrees
-        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
-        .join(' / ');
-}
-
 function unpushedWorkObservationIncompleteSuffix(
   observation: Extract<ManagerUnpushedWorkObservation, { kind: 'observed' }>,
 ): string {
@@ -3428,13 +3414,6 @@ export function renderManagerList(
 }
 
 type ManagerWaitingItem = ManagerListItem['waiting'][number];
-
-// `kind` は省略されうる（猶予中の旧 runner の応答には乗らない）: 「実行許可」と決めつけると、実際は質問だったときに人間が `/allow` を打ってしまう。
-function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
-  if (kind === 'question') return '質問';
-  if (kind === 'permission') return '実行許可';
-  return '種別不明';
-}
 
 // 絶対値をそのまま出す: 相対表現（「4時間前」）は作らない（AGENTS.md「時刻の扱い」）。無いときは `-` で埋めない: 意味の決まっていない値を作ることになる。
 function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {

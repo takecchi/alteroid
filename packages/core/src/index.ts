@@ -604,6 +604,7 @@ export {
   tailByCodePoints,
 } from './excerpt.js';
 export { denialActorTag, describeDenialFollowUp } from './denial-format.js';
+export { describeWaitingKind } from './waiting-kind-format.js';
 /** 並びを pg の `timestamptz` 順と揃えるため、オフセット付き ISO 時刻は文字列でなく実時刻で比べる。 */
 export { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 export {
@@ -1431,6 +1432,11 @@ export {
 } from './workspace-reset.js';
 
 export { MemoryAttachmentStore } from './attachment-memory.js';
+export {
+  checkAndBindOutboundAttachments,
+  conversationBindingKey,
+  serializeAttachmentBinding,
+} from './outbound-attachments.js';
 export {
   ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
   ATTACHMENT_S3_BUCKET_ENV,

@@ -28,8 +28,20 @@ export interface OutboundAttachmentOptions {
 
 const tails = new Map<string, Promise<unknown>>();
 
-// 宛先ごとに直列化する: 呼び A が新しく結んだ x を A が戻す前に呼び B が「結び済み」として通ると、A の戻しが B の添付を外すため
-async function serialized<T>(key: string, run: () => Promise<T>): Promise<T> {
+/** 会話へ結ぶ呼びの直列化の鍵。人間の発言（daemon）とクローンの発言（core）で同じ形にする: 形が違うと同じ会話でも同じ列に並ばないため（#5676） */
+export function conversationBindingKey(conversationId: string): string {
+  return `conversation:${conversationId}`;
+}
+
+/**
+ * 宛先ごとに直列化する: 呼び A が新しく結んだ x を A が戻す前に呼び B が「結び済み」として通ると、A の戻しが B の添付を外すため。
+ * 列は1プロセスに1つだけ持つ: 人間の発言（daemon の `checkAndBindAttachments`）とクローンの発言（ここ）が別々の列を持つと、
+ * 経路をまたぐ呼びが互いを待たず、上の筋が防げないため（#5676。クローンも daemon のプロセスの中で動く）
+ */
+export async function serializeAttachmentBinding<T>(
+  key: string,
+  run: () => Promise<T>,
+): Promise<T> {
   const previous = tails.get(key) ?? Promise.resolve();
   const result = previous.then(run, run);
   const tail = result.catch(() => undefined);
@@ -61,7 +73,9 @@ export async function checkAndBindOutboundAttachments(
   ids: readonly string[],
   options: OutboundAttachmentOptions,
 ): Promise<OutboundAttachmentResult> {
-  return serialized(options.conversationId, () => checkAndBind(stores, ids, options));
+  return serializeAttachmentBinding(conversationBindingKey(options.conversationId), () =>
+    checkAndBind(stores, ids, options),
+  );
 }
 
 async function checkAndBind(

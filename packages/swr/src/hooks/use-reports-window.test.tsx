@@ -102,4 +102,39 @@ describe('useReportsWindow: 先頭の頁がずれたときの隙間', () => {
     await waitFor(() => expect(ids()).toBe('r-10,r-9,r-8,r-7,r-6,r-5,r-4'));
     expect(win.olderError).toBeUndefined();
   });
+
+  it('隙間が無いまま先頭の頁が取り直されても、余分に読まない', async () => {
+    const store = [9, 8, 7, 6, 5, 4, 3].map(report);
+    const stub = stubFetch(daemon(() => store));
+    render(
+      <Providers>
+        <Probe />
+      </Providers>,
+    );
+    await waitFor(() => expect(ids()).toBe('r-9,r-8,r-7'));
+    act(() => win.loadOlder());
+    await waitFor(() => expect(ids()).toBe('r-9,r-8,r-7,r-6,r-5,r-4'));
+
+    const calls = stub.calls.length;
+    await act(() => win.first.mutate());
+    await waitFor(() => expect(stub.calls.length).toBe(calls + 1));
+    await act(() => Promise.resolve());
+    expect(stub.calls.length).toBe(calls + 1);
+    expect(ids()).toBe('r-9,r-8,r-7,r-6,r-5,r-4');
+  });
+
+  it('読み足した頁が limit に満たなければ、それ以上は無い（hasMore が偽）', async () => {
+    const store = [9, 8, 7, 6, 5].map(report);
+    stubFetch(daemon(() => store));
+    render(
+      <Providers>
+        <Probe />
+      </Providers>,
+    );
+    await waitFor(() => expect(ids()).toBe('r-9,r-8,r-7'));
+    expect(win.hasMore).toBe(true);
+    act(() => win.loadOlder());
+    await waitFor(() => expect(ids()).toBe('r-9,r-8,r-7,r-6,r-5'));
+    expect(win.hasMore).toBe(false);
+  });
 });
