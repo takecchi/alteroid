@@ -140,7 +140,7 @@ const LONG_QUERY_METHODS = {
   plugins: ['get', 'put'],
   commitments: ['list', 'removeForConversation', 'clear'],
   // 件数で締めずに表を走査する（全行を読んで並びを作る）。advisory lock の待ちも含めるので、書く口も延ばす
-  tasks: ['list', 'add', 'move', 'setStatus', 'clear'],
+  tasks: ['list', 'add', 'move', 'setStatus', 'removeForConversation', 'clear'],
   inbox: ['claimPending', 'pending', 'peekPending', 'clear'],
   jobs: ['listJobs', 'clear'],
 } as const;

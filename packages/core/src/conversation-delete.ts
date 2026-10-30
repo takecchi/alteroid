@@ -22,7 +22,7 @@ import type { Stores } from './store.js';
 export interface DeleteConversationDeps {
   stores: Pick<
     Stores,
-    'journal' | 'attachments' | 'commitments' | 'inbox' | 'conversationReads' | 'jobs'
+    'journal' | 'attachments' | 'commitments' | 'tasks' | 'inbox' | 'conversationReads' | 'jobs'
   >;
   /** 受信箱の待ち行列から落とす口（`CloneHost.dropQueuedInboxEvents`）。 */
   dropQueuedInboxEvents: (ids: readonly string[]) => Promise<number>;
@@ -41,6 +41,8 @@ export type DeleteConversationResult =
       hiddenCount: number;
       attachmentsRemoved: number;
       commitmentsRemoved: number;
+      /** その会話を起点とする Task の件数（未了・閉じた行とも消す）。 */
+      tasksRemoved: number;
       /** 受信箱から外した、まだ処理していない人間の発言の件数。 */
       queuedDropped: number;
       /** この会話に結び付いた承認の件数（承認は外さない）。 */
@@ -214,6 +216,13 @@ export async function deleteConversation(
     0,
   );
 
+  // Task の本文には人間の発言の全文が入る（起点の会話から開いた行）。台帳と同じく、会話を消したら読めないように物理的に消す（#5899）
+  const tasksRemoved = await attempt(
+    'Task からこの会話を起点とする行を消す',
+    () => stores.tasks.removeForConversation(conversationId),
+    0,
+  );
+
   // 未読に数え続けないよう、既読の位置を消した時刻まで進める（索引の行は会話 id と時刻だけで、本文は無い）
   await attempt(
     '既読の位置を進める',
@@ -237,6 +246,7 @@ export async function deleteConversation(
     hiddenCount,
     attachmentsRemoved,
     commitmentsRemoved,
+    tasksRemoved,
     queuedDropped,
     approvalsLinked,
     incomplete,

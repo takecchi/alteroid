@@ -1,7 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { UnreadableTaskError, verifyTaskStoreContract } from '@alteroid/core';
+import {
+  UnreadableTaskError,
+  verifyTaskRemoveForConversationContract,
+  verifyTaskStoreContract,
+} from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -21,6 +25,19 @@ describe('TaskStore（fs）', () => {
     const path = join(root, 'jobs', 'tasks.json');
     await verifyTaskStoreContract(stores.tasks, {
       plantUnreadable: (id) => plantBroken(path, id),
+    });
+  });
+
+  it('removeForConversation の契約（#5899。3実装で同じことを測る。読めない行を含む）', async () => {
+    const root = await makeTempDir('alteroid-test-');
+    const stores = createFsStores(root);
+    const path = join(root, 'jobs', 'tasks.json');
+    await verifyTaskRemoveForConversationContract(stores.tasks, {
+      plantUnreadable: async (_id, fields) => {
+        const raw = JSON.parse(await readFile(path, 'utf8')) as { tasks: unknown[] };
+        raw.tasks.push({ rank: 1, task: fields });
+        await writeFile(path, JSON.stringify(raw, null, 2), 'utf8');
+      },
     });
   });
 

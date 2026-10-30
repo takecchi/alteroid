@@ -170,6 +170,24 @@ export class PgTaskStore implements TaskStore {
     return removed.length;
   }
 
+  // 条件は core の `isTaskOfConversation` と同じ。jsonb の欄をそのまま見る: 読めない形の行も同じ条件で消え、fs と答えが揃うため。
+  // 他の書き込みと同じ advisory lock の中で消す: 並びを振り直す書き込みが、読んだ後に消えた行を upsert で書き戻さないため。
+  async removeForConversation(conversationId: string): Promise<number> {
+    if (hasNul(conversationId)) return 0;
+    return this.#db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${TASK_LOCK_NAMESPACE}), hashtext('rows'))`,
+      );
+      const removed = await tx
+        .delete(tasks)
+        .where(
+          sql`${tasks.task}->>'originConversationId' = ${conversationId} or (${tasks.task}->>'origin' in ('human', 'self') and ${tasks.task}->>'source' = ${conversationId})`,
+        )
+        .returning({ id: tasks.id });
+      return removed.length;
+    });
+  }
+
   #throwIfUnreadable(loaded: Loaded, id: string): void {
     const broken = loaded.unreadable.find((row) => row.id === id);
     if (broken !== undefined) throw unreadableError(id, broken.reason);
