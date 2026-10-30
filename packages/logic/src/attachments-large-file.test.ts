@@ -61,20 +61,4 @@ describe('checkAttachments: 大きいファイルの別枠（#4128 段2）', () 
     expect(accepted.map((f) => f.name)).toEqual(['a.bin']);
     expect(rejected.map((r) => r.name)).toEqual(['b.bin']);
   });
-
-  it('maxLargeFileBytes を名乗らない（旧い）サーバの上限では、今までどおり maxFileBytes まで', () => {
-    const old: AttachmentCheckLimits = {
-      maxImageBytes: LIMITS.maxImageBytes,
-      maxFileBytes: LIMITS.maxFileBytes,
-      maxPerMessage: LIMITS.maxPerMessage,
-      maxTotalBytes: LIMITS.maxTotalBytes,
-    };
-    const { accepted, rejected } = checkAttachments(
-      [],
-      [file('a.bin', 100), file('b.bin', 101)],
-      old,
-    );
-    expect(accepted.map((f) => f.name)).toEqual(['a.bin']);
-    expect(rejected.map((r) => r.name)).toEqual(['b.bin']);
-  });
 });

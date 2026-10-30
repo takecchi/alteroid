@@ -37,17 +37,17 @@ export function attachmentTooLargeMessage(
   return `${kind === 'image' ? '画像' : 'ファイル'}は 1 つ ${formatAttachmentLimit(limitBytes)} まで（${describeAttachmentActual(bytes, limitBytes)}）`;
 }
 
-/** サーバ・Web・CLI の検査が全部これに揃う。`maxLargeFileBytes` を名乗らない旧いサーバの応答は 0（枠なし）として読む。 */
+/** サーバ・Web・CLI の検査が全部これに揃う。`maxLargeFileBytes` が 0 なら別枠なし。 */
 export function attachmentMaxBytes(
   limits: {
     readonly maxImageBytes: number;
     readonly maxFileBytes: number;
-    readonly maxLargeFileBytes?: number;
+    readonly maxLargeFileBytes: number;
   },
   image: boolean,
 ): number {
   if (image) return limits.maxImageBytes;
-  const large = limits.maxLargeFileBytes ?? 0;
+  const large = limits.maxLargeFileBytes;
   return large > 0 ? Math.max(limits.maxFileBytes, large) : limits.maxFileBytes;
 }
 

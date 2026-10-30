@@ -232,13 +232,9 @@ export async function fetchAttachmentLimits(target: Target): Promise<AttachmentL
     if (response.status === 404) return DEFAULT_ATTACHMENT_LIMITS;
     if (!response.ok) return null;
     const body: Partial<Record<keyof AttachmentLimits, unknown>> = await response.json();
-    // maxLargeFileBytes は 0（枠なし）がありうる。名乗らない旧いデーモンの応答はそのまま通す
-    // （検査側の `attachmentMaxBytes` が、欠けていれば 0 として読む）
+    // maxLargeFileBytes は 0（枠なし）がありうるので、ほかの欄（正の数）と分けて検査する
     const { maxLargeFileBytes } = body;
-    if (
-      maxLargeFileBytes !== undefined &&
-      (!Number.isSafeInteger(maxLargeFileBytes) || (maxLargeFileBytes as number) < 0)
-    ) {
+    if (!Number.isSafeInteger(maxLargeFileBytes) || (maxLargeFileBytes as number) < 0) {
       return null;
     }
     const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS).filter(
