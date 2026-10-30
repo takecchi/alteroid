@@ -81,7 +81,9 @@ describe('alteroid token list', () => {
     const text = read();
     expect(text).toContain('回す契機: free_exhausted');
     expect(text).toContain('トークンは登録されていません');
-    expect(text).toContain('枠に当たっても記録が残りません');
+    // 2026-09-14 から器の環境変数へは倒れない（docs/architecture.md・daemon の index.ts）。走れないと言う（#5872）
+    expect(text).toContain('クローンもマネージャーも走れません');
+    expect(text).not.toContain('頼るしか');
     expect(text).toContain('alteroid token add --label <名前> --file <path>');
   });
 
@@ -267,7 +269,10 @@ describe('alteroid token list', () => {
       await tokenListCommand();
 
       const text = read();
-      expect(text).toContain('現役の指名: まだ一度も無い（器の環境変数のまま走っている）');
+      // 指名が無いときは何も撒かない（器の環境変数のまま走るのではない。#5872）
+      expect(text).toContain('現役の指名: まだ一度も無い');
+      expect(text).toContain('鍵は撒かれていない');
+      expect(text).not.toContain('器の環境変数のまま');
       expect(text).not.toContain('← 現役');
       expect(text).not.toContain('読めない');
     });
