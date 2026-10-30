@@ -234,10 +234,8 @@ function idOf(name: string, raw: string): number {
 }
 
 // UID が runner 自身と同じなら落とす: 境界にならず、孤児の回収が runner 自身まで候補に入れるため。
-export function childUserOf(
-  env: NodeJS.ProcessEnv,
-  ownUid: number | undefined = process.getuid?.(),
-): RunnerChildUser | undefined {
+export function childUserOf(env: NodeJS.ProcessEnv): RunnerChildUser | undefined {
+  const ownUid = process.getuid?.();
   const uid = envValue(env, 'ALTEROID_RUNNER_CHILD_UID');
   if (uid === undefined) return undefined;
   const gid = envValue(env, 'ALTEROID_RUNNER_CHILD_GID') ?? uid;
@@ -315,13 +313,12 @@ export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv): number | undefine
 export function delegationSubreaperOf(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
-  isExecutable: (path: string) => boolean = executableFile,
 ): string | undefined {
   if (childUser === undefined) return undefined;
   for (const dir of (envValue(env, 'PATH') ?? '').split(delimiter)) {
     if (!isAbsolute(dir)) continue;
     const candidate = join(dir, 'tini');
-    if (isExecutable(candidate)) return candidate;
+    if (executableFile(candidate)) return candidate;
   }
   return undefined;
 }

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 import { appDefaults } from './app-defaults.test-support.js';
@@ -14,6 +14,16 @@ const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 function bearer(): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream' };
 }
+
+// 時刻（Date）だけを偽にする: SSE の締め切りなど他のタイマーは本物のまま
+function setClock(iso: string): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(iso));
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function newHost(): RunnerHost {
   return createRunnerHost({
@@ -27,37 +37,38 @@ function newHost(): RunnerHost {
 // #5692 で「差し戻し」自体が無くなった（出来事は列に残り、queuedAt は積んだときの1回だけ）ので、外から見える結果（積んだ時刻のまま答える）で縛る。
 describe('Outbox: queuedAt は積んだときのまま（渡し先が変わっても、畳んでも。#630 (B)）', () => {
   it('積んだ出来事の oldestPendingAt は、後で時計が進み別の出来事が積まれても、積んだ時刻のまま', () => {
-    let clock = 'OLD-2020-01-01T00:00:00.000Z';
-    const outbox = new Outbox(() => clock);
+    setClock('2020-01-01T00:00:00.000Z');
+    const outbox = new Outbox();
     outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
-    clock = 'NEW-2099-01-01T00:00:00.000Z';
+    setClock('2099-01-01T00:00:00.000Z');
     outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-2' });
 
-    expect(outbox.oldestPendingAt).toBe('OLD-2020-01-01T00:00:00.000Z');
-    expect(outbox.oldestPendingAt).not.toBe('NEW-2099-01-01T00:00:00.000Z');
+    expect(outbox.oldestPendingAt).toBe('2020-01-01T00:00:00.000Z');
+    expect(outbox.oldestPendingAt).not.toBe('2099-01-01T00:00:00.000Z');
   });
 
   it('push は「いま」の時刻を queuedAt にする——新規分は「いま」のまま', () => {
-    const outbox = new Outbox(() => 'NOW-2020-06-01T00:00:00.000Z');
+    setClock('2020-06-01T00:00:00.000Z');
+    const outbox = new Outbox();
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-2', sessionId: 'sess-2' };
 
     outbox.push(event);
 
-    expect(outbox.oldestPendingAt).toBe('NOW-2020-06-01T00:00:00.000Z');
+    expect(outbox.oldestPendingAt).toBe('2020-06-01T00:00:00.000Z');
   });
 
   it('購読へ渡る queuedAt は、積んだときの値（渡すときの「いま」ではない）', () => {
-    let clock = 'OLD-2020-01-01T00:00:00.000Z';
-    const outbox = new Outbox(() => clock);
+    setClock('2020-01-01T00:00:00.000Z');
+    const outbox = new Outbox();
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-3', sessionId: 'sess-3' };
     outbox.push(event);
-    clock = 'WRONG-NOW';
+    setClock('2077-07-07T00:00:00.000Z');
     const received: { event: RunnerEvent; seq: number; queuedAt: string }[] = [];
 
     connectedSubscriber(outbox, (ev, seq, queuedAt) => received.push({ event: ev, seq, queuedAt }));
 
     expect(received).toHaveLength(1);
-    expect(received[0]?.queuedAt).toBe('OLD-2020-01-01T00:00:00.000Z');
+    expect(received[0]?.queuedAt).toBe('2020-01-01T00:00:00.000Z');
   });
 });
 
@@ -99,13 +110,13 @@ async function readUntilClosed(
 describe('/events の finally: 畳んで戻したときも元の queuedAt を保つ（(A)+(B) の結線）', () => {
   it('畳んで戻した後も oldestPendingAt は元の古い時刻を答える', async () => {
     const host = newHost();
-    let clock = 'OLD-2020-01-01T00:00:00.000Z';
-    const outbox = new Outbox(() => clock);
+    setClock('2020-01-01T00:00:00.000Z');
+    const outbox = new Outbox();
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-stuck', sessionId: 'sess-stuck' };
     outbox.push(event);
-    expect(outbox.oldestPendingAt).toBe('OLD-2020-01-01T00:00:00.000Z');
+    expect(outbox.oldestPendingAt).toBe('2020-01-01T00:00:00.000Z');
 
-    clock = 'NEW-2030-01-01T00:00:00.000Z';
+    setClock('2030-01-01T00:00:00.000Z');
 
     const { spy } = hangOnRealEvents();
     try {
@@ -127,8 +138,8 @@ describe('/events の finally: 畳んで戻したときも元の queuedAt を保
       expect(outcome).toBe('closed');
       expect(outbox.pending).toBe(1);
 
-      expect(outbox.oldestPendingAt).toBe('OLD-2020-01-01T00:00:00.000Z');
-      expect(outbox.oldestPendingAt).not.toBe('NEW-2030-01-01T00:00:00.000Z');
+      expect(outbox.oldestPendingAt).toBe('2020-01-01T00:00:00.000Z');
+      expect(outbox.oldestPendingAt).not.toBe('2030-01-01T00:00:00.000Z');
 
       await reader.cancel();
       await host.shutdown();

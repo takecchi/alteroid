@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { stat } from 'node:fs/promises';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runnerExecutionResourcesSchema } from '@alteroid/core';
 
@@ -1780,12 +1780,16 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
   const OWN_UID = process.getuid?.() ?? 0;
   const SWEEP_MS = 10_000;
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   // `/health`（read）は1度も呼ばない: 呼ぶと、タイマー無しでも緑になる穴が開くため。
   function setup(): {
     calls: Array<{ pid: number; signal: NodeJS.Signals }>;
     reader: TaskBreakdownReader;
     clock: { now: number };
-    tick: () => Promise<void>;
+    tick: (ms?: number) => Promise<void>;
     stop: () => void;
     cleared: () => number;
   } {
@@ -1807,41 +1811,36 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
         }),
       },
     });
-    let timerCallback: (() => void) | undefined;
+    // 偽にするのは setInterval だけ: 走査の中の setImmediate や fs は本物のまま
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     let pending: Promise<void> = Promise.resolve();
-    let cleared = 0;
-    const stop = startReclaimSweep(
-      {
-        sweepIfStale: (maxAgeMs) => {
-          pending = reader.sweepIfStale(maxAgeMs);
-          return pending;
-        },
+    const stop = startReclaimSweep({
+      sweepIfStale: (maxAgeMs) => {
+        pending = reader.sweepIfStale(maxAgeMs);
+        return pending;
       },
-      {
-        setIntervalFn: (callback, ms) => {
-          expect(ms).toBe(SWEEP_MS);
-          timerCallback = callback;
-          return { unref: () => undefined };
-        },
-        clearIntervalFn: () => {
-          cleared += 1;
-          timerCallback = undefined;
-        },
-      },
-    );
+    });
     return {
       calls,
       reader,
       clock,
       stop,
-      cleared: () => cleared,
-      tick: async () => {
-        timerCallback?.();
+      cleared: () => 1 - vi.getTimerCount(),
+      tick: async (ms = SWEEP_MS) => {
+        await vi.advanceTimersByTimeAsync(ms);
         await pending;
         await new Promise<void>((resolve) => setImmediate(resolve));
       },
     };
   }
+
+  it('タイマーは 10 秒おきに走査する（9.999 秒では走らない）', async () => {
+    const { calls, tick } = setup();
+    await tick(SWEEP_MS - 1);
+    expect(calls).toEqual([]);
+    await tick(1);
+    expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
+  });
 
   it('終端した委譲の孤児木へ、タイマーだけで SIGTERM が届き、猶予を過ぎた次の回で SIGKILL が届く', async () => {
     const { calls, clock, tick } = setup();
@@ -1889,29 +1888,27 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
   });
 
   it('走査が失敗しても握り（unhandled rejection にしない）、前の回が終わるまでは重ねて走らせない', async () => {
-    let timerCallback: (() => void) | undefined;
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     let release: (() => void) | undefined;
     let started = 0;
-    startReclaimSweep(
-      {
-        sweepIfStale: () => {
-          started += 1;
-          return new Promise<void>((_resolve, reject) => {
-            release = () => reject(new Error('scan failed'));
-          });
-        },
+    const stop = startReclaimSweep({
+      sweepIfStale: () => {
+        started += 1;
+        return new Promise<void>((_resolve, reject) => {
+          release = () => reject(new Error('scan failed'));
+        });
       },
-      { setIntervalFn: (callback) => ((timerCallback = callback), { unref: () => undefined }) },
-    );
+    });
 
-    timerCallback?.();
-    timerCallback?.();
+    await vi.advanceTimersByTimeAsync(SWEEP_MS);
+    await vi.advanceTimersByTimeAsync(SWEEP_MS);
     expect(started).toBe(1);
 
     release?.();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    timerCallback?.();
+    await vi.advanceTimersByTimeAsync(SWEEP_MS);
     expect(started).toBe(2);
+    stop();
   });
 });
 
