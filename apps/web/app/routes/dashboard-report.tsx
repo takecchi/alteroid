@@ -1,16 +1,11 @@
 import { BookText } from 'lucide-react';
 import { Link } from 'react-router';
 
-import {
-  ErrorNote,
-  HOME_LINK_CLASS,
-  HomeReportCard,
-  HomeTileNote,
-  Markdown,
-  Spinner,
-} from '@alteroid/ui';
+import { ErrorNote, HOME_LINK_CLASS, HomeReportCard, Markdown, Spinner } from '@alteroid/ui';
 import { useReports } from '@alteroid/swr';
 import { redactBody } from '@alteroid/logic';
+
+import { StaleNote } from '~/components/stale-note';
 
 // 判定と文言を書き写さず reports.tsx を正本にする: 日報の面が2つあり、書き写すと片方だけが古びるため
 import { isUnavailable, UnavailableNote } from './reports';
@@ -36,11 +31,7 @@ export function LatestReport() {
         </Link>
       }
     >
-      {reports.error !== undefined && reports.data !== undefined && (
-        <HomeTileNote tone="warn">
-          最新の日報を取り直せなかった。下は前に読めたときのもの。
-        </HomeTileNote>
-      )}
+      {reports.error !== undefined && reports.data !== undefined && <StaleNote what="日報" />}
       {reports.error !== undefined && reports.data === undefined ? (
         <ErrorNote error={reports.error} />
       ) : reports.data === undefined ? (

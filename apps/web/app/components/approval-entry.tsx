@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
+import { StaleNote } from '~/components/stale-note';
 import { ApprovalConversation, Button, Spinner } from '@alteroid/ui';
 import { useApprovalTrace, useConversation } from '@alteroid/swr';
 import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
@@ -167,12 +168,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
     );
   }
   if (data === undefined) return null;
-  const staleNote =
-    trace.error !== undefined ? (
-      <p className="mt-2 text-xs text-warn">
-        最新の行動を取り直せなかった。下は前に読めたときのもの。
-      </p>
-    ) : null;
+  const staleNote = trace.error !== undefined ? <StaleNote what="行動" /> : null;
   // 窓の外にも行動がありうる。見つかった分岐でも、全部のように並べない。
   const windowNote = data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : '';
   if (data.state !== 'paired') {
@@ -274,11 +270,7 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     );
   }
   const staleNote =
-    conversation.error !== undefined ? (
-      <p className="mb-2 text-xs text-warn">
-        最新の会話を取り直せなかった。下は前に読めたときのもの。
-      </p>
-    ) : null;
+    conversation.error !== undefined ? <StaleNote what="会話" className="mb-2" /> : null;
 
   const messages = conversation.data?.messages ?? [];
   const hasCloneReply = messages.some((message) => message.role === 'outbound');

@@ -131,7 +131,9 @@ describe.each(TILES)('「$name」のタイル', (tile) => {
 
     expect(await screen.findByText(tile.note)).toBeTruthy();
     const card = cardOf(screen.getByText(tile.content));
-    expect(within(card).getByText(tile.note)).toBeTruthy();
+    const note = within(card).getByText(tile.note);
+    expect(note.getAttribute('role')).toBe('status');
+    expect(note.textContent).toMatch(/。下は前に読めたときのもの。$/);
     expect(within(card).queryByRole('alert')).toBeNull();
   });
 

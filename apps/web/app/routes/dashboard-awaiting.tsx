@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 
+import { StaleNote } from '~/components/stale-note';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
@@ -68,11 +69,7 @@ export function AwaitingYou() {
     ? approvals.data.unreadable.length
     : 0;
   const staleNote =
-    approvals.error !== undefined ? (
-      <p className="mx-4 mt-3 text-xs text-warn">
-        最新の承認待ちを取り直せなかった。下は前に読めたときのもの。
-      </p>
-    ) : null;
+    approvals.error !== undefined ? <StaleNote what="承認待ち" className="mx-4 mt-3" /> : null;
   if (pending.length === 0) {
     if (unreadableCount === 0) {
       if (staleNote === null) return <AwaitingYouCalm />;
