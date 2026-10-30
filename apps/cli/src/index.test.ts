@@ -525,6 +525,12 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(positionals).toHaveLength(policy?.registeredArguments.length ?? -1);
   });
 
+  it('tui というコマンドは無い（全画面の TUI は外した。画面は web と chat にある。#5891）', () => {
+    const names = program.commands.flatMap((c) => [c.name(), ...c.aliases()]);
+    expect(names).not.toContain('tui');
+    expect(names).toContain('chat');
+  });
+
   it('tui の説明は TABS の全画面の名前を挙げ、「順に足していく」を含まない', async () => {
     const { TABS } = await import('./tui/layout.js');
     const description = program.commands.find((c) => c.name() === 'tui')?.description() ?? '';
