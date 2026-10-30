@@ -5,6 +5,7 @@
 
 import { createHash } from 'node:crypto';
 
+import { assertNever } from './assert-never.js';
 import {
   excerpt,
   excerptLine,
@@ -68,7 +69,7 @@ export interface MemoryFloor {
 }
 
 export function assertNeverMemoryProtectionStatus(status: never): never {
-  throw new Error(`未知の記憶保護状態: ${JSON.stringify(status)}`);
+  return assertNever('未知の記憶保護状態', status);
 }
 
 // 量で判定しない: 蒸留は正当な運用として大きく畳むことがあるため
@@ -290,7 +291,7 @@ export function parseMemoryFrontmatter(content: string): MemoryFrontmatterState 
 }
 
 export function assertNeverMemoryFrontmatterState(state: never): never {
-  throw new Error(`未知の frontmatter 解釈状態: ${JSON.stringify(state)}`);
+  return assertNever('未知の frontmatter 解釈状態', state);
 }
 
 function frontmatterBody(content: string): string {
@@ -404,7 +405,7 @@ export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): Memor
 }
 
 export function assertNeverMemoryDocKind(kind: never): never {
-  throw new Error(`未知の記憶の区分: ${JSON.stringify(kind)}`);
+  return assertNever('未知の記憶の区分', kind);
 }
 
 export function resolveMemoryDescriptionFreshness(input: {
@@ -704,7 +705,7 @@ function flattenMemoryToc(roots: readonly ResolvedTocNode[]): ResolvedTocNode[] 
 }
 
 export function assertNeverMemoryCreatedAt(createdAt: never): never {
-  throw new Error(`未知の記憶作成時刻の状態: ${JSON.stringify(createdAt)}`);
+  return assertNever('未知の記憶作成時刻の状態', createdAt);
 }
 
 // 根拠が無ければ「不明」と明言する: 値を持たないことを空文字で隠さないため

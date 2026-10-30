@@ -1,3 +1,4 @@
+import { assertNever } from './assert-never.js';
 import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { describeValidity, statusValidity } from './inbox-validity.js';
 import type { JobStatus } from './schema.js';
@@ -86,10 +87,8 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
       );
     case 'active':
       return ' 進んでいる（止まっている兆候は無い）。急かさなくてよい。';
-    default: {
-      const exhaustive: never = kind;
-      throw new Error(`未知の ManagerActivityKind: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return assertNever('未知の ManagerActivityKind', kind);
   }
 }
 
