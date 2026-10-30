@@ -43,11 +43,11 @@ class FakeRunner implements RunnerClient {
     this.stages ?? {};
 
   async connect(): Promise<void> {}
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(): Promise<{ cwd?: string }> {
-    return {};
+  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;
