@@ -3,12 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeProgress } from './progress-describe.js';
 import { summarizeProgress } from './progress.js';
 import {
-  buildCommitmentDerivations,
   DEFAULT_PROGRESS_WINDOW_HOURS,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
+  readRepliesByConversation,
 } from './progress-read.js';
-import { commitmentActiveDelegationIds, commitmentRespondedAt } from './schema.js';
+import { taskRespondedAt, type Task } from './schema.js';
 import { createCloneTools, qualifiedToolName, CLONE_ALLOWED_TOOLS } from './tools.js';
 import { createMemoryStores } from './testing.js';
 
@@ -18,20 +18,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function task(id: string, createdAt: string, over: Partial<Task> = {}): Task {
+  return {
+    id,
+    createdAt,
+    updatedAt: createdAt,
+    status: 'queued',
+    origin: 'human',
+    title: `title ${id}`,
+    body: `body ${id}`,
+    ...over,
+  };
+}
+
 async function seed() {
   const stores = createMemoryStores();
-  await stores.commitments.open({
-    id: 'c1',
-    at: '2026-08-01T00:00:00.000Z',
-    origin: 'self',
-    body: '未了の1件',
-  });
-  await stores.commitments.open({
-    id: 'c2',
-    at: '2026-09-29T00:00:00.000Z',
-    origin: 'human',
-    body: '未了の2件目',
-  });
+  await stores.tasks.add(task('c1', '2026-08-01T00:00:00.000Z', { origin: 'self' }));
+  await stores.tasks.add(task('c2', '2026-09-29T00:00:00.000Z'));
   await stores.jobs.putJob({
     id: 'm1',
     createdAt: '2026-09-29T00:00:00.000Z',
@@ -69,7 +72,7 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
     const reply = await progressTool(stores)({});
     const view = await readProgress(stores, { now: NOW });
     expect(reply).toBe(describeProgress(view));
-    expect(reply).toContain('積み上がり（台帳の未了）: 2 件');
+    expect(reply).toContain('積み上がり（task の未了）: 2 件');
     expect(reply).toContain('実行中 1 /');
     expect(reply).toContain('観測時刻: 2026-09-30T12:00:00.000Z');
   });
@@ -113,8 +116,8 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
   it('不正な windowHours は道具のエラーとして返し、集計を作らない', async () => {
     const stores = await seed();
     let listed = false;
-    const list = stores.commitments.list.bind(stores.commitments);
-    stores.commitments.list = async (options) => {
+    const list = stores.tasks.list.bind(stores.tasks);
+    stores.tasks.list = async (options) => {
       listed = true;
       return list(options);
     };
@@ -149,21 +152,19 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);
     const stores = await seed();
-    for (const [id, source] of [
+    for (const [id, originConversationId] of [
       ['h-replied', 'conv-r'],
       ['h-delegated', 'conv-d'],
       ['h-untouched', 'conv-u'],
       ['h-closed', 'conv-r'],
     ] as const) {
-      await stores.commitments.open({
-        id,
-        at: '2026-09-28T00:00:00.000Z',
-        origin: 'human',
-        body: id,
-        source,
-      });
+      await stores.tasks.add(task(id, '2026-09-28T00:00:00.000Z', { originConversationId }));
     }
-    await stores.commitments.close('h-closed', '2026-09-29T00:00:00.000Z', '済んだ', 'human');
+    await stores.tasks.setStatus('h-closed', 'done', {
+      at: '2026-09-29T00:00:00.000Z',
+      by: 'human',
+      reason: '済んだ',
+    });
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -177,24 +178,20 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
       updatedAt: '2026-09-29T00:00:00.000Z',
       status: 'running',
       summary: '委譲中',
-      conversationId: 'conv-d',
+      taskId: 'h-delegated',
     });
 
     const view = await readProgress(stores, { now: NOW });
 
-    const all = await stores.commitments.list({ includeClosed: true });
+    const all = await stores.tasks.list({ includeClosed: true });
     const jobs = await stores.jobs.listJobs();
-    const derived = await buildCommitmentDerivations(stores, all.entries, async () => jobs);
+    const replies = await readRepliesByConversation(stores);
     const reference = summarizeProgress({
-      commitments: {
+      tasks: {
         ...all,
         entries: all.entries.map((entry) => ({
           ...entry,
-          respondedAt: commitmentRespondedAt(entry, derived.repliesByConversation),
-          activeManagerIds: commitmentActiveDelegationIds(
-            entry,
-            derived.activeManagersByConversation,
-          ),
+          respondedAt: taskRespondedAt(entry, replies),
         })),
       },
       jobs,
@@ -203,19 +200,47 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
       windowHours: DEFAULT_PROGRESS_WINDOW_HOURS,
     });
     expect(view).toEqual({ ...reference, observedAt: view.observedAt, github: view.github });
-    expect(view.backlog.byState).toMatchObject({ responded: 1, delegated: 1, untouched: 2 });
+    expect(view.backlog.byState).toMatchObject({
+      responded: 1,
+      delegated: 1,
+      untouched: 2,
+      unjudgeable: 1,
+    });
   });
 
-  it('未了の人間の行が無ければ、返答の一覧を読まない（片付いた行のために読まない。#5089）', async () => {
-    const stores = await seed();
-    await stores.commitments.open({
-      id: 'h-closed',
-      at: '2026-09-28T00:00:00.000Z',
-      origin: 'human',
-      body: '片付いた',
-      source: 'conv-x',
+  it('返事したかは、task の originConversationId の会話の日誌から、createdAt より後の返答で導く', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '古い返答',
+      conversationId: 'conv-a',
     });
-    await stores.commitments.close('h-closed', '2026-09-29T00:00:00.000Z', '済んだ', 'human');
+    await stores.tasks.add(
+      task('after', new Date(Date.now() + 60_000).toISOString(), {
+        originConversationId: 'conv-a',
+      }),
+    );
+    await stores.tasks.add(
+      task('other-conv', '2026-01-01T00:00:00.000Z', {
+        originConversationId: 'conv-b',
+      }),
+    );
+    const view = await readProgress(stores, { now: new Date(Date.now() + 120_000) });
+    expect(view.backlog.byState).toMatchObject({ responded: 0, untouched: 2 });
+  });
+
+  it('未了の人間の task が無ければ、返答の一覧を読まない（片付いた task のために読まない。#5089）', async () => {
+    const stores = await seed();
+    await stores.tasks.add(
+      task('h-closed', '2026-09-28T00:00:00.000Z', { originConversationId: 'conv-x' }),
+    );
+    await stores.tasks.setStatus('h-closed', 'done', {
+      at: '2026-09-29T00:00:00.000Z',
+      by: 'human',
+      reason: '済んだ',
+    });
     const humanReplies = vi.fn(async () => []);
     stores.journal.humanReplies = humanReplies;
     await readProgress(stores, { now: NOW });
@@ -224,7 +249,7 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
 
   it('取れない値を 0 と書かない（空の台帳の見込みは時間を作らず、齢は —）', async () => {
     const reply = await progressTool(createMemoryStores())({});
-    expect(reply).toContain('積み上がり（台帳の未了）: 0 件');
+    expect(reply).toContain('積み上がり（task の未了）: 0 件');
     expect(reply).toContain('最古 —');
     expect(reply).toContain('中央値 —');
     expect(reply).toContain('unavailable');

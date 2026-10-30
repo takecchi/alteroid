@@ -475,29 +475,13 @@ describe('「承認待ち一覧」', () => {
         ...PROGRESS_BODY,
         backlog: {
           ...PROGRESS_BODY.backlog,
-          completeness: { unreadable: 1, trimmedClosed: 0, unreadableJobs: 0 },
+          completeness: { unreadable: 1, unreadableJobs: 0 },
         },
       },
     });
 
     const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
     expect(row.textContent).toContain('下限');
-  });
-
-  it('刈られた完了済みの行だけ（unreadable が 0）なら、未了の数を下限と言わない（#3698）', async () => {
-    renderHome({
-      approvals: [approval(0)],
-      progress: {
-        ...PROGRESS_BODY,
-        backlog: {
-          ...PROGRESS_BODY.backlog,
-          completeness: { unreadable: 0, trimmedClosed: 4, unreadableJobs: 0 },
-        },
-      },
-    });
-
-    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
-    expect(row.textContent).not.toContain('下限');
   });
 
   it('対照: 欠けていない既定の応答では、下限と言わない', async () => {
@@ -660,23 +644,14 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     expect(await screen.findByText(/何かを任せると、ここに出る/)).toBeTruthy();
   });
 
-  it('閉じた件数は、数え落としうるとき（mayBeUndercounted が真）だけ「以上」と言う。偽なら言わない（#3698）', async () => {
+  it('閉じた件数は tasksClosed のとおりに言い、「以上」を付けない（task の閉じた記録は刈られない。#5910）', async () => {
     renderHome({
       progress: {
         ...PROGRESS_BODY,
-        throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: true },
+        throughput: { ...PROGRESS_BODY.throughput, tasksClosed: 21 },
       },
     });
-    expect(await screen.findByText(/閉じた仕事 12 件以上/)).toBeTruthy();
-    cleanup();
-
-    renderHome({
-      progress: {
-        ...PROGRESS_BODY,
-        throughput: { ...PROGRESS_BODY.throughput, mayBeUndercounted: false },
-      },
-    });
-    expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
+    expect((await screen.findByText(/閉じた仕事 21 件/)).textContent).not.toContain('以上');
   });
 
   it('今日の利用: 記録が無いときも「台帳」と言わず、待てばよいことを言う', async () => {
@@ -703,13 +678,13 @@ describe('「作業の進捗」カード', () => {
     expect(linkTo('/progress')).toBeTruthy();
   });
 
-  it('刈られた完了済みの行だけ（unreadable が 0）なら、下限と言わず、空なら「無い」と言う（#3698）', async () => {
+  it('読めない行が無く空なら、下限と言わず「無い」と言う（#3698）', async () => {
     const empty = {
       ...PROGRESS_BODY,
       backlog: {
         ...PROGRESS_BODY.backlog,
         total: 0,
-        completeness: { unreadable: 0, trimmedClosed: 3, unreadableJobs: 0 },
+        completeness: { unreadable: 0, unreadableJobs: 0 },
       },
       inProgress: { ...PROGRESS_BODY.inProgress, running: 0 },
     };
@@ -725,7 +700,7 @@ describe('「作業の進捗」カード', () => {
         ...PROGRESS_BODY,
         backlog: {
           ...PROGRESS_BODY.backlog,
-          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+          completeness: { unreadable: 2, unreadableJobs: 0 },
         },
       },
     });
@@ -740,8 +715,8 @@ describe('「作業の進捗」カード', () => {
       inProgress: { ...PROGRESS_BODY.inProgress, running: 0 },
     };
     const partials = [
-      { unreadable: 1, trimmedClosed: 0, unreadableJobs: 0 },
-      { unreadable: 0, trimmedClosed: 0, unreadableJobs: 1 },
+      { unreadable: 1, unreadableJobs: 0 },
+      { unreadable: 0, unreadableJobs: 1 },
     ];
     for (const completeness of partials) {
       renderHome({ progress: { ...empty, backlog: { ...empty.backlog, completeness } } });
