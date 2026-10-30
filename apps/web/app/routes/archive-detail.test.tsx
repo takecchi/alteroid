@@ -110,6 +110,16 @@ describe('/archive/:id', () => {
     expect(screen.getByTestId('archive-body').textContent).toBe(full);
   });
 
+  it('文字数は桁区切りで出す（100,000 / 250,000。他の画面の数と同じ en-US の形）', async () => {
+    stub(() => text('x'.repeat(250_000)));
+    renderPage();
+
+    await screen.findByTestId('archive-body');
+    expect(
+      screen.getByText(/先頭の 100,000 文字 \/ 全体 250,000 文字を表示しています/),
+    ).toBeTruthy();
+  });
+
   it('一覧に在る行なら、使用量を読める単位で見出しに出す（生のバイト数にしない）', async () => {
     stub(
       () => text('x'),
