@@ -6,7 +6,7 @@ import {
   assessPermissionGrantStaleness,
   PERMISSION_GRANT_STALE_DAYS,
 } from '@alteroid/core/permission-staleness';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   Page,
@@ -191,15 +191,32 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
     });
   }
 
+  // 確認の行は「取り消す」を差し替えて出すので、押したボタンごと消えて焦点が body に落ちる。切り替えた先の最初のボタンへ移す:
+  // 開いたら「本当に取り消す」へ、やめたら「取り消す」へ
+  // ボタンに ref を渡さず行から引く: 共通の Button は ref を受けない型のため
+  const controlRef = useRef<HTMLDivElement>(null);
+  const moveFocusTo = useRef<'confirm' | 'trigger' | undefined>(undefined);
+  useEffect(() => {
+    const target = moveFocusTo.current;
+    if (target === undefined) return;
+    moveFocusTo.current = undefined;
+    const selector = target === 'confirm' ? '[data-revoke-confirm]' : '[data-revoke-trigger]';
+    controlRef.current?.querySelector<HTMLElement>(selector)?.focus();
+  }, [confirming]);
+
   return (
-    <div className="mt-2 flex flex-col gap-2">
+    <div ref={controlRef} className="mt-2 flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         {!confirming ? (
           <Button
             variant="danger"
             size="sm"
             aria-label={`${shownRule} を取り消す`}
-            onClick={() => setConfirming(true)}
+            data-revoke-trigger
+            onClick={() => {
+              moveFocusTo.current = 'confirm';
+              setConfirming(true);
+            }}
           >
             取り消す
           </Button>
@@ -214,11 +231,19 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
               size="sm"
               loading={busy}
               aria-label={`${shownRule} を本当に取り消す`}
+              data-revoke-confirm
               onClick={() => void run()}
             >
               本当に取り消す
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                moveFocusTo.current = 'trigger';
+                setConfirming(false);
+              }}
+            >
               やめる
             </Button>
           </>

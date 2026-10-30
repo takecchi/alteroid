@@ -9,6 +9,7 @@ import {
   TASK_RANK_STEP,
   type TaskRankRow,
 } from './task.js';
+import { verifyTaskRemoveForConversationContract } from './task-remove-for-conversation-contract.js';
 import { verifyTaskStoreContract } from './task-store-contract.js';
 import { createMemoryStores } from './testing.js';
 
@@ -123,5 +124,9 @@ describe('taskSchema', () => {
 describe('TaskStore の契約（インメモリ。fs / pg にも同じ歯を当てる）', () => {
   it('並び・状態遷移・closed・隙間切れ・NUL の契約', async () => {
     await verifyTaskStoreContract(createMemoryStores().tasks);
+  });
+
+  it('removeForConversation の契約（#5899。3実装で同じことを測る。起点の会話の欄で引く行と、移行前の形の行を物理的に消す）', async () => {
+    await verifyTaskRemoveForConversationContract(createMemoryStores().tasks);
   });
 });

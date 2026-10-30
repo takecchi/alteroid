@@ -110,10 +110,10 @@ const cases: Case[] = [
   {
     tool: 'progress_read',
     seed: async (h) => {
-      await h.call('commitment_open', { body: '約束1' });
+      await h.call('task_add', { title: '約束1', body: '約束1' });
     },
     full: [
-      '積み上がり（台帳の未了）: 1 件',
+      '積み上がり（task の未了）: 1 件',
       '終端時刻の欄が無いので更新時刻での近似',
       '（他と重なりうる）',
     ],

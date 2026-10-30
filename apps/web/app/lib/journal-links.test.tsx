@@ -50,7 +50,7 @@ describe('journalEntryLinks（issue #2064）', () => {
       approvalId: 'a-2',
     };
     expect(journalEntryLinks(fromManager)).toEqual([
-      { to: '/managers/mgr-7', label: '委譲 mgr-7 の詳細', short: '委譲' },
+      { to: '/managers/mgr-7', label: 'マネージャー mgr-7 の詳細', short: 'マネージャー' },
     ]);
     expect(journalEntryLinks(fromClone)).toEqual([]);
   });
@@ -68,7 +68,7 @@ describe('journalEntryLinks（issue #2064）', () => {
     const manager: JournalEntry = { ...clone, id: 't-2', layer: 'manager', managerId: 'mgr-9' };
     expect(journalEntryLinks(clone)).toEqual([]);
     expect(journalEntryLinks(manager)).toEqual([
-      { to: '/managers/mgr-9', label: '委譲 mgr-9 の詳細', short: '委譲' },
+      { to: '/managers/mgr-9', label: 'マネージャー mgr-9 の詳細', short: 'マネージャー' },
     ]);
   });
 
@@ -83,7 +83,7 @@ describe('journalEntryLinks（issue #2064）', () => {
       models: MODELS,
     };
     expect(journalEntryLinks(base)).toEqual([
-      { to: '/managers/job-7f3a', label: '委譲 job-7f3a の詳細', short: '委譲' },
+      { to: '/managers/job-7f3a', label: 'マネージャー job-7f3a の詳細', short: 'マネージャー' },
     ]);
     expect(journalEntryLinks({ ...base, id: 't-4', layer: 'clone', managerId: 'clone' })).toEqual(
       [],

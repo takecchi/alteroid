@@ -120,7 +120,9 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(await screen.findByText(/ の会話$/)).toBeTruthy();
     expect(screen.getByText('sess-1-a.jsonl').closest('details')).not.toBeNull();
     expect(screen.getByText('sess-1').closest('details')).not.toBeNull();
-    expect(screen.getByText(/使用量 1.2 KB/)).toBeTruthy();
+    expect(screen.getByText(/容量 1.2 KB/)).toBeTruthy();
+    // 「使用量」は /usage（トークンと費用）の語。退避した本文のバイトには使わない
+    expect(document.body.textContent).not.toContain('使用量');
   });
 
   it('本文のある行から詳細（/archive/:id）へ行ける。消された行には出さない（#3137）', async () => {
@@ -164,7 +166,8 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(await screen.findByText(/からの会話/)).toBeTruthy();
     expect(screen.getByText('sess-repeated').closest('details')).not.toBeNull();
     expect(screen.getByText('行数 68')).toBeTruthy();
-    expect(screen.getByText('使用量合計 999 B（最大1行 500 B）')).toBeTruthy();
+    expect(screen.getByText('容量の合計 999 B（最大1行 500 B）')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('使用量');
   });
 
   it('折りたたみの外に UUID の形の文字列を出さない', async () => {
@@ -282,12 +285,34 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    expect(await screen.findByText(/使用量 11.2 KB/)).toBeTruthy();
+    expect(await screen.findByText(/容量 11.2 KB/)).toBeTruthy();
     const removedLine = screen.getByText(/削除:/);
     expect(removedLine.textContent).toContain('消した本文は 976.6 KB');
-    expect(removedLine.textContent).toContain('使用量とは数え方が違う');
+    expect(removedLine.textContent).toContain('容量とは数え方が違う');
+    expect(document.body.textContent).not.toContain('使用量');
     expect(removedLine.textContent).toContain('空いた容量とは一致しません');
     expect(screen.queryByText(/1000000/)).toBeNull();
+  });
+
+  it('確認を Esc で閉じたら、焦点は押していた「本文を消す」へ戻る（body に落ちない）', async () => {
+    stubArchiveScreen([
+      {
+        id: 'sess-3-a.jsonl',
+        sessionId: 'sess-3',
+        at: '2026-09-01T00:00:00.000Z',
+        storedBytes: 10,
+      },
+    ]);
+    await renderArchive();
+    const trigger = await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByRole('alertdialog');
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('「本文を消す」で DELETE /archive/:id を叩き、成功すれば一覧が「本文は削除済み」に変わる', async () => {
@@ -436,7 +461,7 @@ describe('/archive 画面 — 行のどこを押しても詳細へ遷移する�
 
   const path = (): string => screen.getByTestId('location').textContent ?? '';
 
-  it('題・余白・使用量の文字を押すと詳細へ行く', async () => {
+  it('題・余白・容量の文字を押すと詳細へ行く', async () => {
     stubArchiveScreen([ENTRY]);
     await renderWithRoutes();
     const title = await screen.findByText(rowName(AT), { selector: 'li span' });
@@ -444,10 +469,10 @@ describe('/archive 画面 — 行のどこを押しても詳細へ遷移する�
     expect(path()).toBe('/archive/sess-5-a.jsonl');
   });
 
-  it('使用量の行や行の余白（li 自体）を押しても詳細へ行く', async () => {
+  it('容量の行や行の余白（li 自体）を押しても詳細へ行く', async () => {
     stubArchiveScreen([ENTRY]);
     await renderWithRoutes();
-    fireEvent.click(await screen.findByText(/使用量 10 B/));
+    fireEvent.click(await screen.findByText(/容量 10 B/));
     expect(path()).toBe('/archive/sess-5-a.jsonl');
   });
 

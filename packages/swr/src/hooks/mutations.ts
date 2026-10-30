@@ -1039,6 +1039,10 @@ export function useEndConversation() {
   );
 }
 
+function isConversationKeyOf(key: unknown, conversationId: string): boolean {
+  return isKeyOfType(key, 'conversation') && (key as { id?: unknown }).id === conversationId;
+}
+
 // 論理削除。結果（件数・`incomplete`・`remainsIn`）は呼び出し側が人間へ見せるので、そのまま返す。
 // 下書きもここで消す: 消した会話の id で残る本文は、どこからも開けないのに端末に平文で残るだけになるため
 export function useDeleteConversation() {
@@ -1055,7 +1059,11 @@ export function useDeleteConversation() {
       await Promise.all([
         mutate((key) => isKeyOfType(key, 'conversations')),
         mutate((key) => isKeyOfType(key, 'conversationUnreadCount')),
-        mutate((key) => isKeyOfType(key, 'conversation')),
+        // 消した会話の本文は読み直さず捨てる: 画面が開いたままだと読み直しが 404 になるため（#5905）。ほかの会話の本文は読み直す
+        mutate((key) => isConversationKeyOf(key, conversationId), undefined, { revalidate: false }),
+        mutate(
+          (key) => isKeyOfType(key, 'conversation') && !isConversationKeyOf(key, conversationId),
+        ),
         mutate((key) => isKeyOfType(key, 'commitments')),
       ]);
       return result;

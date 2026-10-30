@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 
 import {
   AlertDialog,
@@ -33,9 +33,27 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCloseAutoFocus?: (event: Event) => void;
 }) {
+  // 開く直前に焦点の居た要素（開いたボタン）を覚える: AlertDialog.Trigger を使わない作りで、Radix の閉じた後の焦点の戻しは trigger の ref を読むため、何も戻らず body に落ちる（Drawer と同じ）
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent {...(onCloseAutoFocus === undefined ? {} : { onCloseAutoFocus })}>
+      <AlertDialogContent
+        onOpenAutoFocus={() => {
+          opener.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          // 呼び出し側が戻し先を決めているなら、そちらを優先する（会話の「終える」「削除」）
+          if (onCloseAutoFocus !== undefined) {
+            onCloseAutoFocus(event);
+            return;
+          }
+          event.preventDefault();
+          const target = opener.current;
+          opener.current = null;
+          if (target?.isConnected === true && target !== document.body) target.focus();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           {description !== undefined && (

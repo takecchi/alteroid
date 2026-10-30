@@ -34,7 +34,7 @@ export function UnreadableJobNote({
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
   return (
     <WarnNote className={className}>
-      読めない委譲が {unreadable.length} 件ある
+      読めないマネージャーが {unreadable.length} 件ある
       {unreadableIdsNote('id', idsAll)}。
       <strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
       この一覧には載っていない。
@@ -134,11 +134,11 @@ export function ManagerRunnerLostNote({
   return (
     <p className={className}>
       ⚠ 宛先の器は{formatRelative(runnerLostSince)}
-      から名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。この委譲が失われたという意味ではない
+      から名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。このマネージャーが失われたという意味ではない
       —
       黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない
       — 戻る先（session_id）が在れば、送ると resume
-      を試みる（届くとは限らない）。打つ手はこの委譲の側ではなく器の側にある —
+      を試みる（届くとは限らない）。打つ手はこのマネージャーの側ではなく器の側にある —
       名乗らなくなった器そのものを確かめること。
     </p>
   );
@@ -157,7 +157,7 @@ export function ManagerRunnerVanishedNote({
     <p className={className}>
       ⚠ 宛先の器が名簿から消えている（消えた時刻は名簿に残っていないので分からない）。resume
       を試したわけではないので「戻れなかった(lost)」ではなく、「セッションへ戻れず」で絞っても出てこない。状態は実行中のまま残っている
-      — 確かめる前に起こし直さないこと（同じ仕事が2本になる）。
+      — 確かめる前に起こし直さないこと（同じ作業をするマネージャーが2体になる）。
     </p>
   );
 }
@@ -198,11 +198,12 @@ export function ManagerSessionMissingNote({
   return (
     <p className={className}>
       ⚠ 宛先の runner は{formatRelative(sessionMissingSince)}
-      の時点で、この委譲のセッションを持っていなかった（runner
+      の時点で、このマネージャーのセッションを持っていなかった（runner
       がそう答えた。聞けなかったのではない）。{describeSessionMissingKindNote(sessionMissingKind)}
-      この委譲が失われたという意味ではない —
+      このマネージャーが失われたという意味ではない —
       完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える。まず最後の報告とセッションログ（生）を確かめること（報告が届いていなくても、書き終えた報告がそこに残っていることがある）。話しかければ
-      resume から入り直すので、同じ依頼をもう一度出して起こし直さないこと — 同じ仕事が2本になる。
+      resume から入り直すので、同じ依頼文をもう一度出して起こし直さないこと —
+      同じ作業をするマネージャーが2体になる。
     </p>
   );
 }
@@ -249,7 +250,7 @@ export default function Managers() {
   return (
     <Page
       title="マネージャー"
-      description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
+      description="クローンが起こしたマネージャー。人間が Claude Code に頼んだのと同じ位置にいる"
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">
@@ -428,15 +429,15 @@ function ManagersList({
           )}
           {olderStatus === 'end' && (
             <p className="py-2 text-center text-xs text-muted-foreground">
-              これより古い委譲は無い（全 {managers.length} 件）。
+              これより古いマネージャーは無い（全 {managers.length} 件）。
             </p>
           )}
           {olderStatus === 'blocked' && (
             <div>
               <ErrorNote error={olderError} className="mb-2" />
               <p className="mb-2 text-xs text-muted-foreground">
-                これより古い委譲へ自動では進めない（いま {managers.length}{' '}
-                件。全部読み終えたのではない）。読んでいる間にその委譲の状態が動いて、絞りの外へ出た場合に起きる。もう一度押すか、絞りを変えて先頭から読み直すこと。
+                これより古いマネージャーへ自動では進めない（いま {managers.length}{' '}
+                件。全部読み終えたのではない）。読んでいる間にそのマネージャーの状態が動いて、絞りの外へ出た場合に起きる。もう一度押すか、絞りを変えて先頭から読み直すこと。
               </p>
               <OlderButton loading={isLoadingOlder} onClick={loadOlder}>
                 もう一度試す

@@ -57,6 +57,28 @@ export const Default: Story = {
   render: () => <Unanswered />,
 };
 
+export const PermissionRequest: Story = {
+  args: {
+    ...base,
+    state: 'unanswered',
+    question: '`git push` を許可リストに入れてよいか。',
+    allowAnswer: '許可します',
+    allowRecordsPermission: 'records',
+    onSubmit: () => undefined,
+  },
+};
+
+export const PermissionRequestAsOperator: Story = {
+  args: {
+    ...base,
+    state: 'unanswered',
+    question: '`git push` を許可リストに入れてよいか。',
+    allowAnswer: '許可します',
+    allowRecordsPermission: 'not-recorded-operator',
+    onSubmit: () => undefined,
+  },
+};
+
 export const Answered: Story = {
   args: {
     ...base,

@@ -67,7 +67,7 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
         buckets: { under1h: 1, under24h: 3, under7d: 5, over7d: 3 },
       },
       byState: { untouched: 2, responded: 5, delegated: 3, notApplicable: 5 },
-      completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
+      completeness: { unreadable: 0, unreadableJobs: 0 },
     },
     inProgress: {
       running: 2,
@@ -80,8 +80,8 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
       },
     },
     throughput: {
-      commitmentsOpened: 4,
-      commitmentsClosed: 6,
+      tasksOpened: 4,
+      tasksClosed: 6,
       delegationsEnded: { count: 9, basis: 'updatedAt' },
     },
     forecast: {
@@ -125,14 +125,15 @@ describe('progressCommand', () => {
     await progressCommand();
     const text = read();
     expect(text).toContain('観測時刻: 2026-09-30T12:00:00.000Z');
-    expect(text).toContain('積み上がり（台帳の未了）: 12 件');
+    expect(text).toContain('積み上がり（task の未了）: 12 件');
     expect(text).toContain('人間 7 / マネージャー 3 / 外部 1 / 自発 1');
     expect(text).toContain('中央値 30.3時間');
     expect(text).toContain('1時間未満 1 / 24時間未満 3 / 7日未満 5 / 7日以上 3');
     expect(text).toContain('未着手 2 / 返答済み・未クローズ 5 / 委譲あり 3');
     expect(text).toContain('実行中 2 / 人間待ち 1 / 行方不明 0');
     expect(text).toContain('報告無し 1 件');
-    expect(text).toContain('受けた 4 件 / 閉じた 6 件');
+    expect(text).toContain('task: 受けた 4 件 / 閉じた 6 件');
+    expect(text).not.toContain('台帳');
     expect(text).toContain('basis: updatedAt');
     expect(text).toContain('あと約 336時間');
     expect(text).toContain('推定であり約束ではない');
@@ -188,7 +189,7 @@ describe('progressCommand', () => {
       body: body({
         backlog: {
           ...base.backlog,
-          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+          completeness: { unreadable: 2, unreadableJobs: 0 },
         },
       }),
     });
@@ -203,7 +204,7 @@ describe('progressCommand', () => {
       body({
         backlog: {
           ...base.backlog,
-          completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs },
+          completeness: { unreadable: 0, unreadableJobs },
         },
       });
     replies.push({ status: 200, body: withCount(0) });

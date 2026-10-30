@@ -104,7 +104,7 @@ describe('器の枠の状態（#2706）', () => {
       />,
     );
     const runner = containerOf(container, 'runner:unknown-runner');
-    expect(runner.textContent).toContain('器の分からない委譲');
+    expect(runner.textContent).toContain('器の分からないマネージャー');
     expect(runner.textContent).toContain('— 不明');
     expect(runner.querySelector('rect')!.getAttribute('stroke-dasharray')).toBe('6 4');
     expect(containerOf(container, 'runner:r1').textContent).not.toContain('不明');

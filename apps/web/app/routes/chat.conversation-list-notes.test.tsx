@@ -73,6 +73,31 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+describe('一覧の1行目', () => {
+  it('Markdown の記号を落とした素の文で出す（#5905）', async () => {
+    stubFetch((url) => {
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      return json({
+        conversations: [
+          {
+            conversationId: 'c1',
+            preview: '整理しました。 - 午前: 調査 - 午後: 実装 [リンク](https://example.com/x)',
+            updatedAt: '2026-10-06T00:00:00.000Z',
+            messages: 2,
+            unreadCount: 0,
+          },
+        ],
+        scanned: 2,
+        reachedStart: true,
+        hiddenByLimit: 0,
+      });
+    });
+    renderChat();
+
+    expect(await screen.findByText('整理しました。 午前: 調査 午後: 実装 リンク')).toBeTruthy();
+  });
+});
+
 function serve(first: () => Response, second?: () => Response) {
   stubFetch((url) => {
     if (url.includes('/approvals')) return json({ approvals: [] });
