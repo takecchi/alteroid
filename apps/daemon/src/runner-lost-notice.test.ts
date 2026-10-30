@@ -1,4 +1,4 @@
-import type { Job, JobStatus } from '@alteroid/core';
+import { HEARTBEAT_LOST_MS, type Job, type JobStatus } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -59,6 +59,8 @@ const NAMES = [
 describe('createRunnerLostNotice', () => {
   it('窓の長さは HEARTBEAT_LOST_MS と同じ 30 秒', () => {
     expect(RUNNER_LOST_COALESCE_MS).toBe(30_000);
+    // 写しではなく core の正本を指す: ずれたら片方だけ直る形を作らないため
+    expect(RUNNER_LOST_COALESCE_MS).toBe(HEARTBEAT_LOST_MS);
   });
 
   it('1: 1台だけ → 窓が閉じたとき、今と同じ文面で1通', () => {

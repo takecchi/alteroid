@@ -76,6 +76,8 @@ import {
   type RunnerResumeResult,
   unpushedWorkResultSchema,
   notePhase,
+  REGISTRY_RETRY_BASE_MS,
+  REGISTRY_RETRY_MAX_MS,
   writeStderrLine,
 } from '@alteroid/core';
 
@@ -107,9 +109,9 @@ export type RunnerDroppedEventReport =
       dropped: { key: string; count: number }[];
     };
 
-// 名簿側（`runner-protocol.ts` の `REGISTRY_RETRY_BASE_MS` / `REGISTRY_RETRY_MAX_MS`）の値の写し: あちらは export されておらず import できないため
-const RUNNER_STREAM_RETRY_BASE_MS = 1_000;
-const RUNNER_STREAM_RETRY_MAX_MS = 30_000;
+// 繋ぎ直しの間隔は名簿側と同じ値（core の `REGISTRY_RETRY_BASE_MS` / `REGISTRY_RETRY_MAX_MS`）を読む: 写すと片方だけ直るため
+const RUNNER_STREAM_RETRY_BASE_MS = REGISTRY_RETRY_BASE_MS;
+const RUNNER_STREAM_RETRY_MAX_MS = REGISTRY_RETRY_MAX_MS;
 
 // heartbeat の間隔の2倍にする（1倍にしない）: 1倍だと「1回も届かないうちに閾値へ達する」余地が残り、「間隔をまたいだ」と言い切れないため
 const CONNECTION_HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
