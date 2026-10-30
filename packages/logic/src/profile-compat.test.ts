@@ -40,6 +40,12 @@ describe('normalizeProfile', () => {
     expect(out.clone).toEqual({});
   });
 
+  it('entries の無い応答は、旧い形として読み替えずに投げる', () => {
+    expect(() => normalizeProfile(asState({ script: 'export A=1\n' }))).toThrow(
+      'プロファイルの応答が読めない形で届いた（entries が無い）',
+    );
+  });
+
   it('旧形式で script が空・欠けても落ちず、行は0', () => {
     expect(normalizeProfile(asState({ script: '' })).entries).toEqual([]);
     expect(normalizeProfile(asState({})).entries).toEqual([]);
