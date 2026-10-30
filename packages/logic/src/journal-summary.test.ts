@@ -9,7 +9,7 @@ import {
 } from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
-import { describeGithubCiText, summarizeJournalEntry } from './journal-summary.js';
+import { summarizeJournalEntry } from './journal-summary.js';
 
 describe('summarizeJournalEntry — daily_report', () => {
   const REASON = "You've hit your org's monthly spend limit";
@@ -309,7 +309,6 @@ describe('summarizeJournalEntry — github_observation の CI（#2608）', () =>
 
   it.each(cases)('%s: 要約は core の describeGithubCi と同じ文言を含む', (_label, extra) => {
     const ok = { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra } as const;
-    expect(describeGithubCiText(ok)).toBe(describeGithubCi(ok));
     expect(summarizeJournalEntry(observed(extra))).toBe(
       `a/b: open Issue 3 件 / open PR 2 件（観測者 clone） / ${describeGithubCi(ok)}`,
     );
@@ -403,7 +402,7 @@ describe('summarizeJournalEntry — localized（Web の表示。core の字面�
     for (const key of GITHUB_CI_COUNT_ORDER) {
       expected = expected.replace(`${key} `, `${GITHUB_CI_COUNT_LABEL[key]} `);
     }
-    expect(describeGithubCiText(ok, 'localized')).toBe(expected);
+    expect(describeGithubCi(ok, GITHUB_CI_COUNT_LABEL)).toBe(expected);
     const line = summarizeJournalEntry(observed(extra), 'localized');
     expect(line).toBe(
       `a/b: ${GITHUB_OPEN_LABEL.issue.localized} 3 件 / ${GITHUB_OPEN_LABEL.pull.localized} 2 件（記録したのは: クローン） / ${expected}`,
