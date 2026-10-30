@@ -7556,8 +7556,8 @@ export function createCloneTools(context: ToolContext) {
           active = await stores.tokens.readActive();
           activeLine =
             active === null
-              ? // `null` を「1本目が現役」と書かない: 器の環境変数だけで走っている既定の構成と、1本目を撒いた後は別の状態のため
-                '現役の指名: **まだ一度も無い**（器の環境変数のまま走っている）'
+              ? // `null` を「1本目が現役」と書かない: まだ何も撒いていない状態と、1本目を撒いた後は別の状態のため（器の環境変数へは倒れない）
+                '現役の指名: **まだ一度も無い**（プールからまだ一度も回していないので、鍵は撒かれていない）'
               : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`;
         } catch (error) {
           if (!(error instanceof UnreadableActiveTokenError)) throw error;
