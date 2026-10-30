@@ -629,7 +629,7 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
         request: '新しい方の依頼',
         startedAt: '2026-10-02T02:00:00.000Z',
         updatedAt: new Date().toISOString(),
-        waiting: [{ requestId: 'r1', summary: 'デプロイしてよいか', kind: 'question' }],
+        waiting: [{ requestId: 'r1', summary: 'デプロイしてよいか' }],
       }),
       managerRow('mgr-old', {
         status: 'done',
