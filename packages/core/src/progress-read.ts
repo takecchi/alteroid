@@ -1,6 +1,6 @@
 import { readConversationWindow } from './conversation.js';
 import { taskIsResponseJudgeable, taskRespondedAt } from './schema.js';
-import type { Commitment, Job, JournalEntry, UnreadableJob } from './schema.js';
+import type { JournalEntry } from './schema.js';
 import { summarizeProgress } from './progress.js';
 import type { ProgressSummary } from './progress.js';
 import { scanJournalPages } from './journal-scan.js';
@@ -22,60 +22,8 @@ export class InvalidProgressWindowError extends RangeError {
   }
 }
 
-/** `activeManagerIds` の導出の対象になりうる行（`origin` が `human` で `source` を持つ）か。 */
-function hasDelegationDerivableEntry(entries: readonly Commitment[]): boolean {
-  return entries.some((entry) => entry.origin === 'human' && entry.source !== undefined);
-}
-
 /**
- * 読めない委譲がどの台帳の行に紐づくかは、行が壊れているので言えない。行へ紐づけず、
- * 読めない行（id と不正な欄名だけ）をそのまま返す。
- */
-export async function readUnreadableJobsForCommitments(
-  stores: Stores,
-  entries: readonly Commitment[],
-): Promise<UnreadableJob[]> {
-  if (!hasDelegationDerivableEntry(entries)) return [];
-  return stores.jobs.listUnreadableJobs();
-}
-
-/**
- * 台帳の一覧（`GET /commitments`）の導出。進捗（`GET /progress`・`progress_read`）は台帳でなく task から数える（`readProgress`）ので使わない。
- * 返答の引き方（`readRepliesByConversation`）だけは進捗と共有する。
- * `readJobs` は、呼び手が既に job 一覧を読んでいるときに二重に読まないための差し込み口。
- */
-export async function buildCommitmentDerivations(
-  stores: Stores,
-  entries: readonly Commitment[],
-  readJobs: () => Promise<readonly Job[]> = () => stores.jobs.listJobs(),
-) {
-  const activeManagersByConversation = new Map<
-    string,
-    { managerId: string; createdAt: string }[]
-  >();
-  if (!hasDelegationDerivableEntry(entries)) {
-    return { repliesByConversation: new Map<string, string[]>(), activeManagersByConversation };
-  }
-
-  const repliesByConversation = await readRepliesByConversation(stores);
-
-  // `clone.managers.list()`（`ManagerSummary`）は `conversationId` を持たないので使わない。
-  for (const job of await readJobs()) {
-    if (job.conversationId === undefined) continue;
-    if (job.status !== 'running' && job.status !== 'waiting_human') continue;
-    const existing = activeManagersByConversation.get(job.conversationId);
-    const entry = { managerId: job.id, createdAt: job.createdAt };
-    if (existing) {
-      existing.push(entry);
-    } else {
-      activeManagersByConversation.set(job.conversationId, [entry]);
-    }
-  }
-  return { repliesByConversation, activeManagersByConversation };
-}
-
-/**
- * 会話 id ごとの、人間への返答の時刻（昇順）。台帳の行と task のどちらの「返事したか」も、これを引く（作法を1本にする）。
+ * 会話 id ごとの、人間への返答の時刻（昇順）。task の「返事したか」は、これを引く。
  */
 export async function readRepliesByConversation(stores: Stores): Promise<Map<string, string[]>> {
   const repliesByConversation = new Map<string, string[]>();
@@ -93,7 +41,7 @@ export async function readRepliesByConversation(stores: Stores): Promise<Map<str
 
 /**
  * 人間への返答の会話 id と時刻。器が口（`humanReplies`）を持てば、本文を読まずにそこから引く（#5089: pg で全履歴の往復を本文ごと読むのが
- * `/progress`・`/commitments` の時間の多くを占めていた）。持たなければ人間との往復を全部読んで作る。
+ * `/progress` の時間の多くを占めていた）。持たなければ人間との往復を全部読んで作る。
  */
 async function readHumanReplies(stores: Stores): Promise<{ conversationId: string; at: string }[]> {
   if (stores.journal.humanReplies !== undefined) return stores.journal.humanReplies();

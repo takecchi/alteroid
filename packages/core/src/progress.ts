@@ -15,9 +15,9 @@
 
 import { isRunningJobStatus } from './job-status-running.js';
 import {
-  commitmentOriginSchema,
+  taskOriginSchema,
   taskIsResponseJudgeable,
-  type CommitmentOrigin,
+  type TaskOrigin,
   type Job,
   type JobStatus,
   type Task,
@@ -92,8 +92,8 @@ export interface ProgressAgeBuckets {
 export interface ProgressBacklog {
   /** 未了（開いている task。`closedAt` が無い）の総数。`unreadable` は含まない。 */
   total: number;
-  /** `commitmentOriginSchema` の全値をキーに持つ。0 は「その origin の未了が無い」。 */
-  byOrigin: Record<CommitmentOrigin, number>;
+  /** `taskOriginSchema` の全値をキーに持つ。0 は「その origin の未了が無い」。 */
+  byOrigin: Record<TaskOrigin, number>;
   age: {
     /** 未了の中で最古の `createdAt`。未了が0件なら `null`。 */
     oldestAt: string | null;
@@ -182,9 +182,9 @@ function median(sortedAscending: readonly number[]): number | null {
   return lo === undefined ? hi : (lo + hi) / 2;
 }
 
-function emptyByOrigin(): Record<CommitmentOrigin, number> {
-  const out = {} as Record<CommitmentOrigin, number>;
-  for (const origin of commitmentOriginSchema.options) out[origin] = 0;
+function emptyByOrigin(): Record<TaskOrigin, number> {
+  const out = {} as Record<TaskOrigin, number>;
+  for (const origin of taskOriginSchema.options) out[origin] = 0;
   return out;
 }
 

@@ -1003,69 +1003,11 @@ export const schedulePhaseSchema = z.object({
 export type SchedulePhase = z.infer<typeof schedulePhaseSchema>;
 
 // 起点（`origin`）を落とさない: 落とすと、一覧を見たクローンが人間との約束か自分で思い立ったことかを区別できないため
-export const commitmentOriginSchema = z.enum(['human', 'manager', 'external', 'self']);
+// 台帳（Commitment）の撤去（#5469 P7）で名前を Task 側へ寄せた（`commitmentOriginSchema` → `taskOriginSchema`）。値は変えていない
+export const taskOriginSchema = z.enum(['human', 'manager', 'external', 'self']);
+export type TaskOrigin = z.infer<typeof taskOriginSchema>;
 
-// `origin` から導出しない: 人間が積んだ仕事をクローンが片付けることも、クローンが立てた仕事を人間が片付けることもあるため
-// 書き込み側だけをこの enum で縛る: `commitmentSchema.closedBy` に使うと、保存層（`parseCommitment`）は未知の enum 値1つで台帳の一覧を丸ごと読めなくするため
-// `'daemon'` は器が自動で閉じた行（#5015。枠の知らせの担当が戻ったとき）。かつて人間・クローンが否定するときは開き直した（`POST /commitments/:id/reopen`・`commitment_reopen`。どちらの口も段2a・2b で外れた。`autoCloseWhenBack` も外れるので器はまた閉じない）
-export const commitmentClosedBySchema = z.enum(['clone', 'human', 'daemon']);
-
-export const commitmentEditedBySchema = z.enum(['clone', 'human']);
-
-// 順序・優先度・締切を持たない: 持つと「やることの一覧」になり、判断をクローンに残せないため
-export const commitmentSchema = z.object({
-  id: z.string(),
-  at: isoDateTime,
-  origin: commitmentOriginSchema,
-  source: z.string().optional(),
-  // 要約にしない: 器が要約を持つと「頼まれた内容そのもの」が二度と取れなくなるため
-  body: z.string(),
-  closedAt: isoDateTime.optional(),
-  // 「閉じた」だけを残さない: 人間が後から否定するには、何をもって終わりとしたのかが要るため
-  closedReason: z.string().optional(),
-  // 既定へ倒さない: `undefined` は「この欄が入る前の行」で、`'clone'` / `'human'` へ倒すと黙って化けるため
-  // `z.enum` にしない: `parseCommitment` は未知の値1つで台帳の一覧を丸ごと読めなくし、未知の値は `undefined` へ潰さずそのまま保持するため
-  closedBy: z
-    .string()
-    .optional()
-    .describe(
-      "既知の値は 'clone' | 'human' | 'daemon'（commitmentClosedBySchema）。無いこともある" +
-        '（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、' +
-        '型としては任意の文字列を許す。',
-    ),
-  // `z.enum` を置かない: `closedBy` と同じく未知の値1つで台帳の一覧が丸ごと読めなくなるため（網羅性は書き込み側の型 `TextMarkup` と表示側の narrow で保つ）
-  bodyMarkup: z.string().optional(),
-  // 枠の知らせ（`quotaStop`）で開いた行に付く、「名指す担当が戻ったら器が閉じてよい」印（#5164）。再起動で閉じる候補を失わないよう台帳へ持たせる。
-  // 「失敗する前に出ていた本文」付きの知らせには付けない（進み具合が書かれているので、器は閉じない）。無い行は閉じる候補にならない
-  autoCloseWhenBack: z.object({ managerId: z.string() }).optional(),
-  // 開き直された行に付く消えない印（#5271）。器の自動クローズの候補にしない（印の無い古い行の道を含む）。
-  // 否定した直後に器が同じ合図でまた閉じないため（`autoCloseWhenBack` は開き直しで外れるので、外れたことだけでは古い行の道を塞げない）
-  autoCloseDeclined: z.literal(true).optional(),
-  // 日誌へ前後の本文を残さない編集の口を足さない: 台帳が静かに書き換わると、クローンが過去の自分を追えなくなるため
-  editedAt: isoDateTime.optional(),
-  editedBy: z
-    .string()
-    .optional()
-    .describe(
-      "既知の値は 'clone' / 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。" +
-        '台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。',
-    ),
-});
-
-export type CommitmentOrigin = z.infer<typeof commitmentOriginSchema>;
-export type CommitmentClosedBy = z.infer<typeof commitmentClosedBySchema>;
-export type CommitmentEditedBy = z.infer<typeof commitmentEditedBySchema>;
-export type Commitment = z.infer<typeof commitmentSchema>;
-
-// `reason` に依頼の本文（`body`）を載せない: `JSON.stringify(生の値)` を足すと、秘密がテスト出力へ全文で出た事故（`dropped-record.ts`）の再発になるため
-export const unreadableCommitmentSchema = z.object({
-  id: z.string().optional(),
-  at: isoDateTime.optional(),
-  reason: z.string(),
-});
-export type UnreadableCommitment = z.infer<typeof unreadableCommitmentSchema>;
-
-// 台帳（Commitment）と並べて新設した「順序と状態を持つ待ち行列」の1行（#5469 方針案1。P2 は型・ストア・道具まで）。
+// 順序と状態を持つ待ち行列の1行（#5469 方針案1。P2 は型・ストア・道具まで）。
 // waiting = 委譲または人間の返事待ち、needs_decision = 委譲が終わった/失敗した/lost になってクローンの判断待ち。
 // P2 では状態を設定できるだけで、委譲の終わりからの自動遷移は P3 の仕事。
 export const taskStatusSchema = z.enum([
@@ -1076,7 +1018,8 @@ export const taskStatusSchema = z.enum([
   'cancelled',
 ]);
 
-// 書き込み側だけをこの enum で縛る（`commitmentClosedBySchema` と同じ理由）: 保存層に使うと未知の値1つで一覧が丸ごと読めなくなる
+// 書き込み側だけをこの enum で縛る: 保存層に使うと未知の値1つで一覧が丸ごと読めなくなる
+// `origin` から導出しない: 人間が積んだ仕事をクローンが片付けることも、クローンが立てた仕事を人間が片付けることもあるため
 export const taskClosedBySchema = z.enum(['clone', 'human', 'daemon']);
 
 // 並び（位置）を行の欄にしない: 位置は他の行との関係で決まるので、行を書き直すたびに隣の行と食い違いうる。ストアが持つ（`task.ts` の placeTask）
@@ -1087,18 +1030,18 @@ export const taskSchema = z.object({
   // 状態・閉じた記録の更新で動く。本文の版には使わない
   updatedAt: isoDateTime,
   status: taskStatusSchema,
-  origin: commitmentOriginSchema,
+  origin: taskOriginSchema,
   source: z.string().optional(),
   // P2 では任意: 台帳から自動で task を作らない（二重書き込みをしない）ので、起点の会話が定まらない task が生まれるため。
   // 必須にするのは P4（`task_say` で会話の宛先を task に固定するとき）。それまで必須にすると、起点の無い task を作る道具が嘘の会話 id を要求する
   originConversationId: z.string().optional(),
   // 短い一行。一覧にはこれと要旨だけを出し、全文は id 指定の口へ回す（listing-and-detail）
   title: z.string(),
-  // 要約にしない: 器が要約を持つと「頼まれた内容そのもの」が二度と取れなくなるため（`commitmentSchema.body` と同じ）
+  // 要約にしない: 器が要約を持つと「頼まれた内容そのもの」が二度と取れなくなるため
   body: z.string(),
   closedAt: isoDateTime.optional(),
   closedReason: z.string().optional(),
-  // `z.enum` にしない（`commitmentSchema.closedBy` と同じ理由）
+  // `z.enum` にしない: 未知の値1つで一覧が丸ごと読めなくなるため
   closedBy: z
     .string()
     .optional()
@@ -1117,7 +1060,7 @@ export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskClosedBy = z.infer<typeof taskClosedBySchema>;
 export type Task = z.infer<typeof taskSchema>;
 
-// `reason` に本文を載せない理由は `unreadableCommitmentSchema` と同じ
+// `reason` に依頼の本文（`body`）を載せない: `JSON.stringify(生の値)` を足すと、秘密がテスト出力へ全文で出た事故（`dropped-record.ts`）の再発になるため
 export const unreadableTaskSchema = z.object({
   id: z.string().optional(),
   createdAt: isoDateTime.optional(),
@@ -1125,38 +1068,14 @@ export const unreadableTaskSchema = z.object({
 });
 export type UnreadableTask = z.infer<typeof unreadableTaskSchema>;
 
-export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>): string {
-  return entry.closedAt ?? entry.at;
-}
-
-// 会話（`source`）の無い human の行を「判定できない」と分ける: 返事も委譲も会話に結んで探すので、結べない行の「返事なし」は「未着手」ではなく「見えない」であり、丸めて「未着手」と言うと嘘になるため（#4817、teto（クローン）が案A に決定）
-export function commitmentIsResponseJudgeable<C extends Pick<Commitment, 'origin' | 'source'>>(
-  commitment: C,
-): commitment is C & { origin: 'human'; source: string } {
-  return commitment.origin === 'human' && commitment.source !== undefined;
-}
-
-// 新しい状態を「書く」場所を作らず、既存の日誌の `exchange` を読むだけにする: クローンが手で維持する欄を足すと、クローンはそれを忘れるため
-// 「人間の回答待ち」は出さない: `PendingApproval` と `Commitment` を結ぶ id が無く、結べないものを出すと判定を丸めた嘘になるため
-export function commitmentRespondedAt(
-  commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
-  humanOutboundRepliesByConversation: ReadonlyMap<string, readonly string[]>,
-): string | undefined {
-  if (!commitmentIsResponseJudgeable(commitment)) return undefined;
-  const replies = humanOutboundRepliesByConversation.get(commitment.source);
-  if (replies === undefined) return undefined;
-  // 並べ直さない: ソートは組み立て側で1回だけ行うため
-  return replies.find((at) => at > commitment.at);
-}
-
-// 返事を結ぶ会話は task の `originConversationId`（台帳の `source` に当たる）。無い human の task は「判定できない」（`commitmentIsResponseJudgeable` と同じ理由）
+// 返事を結ぶ会話は task の `originConversationId`。無い human の task は「判定できない」: 返事も委譲も会話に結んで探すので、結べない行の「返事なし」は「未着手」ではなく「見えない」であり、丸めて「未着手」と言うと嘘になるため（#4817、teto（クローン）が案A に決定）
 export function taskIsResponseJudgeable<T extends Pick<Task, 'origin' | 'originConversationId'>>(
   task: T,
 ): task is T & { origin: 'human'; originConversationId: string } {
   return task.origin === 'human' && task.originConversationId !== undefined;
 }
 
-// 作法は `commitmentRespondedAt` と同じ（日誌の `exchange` を読むだけ。`createdAt` より後の最初の返答）
+// 新しい状態を「書く」場所を作らず、既存の日誌の `exchange` を読むだけにする: クローンが手で維持する欄を足すと、クローンはそれを忘れるため（`createdAt` より後の最初の返答）
 export function taskRespondedAt(
   task: Pick<Task, 'origin' | 'originConversationId' | 'createdAt'>,
   humanOutboundRepliesByConversation: ReadonlyMap<string, readonly string[]>,
@@ -1166,21 +1085,6 @@ export function taskRespondedAt(
   if (replies === undefined) return undefined;
   // 並べ直さない: ソートは組み立て側で1回だけ行うため
   return replies.find((at) => at > task.createdAt);
-}
-
-// `at` より後に始まった委譲だけを数える: 行より前の委譲は、別の古い頼みごとに応えたものである可能性が高いため
-export function commitmentActiveDelegationIds(
-  commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
-  activeManagersByConversation: ReadonlyMap<
-    string,
-    readonly { managerId: string; createdAt: string }[]
-  >,
-): string[] | undefined {
-  if (!commitmentIsResponseJudgeable(commitment)) return undefined;
-  const managers = activeManagersByConversation.get(commitment.source);
-  if (managers === undefined) return undefined;
-  const ids = managers.filter((m) => m.createdAt > commitment.at).map((m) => m.managerId);
-  return ids.length === 0 ? undefined : ids;
 }
 
 // `lost` を `done` と一緒にしない: 潰すと、戻せなかった仕事が「完了」として片付き、誰も起こし直さないまま消えるため

@@ -1,6 +1,6 @@
 import { assertNoNul, stripNulWellFormed as cleanText } from './nul-guard.js';
 import { taskSchema } from './schema.js';
-import type { CommitmentOrigin, JobStatus, Task, TaskClosedBy, TaskStatus } from './schema.js';
+import type { TaskOrigin, JobStatus, Task, TaskClosedBy, TaskStatus } from './schema.js';
 import { compareIsoInstant } from './iso-instant.js';
 
 // Task の状態遷移と並びの規則。純関数だけを置き、メモリ・fs・pg の3実装が同じものを呼ぶ。
@@ -52,7 +52,7 @@ export type TaskPlacement =
 export interface TaskRankRow {
   readonly id: string;
   readonly rank: number;
-  readonly origin: CommitmentOrigin;
+  readonly origin: TaskOrigin;
 }
 
 export type TaskPlacementResult =
@@ -78,7 +78,7 @@ export const TASK_RANK_STEP = 1024;
 export function placeTask(
   open: readonly TaskRankRow[],
   placement: TaskPlacement | undefined,
-  origin: CommitmentOrigin,
+  origin: TaskOrigin,
 ): TaskPlacementResult {
   const index = insertionIndex(open, placement ?? defaultPlacement(open, origin));
   if (index === undefined) return { kind: 'anchor-not-found' };
@@ -111,7 +111,7 @@ export function placeTask(
   return { kind: 'placed', rank: placedRank, renumber };
 }
 
-function defaultPlacement(open: readonly TaskRankRow[], origin: CommitmentOrigin): TaskPlacement {
+function defaultPlacement(open: readonly TaskRankRow[], origin: TaskOrigin): TaskPlacement {
   if (origin !== 'human') return { kind: 'back' };
   const lastHuman = open.findLast((row) => row.origin === 'human');
   return lastHuman === undefined ? { kind: 'front' } : { kind: 'after', anchorId: lastHuman.id };

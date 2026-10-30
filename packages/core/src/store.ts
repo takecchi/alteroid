@@ -30,9 +30,6 @@ import type {
 } from './task.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
-  Commitment,
-  CommitmentClosedBy,
-  CommitmentEditedBy,
   InboxEvent,
   Job,
   JournalEntry,
@@ -54,7 +51,6 @@ import type {
   TaskStatus,
   UnreadableApproval,
   UnreadableTask,
-  UnreadableCommitment,
   UnreadableInboxEvent,
   UnreadableJob,
   UnreadablePermissionGrant,
@@ -339,7 +335,7 @@ export interface JournalStore {
 
   /**
    * 人間への返答（`exchange`・`with: 'human'`・`role: 'outbound'`・`conversationId` を持つ行）の会話 id と時刻だけを返す（#5089）。並びは契約しない。
-   * 台帳の「返答済み」の判定（`buildCommitmentDerivations`）が、全履歴の人間との往復を本文ごと読まずに済ませるための口。
+   * 待ち行列の「返答済み」の判定（`readRepliesByConversation`）が、全履歴の人間との往復を本文ごと読まずに済ませるための口。
    * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。
    * 省略可能: 持たない器では、呼び手が `readConversationWindow` で読んだ往復から同じものを作る。
    */
@@ -502,7 +498,7 @@ export class UnreadableAccountError extends Error {
 }
 
 /**
- * `JobStore.listApprovals` の返り値（`CommitmentList` と同じ形）。
+ * `JobStore.listApprovals` の返り値（`TaskList` と同じ形）。
  * `PendingApproval[]` のままにしない: 読めない行を空配列へ潰すと、人間もクローンも読めない承認待ちが在ることに気づけない。
  */
 export interface ApprovalList {
@@ -637,7 +633,7 @@ export interface JobStore {
 
   /**
    * 承認待ちの一覧。読めない行（`pendingApprovalSchema` に合わない行）は一覧全体を落とさず `unreadable` に別欄で返す
-   * （`CommitmentStore.list` と同じ形）。メモリ実装は常に空。並び順は契約しない。
+   * （`TaskStore.list` と同じ形）。メモリ実装は常に空。並び順は契約しない。
    *
    * `conversationId` を渡すと `entries` をその会話の確認だけに絞る（`pendingOnly` と併用可。並びは変えない）。
    * `unreadable` も会話で絞る: 生の行の `conversationId` がその会話と一致する読めない行だけが載る。
@@ -779,7 +775,7 @@ export class UnreadableScheduleError extends Error {
 }
 
 /**
- * `ScheduleStore.list` の返り値（`ApprovalList` / `CommitmentList` と同じ形）。
+ * `ScheduleStore.list` の返り値（`ApprovalList` / `TaskList` と同じ形）。
  * `ScheduledRequest[]` のままにしない: 読めない行を空配列へ潰すと、クローンも人間も読めない依頼が在ることに気づけない。
  */
 export interface ScheduleList {
@@ -948,288 +944,8 @@ export interface ScheduleStore {
 }
 
 /**
- * `CommitmentStore.get(id)` が、その行を `commitmentSchema` として読めなかったときに投げる。
- * 呼び出し側（`commitment_list` の全文モード）は throw を、台帳の1行が壊れている（安全側は「読めない」と伝えて返す）と、
- * 器そのものの障害（安全側は握り潰さず上へ投げる）に割る必要がある。前者を後者と同じに握り潰すと器の異常が「台帳が壊れている」に化ける。
- * `instanceof` で見分ける（メッセージの文字列で判定すると言い回しの修正で静かに外れる）。
- */
-export class UnreadableCommitmentError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UnreadableCommitmentError';
-  }
-}
-
-/**
- * `UnreadableCommitmentError` を人間・クローンへ返す1文へ変換する共通の文面。
- * HTTP の口と道具が別ファイルなので、同じ状況の説明を手で書くと片方だけ直して食い違う。
- *
- * 台帳へ書く口はクローンにも人間にも無い（台帳の撤去の段2a・2b）ので、読めない行を閉じる・書き直す案内は載せない。
- */
-export function describeUnreadableCommitment(error: UnreadableCommitmentError): string {
-  return `${error.message}。台帳は読むだけで、読めない形の行は閉じることも書き直すこともできない。`;
-}
-
-/**
- * `CommitmentStore.list` の返り値。
- * `Commitment[]` のままにしない: 保存された形と、いま動いているコードが読める形は将来ずれうる。ずれた行を空配列へ潰すと、
- * クローンが引き受けたことを二度と思い出さない。型に載せれば `unreadable` の読み飛ばしがコンパイラの目に触れる。
- */
-export interface CommitmentList {
-  entries: Commitment[];
-  /** 読めなかった行。「無い」でも「片付いた」でもない第3の状態。 */
-  unreadable: UnreadableCommitment[];
-  /**
-   * `close()` の契約（「行は消さない」）を実装が守れなかった累計 — 保持上限を超えて物理削除された、片付いた行の件数。
-   * 契約を守れている実装は常に `0` を返す（`storage-pg` とインメモリ。`storage-fs` だけが `CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する）。
-   * 0 は「削除を数えていない」ではなく「削除が起きていない」を意味する。揃っていない保持方針の事実を隠さずに運ぶのがこの欄の役目。
-   */
-  trimmedClosed: number;
-}
-
-/**
- * `CommitmentStore.open` が実際に何をしたか。
- *
- * `boolean` のままにしない: 開かなかった理由が「同じ id が既に在った」（冪等性）と「同一マネージャー×同一本文の未了へ任せた」
- * （{@link findOpenManagerDuplicate}）の2つあり、1つの `false` へ潰すと `Clone` 側の区別（`CommitOutcome` の `'existed'` と `'folded'`）が失われる。
- * 文字列の union にもしない: `'existed'` も `'folded'` も truthy なので、`if (await store.open(entry))` と書いた呼び出しが型検査を通ったまま意味を反転させる。
- */
-export interface CommitmentOpenResult {
-  readonly opened: boolean;
-  /** 同一マネージャー×同一本文の未了へ任せたか（畳んだか）。`opened` が `true` なら必ず `false`。両方 `false` なら「同じ id が既に在った」。 */
-  readonly folded: boolean;
-  /**
-   * 畳んだ先の行の id。
-   * 畳んだのに分からないことがある: `storage-pg` は「探す」と「入れる」を1文に畳んでいるので、同じ文が同時に走って DB の制約で弾かれた場合、
-   * 読み取りスナップショットに相手の行が無い。嘘の id を埋めないために任意にしてある（fs と in-memory は常に持つ）。
-   */
-  readonly foldedInto?: string;
-}
-
-/**
- * `CommitmentStore.reopen` が実際に何をしたか。
- *
- * `boolean` にしない: 「無い」と「閉じていない」は呼び出し側の応答が違う（404 と 409）。
- * `before` を返す: 開き直すと `closedAt` / `closedReason` / `closedBy` が行から消えるので、呼び出し側が日誌へ逐語で残す材料はここにしか無い。
- */
-export type CommitmentReopenResult =
-  | { readonly kind: 'reopened'; readonly before: Commitment }
-  | { readonly kind: 'not-found' }
-  | { readonly kind: 'not-closed' }
-  /** 開き直すと {@link findOpenManagerDuplicate} と同じ規則で重複になる。何も書いていない（行は閉じたまま）。 */
-  | { readonly kind: 'duplicate-open'; readonly openId: string };
-
-/**
- * 閉じた行から、閉じた記録（`closedAt` / `closedReason` / `closedBy`）と `autoCloseWhenBack` を外し、`autoCloseDeclined: true` を付けた写しを返す（`CommitmentStore.reopen` の書き込み側）。
- * 外す欄の規則をここに1本だけ置く: in-memory と fs がそれぞれ持つと、片方だけ欄が増えたときにずれる（`storage-pg` だけは SQL で同じ欄を外す）。
- */
-export function withoutClosedRecord(entry: Commitment): Commitment {
-  const reopened = { ...entry };
-  delete reopened.closedAt;
-  delete reopened.closedReason;
-  delete reopened.closedBy;
-  delete reopened.autoCloseWhenBack;
-  reopened.autoCloseDeclined = true;
-  return reopened;
-}
-
-/**
- * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ `body` の未了行を `entries` から探す。
- * 判定の規則をここに1本だけ置く: 3実装がそれぞれ持つと必ずずれる。`storage-pg` だけが同じ規則を SQL で書き直す
- * （DB の制約にしないとプロセスを跨げない）ので、3実装が同じ答えを返すことを `commitment-fold-contract.ts` が測る。
- *
- * 対象はマネージャー起因の行だけ: 無限連投の形（同一マネージャーの合成通知が同文のまま連投される）は `origin: 'manager'` にしか出ない。
- * 人間の発言・回答・外部イベントまで畳むと、たまたま同じ文言になった別々の発言を1件に潰しかねない。
- * `source` が無い行どうしは重複と数えない（出所の分からない行どうしを「同じマネージャー」とは言えない。pg の `foldable` と同じ）。
- * 閉じたあとの同文は畳まない: 「二度と報告できなくなる」側には倒さない。
- *
- * 見つかった行を返す（`boolean` ではない）。呼び出し側は {@link CommitmentOpenResult.foldedInto} へその id を載せる義務がある:
- * どの行へ任せたか分からないと、クローンはその仕事を閉じる手段を持たない。
- */
-export function findOpenManagerDuplicate(
-  entries: readonly Commitment[],
-  entry: Commitment,
-): Commitment | undefined {
-  if (entry.origin !== 'manager' || entry.source === undefined) return undefined;
-  return entries.find(
-    (existing) =>
-      existing.closedAt === undefined &&
-      existing.origin === 'manager' &&
-      existing.source === entry.source &&
-      existing.body === entry.body,
-  );
-}
-
-/**
- * 台帳の行の本文の「版」。`editedAt ?? at` で、クライアントが `GET /commitments` の行から同じ式で出せる（欄は足さない）。
- * `commitmentUpdatedAt`（`closedAt ?? at`）とは別物で、本文の編集では動かない。時刻なので、同じミリ秒に2回書かれると区別できない。
- */
-export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>): string {
-  return entry.editedAt ?? entry.at;
-}
-
-/**
- * `CommitmentStore.editBody` の結果。`CommitmentReopenResult` の `before` と同じ作り。
- * `before` は書き換えと同じ排他の中で読んだ行（上書きされる前の本文を持つ）。呼び出し側が先に読んだ行とは限らない。
- */
-export type CommitmentEditResult =
-  | { readonly kind: 'edited'; readonly before: Commitment }
-  /** 片付いている行・無い id。何も書いていない。 */
-  | { readonly kind: 'not-edited' };
-
-export interface EditCommitmentBodyOptions {
-  /** 前提の版（`commitmentBodyVersion`）。書く瞬間の版と違えば書かず `CommitmentConflictError`。省略は後勝ち。無い行は `current: null` の衝突。片付いている行は版を見ず `false`。 */
-  ifMatch?: string;
-}
-
-/** 前提の版が合わず、書かなかった。`current` はいまの行（消えていれば `null`）。 */
-export class CommitmentConflictError extends Error {
-  readonly current: Commitment | null;
-  constructor(id: string, current: Commitment | null) {
-    super(`引き受けた仕事が読んだ後に変わっています: ${id}`);
-    this.name = 'CommitmentConflictError';
-    this.current = current;
-  }
-}
-
-/** 前提の版 `ifMatch` が、いまの行と合うか（`undefined` は前提なし＝常に合う）。 */
-export function commitmentVersionMatches(
-  current: Pick<Commitment, 'at' | 'editedAt'> | null,
-  ifMatch: string | undefined,
-): boolean {
-  if (ifMatch === undefined) return true;
-  return current !== null && commitmentBodyVersion(current) === ifMatch;
-}
-
-/**
- * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `Commitment`）。
- * 受信箱（`InboxStore`）とは守るものが違う: あちらは配達の状態（ターンが終われば消える）、こちらは仕事の状態（ターンが終わっても残る）で、片方でもう片方を代用できない。
- */
-export interface CommitmentStore {
-  /**
-   * 台帳を返す。**未了は古い順**（齢が判断の材料なので古いものから見せる）、片付いたものは新しい順で未了の後ろに続く。`includeClosed` を省いたら未了だけ。
-   * 1行が読めなくても、その行だけが `unreadable` へ回り `entries` は返る。`entries` の順序・件数は読めた行だけで見た台帳の姿で、読めなかった行は数え上げに紛れ込まない。
-   */
-  list(options?: { includeClosed?: boolean }): Promise<CommitmentList>;
-
-  /**
-   * 1件を読む。「無い（`null`）」と「読めない」は別物: 単票なので型へ逃がす先が無く、読めない行は `UnreadableCommitmentError` を投げる。
-   * 呼び出し側（`commitment_list`）は `instanceof` で捕まえて「読めない」を返し、それ以外の例外（器そのものの障害）は上へ通す。
-   *
-   * NUL: 読むだけの口（`get`・`close`・`closeMany`・`editBody` の id）は NUL を含む id でも断らず「無い」と同じ結果（`null`・`false`・`not-edited`・閉じた id に含めない）を返す。
-   * `open` は `id` の NUL を `NulNotAllowedError` で断り、`body`・`closedReason` の NUL は落として残す（3実装とも）。
-   * `source`（出所の注記。行を指す鍵ではない）の NUL も断らず落として残す（畳み込みの判定も落とした値で揃う）:
-   * 断ると引き受けた仕事が台帳から消え、害が大きいのはそちら（`UsageStore` と同じ事情）。
-   */
-  get(id: string): Promise<Commitment | null>;
-
-  /**
-   * 未了として開く。**同じ id が既に在れば何もしない**（開いたら `opened: true`）。
-   *
-   * 冪等であることがこの器の要: 受信箱の合図は配り直されうるので、その id を使う自動 open は同じ id で二度呼ばれる。上書きすると、一度片付けた仕事が配り直しのたびに開き直る。
-   *
-   * 同一マネージャー×同一本文×未了も開かない（規則は {@link findOpenManagerDuplicate}）。この判定を呼び出し側（読んでから書く形）へ戻さない:
-   * `list()` → 判定 → `open()` と割ると、同じストアを指す2つのデーモンが同時に post したときに台帳が2行に割れる。
-   *
-   * 「読みと書きを同じ排他区間に入れる」だけでは実装によって強さが違う: in-memory の排他はプロセス内の `Map` で、2プロセスが同じストアを指すと効かない。
-   * fs は `withPathLock`（advisory なファイルロック）で、ロックを見ない書き手は防げず、`staleMs` を過ぎた古いロックの回収は lease（同時に区間へ入りうる）。
-   * 書き手が何であっても拒む強さでプロセスを跨いで原子なのは `storage-pg` だけ。契約の歯（`commitment-fold-contract.ts`）が測るのは同一プロセスの同期区間までで、それ以上をこの歯だけで名乗らせない。
-   */
-  open(entry: Commitment): Promise<CommitmentOpenResult>;
-
-  /**
-   * 片付いたことを記録する。閉じたら `true`、無い id と既に閉じているものは `false`。
-   *
-   * 契約は「行は消さない」: 消すと「何を片付けたか」が日報の材料から落ちる（人間が普段読むのは日報だけ。PRD「可観測性」）。
-   * ただし `storage-fs` は毎回ファイル全体を書き直す器なので、片付いた行が積もると書き込み費用が台帳の齢に比例して増える。
-   * それを避けるため `CLOSED_HISTORY_LIMIT` 件を超えた古い片付き行を物理削除する（`trimClosed`）。`storage-pg` とインメモリは行を消さない。
-   * 実装が行を消したら、消した累計件数を `CommitmentList.trimmedClosed` で申告すること: 契約からの逸脱を型の外で握り潰さない。
-   *
-   * `by` は必須: optional にすると「誰が閉じたか」を決めずに通せてしまう。必須にすれば決めていない呼び出しはコンパイルエラーで立ち止まる。
-   */
-  close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean>;
-
-  /**
-   * 複数件を1回でまとめて片付いたことを記録する。
-   *
-   * `close()` を `ids` の件数だけ呼び出し側でループしない: `storage-fs` は `close()` のたびに台帳の JSON 全体を tmp へ書いて置き換えるので、
-   * 500件を閉じれば500回の全体書き直しになる。`closeMany` は複数件を1回の排他区間・1回の更新へ畳む（`storage-pg` は `inArray` の UPDATE 1本、`storage-fs` は `#update` の排他区間を1回）。
-   *
-   * 戻り値は実際に閉じた id の配列で、件数ではない（存在しない id・既に閉じていた id は含まない）:
-   * 呼び出し側（`tools.ts` の一括 close）に「閉じた id を全部日誌へ残す」義務があり、件数だけでは後から組み立てる材料が無い。
-   * `ids` が空なら何も書かずに `[]`。同じ id を重複して渡しても二重に閉じず、返る id も重複しない。
-   * `ids` の件数に上限を持たない: 呼び出し側が既に1回あたりの上限（2000件以下）で抑えており、ここにも持たせると、どちらの上限が効いたのか外から読めなくなる。
-   * 行は消さない（`close()` の契約を継承）。`by` は必須（理由は `close()`）。
-   */
-  closeMany(
-    ids: readonly string[],
-    at: string,
-    reason: string,
-    by: CommitmentClosedBy,
-  ): Promise<string[]>;
-
-  /**
-   * 閉じた行を未了へ戻す。`open` は冪等のまま変えない（同じ id の `open` は閉じた行を蘇らせない）ので、開き直す口は別に持つ。
-   * 人間の口（`POST /commitments/:id/reopen`）もクローンの道具（`commitment_reopen`）も外れた（台帳の撤去の段2a・2b）ので、いまの呼び手は移行・試験だけで、受信箱の配り直しからは呼ばれない。契約は段3で store ごと外すまで保つ。
-   *
-   * `closedAt` / `closedReason` / `closedBy` を外し、`autoCloseWhenBack` も外す: 器が自動で閉じた行を人間が否定したのに、
-   * 担当が戻った合図で器がまた閉じると、否定が黙って覆る。外した印の代わりに消えない印 `autoCloseDeclined: true` を付ける（#5271）:
-   * 印を外しただけでは、印の無い古い行の道（再起動後の掃除が本文の定型だけで候補へ戻す）と、候補の Map に残った行が、開き直した行をまた閉じる。
-   * `id` / `at` / `origin` / `source` / `body` / `bodyMarkup` / `editedAt` / `editedBy` は変えない
-   * （受け取った時刻と起点が切れないことが、新しく積み直さずに開き直す理由）。
-   *
-   * 閉じているかの判定と書き込みは1操作に畳む（読んでから書く形にしない。`close` / `editBody` と同じ）。
-   * 開き直した行が同一マネージャー×同一本文の未了と重複するなら、何も書かず `duplicate-open`（`open` が守る不変条件を、開き直しの経路で破らない。
-   * `storage-pg` はこの組に部分一意索引を持つので、破ると UPDATE が一意制約違反で落ちる）。判定は書き込みと同じ排他区間で行う。
-   * 読めない行は `get` と同じく `UnreadableCommitmentError` を投げ、書き直さない。NUL を含む id は `not-found`。
-   * 外した閉じた記録は行から消えるので、呼び出し側は `before` を日誌へ逐語で残すこと。
-   */
-  reopen(id: string): Promise<CommitmentReopenResult>;
-
-  /**
-   * `body` を書き換える。まだ片付いていない行だけ: 片付いている行・無い id は `{ kind: 'not-edited' }`。
-   * 書いたら `{ kind: 'edited', before }`。`before` は書き換えと同じ排他の中で読んだ行で、実際に上書きした本文を持つ
-   * （呼び出し側が先に読んだ行は、読んでから書くまでに別の書き手が変えているかもしれない）。
-   * 書き換えるのは `body` / `editedAt` / `editedBy` の3つだけで、`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` には触れない。
-   *
-   * `origin` の判定はここでは行わない: `origin` は開いたときから変わらず並行に呼ばれても競合しない。
-   * 競合しうる不変条件（まだ閉じていない）だけをストアの1操作へ畳み、競合しない方針判断（どの `origin` の行を直してよいか）は呼び出し側に残す
-   * （AGENTS.md「不変条件はストアの1操作に閉じること」）。
-   *
-   * `by` は必須（理由は `close` の `by`）。呼ぶ口（人間の `PATCH /commitments/:id`・クローンの `commitment_edit`）は外れた（台帳の撤去の段2a・2b）ので、いまの呼び手は試験だけ。契約は段3で store ごと外すまで保つ。
-   *
-   * 呼び出し側は、編集の前後の本文を日誌へ逐語で残すこと。台帳が守っているのは不変性ではなく追跡可能性で（`commitmentSchema.editedAt`）、
-   * 原文が日誌から読み戻せない編集の口はその線を壊す。日誌は別のストアなのでストアは強制できない: 新しい呼び出し元を足すなら `journal.append` を必ず対にする。
-   */
-  editBody(
-    id: string,
-    body: string,
-    at: string,
-    by: CommitmentEditedBy,
-    options?: EditCommitmentBodyOptions,
-  ): Promise<CommitmentEditResult>;
-
-  /**
-   * 全件を消す（ワークスペースのリセット専用）。未了・片付いた行の両方、`unreadable` に回っていた読めない行も含めて消す。消した件数を返す。
-   * `close()` / `closeMany()` の「行は消さない」契約とは別の操作で、人間が明示的に「引き受けた仕事ごと全部忘れる」と決めたときにしか呼ばれない。
-   */
-  clear(): Promise<number>;
-
-  /**
-   * ある会話から自動で開いた行を、物理的に消す（会話の削除）。`origin: 'human'` かつ `source === conversationId` の行を、
-   * 未了・片付いた行の両方とも消し、消した件数を返す。別の会話の行・`origin: 'self'` / `'manager'` の行には触れない。
-   * `close()` の「行は消さない」契約とは別の操作で、呼ばれるのは人間が会話の削除を明示したときだけ。
-   *
-   * `editBody` で本文を空にして代用しない: 編集の前後の本文は日誌へ逐語で残す決まりで、秘密を日誌へ写し直すことになる。
-   * 読めない行（`list()` の `unreadable`）も `clear()` / `closeMany()` と同じ作法で、生の値の `origin` / `source` が一致すれば消す（3実装で揃える。pg は jsonb の欄をそのまま見る）。
-   * `conversationId` に NUL を含むときは「無い」と同じ（0件）。刈られた id（fs の `trimmedClosedIds`）は触らない。
-   */
-  removeForConversation(conversationId: string): Promise<number>;
-}
-
-/**
- * `TaskStore.get(id)` などが、その行を `taskSchema` として読めなかったときに投げる（`UnreadableCommitmentError` と同じ理由・同じ作法）。
- * `instanceof` で見分ける: 器の障害と台帳の1行の破損は返し方が違う。
+ * `TaskStore.get(id)` などが、その行を `taskSchema` として読めなかったときに投げる。
+ * `instanceof` で見分ける: 器の障害と1行の破損は返し方が違う（メッセージの文字列で判定すると言い回しの修正で静かに外れる）。
  */
 export class UnreadableTaskError extends Error {
   constructor(message: string) {
@@ -1238,7 +954,7 @@ export class UnreadableTaskError extends Error {
   }
 }
 
-/** `TaskStore.list` の返り値。`CommitmentList` と同じ理由で、読めない行を `unreadable` として別に返す（一覧を丸ごと潰さない）。 */
+/** `TaskStore.list` の返り値。読めない行を `unreadable` として別に返す（一覧を丸ごと潰さない）。 */
 export interface TaskList {
   /** 開いている行は並び順（先頭が最優先）。`includeClosed` のときは、その後ろに閉じた行が新しい順で続く。 */
   entries: Task[];
@@ -1247,7 +963,7 @@ export interface TaskList {
 }
 
 /**
- * 順序と状態を持つ待ち行列（`schema.ts` の `Task`）。`CommitmentStore` と並べて新設した（#5469 P2）。台帳から自動では移さない。
+ * 順序と状態を持つ待ち行列（`schema.ts` の `Task`）（#5469 P2）。
  *
  * 並びは行の欄ではなくストアが持つ位置で、規則は `task.ts`（`placeTask` / `setTaskRowStatus`）に1本だけある。3実装はそれを呼ぶだけで、
  * 規則を自前で持たない。契約は `task-store-contract.ts` が3実装に同じ歯を当てて測る。
@@ -1259,7 +975,7 @@ export interface TaskStore {
   /** 並び順で返す。`includeClosed` を省くと開いている行（queued / waiting / needs_decision）だけ。 */
   list(options?: { includeClosed?: boolean }): Promise<TaskList>;
 
-  /** 1件を読む。無ければ `null`、読めない行は `UnreadableTaskError`（`CommitmentStore.get` と同じ）。 */
+  /** 1件を読む。無ければ `null`、読めない行は `UnreadableTaskError`。 */
   get(id: string): Promise<Task | null>;
 
   /**
@@ -1273,7 +989,7 @@ export interface TaskStore {
 
   /**
    * 状態を変える。遷移の規則は `planTaskTransition`。同じ状態は `unchanged`、不正な遷移は `rejected`（例外にしない）。
-   * `by` は必須（`CommitmentStore.close` と同じ理由）。閉じた行を queued に戻すと閉じた記録を外し、既定の規則（`placeTask` の既定の置き場所。human 起点は開いている human 起点の最後の直後、それ以外は末尾）で置き直すので、
+   * `by` は必須: optional にすると「誰が閉じたか」を決めずに通せてしまう。必須にすれば決めていない呼び出しはコンパイルエラーで立ち止まる。閉じた行を queued に戻すと閉じた記録を外し、既定の規則（`placeTask` の既定の置き場所。human 起点は開いている human 起点の最後の直後、それ以外は末尾）で置き直すので、
    * 呼び出し側は `before` を日誌へ逐語で残すこと。読めない行は `UnreadableTaskError`。
    */
   setStatus(
@@ -1300,7 +1016,7 @@ export interface TaskStore {
   /**
    * ある会話を起点とする行を、物理的に消す（会話の削除。#5899）。`originConversationId === conversationId` の行と、台帳から移した起点の欄の無い行
    * （`origin` が `human` / `self` で `source === conversationId`。`isTaskOfConversation`）を、未了・閉じた行の両方とも消し、消した件数を返す。
-   * 別の会話の行・`manager` / `external` の `source` だけが同じ行には触れない。`CommitmentStore.removeForConversation` と同じ作法。
+   * 別の会話の行・`manager` / `external` の `source` だけが同じ行には触れない。
    *
    * `edit` で本文を空にして代用しない: 直す前の本文は日誌へ逐語で残す決まりで、秘密を日誌へ写し直すことになる。
    * 読めない行（`list()` の `unreadable`）も、生の値の欄が一致すれば消して件数に数える（3実装で揃える。pg は jsonb の欄をそのまま見る）。
@@ -1364,7 +1080,7 @@ export interface InboxStore {
   /**
    * 絞り込みで選んだ複数件を、まとめて消す。
    *
-   * `remove()` を `ids.length` 回ループしない: `storage-fs` は `remove()` のたびに `inbox.json` 全体を書き直す（`CommitmentStore.closeMany` と同じ理由）ので、
+   * `remove()` を `ids.length` 回ループしない: `storage-fs` は `remove()` のたびに `inbox.json` 全体を書き直すので、
    * 3,000件なら3,000回の全体書き直しになる。`removeMany` は1回の排他区間・1回の更新へ畳む。
    *
    * どの id を対象にするかはここでは決めない: 絞り込みは `peekPending()` が返した行に呼び出し側（`POST /inbox/remove`）が当てる。
@@ -1837,7 +1553,7 @@ export class UnreadableActiveTokenError extends Error {
  * 鍵列（`managerId`・`model`・`tokenId`・`provider`・`sessionId`）の NUL は、断らずに落として残す（3実装とも）。
  * これらは集計の切り口で、特定の1行を指して書き換える鍵ではない。断ると、NUL を含む `model` のターンの消費が台帳から丸ごと消える
  * （呼び出し側は失敗を握りつぶして日誌に残すだけ）。害が大きいのは記録を失うほうで、他のストアが鍵の NUL を断るのとは逆の向きの例外である（`nul-guard.ts`）。
- * 同じ理由の例外がもう1つある: `CommitmentStore` の `source`。ジョブと承認待ち（`JobStore`）の参照キー・印と `questions` / `selections` の中の文字列も同じ（`id` 自身は断る）。
+ * 同じ理由の例外がもう1つある: `TaskStore` の `source`。ジョブと承認待ち（`JobStore`）の参照キー・印と `questions` / `selections` の中の文字列も同じ（`id` 自身は断る）。
  *
  * `aggregate()` の絞り込み（`managerId`・`tokenId`）の NUL は、落としてから引く（3実装とも）: 書き込みが落として残しているので対称にする。投げず、一致しなければ空の集計を返す。
  * NUL だけの `tokenId`（落とすと空文字になるもの）は、固定の目印 `'(nul-only)'`（`USAGE_NUL_ONLY_TOKEN_ID`）に置き換えて記録する: pg の空文字は「帰属なし」の行なので、そのまま落とすと混ざる。
@@ -1969,7 +1685,7 @@ export interface SessionRegistry {
    * `list` → 比較 → 列ごと書き戻す形で代用しない: 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、拾っている間に新しい墓標が立ち（文脈窓で畳む回はいつでも起きる）、
    * 読んだ列を書き戻すとその新しい方を消して、その区間は二度と拾われない。
    * 呼び出し側で引き直して比べる形は窓を狭めるだけで閉じない: 読みと書きが別々の `await` なので、引き直しの後・書き込みが効く前に新しい墓標が landing しうる。
-   * 判定と書き込みを1操作へ畳む（`CommitmentStore.open` と同じ形・同じ理由）。呼び出し側の壁（ロック）では代わりにならない: ストアのロックは1回の呼び出しの中にしか掛からず、この区間は2回の呼び出しに跨がる。
+   * 判定と書き込みを1操作へ畳む。呼び出し側の壁（ロック）では代わりにならない: ストアのロックは1回の呼び出しの中にしか掛からず、この区間は2回の呼び出しに跨がる。
    */
   clearTranscriptGraveIf(archiveId: string): Promise<boolean>;
   /**
@@ -2288,21 +2004,15 @@ export interface Stores {
    */
   inbox: InboxStore;
   /**
-   * 引き受けたまま終わっていない仕事の台帳。
+   * 順序と状態を持つ待ち行列（#5469 P2）。
    *
-   * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
-   */
-  commitments: CommitmentStore;
-  /**
-   * 順序と状態を持つ待ち行列（#5469 P2。台帳と並べて動く）。
-   *
-   * **省略可能にしないこと**（`commitments` と同じ理由）。ここが任意だと、片方の器でだけ task が使えないという能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ task が使えない（「その場で着手しなかった依頼が黙って消える」）という能力差が生まれる（north_star 禁止1）。
    */
   tasks: TaskStore;
   /**
    * 仕事のやり方。
    *
-   * **省略可能にしないこと**（`commitments` / `schedules` と同じ理由）。ここが任意だと、片方の器でだけ「人間が書いたやり方が読めない」という能力差が生まれる（north_star 禁止1）。
+   * **省略可能にしないこと**（`tasks` / `schedules` と同じ理由）。ここが任意だと、片方の器でだけ「人間が書いたやり方が読めない」という能力差が生まれる（north_star 禁止1）。
    */
   practices: PracticeStore;
   archive: TranscriptArchive;
