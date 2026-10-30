@@ -57,14 +57,9 @@ describe('Page の本文は位置の基準になる（body がスクロールし
 });
 
 describe('Page の操作（action）の置き場（#2763・#2765）', () => {
-  function renderWith(placement?: 'below-on-narrow' | 'side') {
+  function renderWith() {
     render(
-      <Page
-        title="見出し"
-        description="説明文"
-        action={<button type="button">操作</button>}
-        actionPlacement={placement}
-      >
+      <Page title="見出し" description="説明文" action={<button type="button">操作</button>}>
         <button type="button">本文の操作</button>
       </Page>,
     );
@@ -76,12 +71,6 @@ describe('Page の操作（action）の置き場（#2763・#2765）', () => {
     expect(classes).toContain('flex-col');
     expect(classes).toContain('md:flex-row');
     expect(classes).not.toContain('justify-between');
-  });
-
-  it("'side' は狭い幅でも従来どおり横並び", () => {
-    const classes = classesOf(renderWith('side'));
-    expect(classes).not.toContain('flex-col');
-    expect(classes).toContain('justify-between');
   });
 
   it('DOM の順は 見出し → 説明 → 操作 → 本文（Tab の順が変わらない）', () => {

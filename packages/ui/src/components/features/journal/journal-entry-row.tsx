@@ -6,15 +6,12 @@ import { cn } from '@/lib/utils';
 
 import { Badge } from '../../common';
 import { CodeBlock } from '../code-block';
-import { Timestamp } from '../timestamp';
 
 export type JournalEntryTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
 
 // ボタンの中にリンクを入れず、リンクは開いた後の領域に置く
 export function JournalEntryRow({
-  at,
   atLabel,
-  relativeLabel,
   time,
   type,
   typeLabel,
@@ -26,9 +23,7 @@ export function JournalEntryRow({
   defaultOpen = false,
   rawBar = true,
 }: {
-  at?: string;
   atLabel: string;
-  relativeLabel?: string;
   time?: ReactNode;
   type: string;
   typeLabel?: string;
@@ -68,11 +63,7 @@ export function JournalEntryRow({
           </Badge>
         </button>
         <span className="ml-auto shrink-0 text-[11px] text-muted-foreground sm:order-3 sm:ml-0">
-          {time !== undefined ? (
-            time
-          ) : at !== undefined ? (
-            <Timestamp at={at} label={relativeLabel} />
-          ) : null}
+          {time}
         </span>
         <span
           data-testid="journal-row-summary"

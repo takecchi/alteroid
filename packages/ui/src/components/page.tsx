@@ -10,7 +10,6 @@ export function Page({
   documentTitle,
   description,
   action,
-  actionPlacement = 'below-on-narrow',
   className,
   scrollRef,
   tabs,
@@ -20,7 +19,6 @@ export function Page({
   documentTitle?: string;
   description?: ReactNode;
   action?: ReactNode;
-  actionPlacement?: 'below-on-narrow' | 'side';
   className?: string;
   scrollRef?: Ref<HTMLDivElement>;
   tabs?: ReactNode;
@@ -35,9 +33,7 @@ export function Page({
         className={cn(
           tabs === undefined && 'border-b border-border',
           'flex shrink-0 gap-4 py-4 md:pt-[calc(1rem+var(--safe-top))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
-          actionPlacement === 'side'
-            ? 'items-start justify-between'
-            : 'flex-col md:flex-row md:items-start md:justify-between',
+          'flex-col md:flex-row md:items-start md:justify-between',
         )}
       >
         <div className="min-w-0">
