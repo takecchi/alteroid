@@ -1,3 +1,4 @@
+import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
@@ -138,19 +139,17 @@ function SchedulePage() {
       title="予定"
       description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
-      <ConfirmDialog
+      <DiscardConfirmDialog
         open={switchingTo !== undefined}
         onOpenChange={(open) => {
           if (!open) setSwitchingTo(undefined);
         }}
-        title="保存していない変更があります"
         description={
           switchingTo?.next === undefined
-            ? '編集をやめると、書きかけの内容は失われます。'
+            ? undefined
             : '別の依頼の編集に切り替えると、書きかけの内容は失われます。'
         }
-        confirmLabel={switchingTo?.next === undefined ? '破棄して閉じる' : '破棄して切り替える'}
-        destructive
+        confirmLabel={switchingTo?.next === undefined ? undefined : '破棄して切り替える'}
         onConfirm={() => {
           if (switchingTo !== undefined) openEditing(switchingTo.next);
           setSwitchingTo(undefined);
