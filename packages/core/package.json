@@ -36,6 +36,10 @@
       "types": "./dist/answered-via.d.ts",
       "import": "./dist/answered-via.js"
     },
+    "./permission-grant-consent": {
+      "types": "./dist/permission-grant-consent.d.ts",
+      "import": "./dist/permission-grant-consent.js"
+    },
     "./trace-action": {
       "types": "./dist/trace-action.d.ts",
       "import": "./dist/trace-action.js"

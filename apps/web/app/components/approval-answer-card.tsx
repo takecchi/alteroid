@@ -1,4 +1,5 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import { PERMISSION_GRANT_CONSENT_PHRASE } from '@alteroid/core/permission-grant-consent';
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -12,7 +13,7 @@ import {
   type ApprovalQuestionsAnswer,
   type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
-import { useAnswerApproval } from '@alteroid/swr';
+import { useAnswerApproval, useAuth } from '@alteroid/swr';
 import {
   chatDraftEpoch,
   formatDateTime,
@@ -93,6 +94,15 @@ export function ApprovalAnswerCard({
   const changeDraft = onDraftChange ?? setOwnDraft;
 
   const state = approvalStateOf(approval);
+
+  // 資格が読めるまでは言わない（`undefined`）。daemon は持ち主の鍵・認証無効（`open`）の回答を operator とし、core は operator の許可を記録しない
+  const auth = useAuth();
+  const permissionRecording: 'records' | 'not-recorded-operator' | undefined =
+    auth.status === 'ready' && auth.account !== null
+      ? 'records'
+      : (auth.status === 'ready' && auth.operator) || auth.status === 'open'
+        ? 'not-recorded-operator'
+        : undefined;
 
   async function send(request: () => Promise<void>, sent: SentApprovalDraft) {
     // 送信中（このカード・まとめ送信・アンマウント前の別のカード）は何もしない: 同じ承認を二重に送らない。
@@ -193,6 +203,13 @@ export function ApprovalAnswerCard({
           : undefined
       }
       onSubmitQuestions={(answer) => void submitQuestions(answer)}
+      // 許可の承認だけ定型文を送る: core は答えがちょうどこの文のときだけ許可を記録するため（既定の「はい、進めてよい」では記録されない）
+      {...(approval.permissionRequest === undefined
+        ? {}
+        : {
+            allowAnswer: PERMISSION_GRANT_CONSENT_PHRASE,
+            allowRecordsPermission: permissionRecording,
+          })}
       {...(questionsDraft === undefined || onQuestionsDraftChange === undefined
         ? {}
         : { questionsDraft, onQuestionsDraftChange })}
