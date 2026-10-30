@@ -14,6 +14,7 @@ import {
   childUserOf,
   DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY,
   doneTreeReapAfterMsOf,
+  listenPlanOf,
   RECLAIM_ENV_KEY,
   reclaimScanOf,
   reportRetiredLayerProviderEnv,
@@ -248,6 +249,78 @@ describe('socketOwnerOf', () => {
     expect(
       socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '1000', ALTEROID_RUNNER_SOCKET_GID: '2000' }),
     ).toEqual({ uid: 1000, gid: 2000 });
+  });
+
+  it('GID が空文字なら UID に揃える（置いていないのと同じ）', () => {
+    expect(
+      socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '1000', ALTEROID_RUNNER_SOCKET_GID: '' }),
+    ).toEqual({ uid: 1000, gid: 1000 });
+  });
+
+  it.each(['abc', '1.5', '-1', ' 1000', '1e3', '99999999999999999999'])(
+    'UID が非負の整数でない値（%s）なら、黙って chown を飛ばさず落とす',
+    (value) => {
+      expect(() => socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: value })).toThrow(
+        /ALTEROID_RUNNER_SOCKET_UID は非負の整数/,
+      );
+    },
+  );
+
+  it.each(['abc', '1.5', '-1'])('GID が非負の整数でない値（%s）なら落とす', (value) => {
+    expect(() =>
+      socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: '1000', ALTEROID_RUNNER_SOCKET_GID: value }),
+    ).toThrow(/ALTEROID_RUNNER_SOCKET_GID は非負の整数/);
+  });
+});
+
+describe('listenPlanOf（待ち受けの口）', () => {
+  it('置かない・空文字のポートは 4518（空を 0＝任意のポートに読まない）', () => {
+    expect(listenPlanOf({})).toEqual({ kind: 'tcp', port: 4518, hostname: '127.0.0.1' });
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '' })).toEqual({
+      kind: 'tcp',
+      port: 4518,
+      hostname: '127.0.0.1',
+    });
+  });
+
+  it('1〜65535 の整数はそのまま使い、BIND は置かない・空文字なら 127.0.0.1', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '1', ALTEROID_RUNNER_BIND: '' })).toMatchObject({
+      port: 1,
+      hostname: '127.0.0.1',
+    });
+    expect(
+      listenPlanOf({ ALTEROID_RUNNER_PORT: '65535', ALTEROID_RUNNER_BIND: '::' }),
+    ).toMatchObject({ port: 65535, hostname: '::' });
+  });
+
+  it.each(['0', '65536', '-1', 'abc', '4518.5', ' 4518', '1e3', '04518'])(
+    '1〜65535 の整数でないポート（%s）は落とす',
+    (value) => {
+      expect(() => listenPlanOf({ ALTEROID_RUNNER_PORT: value })).toThrow(
+        /ALTEROID_RUNNER_PORT は 1〜65535 の整数/,
+      );
+    },
+  );
+
+  it('ソケットを置けばソケットで待ち受け、TCP の変数は読まない（不正なポートでも落ちない）', () => {
+    expect(
+      listenPlanOf({
+        ALTEROID_RUNNER_SOCKET: '/run/alteroid/runner.sock',
+        ALTEROID_RUNNER_SOCKET_UID: '1000',
+        ALTEROID_RUNNER_SOCKET_GID: '1000',
+        ALTEROID_RUNNER_PORT: 'abc',
+      }),
+    ).toEqual({
+      kind: 'socket',
+      path: '/run/alteroid/runner.sock',
+      owner: { uid: 1000, gid: 1000 },
+    });
+  });
+
+  it('ソケットの持ち主が不正なら、ソケットの口を組む時点で落ちる', () => {
+    expect(() =>
+      listenPlanOf({ ALTEROID_RUNNER_SOCKET: '/run/x.sock', ALTEROID_RUNNER_SOCKET_UID: 'abc' }),
+    ).toThrow(/ALTEROID_RUNNER_SOCKET_UID/);
   });
 });
 
