@@ -1108,6 +1108,49 @@ describe('器の入れ替えの判定材料', () => {
     expect(client.ping).toBeUndefined();
   });
 
+  // 一覧の指紋は1台へ credentials・profile・mcpServers を同時に訊く（manager.ts）。同じ `/health` を重ねて往復しない（#5716）
+  it('同時に重なった credentials・profile・mcpServers・plugins は /health を1回だけ読み、時間を空けた呼びは読み直す', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...runnerAppDefaults(),
+    });
+    const inner = fetchInto(app);
+    let healthReads = 0;
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async (input: string | URL | Request, init?: RequestInit) => {
+        if (new URL(typeof input === 'string' ? input : input.toString()).pathname === '/health') {
+          healthReads += 1;
+        }
+        return inner(input, init);
+      }) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+    healthReads = 0;
+
+    const [credentials] = await Promise.all([
+      client.credentials(),
+      client.profile(),
+      client.mcpServers?.(),
+      client.plugins?.(),
+    ]);
+    expect(credentials).toEqual([]);
+    expect(healthReads).toBe(1);
+
+    await client.credentials();
+    expect(healthReads).toBe(2);
+  });
+
   it('hello() が /health の instanceId を拾う（新しい往復を増やさない）', async () => {
     let calls = 0;
     const client = await createHttpRunner({
