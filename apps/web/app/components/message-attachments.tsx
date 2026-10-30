@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 
-import { AttachmentGoneError, fetchAttachment, useApi } from '@alteroid/swr';
-import { formatBytes, isPreviewableImage, redactError } from '@alteroid/logic';
+import { fetchAttachment, useApi } from '@alteroid/swr';
+import { formatBytes, isPreviewableImage } from '@alteroid/logic';
 import type { MessageAttachment } from '@alteroid/logic';
 import { Button, ZoomableImage } from '@alteroid/ui';
 
+import { describeAttachmentFailure } from '~/lib/error-text';
 import { saveBlob } from '~/lib/save-blob';
 
 /**
@@ -32,9 +33,7 @@ export default function MessageAttachments({
 }
 
 function describe(error: unknown): string {
-  return error instanceof AttachmentGoneError
-    ? '取り出せない（期限切れの可能性）'
-    : `取り出せなかった: ${redactError(error instanceof Error ? error.message : String(error))}`;
+  return describeAttachmentFailure(error, '取り出せなかった: ');
 }
 
 function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {

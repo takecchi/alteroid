@@ -80,6 +80,7 @@ import {
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
+import { errorText } from '~/lib/error-text';
 import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { useApprovalDraftState, usePersistApprovalDrafts } from '~/lib/use-approval-draft-state';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
@@ -2164,7 +2165,7 @@ export function ChatPane({
               new Map(prev).set(
                 shownId,
                 new Error(
-                  `前の送信が受け取られたか確かめられなかった（${redactError(caught instanceof Error ? caught.message : String(caught))}）。もう一度送ると確かめ直す`,
+                  `前の送信が受け取られたか確かめられなかった（${errorText(caught)}）。もう一度送ると確かめ直す`,
                   { cause: caught },
                 ),
               ),
@@ -2218,10 +2219,9 @@ export function ChatPane({
                 );
               });
             } catch (caught) {
-              throw new Error(
-                `${file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
-                { cause: caught },
-              );
+              throw new Error(`${file.name} を上げられなかった: ${errorText(caught)}`, {
+                cause: caught,
+              });
             }
           }
           attachments = uploaded;
