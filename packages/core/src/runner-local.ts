@@ -79,7 +79,6 @@ export interface LocalRunnerOptions {
   /** ローカルでも渡す: コンテナ構成でだけ `.zprofile` が効く形にしない（M4 受け入れ基準1）。 */
   profile?: ProfileVessel;
   attachmentsRoot?: string;
-  attachmentStageLimit?: number;
   pluginsRoot?: string;
   outboxRoot?: string;
   outboxStagedRoot?: string;
@@ -117,9 +116,6 @@ class LocalRunner implements RunnerClient {
       ...(options.attachmentsRoot === undefined
         ? {}
         : { attachmentsRoot: options.attachmentsRoot }),
-      ...(options.attachmentStageLimit === undefined
-        ? {}
-        : { attachmentStageLimit: options.attachmentStageLimit }),
       ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
       ...(options.outboxRoot === undefined ? {} : { outboxRoot: options.outboxRoot }),
       ...(options.outboxStagedRoot === undefined
