@@ -191,15 +191,16 @@ describe('/mcp-servers 画面 — 差し替える', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
     const heading = await screen.findByText(
-      /MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（確認用の値 b{12}）/,
+      /MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（登録の指紋 b{12}）/,
     );
+    expect(document.body.textContent).not.toContain('確認用の値');
     expect(heading.className).toContain('text-warn');
     expect(screen.queryByText(/MCP 連携の登録を差し替えた/)).toBeNull();
     expect(puts).toEqual([next]);
     expect(screen.getByText('足した: notion')).toBeTruthy();
     expect(screen.getByText('外した: linear')).toBeTruthy();
     const report = screen.getByLabelText('実行環境ごとの反映結果');
-    expect(report.textContent).toContain(`runner-1: 届いた（確認用の値 ${'b'.repeat(12)}）`);
+    expect(report.textContent).toContain(`runner-1: 届いた（指紋 ${'b'.repeat(12)}）`);
     expect(report.textContent).toContain('runner-2: 届かなかった — runner に届かなかった');
     expect(screen.getByText('いつから効くか: クローンの次のセッションから')).toBeTruthy();
   });

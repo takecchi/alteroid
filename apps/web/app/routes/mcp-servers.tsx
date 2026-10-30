@@ -409,13 +409,13 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
         <p role="alert" className="font-medium text-warn">
           {cleared
             ? 'MCP 連携の登録は外したが、一部の実行環境へ反映できていない（保存はできている）。'
-            : `MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（確認用の値 ${update.sha256 ?? '?'}）。`}
+            : `MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（登録の指紋 ${update.sha256 ?? '?'}）。`}
         </p>
       ) : (
         <p className="font-medium text-ok">
           {cleared
             ? 'MCP 連携の登録を外した。'
-            : `MCP 連携の登録を差し替えた（確認用の値 ${update.sha256 ?? '?'}）。`}
+            : `MCP 連携の登録を差し替えた（登録の指紋 ${update.sha256 ?? '?'}。下の実行環境ごとの指紋と同じなら、同じ登録が届いている）。`}
         </p>
       )}
       {added.length > 0 && <p className="break-words">足した: {added.join(', ')}</p>}
@@ -436,16 +436,14 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
                 — {redactError(runner.error ?? '理由不明')}
               </span>
             ) : runner.mcpServers === undefined ? (
-              <span className="text-ok">
-                {cleared ? '外した' : '届いた（確認用の値は返らなかった）'}
-              </span>
+              <span className="text-ok">{cleared ? '外した' : '届いた（指紋は返らなかった）'}</span>
             ) : update.sha256 !== undefined && runner.mcpServers.sha256 !== update.sha256 ? (
               <span className="text-destructive">
-                届いたが確認用の値が違う（実行環境 {runner.mcpServers.sha256} / 保存 {update.sha256}
-                ）
+                届いたが指紋が違う（実行環境 {runner.mcpServers.sha256} / 保存 {update.sha256}
+                。古い登録のまま）
               </span>
             ) : (
-              <span className="text-ok">届いた（確認用の値 {runner.mcpServers.sha256}）</span>
+              <span className="text-ok">届いた（指紋 {runner.mcpServers.sha256}）</span>
             )}
           </li>
         ))}

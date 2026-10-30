@@ -247,7 +247,7 @@ export default function Approvals() {
     <Page
       tabs={<ApprovalsTabs />}
       title="承認待ち"
-      description="記憶に根拠が無かったこと。ここで答えると、同じ判断は次から聞かれなくなる"
+      description="クローンが記憶だけでは決められず、あなたに聞いていること。答えは記憶に残り、同じ判断は次から聞かれなくなる"
     >
       <LoadError
         what="承認待ちの一覧"
@@ -262,8 +262,8 @@ export default function Approvals() {
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-3 py-2">
           <span className="text-sm text-muted-foreground">
             {pendingDrafts.length === 0
-              ? 'まとめて送る答えはまだ書かれていない（各カードに書くとここに数が出る）'
-              : `${pendingDrafts.length} 件に答えを書いた（送るとまとめて1回で届く）`}
+              ? '答えを書いたカードはまだない（カードに書くと、ここからまとめて送れる）'
+              : `${pendingDrafts.length} 件に答えを書いた。まとめて送れる`}
           </span>
           <Button
             variant="primary"
