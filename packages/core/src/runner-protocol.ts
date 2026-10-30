@@ -220,7 +220,8 @@ export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 /**
  * 既存の識別子を流用しない: `lease.fence` は同じ runner への resume では進まず、`instanceId` は同じプロセスの
  * resume で変わらない。どちらも古いセッションの畳み（`closed`）と新しいセッションの出来事を区別できない。
- * 欄が無い古い runner の出来事は、世代が古いとも新しいとも読まず従来どおり処理する。
+ * 出来事に世代の欄が無いとき、デーモンが追っている世代を持っていれば、食い違いと同じ古い世代（`stale`）として扱う
+ * （runner は出来事に必ず世代を載せる。#5764）。追っている世代が無い間は、世代を見ずに処理する。
  */
 const sessionGenerationSchema = z.string().optional();
 

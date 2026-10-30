@@ -9354,7 +9354,7 @@ class Pool implements ManagerPool {
     for (const { event, fromRunnerId } of held) {
       // 同じ runner への復帰の窓: 受理されたなら、窓の間に届いた `closed` は resume の前のセッションの畳みなので日誌にだけ残して捨てる。
       if (sameRunner !== undefined) {
-        // 新しいセッション自身の出来事だと分かるなら古い世代として捨てない。`report` は世代が無い（古い runner）ときも処理し直し、`closed` は世代が一致するときだけ。
+        // 新しいセッション自身の出来事だと分かるなら古い世代として捨てない。`report` は追っている世代が無い（`unknown`）ときも処理し直し、`closed` は世代が一致するときだけ。
         const record = this.#records.get(managerId);
         const generation =
           record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
