@@ -88,6 +88,10 @@
       "types": "./dist/memory-freshness-format.d.ts",
       "import": "./dist/memory-freshness-format.js"
     },
+    "./github-ci-format": {
+      "types": "./dist/github-ci-format.d.ts",
+      "import": "./dist/github-ci-format.js"
+    },
     "./journal-diagnostics-format": {
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"
