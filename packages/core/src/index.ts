@@ -1327,11 +1327,6 @@ export {
 export type { AgentProviderId } from './agent-ports.js';
 export { DEFAULT_AGENT_PROVIDER_ID, agentProviderOf } from './agent-provider-selection.js';
 export {
-  MANAGER_PEERS_ENV_KEY,
-  RETIRED_LAYER_PROVIDER_ENV_KEYS,
-  retiredLayerProviderNotices,
-} from './retired-provider-env.js';
-export {
   CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
   PEER_PROVIDER_IDS,

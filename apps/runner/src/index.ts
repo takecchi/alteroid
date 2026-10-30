@@ -35,7 +35,6 @@ import {
   applyRunnerKeepAlive,
   resolveManagerModel,
   resolveWorkerModel,
-  retiredLayerProviderNotices,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   type RunnerChildUser,
@@ -72,13 +71,6 @@ export function createRunnerHttpServer(
   // SSE（`/events`）のように応答を流している最中の接続は、keep-alive の持ち時間では畳まれない。
   applyRunnerKeepAlive(server as unknown as { keepAliveTimeout: number; headersTimeout: number });
   return server;
-}
-
-// 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
-export function reportRetiredLayerProviderEnv(env: NodeJS.ProcessEnv): void {
-  for (const notice of retiredLayerProviderNotices(env, 'alteroid-runner')) {
-    writeStderrLine(`${notice}\n`);
-  }
 }
 
 // ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
@@ -586,8 +578,6 @@ export async function main(): Promise<void> {
   // 既定 off の設定を黙って通さない: 開けた器か閉じた器か、起動行から読めるように。降りたプロファイルで変われば `log` が出し直す
   process.stdout.write(`alteroid-runner: ${host.bashShapeGuardLine()}\n`);
   process.stdout.write(`alteroid-runner: ${host.reportLanguageLine()}\n`);
-
-  reportRetiredLayerProviderEnv(process.env);
 
   for (const notice of peerPlan.notices) process.stdout.write(`${notice}\n`);
 
