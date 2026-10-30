@@ -400,13 +400,14 @@ import {
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import {
-  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  formatUnpushedWorkObservationWorktrees,
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
+import { describeWaitingKind } from './waiting-kind-format.js';
 import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 import { strictToolInput } from './strict-tool-input.js';
@@ -931,13 +932,6 @@ const LIST_DENIED_TOOLS = 3;
 const LIST_TOOL_USE_STALL_LIMIT = 3;
 
 type ManagerWaitingItem = ManagerSummary['waiting'][number];
-
-// 二択へ畳まない: 旧 runner の応答には `kind` が乗らず、「実行許可」と嘘をつくとクローンが質問に許可／拒否で答えるため
-function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
-  if (kind === 'question') return '質問';
-  if (kind === 'permission') return '実行許可';
-  return '種別不明';
-}
 
 // `asc` のときだけ `order=asc` を名乗る: afterId の「次」は返る順序の次なので、order を揃えないと逆向き（desc）に読み継いでしまう。desc の文言は変えない
 function describeJournalContinuation(
@@ -2342,20 +2336,6 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
     );
   }
   return null;
-}
-
-function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly {
-    relativePath: string;
-    branch: string | null;
-    branchCarriedFromAt?: string;
-  }[],
-): string {
-  return worktrees.length === 0
-    ? '見つかった作業ツリー0本'
-    : worktrees
-        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
-        .join(' / ');
 }
 
 function unpushedWorkObservationIncompleteSuffix(

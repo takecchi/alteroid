@@ -164,56 +164,6 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
   });
 });
 
-// `STEPS` を import して共有せず、二重に持つ配列の一致を歯で測る: bash から Node の配列を直接読む口が無く、変換を持ち込むより手で揃えるほうを選んだため。
-function readGateArray(shellText: string, varName: string): string[] | null {
-  const re = new RegExp(String.raw`${varName}=\(([\s\S]*?)\)`);
-  const m = re.exec(shellText);
-  if (!m || m[1] === undefined) return null;
-  return m[1]
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const quoted = /^'(.*)'$/.exec(line);
-      return quoted && quoted[1] !== undefined ? quoted[1] : line;
-    });
-}
-
-describe('verify-for-sdk-pr.sh の GATE_NAMES / GATE_COMMANDS が STEPS と一致する（ソースの静的な読み、Issue #1954）', () => {
-  const VERIFY_FOR_SDK_PR_SH = path.join(ROOT, '.github/scripts/verify-for-sdk-pr.sh');
-  const shellText = readFileSync(VERIFY_FOR_SDK_PR_SH, 'utf8');
-  const steps = STEPS as { name: string; cmd: string; args: string[] }[];
-
-  it('前提: STEPS が1本以上ある（空集合で緑にならない）', () => {
-    expect(steps.length).toBeGreaterThan(0);
-  });
-
-  it('前提: GATE_NAMES / GATE_COMMANDS をソースから読めた（配列の書き方が変わっていない）', () => {
-    expect(readGateArray(shellText, 'GATE_NAMES')).not.toBeNull();
-    expect(readGateArray(shellText, 'GATE_COMMANDS')).not.toBeNull();
-  });
-
-  it('GATE_NAMES の名前と順序が STEPS と一致する（STEPS に足した門の反映漏れを捕まえる。実例: PR #1952）', () => {
-    const gateNames = readGateArray(shellText, 'GATE_NAMES');
-    expect(
-      gateNames,
-      '【赤の意味】.github/scripts/verify-for-sdk-pr.sh の GATE_NAMES が ' +
-        'scripts/verify-core.mjs の STEPS と名前・順序で一致しない。STEPS に門を足す/消す/' +
-        '並べ替えるときは GATE_NAMES と GATE_COMMANDS も同じ形へ揃えること。',
-    ).toEqual(steps.map((step) => step.name));
-  });
-
-  it('GATE_COMMANDS の各コマンドが STEPS の cmd + args と一致する（写し間違いを捕まえる）', () => {
-    const gateCommands = readGateArray(shellText, 'GATE_COMMANDS');
-    const expected = steps.map((step) => [step.cmd, ...step.args].join(' '));
-    expect(
-      gateCommands,
-      '【赤の意味】.github/scripts/verify-for-sdk-pr.sh の GATE_COMMANDS が ' +
-        'scripts/verify-core.mjs の STEPS から作った「cmd + args」と一致しない。',
-    ).toEqual(expected);
-  });
-});
-
 function runsOnPullRequestUpdates(workflowText: string): boolean {
   const lines = workflowText.split('\n');
   const onIndex = lines.findIndex((line) => /^on:\s*$/.test(line));

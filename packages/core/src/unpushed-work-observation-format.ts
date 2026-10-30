@@ -40,6 +40,21 @@ export function describeObservedWorktreeBranch(worktree: {
   return `${worktree.branch}（この観測では取れず、${worktree.branchCarriedFromAt} 時点の観測から引き継いだ）`;
 }
 
+// core（manager_list）と CLI が同じ1本を使う: 写すと片方だけ直り、クローンと人間が同じ観測を違う字面で読むため
+export function formatUnpushedWorkObservationWorktrees(
+  worktrees: readonly {
+    readonly relativePath: string;
+    readonly branch: string | null;
+    readonly branchCarriedFromAt?: string;
+  }[],
+): string {
+  return worktrees.length === 0
+    ? '見つかった作業ツリー0本'
+    : worktrees
+        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
+        .join(' / ');
+}
+
 export type UnpushedWorkObservationSourceLike =
   'stop-refusal' | 'report' | 'tool_use' | 'auto-fold' | 'vacate' | 'stop' | 'closed' | 'shutdown';
 

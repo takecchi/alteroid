@@ -484,7 +484,7 @@ fi
     writeFileSync(join(s.workdir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n# bumped\n");
     writeFileSync(join(s.workdir, 'apps', 'daemon', 'openapi.json'), '{"openapi":"3.1.1"}\n');
 
-    const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
+    const result = run(s, { FAKE_GH_PR_NUMBER: '' });
 
     expect(result.exitCode).toBe(0);
     expect(existsSync(s.pushLog)).toBe(true);
@@ -499,7 +499,7 @@ fi
     );
     writeFileSync(join(s.workdir, 'other.txt'), 'unexpected change\n');
 
-    const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' }, { allowFailure: true });
+    const result = run(s, { FAKE_GH_PR_NUMBER: '' }, { allowFailure: true });
 
     expect(result.exitCode).not.toBe(0);
     expect(existsSync(s.pushLog)).toBe(false);
@@ -516,7 +516,7 @@ fi
     mkdirSync(join(s.workdir, 'packages', 'core', 'src', 'generated'), { recursive: true });
     writeFileSync(join(s.workdir, 'packages', 'core', 'src', 'generated', 'x.ts'), 'export {};\n');
 
-    const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
+    const result = run(s, { FAKE_GH_PR_NUMBER: '' });
 
     expect(result.exitCode).toBe(0);
     expect(existsSync(s.pushLog)).toBe(true);
@@ -528,14 +528,14 @@ fi
     expect(status.startsWith('??')).toBe(true);
   });
 
-  it('開いている PR が無く SDK_VERIFY_OK=true のとき、gh pr create に --draft が付かない', () => {
+  it('開いている PR が無いとき、gh pr create に --draft が付かない（検証は PR に付く CI が持つ）', () => {
     const s = setup();
     writeFileSync(
       join(s.workdir, 'pnpm-workspace.yaml'),
       "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
     );
 
-    const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
+    const result = run(s, { FAKE_GH_PR_NUMBER: '' });
 
     expect(result.exitCode).toBe(0);
     const calls = parseGhCalls(s.ghLog);
@@ -566,60 +566,19 @@ fi
     expect(calls[1]).not.toContain('--draft');
   });
 
-  it('開いている PR が無く SDK_VERIFY_OK が true 以外（空文字含む）のとき、gh pr create に --draft が付く', () => {
+  it('開いている PR があるとき gh pr edit が呼ばれ、gh pr ready が呼ばれる（前の版が draft にした PR を戻す）', () => {
     const s = setup();
     writeFileSync(
       join(s.workdir, 'pnpm-workspace.yaml'),
       "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
     );
 
-    const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: '' });
-
-    expect(result.exitCode).toBe(0);
-    const calls = parseGhCalls(s.ghLog);
-    expect(calls[1]).toEqual([
-      'pr',
-      'create',
-      '--draft',
-      '--base',
-      'main',
-      '--head',
-      BRANCH,
-      '--title',
-      TITLE,
-      '--body-file',
-      s.bodyFile,
-    ]);
-  });
-
-  it('開いている PR があるとき gh pr edit が呼ばれ、SDK_VERIFY_OK=true なら gh pr ready が呼ばれる', () => {
-    const s = setup();
-    writeFileSync(
-      join(s.workdir, 'pnpm-workspace.yaml'),
-      "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
-    );
-
-    const result = run(s, { FAKE_GH_PR_NUMBER: '42', SDK_VERIFY_OK: 'true' });
+    const result = run(s, { FAKE_GH_PR_NUMBER: '42' });
 
     expect(result.exitCode).toBe(0);
     const calls = parseGhCalls(s.ghLog);
     expect(calls[1]).toEqual(['pr', 'edit', '42', '--title', TITLE, '--body-file', s.bodyFile]);
     expect(calls[2]).toEqual(['pr', 'ready', '42']);
-  });
-
-  it('開いている PR があり SDK_VERIFY_OK が true 以外のとき gh pr ready --undo が呼ばれる', () => {
-    const s = setup();
-    writeFileSync(
-      join(s.workdir, 'pnpm-workspace.yaml'),
-      "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
-    );
-
-    const result = run(s, { FAKE_GH_PR_NUMBER: '42', SDK_VERIFY_OK: '' });
-
-    expect(result.exitCode).toBe(0);
-    const calls = parseGhCalls(s.ghLog);
-    expect(calls[1]).toEqual(['pr', 'edit', '42', '--title', TITLE, '--body-file', s.bodyFile]);
-    expect(calls[2]).toEqual(['pr', 'ready', '--undo', '42']);
   });
 
   describe('SDK_VERSION_BEFORE によるタイトルの出し分け', () => {
@@ -630,7 +589,6 @@ fi
 
       const result = run(s, {
         FAKE_GH_PR_NUMBER: '',
-        SDK_VERIFY_OK: 'true',
         SDK_VERSION_BEFORE: SDK_VERSION,
       });
 
@@ -651,7 +609,6 @@ fi
 
       const result = run(s, {
         FAKE_GH_PR_NUMBER: '',
-        SDK_VERIFY_OK: 'true',
         SDK_VERSION_BEFORE: '0.3.237',
       });
 
@@ -673,7 +630,7 @@ fi
       const before = remoteRef(s.originPath, `refs/heads/${BRANCH}`);
       expect(before).toBe('');
 
-      const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
+      const result = run(s, { FAKE_GH_PR_NUMBER: '' });
 
       expect(result.exitCode).toBe(0);
       expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).not.toBe('');
@@ -690,7 +647,7 @@ fi
         join(s.workdir, 'pnpm-workspace.yaml'),
         "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.239\n",
       );
-      const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
+      const result = run(s, { FAKE_GH_PR_NUMBER: '' });
 
       expect(result.exitCode).toBe(0);
       expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).not.toBe(beforeSha);
@@ -708,11 +665,7 @@ fi
         join(s.workdir, 'pnpm-workspace.yaml'),
         "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.239\n",
       );
-      const result = run(
-        s,
-        { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' },
-        { allowFailure: true },
-      );
+      const result = run(s, { FAKE_GH_PR_NUMBER: '' }, { allowFailure: true });
 
       expect(result.exitCode).not.toBe(0);
       expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).toBe(beforeSha);
@@ -735,11 +688,7 @@ fi
         join(s.workdir, 'pnpm-workspace.yaml'),
         "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.239\n",
       );
-      const result = run(
-        s,
-        { FAKE_GH_PR_NUMBER: '77', SDK_VERIFY_OK: 'true' },
-        { allowFailure: true },
-      );
+      const result = run(s, { FAKE_GH_PR_NUMBER: '77' }, { allowFailure: true });
 
       expect(result.exitCode).not.toBe(0);
       const calls = parseGhCalls(s.ghLog);
@@ -776,11 +725,7 @@ fi
         join(s.workdir, 'pnpm-workspace.yaml'),
         "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.239\n",
       );
-      const result = run(
-        s,
-        { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' },
-        { allowFailure: true },
-      );
+      const result = run(s, { FAKE_GH_PR_NUMBER: '' }, { allowFailure: true });
 
       expect(result.exitCode).not.toBe(0);
       const calls = parseGhCalls(s.ghLog);
@@ -801,7 +746,7 @@ fi
 
       const result = run(
         s,
-        { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true', FAKE_GH_FAIL_CREATE: 'true' },
+        { FAKE_GH_PR_NUMBER: '', FAKE_GH_FAIL_CREATE: 'true' },
         { allowFailure: true },
       );
 
@@ -827,7 +772,6 @@ fi
           GH: s.fakeGh,
           FAKE_GH_LOG: s.ghLog,
           FAKE_GH_PR_NUMBER: '',
-          SDK_VERIFY_OK: 'true',
           SDK_BRANCH: BRANCH,
           SDK_VERSION,
           SDK_PR_BODY: s.bodyFile,
@@ -862,7 +806,6 @@ fi
 
         const result = run(s, {
           FAKE_GH_PR_NUMBER: '',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: 'false',
         });
 
@@ -883,7 +826,6 @@ fi
 
         const result = run(s, {
           FAKE_GH_PR_NUMBER: '',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: 'true',
         });
 
@@ -905,7 +847,6 @@ fi
 
         const result = run(s, {
           FAKE_GH_PR_NUMBER: '',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: '',
         });
 
@@ -926,7 +867,6 @@ fi
           GH: s.fakeGh,
           FAKE_GH_LOG: s.ghLog,
           FAKE_GH_PR_NUMBER: '',
-          SDK_VERIFY_OK: 'true',
           SDK_BRANCH: BRANCH,
           SDK_VERSION,
           SDK_PR_BODY: s.bodyFile,
@@ -951,7 +891,6 @@ fi
 
         const result = run(s, {
           FAKE_GH_PR_NUMBER: '42',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: 'false',
         });
 
@@ -976,7 +915,6 @@ fi
 
         const result = run(s, {
           FAKE_GH_PR_NUMBER: '42',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: 'true',
         });
 
@@ -994,7 +932,6 @@ fi
 
         const first = run(s, {
           FAKE_GH_PR_NUMBER: '42',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: 'false',
         });
         expect(first.exitCode).toBe(0);
@@ -1005,7 +942,6 @@ fi
         writeFileSync(join(s.workdir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n# night 2\n");
         const second = run(s, {
           FAKE_GH_PR_NUMBER: '42',
-          SDK_VERIFY_OK: 'true',
           SDK_CI_TRIGGERED: 'true',
         });
         expect(second.exitCode).toBe(0);

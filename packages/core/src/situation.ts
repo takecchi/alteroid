@@ -9,6 +9,7 @@ import {
 import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
+import { sectionBlock } from './section-block.js';
 import type { CooldownSource } from './token-pool.js';
 import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
 
@@ -512,7 +513,9 @@ export function describeSituation(input: {
     .filter((line) => line !== null)
     .join('\n');
   if (input.explained?.get(MATERIALS_KEY) === materials) {
-    return block([`${SITUATION_HEAD}: 前のターンと変化なし（${readAtLabel(at)} に数え直した）。`]);
+    return sectionBlock([
+      `${SITUATION_HEAD}: 前のターンと変化なし（${readAtLabel(at)} に数え直した）。`,
+    ]);
   }
   input.explained?.set(MATERIALS_KEY, materials);
   // 鍵の行の不変条件も同じ控えで畳む: 鍵の行そのもの（数）は毎回出す
@@ -535,7 +538,7 @@ export function describeSituation(input: {
         `${folded.map((key) => EXPLANATION_GIST[key]).join(' ')}）`,
     );
   }
-  return block([
+  return sectionBlock([
     ...lines,
     ...(inboxBacklogLine === null ? [] : [inboxBacklogLine]),
     // メモリの配達待ち行列は器の行数の直後に置く: 離すと器の行数の1行だけが「受信箱の全部」に見えるため
@@ -571,15 +574,10 @@ const READINGS_NOTICE =
 
 // 行を消さず、0 でも埋めない: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
 export function describeSituationUnavailable(error: unknown, at: number = Date.now()): string {
-  return block([
+  return sectionBlock([
     // こちらも時刻を名乗る: 数えられた節だけが名乗る形にすると非対称そのものが理由を要求するため
     `${SITUATION_HEAD}を数えられなかった（${readAtLabel(at)} 時点）: ${reasonOf(error)}`,
     'これは「全部片付いている」ではなく「**数えられなかった**」である。' +
       '本数が要るなら `manager_list` / `runner_list` を自分で呼ぶこと。',
   ]);
-}
-
-// 末尾の区切り（---）まで含めて返す: 呼び出し側で足すと、節を足すたびに #runTurn の連結にも手が要るため
-function block(lines: readonly string[]): string {
-  return [...lines, '', '---', ''].join('\n');
 }

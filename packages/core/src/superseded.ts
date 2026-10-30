@@ -1,3 +1,4 @@
+import { sectionBlock } from './section-block.js';
 import type { CommitmentList } from './store.js';
 
 export type SupersededDecision =
@@ -77,7 +78,7 @@ export function describeSuperseded(decision: SupersededDecision, managerId: stri
   if (decision.kind === 'none') return '';
 
   if (decision.kind === 'superseded') {
-    return block([
+    return sectionBlock([
       `⚠ **この委譲（${managerId}）からは、この合図より後に報告が ${decision.reports} 件届いている**` +
         `（最新: ${decision.latestAt}）。`,
       '⟹ **この報告の中身は既に古いかもしれない。** 手を動かす前に、その' +
@@ -90,14 +91,9 @@ export function describeSuperseded(decision: SupersededDecision, managerId: stri
     ]);
   }
 
-  return block([
+  return sectionBlock([
     `⚠ **この委譲（${managerId}）の、この合図より後の報告を数えられなかった**（${decision.detail}）。`,
     'これは「0 件」ではなく「**数えられなかった**」である。要るなら `manager_list` / ' +
       '`commitment_list` を自分で呼ぶこと。',
   ]);
-}
-
-// 末尾の区切り（---）まで含めて返す: 呼び出し側で足すと、節を足すたびに #runTurn の連結にも手が要るため
-function block(lines: readonly string[]): string {
-  return [...lines, '', '---', ''].join('\n');
 }
