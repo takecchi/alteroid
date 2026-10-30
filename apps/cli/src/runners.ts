@@ -117,8 +117,8 @@ interface RunnersView {
     profileProbe: RunnerProbe;
     revision: RunnerRevisionStatus;
     pushHealth?: RunnerPushHealth;
-    // 無いのは旧いデーモンの応答。`unknown` は名乗らない旧い runner（「頼めない」とは読まない）
-    managerPeers?: ManagerPeersView;
+    // `unknown` は名乗らない旧い runner（「頼めない」とは読まない）
+    managerPeers: ManagerPeersView;
   }[];
   daemonRevision: RunnerRevisionReport;
 }

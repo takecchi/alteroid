@@ -27,6 +27,7 @@ const BASE: RunnerSummary = {
   credentialsProbe: { status: 'asked' },
   profileProbe: { status: 'asked' },
   revision: { status: 'unheard' },
+  managerPeers: { status: 'named', peers: [] },
 };
 
 // instanceId の試験でも省略しない: 省ける形にすると「画面が読んでいない」と「デーモンが返していない」が試料の側で混ざるため

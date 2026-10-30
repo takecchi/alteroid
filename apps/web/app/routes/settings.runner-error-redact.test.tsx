@@ -20,6 +20,7 @@ const BASE: RunnerSummary = {
   credentialsProbe: { status: 'asked' },
   profileProbe: { status: 'asked' },
   revision: { status: 'unheard' },
+  managerPeers: { status: 'named', peers: [] },
 };
 
 const DAEMON_UNKNOWN: DaemonRevision = { status: 'unknown' };
