@@ -332,6 +332,27 @@ describe('/usage 画面', () => {
     expect(within(managers).queryByText(longManagerId)).toBeNull();
   });
 
+  it('依頼文の秘密は、絞り込みの選択肢にもマネージャー別の行の名前にも素で出さない（一覧・CLI と同じ伏せ）', async () => {
+    const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+    stubUsage({
+      rows: [row(1, { managerId: 'mgr-secret' })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      managers: [
+        { managerId: 'mgr-secret', request: `鍵 ${secret}`, startedAt: '2026-08-14T01:00:00.000Z' },
+      ],
+    });
+
+    renderUsage();
+
+    const option = await screen.findByRole('option', { name: /^鍵 / });
+    expect(option.textContent).not.toContain('sk-ant-api03');
+    await screen.findByRole('heading', { name: 'マネージャー別' });
+    const managers = axisCard('マネージャー別');
+    expect(managers.textContent).toContain('鍵 ');
+    expect(managers.innerHTML).not.toContain('sk-ant-api03');
+  });
+
   it('マネージャー別は、mgr- で始まらない委譲の id もリンクにし、clone の行はしない', async () => {
     stubUsage({
       rows: [
