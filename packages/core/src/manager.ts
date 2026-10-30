@@ -148,6 +148,7 @@ import type {
   RunnerAttachment,
   RunnerClient,
   RunnerCredentialFingerprint,
+  RunnerEntry,
   RunnerEvent,
   ScratchSweepItem,
   RunnerExecutionResources,
@@ -4336,7 +4337,7 @@ class Pool implements ManagerPool {
       // 指紋が分からないときは断らず流し、世代は書かない。
       const observed = record.attached
         ? this.#sessionTokenFingerprintOf(managerId)
-        : this.#observedTokenFingerprint(record.job.runnerId, managerId);
+        : this.#observedSessionField('sessionTokenFingerprints', record.job.runnerId, managerId);
       if (observed === undefined || activeFingerprint === undefined) return {};
       if (observed === activeFingerprint) return { fingerprintMatched: true };
     }
@@ -5031,14 +5032,27 @@ class Pool implements ManagerPool {
     }
   }
 
-  /** 聞けていない・欄を返さない runner のときは `undefined`（「分からない」）。 */
-  #observedTokenFingerprint(runnerId: string | undefined, managerId: string): string | undefined {
+  /**
+   * 名簿の最後の観測を読むだけで往復しない。聞けていない・欄を返さない runner・キーが無い委譲のときは `undefined`（「分からない」。0 ではない）。
+   * `field` は `RunnerEntry` の観測の欄（委譲ごとのキーを持つ記録）の名前。
+   */
+  #observedSessionField<
+    K extends
+      | 'sessionBackgroundTasks'
+      | 'sessionClassifierDenials'
+      | 'sessionPeerApprovals'
+      | 'sessionTokenFingerprints',
+  >(
+    field: K,
+    runnerId: string | undefined,
+    managerId: string,
+  ): NonNullable<RunnerEntry[K]>[string] | undefined {
     if (runnerId === undefined) return undefined;
     for (const entry of this.#runners.entries()) {
       if (entry.runnerId !== runnerId) continue;
-      const fingerprints = entry.sessionTokenFingerprints;
-      if (fingerprints !== undefined && Object.hasOwn(fingerprints, managerId)) {
-        return fingerprints[managerId];
+      const observed = entry[field] as Readonly<Record<string, unknown>> | undefined;
+      if (observed !== undefined && Object.hasOwn(observed, managerId)) {
+        return observed[managerId] as NonNullable<RunnerEntry[K]>[string];
       }
     }
     return undefined;
@@ -5052,49 +5066,9 @@ class Pool implements ManagerPool {
     const record = this.#records.get(managerId);
     if (record === undefined) return undefined;
     return (
-      this.#observedTokenFingerprint(record.job.runnerId, managerId) ??
+      this.#observedSessionField('sessionTokenFingerprints', record.job.runnerId, managerId) ??
       record.tokenFingerprintAtReattach
     );
-  }
-
-  /** 聞けていない・欄を返さない runner のときは `undefined`（0 ではない）。 */
-  #observedBackgroundTasks(runnerId: string | undefined, managerId: string): number | undefined {
-    if (runnerId === undefined) return undefined;
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId !== runnerId) continue;
-      const tasks = entry.sessionBackgroundTasks;
-      if (tasks !== undefined && Object.hasOwn(tasks, managerId)) return tasks[managerId];
-    }
-    return undefined;
-  }
-
-  // `#observedBackgroundTasks` と同じ読み方: 名簿の最後の観測を読むだけで往復しない。キーが無いのは「分からない」
-  #observedClassifierDenials(
-    runnerId: string | undefined,
-    managerId: string,
-  ): readonly ClassifierDenialOverLimit[] | undefined {
-    if (runnerId === undefined) return undefined;
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId !== runnerId) continue;
-      const denials = entry.sessionClassifierDenials;
-      if (denials !== undefined && Object.hasOwn(denials, managerId)) return denials[managerId];
-    }
-    return undefined;
-  }
-
-  #observedPeerApprovals(
-    runnerId: string | undefined,
-    managerId: string,
-  ): { count: number; oldestSince: string } | undefined {
-    if (runnerId === undefined) return undefined;
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId !== runnerId) continue;
-      const approvals = entry.sessionPeerApprovals;
-      if (approvals !== undefined && Object.hasOwn(approvals, managerId)) {
-        return approvals[managerId];
-      }
-    }
-    return undefined;
   }
 
   // 名簿・現役の世代は1回だけ引いて使い回す: 一覧を作っている間に動いても、同じ応答の中では全件を同じ像で比べる
@@ -5140,11 +5114,23 @@ class Pool implements ManagerPool {
   // 聞けていない委譲には欄を作らない（0 を捏造しない）。走行中の像（`#records`）に在る委譲だけに添える
   #withObserved(record: ManagerRecord, summary: ManagerSummary): ManagerSummary {
     let result = summary;
-    const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
+    const tasks = this.#observedSessionField(
+      'sessionBackgroundTasks',
+      record.job.runnerId,
+      record.job.id,
+    );
     if (tasks !== undefined) result = { ...result, liveBackgroundTasks: tasks };
-    const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
+    const denials = this.#observedSessionField(
+      'sessionClassifierDenials',
+      record.job.runnerId,
+      record.job.id,
+    );
     if (denials !== undefined) result = { ...result, classifierDenials: denials };
-    const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
+    const peerApprovals = this.#observedSessionField(
+      'sessionPeerApprovals',
+      record.job.runnerId,
+      record.job.id,
+    );
     if (peerApprovals !== undefined) {
       result = { ...result, pendingPeerApprovals: { ...peerApprovals } };
     }
