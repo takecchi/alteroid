@@ -1,3 +1,10 @@
+import type {
+  ConversationMessage as LogicConversationMessage,
+  ConversationSummary as LogicConversationSummary,
+  ConversationsResponse,
+  MessageAttachment,
+} from '@alteroid/logic';
+
 import { stdout } from './terminal-out.js';
 
 import { attachmentLinesOf } from './attachments.js';
@@ -26,25 +33,17 @@ import { withdrawnMessageText } from './withdrawn-message.js';
  * 打ち切りを握り潰すと同じ欠陥の入口を作る。
  */
 
-export interface ConversationSummary {
-  conversationId: string;
-  startedAt: string;
-  updatedAt: string;
-  messages: number;
-  preview: string;
-  unreadCount?: number;
-}
+// logic の型そのままにしない: 描画が読まない必須欄（`readThrough`・添付の `sha256` など）まで偽の応答に要求すると、
+// 試験の組み立てが割れる。読む欄だけに絞り、欄の型は logic（生成 spec）から引く。
+export type ConversationSummary = Pick<
+  LogicConversationSummary,
+  'conversationId' | 'startedAt' | 'updatedAt' | 'messages' | 'preview'
+> &
+  Partial<Pick<LogicConversationSummary, 'unreadCount'>>;
 
-export interface ConversationMessage {
-  id: string;
-  at: string;
-  role: 'inbound' | 'outbound';
-  text: string;
-  delivery?: 'withdrawn';
-  supersedes?: string;
-  supersededBy?: string;
-  attachments?: { id: string; name: string; mediaType: string; size: number }[];
-}
+export type ConversationMessage = Omit<LogicConversationMessage, 'attachments'> & {
+  attachments?: Pick<MessageAttachment, 'id' | 'name' | 'mediaType' | 'size'>[];
+};
 
 export interface ConversationsListOptions {
   limit?: string;
@@ -107,13 +106,9 @@ export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string
   }
 }
 
-export interface ConversationsListPage {
+export type ConversationsListPage = Omit<ConversationsResponse, 'conversations'> & {
   conversations: ConversationSummary[];
-  scanned: number;
-  reachedStart: boolean;
-  hiddenByLimit: number;
-  nextCursor?: string | undefined;
-}
+};
 
 /** 案内に出す打ち方。`alteroid conversations list` と chat の `/conversations` で、ここだけが違う。 */
 export interface ConversationsListHints {
