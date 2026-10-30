@@ -862,3 +862,12 @@ describe('reportRetiredLayerProviderEnv（もう読まない層の provider の�
     expect(source).toContain('reportRetiredLayerProviderEnv(process.env);');
   });
 });
+
+// 退役から3週間を過ぎたので、起動時の「もう読まない」の知らせは外す（#5805）。変数は今までどおり読まない
+describe('退役した層の provider の変数（#5805）', () => {
+  it('起動は、退役した変数の知らせを出さない', () => {
+    const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    expect(source).not.toContain('retiredLayerProviderNotices');
+    expect(source).not.toContain('reportRetiredLayerProviderEnv');
+  });
+});
