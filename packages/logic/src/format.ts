@@ -1,6 +1,15 @@
-// `@alteroid/core` の値を import しない（型だけ）: 値を1つでも import すると `sideEffects` 未宣言のため
+// `@alteroid/core` 本体の値を import しない（型だけ。値は下の軽い出口から取る）: 本体から値を1つでも import すると `sideEffects` 未宣言のため
 // tree-shake されず、core 全体が client バンドルへ入る（assertNever 1つで約1.2MB のチャンクができた）。
 import type { MemoryCreatedAt } from '@alteroid/core';
+
+// 要旨の鮮度の整形は core の軽い出口に1本だけ置く（写さない）。名前を変えずに再 export して、呼び手の import を変えない。
+// 軽い出口は何も import しないので、値を取っても core 本体は client バンドルへ入らない。
+export {
+  describeMemoryDescriptionDrift,
+  formatMemoryDescriptionDrift,
+  formatMemoryDescriptionDriftAtLeast,
+  formatMemoryStaleness,
+} from '@alteroid/core/memory-freshness-format';
 
 const dateTime = new Intl.DateTimeFormat('ja-JP', {
   month: '2-digit',
@@ -81,75 +90,10 @@ export function formatCreatedAtRelative(createdAt: MemoryCreatedAt): string {
   }
 }
 
-// `Math.max(seconds, 0)` を外さない: 受け取るのは HTTP 経由の JSON（信頼境界の外）で、型の保証だけを信じない。
-export function formatMemoryStaleness(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${Math.max(seconds, 0)}秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}時間`;
-  const days = Math.floor(hours / 24);
-  return `${days}日`;
-}
-
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   // 丸めた後の値で単位を上げるか決める: 1,048,524 バイト以上が「1024.0 KB」になる。
   const kb = (bytes / 1024).toFixed(1);
   if (Number(kb) < 1024) return `${kb} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-type MemoryDescriptionDrift =
-  | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
-  | {
-      kind: 'at-least';
-      baselineBytes: number;
-      baselineAt: string;
-      currentBytes: number;
-      deltaBytes: number;
-    }
-  | { kind: 'unrecorded' };
-
-function assertNeverMemoryDescriptionDrift(drift: never): never {
-  throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
-}
-
-// 符号つきで出す: 減ったことと増えたことを同じ表示にしない。`describedBytes === 0` では % を出さない（0除算を「0%」にしない）。
-export function formatMemoryDescriptionDrift(drift: {
-  describedBytes: number;
-  currentBytes: number;
-  deltaBytes: number;
-}): string {
-  const sign = drift.deltaBytes < 0 ? '-' : '+';
-  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
-  if (drift.describedBytes === 0) return `本文は${sign}${magnitude}バイト変わった`;
-  const percent = Math.round((Math.abs(drift.deltaBytes) / drift.describedBytes) * 100);
-  return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
-}
-
-// `%` を出さない: 母数が要旨を書いた時点の大きさではなく、`measured` の `%` とは別の量になる。
-// `baselineAt` と `本文は` も出さない: この文字列はクローンのプロンプトへ毎ターン焼かれ、トークンが恒久的に膨らむ。
-export function formatMemoryDescriptionDriftAtLeast(drift: {
-  baselineBytes: number;
-  currentBytes: number;
-  deltaBytes: number;
-}): string {
-  const sign = drift.deltaBytes < 0 ? '-' : '+';
-  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
-  return `${sign}${magnitude}バイト以上変わった`;
-}
-
-export function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
-  switch (drift.kind) {
-    case 'measured':
-      return formatMemoryDescriptionDrift(drift);
-    case 'at-least':
-      return formatMemoryDescriptionDriftAtLeast(drift);
-    case 'unrecorded':
-      return '本文の変化量は記録されていない';
-    default:
-      return assertNeverMemoryDescriptionDrift(drift);
-  }
 }
