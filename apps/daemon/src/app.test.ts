@@ -73,7 +73,6 @@ import { createApp, parseAllowedOrigins } from './app.js';
 import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
-import { createHttpRunner } from './runner-client.js';
 import {
   credentialsUpdateResponseSchema,
   managerSummarySchema,
@@ -8414,7 +8413,6 @@ describe('OpenAPI', () => {
       '/managers/{id}/transcript',
       '/managers/{id}/messages',
       '/runners',
-      '/runners/credentials',
       '/runners/vacate',
       '/archive',
       '/archive/sessions',
@@ -10345,239 +10343,6 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   });
 });
 
-describe('runner への鍵配布を日誌へ残す（POST /runners/credentials。issue #2198）', () => {
-  const DUMMY_VALUE = 'CRED-RUNNERS-DUMMY';
-
-  function withRunners(runners: ReturnType<typeof fakeRunner>[] = []) {
-    return createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: registryOf(runners),
-    });
-  }
-
-  async function distribute(target: ReturnType<typeof withRunners>, credentials: unknown) {
-    return target.request('/runners/credentials', json({ credentials }));
-  }
-
-  it('正常系: 日誌に2行残り、runner の id・鍵の名前と指紋が載る', async () => {
-    const runner = fakeRunner('runner-1');
-    const withVault = withRunners([runner]);
-
-    const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
-    expect(response.status).toBe(200);
-
-    const ours = (await stores.journal.list({ types: ['decision'] }))
-      .flatMap((entry) => (entry.type === 'decision' ? [entry] : []))
-      .reverse()
-      .filter((entry) => entry.decision.includes('環境変数（鍵）'));
-    expect(ours).toHaveLength(2);
-
-    const fp = fingerprintOf(DUMMY_VALUE);
-    expect(ours[0]?.decision).toContain('配ろうとしている');
-    expect(ours[0]?.decision).toContain(`NPM_TOKEN=${fp}`);
-    expect(ours[1]?.decision).toContain('配った');
-    expect(ours[1]?.decision).toContain(`NPM_TOKEN=${fp}`);
-    expect(ours[1]?.grounds).toContain('runner-1=ok');
-
-    expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
-  });
-
-  it('日誌にも stderr にも応答にも鍵の値が1文字も載らない', async () => {
-    const runner = fakeRunner('runner-1');
-    const withVault = withRunners([runner]);
-
-    const lines = await captureStderr(async () => {
-      const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
-      expect(response.status).toBe(200);
-      expect(await response.text()).not.toContain(DUMMY_VALUE);
-    });
-    expect(lines.join('\n')).not.toContain(DUMMY_VALUE);
-
-    const journalText = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
-    expect(journalText).not.toContain(DUMMY_VALUE);
-  });
-
-  it('日誌への先書きが落ちると 500 になり、runner へ1本も配られない', async () => {
-    const runner = fakeRunner('runner-1');
-    const failingJournal: Stores = {
-      ...stores,
-      journal: {
-        ...stores.journal,
-        append: () => {
-          throw new Error('journal store unavailable (test)');
-        },
-      },
-    };
-    const withVault = createApp({
-      clone: fake.clone,
-      stores: failingJournal,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: registryOf([runner]),
-    });
-
-    const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
-    expect(response.status).toBe(500);
-    expect(runner.receivedCredentials).toEqual([]);
-    expect(runner.held.has('NPM_TOKEN')).toBe(false);
-  });
-
-  it('配布が投げたとき、先の行と打ち消しの行の両方が残る', async () => {
-    const throwingRegistry = {
-      async list() {
-        throw new Error('registry unavailable (test)');
-      },
-      async get() {
-        throw new Error('この検証では使わない');
-      },
-      async select() {
-        throw new Error('この検証では使わない');
-      },
-    } as never;
-    const withVault = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: throwingRegistry,
-    });
-
-    const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
-    expect(response.status).toBe(500);
-
-    const ours = (await stores.journal.list({ types: ['decision'] }))
-      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
-      .reverse()
-      .filter((decision) => decision.includes('環境変数（鍵）'));
-    expect(ours).toHaveLength(2);
-    expect(ours[0]).toContain('配ろうとしている');
-    expect(ours[1]).toContain('配れなかった');
-    expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
-  });
-
-  describe('配布の失敗に鍵の値を載せない（issue #2407）', () => {
-    const FAKE_SECRET = 'FAKE_SECRET_VALUE_2407';
-
-    async function journalText(): Promise<string> {
-      return JSON.stringify(await stores.journal.list({ types: ['decision'] }));
-    }
-
-    it('setCredentials が値入りの error を投げても、応答・日誌・stderr に値が出ず、種類は残る', async () => {
-      const failing = {
-        ...fakeRunner('runner-bad'),
-        async setCredentials(entries: { name: string; value: string }[]) {
-          throw Object.assign(
-            new Error(`rpc failed: params=${JSON.stringify(entries)}`, {
-              cause: new Error(`inner ${entries[0]?.value ?? ''}`),
-            }),
-            { name: 'FakeRpcError' },
-          );
-        },
-      };
-      const good = fakeRunner('runner-good');
-      const target = withRunners([failing, good] as never);
-
-      const lines = await captureStderr(async () => {
-        const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
-        expect(response.status).toBe(200);
-        const text = await response.text();
-        expect(text).not.toContain(FAKE_SECRET);
-        const body = JSON.parse(text) as {
-          results: { runnerId: string; ok: boolean; error?: string }[];
-        };
-        expect(body.results[0]).toEqual({
-          runnerId: 'runner-bad',
-          ok: false,
-          error: '鍵の配布に失敗した（FakeRpcError）',
-        });
-        expect(body.results[1]).toMatchObject({ runnerId: 'runner-good', ok: true });
-      });
-      expect(lines.join('\n')).not.toContain(FAKE_SECRET);
-
-      const text = await journalText();
-      expect(text).not.toContain(FAKE_SECRET);
-      expect(text).toContain('runner-bad=失敗（FakeRpcError）');
-      expect(text).toContain('runner-good=ok');
-    });
-
-    it('runner の HTTP 応答が送った値を写しても（RunnerHttpError の message）、値が出ず、状態は残る', async () => {
-      const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
-        const url = new URL(typeof input === 'string' ? input : input.toString());
-        if (url.pathname === '/health') {
-          return Response.json({ ok: true, runnerId: 'runner-http', workspacePath: '/work' });
-        }
-        return new Response(`echo: ${String(init?.body)}`, { status: 500 });
-      }) as typeof fetch;
-      const httpRunner = await createHttpRunner({
-        baseUrl: 'http://runner.test',
-        token: 'test-runner-token',
-        fetchFn,
-      });
-      try {
-        const raw = await httpRunner
-          .setCredentials([{ name: 'NPM_TOKEN', value: FAKE_SECRET }])
-          .then(
-            () => '',
-            (error: unknown) => String(error),
-          );
-        expect(raw).toContain(FAKE_SECRET);
-
-        const target = withRunners([httpRunner] as never);
-        const lines = await captureStderr(async () => {
-          const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
-          expect(response.status).toBe(200);
-          const text = await response.text();
-          expect(text).not.toContain(FAKE_SECRET);
-          const body = JSON.parse(text) as { results: { ok: boolean; error?: string }[] };
-          expect(body.results[0]?.ok).toBe(false);
-          expect(body.results[0]?.error).toBe('鍵の配布に失敗した（RunnerHttpError、HTTP 500）');
-        });
-        expect(lines.join('\n')).not.toContain(FAKE_SECRET);
-        const text = await journalText();
-        expect(text).not.toContain(FAKE_SECRET);
-        expect(text).toContain('runner-http=失敗（RunnerHttpError、HTTP 500）');
-      } finally {
-        await httpRunner.close();
-      }
-    });
-
-    it('registry.list() が値入りの error を投げても、打ち消しの日誌に値が出ず、種類は残る', async () => {
-      const throwingRegistry = {
-        async list() {
-          throw Object.assign(new Error(`registry down: ${FAKE_SECRET}`), {
-            name: 'FakeRegistryError',
-          });
-        },
-        async get() {
-          throw new Error('この検証では使わない');
-        },
-        async select() {
-          throw new Error('この検証では使わない');
-        },
-      } as never;
-      const target = createApp({
-        clone: fake.clone,
-        stores,
-        token: 'test-token',
-        shutdown: () => undefined,
-        runners: throwingRegistry,
-      });
-
-      const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
-      expect(response.status).toBe(500);
-      expect(await response.text()).not.toContain(FAKE_SECRET);
-
-      const text = await journalText();
-      expect(text).not.toContain(FAKE_SECRET);
-      expect(text).toContain('配れなかった');
-      expect(text).toContain('runner の一覧を取れなかった（FakeRegistryError）');
-    });
-  });
-});
-
 describe('宣言と実物の一致（/profile）', () => {
   // profileService() を使わない: その prepare() は profile を生成しないため、.parse() を外しても検知できない。
   function withRealApplier() {
@@ -11347,20 +11112,22 @@ describe('宣言と実物の一致（/schedule）', () => {
 
 // 値を2本送る: 1本だと「壊れた行だけ伏せる」直しでも緑になるから。
 describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値が漏れない（#424）', () => {
-  it('POST /runners/credentials: 2本目の name が不正でも、同じ回に送った値が1つも出ない', async () => {
-    const FIRST = 'CRED-FIRST-DUMMY';
-    const SECOND = 'CRED-SECOND-DUMMY';
+  it('PUT /credentials: 2本目の name が不正でも、同じ回に送った値が1つも出ない', async () => {
+    const FIRST = 'CRED-PUT-FIRST-DUMMY';
+    const SECOND = 'CRED-PUT-SECOND-DUMMY';
 
-    const response = await app.request(
-      '/runners/credentials',
-      json({
+    const response = await app.request('/credentials', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
         credentials: [
           { name: 'GH_TOKEN', value: FIRST },
           { name: 'not-upper-case', value: SECOND },
         ],
       }),
-    );
+    });
 
+    // 形の検証は器の有無（503）より先に走る。
     expect(response.status).toBe(400);
     const text = await response.text();
     expect(text).not.toContain(FIRST);
@@ -11369,6 +11136,15 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(typeof body.error).toBe('string');
+  });
+
+  it('POST /runners/credentials は口が無い（404）。鍵の配布は PUT /credentials に一本化した（#5890）', async () => {
+    const response = await app.request(
+      '/runners/credentials',
+      json({ credentials: [{ name: 'GH_TOKEN', value: 'CRED-GONE-DUMMY' }] }),
+    );
+
+    expect(response.status).toBe(404);
   });
 
   it('PUT /profile/:name: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {

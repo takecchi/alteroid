@@ -32163,134 +32163,6 @@
         }
       }
     },
-    "/runners/credentials": {
-      "post": {
-        "operationId": "postRunnersCredentials",
-        "tags": ["runners"],
-        "summary": "マネージャーの道具の鍵を差し替える",
-        "description": "器を作り直さない。鍵はここに保管せず、受け取って全 runner へ降ろすだけである（デーモンの器に記憶の鍵と GitHub の書き込み権を並べない）。",
-        "responses": {
-          "200": {
-            "description": "各 runner への配布結果。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "results": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "runnerId": {
-                            "type": "string"
-                          },
-                          "ok": {
-                            "type": "boolean"
-                          },
-                          "credentials": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "name": {
-                                  "type": "string"
-                                },
-                                "sha256": {
-                                  "type": "string"
-                                },
-                                "updatedAt": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["name", "sha256", "updatedAt"],
-                              "additionalProperties": false
-                            }
-                          },
-                          "error": {
-                            "type": "string"
-                          }
-                        },
-                        "required": ["runnerId", "ok"],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": ["results"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "本文の形が不正（配布していない）。**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（下の`hook` の doc）。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "runner が登録されていない。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "credentials": {
-                    "minItems": 1,
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^[A-Z][A-Z0-9_]*$"
-                        },
-                        "value": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["name", "value"]
-                    }
-                  }
-                },
-                "required": ["credentials"]
-              }
-            }
-          }
-        }
-      }
-    },
     "/runners/vacate": {
       "post": {
         "operationId": "postRunnersVacate",
@@ -34751,7 +34623,7 @@
             }
           },
           "400": {
-            "description": "本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（`POST /runners/credentials` の hook の doc）。",
+            "description": "本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（下の `jsonBody` の hook の doc）。",
             "content": {
               "application/json": {
                 "schema": {

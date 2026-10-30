@@ -1175,17 +1175,6 @@ export const topologyResponseSchema = z.object({
   links: z.array(topologyLinkSchema),
 });
 
-export const runnersCredentialsResponseSchema = z.object({
-  results: z.array(
-    z.object({
-      runnerId: z.string(),
-      ok: z.boolean(),
-      credentials: z.array(runnerCredentialFingerprintSchema).optional(),
-      error: z.string().optional(),
-    }),
-  ),
-});
-
 export const runnersVacateCommandSchema = z.object({
   runnerId: z.string(),
 });
