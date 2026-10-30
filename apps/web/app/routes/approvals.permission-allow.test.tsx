@@ -89,7 +89,7 @@ function renderPage() {
 
 const SENDS = '「許可」は「許可します」と送';
 const RECORDED = `${SENDS}り、許可（Bash）の一覧に載る。「却下」は「いいえ、やらないで」と送る。`;
-const NOT_RECORDED = `${SENDS}る。持ち主の鍵で答えた許可は、許可（Bash）の一覧に載らない（アカウントで入って答えると載る）。「却下」は「いいえ、やらないで」と送る。`;
+const NOT_RECORDED = `${SENDS}る。実行環境の持ち主の鍵で入って答えた許可は、許可（Bash）の一覧に載らない（アカウントで入って答えると載る）。「却下」は「いいえ、やらないで」と送る。`;
 const SEND_ONLY = `${SENDS}る。「却下」は「いいえ、やらないで」と送る。`;
 
 let originalFetch: typeof fetch;

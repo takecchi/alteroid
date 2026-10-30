@@ -26,6 +26,7 @@ import {
   containsMemoryFrontmatterLineBreak,
   cutMemorySections,
   deriveHumanTouchedAtFromJournal,
+  deriveMemoryBootBackfillFromJournal,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   MEMORY_JOURNAL_SCAN_PAGE_SIZE,
@@ -466,6 +467,225 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
       fakeJournal([memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write')]),
     );
     expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
+
+// まとめる前の2関数の写し（#5963）: 1周にまとめた `deriveMemoryBootBackfillFromJournal` と、同じ日誌の入力で結果が同じことを突き合わせる基準として置く。
+// 本体から折り畳みを切り出したので、基準の側は独立に保つ必要があり、本体を呼ばずに旧実装をそのまま写してある（これを本体へ寄せ直さないこと）。
+async function legacyWalk(
+  journal: Pick<JournalStore, 'listPage'>,
+  pageSize: number,
+  onPage: (page: JournalEntry[]) => void,
+): Promise<void> {
+  let after: JournalQuery['after'];
+  for (;;) {
+    const { entries: page, next } = await journal.listPage({
+      types: ['memory_update'],
+      order: 'asc',
+      limit: pageSize,
+      ...(after === undefined ? {} : { after }),
+    });
+    if (page.length > 0) onPage(page);
+    if (next === null) return;
+    after = next;
+  }
+}
+
+async function legacyHumanTouchedAt(
+  journal: Pick<JournalStore, 'listPage'>,
+  pageSize: number,
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const beforeLastWrite = new Map<string, string | undefined>();
+  await legacyWalk(journal, pageSize, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'memory_update') continue;
+      if (entry.action === 'remove') {
+        result.delete(entry.slug);
+        beforeLastWrite.delete(entry.slug);
+        continue;
+      }
+      if (entry.action === 'write_failed') {
+        if (entry.cause === 'human' && beforeLastWrite.has(entry.slug)) {
+          const previous = beforeLastWrite.get(entry.slug);
+          if (previous === undefined) result.delete(entry.slug);
+          else result.set(entry.slug, previous);
+          beforeLastWrite.delete(entry.slug);
+        }
+        continue;
+      }
+      if (entry.cause !== 'human') continue;
+      if (entry.action === 'write') beforeLastWrite.set(entry.slug, result.get(entry.slug));
+      result.set(entry.slug, entry.at);
+    }
+  });
+  return result;
+}
+
+async function legacyCreatedAt(
+  journal: Pick<JournalStore, 'listPage'>,
+  pageSize: number,
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const createdByLastWrite = new Set<string>();
+  await legacyWalk(journal, pageSize, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'memory_update') continue;
+      if (entry.action === 'remove') {
+        result.delete(entry.slug);
+        createdByLastWrite.delete(entry.slug);
+        continue;
+      }
+      if (entry.action === 'write_failed') {
+        if (createdByLastWrite.delete(entry.slug)) result.delete(entry.slug);
+        continue;
+      }
+      if (entry.action !== 'write') continue;
+      createdByLastWrite.delete(entry.slug);
+      if (!result.has(entry.slug)) {
+        result.set(entry.slug, entry.at);
+        createdByLastWrite.add(entry.slug);
+      }
+    }
+  });
+  return result;
+}
+
+describe('deriveMemoryBootBackfillFromJournal — 1周にまとめても、2関数を別々に呼んだ結果と同じ（#5963）', () => {
+  const ACTIONS = ['write', 'append', 'remove', 'write_failed', undefined] as const;
+  const CAUSES = ['human', 'clone'] as const;
+
+  // 種を固定した擬似乱数: 失敗したときに同じ入力を再現できるように。
+  function seededJournal(count: number, seed: number, slugCount: number): JournalEntry[] {
+    let state = seed;
+    const next = (bound: number): number => {
+      state = (state * 1664525 + 1013904223) % 4294967296;
+      return Math.floor((state / 4294967296) * bound);
+    };
+    const entries: JournalEntry[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const at = new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString();
+      entries.push(
+        memoryUpdateEntry(`slug-${next(slugCount)}`, at, ACTIONS[next(ACTIONS.length)], {
+          cause: CAUSES[next(CAUSES.length)],
+          id: `id-${i}`,
+        }),
+      );
+    }
+    return entries.reverse();
+  }
+
+  function countingJournal(entries: JournalEntry[]): {
+    journal: Pick<JournalStore, 'listPage'>;
+    calls: () => number;
+  } {
+    const inner = fakeJournal(entries);
+    let calls = 0;
+    return {
+      journal: {
+        listPage: async (query) => {
+          calls += 1;
+          return inner.listPage(query);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  const PAGE = 7;
+
+  it.each([
+    [0, 1],
+    [1, 2],
+    [PAGE, 3],
+    [PAGE + 1, 4],
+    [PAGE * 10 + 3, 5],
+    [400, 6],
+  ])('件数=%i（種=%i）: 人間の印・作った時刻とも旧実装と同じ値を返す', async (count, seed) => {
+    const journal = fakeJournal(seededJournal(count, seed, 5));
+
+    const combined = await deriveMemoryBootBackfillFromJournal(journal, { pageSize: PAGE });
+
+    expect([...combined.humanTouchedAt.entries()]).toEqual([
+      ...(await legacyHumanTouchedAt(journal, PAGE)).entries(),
+    ]);
+    expect([...combined.createdAt.entries()]).toEqual([
+      ...(await legacyCreatedAt(journal, PAGE)).entries(),
+    ]);
+  });
+
+  it('既定の頁の幅をまたぐ量（2,500 行）でも旧実装と同じ値を返す', async () => {
+    const journal = fakeJournal(seededJournal(2500, 11, 40));
+
+    const combined = await deriveMemoryBootBackfillFromJournal(journal);
+
+    expect([...combined.humanTouchedAt.entries()]).toEqual([
+      ...(await legacyHumanTouchedAt(journal, MEMORY_JOURNAL_SCAN_PAGE_SIZE)).entries(),
+    ]);
+    expect([...combined.createdAt.entries()]).toEqual([
+      ...(await legacyCreatedAt(journal, MEMORY_JOURNAL_SCAN_PAGE_SIZE)).entries(),
+    ]);
+    expect(combined.humanTouchedAt.size).toBeGreaterThan(0);
+    expect(combined.createdAt.size).toBeGreaterThan(0);
+  });
+
+  it('人間の行・作った時刻が要る行・両方・どちらでもない行を含む手組みの入力でも同じ値を返す', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('none', '2026-01-09T00:00:00.000Z', 'append', { cause: 'clone' }),
+      memoryUpdateEntry('both', '2026-01-08T00:00:00.000Z', 'write_failed', { cause: 'human' }),
+      memoryUpdateEntry('both', '2026-01-07T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('created-only', '2026-01-06T00:00:00.000Z', 'write', { cause: 'clone' }),
+      memoryUpdateEntry('touched-only', '2026-01-05T00:00:00.000Z', 'append', { cause: 'human' }),
+      memoryUpdateEntry('gone', '2026-01-04T00:00:00.000Z', 'remove', { cause: 'human' }),
+      memoryUpdateEntry('gone', '2026-01-03T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('both', '2026-01-02T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('none', '2026-01-01T00:00:00.000Z', undefined, { cause: 'clone' }),
+    ]);
+
+    const combined = await deriveMemoryBootBackfillFromJournal(journal, { pageSize: 2 });
+
+    expect([...combined.humanTouchedAt.entries()]).toEqual([
+      ...(await legacyHumanTouchedAt(journal, 2)).entries(),
+    ]);
+    expect([...combined.createdAt.entries()]).toEqual([
+      ...(await legacyCreatedAt(journal, 2)).entries(),
+    ]);
+    expect([...combined.createdAt.keys()].sort()).toEqual(['both', 'created-only']);
+    expect([...combined.humanTouchedAt.keys()].sort()).toEqual(['both', 'touched-only']);
+  });
+
+  it('壊れた行を捨てて短くなった頁・丸ごと壊れた頁があっても、旧実装と同じ値を返す', async () => {
+    const entries = seededJournal(60, 21, 4);
+    const broken = new Set(['id-10', 'id-11', 'id-12', 'id-13', 'id-14', 'id-33']);
+    const inner = fakeJournal(entries);
+    const dropping: Pick<JournalStore, 'listPage'> = {
+      listPage: async (query) => {
+        const page = await inner.listPage(query);
+        return { entries: page.entries.filter((e) => !broken.has(e.id)), next: page.next };
+      },
+    };
+
+    const combined = await deriveMemoryBootBackfillFromJournal(dropping, { pageSize: 5 });
+
+    expect([...combined.humanTouchedAt.entries()]).toEqual([
+      ...(await legacyHumanTouchedAt(dropping, 5)).entries(),
+    ]);
+    expect([...combined.createdAt.entries()]).toEqual([
+      ...(await legacyCreatedAt(dropping, 5)).entries(),
+    ]);
+  });
+
+  it('日誌を読む回数は旧実装（2つの関数）の半分になる', async () => {
+    const entries = seededJournal(100, 31, 6);
+    const legacy = countingJournal(entries);
+    await legacyHumanTouchedAt(legacy.journal, PAGE);
+    await legacyCreatedAt(legacy.journal, PAGE);
+    const merged = countingJournal(entries);
+
+    await deriveMemoryBootBackfillFromJournal(merged.journal, { pageSize: PAGE });
+
+    expect(merged.calls()).toBeGreaterThan(1);
+    expect(merged.calls() * 2).toBe(legacy.calls());
   });
 });
 

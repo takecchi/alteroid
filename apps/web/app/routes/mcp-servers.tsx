@@ -2,6 +2,7 @@
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { describeMcpServersProblem } from '~/lib/mcp-servers-check';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -218,6 +219,8 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
   function askSave() {
     if (parsed === null) return;
+    // 前の送信の失敗の文は消す: 新しい失敗（読めない・形が不正）の下に、前の失敗が並んで残らないように
+    setFailure(undefined);
     if (!parsed.ok) {
       setParseError(parsed.error);
       return;
@@ -461,7 +464,7 @@ function toMcpJson(servers: McpServers): string {
   return `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`;
 }
 
-// 中身の検査をここでしない: 形の検査はデーモンの parseMcpServers が正本のため
+// 形の規則は core の checkMcpServers が正本（デーモンの zod のスキーマと同じ判定を、試験で突き合わせてある）。ここは JSON の読みと、外側の形（mcpServers の有無）だけを見る
 function parseMcpJson(
   text: string,
 ): { ok: true; servers: McpServers } | { ok: false; error: string } {
@@ -486,5 +489,8 @@ function parseMcpJson(
       error: '{ "mcpServers": { … } } の形で書くこと（.mcp.json と同じ形。送っていない）',
     };
   }
+  // 形は送る前に見て、どのサーバのどの欄が違うかを言う。通ったものも、最後の判断は daemon が持つ（食い違えば daemon の文がそのまま出る）
+  const problem = describeMcpServersProblem(servers as Record<string, unknown>);
+  if (problem !== undefined) return { ok: false, error: `${problem}（送っていない）` };
   return { ok: true, servers: servers as McpServers };
 }

@@ -297,6 +297,60 @@ function externalNode(external: TopologyExternal, box: Box): LaidNode {
   };
 }
 
+// 広い版と狭い版で同じ関数にする: 札と線を積む順が重なりの順なので、2か所に書くとどちらかだけ順がずれる。違うのは線の引き方（`fanWorkers`）だけ
+function pushManagerTree(
+  scene: TopologyScene,
+  managerBoxes: readonly { box: Box; workerBoxes: Box[] }[],
+  brokenOf: ReadonlyMap<number, boolean>,
+  toManagers: readonly Point[][],
+  fanWorkers: (box: Box, workerBoxes: Box[]) => Point[][],
+  nodes: LaidNode[],
+  edges: LaidEdge[],
+): void {
+  scene.managers.forEach((m, i) => {
+    const { box, workerBoxes } = managerBoxes[i]!;
+    edges.push({
+      key: `m-${m.id}`,
+      points: toManagers[i]!,
+      flow: m.flow ?? 'idle',
+      broken: brokenOf.get(i) ?? false,
+      reverse: false,
+    });
+    nodes.push({
+      key: `m-${m.id}`,
+      kind: 'manager',
+      box,
+      label: m.label,
+      task: m.task,
+      status: m.status,
+      details: m.details,
+      ...(m.group === true ? {} : { agent: m.agent ?? {} }),
+      edges: [`m-${m.id}`, ...(m.workers ?? []).map((w) => `w-${w.id}`)],
+    });
+    const toWorkers = fanWorkers(box, workerBoxes);
+    (m.workers ?? []).forEach((w, j) => {
+      edges.push({
+        key: `w-${w.id}`,
+        points: toWorkers[j]!,
+        flow: w.flow ?? 'idle',
+        broken: brokenOf.get(i) ?? false,
+        reverse: false,
+      });
+      nodes.push({
+        key: `w-${w.id}`,
+        kind: 'worker',
+        box: workerBoxes[j]!,
+        label: w.label,
+        task: w.task,
+        status: w.status,
+        details: w.details,
+        agent: w.agent ?? {},
+        edges: [`w-${w.id}`],
+      });
+    });
+  });
+}
+
 // 上へ折れる線は上の札ほど内側の幹、下へ折れる線は下の札ほど内側の幹にする: どの線も別の線の幹と横線を横切らないため
 function fanInto(sources: readonly Box[], target: Box): Point[][] {
   const x1 = Math.max(...sources.map(right));
@@ -458,48 +512,7 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
     cloneBox,
     managerBoxes.map((m) => m.box),
   );
-  scene.managers.forEach((m, i) => {
-    const { box, workerBoxes } = managerBoxes[i]!;
-    edges.push({
-      key: `m-${m.id}`,
-      points: toManagers[i]!,
-      flow: m.flow ?? 'idle',
-      broken: brokenOf.get(i) ?? false,
-      reverse: false,
-    });
-    nodes.push({
-      key: `m-${m.id}`,
-      kind: 'manager',
-      box,
-      label: m.label,
-      task: m.task,
-      status: m.status,
-      details: m.details,
-      ...(m.group === true ? {} : { agent: m.agent ?? {} }),
-      edges: [`m-${m.id}`, ...(m.workers ?? []).map((w) => `w-${w.id}`)],
-    });
-    const toWorkers = fanRight(box, workerBoxes);
-    (m.workers ?? []).forEach((w, j) => {
-      edges.push({
-        key: `w-${w.id}`,
-        points: toWorkers[j]!,
-        flow: w.flow ?? 'idle',
-        broken: brokenOf.get(i) ?? false,
-        reverse: false,
-      });
-      nodes.push({
-        key: `w-${w.id}`,
-        kind: 'worker',
-        box: workerBoxes[j]!,
-        label: w.label,
-        task: w.task,
-        status: w.status,
-        details: w.details,
-        agent: w.agent ?? {},
-        edges: [`w-${w.id}`],
-      });
-    });
-  });
+  pushManagerTree(scene, managerBoxes, brokenOf, toManagers, fanRight, nodes, edges);
 
   const wrap = (b: Box): Box => ({
     x: b.x - PAD,
@@ -663,48 +676,15 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
     cloneBox.x + 6,
     managerBoxes[0]?.box.x ? managerBoxes[0].box.x - 8 : 40,
   );
-  scene.managers.forEach((m, i) => {
-    const { box, workerBoxes } = managerBoxes[i]!;
-    edges.push({
-      key: `m-${m.id}`,
-      points: toManagers[i]!,
-      flow: m.flow ?? 'idle',
-      broken: brokenOf.get(i) ?? false,
-      reverse: false,
-    });
-    nodes.push({
-      key: `m-${m.id}`,
-      kind: 'manager',
-      box,
-      label: m.label,
-      task: m.task,
-      status: m.status,
-      details: m.details,
-      ...(m.group === true ? {} : { agent: m.agent ?? {} }),
-      edges: [`m-${m.id}`, ...(m.workers ?? []).map((w) => `w-${w.id}`)],
-    });
-    const toWorkers = fanDown(box, workerBoxes, box.x + 8, (workerBoxes[0]?.x ?? 80) - 8);
-    (m.workers ?? []).forEach((w, j) => {
-      edges.push({
-        key: `w-${w.id}`,
-        points: toWorkers[j]!,
-        flow: w.flow ?? 'idle',
-        broken: brokenOf.get(i) ?? false,
-        reverse: false,
-      });
-      nodes.push({
-        key: `w-${w.id}`,
-        kind: 'worker',
-        box: workerBoxes[j]!,
-        label: w.label,
-        task: w.task,
-        status: w.status,
-        details: w.details,
-        agent: w.agent ?? {},
-        edges: [`w-${w.id}`],
-      });
-    });
-  });
+  pushManagerTree(
+    scene,
+    managerBoxes,
+    brokenOf,
+    toManagers,
+    (box, workerBoxes) => fanDown(box, workerBoxes, box.x + 8, (workerBoxes[0]?.x ?? 80) - 8),
+    nodes,
+    edges,
+  );
 
   return {
     width,

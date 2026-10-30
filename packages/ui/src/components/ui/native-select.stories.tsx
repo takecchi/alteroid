@@ -22,15 +22,6 @@ export const Default: Story = {
   ),
 };
 
-export const Small: Story = {
-  render: () => (
-    <NativeSelect size="sm" defaultValue="ja" className="w-40">
-      <NativeSelectOption value="ja">日本語</NativeSelectOption>
-      <NativeSelectOption value="en">英語</NativeSelectOption>
-    </NativeSelect>
-  ),
-};
-
 export const WithOptGroup: Story = {
   render: () => (
     <NativeSelect defaultValue="tokyo" className="w-64">

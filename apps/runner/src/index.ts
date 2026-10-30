@@ -84,7 +84,7 @@ export function runnerIdOf(env: NodeJS.ProcessEnv): string {
 const SHUTDOWN_GRACE_MS = LEASE_DRAIN_MS;
 
 // `SHUTDOWN_GRACE_MS` ちょうどにしない: 猶予が切れる時刻には SIGKILL が来て、自分の意思で `exit` する最後の口が負けるため。
-const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
+export const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
 const DRAIN_WAIT_MS = 3_000;
 
@@ -194,6 +194,26 @@ export async function shutdownHandingOver(deps: {
         `alteroid-runner: 畳みで預けた物のうち ${String(left)} 件を、デーモンが取りに来ないまま止まる（生ログの退避・出し箱の退避先）\n`,
       );
     }
+  }
+}
+
+/**
+ * 停止の骨組み。`main` の中の閉じた関数だと試験から押さえられないため切り出した（振る舞いは変えていない）。
+ * 強制 exit の時計は先頭（SIGTERM の瞬間）で張る。片付けの途中で投げても、`finally` で必ず exit に届かせる:
+ * 届かないと、投げた後は時計（`forcedExitMs`）が切れるまで居座るため。exit のコードは正常系と同じ 0。
+ */
+export async function shutdownThenExit(deps: {
+  forcedExitMs: number;
+  handOver: () => Promise<void>;
+  afterHandOver: () => void;
+}): Promise<void> {
+  const forced = setTimeout(() => process.exit(0), deps.forcedExitMs);
+  forced.unref();
+  try {
+    await deps.handOver();
+    deps.afterHandOver();
+  } finally {
+    process.exit(0);
   }
 }
 
@@ -541,21 +561,20 @@ export async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
-    const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
-    forced.unref();
-    await shutdownHandingOver({
-      host,
-      outbox,
-      closeListener: () => {
-        server.close();
-        if (listenPlan.kind === 'socket') rmSync(listenPlan.path, { force: true });
-      },
+    await shutdownThenExit({
+      forcedExitMs: FORCED_EXIT_MS,
+      handOver: () =>
+        shutdownHandingOver({
+          host,
+          outbox,
+          closeListener: () => {
+            server.close();
+            if (listenPlan.kind === 'socket') rmSync(listenPlan.path, { force: true });
+          },
+        }),
+      // `host.shutdown()` より先に止めない: 畳んだ委譲の木が、終わるまで SIGKILL を受けられるように。
+      afterHandOver: () => stopReclaimSweep?.(),
     });
-
-    // `host.shutdown()` より先に止めない: 畳んだ委譲の木が、終わるまで SIGKILL を受けられるように。
-    stopReclaimSweep?.();
-
-    process.exit(0);
   };
 
   process.on('SIGTERM', () => void shutdown());

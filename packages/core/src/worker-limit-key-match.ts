@@ -1,3 +1,4 @@
+import { clipWithEllipsis } from './excerpt.js';
 import { hasAuthoritativeCooldown, roundDownToMinute } from './token-reset-match.js';
 import type { AgentToken } from './token-pool.js';
 import { parseNoticeResetAt, parseNoticeResetDatedAt } from './usage-reset-text.js';
@@ -35,10 +36,7 @@ export interface WorkerLimitKeyMatchInput {
 const PREFIX = '鍵の突き合わせ: ';
 
 function describeToken(token: Pick<AgentToken, 'id' | 'label' | 'order'>): string {
-  const label =
-    token.label.length > LABEL_MAX_CHARS
-      ? `${token.label.slice(0, LABEL_MAX_CHARS)}…`
-      : token.label;
+  const label = clipWithEllipsis(token.label, LABEL_MAX_CHARS);
   return `鍵「${label}」（order ${String(token.order)}・id ${token.id.slice(0, ID_HEAD_CHARS)}）`;
 }
 

@@ -3979,7 +3979,7 @@ class Pool implements ManagerPool {
         question: pending.summary,
         approvalId: pending.requestId,
         managerId,
-        answeredAt: new Date().toISOString(),
+        answeredAt: new Date(this.#now()).toISOString(),
         /*
          * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
          * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
@@ -8413,7 +8413,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'manager_message',
         id: randomUUID(),
-        at: new Date().toISOString(),
+        at: new Date(this.#now()).toISOString(),
         managerId,
         kind: 'report',
         text: messageText,
@@ -10479,7 +10479,7 @@ class Pool implements ManagerPool {
           // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
           record.job.lastFoldedTurn = {
             text: reportFullTextOf(event),
-            at: new Date().toISOString(),
+            at: new Date(this.#now()).toISOString(),
           };
           await this.#persist(record);
           return;
@@ -10534,7 +10534,7 @@ class Pool implements ManagerPool {
           record.job.lastFailure = {
             code: event.failure.code,
             via: event.failure.via,
-            at: new Date().toISOString(),
+            at: new Date(this.#now()).toISOString(),
           };
           // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
           // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
@@ -10548,7 +10548,10 @@ class Pool implements ManagerPool {
         if (event.unreported === undefined) {
           delete record.job.lastUnreported;
         } else {
-          record.job.lastUnreported = { ...event.unreported, at: new Date().toISOString() };
+          record.job.lastUnreported = {
+            ...event.unreported,
+            at: new Date(this.#now()).toISOString(),
+          };
         }
         await this.#persist(record);
         await this.#journal({
@@ -10720,7 +10723,7 @@ class Pool implements ManagerPool {
             question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
             approvalId: event.requestId,
             managerId: event.managerId,
-            withdrawnAt: new Date().toISOString(),
+            withdrawnAt: new Date(this.#now()).toISOString(),
             withdrawnReason:
               `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
               `理由: ${event.withdrawn.reason}`,
@@ -10957,7 +10960,7 @@ class Pool implements ManagerPool {
 
         // ここで自分の番を待つ: 上の `await` の間に後から届いた usage が先に `record` へ着くと、小さい累積が後から届いて「数え直し」と読まれ過大に数える。
         await usageTicket?.turn();
-        const at = new Date();
+        const at = new Date(this.#now());
         // 1回だけ引いて使い回す: 2回引くと、間に回し手が `#tokenIdentities` を書き換えたとき「有無の判定」と「使う値」が別の世代を見る。
         const tokenIdentity = this.#tokenIdentities.get(event.managerId);
         let fold;
@@ -11071,7 +11074,7 @@ class Pool implements ManagerPool {
 
       case 'peer_usage': {
         // トークンの身元（`#tokenIdentities`）は付けない: マネージャー本体のセッションの鍵で、peer が使った鍵とは限らない（取れない軸は埋めない）。
-        const at = new Date();
+        const at = new Date(this.#now());
         try {
           if (event.unmetered === true) {
             // 0 を積まず「取れなかった」として数える。
@@ -11672,12 +11675,18 @@ class Pool implements ManagerPool {
         // 先に前の回の値を下ろす: 欄が無い回に下ろさないと、続けて `failed` で閉じたとき1回目の値が今回の落ち方として残る。`status` では絞らない。
         delete record.job.lastSystemError;
         if (event.status === 'failed' && event.systemError !== undefined) {
-          record.job.lastSystemError = { ...event.systemError, at: new Date().toISOString() };
+          record.job.lastSystemError = {
+            ...event.systemError,
+            at: new Date(this.#now()).toISOString(),
+          };
         }
         // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
         delete record.job.lastCgroupEvents;
         if (event.status === 'failed' && event.cgroupEvents !== undefined) {
-          record.job.lastCgroupEvents = { ...event.cgroupEvents, at: new Date().toISOString() };
+          record.job.lastCgroupEvents = {
+            ...event.cgroupEvents,
+            at: new Date(this.#now()).toISOString(),
+          };
         }
         // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
         // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
@@ -12639,7 +12648,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date().toISOString(),
+      at: new Date(this.#now()).toISOString(),
       managerId: job.id,
       kind: 'report',
       text: [
@@ -12968,7 +12977,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date().toISOString(),
+      at: new Date(this.#now()).toISOString(),
       managerId,
       kind,
       text: outgoing,

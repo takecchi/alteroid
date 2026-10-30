@@ -34,7 +34,11 @@ import { join } from 'node:path';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { createHttpRunner, type RunnerDroppedEventReport } from './runner-client.js';
+import {
+  createHttpRunner,
+  describeRunnerDropped,
+  type RunnerDroppedEventReport,
+} from './runner-client.js';
 import { RunnerHttpTransport } from './runner-http-transport.js';
 
 const TOKEN = 'test-runner-token';
@@ -2653,6 +2657,43 @@ describe('解釈できずに捨てた出来事の跡', () => {
     expect(first).toMatchObject({ phase: 'first', reason: 'unparsable' });
     expect(first && 'type' in first ? first.type : undefined).toBeUndefined();
     expect(first?.phase === 'first' ? first.bytes : 0).toBeGreaterThan(0);
+  });
+
+  it('受ける側（onEvent）が投げたときは、unparsable ではなく handler-failed で type つきの跡が出る（#5950）', async () => {
+    const dropped: RunnerDroppedEventReport[] = [];
+    let calls = 0;
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchFramesOnce([JSON.stringify({ type: 'hello', runnerId: 'r1' })]),
+      sleepFn: async () => undefined,
+      onDroppedEvent: (report) => dropped.push(report),
+    });
+    await client.connect(() => {
+      calls += 1;
+      throw new Error('handler boom');
+    });
+    await expect
+      .poll(() => dropped.some((r) => r.phase === 'closed'), { timeout: 2000 })
+      .toBe(true);
+    await client.close();
+
+    expect(calls).toBe(1);
+    const first = dropped.find((r) => r.phase === 'first');
+    expect(first).toMatchObject({
+      phase: 'first',
+      reason: 'handler-failed',
+      type: 'hello',
+      error: 'handler boom',
+    });
+    expect(first?.phase === 'first' ? first.bytes : 0).toBeGreaterThan(0);
+    const closed = dropped.find((r) => r.phase === 'closed');
+    expect(closed?.phase === 'closed' ? closed.dropped : []).toEqual([
+      { key: 'handler-failed:hello', count: 1 },
+    ]);
+    expect(describeRunnerDropped(first as RunnerDroppedEventReport)).toContain(
+      '受ける側の処理が失敗した',
+    );
   });
 
   it('正常なフレームでは跡を出さない', async () => {
