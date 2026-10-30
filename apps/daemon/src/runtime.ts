@@ -1,12 +1,7 @@
 import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export interface DaemonRuntimeInfo {
-  pid: number;
-  port: number;
-  startedAt: string;
-  token: string;
-}
+import type { DaemonRuntimeInfo } from '@alteroid/core/cli-light';
 
 export function runtimeFilePath(stateDir: string): string {
   return join(stateDir, 'daemon.json');
