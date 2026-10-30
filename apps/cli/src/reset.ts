@@ -37,10 +37,6 @@ export async function resetCommand(options: { yes?: boolean } = {}, io?: Confirm
   report(view.cleared);
 }
 
-const CONFIRM_GROUPS = RESET_CONFIRM_GROUPS;
-
-export const RESET_CONFIRM_GROUPS_FOR_TEST = CONFIRM_GROUPS;
-
 // userinfo（`user:pass@`）を出さない: 秘密を画面に出さないため
 export function displayBaseUrl(baseUrl: string): string {
   try {
@@ -54,7 +50,7 @@ export function displayBaseUrl(baseUrl: string): string {
 }
 
 export function buildConfirmMessage(baseUrl: string): string {
-  const list = CONFIRM_GROUPS.map((group) => group.label).join('・');
+  const list = RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
   return (
     '本当に削除しますか？\n' +
     `接続先: ${displayBaseUrl(baseUrl)}\n` +
