@@ -103,9 +103,8 @@ describe('pnpm test:shard-files（実物の vitest）', () => {
       .sort();
     expect(all.length).toBeGreaterThanOrEqual(2);
     expect(first.filter((f) => second.includes(f))).toEqual([]);
-    // 比べるのは git が見るファイルだけ: vitest は `.gitignore` 済みの置き場（`src/generated/`）の一時ファイルも列挙するが、
-    // `all` には出ない。並んで走る歯（`vitest-workspace-config.test.ts` の歯B）がそこへ probe を置いては消すので、
-    // 列挙の瞬間に在るか無いかで食い違っていた（#5214）
+    // 比べるのは git が見るファイルだけ: vitest は `.gitignore` 済みの置き場（`src/generated/`）の一時ファイルも列挙するが、`all` には出ない（#5214）。
+    // 範囲の中に、並んで走る試験が一時ファイルを置かないこと: 1/2 と 2/2 は別々の列挙なので、間に出入りすると境目がずれて本物のファイルが重なるか抜ける
     const scannable = new Set(all);
     expect([...first, ...second].filter((f) => scannable.has(f)).sort()).toEqual(all);
     expect(first.length).toBeGreaterThan(0);
@@ -126,7 +125,7 @@ describe('pnpm test:shard-files（実物の vitest）', () => {
       expectShardsCoverScope();
     } finally {
       await rm(stray, { force: true });
-      // 作った側だけが、空なら消す: 並んで走る歯B が同じ置き場に probe を置いている途中でありうるため、中身ごとは消さない
+      // 作った側だけが、空なら消す: 元から在った置き場には `openapi.d.ts` 等の本物の生成物が入っているため、中身ごとは消さない
       if (createdDir) await rmdir(generatedDir).catch(() => undefined);
     }
   }, 240_000);
