@@ -86,22 +86,21 @@ function hangOnRealEvents(): { spy: ReturnType<typeof vi.spyOn>; calls: string[]
   return { spy, calls };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe('/events の finally: 畳んで戻したときも元の queuedAt を保つ（(A)+(B) の結線）', () => {
   it('畳んで戻した後も oldestPendingAt は元の古い時刻を答える', async () => {
-    // 偽の時計で締め切り（`SSE_WRITE_DEADLINE_MS`）を進める。ストリームの読み書きは本物のまま（時計だけを偽にする）。
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    // 偽の時計で締め切り（`SSE_WRITE_DEADLINE_MS`）を進め、積んだ時刻（Date）も偽にする。ストリームの読み書きは本物のまま（時計だけを偽にする）。
+    // `useFakeTimers` は1回にまとめる: `setClock`（Date だけを偽にする）を後から呼ぶと時計が入れ替わり、setTimeout が本物へ戻って締め切りが発火しない。
+    vi.useFakeTimers({
+      toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+    });
+    vi.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
     const host = newHost();
-    setClock('2020-01-01T00:00:00.000Z');
     const outbox = new Outbox();
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-stuck', sessionId: 'sess-stuck' };
     outbox.push(event);
     expect(outbox.oldestPendingAt).toBe('2020-01-01T00:00:00.000Z');
 
-    setClock('2030-01-01T00:00:00.000Z');
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
 
     const { spy } = hangOnRealEvents();
     try {
