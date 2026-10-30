@@ -26,8 +26,9 @@ import {
 } from '~/lib/leave-guard';
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { GoneAfterReadNote } from '~/components/gone-after-read-note';
+import { InvalidSlugNote } from '~/components/invalid-slug-note';
 import { isNotFound } from '~/lib/is-not-found';
-import { describeSlugError } from '~/lib/slug-error';
+import { isValidSlug } from '~/lib/slug';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/memory-detail';
@@ -40,7 +41,11 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
 export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   return (
     <LeaveGuardScope key={loaderData.slug}>
-      <MemoryDetailBody slug={loaderData.slug} />
+      {isValidSlug(loaderData.slug) ? (
+        <MemoryDetailBody slug={loaderData.slug} />
+      ) : (
+        <InvalidSlugNote kind="記憶" slug={loaderData.slug} />
+      )}
     </LeaveGuardScope>
   );
 }
@@ -221,11 +226,9 @@ function MemoryDetailBody({ slug }: { slug: string }) {
         </div>
       </header>
 
-      {!missing && !goneAfterRead && (
-        <ErrorNote error={describeSlugError(error)} className="mb-3" />
-      )}
+      {!missing && !goneAfterRead && <ErrorNote error={error} className="mb-3" />}
       {goneAfterRead && <GoneAfterReadNote noun="記憶" />}
-      <ErrorNote error={describeSlugError(failure)} className="mb-3" />
+      <ErrorNote error={failure} className="mb-3" />
       {deleteConflict !== undefined && (
         <DeleteConflictNotice
           noun="記憶"

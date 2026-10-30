@@ -4,8 +4,7 @@ import { useNavigate } from 'react-router';
 import { Button, FieldHint, Input, cn } from '@alteroid/ui';
 
 import { useBeforeUnloadGuard } from '~/lib/leave-guard';
-
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+import { isValidSlug, SLUG_USABLE_FORM } from '~/lib/slug';
 
 // 記憶とやり方の一覧の上に置く「新しい名前を入れて開く」口。開いた先（`${basePath}/${slug}`）の詳細の画面が書く。
 export function NewSlugForm({
@@ -23,7 +22,7 @@ export function NewSlugForm({
   const [slug, setSlug] = useState('');
   // 移動の確認（useBlocker）は置かない: ルーターのブロッカーは1つで、子の経路（memory-detail.tsx・practice-detail.tsx）が持つため
   useBeforeUnloadGuard(slug !== '' && slug !== selectedSlug);
-  const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
+  const valid = isValidSlug(slug);
   const open = () => void navigate(`${basePath}/${slug}`);
 
   return (
@@ -59,9 +58,7 @@ export function NewSlugForm({
         先頭は英数字で、128 文字まで。
       </FieldHint>
       {slug !== '' && !valid && (
-        <p className="mt-1.5 text-xs text-destructive">
-          使えるのは半角の英小文字・数字と . _ - で、先頭は英数字。128 文字まで。
-        </p>
+        <p className="mt-1.5 text-xs text-destructive">{SLUG_USABLE_FORM}</p>
       )}
     </div>
   );
