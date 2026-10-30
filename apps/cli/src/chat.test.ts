@@ -2100,7 +2100,6 @@ describe('chat の台帳コマンド', () => {
       expect(help()).toContain('/commitment <番号|id>');
     });
   });
-
 });
 
 // 台帳の撤去の段2b: 人間の側から台帳へ書く命令は無い（読む `/commitments` `/commitment` は段3まで残る）
@@ -2114,9 +2113,13 @@ describe('chat に台帳へ書く命令は無い', () => {
 
       await runSlashCommand(
         line,
-        ...slashArgs(client, { ...emptyListed(), commitments: ['cmt-1'] }, {
-          onFailed: (reason) => failed.push(reason),
-        }),
+        ...slashArgs(
+          client,
+          { ...emptyListed(), commitments: ['cmt-1'] },
+          {
+            onFailed: (reason) => failed.push(reason),
+          },
+        ),
       );
 
       expect(calls).toEqual([]);

@@ -860,7 +860,7 @@ export function createMemoryStores(): Stores {
       commitments.set(id, reopened);
       return { kind: 'reopened', before: isolate(existing) };
     },
-    // `origin` の判定はしない: 呼び出し側（`PATCH /commitments/:id`）が確かめてから呼ぶ（`CommitmentStore.editBody` の doc）。
+    // `origin` の判定はしない: 呼び出し側が確かめてから呼ぶ（`CommitmentStore.editBody` の doc。呼ぶ口は外れた）。
     async editBody(id, body, at, by: CommitmentEditedBy, options) {
       const existing = commitments.get(id);
       if (!existing && options?.ifMatch !== undefined) throw new CommitmentConflictError(id, null);

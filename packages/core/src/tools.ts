@@ -1267,7 +1267,7 @@ async function describeMissingReport(
 const COMMITMENT_LIST_BUDGET = 8_000;
 export const COMMITMENT_BODY_LIMIT = 240;
 const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
-// 定数は道具と HTTP で共有するので `commitment-close-many.ts` に在る。外へ出していた名前はここから変えない
+// 定数は `commitment-close-many.ts` に在る（かつては HTTP の一括とも共有していた）。外へ出していた名前はここから変えない
 export { CLOSE_MANY_LIMIT_MAX, CLOSE_MANY_JOURNAL_ID_CHARS };
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
 

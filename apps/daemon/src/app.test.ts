@@ -5403,9 +5403,7 @@ describe('HTTP API', () => {
 
     const all = await app.request('/commitments?includeClosed=true');
     expect(await all.json()).toMatchObject({
-      entries: [
-        { id: 'cm-closed', body: '日報の体裁を直す', closedReason: '直して PR を出した' },
-      ],
+      entries: [{ id: 'cm-closed', body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
     });
   });
 

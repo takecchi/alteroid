@@ -205,10 +205,7 @@ describe('POST /tasks/:id/reopen の印', () => {
       call({}, 'POST', { title: '日報', body: '日報の体裁を直す' }),
     );
     const id = ((await opened.json()) as { id: string }).id;
-    await app.request(
-      `/tasks/${id}/close`,
-      call({}, 'POST', { status: 'done', reason: '直した' }),
-    );
+    await app.request(`/tasks/${id}/close`, call({}, 'POST', { status: 'done', reason: '直した' }));
     return id;
   }
 
