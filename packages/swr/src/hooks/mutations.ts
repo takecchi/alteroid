@@ -36,7 +36,13 @@ import type {
 } from '@alteroid/logic';
 import { saveChatDraft, saveChatDraftMark } from '@alteroid/logic';
 
-import { isKeyOfType, KEY } from './queries';
+import {
+  forgetOwnDeletedConversation,
+  isConversationKeyOf,
+  isKeyOfType,
+  KEY,
+  rememberOwnDeletedConversation,
+} from './queries';
 import { writeThenRefresh } from './write-then-refresh';
 import {
   answerWithin,
@@ -1036,10 +1042,6 @@ export function useEndConversation() {
   );
 }
 
-function isConversationKeyOf(key: unknown, conversationId: string): boolean {
-  return isKeyOfType(key, 'conversation') && (key as { id?: unknown }).id === conversationId;
-}
-
 // 論理削除。結果（件数・`incomplete`・`remainsIn`）は呼び出し側が人間へ見せるので、そのまま返す。
 // 下書きもここで消す: 消した会話の id で残る本文は、どこからも開けないのに端末に平文で残るだけになるため
 export function useDeleteConversation() {
@@ -1047,9 +1049,14 @@ export function useDeleteConversation() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (conversationId: string): Promise<ConversationDeleteResult> => {
+      rememberOwnDeletedConversation(conversationId);
       const result = await api.api
         .DELETE('/conversations/{id}', { params: { path: { id: conversationId } } })
-        .then(unwrap);
+        .then(unwrap)
+        .catch((caught: unknown) => {
+          forgetOwnDeletedConversation(conversationId);
+          throw caught;
+        });
       saveChatDraft(conversationId, '');
       saveChatDraftMark(conversationId, undefined);
       // 一覧・未読数・本文・台帳を捨てる。`use-journal-live.ts` の `conversation_deleted` と同じ束（墓標の SSE を待たずに揃える）
