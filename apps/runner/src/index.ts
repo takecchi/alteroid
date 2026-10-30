@@ -45,6 +45,7 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
+import { childUserIds } from './child-user-ids.js';
 import { openManagerToolsSocket } from './manager-tools-socket.js';
 import { planPeerSocket } from './peer-socket.js';
 import { gateDuringShutdown, waitForPickups } from './shutdown-pickups.js';
@@ -367,10 +368,11 @@ export async function main(): Promise<void> {
     );
   }
 
+  const childUserReader = childUserIds(childUser);
   const credentialDir = envValue(process.env, 'ALTEROID_CREDENTIAL_DIR');
   const credentials = createCredentialStore({
     ...(credentialDir === undefined ? {} : { dir: credentialDir }),
-    ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
+    ...(childUserReader === undefined ? {} : { reader: childUserReader }),
     // 自分の env を種にしない: 冷却中の死んだ鍵が器に載り、デーモンが上書きするまでの窓で使われるため。空を渡すのは「省略」（`process.env`）と意味が違う。
     seed: {},
     withheldEnvKeys: WITHHELD_ENV_KEYS,
@@ -390,7 +392,7 @@ export async function main(): Promise<void> {
   rmSync(profilePath, { force: true });
   const profile = createProfileVessel({
     path: profilePath,
-    ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
+    ...(childUserReader === undefined ? {} : { reader: childUserReader }),
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 

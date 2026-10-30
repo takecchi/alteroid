@@ -11,16 +11,19 @@ import {
   writeStderrLine,
 } from '@alteroid/core';
 
+import { childUserIds } from './child-user-ids.js';
+
 /** 開けなくても runner は止めない: 道具が出ないだけで、委譲そのものは動くため。理由は stderr に1行出す。 */
 export async function openManagerToolsSocket(
   childUser: RunnerChildUser | undefined,
   dir: string = DEFAULT_MANAGER_TOOLS_SOCKET_DIR,
   write: (line: string) => void = (line) => writeStderrLine(line),
 ): Promise<ManagerToolsSocketHost | undefined> {
+  const owner = childUserIds(childUser);
   try {
     return await createManagerToolsSocketHost({
       socketPath: join(dir, MANAGER_TOOLS_SOCKET_FILENAME),
-      ...(childUser === undefined ? {} : { childUser: { uid: childUser.uid, gid: childUser.gid } }),
+      ...(owner === undefined ? {} : { childUser: owner }),
     });
   } catch (error) {
     write(

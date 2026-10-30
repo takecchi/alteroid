@@ -321,7 +321,7 @@ async function scanTasks(
   }
 
   if (oldestZombieStarttime !== undefined && uptimeSeconds !== undefined) {
-    const ageSeconds = Math.floor(uptimeSeconds - oldestZombieStarttime / clockTicksPerSecond);
+    const ageSeconds = ageSecondsOf(uptimeSeconds, oldestZombieStarttime, clockTicksPerSecond);
     if (Number.isFinite(ageSeconds)) {
       result.oldestZombieSeconds = Math.max(0, ageSeconds);
     }
@@ -339,6 +339,16 @@ async function scanTasks(
   }
 
   return result;
+}
+
+// 起動からの経過秒（`/proc/uptime`）から、プロセスの開始（`starttime` はクロック刻み）を引いて切り捨てる。
+// 負や有限でない値の扱い（0 へ丸める・捨てる）は呼び手が決める。
+function ageSecondsOf(
+  uptimeSeconds: number,
+  starttime: number,
+  clockTicksPerSecond: number,
+): number {
+  return Math.floor(uptimeSeconds - starttime / clockTicksPerSecond);
 }
 
 // 投げたら「読めなかった」として数える: 握り潰して `undefined` にすると、候補から静かに漏れて「孤児は居ない」に化けるため。
@@ -381,7 +391,9 @@ async function observeReclaim(
     branches: Map<number, BranchEntry>;
   },
 ): Promise<ReclaimObservation> {
+  // 走査の索引は1回だけ作って、帰属・枝・判定・片付けへ渡す。
   const children = childrenByPpidOf(scanned);
+  const byPid = new Map(scanned.map((entry) => [entry.pid, entry]));
 
   // root が所有する `ppid == 1` のプロセス（runner 自身など）を種にしない: その部分木に居る生きたセッションまで候補に入るため。
   const roots = scanned.filter(
@@ -395,11 +407,11 @@ async function observeReclaim(
   const liveSessionPids = snapshot.live;
   const knownTerminatedSessionPids = snapshot.knownTerminated;
   const anyTrackedDelegations = snapshot.anyTrackedDelegations;
-  // sid と同じ pid が走査に実在するなら撃たない: pid が使い回されて別の委譲の配下が新しいセッションを開いたか、本人がまだ生きているため。
-  const scannedPids = new Set(scanned.map((entry) => entry.pid));
+  // sid と同じ pid が走査に実在するなら撃たない（`byPid.has(sid)`）: pid が使い回されて別の委譲の配下が新しいセッションを開いたか、本人がまだ生きているため。
 
   const attributions = attributeSids(
     scanned,
+    byPid,
     liveSessionPids,
     knownTerminatedSessionPids,
     deps.lineage,
@@ -417,6 +429,8 @@ async function observeReclaim(
   const branches = tiniInUse
     ? attributeBranches(
         scanned,
+        byPid,
+        children,
         new Set([...liveSessionPids, ...knownTerminatedSessionPids, ...ownerListedSessionPids]),
         deps.branches,
       )
@@ -440,7 +454,7 @@ async function observeReclaim(
       liveSessionPids,
       knownTerminatedSessionPids,
       anyTrackedDelegations,
-      scannedPids,
+      byPid,
       narrowToCliBranch,
     );
   const firesVerdict = (verdict: ReapVerdict): boolean =>
@@ -524,7 +538,7 @@ async function observeReclaim(
     if (entry.pid === INIT_PID) continue;
     if (entry.ownerUid !== reclaim.childUid || RECLAIM_EXCLUDED_STATES.has(entry.state)) continue;
     outsideRoots.total += 1;
-    if (scannedPids.has(entry.ppid)) outsideRoots.parentInScan += 1;
+    if (byPid.has(entry.ppid)) outsideRoots.parentInScan += 1;
     const verdict = verdictOf(entry);
     if (isFireVerdict(verdict)) outsideBySid.wouldFire += 1;
     else {
@@ -533,14 +547,7 @@ async function observeReclaim(
     }
   }
 
-  const stillPresentStarttimes = new Map(scanned.map((entry) => [entry.pid, entry.starttime]));
-  const fired = reconcileReaper(
-    deps.reaper,
-    fireCandidates,
-    stillPresentStarttimes,
-    nowMs,
-    deps.killFn,
-  );
+  const fired = reconcileReaper(deps.reaper, fireCandidates, byPid, nowMs, deps.killFn);
 
   const observation: ReclaimObservation = {
     mode,
@@ -567,13 +574,13 @@ async function observeReclaim(
   };
 
   if (oldestStarttime !== undefined && uptimeSeconds !== undefined) {
-    const ageSeconds = Math.floor(uptimeSeconds - oldestStarttime / clockTicksPerSecond);
+    const ageSeconds = ageSecondsOf(uptimeSeconds, oldestStarttime, clockTicksPerSecond);
     if (Number.isFinite(ageSeconds)) observation.oldestAgeSec = Math.max(0, ageSeconds);
   }
 
   if (candidateStarttimes.length > 0 && uptimeSeconds !== undefined) {
     const ages = candidateStarttimes.map((starttime) =>
-      Math.max(0, Math.floor(uptimeSeconds - starttime / clockTicksPerSecond)),
+      Math.max(0, ageSecondsOf(uptimeSeconds, starttime, clockTicksPerSecond)),
     );
     observation.medianAgeSec = medianAgeOf(ages);
     observation.ageBuckets = bucketAges(ages);
@@ -601,18 +608,18 @@ function reapVerdictFor(
   return 'sidUnrecognised';
 }
 
-type ReapVerdict =
-  'fireNoDelegations' | 'fireTerminated' | 'fireInherited' | 'fireLedger' | keyof ReclaimHeldCounts;
+// 撃つ判定は2つだけ: 委譲が0本のときの全員（`fireNoDelegations`。`observe` では撃たずに数える）と、終端した委譲の帰属で撃つもの（`fire`）。
+// 帰属の出所（自分の sid・祖先・台帳）は撃つかどうかに効かないので、判定の名前では分けない。
+type ReapVerdict = 'fireNoDelegations' | 'fire' | keyof ReclaimHeldCounts;
 
-function isFireVerdict(
-  verdict: ReapVerdict,
-): verdict is 'fireNoDelegations' | 'fireTerminated' | 'fireInherited' | 'fireLedger' {
-  return verdict.startsWith('fire');
+function isFireVerdict(verdict: ReapVerdict): verdict is 'fireNoDelegations' | 'fire' {
+  return verdict === 'fireNoDelegations' || verdict === 'fire';
 }
 
+// 'own' は自分の sid、'inherited' は祖先（木）か台帳（前の走査）から継いだ sid。
 interface SidAttribution {
   sid: number;
-  source: 'own' | 'tree' | 'ledger';
+  source: 'own' | 'inherited';
 }
 
 // pid と starttime の組で1つのプロセスを指す: pid が別のプロセスへ使い回されても引かないため。
@@ -623,11 +630,11 @@ interface LineageEntry {
 
 function attributeSids(
   scanned: readonly ScannedProcess[],
+  byPid: ReadonlyMap<number, ScannedProcess>,
   liveSessionPids: ReadonlySet<number>,
   knownTerminatedSessionPids: ReadonlySet<number>,
   lineage: ReadonlyMap<number, LineageEntry>,
 ): Map<number, SidAttribution> {
-  const byPid = new Map(scanned.map((entry) => [entry.pid, entry]));
   const result = new Map<number, SidAttribution>();
   const settled = new Set<number>();
 
@@ -639,7 +646,7 @@ function attributeSids(
   const ledgerOf = (entry: ScannedProcess): SidAttribution | undefined => {
     const row = lineage.get(entry.pid);
     return row !== undefined && row.starttime === entry.starttime
-      ? { sid: row.sid, source: 'ledger' }
+      ? { sid: row.sid, source: 'inherited' }
       : undefined;
   };
 
@@ -660,7 +667,7 @@ function attributeSids(
       const entry = chain[i] as ScannedProcess;
       const attribution =
         ownOf(entry) ??
-        (above === undefined ? undefined : ({ sid: above.sid, source: 'tree' } as const)) ??
+        (above === undefined ? undefined : ({ sid: above.sid, source: 'inherited' } as const)) ??
         ledgerOf(entry);
       if (attribution !== undefined) result.set(entry.pid, attribution);
       settled.add(entry.pid);
@@ -708,11 +715,11 @@ function isOutsideCliBranch(
 // 台帳の `adopted` は外さない: `pg_ctl` の postmaster は引き取られる直前まで CLI の枝の子（pg_ctl の子）に見えるため。
 function attributeBranches(
   scanned: readonly ScannedProcess[],
+  byPid: ReadonlyMap<number, ScannedProcess>,
+  childrenByPpid: ReadonlyMap<number, readonly ScannedProcess[]>,
   trackedPids: ReadonlySet<number>,
   ledger: ReadonlyMap<number, BranchEntry>,
 ): Map<number, Branch> {
-  const byPid = new Map(scanned.map((entry) => [entry.pid, entry]));
-  const childrenByPpid = childrenByPpidOf(scanned);
   const cliChildOf = new Map<number, number>();
   for (const pid of trackedPids) {
     const oldest = (childrenByPpid.get(pid) ?? [])
@@ -765,26 +772,24 @@ function reapVerdictOf(
   liveSessionPids: ReadonlySet<number>,
   knownTerminatedSessionPids: ReadonlySet<number>,
   anyTrackedDelegations: boolean,
-  scannedPids: ReadonlySet<number>,
+  byPid: ReadonlyMap<number, ScannedProcess>,
   narrowToCliBranch: CliBranchNarrowing | undefined,
 ): ReapVerdict {
   const { sid } = entry;
   if (sid !== undefined && !liveSessionPids.has(sid)) {
     if (knownTerminatedSessionPids.has(sid)) {
-      if (!scannedPids.has(sid)) {
-        return isOutsideCliBranch(entry, sid, narrowToCliBranch)
-          ? 'sidUnrecognised'
-          : 'fireTerminated';
+      if (!byPid.has(sid)) {
+        return isOutsideCliBranch(entry, sid, narrowToCliBranch) ? 'sidUnrecognised' : 'fire';
       }
     } else if (
       attribution !== undefined &&
       attribution.source !== 'own' &&
       knownTerminatedSessionPids.has(attribution.sid) &&
       !liveSessionPids.has(attribution.sid) &&
-      !scannedPids.has(attribution.sid)
+      !byPid.has(attribution.sid)
     ) {
       if (isOutsideCliBranch(entry, attribution.sid, narrowToCliBranch)) return 'sidUnrecognised';
-      return attribution.source === 'ledger' ? 'fireLedger' : 'fireInherited';
+      return 'fire';
     }
   }
   return reapVerdictFor(sid, liveSessionPids, knownTerminatedSessionPids, anyTrackedDelegations);
@@ -824,13 +829,13 @@ interface ReaperEntry {
 function reconcileReaper(
   reaper: Map<number, ReaperEntry>,
   fireCandidates: readonly { pid: number; starttime: number; numThreads: number }[],
-  stillPresentStarttimes: ReadonlyMap<number, number>,
+  byPid: ReadonlyMap<number, ScannedProcess>,
   nowMs: number,
   killFn: (pid: number, signal: NodeJS.Signals) => void,
 ): { signalled: number; killed: number; freedThreads: number } {
   let freedThreads = 0;
   for (const [pid, entry] of [...reaper.entries()]) {
-    if (stillPresentStarttimes.get(pid) === entry.starttime) continue;
+    if (byPid.get(pid)?.starttime === entry.starttime) continue;
     freedThreads += entry.numThreads;
     reaper.delete(pid);
   }
