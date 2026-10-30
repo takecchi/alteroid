@@ -1,4 +1,5 @@
 // URL の伏せ字を自前で書かない: CLI と別々に同じ判定を持つと、どちらも password だけの userinfo を素通ししていたため
+import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
@@ -13,7 +14,6 @@ import {
   Button,
   Card,
   CardHeader,
-  ConfirmDialog,
   ErrorNote,
   KeyValueList,
   Spinner,
@@ -382,13 +382,9 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
         {result !== null && <UpdateReport before={result.before} update={result.update} />}
       </div>
-      <ConfirmDialog
+      <DiscardConfirmDialog
         open={confirmingClose}
         onOpenChange={setConfirmingClose}
-        title="書きかけの編集があります"
-        description="このまま閉じると、いま書いている内容は失われます。"
-        confirmLabel="破棄して閉じる"
-        destructive
         onConfirm={() => {
           setDraft(null);
           setConfirmingClose(false);

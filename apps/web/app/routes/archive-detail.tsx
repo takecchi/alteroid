@@ -105,7 +105,7 @@ function Text({ body }: { body: string }) {
         <span>
           {end >= text.length
             ? `全体を表示しています（${formatBytes(new Blob([text]).size)}）`
-            : `先頭の ${end.toLocaleString()} 文字 / 全体 ${text.length.toLocaleString()} 文字を表示しています（長いので少しずつ出します）`}
+            : `先頭の ${end.toLocaleString('en-US')} 文字 / 全体 ${text.length.toLocaleString('en-US')} 文字を表示しています（長いので少しずつ出します）`}
         </span>
         {end < text.length && (
           <Button size="sm" onClick={() => setShown(cutAt(text, end, CHUNK_CHARS))}>
