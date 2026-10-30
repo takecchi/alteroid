@@ -381,6 +381,19 @@ async function withDeadline<T>(
   }
 }
 
+// 添付の置き場に断られたら、投げずに 422 の本文として返す（呼び側が `c.json(result, 422)` にする）。ほかの例外はそのまま投げる。
+async function rejectingAttachment<T>(
+  run: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (error) {
+    if (error instanceof RunnerAttachmentRejectedError)
+      return { ok: false, error: reasonOf(error) };
+    throw error;
+  }
+}
+
 // 出し箱と rescue-files の退避先の GET / DELETE の共通部分（違うのは host のどのメソッドを呼ぶかだけ）。
 // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
 async function serveSpilledFile(
@@ -780,15 +793,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
       validated('json', runnerStartCommandSchema, '起動命令の入力の形が不正（置いていない）'),
       async (c) => {
-        try {
-          const { cwd, sessionGeneration } = await host.start(c.req.valid('json'));
-          return c.json({ ok: true, cwd, sessionGeneration });
-        } catch (error) {
-          if (error instanceof RunnerAttachmentRejectedError) {
-            return c.json({ ok: false, error: reasonOf(error) }, 422);
-          }
-          throw error;
-        }
+        const started = await rejectingAttachment(() => host.start(c.req.valid('json')));
+        if (!started.ok) return c.json(started, 422);
+        const { cwd, sessionGeneration } = started.value;
+        return c.json({ ok: true, cwd, sessionGeneration });
       },
     )
 
@@ -806,13 +814,16 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         if (command.managerId !== c.req.param('id')) {
           return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
         }
-        let resumed: { cwd: string; reusedLiveSession: boolean; sessionGeneration: string };
         try {
-          resumed = await host.resume(command);
+          const resumed = await rejectingAttachment(() => host.resume(command));
+          if (!resumed.ok) return c.json(resumed, 422);
+          return c.json({
+            ok: true,
+            cwd: resumed.value.cwd,
+            reusedLiveSession: resumed.value.reusedLiveSession,
+            sessionGeneration: resumed.value.sessionGeneration,
+          });
         } catch (error) {
-          if (error instanceof RunnerAttachmentRejectedError) {
-            return c.json({ ok: false, error: reasonOf(error) }, 422);
-          }
           // 世代が古い resume を 500 に落とさない: 5xx は再試行されるため、古い命令を延々と投げ直される。
           if (error instanceof RunnerFenceError) {
             return c.json(
@@ -822,12 +833,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           }
           throw error;
         }
-        return c.json({
-          ok: true,
-          cwd: resumed.cwd,
-          reusedLiveSession: resumed.reusedLiveSession,
-          sessionGeneration: resumed.sessionGeneration,
-        });
       },
     )
 
@@ -837,16 +842,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       validated('json', runnerMessageCommandSchema, 'メッセージの入力の形が不正（置いていない）'),
       async (c) => {
         const command = c.req.valid('json');
-        let delivered: boolean;
-        try {
-          delivered = await host.send(c.req.param('id'), command.text, command.attachments);
-        } catch (error) {
-          if (error instanceof RunnerAttachmentRejectedError) {
-            return c.json({ ok: false, error: reasonOf(error) }, 422);
-          }
-          throw error;
-        }
-        if (!delivered) return c.json({ error: 'not found' as const }, 404);
+        const sent = await rejectingAttachment(() =>
+          host.send(c.req.param('id'), command.text, command.attachments),
+        );
+        if (!sent.ok) return c.json(sent, 422);
+        if (!sent.value) return c.json({ error: 'not found' as const }, 404);
         return c.json({ ok: true });
       },
     )
