@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 
+import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
+import { EditConflictBand } from '~/components/edit-conflict-band';
 import { LoadError } from '~/components/load-error';
 import {
   TaskCloseForm,
@@ -11,6 +13,7 @@ import {
   isTaskClosed,
 } from '~/components/task-parts';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
@@ -19,7 +22,6 @@ import {
   Card,
   CardHeader,
   CodeBlock,
-  ConfirmDialog,
   Empty,
   ErrorNote,
   Input,
@@ -100,19 +102,19 @@ function TaskCard({
   listReady: boolean;
 }) {
   const now = useMinuteNow();
-  const [editing, setEditing] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const {
+    editing,
+    setEditing,
+    setDirty,
+    confirmingDiscard,
+    setConfirmingDiscard,
+    closeEditor,
+    requestCloseEditor,
+  } = useDiscardGuard();
   const closed = isTaskClosed(task);
   const position = openTasks.findIndex((entry) => entry.id === task.id);
   // 閉じるとページに居たまま行が閉じた側へ移るので、閉じた行には編集欄を出さない。
   const showEditor = editing && !closed;
-
-  function closeEditor() {
-    setEditing(false);
-    setDirty(false);
-    setConfirmingDiscard(false);
-  }
 
   return (
     <Card>
@@ -137,20 +139,16 @@ function TaskCard({
           <TaskEditor
             task={task}
             onDone={closeEditor}
-            onRequestCancel={() => (dirty ? setConfirmingDiscard(true) : closeEditor())}
+            onRequestCancel={requestCloseEditor}
             onDirtyChange={setDirty}
           />
         ) : (
           <TaskText task={task} />
         )}
 
-        <ConfirmDialog
+        <DiscardConfirmDialog
           open={confirmingDiscard}
           onOpenChange={setConfirmingDiscard}
-          title="保存していない変更があります"
-          description="編集をやめると、書きかけの内容は失われます。"
-          confirmLabel="破棄して閉じる"
-          destructive
           onConfirm={closeEditor}
         />
 
@@ -290,42 +288,26 @@ function TaskEditor({
       </div>
 
       {conflict !== undefined && (
-        <div
-          role="alert"
-          className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
+        <EditConflictBand
+          className="mt-2"
+          heading="開いたあとに、裏でこの task が変わった。"
+          retryLabel="いまの内容の上で、下書きを保存し直す"
+          discardLabel="下書きを捨てて、いまの内容にする"
+          busy={busy}
+          onRetry={() => void save(adoptConflictVersion(conflict))}
+          onDiscard={() => {
+            adoptConflictVersion(conflict);
+            setTitleDraft(undefined);
+            setBodyDraft(undefined);
+          }}
         >
-          <p className="mb-2 break-words">
-            <strong>開いたあとに、裏でこの task が変わった。</strong>
-            保存していない。下書きはそのまま残してある。
-          </p>
           <CodeBlock label="いまの title" maxHeight="4rem">
             {redactBody(conflict.title)}
           </CodeBlock>
           <CodeBlock label="いまの本文" maxHeight="12rem" className="mt-2">
             {redactBody(conflict.body)}
           </CodeBlock>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={busy}
-              onClick={() => void save(adoptConflictVersion(conflict))}
-            >
-              いまの内容の上で、下書きを保存し直す
-            </Button>
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                adoptConflictVersion(conflict);
-                setTitleDraft(undefined);
-                setBodyDraft(undefined);
-              }}
-            >
-              下書きを捨てて、いまの内容にする
-            </Button>
-          </div>
-        </div>
+        </EditConflictBand>
       )}
       <ErrorNote error={failure} className="mt-2" />
     </div>
