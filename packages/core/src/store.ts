@@ -1301,6 +1301,17 @@ export interface TaskStore {
 
   /** 全件を消す（ワークスペースのリセット専用）。読めない行も含め、消した件数を返す。 */
   clear(): Promise<number>;
+
+  /**
+   * ある会話を起点とする行を、物理的に消す（会話の削除。#5899）。`originConversationId === conversationId` の行と、台帳から移した起点の欄の無い行
+   * （`origin` が `human` / `self` で `source === conversationId`。`isTaskOfConversation`）を、未了・閉じた行の両方とも消し、消した件数を返す。
+   * 別の会話の行・`manager` / `external` の `source` だけが同じ行には触れない。`CommitmentStore.removeForConversation` と同じ作法。
+   *
+   * `edit` で本文を空にして代用しない: 直す前の本文は日誌へ逐語で残す決まりで、秘密を日誌へ写し直すことになる。
+   * 読めない行（`list()` の `unreadable`）も、生の値の欄が一致すれば消して件数に数える（3実装で揃える。pg は jsonb の欄をそのまま見る）。
+   * `conversationId` に NUL を含むときは「無い」と同じ（0件）。読んで・選んで・消すは1操作（並びを動かす書き込みと交わらない）。
+   */
+  removeForConversation(conversationId: string): Promise<number>;
 }
 
 /**

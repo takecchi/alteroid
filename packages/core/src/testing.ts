@@ -154,6 +154,7 @@ import {
 } from './token-pool.js';
 import {
   addTaskRow,
+  isTaskOfConversation,
   listTaskRows,
   moveTaskRow,
   prepareTask,
@@ -941,6 +942,13 @@ export function createMemoryStores(): Stores {
     async clear() {
       const removed = taskRows.length;
       taskRows = [];
+      return removed;
+    },
+    async removeForConversation(conversationId) {
+      if (hasNul(conversationId)) return 0;
+      const rows = taskRows.filter((row) => !isTaskOfConversation(row.task, conversationId));
+      const removed = taskRows.length - rows.length;
+      taskRows = rows;
       return removed;
     },
   };

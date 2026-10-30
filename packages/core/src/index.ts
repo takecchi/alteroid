@@ -483,6 +483,7 @@ export {
   editTaskRow,
   taskBodyVersion,
   isTaskClosed,
+  isTaskOfConversation,
   listTaskRows,
   moveTaskRow,
   placeTask,

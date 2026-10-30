@@ -326,6 +326,7 @@ export const conversationDeleteResponseSchema = z.object({
   hiddenCount: z.number().int(),
   attachmentsRemoved: z.number().int(),
   commitmentsRemoved: z.number().int(),
+  tasksRemoved: z.number().int(),
   queuedDropped: z.number().int(),
   approvalsLinked: z.number().int(),
   incomplete: z.array(z.string()),
