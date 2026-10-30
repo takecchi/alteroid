@@ -322,7 +322,8 @@ describe('古い側と取りこぼし', () => {
     const before = api.journalListCalls.length;
     fire('open');
     await waitFor(() => api.journalListCalls.length === before + 1);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 撃ち直すならマイクロタスクの中で次の呼びが起きる: 実時間を待たず、マクロタスクを1つ回してから数える
+    await new Promise((resolve) => setImmediate(resolve));
     expect(api.journalListCalls.length).toBe(before + 1);
     expect(api.journalListCalls.at(-1)).toMatchObject({ since: minute(1), limit: 1 });
     expect(ids()).toEqual(['e1']);
