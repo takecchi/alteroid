@@ -20,7 +20,6 @@ function replyingClient(status: number, rawBody: string): ReturnType<typeof crea
 function emptyListed(): Listed {
   return {
     approvals: [],
-    commitments: [],
     conversations: [],
     managers: [],
     managerAnchors: {},
@@ -66,8 +65,6 @@ const FAILURE_MOUTHS: readonly (readonly [name: string, line: string])[] = [
   ['/approval-trace', '/approval-trace appr-1'],
   ['/answer', '/answer appr-1 はい'],
   ['/answers', '/answers appr-1 はい'],
-  ['/commitments', '/commitments'],
-  ['/commitment <id>', '/commitment cmt-1'],
   ['/schedule-show', '/schedule-show nightly'],
   ['/usage', '/usage'],
   ['/reply（requestId から宛先を引く）', '/reply req-1 こんにちは'],

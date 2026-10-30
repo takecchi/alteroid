@@ -65,7 +65,6 @@ describe('alteroid reset --yes', () => {
           schedules: 0,
           schedulePhases: 0,
           inbox: 0,
-          commitments: 0,
           archive: 0,
           sessions: 0,
           profile: 0,

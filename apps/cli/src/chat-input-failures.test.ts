@@ -113,8 +113,7 @@ describe('#3683: 本文の改行・インデント・連続した空白を潰さ
     const listed = {
       approvals: [],
       managerAnchors: {},
-      commitments: [],
-      conversations: [],
+        conversations: [],
       managers: [],
       waiting: [],
       messages: ['m1'],
@@ -194,8 +193,7 @@ describe('#3685: 非 TTY の /edit・/resume・/attach・/detach の失敗で止
         {
           approvals: [],
           managerAnchors: {},
-          commitments: [],
-          conversations: [],
+                conversations: [],
           managers: [],
           waiting: [],
           messages: [],
@@ -440,7 +438,6 @@ describe('#3723: /schedule の依頼文と /answer の補足も改行・連続�
   const listed = {
     approvals: [],
     managerAnchors: {},
-    commitments: [],
     conversations: [],
     managers: [],
     waiting: [],

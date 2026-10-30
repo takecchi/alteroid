@@ -94,7 +94,6 @@ import {
   tasksCloseCommand,
   tasksCommand,
   tasksEditCommand,
-  tasksMigrateCommand,
   tasksMoveCommand,
   tasksReopenCommand,
   tasksShowCommand,
@@ -410,18 +409,6 @@ const tasksProgram = program
   .option('--all', '閉じた task（done / cancelled）も後ろに足す')
   .action(async (options: { all?: boolean }) => {
     await tasksCommand(options);
-  });
-
-tasksProgram
-  .command('migrate')
-  .addHelpText('after', HELP_EXAMPLES.tasksMigrate)
-  .description(
-    '引き受けた仕事の台帳を task へ移す（計画を出して止まる。--yes で、いま見た計画を実行する）',
-  )
-  .option('--dry-run', '計画と内訳だけを出す（何も書かない。--yes なしでも同じく書かない）')
-  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
-  .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
-    await tasksMigrateCommand(options);
   });
 
 // 人間が task を書く口（#5469 P7c-1）。HTTP の口と1対1

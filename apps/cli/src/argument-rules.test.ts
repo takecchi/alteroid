@@ -17,7 +17,6 @@ const target: Target = {
 const listed = () => ({
   approvals: [],
   managerAnchors: {},
-  commitments: [],
   conversations: [],
   managers: [],
   waiting: [],
@@ -37,9 +36,6 @@ function stubDaemon(): string[] {
   vi.stubGlobal('fetch', (input: unknown) => {
     const url = input instanceof Request ? input.url : String(input);
     urls.push(url);
-    if (url.includes('/commitments')) {
-      return Promise.resolve(Response.json({ entries: [], unreadable: [], trimmedClosed: 0 }));
-    }
     throw new Error(`想定外の要求: ${url}`);
   });
   return urls;
@@ -85,17 +81,10 @@ describe('キーワードとコマンドの語は大文字小文字を区別し�
     const draft = new AttachmentDraft();
     expect(draft.remove('ALL')).toEqual({ ok: true, removed: [] });
   });
-
-  it('/commitments ALL は片付いた行も読む', async () => {
-    const { urls, failed } = await run('/commitments ALL');
-    expect(failed).toEqual([]);
-    expect(urls.some((url) => url.includes('includeClosed=true'))).toBe(true);
-  });
 });
 
 describe('余分な語・知らない語は、使い方の誤りとして断り、デーモンへ送らない', () => {
   it.each([
-    ['/commitments foo', '使わない語です: foo（使えるのは /commitments、/commitments all）'],
     ['/unschedule a b', '使い方: /unschedule <kind>'],
     ['/run a b', '使い方: /run <kind>'],
     ['/help me', '使わない語です: me（使えるのは /help だけ。引数は取りません）'],

@@ -379,7 +379,6 @@ export async function conversationsDeleteCommand(
     `会話を削除しました: ${result.conversationId}`,
     `  読めなくした発言: ${String(result.hiddenCount)} 件`,
     `  消した添付: ${String(result.attachmentsRemoved)} 件`,
-    `  消した台帳の約束: ${String(result.commitmentsRemoved)} 件`,
     `  消した Task: ${String(result.tasksRemoved)} 件`,
     `  受信箱から外した未処理の発言: ${String(result.queuedDropped)} 件`,
     `  この会話に結び付いた承認（外していない）: ${String(result.approvalsLinked)} 件`,

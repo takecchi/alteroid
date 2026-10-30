@@ -305,8 +305,7 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
       ...slashArgs(createClient(target.baseUrl, target.headers), {
         approvals: [],
         managerAnchors: {},
-        commitments: [],
-        conversations: [],
+            conversations: [],
         managers: [],
         waiting: [],
         messages: [],
@@ -321,7 +320,6 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
   const listedWith = (conversations: string[]) => ({
     approvals: [],
     managerAnchors: {},
-    commitments: [],
     conversations,
     managers: [],
     waiting: [],
@@ -387,13 +385,13 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
   it('同じ形は、番号|id を先頭に取る他のコマンドも断る（/stop・/approval など）', async () => {
     const calls = stub({ streams: {} });
     const out = captureStdout();
-    for (const line of ['/stop limit=5', '/approval x=1', '/commitment a=b']) {
+    for (const line of ['/stop limit=5', '/approval x=1']) {
       await runSlashCommand(
         line,
         ...slashArgs(createClient(target.baseUrl, target.headers), listedWith([])),
       );
     }
-    expect(out().match(/使い方の誤り: /g)).toHaveLength(3);
+    expect(out().match(/使い方の誤り: /g)).toHaveLength(2);
     expect(calls).toEqual([]);
   });
 

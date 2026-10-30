@@ -14,7 +14,6 @@ interface ResetSummary {
   schedules: number;
   schedulePhases: number;
   inbox: number;
-  commitments: number;
   tasks: number;
   practices: number;
   archive: number;
@@ -68,7 +67,6 @@ export const SUMMARY_LABELS: [keyof ResetSummary, string][] = [
   ['schedules', '継続中の依頼'],
   ['schedulePhases', '既定の仕込みの位相'],
   ['inbox', '受信箱'],
-  ['commitments', '引き受けたまま終わっていない仕事'],
   ['tasks', 'task（順序と状態を持つ待ち行列）'],
   ['practices', '仕事のやり方'],
   ['archive', 'アーカイブ'],

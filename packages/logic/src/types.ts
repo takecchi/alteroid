@@ -20,9 +20,6 @@ export type UnreadableApproval = NonNullable<Ok<paths['/approvals']['get']>['unr
 
 export type UnreadableInboxEvent = NonNullable<Ok<paths['/inbox']['get']>['unreadable']>[number];
 
-export type Commitment = Ok<paths['/commitments']['get']>['entries'][number];
-export type UnreadableCommitment = Ok<paths['/commitments']['get']>['unreadable'][number];
-
 export type Task = Ok<paths['/tasks']['get']>['entries'][number];
 export type TaskStatus = Task['status'];
 export type UnreadableTask = Ok<paths['/tasks']['get']>['unreadable'][number];
