@@ -290,7 +290,7 @@ interface Line {
   turnFailure?: 'failed' | 'held';
   turnFailureKind?: TurnFailureKind;
   replyGroup?: string;
-  // 返信の途中に人間の発言が届いて（`queued`）分けた行の印: デーモンはそこで返信を割って日誌へ書くので、デーモンはそこで返信を割って日誌へ書くので、割らない古いデーモンの本文と照合するときはこの境目に区切りを入れない
+  // 返信の途中に人間の発言が届いて（`queued`）分けた行の印: デーモンはそこで返信を割って日誌へ書くので、割らない古いデーモンの本文と照合するときはこの境目に区切りを入れない
   splitByHuman?: true;
   journalId?: string;
   attachments?: readonly MessageAttachment[];
