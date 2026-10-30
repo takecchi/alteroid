@@ -97,15 +97,13 @@ export function buildIssueTitle({ workflowName, headSha }) {
 }
 
 // 本文に「次の一手」（run の URL・落ちた workflow・sha・この Issue を閉じてよい条件）を書く: 「赤いですよ」だけだと読んだ側が Actions を開いて辿り直すことになるため。
-export function buildIssueBody({ workflowName, headSha, runId, runUrl, key, extraLines = [] }) {
+export function buildIssueBody({ workflowName, headSha, runId, runUrl, key }) {
   return [
     `**\`main\` で \`${workflowName}\` が失敗した。**`,
     '',
     `- sha: \`${headSha}\``,
     `- ${runMention(runId)}: ${runUrl}`,
     '',
-    ...extraLines,
-    ...(extraLines.length > 0 ? [''] : []),
     '## これは何か',
     '',
     '`main` の post-merge CI が落ちても知らせる経路が repo の中に1本も無かった',
@@ -123,11 +121,10 @@ export function buildIssueBody({ workflowName, headSha, runId, runUrl, key, extr
   ].join('\n');
 }
 
-export function buildCommentBody({ workflowName, headSha, runId, runUrl, extraLines = [] }) {
+export function buildCommentBody({ workflowName, headSha, runId, runUrl }) {
   return [
     `**同じ sha でまた失敗した。** \`${workflowName}\` / \`${headSha.slice(0, 12)}\``,
     '',
     `- ${runMention(runId)}: ${runUrl}`,
-    ...(extraLines.length > 0 ? ['', ...extraLines] : []),
   ].join('\n');
 }
