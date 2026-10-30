@@ -420,7 +420,7 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/profile', { headers: auth })).status).toBe(200);
     expect(
       (
-        await app.request('/profile', {
+        await app.request('/profile/default', {
           method: 'PUT',
           headers: { 'content-type': 'application/json', ...auth },
           body: JSON.stringify({ script: 'env' }),
@@ -1074,7 +1074,7 @@ describe('許可済みのアカウントは /credentials /reset /mcp-servers /pr
 
     expect(
       (
-        await vaultApp.request('/profile', {
+        await vaultApp.request('/profile/default', {
           method: 'PUT',
           headers: { 'content-type': 'application/json', ...auth },
           body: JSON.stringify({ script: 'env' }),

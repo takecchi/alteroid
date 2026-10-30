@@ -8549,7 +8549,7 @@ class Pool implements ManagerPool {
           (outputChars === 0
             ? ''
             : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
-              '出力は profile_write / PUT /profile で書き直したときの応答で読める）'),
+              '出力は profile_write / PUT /profile/:name で書き直したときの応答で読める）'),
       );
     } catch (error) {
       // `this.#journal` を経由し、直に `this.#stores.journal.append` を呼ばない: 日誌 append の失敗をプロファイル配布の失敗として書いてしまうため。投げ直さない: 委譲経路を日誌の失敗で止めず、応答を受け取って判断し直す相手がここには居ない（tools.ts の `appendJournalOrThrow` とは非対称）。

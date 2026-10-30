@@ -16,24 +16,44 @@ let originalFetch: typeof fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   // 古いデーモンの形: runner の結果を伏せずに返す
-  globalThis.fetch = (() =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({
-          updatedAt: '2026-10-12T00:00:00Z',
-          clone: { ok: true },
-          runners: [
-            {
-              runnerId: 'runner-b',
-              ok: false,
-              error: `bash: export GH_TOKEN=${TOKEN}: bad`,
-              output: `+ export GH_TOKEN=${TOKEN}`,
-            },
-          ],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-    )) as typeof fetch;
+  globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+    const body =
+      (init?.method ?? 'GET') === 'GET'
+        ? {
+            entries: [
+              {
+                name: 'default',
+                script: 'export A=1\n',
+                scope: 'all',
+                updatedAt: '2026-10-12T00:00:00Z',
+                sha256: 'abc',
+                bytes: 11,
+                version: 'v1',
+              },
+            ],
+            clone: {},
+            runner: {},
+            script: '',
+          }
+        : {
+            updatedAt: '2026-10-12T00:00:00Z',
+            clone: { ok: true },
+            runners: [
+              {
+                runnerId: 'runner-b',
+                ok: false,
+                error: `bash: export GH_TOKEN=${TOKEN}: bad`,
+                output: `+ export GH_TOKEN=${TOKEN}`,
+              },
+            ],
+          };
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }) as typeof fetch;
 });
 
 afterEach(() => {

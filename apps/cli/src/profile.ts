@@ -302,7 +302,10 @@ export async function profileRemoveCommand(
   failOnPartialPush(result);
 }
 
-/** 空の `PUT /profile` を1回で叩く: 行ごとに `DELETE` を並べると、途中で落ちたとき半端に残る。 */
+/**
+ * 読んだ行を1行ずつ `DELETE` する。全行を1回で置き換える口は無いので、途中で落ちたときは
+ * 外した行と残った行が混ざる（その旨を例外に添える）。台ごとの結果は最後の `DELETE` の応答（行が0なら出さない）。
+ */
 export async function profileClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
@@ -310,15 +313,32 @@ export async function profileClearCommand(options: { yes?: boolean } = {}): Prom
     'プロファイルの全行を外します。行の本文は残りません（控えるなら alteroid profile show）。',
     options,
   );
-  const result = (await request(target, '/profile', {
-    method: 'PUT',
-    body: JSON.stringify({ script: '' }),
-  })) as UpdateView;
+  const profile = await fetchProfile(target);
+  let result: UpdateView | undefined;
+  let removed = 0;
+  for (const row of profile.entries) {
+    const ifMatch = readVersionOf(profile, row.name);
+    try {
+      result = (await request(
+        target,
+        `/profile/${encodeURIComponent(row.name)}${typeof ifMatch === 'string' ? `?ifMatch=${encodeURIComponent(ifMatch)}` : ''}`,
+        { method: 'DELETE' },
+      )) as UpdateView;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `プロファイルの行 ${row.name} を外せず、${String(removed)} 行を外したところで止めました（残りの行はそのままです）。\n${message}`,
+        { cause: error },
+      );
+    }
+    removed += 1;
+  }
   stdout.write(
-    hasRunnerPushFailure(result)
+    result !== undefined && hasRunnerPushFailure(result)
       ? '警告: プロファイルを全部外しましたが、一部の runner へ反映できていません。\n'
       : 'プロファイルを全部外しました。\n',
   );
+  if (result === undefined) return;
   report('クローン', result.clone);
   for (const runner of result.runners) report(runner.runnerId, runner);
   failOnPartialPush(result);
@@ -405,7 +425,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
 
   if (!response.ok) {
     if (response.status === 403) {
-      // `not_operator` の文言は、`GET /profile` `PUT /profile` が `requireOperator` のままなので残す。
+      // `not_operator` の文言は、`GET /profile` と行の書き込みが `requireOperator` のままなので残す。
       throw await forbiddenError(response, target, {
         notOperator:
           '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +

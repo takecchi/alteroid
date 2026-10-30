@@ -38,7 +38,7 @@ function entriesView() {
 function updateView() {
   return {
     updatedAt: '2026-10-03T00:00:00Z',
-    entries: entriesView().map(({ script: _script, ...rest }) => rest),
+    entries: entriesView().map((row) => ({ ...row, script: undefined })),
     composed: { clone: {}, runner: {} },
     clone: { ok: true },
     runners: [
@@ -56,7 +56,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** 行を持つ偽のデーモン。`PUT /profile`（空）でも `DELETE /profile/:name` でも、行は消える。 */
+/** 行を持つ偽のデーモン。`DELETE /profile/:name` で行が消える。それ以外の口は 500 を返す。 */
 beforeEach(() => {
   rows = [];
   runnerOk = true;
@@ -67,10 +67,6 @@ beforeEach(() => {
     const method = init?.method ?? request.method ?? 'GET';
     if (method === 'GET' && url.pathname === '/profile') {
       return Promise.resolve(json({ entries: entriesView(), clone: {}, runner: {}, script: '' }));
-    }
-    if (method === 'PUT' && url.pathname === '/profile') {
-      rows = [];
-      return Promise.resolve(json(updateView()));
     }
     const named = /^\/profile\/([^/]+)$/.exec(url.pathname);
     if (method === 'DELETE' && named !== null) {
