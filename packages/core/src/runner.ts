@@ -1651,7 +1651,11 @@ class Host implements RunnerHost {
       onPeersParked: (parked) => this.#parkPeers(managerId, parked),
       onCloseRescue: (rescue) => {
         this.#closeRescues.add(rescue);
-        void rescue.finally(() => this.#closeRescues.delete(rescue));
+        // `finally` の派生を捨てない（#5972）: `rescue` が拒否すると派生の拒否は受け手が無い
+        const forget = (): void => {
+          this.#closeRescues.delete(rescue);
+        };
+        rescue.then(forget, forget);
       },
       managerId,
       request,
@@ -2197,9 +2201,9 @@ class Host implements RunnerHost {
 
   #parkPeers(managerId: string, parked: ParkedPeers): void {
     // 前に預かった分が残っていれば閉じる: 同じ担当の peer が2組あると、どちらを付け替えるか決められないため
-    void this.#closeParkedPeers(managerId, 'replaced', '同じ担当の peer を預かり直した');
+    this.#closeParkedPeersDetached(managerId, 'replaced', '同じ担当の peer を預かり直した');
     const timer = setTimeout(() => {
-      void this.#closeParkedPeers(
+      this.#closeParkedPeersDetached(
         managerId,
         'expired',
         `鍵の付け替えで畳んだ担当が ${String(PEER_PARK_TTL_MS / 60_000)} 分戻らなかった`,
@@ -2251,8 +2255,29 @@ class Host implements RunnerHost {
       });
     });
     this.#closingPeers.add(closing);
-    void closing.finally(() => this.#closingPeers.delete(closing));
+    // `finally` の派生を捨てない: `closing` が拒否すると派生の拒否は誰も受けず、runner ごと落ちる（#5972）。両方の道で外すだけにして、拒否の受け手は呼び手に任せる
+    const forget = (): void => {
+      this.#closingPeers.delete(closing);
+    };
+    closing.then(forget, forget);
     return closing;
+  }
+
+  /** 結果を待たない呼び手用（#5972）: 拒否を受けて stderr に残す。`void` で捨てると受け手のいない拒否になり、runner ごと落ちる。 */
+  #closeParkedPeersDetached(
+    managerId: string,
+    kind: 'expired' | 'stopped' | 'replaced' | 'shutdown',
+    reason: string,
+  ): void {
+    const noteFailure = (error: unknown): void => {
+      noteBackgroundFailure('預かった peer の閉じ', `managerId=${managerId} kind=${kind}`, error);
+    };
+    // 遅らせて呼ばない（同期に呼ぶ）: `#parkPeers` の「預かり直し」は、新しい預かりを入れる前に古い分を取るため
+    try {
+      this.#closeParkedPeers(managerId, kind, reason).catch(noteFailure);
+    } catch (error) {
+      noteFailure(error);
+    }
   }
 
   list(): RunnerManagerState[] {
@@ -2337,25 +2362,38 @@ class Host implements RunnerHost {
     if (this.#codexAuthTimer !== null) clearInterval(this.#codexAuthTimer);
     this.#codexAuthTimer = null;
     this.#scratchAbort.abort();
-    await Promise.all(
+    // どの段が失敗しても後の待ちと閉じは必ず走らせる（#5972）: `Promise.all` は1本の拒否で抜け、peer の口・道具の口が開いたまま残る。
+    // 失敗は stderr に残し、最後に最初の1件を投げ直す: 呼び手（apps/runner の停止）は `.catch` で受けて口を閉じる側へ進み、投げ直しで落ちない。黙らせると、畳みが不完全だったことを呼び手が知れない
+    const failures: unknown[] = [];
+    const settle = async (step: string, tasks: readonly Promise<unknown>[]): Promise<void> => {
+      for (const result of await Promise.allSettled(tasks)) {
+        if (result.status === 'rejected') {
+          failures.push(result.reason);
+          noteBackgroundFailure(step, '', result.reason);
+        }
+      }
+    };
+    await settle(
+      'セッションの停止',
       [...this.#sessions.values()].map((session) =>
         session.stop('runner が停止した。', { captureUnpushedWork: true }),
       ),
     );
     this.#sessions.clear();
     // 終わった担当の退避も待つ（#4789）: 上で止めた担当の分も、それより前に終わった担当の分もここに積まれている
-    await Promise.all([...this.#closeRescues]);
+    await settle('終わった担当の退避の待ち', [...this.#closeRescues]);
     for (const managerId of [...this.#parkedPeers.keys()]) {
-      void this.#closeParkedPeers(managerId, 'shutdown', '器を畳む');
+      this.#closeParkedPeersDetached(managerId, 'shutdown', '器を畳む');
     }
     // 閉じた後に届く背景ターンの止まりどころも待つ（#4885）: 待たずに返すと、知らせを運ぶ前に出口が閉じる
-    await Promise.all([...this.#closingPeers]);
+    await settle('預かった peer の閉じの待ち', [...this.#closingPeers]);
     // 予約済みの plugin の片づけ（retainPlugins の投げっぱなし）を待つ: 待たずに返すと、畳んだ後にも展開先を消し続け、呼び手の後片づけと競合するため
-    await this.#pluginsChain;
+    await settle('plugin の片づけの待ち', [this.#pluginsChain]);
     // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
     this.#peerSocket?.close();
     this.#peerSocket = undefined;
     this.#managerTools?.host.close();
+    if (failures.length > 0) throw failures[0];
   }
 }
 
