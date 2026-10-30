@@ -210,14 +210,14 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     expect(await journalText(stores)).not.toContain(FAKE_VALUE);
   });
 
-  it('PUT /profile: 実物のストアの失敗（drizzle の Failed query … params）の値が、日誌にも stderr にも応答にも出ない', async () => {
+  it('PUT /profile/:name: 実物のストアの失敗（drizzle の Failed query … params）の値が、日誌にも stderr にも応答にも出ない', async () => {
     const app = profileApp();
     await breakProfileTable(db);
 
     let response!: Response;
     const stderrText = (
       await captureStderr(async () => {
-        response = await putJson(app, '/profile', {
+        response = await putJson(app, '/profile/default', {
           script: `export GH_TOKEN=${FAKE_VALUE}`,
         });
       })
@@ -232,12 +232,12 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     expect(stderrText).not.toContain(FAKE_VALUE);
   });
 
-  it('PUT /profile: script・行の名前の NUL は入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
+  it('PUT /profile/:name: script・行の名前の NUL は入力の誤りとして 400。欄名だけを返し、値は含まない（#2927）', async () => {
     const app = profileApp();
 
     const stderrText = (
       await captureStderr(async () => {
-        const nulScript = await putJson(app, '/profile', {
+        const nulScript = await putJson(app, '/profile/default', {
           script: `export GH_TOKEN=${NUL_VALUE}`,
         });
         expect(nulScript.status).toBe(400);
@@ -285,10 +285,12 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     expect(await stores.mcpServers.read()).toBeNull();
   });
 
-  it('PUT /profile: 対照——成功したときは今までどおり 200', async () => {
+  it('PUT /profile/:name: 対照——成功したときは今までどおり 200', async () => {
     const app = profileApp();
 
-    const response = await putJson(app, '/profile', { script: `export GH_TOKEN=${FAKE_VALUE}` });
+    const response = await putJson(app, '/profile/default', {
+      script: `export GH_TOKEN=${FAKE_VALUE}`,
+    });
 
     expect(response.status).toBe(200);
     expect(await response.text()).not.toContain(FAKE_VALUE);

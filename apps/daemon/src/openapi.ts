@@ -1259,10 +1259,6 @@ export const profileEntryDeleteQuery = z.object({
   ifMatch: z.string().min(1).optional(),
 });
 
-export const profileUpdateRequestSchema = z.object({
-  script: z.string(),
-});
-
 export const profileUpdateResponseSchema = z.object({
   updatedAt: z.string(),
   entries: z.array(profileEntrySummarySchema),

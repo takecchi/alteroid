@@ -131,7 +131,7 @@ const PROFILE_BODY_FUNCTION = '__alteroid_profile_body';
 export function renderProfileFile(script: string, withheldEnvKeys: readonly string[]): string {
   const lines = [
     '# このファイルは alteroid が書いている。直接編集しても次の差し替えで消える。',
-    `# 本文の差し替えは \`alteroid profile set\` / \`PUT /profile\`。`,
+    `# 本文の差し替えは \`alteroid profile set\` / \`PUT /profile/:name\`。`,
     '',
     `if [ -z "\${${PROFILE_SOURCED_ENV_KEY}:-}" ]; then`,
     `  ${PROFILE_SOURCED_ENV_KEY}=1; export ${PROFILE_SOURCED_ENV_KEY}`,

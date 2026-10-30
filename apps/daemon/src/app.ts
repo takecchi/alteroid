@@ -388,7 +388,6 @@ import {
   profileConflictResponseSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
-  profileUpdateRequestSchema,
   profileUpdateResponseSchema,
   reportsResponseSchema,
   resetRequestSchema,
@@ -1560,7 +1559,7 @@ function describeProfileEntries(entries: readonly EnvProfileEntry[]) {
   };
 }
 
-// 書き換える3本の口（`PUT /profile` / `PUT /profile/:name` / `DELETE /profile/:name`）はここ1か所に寄せる: 別々だと片方だけに検査や日誌が入って「人間が置くと弾かれるのにクローンが置くと通る」が生まれる。日誌を先に書く（書けなければ差し替えずに 500）。シェルの stderr は入力の行を引用し `set -x` は値ごと吐くので `redactProfileFailure` で伏せてから返す。値は日誌に1文字も書かない。
+// 書き換える2本の口（`PUT /profile/:name` / `DELETE /profile/:name`）はここ1か所に寄せる: 別々だと片方だけに検査や日誌が入って「人間が置くと弾かれるのにクローンが置くと通る」が生まれる。日誌を先に書く（書けなければ差し替えずに 500）。シェルの stderr は入力の行を引用し `set -x` は値ごと吐くので `redactProfileFailure` で伏せてから返す。値は日誌に1文字も書かない。
 async function mutateProfile(
   deps: AppDeps,
   spec: {
@@ -9142,52 +9141,6 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // deprecated だが意味を保って残す: 古い CLI と Web（Vercel で別に配られる）が叩き続ける。
-    .put(
-      '/profile',
-      describeRoute({
-        tags: ['profile'],
-        deprecated: true,
-        summary: '実行環境プロファイルを全部差し替える（deprecated）',
-        description:
-          '全行を `default` 1行（撒く先 all）に置き換える。空白だけなら全部外す。' +
-          '置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。' +
-          '新しい読み手は `PUT /profile/{name}` / `DELETE /profile/{name}` を使うこと。',
-        responses: {
-          200: {
-            description: 'クローンと各 runner への反映結果。',
-            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
-          },
-          400: {
-            description:
-              'プロファイルが読めなかった（保存していない）。**本文の形がそもそも' +
-              '不正だった場合も同じ 400 に乗る**（`script` を欠いた本文など）——' +
-              'どちらの場合も送られてきた本文は返さない（下の `hook` の doc）。',
-            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      // 既定の 400 を使わない: `script` の綴りを1つ間違えただけで、鍵の値まで含みうるスクリプト全文が応答へ載る。宣言済みの `profileErrorResponseSchema`（`{ error, detail }`）の形で返し、`detail` に載せてよいのは `path` だけ（CLI がこの `detail` をそのまま人へ表示する）。
-      jsonBody(profileUpdateRequestSchema, (where) => ({
-        error: 'プロファイルの入力の形が不正（保存していない）',
-        detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
-      })),
-      async (c) => {
-        const { script } = c.req.valid('json');
-        const outcome = await mutateProfile(deps, {
-          actor: describeActor(c.get('principal')),
-          route: 'PUT /profile',
-          run: (profile) => profile.apply(script),
-        });
-        // 版を比べない口なので 409 は来ない（`apply` は ifMatch を受けない）
-        return outcome.ok ? c.json(outcome.body, 200) : c.json(outcome.body, 400);
-      },
-    )
-
     // 名前の形が不正なら 400: 名前は fs 版の器の中でファイル名になる。
     .put(
       '/profile/:name',
@@ -9388,7 +9341,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      // 既定の 400 を使わない（`PUT /profile` と同じ理由）: 本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで `env` / `headers` の鍵が応答へ載る。
+      // 既定の 400 を使わない（`PUT /profile/:name` と同じ理由）: 本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで `env` / `headers` の鍵が応答へ載る。
       jsonBody(mcpServersUpdateRequestSchema, (where) => ({
         error: 'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
       })),

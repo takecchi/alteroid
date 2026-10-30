@@ -91,9 +91,10 @@ function entryOf(
   name: string,
   script: string,
   scope: 'all' | 'app' | 'runner' = 'all',
-  extra: { bytes?: number; sha256?: string; updatedAt?: string } = {},
+  extra: { bytes?: number; sha256?: string; updatedAt?: string; version?: string } = {},
 ) {
   return {
+    ...(extra.version === undefined ? {} : { version: extra.version }),
     name,
     script,
     scope,
@@ -509,8 +510,19 @@ describe('alteroid profile rm', () => {
 });
 
 describe('alteroid profile clear', () => {
-  it('全行を外す（旧来の全文置換の口へ空を1回）。gh/git の案内は出さない', async () => {
-    setReply('PUT', '/profile', {
+  it('全行を、読んだ版つきで1行ずつ DELETE する。gh/git の案内は出さない', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([
+        entryOf('default', 'export A=1\n', 'all', { version: 'v1' }),
+        entryOf('rust', 'export R=1\n', 'runner', { version: 'v2' }),
+      ]),
+    });
+    setReply('DELETE', '/profile/default', {
+      status: 200,
+      body: updateBody([], { clone: { ok: true }, runners: [] }),
+    });
+    setReply('DELETE', '/profile/rust', {
       status: 200,
       body: updateBody([], { clone: { ok: true }, runners: [] }),
     });
@@ -522,9 +534,33 @@ describe('alteroid profile clear', () => {
     expect(text).toContain('プロファイルを全部外しました。');
     expect(text).toContain('  クローン: 反映しました\n');
     expect(text).not.toContain('これから起こす仕事には即座に効きます');
-    const put = sent.find((entry) => entry.method === 'PUT');
-    expect(new URL(put?.url ?? 'http://x/').pathname).toBe('/profile');
-    expect(JSON.parse(String(put?.body))).toEqual({ script: '' });
+    expect(
+      sent.map((entry) => `${entry.method} ${entry.url.replace('http://127.0.0.1:4517', '')}`),
+    ).toEqual([
+      'GET /profile',
+      'DELETE /profile/default?ifMatch=v1',
+      'DELETE /profile/rust?ifMatch=v2',
+    ]);
+  });
+
+  it('途中の行で落ちたら、何行外して止めたかを添えて落ち、残りの行は消さない', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([
+        entryOf('a', 'export A=1\n', 'all', { version: 'v1' }),
+        entryOf('b', 'export B=1\n', 'all', { version: 'v2' }),
+        entryOf('c', 'export C=1\n', 'all', { version: 'v3' }),
+      ]),
+    });
+    setReply('DELETE', '/profile/a', { status: 200, body: updateBody([]) });
+    setReply('DELETE', '/profile/b', { status: 409, body: { error: 'conflict' } });
+    captureStdout();
+
+    await expect(profileClearCommand({ yes: true })).rejects.toThrow(
+      /行 b を外せず、1 行を外したところで止めました/,
+    );
+
+    expect(sent.filter((entry) => entry.method === 'DELETE')).toHaveLength(2);
   });
 });
 
@@ -841,7 +877,7 @@ describe('alteroid profile rm / clear の確認（#3141）', () => {
     expect(sent.some((entry) => entry.method !== 'GET')).toBe(false);
   });
 
-  it('clear: 端末でなく --yes も無ければ、PUT せずに断る', async () => {
+  it('clear: 端末でなく --yes も無ければ、DELETE せずに断る', async () => {
     const restore = pretendTty(false);
     try {
       await expect(profileClearCommand()).rejects.toThrow('--yes');
