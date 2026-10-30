@@ -13,6 +13,7 @@ import {
   renderListingFromEnd,
 } from './excerpt.js';
 import { encodeMemoryCursor } from './memory-cursor.js';
+import { memoryFreshnessMarker } from './memory-freshness-format.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import type {
   JournalEntry,
@@ -411,13 +412,11 @@ function resolveMemoryDescriptionDrift(input: {
   };
 }
 
-export function assertNeverMemoryDescriptionFreshness(freshness: never): never {
-  throw new Error(`未知の要旨の鮮度状態: ${JSON.stringify(freshness)}`);
-}
-
-export function assertNeverMemoryDescriptionDrift(drift: never): never {
-  throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
-}
+// 鮮度の印の一式は `memory-freshness-format.ts` に置く（CLI と同じ1本）。ここからも同じ名前で出す
+export {
+  assertNeverMemoryDescriptionDrift,
+  assertNeverMemoryDescriptionFreshness,
+} from './memory-freshness-format.js';
 
 // fs と pg で別々に書かない: 器ごとに frontmatter の解釈を書くと食い違うため
 export function deriveMemoryFrontmatter(input: {
@@ -674,75 +673,6 @@ export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
       return '不明';
     default:
       return assertNeverMemoryCreatedAt(createdAt);
-  }
-}
-
-// ここでは clamp を重ねない: 同じ異常を2箇所で別々に隠すと、片方だけ直っていない状態に気づけなくなるため
-function formatMemoryStaleness(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}時間`;
-  const days = Math.floor(hours / 24);
-  return `${days}日`;
-}
-
-// `describedBytes === 0` のときは % を出さない: 0除算を「0%」に化けさせないため
-function formatMemoryDescriptionDrift(drift: {
-  describedBytes: number;
-  currentBytes: number;
-  deltaBytes: number;
-}): string {
-  const sign = drift.deltaBytes < 0 ? '-' : '+';
-  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
-  if (drift.describedBytes === 0) return `本文は${sign}${magnitude}バイト変わった`;
-  const percent = Math.round((Math.abs(drift.deltaBytes) / drift.describedBytes) * 100);
-  return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
-}
-
-// `%` と `baselineAt` を出さない: 母数が measured と別の量になり、この文字列は毎ターンプロンプトへ焼かれるのでトークン肥大を避けるため
-function formatMemoryDescriptionDriftAtLeast(drift: {
-  baselineBytes: number;
-  currentBytes: number;
-  deltaBytes: number;
-}): string {
-  const sign = drift.deltaBytes < 0 ? '-' : '+';
-  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
-  return `${sign}${magnitude}バイト以上変わった`;
-}
-
-// `at-least` と `unrecorded` を `measured` と同じ言葉にしない: 下限を確定値に見せず、記録が無いことを「0バイト変わった」に化けさせないため
-function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
-  switch (drift.kind) {
-    case 'measured':
-      return formatMemoryDescriptionDrift(drift);
-    case 'at-least':
-      return formatMemoryDescriptionDriftAtLeast(drift);
-    case 'unrecorded':
-      return '本文の変化量は記録されていない';
-    default:
-      return assertNeverMemoryDescriptionDrift(drift);
-  }
-}
-
-// stale の有無という1bitの印にしない: 常に鳴る印に読み手が慣れて他の印まで見なくなるため。unknown を「0（最新）」に見せない: 欠測が「手を入れなくてよい」側に化けるため
-function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
-  switch (freshness.kind) {
-    case 'fresh':
-      return '要旨の後に本文は動いていない: ';
-    case 'stale':
-      return (
-        `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い` +
-        `（${describeMemoryDescriptionDrift(freshness.drift)}）: `
-      );
-    case 'unknown':
-      return '要旨を書いた時刻が記録されていない: ';
-    case 'absent':
-      return '';
-    default:
-      return assertNeverMemoryDescriptionFreshness(freshness);
   }
 }
 
