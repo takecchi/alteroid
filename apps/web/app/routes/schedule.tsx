@@ -72,15 +72,11 @@ export default function Schedule() {
 
 function SchedulePage() {
   const { data, error, isLoading, isValidating, mutate } = useSchedule();
-  const runSchedule = useRunSchedule();
   const removeSchedule = useRemoveSchedule();
-  // 同じ描画の間に届く2回目のクリックは runningRef が同期的に弾く: running（state）は描き直された後にしか効かないため
-  const runningRef = useRef<Set<string>>(new Set());
-  const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
-  const [ran, setRan] = useState<string | undefined>(undefined);
+  // 「起こした」を出す行は常に1つ: 別の行を回すと前の行の表示は消える。表示の持ち主は各行で、ここは「どの行が最後か」だけを持つ
+  const [ranKind, setRanKind] = useState<string | undefined>(undefined);
+  // 読めない行の「外す」と各行の「外す」で1つを共有する: 外している間の回り表示が、同時に1件だけだった今までと変わらないように
   const [removing, setRemoving] = useState<string | undefined>(undefined);
-  const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
-  const [removeBase, setRemoveBase] = useState<string | undefined>(undefined);
   const [confirmingUnreadable, setConfirmingUnreadable] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   /**
@@ -219,137 +215,22 @@ function SchedulePage() {
           </Empty>
         ) : (
           <ul>
-            {shownEntries.map((entry) => {
-              // 編集中にほかで消された依頼の行（写し）。操作は消えた依頼に向かうので出さない
-              const gone = editingGone && entry.kind === editing;
-              return (
-                <li
-                  key={entry.kind}
-                  /* flex-wrap と break-words を付ける: 右側の時刻+バッジとボタンが合計で入りきらないことがあり、kind は空白を持たない最大64字で break-words が無いとはみ出しうるため */
-                  className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
-                >
-                  {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
-                  <div className="min-w-[min(14rem,100%)] flex-1">
-                    {/* 描く所だけ伏せる: 依頼の本文は人間かクローンが書いた自由文で、約束の一覧も同じ種類の本文を伏せるため（編集欄は再送する本文なので伏せない） */}
-                    <p className="text-sm">{redactBody(entry.description)}</p>
-                    {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
-                    {entry.request !== undefined && (
-                      <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
-                        名前: <span className="font-mono break-words">{entry.kind}</span>
-                      </p>
-                    )}
-                    {/* 既定の仕込みの名前を書き写さない: 数え上げを持つのは RESERVED_SCHEDULE_KINDS だけのため */}
-                    {/* 本文は <Markdown> を使わず line-clamp-3 で畳む: 畳まないと一覧の1行が画面外まで伸びるため */}
-                    {entry.request !== undefined && (
-                      <>
-                        <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
-                          {redactBody(entry.request)}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          前回:{' '}
-                          {entry.lastRunAt === undefined
-                            ? 'まだ一度も動いていない'
-                            : formatDateTime(entry.lastRunAt)}
-                          {' · 全文・周期は「編集」で見られる'}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                  <div className="shrink-0 text-right text-[11px] text-muted-foreground">
-                    <p>{formatDateTime(entry.nextAt)}</p>
-                    <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
-                  </div>
-                  {/* 消された行は操作の代わりに断る（同じ位置の1枠で差し替える: 枠の数を変えると下の編集欄が作り直される） */}
-                  {gone ? (
-                    <span role="status" className="shrink-0 text-[11px] text-warn">
-                      この依頼は、ほかで消された（一覧には残っていない）。編集欄の「自分の内容で上書きする」で作り直せる。
-                    </span>
-                  ) : (
-                    <Button
-                      size="sm"
-                      aria-label={`${entry.kind} を今すぐ回す`}
-                      loading={running.has(entry.kind)}
-                      onClick={() => {
-                        if (runningRef.current.has(entry.kind)) return;
-                        runningRef.current.add(entry.kind);
-                        setRunning(new Set(runningRef.current));
-                        setRan(undefined);
-                        setFailure(undefined);
-                        runSchedule(entry.kind)
-                          // 「終わった」とは書かない: デーモンは scheduler.run が真なら { ok: true } を返すだけで、ターンの結果は待たないため
-                          .then(() => setRan(entry.kind))
-                          .catch(setFailure)
-                          .finally(() => {
-                            runningRef.current.delete(entry.kind);
-                            setRunning(new Set(runningRef.current));
-                          });
-                      }}
-                    >
-                      今すぐ回す
-                    </Button>
-                  )}
-                  {ran === entry.kind && (
-                    <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
-                      起こした（結果は待っていない）
-                    </span>
-                  )}
-                  {/* 既定の仕込みは外すボタンを消さず「既定（外せない）」と書く: ボタンだけ消すと押せない理由が画面から消えるため */}
-                  {entry.request === undefined ? (
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      既定（外せない）
-                    </span>
-                  ) : gone ? null : (
-                    <>
-                      <Button
-                        size="sm"
-                        aria-label={`${entry.kind} を編集`}
-                        onClick={() => requestEditing(entry.kind)}
-                      >
-                        編集
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        aria-label={`${entry.kind} を外す`}
-                        loading={removing === entry.kind}
-                        onClick={() => {
-                          // 確かめに入った時点に見ていた版を控える: 確かめている間に書き換えられた依頼を、見ないまま外さないため（#4599）
-                          setRemoveBase(entry.updatedAt);
-                          setConfirmingRemove(entry.kind);
-                        }}
-                      >
-                        外す
-                      </Button>
-                      {/* 押した瞬間には実行せず確認を挟む: 外すと依頼の本文も周期も消えて取り消せないため */}
-                      <ConfirmDialog
-                        open={confirmingRemove === entry.kind}
-                        onOpenChange={(open) => {
-                          if (!open) setConfirmingRemove(undefined);
-                        }}
-                        title={`予定「${entry.kind}」を外しますか`}
-                        description="依頼の本文と周期が消え、元に戻せません。"
-                        confirmLabel="外す"
-                        destructive
-                        onConfirm={() => {
-                          setRemoving(entry.kind);
-                          setFailure(undefined);
-                          removeSchedule(entry.kind, removeBase)
-                            .catch(setFailure)
-                            .finally(() => setRemoving(undefined));
-                        }}
-                      />
-                    </>
-                  )}
-                  {editing === entry.kind && isScheduled(entry) && (
-                    <ScheduleEditForm
-                      entry={entry}
-                      onCancel={() => requestEditing(undefined)}
-                      onSaved={() => openEditing(undefined)}
-                    />
-                  )}
-                </li>
-              );
-            })}
+            {shownEntries.map((entry) => (
+              <ScheduleRow
+                key={entry.kind}
+                entry={entry}
+                // 編集中にほかで消された依頼の行（写し）。操作は消えた依頼に向かうので出さない
+                gone={editingGone && entry.kind === editing}
+                editing={editing === entry.kind}
+                removing={removing === entry.kind}
+                ranKind={ranKind}
+                onRanKind={setRanKind}
+                onRemoving={setRemoving}
+                onFailure={setFailure}
+                requestEditing={requestEditing}
+                openEditing={openEditing}
+              />
+            ))}
           </ul>
         )}
       </Card>
@@ -357,6 +238,169 @@ function SchedulePage() {
       <ScheduleForm existingKinds={existingKinds} />
       <EventForm />
     </Page>
+  );
+}
+
+// 行ごとの操作の state（回している・起こした・外す確認）は行が持つ: 行が一覧から消えたら、その行の表示も一緒に消えるように
+function ScheduleRow({
+  entry,
+  gone,
+  editing,
+  removing,
+  ranKind,
+  onRanKind,
+  onRemoving,
+  onFailure,
+  requestEditing,
+  openEditing,
+}: {
+  entry: ScheduleEntry;
+  gone: boolean;
+  editing: boolean;
+  removing: boolean;
+  ranKind: string | undefined;
+  onRanKind: (kind: string | undefined) => void;
+  onRemoving: (kind: string | undefined) => void;
+  onFailure: (failure: unknown) => void;
+  requestEditing: (next: string | undefined) => void;
+  openEditing: (next: string | undefined) => void;
+}) {
+  const runSchedule = useRunSchedule();
+  const removeSchedule = useRemoveSchedule();
+  // 同じ描画の間に届く2回目のクリックは runningRef が同期的に弾く: running（state）は描き直された後にしか効かないため
+  const runningRef = useRef(false);
+  const [running, setRunning] = useState(false);
+  const [ran, setRan] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [removeBase, setRemoveBase] = useState<string | undefined>(undefined);
+  return (
+    <li
+      /* flex-wrap と break-words を付ける: 右側の時刻+バッジとボタンが合計で入りきらないことがあり、kind は空白を持たない最大64字で break-words が無いとはみ出しうるため */
+      className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+    >
+      {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
+      <div className="min-w-[min(14rem,100%)] flex-1">
+        {/* 描く所だけ伏せる: 依頼の本文は人間かクローンが書いた自由文で、約束の一覧も同じ種類の本文を伏せるため（編集欄は再送する本文なので伏せない） */}
+        <p className="text-sm">{redactBody(entry.description)}</p>
+        {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
+        {entry.request !== undefined && (
+          <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
+            名前: <span className="font-mono break-words">{entry.kind}</span>
+          </p>
+        )}
+        {/* 既定の仕込みの名前を書き写さない: 数え上げを持つのは RESERVED_SCHEDULE_KINDS だけのため */}
+        {/* 本文は <Markdown> を使わず line-clamp-3 で畳む: 畳まないと一覧の1行が画面外まで伸びるため */}
+        {entry.request !== undefined && (
+          <>
+            <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
+              {redactBody(entry.request)}
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              前回:{' '}
+              {entry.lastRunAt === undefined
+                ? 'まだ一度も動いていない'
+                : formatDateTime(entry.lastRunAt)}
+              {' · 全文・周期は「編集」で見られる'}
+            </p>
+          </>
+        )}
+      </div>
+      <div className="shrink-0 text-right text-[11px] text-muted-foreground">
+        <p>{formatDateTime(entry.nextAt)}</p>
+        <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
+      </div>
+      {/* 消された行は操作の代わりに断る（同じ位置の1枠で差し替える: 枠の数を変えると下の編集欄が作り直される） */}
+      {gone ? (
+        <span role="status" className="shrink-0 text-[11px] text-warn">
+          この依頼は、ほかで消された（一覧には残っていない）。編集欄の「自分の内容で上書きする」で作り直せる。
+        </span>
+      ) : (
+        <Button
+          size="sm"
+          aria-label={`${entry.kind} を今すぐ回す`}
+          loading={running}
+          onClick={() => {
+            if (runningRef.current) return;
+            runningRef.current = true;
+            setRunning(true);
+            setRan(false);
+            onRanKind(undefined);
+            onFailure(undefined);
+            runSchedule(entry.kind)
+              // 「終わった」とは書かない: デーモンは scheduler.run が真なら { ok: true } を返すだけで、ターンの結果は待たないため
+              .then(() => {
+                setRan(true);
+                onRanKind(entry.kind);
+              })
+              .catch(onFailure)
+              .finally(() => {
+                runningRef.current = false;
+                setRunning(false);
+              });
+          }}
+        >
+          今すぐ回す
+        </Button>
+      )}
+      {/* ran だけでは出さない: 別の行を回した時点で前の行の表示は消す今までの振る舞いを、ranKind が持つため */}
+      {ran && ranKind === entry.kind && (
+        <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+          起こした（結果は待っていない）
+        </span>
+      )}
+      {/* 既定の仕込みは外すボタンを消さず「既定（外せない）」と書く: ボタンだけ消すと押せない理由が画面から消えるため */}
+      {entry.request === undefined ? (
+        <span className="shrink-0 text-[11px] text-muted-foreground">既定（外せない）</span>
+      ) : gone ? null : (
+        <>
+          <Button
+            size="sm"
+            aria-label={`${entry.kind} を編集`}
+            onClick={() => requestEditing(entry.kind)}
+          >
+            編集
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            aria-label={`${entry.kind} を外す`}
+            loading={removing}
+            onClick={() => {
+              // 確かめに入った時点に見ていた版を控える: 確かめている間に書き換えられた依頼を、見ないまま外さないため（#4599）
+              setRemoveBase(entry.updatedAt);
+              setConfirmingRemove(true);
+            }}
+          >
+            外す
+          </Button>
+          {/* 押した瞬間には実行せず確認を挟む: 外すと依頼の本文も周期も消えて取り消せないため */}
+          <ConfirmDialog
+            open={confirmingRemove}
+            onOpenChange={(open) => {
+              if (!open) setConfirmingRemove(false);
+            }}
+            title={`予定「${entry.kind}」を外しますか`}
+            description="依頼の本文と周期が消え、元に戻せません。"
+            confirmLabel="外す"
+            destructive
+            onConfirm={() => {
+              onRemoving(entry.kind);
+              onFailure(undefined);
+              removeSchedule(entry.kind, removeBase)
+                .catch(onFailure)
+                .finally(() => onRemoving(undefined));
+            }}
+          />
+        </>
+      )}
+      {editing && isScheduled(entry) && (
+        <ScheduleEditForm
+          entry={entry}
+          onCancel={() => requestEditing(undefined)}
+          onSaved={() => openEditing(undefined)}
+        />
+      )}
+    </li>
   );
 }
 
