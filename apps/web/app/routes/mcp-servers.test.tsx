@@ -328,6 +328,42 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
   });
 
+  // #5903: 新しい失敗を出すときは、前の失敗の文を消す
+  async function failOnceThenType(next: string) {
+    stubMcp({
+      put: { status: 400, body: { error: 'MCP サーバの登録の形が不正（保存していない）: x' } },
+    });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), {
+      target: { value: '{"mcpServers":{"demo":{"command":"npx"}}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    expect(await screen.findByText(/MCP サーバの登録の形が不正（保存していない）: x/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), { target: { value: next } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+  }
+
+  it('daemon の 400 のあとに「JSON として読めない」を出すとき、前の失敗の文を消す', async () => {
+    await failOnceThenType('{ "mcpServers": ');
+
+    expect(screen.getByRole('alert').textContent).toContain('JSON として読めない');
+    expect(screen.queryByText(/MCP サーバの登録の形が不正（保存していない）/)).toBeNull();
+    expect(screen.queryByText('前の登録がそのまま残っている。')).toBeNull();
+  });
+
+  it('daemon の 400 のあとに「mcpServers の形」の失敗を出すとき、前の失敗の文を消す', async () => {
+    await failOnceThenType('{"mcpServers":5}');
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      '{ "mcpServers": { … } } の形で書くこと',
+    );
+    expect(screen.queryByText(/MCP サーバの登録の形が不正（保存していない）/)).toBeNull();
+  });
+
   it('「登録を全部外す」は確認を挟んでから空の mcpServers を PUT する（alteroid mcp clear と同じ）', async () => {
     const { puts } = stubMcp({
       put: {

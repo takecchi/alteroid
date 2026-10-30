@@ -25,11 +25,8 @@ import {
   memoryDocumentSchema,
   pendingApprovalSchema,
   permissionGrantSchema,
-  pluginNameSchema,
-  pluginRelativePathSchema,
-  pluginRepoUrlSchema,
+  pluginPreviewRequestSchema,
   pluginScopeSchema,
-  pluginSourceShaSchema,
   practiceMetaSchema,
   practiceSchema,
   practiceVersionMetaSchema,
@@ -1310,25 +1307,8 @@ export const mcpServersUpdateResponseSchema = z.object({
   ),
 });
 
-// 未知の欄は拒む: 綴り違いが「効かない指定」にならないようにするため。
-export const pluginPreviewRequestSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    kind: z.literal('url'),
-    url: pluginRepoUrlSchema,
-    path: pluginRelativePathSchema.optional(),
-    ref: z
-      .string()
-      .min(1)
-      .max(256)
-      // eslint-disable-next-line no-control-regex -- 制御文字・空白を弾くための検査
-      .refine((v) => !/[\u0000- \u007f]/.test(v) && !v.startsWith('-'), {
-        message: '使えない文字を含む',
-      })
-      .optional(),
-    sha: pluginSourceShaSchema.optional(),
-  }),
-  z.strictObject({ kind: z.literal('marketplace'), plugin: pluginNameSchema }),
-]);
+// 定義は core（plugin-source-input.ts）。web の送る前の検査も同じものを使う。app.ts が openapi.ts から取るので、ここから出す
+export { pluginPreviewRequestSchema };
 
 const pluginSourceViewSchema = z.object({
   kind: z.enum(['url', 'marketplace']),

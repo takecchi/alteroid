@@ -218,6 +218,8 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
   function askSave() {
     if (parsed === null) return;
+    // 前の送信の失敗の文は消す: 新しい失敗（読めない・形が不正）の下に、前の失敗が並んで残らないように
+    setFailure(undefined);
     if (!parsed.ok) {
       setParseError(parsed.error);
       return;

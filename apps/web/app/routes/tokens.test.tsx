@@ -973,14 +973,14 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     expect(puts).toEqual([{ rotateOn: 'off', cooldownMs: DEFAULT_SETTINGS.cooldownMs }]);
   });
 
-  it('休止の既定（ミリ秒）を変えて保存すると PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
+  it('休止の既定を変えて保存すると PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
     const { puts } = stubPolicyScreen();
 
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('休止の既定を変える（ミリ秒）'), {
-      target: { value: '3600000' },
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: '1' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -1005,23 +1005,147 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
   });
 
-  // 「正の整数」等の判定を画面側で先回りして弾かない: 送って、サーバの 400 の本文をそのまま人間へ見せるため
-  it('サーバが 400 で断ったら、握り潰さずサーバの文言をそのまま出す', async () => {
+  // 形に合う入力をサーバが断ったとき（規則のずれ）は、サーバの 400 の本文をそのまま人間へ見せる
+  it('形に合う入力をサーバが 400 で断ったら、握り潰さずサーバの文言をそのまま出す', async () => {
     const { failNextUpdate } = stubPolicyScreen();
     failNextUpdate(400, '設定の入力の形が不正: cooldownMs は正の整数である必要がある');
 
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('休止の既定を変える（ミリ秒）'), {
-      target: { value: '-1' },
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: '1' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     expect(
       await screen.findByText(/設定の入力の形が不正: cooldownMs は正の整数である必要がある/),
     ).toBeTruthy();
-    expect(screen.getByLabelText('休止の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
+    expect(screen.getByLabelText('休止の既定を変える（時間）')).toHaveProperty('value', '1');
+  });
+
+  // #5903: 時と分の2つの欄。保存済みのミリ秒を割って初期値にし、送る中身はミリ秒のまま
+  it('保存済みの値を時と分に割って欄の初期値にする（18000000 は 5 時間 0 分）', async () => {
+    stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(screen.getByLabelText('休止の既定を変える（時間）')).toHaveProperty('value', '5');
+    expect(screen.getByLabelText('休止の既定を変える（分）')).toHaveProperty('value', '0');
+    expect(screen.getByText(/^5時間。/)).toBeTruthy();
+  });
+
+  it('端数のある値は時と分に割り、分の表示は時間に丸めない（5400000 は 1 時間 30 分）', async () => {
+    stubPolicyScreen({ rotateOn: 'free_exhausted', cooldownMs: 5_400_000 });
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(screen.getByLabelText('休止の既定を変える（時間）')).toHaveProperty('value', '1');
+    expect(screen.getByLabelText('休止の既定を変える（分）')).toHaveProperty('value', '30');
+    expect(screen.getByText(/^1時間30分。/)).toBeTruthy();
+  });
+
+  it('時と分を入れて保存すると、ミリ秒に換算して送る（2 時間 30 分は 9000000）', async () => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: '2' },
+    });
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（分）'), {
+      target: { value: '30' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(puts).toEqual([{ rotateOn: DEFAULT_SETTINGS.rotateOn, cooldownMs: 9_000_000 }]);
+    });
+  });
+
+  it('時の欄だけ入れて分を空にすると、分は 0 として送る', async () => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: '1' },
+    });
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（分）'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(puts).toEqual([{ rotateOn: 'free_exhausted', cooldownMs: 3_600_000 }]),
+    );
+  });
+
+  it('触っていない欄は保存済みの値のまま送る（端数のミリ秒を落とさない）', async () => {
+    const { puts } = stubPolicyScreen({ rotateOn: 'free_exhausted', cooldownMs: 5_400_500 });
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('切り替える条件を変える'), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(puts).toEqual([{ rotateOn: 'off', cooldownMs: 5_400_500 }]));
+  });
+
+  // #5903: 形に合わない入力は送らず、画面の語で直し方を言う（サーバの文ではない）
+  it.each([
+    ['分が負の数', '0', '-5', /時と分は、0 以上の整数（半角の数字）で入れる/],
+    ['時が小数', '1.5', '0', /時と分は、0 以上の整数（半角の数字）で入れる/],
+    ['時と分が両方 0', '0', '0', /休止の既定は 0 分より長くする/],
+    ['時と分が両方空', '', '', /休止の既定は 0 分より長くする/],
+    ['大きすぎる', '99999999999999999', '0', /休止の既定が長すぎる/],
+  ])('%s: PUT を送らず、画面の語で言う', async (_name, hours, minutes, expected) => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: hours },
+    });
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（分）'), {
+      target: { value: minutes },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText(expected)).toBeTruthy();
+    expect(screen.queryByText(/cooldownMs/)).toBeNull();
+    expect(puts).toEqual([]);
+  });
+
+  it('形に合わない入力で出した文は、直して保存し直すと消える', async () => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: '0' },
+    });
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（分）'), {
+      target: { value: '0' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    expect(await screen.findByText(/休止の既定は 0 分より長くする/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（分）'), {
+      target: { value: '10' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() =>
+      expect(puts).toEqual([{ rotateOn: 'free_exhausted', cooldownMs: 600_000 }]),
+    );
+    expect(screen.queryByText(/休止の既定は 0 分より長くする/)).toBeNull();
   });
 
   it('送信中は「保存」が押せず、前の失敗は送り直した瞬間に消え、成功すれば下書きが空に戻る', async () => {
@@ -1031,8 +1155,8 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     renderTokens();
     await waitForPoolLoaded();
 
-    fireEvent.change(screen.getByLabelText('休止の既定を変える（ミリ秒）'), {
-      target: { value: '-1' },
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（時間）'), {
+      target: { value: '1' },
     });
     const save = () => screen.getByRole<HTMLButtonElement>('button', { name: '保存' });
     fireEvent.click(save());
@@ -1144,7 +1268,8 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
       await screen.findByText(new RegExp(`切り替えの設定は読めない（消えたのではなく.*${REASON}`)),
     ).toBeTruthy();
     expect(screen.getByLabelText('切り替える条件を選ぶ')).toHaveProperty('value', '');
-    expect(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('休止の既定を選ぶ（時間）')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('休止の既定を選ぶ（分）')).toHaveProperty('value', '');
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
   });
 
@@ -1173,10 +1298,24 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     });
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
 
-    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
-      target: { value: '3600000' },
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（時間）'), {
+      target: { value: '1' },
     });
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
+  });
+
+  it('形に合わない休止の既定は送らず、画面の語で言う（#5903）', async () => {
+    const { puts } = stubUnreadableScreen({ reason: '理由' });
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), { target: { value: 'off' } });
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（分）'), { target: { value: '-5' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText(/時と分は、0 以上の整数（半角の数字）で入れる/)).toBeTruthy();
+    expect(puts).toEqual([]);
   });
 
   it('両方選んで保存すると PUT /tokens/policy に両方の欄が送られ、成功後は一覧が取り直されて通常の設定カードに戻る', async () => {
@@ -1188,8 +1327,8 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'overage_exhausted' },
     });
-    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
-      target: { value: '3600000' },
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（時間）'), {
+      target: { value: '1' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -1208,8 +1347,8 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'off' },
     });
-    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
-      target: { value: '3600000' },
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（時間）'), {
+      target: { value: '1' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -1227,8 +1366,8 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), { target: { value: 'off' } });
-    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
-      target: { value: '3600000' },
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（時間）'), {
+      target: { value: '1' },
     });
     const save = () => screen.getByRole<HTMLButtonElement>('button', { name: '保存' });
     fireEvent.click(save());
