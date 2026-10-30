@@ -258,7 +258,7 @@ describe('turn_usage — 種別フィルタと1行の文言', () => {
 
     expect(screen.queryByText(summarizeJournalEntry(TURN_USAGE))).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'ターンの消費' }));
+    fireEvent.click(screen.getByRole('button', { name: '1回のトークン数' }));
 
     await waitFor(() => {
       expect(
@@ -268,6 +268,22 @@ describe('turn_usage — 種別フィルタと1行の文言', () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it('画面の説明は新しい文で、旧い文は出ない', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    expect(
+      screen.getByText(
+        'クローンの行いの細かい記録（判断・質問・道具の実行から、時間やトークンの数字まで）。追記だけで書き換えず、あとから「それは違う」と言える',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/あとから否定できる/)).toBeNull();
   });
 });
 
@@ -767,7 +783,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     });
 
     const NOTE =
-      '道具の入力・作業者の待機・ターンの消費・文脈の占有・ターンの時間・API の時間・受信箱の流量・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+      '道具の入力・作業者の待機・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・受信箱の出入り・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
     const { unmount } = renderJournal({ status: 'live', recent: [] }, [
       `/?q=${encodeURIComponent('当たらない語')}`,
     ]);
@@ -841,7 +857,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect(screen.getByText(/道具の入力/)).toBeTruthy();
     expect(
       screen.getByText(
-        /道具の入力・作業者の待機・ターンの消費・文脈の占有・ターンの時間・API の時間・受信箱の流量・GitHub の観測・会話の削除/,
+        /道具の入力・作業者の待機・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・受信箱の出入り・GitHub の観測・会話の削除/,
       ),
     ).toBeTruthy();
   });

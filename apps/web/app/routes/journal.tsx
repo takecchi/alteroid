@@ -57,7 +57,7 @@ export default function Journal() {
     <Page
       tabs={<JournalTabs />}
       title="日誌"
-      description="聞かずに実行した判断・エスカレーション・ツール実行。追記専用で、あとから否定できる"
+      description="クローンの行いの細かい記録（判断・質問・道具の実行から、時間やトークンの数字まで）。追記だけで書き換えず、あとから「それは違う」と言える"
       scrollRef={scrollAreaRef}
     >
       {/* startMargin にここの実測の高さを渡す: scrollRef を Page のスクロール領域に向けており、直接の親でない祖先までの距離は自分で申告する必要があるため */}
