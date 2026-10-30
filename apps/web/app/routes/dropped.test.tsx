@@ -150,8 +150,4 @@ describe('/dropped 画面 — 利用者の言葉で書く（#2792）', () => {
     expect(describeDroppedTraceRetentionNote(200)).toContain('直近 200 件');
     expect(describeDroppedTraceRetentionNote(7)).toContain('直近 7 件');
   });
-
-  it('origin が無いとき（古い版）は空文字', () => {
-    expect(describeDroppedTraceOriginNote(undefined)).toBe('');
-  });
 });

@@ -1202,7 +1202,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 生ログの退避。`body`（本文をそのまま載せる。古い形）か `ref`（本文は runner に預け、デーモンが
    * `GET /managers/:id/archive/:archiveId` で取りに行く）のどちらか一方を持つ（#4485）。
    * 本文を SSE の1行で運ぶと、数十 MB の行をデーモンが受け取り・解析する間ループが塞がり、ヒープも膨らむ。
-   * `ref` を送るのは、SSE の接続で `archive-ref` を名乗ったデーモンにだけ（`archive-ref.ts`。古いデーモンは `body` 無しの出来事を落とすため）。
+   * runner はいつも預けて `ref` を送る（`archive-ref.ts`。名乗りで切り替えるのは #5701 でやめた）。
    * 両方とも無い出来事は、デーモンが「取れなかった」として跡を残す。
    */
   z.object({
