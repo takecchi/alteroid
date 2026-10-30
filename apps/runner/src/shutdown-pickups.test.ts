@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net';
 
+import { captureStderr } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -76,44 +77,65 @@ describe('gateDuringShutdown: 畳みの間は取りに来る要求だけを通�
   });
 });
 
+// 以降の試験は偽の時計で畳みの時間を進める（実時間を待たない。待ち時間・送り直しの時刻・stderr の書き先を引数で差し替えない）
+// stderr は本番と同じ `writeStderrLine` の出力を `captureStderr` で捕まえる
 describe('waitForPickups（#4699）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('預けた物が取られ切ったら返る', async () => {
+    vi.useFakeTimers();
     let pending = 2;
     setTimeout(() => (pending = 0), 20);
-    const left = await waitForPickups({
+    const waiting = waitForPickups({
       pending: () => pending,
       subscribed: () => true,
       deadlineAt: Date.now() + 5_000,
-      pollMs: 5,
     });
-    expect(left).toBe(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await waiting).toBe(0);
   });
 
   it('デーモンが繋がっていなければ待たない', async () => {
+    vi.useFakeTimers();
     const started = Date.now();
+    // 進めずに返る: 1回でも待てば、偽の時計を進めない限り終わらない
     const left = await waitForPickups({
       pending: () => 3,
       subscribed: () => false,
       deadlineAt: Date.now() + 5_000,
-      pollMs: 5,
     });
     expect(left).toBe(3);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(Date.now() - started).toBe(0);
   });
 
   it('期限に達したら、残りの数を返して待つのをやめる', async () => {
-    const left = await waitForPickups({
+    vi.useFakeTimers();
+    let settled = false;
+    const waiting = waitForPickups({
       pending: () => 1,
       subscribed: () => true,
-      deadlineAt: Date.now() + 30,
-      pollMs: 5,
+      deadlineAt: Date.now() + 5_000,
+    }).then((left) => {
+      settled = true;
+      return left;
     });
-    expect(left).toBe(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await waiting).toBe(1);
   });
 });
 
 describe('shutdownHandingOver: 口は預けた物が取られてから閉じる（#4699）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // 守る事故: #4699（口を先に閉じて、預けた生ログ・退避先をデーモンが取りに来られず、器の入れ替えのたびに失った）
   it('⭐ 畳み終えても、預けた物が取られるまでは口を閉じない', async () => {
+    vi.useFakeTimers();
     const order: string[] = [];
     let pending = 0;
     const outbox = new Outbox();
@@ -132,35 +154,39 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
       inlineUnpickedArchives: () => 0,
     };
 
-    await shutdownHandingOver({
+    const done = shutdownHandingOver({
       host,
       outbox,
       closeListener: () => order.push('close'),
-      drainWaitMs: 0,
-      write: () => undefined,
     });
+    await vi.advanceTimersByTimeAsync(100);
+    await done;
     detach();
 
     expect(order).toEqual(['host.shutdown', 'picked', 'close']);
   });
 
-  it('期限までに取られなければ、残りを1行書いて口を閉じる', async () => {
-    const lines: string[] = [];
+  // 守る事故: #4699（取られない物を待ち続けて forced exit に巻き込まれる）。上限（50 秒）まで待ち、残りを1行書いて閉じる
+  it('期限（50 秒）までに取られなければ、残りを1行書いて口を閉じる', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     const detach = connectedSubscriber(outbox, () => undefined);
     let closed = false;
 
-    await shutdownHandingOver({
-      host: {
-        shutdown: async () => undefined,
-        pendingPickups: () => 1,
-        inlineUnpickedArchives: () => 0,
-      },
-      outbox,
-      closeListener: () => (closed = true),
-      drainWaitMs: 0,
-      pickupWaitLimitMs: 30,
-      write: (line) => lines.push(line),
+    const lines = await captureStderr(async () => {
+      const done = shutdownHandingOver({
+        host: {
+          shutdown: async () => undefined,
+          pendingPickups: () => 1,
+          inlineUnpickedArchives: () => 0,
+        },
+        outbox,
+        closeListener: () => (closed = true),
+      });
+      await vi.advanceTimersByTimeAsync(49_999);
+      expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
     });
     detach();
 
@@ -169,29 +195,32 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
   });
 
   // 器の入れ替えの直前に預けた生ログが、取りに行った先の新しいプロセスに無く失われた（#4896）
-  it('⭐ 取られないまま上限の手前に来たら、預けた生ログを本文つきで送り直してから口を閉じる', async () => {
+  it('⭐ 取られないまま 30 秒（上限の手前）に来たら、預けた生ログを本文つきで送り直してから口を閉じる', async () => {
+    vi.useFakeTimers();
     const order: string[] = [];
     let pending = 1;
     const outbox = new Outbox();
     const detach = connectedSubscriber(outbox, () => undefined);
-    const lines: string[] = [];
 
-    await shutdownHandingOver({
-      host: {
-        shutdown: async () => undefined,
-        pendingPickups: () => pending,
-        inlineUnpickedArchives: () => {
-          order.push('inline');
-          pending = 0;
-          return 1;
+    const lines = await captureStderr(async () => {
+      const done = shutdownHandingOver({
+        host: {
+          shutdown: async () => undefined,
+          pendingPickups: () => pending,
+          inlineUnpickedArchives: () => {
+            order.push('inline');
+            pending = 0;
+            return 1;
+          },
         },
-      },
-      outbox,
-      closeListener: () => order.push('close'),
-      // 畳み始めから 40 秒経った体にする（実時間を待たない）: 送り直す時刻（既定 30 秒）は過ぎ、上限（50 秒）は過ぎていない
-      startedAt: Date.now() - 40_000,
-      drainWaitMs: 0,
-      write: (line) => lines.push(line),
+        outbox,
+        closeListener: () => order.push('close'),
+      });
+      // 送り直す時刻（30 秒）の手前では、送り直さず口も閉じない
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(order).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
     });
     detach();
 
@@ -201,12 +230,13 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
   });
 
   it('送り直す時刻より前に取られたら、送り直さない', async () => {
+    vi.useFakeTimers();
     let pending = 1;
     let inlined = 0;
     const outbox = new Outbox();
     const detach = connectedSubscriber(outbox, () => undefined);
 
-    await shutdownHandingOver({
+    const done = shutdownHandingOver({
       host: {
         shutdown: async () => undefined,
         // 1回目の確認では残り、次の確認で取られている
@@ -222,17 +252,20 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
       },
       outbox,
       closeListener: () => undefined,
-      drainWaitMs: 0,
-      write: () => undefined,
     });
+    await vi.advanceTimersByTimeAsync(100);
+    await done;
+    // 送り直す時刻（30 秒）を過ぎても、タイマーは残っていない
+    await vi.advanceTimersByTimeAsync(60_000);
     detach();
 
     expect(inlined).toBe(0);
   });
 
   it('デーモンが繋がっていなければ、送り直さない（受ける相手が居ない）', async () => {
+    vi.useFakeTimers();
     let inlined = 0;
-    await shutdownHandingOver({
+    const done = shutdownHandingOver({
       host: {
         shutdown: async () => undefined,
         pendingPickups: () => 1,
@@ -243,10 +276,8 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
       },
       outbox: new Outbox(),
       closeListener: () => undefined,
-      startedAt: Date.now() - 40_000,
-      drainWaitMs: 0,
-      write: () => undefined,
     });
+    await done;
 
     expect(inlined).toBe(0);
   });
@@ -278,8 +309,6 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
       },
       outbox,
       closeListener: () => (closed = true),
-      drainWaitMs: 0,
-      write: () => undefined,
     });
 
     await vi.advanceTimersByTimeAsync(29_999);
@@ -314,8 +343,6 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
       },
       outbox,
       closeListener: () => (closed = true),
-      drainWaitMs: 0,
-      write: () => undefined,
     });
 
     await vi.advanceTimersByTimeAsync(35_000);
@@ -340,8 +367,6 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
       },
       outbox,
       closeListener: () => (closed = true),
-      drainWaitMs: 0,
-      write: () => undefined,
     });
 
     await vi.advanceTimersByTimeAsync(49_999);
@@ -350,5 +375,26 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
     await done;
     detach();
     expect(closed).toBe(true);
+  });
+
+  it('デーモンが繋がっていなければ、shutdown() が終わらなくても 30 秒で送り直さない', async () => {
+    vi.useFakeTimers();
+    let inlined = 0;
+    const done = shutdownHandingOver({
+      host: {
+        shutdown: () => new Promise<void>(() => undefined),
+        pendingPickups: () => 1,
+        inlineUnpickedArchives: () => {
+          inlined += 1;
+          return 1;
+        },
+      },
+      outbox: new Outbox(),
+      closeListener: () => undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(50_000);
+    await done;
+    expect(inlined).toBe(0);
   });
 });

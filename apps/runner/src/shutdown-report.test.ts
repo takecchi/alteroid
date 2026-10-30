@@ -8,13 +8,13 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { captureStderr, createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { formatOutboxShutdownReport, Outbox, type OutboxShutdownSnapshot } from './app.js';
-import { drainAndReportOutbox, DRAIN_POLL_INTERVAL_MS, waitForOutboxDrain } from './index.js';
+import { drainAndReportOutbox, waitForOutboxDrain } from './index.js';
 import {
   connectedSubscriber,
   stuckSubscriber,
@@ -189,107 +189,138 @@ describe('Outbox.subscribed（#629）', () => {
   });
 });
 
+// 守る事故: #629（畳むとき、デーモンが取り切る前に口を閉じて、出し箱の中身を捨てた）。待ち時間は偽の時計で進める（実時間を待たない・待ち時間の引数を持たない）
 describe('waitForOutboxDrain（#629）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // 待たずに返る: 偽の時計だと、1回でも setTimeout を待てば進めない限り終わらない（= 試験が詰まって落ちる）
   it('購読が付いていなければ、pending が残っていても即座に返る（1ミリ秒も待たない）', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: 'x' });
     expect(outbox.subscribed).toBe(false);
     expect(outbox.pending).toBeGreaterThan(0);
 
     const start = Date.now();
-    await waitForOutboxDrain(outbox, 5_000);
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeLessThan(DRAIN_POLL_INTERVAL_MS);
+    await waitForOutboxDrain(outbox);
+    expect(Date.now() - start).toBe(0);
   });
 
   it('購読が付いていても pending が既に0なら、タイムアウトを待たず即座に返る', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     const detach = connectedSubscriber(outbox, () => undefined);
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: 'x' });
     expect(outbox.pending).toBe(0);
 
     const start = Date.now();
-    await waitForOutboxDrain(outbox, 5_000);
-    expect(Date.now() - start).toBeLessThan(DRAIN_POLL_INTERVAL_MS);
+    await waitForOutboxDrain(outbox);
+    expect(Date.now() - start).toBe(0);
     detach();
   });
 
-  it('購読が付いていて pending が残っていれば待ち、外から0になったら即座に返る', async () => {
+  it('購読が付いていて pending が残っていれば待ち、外から0になったら次の確認で返る', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
     for (let i = 0; i < 3; i += 1) outbox.push(session(String(i)));
     expect(outbox.pending).toBe(3);
 
-    const waitPromise = waitForOutboxDrain(outbox, 5_000);
-    await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS * 2));
+    let settled = false;
+    const waitPromise = waitForOutboxDrain(outbox).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe(false);
     stuck.drain();
-
-    const start = Date.now();
+    await vi.advanceTimersByTimeAsync(50);
     await waitPromise;
-    expect(Date.now() - start).toBeLessThan(5_000);
+    expect(settled).toBe(true);
     stuck.detach();
   });
 
-  it('購読は付いているが捌けないまま、タイムアウトで諦める（例外は投げない）', async () => {
+  it('購読は付いているが捌けないまま、3 秒のタイムアウトで諦める（例外は投げない）', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
     outbox.push(session('1'));
-    const start = Date.now();
-    await waitForOutboxDrain(outbox, DRAIN_POLL_INTERVAL_MS * 3);
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(DRAIN_POLL_INTERVAL_MS * 2);
+
+    let settled = false;
+    const waitPromise = waitForOutboxDrain(outbox).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await waitPromise;
+    expect(settled).toBe(true);
     stuck.detach();
   });
 
   it('待っている途中で購読が外れたら、タイムアウトを待たずに諦める', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
     outbox.push(session('1'));
-    const waitPromise = waitForOutboxDrain(outbox, 5_000);
-    await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS * 2));
-    stuck.detach();
 
-    const start = Date.now();
+    let settled = false;
+    const waitPromise = waitForOutboxDrain(outbox).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe(false);
+    stuck.detach();
+    await vi.advanceTimersByTimeAsync(50);
     await waitPromise;
-    expect(Date.now() - start).toBeLessThan(5_000);
+    expect(settled).toBe(true);
   });
 });
 
+// 守る事故: #629（7時間半詰まって未送出 477 件のまま焼き直した。畳むとき何が失われるかを stderr に名指しする）
 describe('drainAndReportOutbox（#629）', () => {
-  it('購読が無ければ待たずに、残っているものを注入した write へ書く', async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('購読が無ければ待たずに、残っているものを stderr へ書く', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox();
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログ' });
     outbox.push({ type: 'report', managerId: 'mgr-1', text: '報告', status: 'done' });
 
-    const written: string[] = [];
     const start = Date.now();
-    await drainAndReportOutbox(outbox, { write: (line) => written.push(line) });
-    expect(Date.now() - start).toBeLessThan(DRAIN_POLL_INTERVAL_MS);
+    const written = await captureStderr(() => drainAndReportOutbox(outbox));
+    expect(Date.now() - start).toBe(0);
 
     expect(written).toHaveLength(1);
     expect(written[0]).toContain('type=archive managerId=mgr-1');
     expect(written[0]).toContain('type=report managerId=mgr-1');
   });
 
-  it('何も残っていなければ write は1度も呼ばれない', async () => {
+  it('何も残っていなければ stderr へ1行も書かない', async () => {
     const outbox = new Outbox();
-    const written: string[] = [];
-    await drainAndReportOutbox(outbox, { write: (line) => written.push(line) });
+    const written = await captureStderr(() => drainAndReportOutbox(outbox));
     expect(written).toHaveLength(0);
   });
 
-  it('購読が付いていれば waitMs の分だけ待ってから、捌けなかった分を名指しして書く', async () => {
+  it('購読が付いていれば 3 秒待ってから、捌けなかった分を名指しして書く', async () => {
+    vi.useFakeTimers();
     const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
     const stuck = stuckSubscriber(outbox);
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログ' });
-    const written: string[] = [];
-    const start = Date.now();
-    await drainAndReportOutbox(outbox, {
-      waitMs: DRAIN_POLL_INTERVAL_MS * 3,
-      write: (line) => written.push(line),
+
+    const written = await captureStderr(async () => {
+      let settled = false;
+      const done = drainAndReportOutbox(outbox).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
     });
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(DRAIN_POLL_INTERVAL_MS * 2);
     expect(written).toHaveLength(1);
     expect(written[0]).toContain('出来事が 1 件、このプロセスの終了と一緒に失われる');
     expect(written[0]).toContain('type=archive managerId=mgr-1');
@@ -418,8 +449,7 @@ describe('購読が付いていないまま畳む経路（Host#shutdown()）を�
     await host.shutdown();
     expect(outbox.subscribed).toBe(true);
 
-    const written: string[] = [];
-    await drainAndReportOutbox(outbox, { write: (line) => written.push(line) });
+    const written = await captureStderr(() => drainAndReportOutbox(outbox));
 
     expect(delivered.some((event) => (event as { type?: string }).type === 'archive')).toBe(true);
     expect(written).toHaveLength(0);

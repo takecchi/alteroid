@@ -1,6 +1,7 @@
 import { statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { captureStderr } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
@@ -24,10 +25,10 @@ describe('openManagerToolsSocket（#2987）', () => {
     // 置き場所の親がファイルなので mkdir が落ちる
     const blocker = join(root, 'not-a-dir');
     writeFileSync(blocker, '');
-    const lines: string[] = [];
-    const host = await openManagerToolsSocket(undefined, join(blocker, 'manager'), (line) =>
-      lines.push(line),
-    );
+    let host: Awaited<ReturnType<typeof openManagerToolsSocket>>;
+    const lines = await captureStderr(async () => {
+      host = await openManagerToolsSocket(undefined, join(blocker, 'manager'));
+    });
     expect(host).toBeUndefined();
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('alteroid-manager');

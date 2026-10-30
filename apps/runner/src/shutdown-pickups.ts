@@ -40,12 +40,9 @@ export async function waitForPickups(options: {
   pending: () => number;
   subscribed: () => boolean;
   deadlineAt: number;
-  now?: () => number;
-  pollMs?: number;
 }): Promise<number> {
-  const now = options.now ?? Date.now;
-  while (options.pending() > 0 && options.subscribed() && now() < options.deadlineAt) {
-    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? PICKUP_POLL_INTERVAL_MS));
+  while (options.pending() > 0 && options.subscribed() && Date.now() < options.deadlineAt) {
+    await new Promise((resolve) => setTimeout(resolve, PICKUP_POLL_INTERVAL_MS));
   }
   return options.pending();
 }
