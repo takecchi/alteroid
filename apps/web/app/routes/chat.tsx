@@ -75,6 +75,7 @@ import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import { errorText } from '~/lib/error-text';
 import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import { useFollowScroll } from '~/lib/use-follow-scroll';
 import { useApprovalDraftState, usePersistApprovalDrafts } from '~/lib/use-approval-draft-state';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -126,8 +127,6 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
 }
 
 let replyGroupSeq = 0;
-// 厳密一致（scrollTop + clientHeight === scrollHeight）は小数の丸めで成立しないことがあるので余裕を持たせる
-const BOTTOM_THRESHOLD_PX = 32;
 const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
 
 class TurnFailedError extends Error {
@@ -504,13 +503,6 @@ export function ChatPane({
     undefined,
   );
   const [viewingVersionIndex, setViewingVersionIndex] = useState<Record<string, number>>({});
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  // 測定は onScroll 側で行ってここへ持ち越す: 効果が走る時点では新しい行が既に描かれ scrollHeight が伸びていて、行が来る前の位置は測れない
-  const isAtBottomRef = useRef(true);
-  const justSentOwnLineRef = useRef(false);
-  // 会話の切り替わりを追従の効果自身の中で見分ける: 他の効果の宣言順に依存させないため（ChatPane は切り替えで作り直されず、ref は会話 A の false を持ち越す）
-  const lastSeenShownIdRef = useRef(shownId);
 
   // send は自分のストリームを始めるとき先にこれを畳む: 登録の前に送ると再生と送信の2本が同じ応答を受けて二重に出る
   const pendingResumeRef = useRef<AbortController | undefined>(undefined);
@@ -932,24 +924,11 @@ export function ChatPane({
     }
   }, [retries, shownId]);
 
-  const handleScroll = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (el === null) return;
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX;
-  }, []);
-
-  useEffect(() => {
-    if (lastSeenShownIdRef.current !== shownId) {
-      lastSeenShownIdRef.current = shownId;
-      isAtBottomRef.current = true;
-    }
-    if (isAtBottomRef.current || justSentOwnLineRef.current) {
-      bottomRef.current?.scrollIntoView({ block: 'end' });
-      // scroll イベントを待たずに確定させる: チャンクが立て続けに届くと、イベントが次の効果の実行に間に合わない
-      isAtBottomRef.current = true;
-    }
-    justSentOwnLineRef.current = false;
-  }, [all.length, lines, shownId]);
+  const { bottomRef, scrollContainerRef, handleScroll, justSentOwnLineRef } = useFollowScroll({
+    length: all.length,
+    lines,
+    shownId,
+  });
 
   // shownIdRef の更新と abort() を1つの効果の同期実行の中に置く: owns() と stopped() が同時に切り替わる（片方だけ壊しても、もう片方が writable() を締める）。
   // stream.id が shownId と同じなら止めない: open で採番した id へ同期したときに止めると、続く text / done が出ないまま会話が終わったように見える
@@ -984,7 +963,7 @@ export function ChatPane({
       ]);
       return key;
     },
-    [],
+    [justSentOwnLineRef],
   );
 
   // 入力欄へ戻すのは下の effect: 失敗が届いた時点の会話を shownIdRef で当てると、切り替え直後の窓で取り違える
