@@ -86,13 +86,13 @@ function fakeRunner(
     async connect() {
       /* この試験群では使わない。 */
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       sessions.set(command.managerId, { managerId: command.managerId });
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

@@ -48,7 +48,7 @@ function fakeRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -56,9 +56,9 @@ function fakeRunner() {
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
+    async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
       delivered.push(command.message ?? '');
       alive.push({
         managerId: command.managerId,
@@ -68,7 +68,7 @@ function fakeRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(_managerId, text) {
       delivered.push(text);

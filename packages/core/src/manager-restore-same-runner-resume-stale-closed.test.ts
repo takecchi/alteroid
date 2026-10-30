@@ -92,10 +92,10 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string }> {
+      async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           managerId: command.managerId,
@@ -105,7 +105,7 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
           waiting: [],
           sessionId: command.sessionId,
         });
-        return {};
+        return { cwd: command.cwd };
       },
       async send() {
         return true;

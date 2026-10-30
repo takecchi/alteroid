@@ -47,14 +47,14 @@ function fakeRunner(): FakeRunner {
     async connect(listener) {
       onEvent = listener;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       // 400 は投げ直しても同じ答えが返る失敗（再試行の梯子へ載らず、戻せなかったものとして知らされる）。
       if (failResume.value) throw new RunnerHttpError('resume が失敗した (400)（試験用）', 400);
       resumes.push(command.managerId);
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

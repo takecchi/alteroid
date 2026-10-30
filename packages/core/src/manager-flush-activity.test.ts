@@ -43,11 +43,11 @@ function flushRunner(runnerId = 'runner-primary'): FlushRunner {
       // 見回りは末尾の口を名乗る runner からだけ読む（#5160）
       onEvent({ type: 'hello', runnerId, capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL] });
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

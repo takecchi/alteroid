@@ -60,10 +60,10 @@ function fakeRunner(sessionFingerprint: string) {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       alive.push({
         managerId: command.managerId,
@@ -75,7 +75,7 @@ function fakeRunner(sessionFingerprint: string) {
         tokenFingerprint: NEW_FP,
         liveBackgroundTasks: 0,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

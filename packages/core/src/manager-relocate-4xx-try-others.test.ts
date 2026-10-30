@@ -92,10 +92,10 @@ function fakeRunner(
     async connect() {
       /* hello の配送経路は使わない */
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       sessions.set(command.managerId, {
         managerId: command.managerId,
@@ -105,7 +105,7 @@ function fakeRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

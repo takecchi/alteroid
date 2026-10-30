@@ -36,10 +36,10 @@ describe('resume 中に abort で止めた委譲を、resume の失敗が lost �
       workspacePathKnown: true,
       workspacePath: '/work/project',
       async connect() {},
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(): Promise<{ cwd?: string }> {
+      async resume(): Promise<{ cwd: string }> {
         entered();
         await g;
         throw new RunnerHttpError('bad session', 400);

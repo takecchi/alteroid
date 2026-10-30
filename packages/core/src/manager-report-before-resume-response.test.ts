@@ -93,10 +93,10 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string; sessionGeneration?: string }> {
+      async resume(command): Promise<{ cwd: string; sessionGeneration?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           managerId: command.managerId,
@@ -106,7 +106,9 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
           waiting: [],
           sessionId: command.sessionId,
         });
-        return sessionGeneration === undefined ? {} : { sessionGeneration };
+        return sessionGeneration === undefined
+          ? { cwd: command.cwd }
+          : { cwd: command.cwd, sessionGeneration };
       },
       async send() {
         return true;
