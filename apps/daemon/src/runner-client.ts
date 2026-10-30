@@ -26,7 +26,7 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from '@alteroid/core';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
@@ -1449,12 +1449,19 @@ function requestOverSocket(
   bodyIdleTimeoutMs: number,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
+    const signal = init.signal ?? undefined;
+    // 要求を作る前に見る: `fetch` は中断済みの合図ならすぐ拒否する。見ないと、中断済みでも要求が runner へ届いて実行される
+    if (signal?.aborted === true) {
+      reject(signal.reason);
+      return;
+    }
     const headers = new Headers(init.headers ?? {});
     const outgoing: Record<string, string> = {};
     headers.forEach((value, key) => {
       outgoing[key] = value;
     });
 
+    let response: IncomingMessage | undefined;
     const req = httpRequest(
       {
         socketPath,
@@ -1463,6 +1470,7 @@ function requestOverSocket(
         headers: outgoing,
       },
       (res) => {
+        response = res;
         // 本文の無通信の期限（#4691）: 壊すと本文の流れが失敗し、`text()` / `json()` / `read()` が失敗で返る
         res.setTimeout(bodyIdleTimeoutMs, () => {
           res.destroy(
@@ -1482,8 +1490,20 @@ function requestOverSocket(
     );
 
     req.on('error', reject);
-    const signal = init.signal;
-    if (signal) signal.addEventListener('abort', () => req.destroy(), { once: true });
+    if (signal !== undefined) {
+      // 理由なしの `req.destroy()` にしない: 見出しの前は理由が `socket hang up` に化け、本文の途中は本文の流れが理由の無い `aborted` で終わり、
+      // `fetch` の「中断の理由がそのまま伝わる」と食い違うため。応答の側も同じ理由で壊す（`req.destroy(reason)` だけでは本文の流れへ理由が届かない）
+      const onAbort = (): void => {
+        reject(signal.reason);
+        response?.destroy(signal.reason as Error);
+        req.destroy(signal.reason as Error);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      // 決着したら外す: 呼び手の合図は使い回されうるので、外さないと要求の数だけ listener が積まれる
+      req.once('close', () => {
+        signal.removeEventListener('abort', onAbort);
+      });
+    }
     if (typeof init.body === 'string') {
       req.write(init.body);
     } else if (init.body instanceof ReadableStream) {
