@@ -2,7 +2,7 @@ import { stdout } from './terminal-out.js';
 
 import {
   assessPermissionGrantStaleness,
-  describePermissionRuleBreadth,
+  describePermissionRuleBreadthText,
   PERMISSION_GRANT_STALE_DAYS,
 } from '@alteroid/core/cli-light';
 import type { PermissionGrant } from '@alteroid/core';
@@ -176,20 +176,9 @@ export async function permissionRemoveUnreadableCommand(
   );
 }
 
+// 文は core で作る: Web の許可の画面と一字一句そろえるため。頭の語は伏せ字を通した規則から取る
 function describeBreadth(rule: string): string {
-  const breadth = describePermissionRuleBreadth(rule);
-  switch (breadth.level) {
-    case 'exact':
-      return '完全一致（最も狭い。この文字列にしか一致しない）';
-    case 'narrow':
-      return `前方一致・狭い（固定 ${breadth.prefixWordCount} 語まで一致）`;
-    case 'medium':
-      return `前方一致・中間（固定 ${breadth.prefixWordCount} 語まで一致）`;
-    case 'broad':
-      return `前方一致・広い（固定 ${breadth.prefixWordCount} 語のみ——この語で始まるコマンドなら何でも通る）`;
-    case 'invalid':
-      return '⚠️ 規則が不正（照合されない。壊れている可能性がある）';
-  }
+  return describePermissionRuleBreadthText(rule, redactBody(rule));
 }
 
 function renderGrant(grant: PermissionGrant, now: Date): string {

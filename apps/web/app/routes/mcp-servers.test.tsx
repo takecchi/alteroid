@@ -191,17 +191,61 @@ describe('/mcp-servers 画面 — 差し替える', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
     const heading = await screen.findByText(
-      /MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（確認用の値 b{12}）/,
+      /MCP 連携の登録は保存したが、一部の実行環境へ反映できていない（登録の指紋 b{12}）/,
     );
+    expect(document.body.textContent).not.toContain('確認用の値');
     expect(heading.className).toContain('text-warn');
     expect(screen.queryByText(/MCP 連携の登録を差し替えた/)).toBeNull();
     expect(puts).toEqual([next]);
     expect(screen.getByText('足した: notion')).toBeTruthy();
     expect(screen.getByText('外した: linear')).toBeTruthy();
     const report = screen.getByLabelText('実行環境ごとの反映結果');
-    expect(report.textContent).toContain(`runner-1: 届いた（確認用の値 ${'b'.repeat(12)}）`);
+    expect(report.textContent).toContain(`runner-1: 届いた（指紋 ${'b'.repeat(12)}）`);
     expect(report.textContent).toContain('runner-2: 届かなかった — runner に届かなかった');
     expect(screen.getByText('いつから効くか: クローンの次のセッションから')).toBeTruthy();
+  });
+
+  async function saveWithRunners(runners: unknown[]) {
+    stubMcp({ put: { status: 200, body: { ...UPDATED, runners } } });
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    const editor = screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録');
+    fireEvent.change(editor, {
+      target: {
+        value: JSON.stringify({
+          mcpServers: { notion: { type: 'sse', url: 'https://example.com/sse' } },
+        }),
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+  }
+
+  it('全部届いたときは、登録の指紋の言い方で出る（指紋が返らない実行環境も）', async () => {
+    await saveWithRunners([
+      { runnerId: 'runner-1', ok: true, mcpServers: { names: ['x'], sha256: 'b'.repeat(12) } },
+      { runnerId: 'runner-3', ok: true },
+    ]);
+
+    await screen.findByText(
+      `MCP 連携の登録を差し替えた（登録の指紋 ${'b'.repeat(12)}。下の実行環境ごとの指紋と同じなら、同じ登録が届いている）。`,
+    );
+    const report = screen.getByLabelText('実行環境ごとの反映結果');
+    expect(report.textContent).toContain(`runner-1: 届いた（指紋 ${'b'.repeat(12)}）`);
+    expect(report.textContent).toContain('runner-3: 届いた（指紋は返らなかった）');
+    expect(document.body.textContent).not.toContain('確認用の値');
+  });
+
+  it('指紋が違う実行環境は、古い登録のままだと言う', async () => {
+    await saveWithRunners([
+      { runnerId: 'runner-2', ok: true, mcpServers: { names: ['x'], sha256: 'c'.repeat(12) } },
+    ]);
+
+    const report = await screen.findByLabelText('実行環境ごとの反映結果');
+    expect(report.textContent).toContain(
+      `runner-2: 届いたが指紋が違う（実行環境 ${'c'.repeat(12)} / 保存 ${'b'.repeat(12)}。古い登録のまま）`,
+    );
+    expect(document.body.textContent).not.toContain('確認用の値');
   });
 
   it('Ctrl + Enter は「保存する」と同じ（確認へ進むだけ）。確認の段では何もせず、確認を飛ばして送らない', async () => {
