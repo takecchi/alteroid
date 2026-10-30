@@ -1228,15 +1228,10 @@ export const profileEntrySchema = z.object({
 export const profileEntrySummarySchema = profileEntrySchema.omit({ script: true });
 
 // 本文を返す口は実行環境の持ち主だけが通る（`/access` とは資格が違う）: 鍵をまるごと運ぶ口のため。
-// `script` / `updatedAt` / `sha256` / `bytes` は消さない: 別々に配られる古い CLI と Web が1本の時代の応答をまだ読むため（deprecated）。
 export const profileResponseSchema = z.object({
   entries: z.array(profileEntrySchema),
   clone: profileComposedFingerprintSchema,
   runner: profileComposedFingerprintSchema,
-  script: z.string(),
-  updatedAt: z.string().optional(),
-  sha256: z.string().optional(),
-  bytes: z.number().optional(),
 });
 
 // 理由を本文で返す: シェルの構文エラーは行番号込みでしか直せないため。
