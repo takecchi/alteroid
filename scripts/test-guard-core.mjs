@@ -598,8 +598,20 @@ export function collectMatchingTestFiles(root, includeGlobs) {
   return all.filter((f) => includeGlobs.some((g) => path.matchesGlob(f, g)));
 }
 
+// 列挙してから読むまでに消えたファイルは飛ばす: 並んで走る試験が `.gitignore` 済みの置き場に probe を置いては消すので、ENOENT で落ちていた。
 export function readFilesForScan(root, relPaths) {
-  return relPaths.map((p) => ({ path: p, content: readFileSync(path.join(root, p), 'utf8') }));
+  const files = [];
+  for (const p of relPaths) {
+    let content;
+    try {
+      content = readFileSync(path.join(root, p), 'utf8');
+    } catch (err) {
+      if (err?.code === 'ENOENT') continue;
+      throw err;
+    }
+    files.push({ path: p, content });
+  }
+  return files;
 }
 
 // `readIncludeGlobs` の失敗や空の `include` も「判定できない」（`EXIT_SCAN_EMPTY`）へ倒す: 「見ていない」の入口を 1 つに絞るため。
