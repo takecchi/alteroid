@@ -1,4 +1,4 @@
-export const CODEX_PROTOCOL_VERSION = '0.164.0';
+export const CODEX_PROTOCOL_VERSION = '0.165.0';
 
 // "jsonrpc":"2.0" を付けない: app-server の JSONRPCMessage に jsonrpc の欄が無いため
 export type CodexRequestId = string | number;
