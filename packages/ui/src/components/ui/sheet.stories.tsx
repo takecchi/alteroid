@@ -28,7 +28,7 @@ export const Default: Story = {
       <SheetTrigger asChild>
         <Button>詳細を開く</Button>
       </SheetTrigger>
-      <SheetContent>
+      <SheetContent side="left">
         <SheetHeader>
           <SheetTitle>マネージャーの詳細</SheetTitle>
           <SheetDescription>現在の状態と設定を表示します。</SheetDescription>
