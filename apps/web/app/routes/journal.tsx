@@ -1,7 +1,7 @@
 import { LoadError } from '~/components/load-error';
 import { JournalTabs } from '~/components/group-tabs';
 import { Search } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
 import {
@@ -25,7 +25,7 @@ import {
   shiftForPrepend,
 } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
-import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
+import { useChipSelection } from '~/lib/use-chip-selection';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import type { JournalEntryType } from '@alteroid/logic';
 
@@ -40,49 +40,18 @@ const SEARCH_PARAM = 'q';
 // GET /journal?type= と同じ名前にしない: 1つの値と、複数値をカンマ区切りで詰めたものとでは意味が違うため
 const TYPES_SEARCH_PARAM = 'types';
 
-// 知らない値を selected に残さない: 型を JournalEntryType[] のまま保てず、対応するチップが無いので選択されているのにどのチップも押されて見えない状態になるため
-function parseSelectedTypes(raw: string | null): readonly JournalEntryType[] {
-  if (raw === null || raw === '') return [];
-  const result: JournalEntryType[] = [];
-  for (const part of raw.split(',')) {
-    if (part === '') continue;
-    if (!(JOURNAL_TYPES as readonly string[]).includes(part)) continue;
-    const type = part as JournalEntryType;
-    if (!result.includes(type)) result.push(type);
-  }
-  return result;
-}
-
 export default function Journal() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [headerRef, headerHeight] = useMeasuredHeight();
 
-  // 絞り込みを画面の state に閉じ込めない（正本は URL）: 開き直すと消え、戻るで戻れず、リンクで共有できないため
-  // replace: true にする: 打鍵やチップの操作ごとに履歴が積まれると「戻る」が使えなくなるため
-  // チップは debounce しない: 1回のクリックがそのまま1回の意図した操作で、検索語のような「入力の途中」が無いため
-  const [searchParams, replaceParams] = useReplaceSearchParams();
+  // 絞り込みを画面の state に閉じ込めない（正本は URL）。検索語は打鍵の途中があるので debounce し、チップはしない
   const [draft, setDraft, committed] = useSearchParamDraft(SEARCH_PARAM);
   const [retryNonce, setRetryNonce] = useState(0);
-  // useMemo で包み、生の文字列が変わらない限り同じ参照を返す: 描画のたびに selected が新しい配列になり、useJournalWindow の effect が毎回走り直すため
-  const rawTypes = searchParams.get(TYPES_SEARCH_PARAM);
-  const selected = useMemo(() => parseSelectedTypes(rawTypes), [rawTypes]);
-
-  function toggle(type: JournalEntryType) {
-    replaceParams((next) => {
-      const current = parseSelectedTypes(next.get(TYPES_SEARCH_PARAM));
-      const updated = current.includes(type)
-        ? current.filter((t) => t !== type)
-        : [...current, type];
-      if (updated.length === 0) next.delete(TYPES_SEARCH_PARAM);
-      else next.set(TYPES_SEARCH_PARAM, updated.join(','));
-    });
-  }
-
-  function clearSelected() {
-    replaceParams((next) => {
-      next.delete(TYPES_SEARCH_PARAM);
-    });
-  }
+  const {
+    selected,
+    toggle,
+    clear: clearSelected,
+  } = useChipSelection<JournalEntryType>(TYPES_SEARCH_PARAM, JOURNAL_TYPES);
 
   return (
     <Page
