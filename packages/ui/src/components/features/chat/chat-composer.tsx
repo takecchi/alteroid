@@ -231,6 +231,7 @@ export function ChatComposer({
                 rows={1}
                 data-chat-input
                 disabled={disabled}
+                aria-label="メッセージ"
                 aria-describedby={hintsVisible ? hintId : undefined}
                 maxHeight={MAX_HEIGHT}
                 className={cn(
