@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { clipWithEllipsis } from './excerpt.js';
+
 // HTTP の1要求の中で打った DB の問い合わせを数える器（#5089）。
 // 器の持ち主はデーモンの HTTP の口で、足し込むのは storage-pg のプール。core に置く: 両方が依存できる場所がここだけのため
 
@@ -71,7 +73,7 @@ function sqlHead(sql: string | undefined): string | undefined {
   if (sql === undefined) return undefined;
   const flat = sql.replace(/\s+/g, ' ').trim();
   if (flat === '') return undefined;
-  return flat.length > SQL_HEAD_CHARS ? `${flat.slice(0, SQL_HEAD_CHARS)}…` : flat;
+  return clipWithEllipsis(flat, SQL_HEAD_CHARS);
 }
 
 const storage = new AsyncLocalStorage<RequestTiming>();
