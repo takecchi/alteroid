@@ -98,6 +98,7 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
       async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

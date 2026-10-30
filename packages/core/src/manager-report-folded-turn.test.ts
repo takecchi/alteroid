@@ -122,6 +122,7 @@ async function runningManualSetup(
   };
   await stores.jobs.putJob(job);
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

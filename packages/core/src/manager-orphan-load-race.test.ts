@@ -120,6 +120,7 @@ function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void
         cwd: '/work/project',
         request: '調べ物',
         waiting: [],
+        liveBackgroundTasks: 0,
       }));
     },
     async transcript() {
@@ -341,6 +342,7 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       async list(): Promise<RunnerManagerState[]> {
         return [
           {
+            liveBackgroundTasks: 0,
             managerId,
             status: 'running',
             cwd: '/work/project',
@@ -446,6 +448,7 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
           cwd: '/work/project',
           request: '調べ物',
           waiting: [],
+          liveBackgroundTasks: 0,
         }));
       },
       async transcript() {

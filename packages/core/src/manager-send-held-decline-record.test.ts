@@ -29,11 +29,12 @@ const JOB: Job = {
 
 const MINUTE_MS = 60_000;
 
-// 背景処理の本数を後から変えられる偽の runner（`manager-send-held.test.ts` と同じ形）。`background` を undefined にすると本数を返さない古い runner になる。
+// 背景処理の本数を後から変えられる偽の runner（`manager-send-held.test.ts` と同じ形）。この試験は欄の無い古い runner を断り続ける材料にしていたが、欄は必須になった（#5763）ので、2 本残っている回を断り続ける材料にする。
 function fakeRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
-  const behavior: { background: number | undefined } = { background: undefined };
+  // 既定は 2 本残っている回（断り続ける）。
+  const behavior: { background: number } = { background: 2 };
 
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
@@ -45,6 +46,7 @@ function fakeRunner() {
     },
     async start(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -55,6 +57,7 @@ function fakeRunner() {
     },
     async resume(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -78,7 +81,7 @@ function fakeRunner() {
       return alive.map((state) => ({
         ...state,
         waiting: [],
-        ...(behavior.background === undefined ? {} : { liveBackgroundTasks: behavior.background }),
+        liveBackgroundTasks: behavior.background,
       }));
     },
     async transcript() {
@@ -182,7 +185,7 @@ describe('見回りの届け直しが同じ判定で断るだけの回は、断�
     await poll(s, 3);
     expect(await declineLines(s)).toBe(1);
 
-    // 本数が分からない状態から、背景処理が1本残っている状態へ変える（断る理由の文が変わる）
+    // 背景処理が2本残っている状態から、1本残っている状態へ変える（断る理由の文が変わる）
     s.fake.behavior.background = 1;
     await poll(s, 1);
     expect(await declineLines(s)).toBe(2);

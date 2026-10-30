@@ -1138,7 +1138,7 @@ class Host implements RunnerHost {
       if (
         state.status === 'running' ||
         state.status === 'waiting_human' ||
-        (state.liveBackgroundTasks ?? 0) > 0
+        state.liveBackgroundTasks > 0
       ) {
         active += 1;
       }
@@ -1230,7 +1230,7 @@ class Host implements RunnerHost {
     return (
       state.status === 'done' &&
       state.waiting.length === 0 &&
-      (state.liveBackgroundTasks ?? 0) === 0 &&
+      state.liveBackgroundTasks === 0 &&
       (state.liveBackgroundPeers ?? 0) === 0
     );
   }

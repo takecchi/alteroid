@@ -530,7 +530,7 @@ export interface ManagerSummary {
   /** `tokenGeneration` が定義されているときは欄ごと消える（測れているのに理由を出さない）。 */
   tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
   /**
-   * `undefined` は「0 本」ではなく「分からない」（未聴取・古い runner）。往復は足さず名簿の観測を
+   * `undefined` は「0 本」ではなく「分からない」（未聴取・状態が読めなかった委譲）。往復は足さず名簿の観測を
    * 読むだけなので、少し古いことがある。
    */
   liveBackgroundTasks?: number;
@@ -4301,7 +4301,8 @@ class Pool implements ManagerPool {
    * 確認待ち（`canUseTool`）と起こしっぱなしの背景処理が道連れになる。古い鍵のまま流し込むこともしない。
    *
    * - 背景処理は runner の応答の `liveBackgroundTasks` だけが材料: `report.awaitingBackground` は失敗で終わった回
-   *   （枠で終わった回）には立たない。欄が無い（古い runner）ときは「分からない」として断る（0 と読むと背景処理を黙って殺す）。
+   *   （枠で終わった回）には立たない。欄は runner が必ず返す。欄の無い応答（古い runner）は
+   *   スキーマが落とし、読めない委譲として断る側に数える（0 と読むと背景処理を黙って殺す）。
    * - `sessionId` が無いまま畳むと会話が切れる。
    *
    * 順序に依存している（`runner-stop-finish-order.test.ts` が固定）: `runner.stop()` は子プロセスを閉じた後に生ログを送り出し、
@@ -4422,11 +4423,7 @@ class Pool implements ManagerPool {
     const blockers: string[] = [];
     const waitingCount = Math.max(state.waiting.length, record.waiting.length);
     if (waitingCount > 0) blockers.push(`確認待ちが ${String(waitingCount)} 件残っている`);
-    if (state.liveBackgroundTasks === undefined) {
-      blockers.push(
-        '起こしっぱなしの背景処理が残っているか分からない（この runner の版は本数を返さない）',
-      );
-    } else if (state.liveBackgroundTasks > 0) {
+    if (state.liveBackgroundTasks > 0) {
       blockers.push(`起こしっぱなしの背景処理が ${String(state.liveBackgroundTasks)} 本残っている`);
     }
     if (record.job.sessionId === undefined) {
@@ -4437,15 +4434,12 @@ class Pool implements ManagerPool {
     }
     // 背景処理だけが理由で、話しかけたい伝言が待ちの上限を過ぎたときは背景処理ごと畳む: 背景処理が終わらない（dev サーバ・見張り）か、
     // 終わったのに静かなセッションへ変化が届かず本数が古いまま残ると、時間では解けず、古い鍵のまま居座るため。
-    // 確認待ち・走っているターン・本数が分からない回は畳まない（答えを待っているのはクローンで、分からないものは捨てない）。
+    // 確認待ち・走っているターン・状態が読めない回は畳まない（答えを待っているのはクローンで、分からないものは捨てない）。
     // 鍵の回転の回は、peer 以外の背景処理を待ちの上限（`rotationFoldDueAt`）まで待つ（#5044。#4850 は待たなかった）: 待つ間は鍵を使わず枠を焼かない。
     // 待たずに畳むと、長い検証は鍵が回るたびに途中で失われ、続けて回ると終わらない。上限を過ぎたら、終わらない背景処理（dev サーバ・見張り）とみなして畳む。
     // ここへ来るのは抱えている鍵が ready でない回だけ（ready なら下で旧セッションへ流して返る）。冷却中・失効・分からないは同じく畳む側に倒す。
     // peer だけなら待たない: peer は畳まずに預けて続くため（#4734）
-    const peersInBackground = Math.min(
-      state.liveBackgroundPeers ?? 0,
-      state.liveBackgroundTasks ?? 0,
-    );
+    const peersInBackground = Math.min(state.liveBackgroundPeers ?? 0, state.liveBackgroundTasks);
     const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
     // 断る回にも鍵の状態を言うために外へ出す: 言わないと、クローンはいつ送り直せばよいかを決められず、
     // 段1（ready なら届ける）で足りているのかを日誌から数えられない（#4441 の段2の判断材料）。
@@ -4480,7 +4474,7 @@ class Pool implements ManagerPool {
     // 残っている背景処理（peer を除く）が全部作業者（サブエージェント）で、抱えている鍵が使えないと分かっていれば待たない（#5109）:
     // 作業者は担当と同じ古い鍵で走るので、待っても進まず、本数だけが残って上限まで待つことになる（2026-10-20 の PARTY-6・MVP-4 は 16 分）。
     // テスト・ビルドのような子プロセスは鍵を使わずに最後まで走るので、今までどおり待つ。種類の分からない runner（欄が無い）も今までどおり待つ。
-    const nonPeerBackground = (state.liveBackgroundTasks ?? 0) - peersInBackground;
+    const nonPeerBackground = state.liveBackgroundTasks - peersInBackground;
     const agentsStuckOnUnusableKey =
       heldTokenUnusable &&
       state.liveBackgroundAgents !== undefined &&
@@ -4490,7 +4484,6 @@ class Pool implements ManagerPool {
       options.foldBackgroundIfHeldTokenNotReady === true &&
       options.rotationFoldDueAt !== undefined &&
       blockers.length === 1 &&
-      state.liveBackgroundTasks !== undefined &&
       nonPeerBackground > 0 &&
       !agentsStuckOnUnusableKey;
     const foldBackground =
@@ -4498,7 +4491,6 @@ class Pool implements ManagerPool {
         (options.foldBackgroundIfHeldTokenNotReady === true && !rotationWaiting) ||
         agentsStuckOnUnusableKey) &&
       blockers.length === 1 &&
-      state.liveBackgroundTasks !== undefined &&
       state.liveBackgroundTasks > 0
         ? state.liveBackgroundTasks
         : undefined;
@@ -4556,9 +4548,7 @@ class Pool implements ManagerPool {
           ...(held === undefined ? {} : { generation: held }),
           ...(heldTokenId === undefined ? {} : { heldTokenId }),
           ...(heldTokenState === undefined ? {} : { heldTokenState }),
-          ...(state.liveBackgroundTasks === undefined
-            ? {}
-            : { backgroundTasks: state.liveBackgroundTasks }),
+          backgroundTasks: state.liveBackgroundTasks,
           backgroundCommands: redactedBackgroundCommands(state.backgroundTaskCommands),
         },
       };

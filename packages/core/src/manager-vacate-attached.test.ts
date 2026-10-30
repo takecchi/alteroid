@@ -96,6 +96,7 @@ function fakeRunner(
       // 起こした瞬間にセッションを載せる: 空だと `sessionGone` 判定が「最初から居ない」で `true` になり、
       // 「確かめた停止」を試験したことにならない。
       sessions.set(command.managerId, {
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -106,6 +107,7 @@ function fakeRunner(
     },
     async resume(command): Promise<{ cwd: string }> {
       sessions.set(command.managerId, {
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

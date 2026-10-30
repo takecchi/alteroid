@@ -657,6 +657,7 @@ describe('旧 runner への問い合わせ（kind / askedAt を持たない /man
               cwd: '/workspace/mgr-legacy',
               request: '古い runner からの引き継ぎ',
               waiting: [{ requestId: 'req-legacy', summary: '許可してよいか' }],
+              liveBackgroundTasks: 0,
             },
           ],
         });
@@ -705,6 +706,7 @@ describe('旧 runner への問い合わせ（kind / askedAt を持たない /man
                   askedAt: '2026-08-24T00:00:00.000Z',
                 },
               ],
+              liveBackgroundTasks: 0,
             },
           ],
         });

@@ -51,6 +51,7 @@ function fakeRunner() {
     },
     async start(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -63,6 +64,7 @@ function fakeRunner() {
       resumes.push(command);
       if (behavior.resumeGate !== undefined) await behavior.resumeGate;
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

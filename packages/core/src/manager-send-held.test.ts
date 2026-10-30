@@ -67,6 +67,7 @@ function fakeRunner() {
     },
     async start(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -79,6 +80,7 @@ function fakeRunner() {
       if (behavior.failResume) throw new Error('resume が落ちた');
       resumes.push(command);
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

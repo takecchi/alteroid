@@ -145,6 +145,7 @@ async function setup(options: { names?: boolean; fileTimeoutMs?: number } = {}):
   await stores.jobs.putJob(job);
   const fake = fakeRunner({ names: options.names ?? true });
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

@@ -47,6 +47,7 @@ function fakeRunner() {
           cwd: '/work/mgr-a',
           request: '調べて',
           waiting: [],
+          liveBackgroundTasks: 0,
           sessionId: 'sess-a',
         },
       ];

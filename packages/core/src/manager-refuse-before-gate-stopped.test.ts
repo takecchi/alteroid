@@ -98,6 +98,7 @@ describe('併存の見送り（#refuseRelocationsBeforeGate）と abort の交�
       async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

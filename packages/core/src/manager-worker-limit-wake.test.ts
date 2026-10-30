@@ -50,6 +50,7 @@ function fakeRunner() {
     },
     async start(command): Promise<{ cwd: string }> {
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -61,6 +62,7 @@ function fakeRunner() {
     async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
       delivered.push(command.message ?? '');
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

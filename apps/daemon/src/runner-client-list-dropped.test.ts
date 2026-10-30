@@ -18,7 +18,14 @@ function fetchWithManagers(managers: unknown[]): typeof fetch {
 }
 
 const MANAGERS = [
-  { managerId: 'mgr-ok', status: 'running', cwd: '/workspace/a', request: '普通', waiting: [] },
+  {
+    managerId: 'mgr-ok',
+    status: 'running',
+    cwd: '/workspace/a',
+    request: '普通',
+    waiting: [],
+    liveBackgroundTasks: 0,
+  },
   {
     managerId: 'mgr-future',
     status: 'archiving',
@@ -86,5 +93,28 @@ describe('HttpRunner#listWithUnreadable() は、読めなかった委譲の mana
       expect(result.unreadableIds).toEqual(['mgr-future']);
     });
     expect(listing.join('\n')).toContain('こちらのスキーマに合わない 2 件を飛ばした');
+  });
+
+  it('liveBackgroundTasks の無い要素（古い runner）は、読めない扱いになり、0 本とは読まない（#5763）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://old.test',
+      token: TOKEN,
+      fetchFn: fetchWithManagers([
+        {
+          managerId: 'mgr-old',
+          status: 'done',
+          cwd: '/workspace/c',
+          request: '古い',
+          waiting: [],
+        },
+      ]),
+    });
+
+    const lines = await captureStderr(async () => {
+      const result = await listRunnerManagers(client);
+      expect(result.states).toEqual([]);
+      expect(result.unreadableIds).toEqual(['mgr-old']);
+    });
+    expect(lines.join('\n')).toContain('managerId=mgr-old 欄=liveBackgroundTasks');
   });
 });

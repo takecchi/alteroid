@@ -98,6 +98,7 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
       async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

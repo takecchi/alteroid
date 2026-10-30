@@ -104,6 +104,7 @@ function fakeRunner(runnerId: string): Fake {
     async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       sessions.set(command.managerId, {
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -190,6 +191,7 @@ async function askingSetup(leaseAgeMs: number, holderSeenAgoMs = 1_000) {
   fake.add(y.client);
   fake.setLastSeen('runner-x', holderSeenAgoMs);
   x.sessions.set('mgr-1', {
+    liveBackgroundTasks: 0,
     managerId: 'mgr-1',
     status: 'running',
     cwd: '/work/project',
@@ -203,6 +205,7 @@ async function askingSetup(leaseAgeMs: number, holderSeenAgoMs = 1_000) {
   await settle();
   // X 上のセッションが確認を出して待つ（runner 側の状態も waiting にしておく）。
   x.sessions.set('mgr-1', {
+    liveBackgroundTasks: 0,
     managerId: 'mgr-1',
     status: 'waiting_human',
     cwd: '/work/project',

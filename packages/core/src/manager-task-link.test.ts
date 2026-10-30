@@ -341,6 +341,7 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     // 再起動した別のプール。runner は done のセッションを持っている
     const rebooted = fakeRunner();
     rebooted.alive.push({
+      liveBackgroundTasks: 0,
       managerId: started.managerId,
       status: 'done',
       cwd: '/work/project',
