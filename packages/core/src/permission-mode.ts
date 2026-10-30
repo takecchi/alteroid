@@ -1,4 +1,4 @@
-import { placedEnvValue } from './placed-env.js';
+import { resolveEnumEnv } from './placed-env.js';
 
 /**
  * 判定を1か所に置くのは、層ごとに書き写すと「綴りの間違いは黙って既定へ倒さず落とす」が
@@ -23,13 +23,5 @@ export const DEFAULT_PERMISSION_MODE: PermissionModeName = 'auto';
 
 /** 不正な値は既定へ倒さず落とす: 綴りを間違えた持ち主が「確認が来ない」ことに気づけなくなるため。 */
 export function resolvePermissionModeFor(env: NodeJS.ProcessEnv, key: string): PermissionModeName {
-  const given = placedEnvValue(env, key);
-  if (given === null) return DEFAULT_PERMISSION_MODE;
-  if ((PERMISSION_MODES as readonly string[]).includes(given)) {
-    return given as PermissionModeName;
-  }
-  throw new Error(
-    `${key} の値が不正: ${given}` +
-      `（使えるのは ${PERMISSION_MODES.join(' / ')}。既定は ${DEFAULT_PERMISSION_MODE}）`,
-  );
+  return resolveEnumEnv(env, key, PERMISSION_MODES, DEFAULT_PERMISSION_MODE);
 }

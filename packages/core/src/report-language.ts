@@ -6,6 +6,8 @@
  * **知らせるだけで、止めない・断らない**（`block` を使わない）。
  */
 
+import { resolveEnumEnv } from './placed-env.js';
+
 export const REPORT_LANGUAGE_ENV = 'ALTEROID_REPORT_LANGUAGE';
 
 export const REPORT_LANGUAGE_VALUES = ['ja', 'off'] as const;
@@ -14,16 +16,9 @@ export type ReportLanguageMode = (typeof REPORT_LANGUAGE_VALUES)[number];
 // 既定は掛けない: 作者の運用スタイルを要件にしない（north_star 禁止2）
 export const DEFAULT_REPORT_LANGUAGE: ReportLanguageMode = 'off';
 
+// 綴り違いは黙って既定へ倒さず投げる: 持ち主が気づけないままにならないため（受け手が知らせない側へ倒して note に残す）
 export function resolveReportLanguage(env: NodeJS.ProcessEnv = process.env): ReportLanguageMode {
-  const given = env[REPORT_LANGUAGE_ENV]?.trim();
-  if (given === undefined || given.length === 0) return DEFAULT_REPORT_LANGUAGE;
-  if ((REPORT_LANGUAGE_VALUES as readonly string[]).includes(given)) {
-    return given as ReportLanguageMode;
-  }
-  // 綴り違いは黙って既定へ倒さず投げる: 持ち主が気づけないままにならないため（受け手が知らせない側へ倒して note に残す）
-  throw new Error(
-    `${REPORT_LANGUAGE_ENV} の値が不正: ${given}（使えるのは ${REPORT_LANGUAGE_VALUES.join(' / ')}。既定は ${DEFAULT_REPORT_LANGUAGE}）`,
-  );
+  return resolveEnumEnv(env, REPORT_LANGUAGE_ENV, REPORT_LANGUAGE_VALUES, DEFAULT_REPORT_LANGUAGE);
 }
 
 // 実効の値: 実行環境プロファイルの値を優先し、無ければ runner の env の値（`resolveEffectiveBashShapeGuard` と同じ作法）

@@ -1,3 +1,5 @@
+import { resolveEnumEnv } from './placed-env.js';
+
 export const BASH_GUARD_ENV = 'ALTEROID_BASH_GUARD';
 
 export const BASH_GUARD_VALUES = ['ask', 'deny', 'off'] as const;
@@ -15,15 +17,13 @@ export type BashShapeGuardMode = (typeof BASH_SHAPE_GUARD_VALUES)[number];
 // 既定は掛けない: 作者の運用スタイルを要件にしない（north_star 禁止2）。掛けたい器が env かプロファイルで開ける
 export const DEFAULT_BASH_SHAPE_GUARD: BashShapeGuardMode = 'off';
 
+// 綴り違いは黙って既定へ倒さず落とす: 持ち主が気づけないままにならないため
 export function resolveBashShapeGuard(env: NodeJS.ProcessEnv = process.env): BashShapeGuardMode {
-  const given = env[BASH_SHAPE_GUARD_ENV]?.trim();
-  if (given === undefined || given.length === 0) return DEFAULT_BASH_SHAPE_GUARD;
-  if ((BASH_SHAPE_GUARD_VALUES as readonly string[]).includes(given)) {
-    return given as BashShapeGuardMode;
-  }
-  // 綴り違いは黙って既定へ倒さず落とす: 持ち主が気づけないままにならないため
-  throw new Error(
-    `${BASH_SHAPE_GUARD_ENV} の値が不正: ${given}（使えるのは ${BASH_SHAPE_GUARD_VALUES.join(' / ')}。既定は ${DEFAULT_BASH_SHAPE_GUARD}）`,
+  return resolveEnumEnv(
+    env,
+    BASH_SHAPE_GUARD_ENV,
+    BASH_SHAPE_GUARD_VALUES,
+    DEFAULT_BASH_SHAPE_GUARD,
   );
 }
 
@@ -57,12 +57,7 @@ export function describeBashShapeGuard(
   }
 }
 
+// 綴り違いは黙って既定へ倒さず落とす: 持ち主が気づけないままにならないため
 export function resolveBashGuardMode(env: NodeJS.ProcessEnv = process.env): BashGuardMode {
-  const given = env[BASH_GUARD_ENV]?.trim();
-  if (given === undefined || given.length === 0) return DEFAULT_BASH_GUARD;
-  if ((BASH_GUARD_VALUES as readonly string[]).includes(given)) return given as BashGuardMode;
-  // 綴り違いは黙って既定へ倒さず落とす: 持ち主が気づけないままにならないため
-  throw new Error(
-    `${BASH_GUARD_ENV} の値が不正: ${given}（使えるのは ${BASH_GUARD_VALUES.join(' / ')}。既定は ${DEFAULT_BASH_GUARD}）`,
-  );
+  return resolveEnumEnv(env, BASH_GUARD_ENV, BASH_GUARD_VALUES, DEFAULT_BASH_GUARD);
 }
