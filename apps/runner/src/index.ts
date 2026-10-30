@@ -81,10 +81,8 @@ export function reportRetiredLayerProviderEnv(
 }
 
 // ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
-export function runnerIdOf(env: NodeJS.ProcessEnv = process.env): string {
-  const given = env.ALTEROID_RUNNER_ID;
-  if (given !== undefined && given.length > 0) return given;
-  return 'runner-primary';
+export function runnerIdOf(env: NodeJS.ProcessEnv): string {
+  return envValue(env, 'ALTEROID_RUNNER_ID') ?? 'runner-primary';
 }
 
 // 猶予は `railway/runner.json` の `drainingSeconds` と `compose.yaml` の `stop_grace_period` の写し: 実行中のプロセスからは読めないため。デーモン側と共有しない: Service ごとの設定で、片方だけ延ばす日があるため。
@@ -221,7 +219,7 @@ function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
 }
 
 // 両方置かれて食い違うときは黙って片方を選ばず落とす: 人間は「置いた」、runner は 401 を返し続け、どちらも正しいまま噛み合わないため。
-export function tokenSha256Of(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function tokenSha256Of(env: NodeJS.ProcessEnv): string | undefined {
   const given = envValue(env, 'ALTEROID_RUNNER_TOKEN_SHA256');
   const raw = envValue(env, 'ALTEROID_RUNNER_TOKEN');
   if (raw === undefined) return given;
@@ -247,7 +245,7 @@ function idOf(name: string, raw: string): number {
 
 // UID が runner 自身と同じなら落とす: 境界にならず、孤児の回収が runner 自身まで候補に入れるため。
 export function childUserOf(
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
   ownUid: number | undefined = process.getuid?.(),
 ): RunnerChildUser | undefined {
   const uid = envValue(env, 'ALTEROID_RUNNER_CHILD_UID');
@@ -348,10 +346,10 @@ function executableFile(path: string): boolean {
 }
 
 export async function main(): Promise<void> {
-  const runnerId = runnerIdOf();
+  const runnerId = runnerIdOf(process.env);
   const workspacePath = process.env.ALTEROID_WORKSPACE || process.cwd();
 
-  const tokenSha256 = tokenSha256Of();
+  const tokenSha256 = tokenSha256Of(process.env);
   if (tokenSha256 === undefined) {
     throw new Error(
       'ALTEROID_RUNNER_TOKEN が要る（制御面の本人確認。' +
@@ -361,7 +359,7 @@ export async function main(): Promise<void> {
   // `WITHHELD_ENV_KEYS` に頼らず、この器の環境からも消す: 二重の底にするため。
   delete process.env.ALTEROID_RUNNER_TOKEN;
 
-  const childUser = childUserOf();
+  const childUser = childUserOf(process.env);
   if (childUser !== undefined && process.getuid?.() !== 0) {
     throw new Error(
       'ALTEROID_RUNNER_CHILD_UID が指定されているが、UID を降ろす特権が無い。' +
@@ -369,10 +367,9 @@ export async function main(): Promise<void> {
     );
   }
 
+  const credentialDir = envValue(process.env, 'ALTEROID_CREDENTIAL_DIR');
   const credentials = createCredentialStore({
-    ...(envValue(process.env, 'ALTEROID_CREDENTIAL_DIR') === undefined
-      ? {}
-      : { dir: process.env.ALTEROID_CREDENTIAL_DIR as string }),
+    ...(credentialDir === undefined ? {} : { dir: credentialDir }),
     ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
     // 自分の env を種にしない: 冷却中の死んだ鍵が器に載り、デーモンが上書きするまでの窓で使われるため。空を渡すのは「省略」（`process.env`）と意味が違う。
     seed: {},
@@ -483,13 +480,15 @@ export async function main(): Promise<void> {
   const stopReclaimSweep =
     reclaimScan === undefined ? undefined : startReclaimSweep(taskBreakdownReader);
 
+  const managerModel = resolveManagerModel(process.env);
+  const workerModel = resolveWorkerModel(process.env);
   const app = createRunnerApp({
     host,
     outbox,
     tokenSha256,
     taskBreakdownReader,
-    managerModel: resolveManagerModel(process.env),
-    workerModel: resolveWorkerModel(process.env),
+    managerModel,
+    workerModel,
   });
   let stopping = false;
   // 畳みの間は、デーモンが取りに来る要求だけを通す（#4699。`shutdown-pickups.ts`）
@@ -585,7 +584,7 @@ export async function main(): Promise<void> {
                 : `${delegationSubreaper} -s`
             }`
       }` +
-      ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
+      ` / 帯: ${managerModel} → ${workerModel}）\n`,
   );
 }
 
