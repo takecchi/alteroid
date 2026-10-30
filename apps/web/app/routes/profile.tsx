@@ -1,4 +1,5 @@
 import { SettingsTabs } from '~/components/group-tabs';
+import { isNotFound } from '~/lib/is-not-found';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { describeScope, SCOPE_OPTIONS } from '~/lib/scope-labels';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
@@ -22,7 +23,6 @@ import {
   Textarea,
 } from '@alteroid/ui';
 import {
-  ApiError,
   ProfileRejectedError,
   ProfileChangedError,
   useProfile,
@@ -261,7 +261,7 @@ function EntryRow({
       onRemoved(entry.name, update);
     } catch (caught) {
       // 404 は失敗の注記にせず親へ渡す: 取り直しで行が消え、注記を出す先も無くなるため
-      if (caught instanceof ApiError && caught.status === 404) {
+      if (isNotFound(caught)) {
         onRemoved(entry.name, null);
       } else {
         setFailure(caught);

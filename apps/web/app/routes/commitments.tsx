@@ -4,6 +4,7 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { ReopenForm } from '~/components/reopen-form';
 import { clipRawValue } from '~/lib/clip-raw-value';
+import { isNotFound } from '~/lib/is-not-found';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -396,7 +397,7 @@ function HumanConversationBadge({ label, source }: { label: string; source: stri
     return <UnconfirmedBadge label={label} />;
   }
   if (single.error !== undefined) {
-    if (single.error instanceof ApiError && single.error.status === 404) {
+    if (isNotFound(single.error)) {
       return <Badge tone="accent">{label}</Badge>;
     }
     return <UnconfirmedBadge label={label} />;

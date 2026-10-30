@@ -3,11 +3,11 @@ import { useEffect, useRef, useState, type DragEvent } from 'react';
 
 import { LoadError } from '~/components/load-error';
 import { describeAttachmentFailure } from '~/lib/error-text';
+import { isNotFound } from '~/lib/is-not-found';
 import { saveBlob } from '~/lib/save-blob';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import {
-  ApiError,
   AttachmentGoneError,
   fetchAttachment,
   useApi,
@@ -55,9 +55,7 @@ const SEARCH_PARAM = 'q';
 const CONVERSATION_PARAM = 'conversation';
 
 function isGone(error: unknown): boolean {
-  return (
-    error instanceof AttachmentGoneError || (error instanceof ApiError && error.status === 404)
-  );
+  return error instanceof AttachmentGoneError || isNotFound(error);
 }
 
 export default function Files() {
