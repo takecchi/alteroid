@@ -421,7 +421,8 @@ function ConversationLink({
   source: string;
   preview: string;
 }) {
-  const flat = preview.replace(/\s+/g, ' ').trim();
+  // 伏せてから切る: 会話の書き出しは人間の発言で秘密を含みうる（会話一覧の display.body・CLI と同じ redactBody）
+  const flat = redactBody(preview).replace(/\s+/g, ' ').trim();
   const title =
     flat.length > CONVERSATION_TITLE_MAX ? `${flat.slice(0, CONVERSATION_TITLE_MAX)}…` : flat;
   return (
