@@ -23,6 +23,7 @@ import type { TopologySnapshot, TopologySnapshotManager } from './types.js';
 
 const NOW = Date.parse('2026-10-04T03:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
+const ASKED_AT = ago(60_000);
 
 function snapshot(patch: Partial<TopologySnapshot> = {}): TopologySnapshot {
   return {
@@ -510,8 +511,8 @@ describe('マネージャー', () => {
       status: 'waiting_human',
       runnerId: 'runner-1',
       waiting: [
-        { requestId: 'q1', summary: 'マージしてよいか' },
-        { requestId: 'q2', summary: '別件' },
+        { requestId: 'q1', kind: 'question', summary: 'マージしてよいか', askedAt: ASKED_AT },
+        { requestId: 'q2', kind: 'question', summary: '別件', askedAt: ASKED_AT },
       ],
     });
     expect(scene.label).toBe('abcdef12');
@@ -525,7 +526,7 @@ describe('マネージャー', () => {
 
   it('デーモンが切った返事待ち（waitingOmitted）も「ほか」に数える', () => {
     const scene = sceneOf({
-      waiting: [{ requestId: 'q1', summary: 'A' }],
+      waiting: [{ requestId: 'q1', kind: 'question', summary: 'A', askedAt: ASKED_AT }],
       waitingOmitted: 4,
     });
     expect(scene.details?.find((row) => row.label === '返事待ち')?.value).toBe('A（ほか 4 件）');
