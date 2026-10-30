@@ -21,8 +21,6 @@ import {
 } from '@alteroid/logic';
 import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
 
-export { JOURNAL_PAGE };
-
 interface JournalQueryParams {
   limit: number;
   type?: string;

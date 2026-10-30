@@ -1,4 +1,3 @@
-// `JOURNAL_PAGE` をここに持つ: 元は `@alteroid/swr` の `use-journal-window.ts`（react と swr を持つ）に在り、logic には無いため
 import type { JournalEntry } from '@alteroid/core';
 
 // 件数ではなく文字数で締める: `tool_use` の入力のような大きい行が並んだとき、何件で壊れるかが運任せになるため
