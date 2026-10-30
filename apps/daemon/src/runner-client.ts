@@ -444,6 +444,9 @@ class HttpRunner implements RunnerClient {
 
   readonly #droppedManagerKeys = new Set<string>();
 
+  // 走っている `/health` の読み（指紋の4つの口が分け合う）。済んだら外す: 値を覚え置くと、次の呼びが古い指紋を読むため
+  #healthInFlight: Promise<HealthBody> | null = null;
+
   get runnerIdKnown(): boolean {
     return this.#runnerIdKnown;
   }
@@ -978,9 +981,22 @@ class HttpRunner implements RunnerClient {
     };
   }
 
+  // 同時に重なった読みは、走っている1回の本文を分け合う（#5716）: 一覧の指紋は1台へ credentials・profile・mcpServers を同時に訊くため。
+  // 分け合った呼びは同じ時点の値を読み、その1回が落ちれば揃って落ちる。`identity()`・`resources()` は取り消し（`signal`）を呼び手ごとに持つので分け合わない
+  #readHealth(): Promise<HealthBody> {
+    if (this.#healthInFlight !== null) return this.#healthInFlight;
+    const reading = (async () => {
+      const response = await this.#call('GET', '/health');
+      return (await response.json()) as HealthBody;
+    })().finally(() => {
+      if (this.#healthInFlight === reading) this.#healthInFlight = null;
+    });
+    this.#healthInFlight = reading;
+    return reading;
+  }
+
   async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     return fingerprintsOf(body.credentials);
   }
 
@@ -993,8 +1009,7 @@ class HttpRunner implements RunnerClient {
   }
 
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外したプロファイルと一致」と読み、外したはずのプロファイルが runner に残り続けるため
     if (body.profile === undefined || body.profile === null) return undefined;
     const parsed = runnerProfileFingerprintSchema.safeParse(body.profile);
@@ -1010,8 +1025,7 @@ class HttpRunner implements RunnerClient {
 
   // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外した登録と一致」と読み、外したはずの登録が runner に残り続けるため
   async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     if (body.mcpServers === undefined || body.mcpServers === null) return undefined;
     const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
     if (!parsed.success) throw new Error('runner の /health の mcpServers の欄を読めなかった');
@@ -1041,8 +1055,7 @@ class HttpRunner implements RunnerClient {
 
   // 欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒さない）: 外したはずの plugin が runner に残り続けるため
   async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     if (body.plugins === undefined || body.plugins === null) return undefined;
     const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
     if (!parsed.success) throw new Error('runner の /health の plugins の欄を読めなかった');
