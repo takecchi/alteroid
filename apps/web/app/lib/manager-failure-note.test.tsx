@@ -19,7 +19,7 @@ describe('terminalFailureNote', () => {
     for (const status of ['failed', 'lost'] as const) {
       cleanup();
       renderNote(status);
-      expect(screen.getByText('この仕事はもう終わっている')).toBeTruthy();
+      expect(screen.getByText('このマネージャーはもう終わっている')).toBeTruthy();
       expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
       expect(
         screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
@@ -31,7 +31,7 @@ describe('terminalFailureNote', () => {
 
   it('stopped は「人間・クローンが明示的に停止させた」終端の言葉になる', () => {
     renderNote('stopped');
-    expect(screen.getByText('この仕事はもう終わっている')).toBeTruthy();
+    expect(screen.getByText('このマネージャーはもう終わっている')).toBeTruthy();
     expect(
       screen.getByText(/人間・クローンが明示的に停止させ、確かめたうえで既に終端している/),
     ).toBeTruthy();

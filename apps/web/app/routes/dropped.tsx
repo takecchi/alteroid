@@ -18,12 +18,12 @@ export default function Dropped() {
     >
       <Card>
         <CardHeader
-          title="失敗の一覧"
+          title="記録の失敗の一覧"
           subtitle="古いものが上、新しいものが下に並びます"
           action={data === undefined ? undefined : <Badge>{data.total}</Badge>}
         />
         <LoadError
-          what="失敗の一覧"
+          what="記録の失敗の一覧"
           error={error}
           onRetry={() => mutate()}
           retrying={isValidating}

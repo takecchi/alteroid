@@ -9,7 +9,7 @@ export function terminalFailureNote(status: ManagerStatus): ReactNode | null {
   if (status === 'failed' || status === 'lost') {
     return (
       <>
-        <strong className="font-medium">この仕事はもう終わっている</strong>
+        <strong className="font-medium">このマネージャーはもう終わっている</strong>
         。セッションそのものが、
         <strong className="font-medium">依頼者が望まない終わり方で既に終端している</strong>
         。続けたいなら話しかけて resume を試みるしかなく、届く保証は無い。
@@ -19,7 +19,7 @@ export function terminalFailureNote(status: ManagerStatus): ReactNode | null {
   if (status === 'stopped') {
     return (
       <>
-        <strong className="font-medium">この仕事はもう終わっている</strong>
+        <strong className="font-medium">このマネージャーはもう終わっている</strong>
         。このセッションは、その後
         <strong className="font-medium">
           人間・クローンが明示的に停止させ、確かめたうえで既に終端している

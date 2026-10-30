@@ -180,7 +180,7 @@ export function ApprovalAnswerCard({
       jobLink={
         approval.jobId !== undefined && approval.jobId !== null ? (
           <>
-            {'委譲: '}
+            {'マネージャー: '}
             <Link to={`/managers/${approval.jobId}`} className="hover:underline">
               詳細を見る
             </Link>

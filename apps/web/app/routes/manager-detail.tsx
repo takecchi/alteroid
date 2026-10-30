@@ -39,7 +39,7 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
 }
 
 // 依頼の全文（`manager.request`）を渡さない: header は `shrink-0` なので、長いと本文が画面の外へ押し出される。
-const PAGE_DESCRIPTION = 'この仕事1本の状態と、走行中に割り込む口。依頼の全文は下';
+const PAGE_DESCRIPTION = 'このマネージャー1体の状態と、走行中に割り込む口。依頼文の全文は下';
 
 const NOT_FOUND_DESCRIPTION = '指定されたマネージャーはありません';
 
@@ -185,7 +185,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             <Card>
               <CardHeader
                 title="このマネージャーが待っていること"
-                subtitle="答えるまでこの仕事だけが止まる"
+                subtitle="答えるまでこのマネージャーだけが止まる"
               />
               <ul>
                 {manager.waiting.map((request) => (
@@ -240,7 +240,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 function RequestCard({ request }: { request: string }) {
   return (
     <Card className="min-w-0">
-      <CardHeader title="依頼" subtitle="この仕事を起こしたときに渡した指示（全文）" />
+      <CardHeader title="依頼文" subtitle="このマネージャーを起こしたときに渡した指示（全文）" />
       <div className="max-h-72 min-w-0 overflow-y-auto px-4 py-3">
         <p className="text-sm break-words whitespace-pre-wrap">{redactBody(request)}</p>
       </div>
@@ -267,11 +267,12 @@ const SEND_OUTCOME_LABELS: Record<string, { label: string; reached: boolean }> =
     reached: true,
   },
   session_missing: {
-    label: '届いていない（担当がこの仕事の会話を持っておらず、入り直せなかった）',
+    label: '届いていない（担当がこのマネージャーの会話を持っておらず、入り直せなかった）',
     reached: false,
   },
   declined: {
-    label: '届けていない（世代が食い違う待機中の仕事を畳めなかったため、古い会話へも送らなかった）',
+    label:
+      '届けていない（世代が食い違う待機中のマネージャーを畳めなかったため、古い会話へも送らなかった）',
     reached: false,
   },
   unknown: { label: '届いたか確かめられなかった', reached: false },
@@ -584,7 +585,7 @@ function SendMessage({
         {noWayBack ? (
           <p id={REASON_ID} className="mb-2 text-xs text-destructive">
             <strong className="font-medium">送れない</strong>—
-            この仕事は戻る先（session_id）を持っておらず、送っても runner
+            このマネージャーは戻る先（session_id）を持っておらず、送っても runner
             へは何も飛ばない。続きが要るなら
             <strong className="font-medium">新しく起こし直すこと</strong>。
           </p>
