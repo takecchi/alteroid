@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 
-import type { Commitment } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -107,14 +106,14 @@ describe('measureStorageFootprint（積んだぶんだけ増える）', () => {
   });
 
   it('commitments: 未了と片付きは独立して数える（storedBytes/textBytes とも）', async () => {
-    const openEntry: Commitment = {
+    const openEntry = {
       id: 'c-open',
       at: '2026-09-20T00:00:00.000Z',
       origin: 'manager',
       source: 'mgr-1',
       body: randomBody(1_000),
     };
-    const closedEntry: Commitment = {
+    const closedEntry = {
       id: 'c-closed',
       at: '2026-09-19T00:00:00.000Z',
       origin: 'manager',
