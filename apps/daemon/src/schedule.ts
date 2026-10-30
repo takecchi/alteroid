@@ -36,42 +36,39 @@ export const DEFAULT_REPORT_LOOKBACK_DAYS = 3;
 // 後追いで遡る日数の上限（#4723）: 上限が無いと、遡る起点の日付が Invalid Date になり後追いが壊れるため。1年より前の日報を後から書かせる理由は無い
 export const MAX_REPORT_LOOKBACK_DAYS = 365;
 
+// 「HH:MM または off」の環境変数。未設定なら既定、off なら null、読めなければ注意を足して既定
+function readTimeOfDayEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  defaultAt: string,
+  notes: string[],
+): TimeOfDay | null {
+  const raw = placedEnvValue(env, name);
+  if (raw === null) return parseTimeOfDay(defaultAt);
+  if (OFF_SPELLINGS.has(raw.toLowerCase())) return null;
+  const parsed = parseTimeOfDay(raw);
+  if (parsed === null) {
+    notes.push(`${name}="${raw}" は HH:MM として読めないので既定 ${defaultAt} を使う`);
+    return parseTimeOfDay(defaultAt);
+  }
+  return parsed;
+}
+
 export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): ScheduleConfig {
   const notes: string[] = [];
 
-  const rawAt = placedEnvValue(env, 'ALTEROID_DAILY_REPORT_AT');
-  let dailyReportAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_DAILY_REPORT_AT);
-  if (rawAt !== null) {
-    if (OFF_SPELLINGS.has(rawAt.toLowerCase())) {
-      dailyReportAt = null;
-    } else {
-      const parsed = parseTimeOfDay(rawAt);
-      if (parsed === null) {
-        notes.push(
-          `ALTEROID_DAILY_REPORT_AT="${rawAt}" は HH:MM として読めないので既定 ${DEFAULT_DAILY_REPORT_AT} を使う`,
-        );
-      } else {
-        dailyReportAt = parsed;
-      }
-    }
-  }
-
-  const rawTidyAt = placedEnvValue(env, 'ALTEROID_MEMORY_TIDY_AT');
-  let memoryTidyAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_MEMORY_TIDY_AT);
-  if (rawTidyAt !== null) {
-    if (OFF_SPELLINGS.has(rawTidyAt.toLowerCase())) {
-      memoryTidyAt = null;
-    } else {
-      const parsed = parseTimeOfDay(rawTidyAt);
-      if (parsed === null) {
-        notes.push(
-          `ALTEROID_MEMORY_TIDY_AT="${rawTidyAt}" は HH:MM として読めないので既定 ${DEFAULT_MEMORY_TIDY_AT} を使う`,
-        );
-      } else {
-        memoryTidyAt = parsed;
-      }
-    }
-  }
+  const dailyReportAt = readTimeOfDayEnv(
+    env,
+    'ALTEROID_DAILY_REPORT_AT',
+    DEFAULT_DAILY_REPORT_AT,
+    notes,
+  );
+  const memoryTidyAt = readTimeOfDayEnv(
+    env,
+    'ALTEROID_MEMORY_TIDY_AT',
+    DEFAULT_MEMORY_TIDY_AT,
+    notes,
+  );
 
   const rawEvery = placedEnvValue(env, 'ALTEROID_INITIATIVE_EVERY');
   let initiativeEveryMinutes: number | null = DEFAULT_INITIATIVE_EVERY_MINUTES;

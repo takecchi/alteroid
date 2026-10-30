@@ -12,7 +12,11 @@ import {
   writeStderrLine,
 } from '@alteroid/core';
 
-import { readEveryMinutes, type EveryMinutesConfig } from './env-every-minutes.js';
+import {
+  clampedIntervalMs,
+  readEveryMinutes,
+  type EveryMinutesConfig,
+} from './env-every-minutes.js';
 import { startPeriodicRun } from './periodic-runner.js';
 
 export const ARCHIVE_FOLD_EVERY_ENV = 'ALTEROID_ARCHIVE_FOLD_EVERY';
@@ -21,9 +25,6 @@ export const DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES = 60;
 
 // `before` から猶予を引く: 書き込み（`#onPreCompact` の `archive()`）と掃除（この一周の `list()`）が競らないようにするため。
 export const ARCHIVE_FOLD_GRACE_MS = 10 * 60_000;
-
-// 上限は 2^31-1 ms: `setTimeout` はそれを超える遅延を 1ms へ倒し、畳み込みが全行走査を休みなく回してしまうため。
-export const MAX_ARCHIVE_FOLD_INTERVAL_MS = 2_147_483_647;
 
 // 下限は 1 分: これを許すと `0.00001` のような値で `setTimeout` が 1ms へ倒れ、畳み込みが全行走査を休みなく回すため。切り上げて採るのではなく既定へ倒す（添付の掃除の読み取りと同じ作法）。
 export const MIN_ARCHIVE_FOLD_EVERY_MINUTES = 1;
@@ -207,10 +208,7 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
       stop: () => {},
     };
   }
-  const interval = Math.min(
-    options.intervalMs ?? options.everyMinutes * 60_000,
-    MAX_ARCHIVE_FOLD_INTERVAL_MS,
-  );
+  const interval = clampedIntervalMs(options.intervalMs, options.everyMinutes);
 
   const foldOnce = (): Promise<FoldArchiveOnceResult | null> =>
     foldArchiveOnce({

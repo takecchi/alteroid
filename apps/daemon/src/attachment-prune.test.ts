@@ -8,12 +8,12 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import {
   DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
-  MAX_ATTACHMENT_PRUNE_INTERVAL_MS,
   MIN_ATTACHMENT_PRUNE_EVERY_MINUTES,
   readAttachmentPruneConfig,
   reportAttachmentPruned,
   startAttachmentPruning,
 } from './attachment-prune.js';
+import { MAX_TIMER_DELAY_MS } from './env-every-minutes.js';
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -216,7 +216,7 @@ describe('添付の掃除の周期は setTimeout の範囲に収まる（#3539�
   it('既定の60分は頭打ちに掛からず、そのまま 3_600_000 ms', async () => {
     const delays = await collectDelays({ everyMinutes: DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES });
     expect(delays).toEqual([3_600_000]);
-    expect(MAX_ATTACHMENT_PRUNE_INTERVAL_MS).toBe(2_147_483_647);
+    expect(MAX_TIMER_DELAY_MS).toBe(2_147_483_647);
   });
 });
 
