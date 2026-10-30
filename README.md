@@ -108,7 +108,7 @@ alteroid は、この「あなた」の席に **あなたの価値観を写し�
 
 ![記憶](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/memory.png)
 
-ほかに、承認待ち・未了の仕事・作業の進捗・マネージャー・日誌・日報・利用状況・スケジュールなどの画面があります
+ほかに、承認待ち・待ち行列・作業の進捗・マネージャー・日誌・日報・利用状況・スケジュールなどの画面があります
 （配置と接続先の決まり方は [apps/web/README.md](./apps/web/README.md)）。
 
 ## はじめる
