@@ -1,6 +1,7 @@
 import { FilterNote } from '~/components/filter-note';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { clipLine } from '~/lib/clip-line';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { duplicateParamNotices } from '~/lib/duplicate-param-notice';
 import { settingsDocumentTitle } from '~/lib/nav';
@@ -43,7 +44,6 @@ import { useManagers, useTokens, useUsage, type UsageQuery } from '@alteroid/swr
 import {
   describeAccountUsageView,
   formatDateTime,
-  redactBody,
   tokensHref,
   usageLayerLabel,
   usageSiteLabel,
@@ -157,9 +157,8 @@ interface IdLabels {
 
 // 伏せてから切る: 依頼文は人間が書いた本文で秘密を含みうる（一覧・CLI と同じ redactBody）。切ってから伏せると、途中で切れた秘密が形を外れて素で残る
 function shortenRequest(request: string): string {
-  const flat = redactBody(request).replace(/\s+/g, ' ').trim();
-  if (flat === '') return '（依頼文なし）';
-  return flat.length > 28 ? `${flat.slice(0, 28)}…` : flat;
+  const line = clipLine(request, 28);
+  return line === '' ? '（依頼文なし）' : line;
 }
 
 function FilterField({

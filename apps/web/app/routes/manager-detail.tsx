@@ -35,6 +35,7 @@ import {
 } from '@alteroid/logic';
 import { RemovedBody } from '~/components/load-error';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
+import { clipLine } from '~/lib/clip-line';
 import { isNotFound } from '~/lib/is-not-found';
 import { LeaveGuardScope, useIsMounted, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
@@ -902,8 +903,7 @@ function SendOutcomeNote({ note }: { note: { text: string; reached: boolean } | 
 const WAITING_LABEL_MAX = 20;
 
 function waitingLabel(summary: string): string {
-  const flat = redactBody(summary).replace(/\s+/g, ' ').trim();
-  return `「${flat.length > WAITING_LABEL_MAX ? `${flat.slice(0, WAITING_LABEL_MAX)}…` : flat}」`;
+  return `「${clipLine(summary, WAITING_LABEL_MAX)}」`;
 }
 
 function PermissionWaitingRow({

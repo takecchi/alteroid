@@ -2,10 +2,11 @@ import { useId, useState } from 'react';
 
 import { Badge, Button, ErrorNote, FieldHint, Input, Select } from '@alteroid/ui';
 import { useCloseTask, useMoveTask, useReopenTask } from '@alteroid/swr';
-import { formatDateTime, redactBody } from '@alteroid/logic';
+import { formatDateTime } from '@alteroid/logic';
 import type { Task, TaskPlacementInput } from '@alteroid/logic';
 
 import { ReopenForm } from '~/components/reopen-form';
+import { clipLine } from '~/lib/clip-line';
 import { useReportDirty } from '~/lib/leave-guard';
 
 // 状態の言い換えに生の値を併記する: 画面の語と CLI・クローンが使う語（queued など）を結べなくならないように。
@@ -65,14 +66,11 @@ export function TaskOriginBadge({ origin }: { origin: string }) {
 }
 
 function taskLabel(task: Task): string {
-  const flat = redactBody(task.title).replace(/\s+/g, ' ').trim();
-  return Array.from(flat).length > 20 ? `${Array.from(flat).slice(0, 20).join('')}…` : flat;
+  return clipLine(task.title, 20);
 }
 
 export function excerptOf(body: string, max = 120): string {
-  const flat = redactBody(body).replace(/\s+/g, ' ').trim();
-  const chars = Array.from(flat);
-  return chars.length > max ? `${chars.slice(0, max).join('')}…` : flat;
+  return clipLine(body, max);
 }
 
 type PlacementKind = TaskPlacementInput['kind'];
