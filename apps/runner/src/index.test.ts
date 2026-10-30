@@ -53,6 +53,13 @@ describe('tokenSha256Of', () => {
       undefined,
     );
   });
+
+  it('空白だけは未指定と同じ・前後の空白は落としてから畳む', () => {
+    expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: ' ', ALTEROID_RUNNER_TOKEN_SHA256: '\t' })).toBe(
+      undefined,
+    );
+    expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: ` ${TOKEN}\n` })).toBe(TOKEN_SHA256);
+  });
 });
 
 describe('器の起動スクリプト', () => {
@@ -280,6 +287,26 @@ describe('listenPlanOf（待ち受けの口）', () => {
       kind: 'tcp',
       port: 4518,
       hostname: '127.0.0.1',
+    });
+  });
+
+  it('空白だけのポート・BIND は置いていないのと同じ（既定の 4518・127.0.0.1）', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '  ', ALTEROID_RUNNER_BIND: ' ' })).toEqual({
+      kind: 'tcp',
+      port: 4518,
+      hostname: '127.0.0.1',
+    });
+  });
+
+  it('前後の空白は落として読む（ポート・BIND・ソケット）', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: ' 4600 ', ALTEROID_RUNNER_BIND: ' :: ' })).toEqual({
+      kind: 'tcp',
+      port: 4600,
+      hostname: '::',
+    });
+    expect(listenPlanOf({ ALTEROID_RUNNER_SOCKET: ' /run/x.sock ' })).toMatchObject({
+      kind: 'socket',
+      path: '/run/x.sock',
     });
   });
 
