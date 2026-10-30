@@ -9,7 +9,7 @@
 # **ここで回す本数は `scripts/verify-core.mjs` の `STEPS` と同じ名前・同じ順序。**
 # 元々ここは `build` / `typecheck` / `lint` / `format:check` / `test` の5本しか
 # 回していなかった（このスクリプトへ切り出した最初のコミット）。`pnpm verify` の
-# 一式は9本あり、`web-bundle-node-traces` / `web-bundle-size` / `openapi` /
+# 一式は9本あり、`web-build-output` / `web-bundle-size` / `openapi` /
 # `sdk-quotes` の4本が抜けていた。**`GITHUB_TOKEN` で作った PR には `pull_request`
 # の CI が付かない**（GitHub の仕様）ので、この一式が唯一の検証記録になる回がある
 # — 5本しか回していないと、その回の PR は「4本を検査していないのに検査済みに
@@ -54,10 +54,8 @@ dir="${RUNNER_TEMP:-/tmp}"
 # が突き合わせて測る）。
 GATE_NAMES=(
   build
-  web-bundle-node-traces
+  web-build-output
   web-bundle-size
-  web-css-comment-classnames
-  web-css-no-inline-fonts
   openapi
   sdk-quotes
   stale-token-restart-advice
@@ -70,10 +68,8 @@ GATE_NAMES=(
 )
 GATE_COMMANDS=(
   'pnpm build'
-  'pnpm check:web-bundle-node-traces'
+  'pnpm check:web-build-output'
   'pnpm check:web-bundle-size'
-  'pnpm check:web-css-comment-classnames'
-  'pnpm check:web-css-no-inline-fonts'
   'git diff --exit-code HEAD -- apps/daemon/openapi.json'
   'pnpm check:sdk-quotes'
   'pnpm check:stale-token-restart-advice'

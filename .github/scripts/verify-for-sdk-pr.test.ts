@@ -179,7 +179,7 @@ describe('verify-for-sdk-pr.sh', () => {
 
     const buildSection = verifyMd.slice(
       verifyMd.indexOf('### `build`'),
-      verifyMd.indexOf('### `web-bundle-node-traces`'),
+      verifyMd.indexOf('### `web-build-output`'),
     );
     expect(buildSection).toContain('OK');
     expect(buildSection).toContain('末尾 10 行');

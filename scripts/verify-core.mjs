@@ -184,13 +184,21 @@ export function classifyTest({ status, signal, output }) {
 export const STEPS = [
   { name: 'build', cmd: 'pnpm', args: ['build'], workspaceConcurrencyEnv: true },
   {
-    name: 'web-bundle-node-traces',
+    name: 'web-build-output',
     cmd: 'pnpm',
-    args: ['check:web-bundle-node-traces'],
+    args: ['check:web-build-output'],
     hint:
-      'apps/web の生成物に Node 専用の痕跡（createRequire / node: 指定子 / process.cwd / Bun.）が' +
+      '落ちた門は出力の `check-web-…:` の行が言う。' +
+      '(node-traces) apps/web の生成物に Node 専用の痕跡（createRequire / node: 指定子 / process.cwd / Bun.）が' +
       '混入している。@alteroid/core（や他の依存）から値を import してサーバ専用コードを引き込んで' +
-      'いないか確認すること（scripts/check-web-bundle-node-traces.mjs の doc）',
+      'いないか確認すること（scripts/check-web-bundle-node-traces-core.mjs）。' +
+      '(css-comment-classnames) apps/web の生成物の CSS に、コメント中のプレースホルダ記法（`...` / `…`）が' +
+      'クラス名として拾われて生まれた不正な宣言が入っている。プレースホルダを含む例をコメントへ書いていないか' +
+      '確認すること（scripts/check-web-css-comment-classnames-core.mjs の doc、#317）。' +
+      '(css-no-inline-fonts) apps/web の生成物の CSS にフォントの base64 埋め込み（`data:font/`）が入っている。' +
+      'apps/web/vite.config.ts の build.assetsInlineLimit（フォントを埋め込まない関数形）が' +
+      '外れていないか確認すること。埋め込むと unicode-range に関係なく CSS と一緒に最初に' +
+      '落ちてくる（scripts/check-web-css-no-inline-fonts-core.mjs の doc）',
   },
   {
     name: 'web-bundle-size',
@@ -200,25 +208,6 @@ export const STEPS = [
       'apps/web の生成物（apps/web/build/client/assets/*.js）がチャンクのサイズ予算を超えた。' +
       '閾値を上げる前に、増えた原因を特定すること（scripts/check-web-bundle-size.mjs の doc、' +
       'https://github.com/takecchi/alteroid/issues/335）',
-  },
-  {
-    name: 'web-css-comment-classnames',
-    cmd: 'pnpm',
-    args: ['check:web-css-comment-classnames'],
-    hint:
-      'apps/web の生成物の CSS に、コメント中のプレースホルダ記法（`...` / `…`）がクラス名として' +
-      '拾われて生まれた不正な宣言が入っている。プレースホルダを含む例をコメントへ書いていないか' +
-      '確認すること（scripts/check-web-css-comment-classnames-core.mjs の doc、#317）',
-  },
-  {
-    name: 'web-css-no-inline-fonts',
-    cmd: 'pnpm',
-    args: ['check:web-css-no-inline-fonts'],
-    hint:
-      'apps/web の生成物の CSS にフォントの base64 埋め込み（`data:font/`）が入っている。' +
-      'apps/web/vite.config.ts の build.assetsInlineLimit（フォントを埋め込まない関数形）が' +
-      '外れていないか確認すること。埋め込むと unicode-range に関係なく CSS と一緒に最初に' +
-      '落ちてくる（scripts/check-web-css-no-inline-fonts-core.mjs の doc）',
   },
   {
     name: 'openapi',
