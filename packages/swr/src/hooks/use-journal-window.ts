@@ -132,8 +132,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
       )
       .then((data) => {
         if (cancelled) return;
-        // `applyOlderPage` ではなく `applyInitialPage` を使う: 初期読み込みは窓を持たず、`limit` 未満で返った時点で `'end'` と言い切れる
-        // （`applyOlderPage` だと日誌が短くても `'progress'` になり、「もっと遡る」を1回押すまで終端と地平の注記が出ない）
+        // `applyOlderPage` ではなく `applyInitialPage` を使う: 初期読み込みは窓を持たず、突き合わせる既存の行が無いため
         const applied = applyInitialPage(data.entries, data.next);
         olderCursorRef.current = data.next;
         setEntries(applied.entries);
