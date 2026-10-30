@@ -27,6 +27,7 @@ import {
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { GoneAfterReadNote } from '~/components/gone-after-read-note';
 import { isNotFound } from '~/lib/is-not-found';
+import { describeSlugError } from '~/lib/slug-error';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/memory-detail';
@@ -220,9 +221,11 @@ function MemoryDetailBody({ slug }: { slug: string }) {
         </div>
       </header>
 
-      {!missing && !goneAfterRead && <ErrorNote error={error} className="mb-3" />}
+      {!missing && !goneAfterRead && (
+        <ErrorNote error={describeSlugError(error)} className="mb-3" />
+      )}
       {goneAfterRead && <GoneAfterReadNote noun="記憶" />}
-      <ErrorNote error={failure} className="mb-3" />
+      <ErrorNote error={describeSlugError(failure)} className="mb-3" />
       {deleteConflict !== undefined && (
         <DeleteConflictNotice
           noun="記憶"

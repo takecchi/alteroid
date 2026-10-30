@@ -85,6 +85,17 @@ function docRoute(doc: MemoryDocument): Parameters<typeof stubFetch>[0] {
   };
 }
 
+describe('名前が不正（400）', () => {
+  it('サーバの「スラッグが不正」ではなく、画面の言葉（名前・使える形）で言う', async () => {
+    renderDetail('Bad Name', () => json({ error: '記憶のスラッグが不正' }, 400));
+
+    expect(
+      await screen.findByText(/記憶の名前が使えない形。使えるのは半角の英小文字・数字と/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/スラッグ/)).toBeNull();
+  });
+});
+
 describe('既定タブ', () => {
   it('記憶が在るときはプレビューが既定で、本文が Markdown として描かれる', async () => {
     renderDetail('notes', docRoute(DOC));

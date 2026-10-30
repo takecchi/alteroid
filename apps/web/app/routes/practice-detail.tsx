@@ -37,6 +37,7 @@ import {
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { GoneAfterReadNote } from '~/components/gone-after-read-note';
 import { isNotFound } from '~/lib/is-not-found';
+import { describeSlugError } from '~/lib/slug-error';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/practice-detail';
@@ -294,14 +295,16 @@ function PracticeDetailBody({ slug }: { slug: string }) {
         </div>
       </header>
 
-      {!missing && !goneAfterRead && !unreadable && <ErrorNote error={error} className="mb-3" />}
+      {!missing && !goneAfterRead && !unreadable && (
+        <ErrorNote error={describeSlugError(error)} className="mb-3" />
+      )}
       {unreadable && (
         <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
           このやり方は読めない形で入っている（中身を読めない）。書き直すか、外すことができる。書き直すと前の内容は残らない。
         </p>
       )}
       {goneAfterRead && <GoneAfterReadNote noun="やり方" />}
-      <ErrorNote error={failure} className="mb-3" />
+      <ErrorNote error={describeSlugError(failure)} className="mb-3" />
       {deleteConflict !== undefined && (
         <DeleteConflictNotice
           noun="やり方"
@@ -427,11 +430,11 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 保存のたびに版が1つ増える。削除しても版は消えない。
               </p>
               {historyError !== undefined && history !== undefined && (
-                <ErrorNote error={historyError} className="mb-2" />
+                <ErrorNote error={describeSlugError(historyError)} className="mb-2" />
               )}
               {historyError !== undefined && history === undefined ? (
                 // 取れなかったのを読み込み中と区別する: `Spinner` のまま回り続けないように。
-                <ErrorNote error={historyError} />
+                <ErrorNote error={describeSlugError(historyError)} />
               ) : history === undefined ? (
                 <Spinner />
               ) : historyVersions.length === 0 ? (
@@ -471,13 +474,13 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 </p>
               ) : historyDetailError !== undefined && historyDetail === undefined ? (
                 // 取れなかったのを読み込み中と区別する: `Spinner` のまま回り続けないように。
-                <ErrorNote error={historyDetailError} />
+                <ErrorNote error={describeSlugError(historyDetailError)} />
               ) : historyDetailLoading || historyDetail === undefined ? (
                 <Spinner />
               ) : (
                 <>
                   {historyDetailError !== undefined && (
-                    <ErrorNote error={historyDetailError} className="mb-2" />
+                    <ErrorNote error={describeSlugError(historyDetailError)} className="mb-2" />
                   )}
                   <p className="mb-2 text-xs text-muted-foreground">
                     版{historyDetail.version.version}（
