@@ -1,5 +1,6 @@
 import { LoadError } from '~/components/load-error';
 import { JournalTabs } from '~/components/group-tabs';
+import { OlderButton } from '~/components/older-button';
 import { Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
@@ -257,14 +258,9 @@ function JournalBody({
       {!isLoadingInitial && entries.length > 0 && (
         <div className="mt-3">
           {olderStatus === 'progress' && (
-            <button
-              type="button"
-              onClick={loadOlder}
-              disabled={isLoadingOlder}
-              className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
-            >
-              {isLoadingOlder ? '読み込み中…' : `もっと遡る（いま ${entries.length} 件）`}
-            </button>
+            <OlderButton loading={isLoadingOlder} onClick={loadOlder}>
+              {`もっと遡る（いま ${entries.length} 件）`}
+            </OlderButton>
           )}
           {olderStatus === 'end' && (
             <p className="py-2 text-center text-xs text-muted-foreground">

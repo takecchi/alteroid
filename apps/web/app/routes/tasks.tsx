@@ -5,6 +5,7 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import {
   AnchorSelect,
+  EditedBadge,
   PLACEMENT_KIND_LABEL,
   TaskCloseForm,
   TaskMoveControls,
@@ -22,7 +23,6 @@ import { unsentInput } from '~/lib/unsent-input';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
-  Badge,
   Button,
   Card,
   CardHeader,
@@ -171,9 +171,7 @@ function OpenRow({
         <span className="font-mono">{position}.</span>
         <TaskStatusBadge status={task.status} />
         <TaskOriginBadge origin={task.origin} />
-        {task.editedAt !== undefined && (
-          <Badge tone="neutral">編集済み（{formatDateTime(task.editedAt)}）</Badge>
-        )}
+        <EditedBadge editedAt={task.editedAt} />
         <span>{formatDateTime(task.createdAt)}</span>
         <span>({formatRelativeAtMinute(task.createdAt, now)})</span>
       </div>

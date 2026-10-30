@@ -131,6 +131,8 @@ describe('台帳の「片付けたものも見る」を URL に持つ（#4016）
     stubCommitments();
     renderAt('/commitments?closed=1&closed=0');
     expect(await screen.findByText('もう終わった')).toBeTruthy();
-    expect(screen.getByText(/指定が複数あるので、先頭の値を使っています/)).toBeTruthy();
+    expect(
+      screen.getByText('「片付けたものも見る」の指定が複数あるので、先頭の値を使っています'),
+    ).toBeTruthy();
   });
 });

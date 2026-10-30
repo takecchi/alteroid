@@ -17,6 +17,7 @@ import { denialActorTag, describeDenialFollowUp } from '@alteroid/core/denial-fo
 import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
+import { OlderButton } from '~/components/older-button';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { useChipSelection } from '~/lib/use-chip-selection';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
@@ -421,14 +422,9 @@ function ManagersList({
       {!isLoadingInitial && managers.length > 0 && (
         <div className="p-3">
           {olderStatus === 'progress' && (
-            <button
-              type="button"
-              onClick={loadOlder}
-              disabled={isLoadingOlder}
-              className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
-            >
-              {isLoadingOlder ? '読み込み中…' : `もっと見る（いま ${managers.length} 件）`}
-            </button>
+            <OlderButton loading={isLoadingOlder} onClick={loadOlder}>
+              {`もっと見る（いま ${managers.length} 件）`}
+            </OlderButton>
           )}
           {olderStatus === 'end' && (
             <p className="py-2 text-center text-xs text-muted-foreground">
@@ -442,14 +438,9 @@ function ManagersList({
                 これより古い委譲へ自動では進めない（いま {managers.length}{' '}
                 件。全部読み終えたのではない）。読んでいる間にその委譲の状態が動いて、絞りの外へ出た場合に起きる。もう一度押すか、絞りを変えて先頭から読み直すこと。
               </p>
-              <button
-                type="button"
-                onClick={loadOlder}
-                disabled={isLoadingOlder}
-                className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
-              >
-                {isLoadingOlder ? '読み込み中…' : 'もう一度試す'}
-              </button>
+              <OlderButton loading={isLoadingOlder} onClick={loadOlder}>
+                もう一度試す
+              </OlderButton>
             </div>
           )}
         </div>

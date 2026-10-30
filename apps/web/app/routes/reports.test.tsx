@@ -488,6 +488,24 @@ describe('日報', () => {
     expect(screen.getByRole('button', { name: 'もっと古い日報を読む' })).toBeTruthy();
   });
 
+  it('但し書きは件数つきの1文で、ボタンはその直後に並ぶ', async () => {
+    const reports = makeReports(60);
+    stubFetch((url) => {
+      if (url.endsWith('/reports') || url.includes('/reports?')) return json({ reports });
+      return undefined;
+    });
+
+    renderReports();
+
+    const note = await screen.findByText(
+      'いま読んでいるのは 60 件ぶん。これより古い日報があるかもしれない。',
+    );
+    expect(note.tagName).toBe('P');
+    expect(note.nextElementSibling).toBe(
+      screen.getByRole('button', { name: 'もっと古い日報を読む' }),
+    );
+  });
+
   it('上限に達していなければ、その但し書きは出さない（雑音にしない）', async () => {
     const reports = makeReports(3);
     stubFetch((url) => {

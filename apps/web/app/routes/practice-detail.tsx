@@ -35,6 +35,7 @@ import {
   useReportDirty,
 } from '~/lib/leave-guard';
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
+import { GoneAfterReadNote } from '~/components/gone-after-read-note';
 import { isNotFound } from '~/lib/is-not-found';
 import { useLatest } from '~/lib/use-latest';
 
@@ -299,11 +300,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
           このやり方は読めない形で入っている（中身を読めない）。書き直すか、外すことができる。書き直すと前の内容は残らない。
         </p>
       )}
-      {goneAfterRead && (
-        <p role="alert" className="mb-3 rounded-lg border border-warn/50 p-3 text-sm text-warn">
-          このやり方は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。
-        </p>
-      )}
+      {goneAfterRead && <GoneAfterReadNote noun="やり方" />}
       <ErrorNote error={failure} className="mb-3" />
       {deleteConflict !== undefined && (
         <DeleteConflictNotice

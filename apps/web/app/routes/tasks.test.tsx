@@ -3,6 +3,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { storeTestBaseUrl } from '~/test-support';
+import { formatDateTime } from '@alteroid/logic';
 
 import { renderTasksAt, stubTasksServer, task } from './tasks-test-helpers';
 
@@ -111,6 +112,38 @@ describe('/tasks 一覧', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/t-b'));
     expect(await screen.findByText(/末尾の一文/)).toBeTruthy();
     expect(screen.getByText('優先順 2 / 2')).toBeTruthy();
+  });
+});
+
+describe('「編集済み（日時）」の印', () => {
+  const EDITED = '2026-09-02T03:04:05.000Z';
+  const label = `編集済み（${formatDateTime(EDITED)}）`;
+
+  it('一覧: editedAt が在る行にだけ、日時つきで出る', async () => {
+    stubTasksServer([
+      task({ id: 't-a', title: '編集した仕事', editedAt: EDITED }),
+      task({ id: 't-b', title: '編集していない仕事' }),
+    ]);
+    renderTasksAt('/tasks');
+
+    await screen.findByText('編集した仕事');
+    expect(screen.getAllByText(label)).toHaveLength(1);
+    expect(screen.queryAllByText(/編集済み/)).toHaveLength(1);
+  });
+
+  it('詳細: editedAt が在るときだけ、日時つきで出る', async () => {
+    stubTasksServer([task({ id: 't-a', title: '編集した仕事', editedAt: EDITED })]);
+    renderTasksAt('/tasks/t-a');
+
+    expect(await screen.findByText(label)).toBeTruthy();
+  });
+
+  it('詳細: editedAt が無ければ出ない', async () => {
+    stubTasksServer([task({ id: 't-a', title: '編集していない仕事' })]);
+    renderTasksAt('/tasks/t-a');
+
+    await screen.findByText('順番待ち（queued）');
+    expect(screen.queryByText(/編集済み/)).toBeNull();
   });
 });
 
