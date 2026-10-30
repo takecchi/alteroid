@@ -60,56 +60,60 @@ describe('「無い」と「読めなかった」の区別（穴2）', () => {
     });
   });
 
-  describe('getTranscriptGrave / transcript-grave.json', () => {
-    it('ファイルが無いときは跡を残さず null を返す（陰性対照）', async () => {
+  describe('listTranscriptGraves / transcript-grave-queue.json', () => {
+    it('ファイルが無いときは跡を残さず空を返す（陰性対照）', async () => {
       const registry = new FsSessionRegistry(dir);
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await registry.getTranscriptGrave();
+        value = await registry.listTranscriptGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines).toHaveLength(0);
       expect(recentDroppedTraces()).toHaveLength(0);
     });
 
-    it('千切れた JSON を読んだときは跡を残して null を返す', async () => {
-      await writeFile(join(dir, 'transcript-grave.json'), '{"archiveId":"arc-1', 'utf8');
+    it('千切れた JSON を読んだときは跡を残して空を返す', async () => {
+      await writeFile(
+        join(dir, 'transcript-grave-queue.json'),
+        '{"graves":[{"archiveId":"arc-1',
+        'utf8',
+      );
       const registry = new FsSessionRegistry(dir);
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await registry.getTranscriptGrave();
+        value = await registry.listTranscriptGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines).toHaveLength(1);
       expect(lines[0]).toContain('生ログの墓標');
       expect(recentDroppedTraces()).toHaveLength(1);
     });
   });
 
-  describe('getLostSessionGrave / lost-session-grave.json', () => {
-    it('ファイルが無いときは跡を残さず null を返す（陰性対照）', async () => {
+  describe('listLostSessionGraves / lost-session-grave-queue.json', () => {
+    it('ファイルが無いときは跡を残さず空を返す（陰性対照）', async () => {
       const registry = new FsSessionRegistry(dir);
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await registry.getLostSessionGrave();
+        value = await registry.listLostSessionGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines).toHaveLength(0);
       expect(recentDroppedTraces()).toHaveLength(0);
     });
 
-    it('千切れた JSON を読んだときは跡を残して null を返す', async () => {
+    it('千切れた JSON を読んだときは跡を残して空を返す', async () => {
       await writeFile(
-        join(dir, 'lost-session-grave.json'),
-        '{"projectKey":"proj-1","sessionId":"sess-1',
+        join(dir, 'lost-session-grave-queue.json'),
+        '{"graves":[{"projectKey":"proj-1","sessionId":"sess-1',
         'utf8',
       );
       const registry = new FsSessionRegistry(dir);
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await registry.getLostSessionGrave();
+        value = await registry.listLostSessionGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines).toHaveLength(1);
       expect(lines[0]).toContain('再開素材を捨てた回の墓標');
       expect(recentDroppedTraces()).toHaveLength(1);
@@ -224,16 +228,16 @@ describe('clear() は変わらず4欄を消す（回帰確認）', () => {
 describe('墓標の compare-and-set（#1157）', () => {
   it('一致すれば下ろして true', async () => {
     const registry = new FsSessionRegistry(dir);
-    await registry.setTranscriptGrave({ archiveId: 'arc-1' });
+    await registry.addTranscriptGrave({ archiveId: 'arc-1' });
     expect(await registry.clearTranscriptGraveIf('arc-1')).toBe(true);
-    expect(await registry.getTranscriptGrave()).toBeNull();
+    expect(await registry.listTranscriptGraves()).toEqual([]);
   });
 
   it('⛔ 入れ替わっていたら下ろさず false（新しい墓標を消さない）', async () => {
     const registry = new FsSessionRegistry(dir);
-    await registry.setTranscriptGrave({ archiveId: 'arc-new' });
+    await registry.addTranscriptGrave({ archiveId: 'arc-new' });
     expect(await registry.clearTranscriptGraveIf('arc-old')).toBe(false);
-    expect(await registry.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
+    expect(await registry.listTranscriptGraves()).toEqual([{ archiveId: 'arc-new' }]);
   });
 
   it('そもそも無ければ false', async () => {
@@ -243,19 +247,18 @@ describe('墓標の compare-and-set（#1157）', () => {
 
   it('捨てた回の墓標も同じ形（一致すれば下ろして true）', async () => {
     const registry = new FsSessionRegistry(dir);
-    await registry.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-1' });
+    await registry.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-1' });
     expect(await registry.clearLostSessionGraveIf('sess-1')).toBe(true);
-    expect(await registry.getLostSessionGrave()).toBeNull();
+    expect(await registry.listLostSessionGraves()).toEqual([]);
   });
 
   it('⛔ 捨てた回の墓標も、入れ替わっていたら下ろさず false', async () => {
     const registry = new FsSessionRegistry(dir);
-    await registry.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
+    await registry.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
     expect(await registry.clearLostSessionGraveIf('sess-old')).toBe(false);
-    expect(await registry.getLostSessionGrave()).toEqual({
-      projectKey: 'proj',
-      sessionId: 'sess-new',
-    });
+    expect(await registry.listLostSessionGraves()).toEqual([
+      { projectKey: 'proj', sessionId: 'sess-new' },
+    ]);
   });
 
   describe('⛔ 墓標を立てる・下ろす書き込みは、clear…If の判定と rm の間に割り込まない（#3860）', () => {
@@ -349,13 +352,13 @@ describe('墓標の compare-and-set（#1157）', () => {
   it('⭐ 同じディレクトリを向いた2つのインスタンスから同時に下ろしても、下ろせるのは1つだけ', async () => {
     const a = new FsSessionRegistry(dir);
     const b = new FsSessionRegistry(dir);
-    await a.setTranscriptGrave({ archiveId: 'arc-1' });
+    await a.addTranscriptGrave({ archiveId: 'arc-1' });
     const [ra, rb] = await Promise.all([
       a.clearTranscriptGraveIf('arc-1'),
       b.clearTranscriptGraveIf('arc-1'),
     ]);
     expect([ra, rb].filter(Boolean)).toHaveLength(1);
-    expect(await a.getTranscriptGrave()).toBeNull();
+    expect(await a.listTranscriptGraves()).toEqual([]);
   });
 });
 

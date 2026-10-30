@@ -164,7 +164,7 @@ describe('foldArchiveOnce（issue #698）', () => {
     const stores = createMemoryStores();
     const row1 = await stores.archive.archive('sess-3', 'X'.repeat(40));
     await stores.archive.archive('sess-3', 'X'.repeat(40) + 'Y'.repeat(40));
-    await stores.sessions.setTranscriptGrave({ archiveId: row1.id });
+    await stores.sessions.addTranscriptGrave({ archiveId: row1.id });
 
     const result = await foldArchiveOnce({ stores, managers: noRunningManagers, now: FAR_FUTURE });
     assertInvariant(result);

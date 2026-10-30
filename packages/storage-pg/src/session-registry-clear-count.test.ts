@@ -76,7 +76,7 @@ describe('PgSessionRegistry — 墓標の蒸留失敗回数（#4752）', () => {
   });
 
   it('墓標の本体の突き合わせには触れない（数えても clear…If は今までどおり下ろす）', async () => {
-    await stores.sessions.setTranscriptGrave({ archiveId: 'a1' });
+    await stores.sessions.addTranscriptGrave({ archiveId: 'a1' });
     await stores.sessions.noteGraveDistillFailure('transcript', 'a1');
     expect(await stores.sessions.clearTranscriptGraveIf('a1')).toBe(true);
   });
