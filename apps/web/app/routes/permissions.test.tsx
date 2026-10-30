@@ -208,6 +208,31 @@ describe('/permissions 画面 — 取り消し', () => {
     await waitForCall(stub.calls, /\/permission-grants\/grant-a\/revoke$/);
   });
 
+  it('「取り消す」を押したら、焦点は確認の行の「本当に取り消す」へ移る（body に落ちない）', async () => {
+    stubGrants({ body: { grants: [grant({ id: 'grant-a' })] } });
+    await renderPermissions();
+    const trigger = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' });
+    trigger.focus();
+
+    fireEvent.click(trigger);
+
+    const confirm = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を本当に取り消す' });
+    await waitFor(() => expect(document.activeElement).toBe(confirm));
+  });
+
+  it('確認の行で「やめる」を押したら、焦点は「取り消す」へ戻る（body に落ちない）', async () => {
+    stubGrants({ body: { grants: [grant({ id: 'grant-a' })] } });
+    await renderPermissions();
+    fireEvent.click(screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' }));
+    const cancel = screen.getByRole('button', { name: 'やめる' });
+    cancel.focus();
+
+    fireEvent.click(cancel);
+
+    const trigger = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
   it('取り消し済みの行には取り消しボタンが無い', async () => {
     stubGrants({
       body: {

@@ -867,6 +867,20 @@ describe('停止は status で出し分けない', () => {
     expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
   });
 
+  it('確認を Esc で閉じたら、焦点は押していた「停止する」へ戻る（body に落ちない）', async () => {
+    const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
+    const trigger = await screen.findByRole('button', { name: '停止する' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByRole('alertdialog');
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(sent).toHaveLength(0);
+  });
+
   it('押しただけでは止まらず、確認で「やめる」なら止めずに閉じ、「停止する」で初めて DELETE が飛ぶ', async () => {
     const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
     fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
