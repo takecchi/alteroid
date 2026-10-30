@@ -11,11 +11,11 @@ const meta = {
   argTypes: {
     variant: {
       control: 'select',
-      options: ['default', 'secondary', 'outline', 'ghost', 'destructive', 'link'],
+      options: ['default', 'outline', 'ghost', 'destructive'],
     },
     size: {
       control: 'select',
-      options: ['xs', 'sm', 'default', 'lg', 'icon', 'icon-xs', 'icon-sm', 'icon-lg'],
+      options: ['sm', 'default', 'icon-sm'],
     },
     disabled: { control: 'boolean' },
     asChild: { table: { disable: true } },
@@ -33,11 +33,9 @@ export const Variants: Story = {
   render: () => (
     <div className="flex flex-wrap items-center gap-2">
       <Button>Default</Button>
-      <Button variant="secondary">Secondary</Button>
       <Button variant="outline">Outline</Button>
       <Button variant="ghost">Ghost</Button>
       <Button variant="destructive">Destructive</Button>
-      <Button variant="link">Link</Button>
     </div>
   ),
 };
@@ -45,11 +43,9 @@ export const Variants: Story = {
 export const Sizes: Story = {
   render: () => (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="xs">XS</Button>
       <Button size="sm">Small</Button>
       <Button>Default</Button>
-      <Button size="lg">Large</Button>
-      <Button size="icon" aria-label="メール">
+      <Button size="icon-sm" aria-label="メール">
         <Mail />
       </Button>
     </div>
