@@ -3,6 +3,7 @@ import { EditConflictBand } from '~/components/edit-conflict-band';
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { ReopenForm } from '~/components/reopen-form';
+import { clipLine } from '~/lib/clip-line';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { isNotFound } from '~/lib/is-not-found';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
@@ -423,9 +424,7 @@ function ConversationLink({
   preview: string;
 }) {
   // 伏せてから切る: 会話の書き出しは人間の発言で秘密を含みうる（会話一覧の display.body・CLI と同じ redactBody）
-  const flat = redactBody(preview).replace(/\s+/g, ' ').trim();
-  const title =
-    flat.length > CONVERSATION_TITLE_MAX ? `${flat.slice(0, CONVERSATION_TITLE_MAX)}…` : flat;
+  const title = clipLine(preview, CONVERSATION_TITLE_MAX);
   return (
     <Badge tone="accent">
       {label} /{' '}
@@ -913,8 +912,7 @@ function OrphanNote({
 const SNIPPET_MAX = 20;
 
 function snippet(body: string): string {
-  const flat = redactBody(body).replace(/\s+/g, ' ').trim();
-  return flat.length > SNIPPET_MAX ? `${flat.slice(0, SNIPPET_MAX)}…` : flat;
+  return clipLine(body, SNIPPET_MAX);
 }
 
 function OpenRow({

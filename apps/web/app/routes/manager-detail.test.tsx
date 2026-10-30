@@ -1876,3 +1876,35 @@ describe('「話しかける」と待ちの行は、send の戻り値を使い�
     expect(document.activeElement).toBe(textarea);
   });
 });
+
+describe('許可待ちの行の見出し（waitingLabel・20 字）の切れ目', () => {
+  const askedAt = '2026-08-23T01:00:00.000Z';
+
+  async function allowButtonName(summary: string): Promise<string> {
+    renderDetail({
+      ...BASE,
+      status: 'waiting_human',
+      waiting: [{ requestId: 'req-p', summary, kind: 'permission', askedAt }],
+    });
+    const button = await screen.findByRole('button', { name: /を許可$/ });
+    return button.getAttribute('aria-label') ?? '';
+  }
+
+  it('20 字ちょうどは切らない', async () => {
+    expect(await allowButtonName('あ'.repeat(20))).toBe(`「${'あ'.repeat(20)}」を許可`);
+  });
+
+  it('21 字は 20 字で切って「…」を付ける', async () => {
+    expect(await allowButtonName('あ'.repeat(21))).toBe(`「${'あ'.repeat(20)}…」を許可`);
+  });
+
+  it('ASCII の 21 字も 20 字で切り、空白の連なりは 1 つにつぶす', async () => {
+    expect(await allowButtonName(`a \n b${'c'.repeat(18)}d`)).toBe(
+      `「a b${'c'.repeat(17)}…」を許可`,
+    );
+  });
+
+  it('絵文字を含む文は、絵文字の途中で切らない（コードポイントで 20 字）', async () => {
+    expect(await allowButtonName(`${'あ'.repeat(19)}😀😀`)).toBe(`「${'あ'.repeat(19)}😀…」を許可`);
+  });
+});

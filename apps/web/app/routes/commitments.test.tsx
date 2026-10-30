@@ -1788,3 +1788,75 @@ describe('本文の編集欄の名前は行ごとに区別される（#3788）',
     expect((second as HTMLTextAreaElement).value).toBe('議事録を共有する');
   });
 });
+
+describe('行の見出し（snippet・20 字）と会話の名前（24 字）の切れ目', () => {
+  const CONV_ID = '2fa61863-1e7e-4bc2-acd6-48a465a650de';
+
+  async function openerName(body: string): Promise<string> {
+    stubCommitments([commitment({ origin: 'human', body })]);
+    renderPage();
+    const opener = await screen.findByRole('button', { name: /の本文を編集$/ });
+    return opener.getAttribute('aria-label') ?? '';
+  }
+
+  async function conversationLinkText(preview: string): Promise<string> {
+    stubFetch((url) => {
+      if (/\/conversations\/[^/?]+/.test(url)) return json({ error: 'not found' }, 404);
+      if (url.includes('/conversations')) {
+        return json({
+          conversations: [
+            {
+              conversationId: CONV_ID,
+              preview,
+              updatedAt: new Date().toISOString(),
+              messages: 1,
+            },
+          ],
+          hiddenByLimit: 0,
+        });
+      }
+      if (!url.includes('/commitments')) return undefined;
+      return json({ entries: [commitment({ origin: 'human', source: CONV_ID })] });
+    });
+    renderPageWithRouter();
+    const link = await screen.findByRole('link', { name: /^会話/ });
+    return link.textContent ?? '';
+  }
+
+  it('20 字ちょうどの本文は切らない', async () => {
+    expect(await openerName('あ'.repeat(20))).toBe(`「${'あ'.repeat(20)}」の本文を編集`);
+  });
+
+  it('21 字の本文は 20 字で切って「…」を付ける', async () => {
+    expect(await openerName('あ'.repeat(21))).toBe(`「${'あ'.repeat(20)}…」の本文を編集`);
+  });
+
+  it('ASCII の 21 字も 20 字で切り、改行と連続する空白は 1 つにつぶす', async () => {
+    expect(await openerName(`a\n\n  b${'c'.repeat(18)}d`)).toBe(
+      `「a b${'c'.repeat(17)}…」の本文を編集`,
+    );
+  });
+
+  it('絵文字を含む本文は、絵文字の途中で切らない（コードポイントで 20 字）', async () => {
+    // 19 字 + 絵文字 2 つ: UTF-16 では 21 単位で、20 単位目が絵文字の前半になる
+    expect(await openerName(`${'あ'.repeat(19)}😀😀`)).toBe(
+      `「${'あ'.repeat(19)}😀…」の本文を編集`,
+    );
+  });
+
+  it('会話の名前は 24 字ちょうどなら切らず、25 字なら 24 字で切る', async () => {
+    expect(await conversationLinkText('あ'.repeat(24))).toBe(`会話「${'あ'.repeat(24)}」`);
+    cleanup();
+    expect(await conversationLinkText('あ'.repeat(25))).toBe(`会話「${'あ'.repeat(24)}…」`);
+  });
+
+  it('会話の名前は絵文字の途中で切らない（コードポイントで 24 字）', async () => {
+    expect(await conversationLinkText(`${'あ'.repeat(23)}😀😀`)).toBe(
+      `会話「${'あ'.repeat(23)}😀…」`,
+    );
+  });
+
+  it('書き出しが空白だけの会話は「会話」とだけ出す', async () => {
+    expect(await conversationLinkText(' \n ')).toBe('会話');
+  });
+});

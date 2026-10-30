@@ -1339,3 +1339,45 @@ describe('/usage 画面のアカウント全体の残り', () => {
     expect(tokens).toContain('break-words');
   });
 });
+
+describe('/usage 画面の絞り込みの選択肢に出す依頼文の切れ目（28 字）', () => {
+  function renderWithRequest(request: string) {
+    stubUsage({
+      rows: [row(1, { managerId: 'mgr-clip' })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      managers: [{ managerId: 'mgr-clip', request, startedAt: '2026-08-14T01:00:00.000Z' }],
+    });
+    renderUsage();
+  }
+
+  it('28 字ちょうどは切らない', async () => {
+    renderWithRequest('あ'.repeat(28));
+    const option = await screen.findByRole('option', { name: /^あ+（/ });
+    expect(option.textContent?.startsWith(`${'あ'.repeat(28)}（`)).toBe(true);
+  });
+
+  it('29 字は 28 字で切って「…」を付ける', async () => {
+    renderWithRequest('あ'.repeat(29));
+    const option = await screen.findByRole('option', { name: /^あ+…（/ });
+    expect(option.textContent?.startsWith(`${'あ'.repeat(28)}…（`)).toBe(true);
+  });
+
+  it('ASCII でも 28 字ちょうどは切らず、29 字は切る', async () => {
+    renderWithRequest(`${'x'.repeat(28)}y`);
+    const option = await screen.findByRole('option', { name: /^x+…（/ });
+    expect(option.textContent?.startsWith(`${'x'.repeat(28)}…（`)).toBe(true);
+  });
+
+  it('空白だけの依頼文は「（依頼文なし）」と出す', async () => {
+    renderWithRequest(' \n\t ');
+    expect(await screen.findByRole('option', { name: /^（依頼文なし）（/ })).toBeTruthy();
+  });
+
+  it('絵文字を含む依頼文は、絵文字の途中で切らない（コードポイントで 28 字）', async () => {
+    // 27 字 + 絵文字 2 つ: UTF-16 では 29 単位で、28 単位目が絵文字の前半になる
+    renderWithRequest(`${'あ'.repeat(27)}😀😀`);
+    const option = await screen.findByRole('option', { name: /^あ+😀…（/ });
+    expect(option.textContent?.startsWith(`${'あ'.repeat(27)}😀…（`)).toBe(true);
+  });
+});

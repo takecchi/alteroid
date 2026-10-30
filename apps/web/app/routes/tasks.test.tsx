@@ -351,3 +351,51 @@ describe('task を並べ替える', () => {
     expect(options).toEqual(['基準の行を選ぶ', '2. 返事を待っている仕事', '3. 判断が要る仕事']);
   });
 });
+
+describe('一覧の見出し（title は 20 字・本文の抜粋は 120 字）の切れ目', () => {
+  async function closeButtonName(title: string): Promise<string> {
+    stubTasksServer([task({ id: 't-a', title, body: '本文' })]);
+    renderTasksAt('/tasks');
+    const button = await screen.findByRole('button', { name: /を閉じる$/ });
+    return button.getAttribute('aria-label') ?? '';
+  }
+
+  async function excerptText(body: string): Promise<string> {
+    stubTasksServer([task({ id: 't-a', title: '抜粋を見る仕事', body })]);
+    renderTasksAt('/tasks');
+    const item = (await screen.findByRole('link', { name: '抜粋を見る仕事' })).closest('li');
+    return item?.querySelector('p')?.textContent ?? '';
+  }
+
+  it('title が 20 字ちょうどなら切らず、21 字なら 20 字で切る', async () => {
+    expect(await closeButtonName('あ'.repeat(20))).toBe(`「${'あ'.repeat(20)}」を閉じる`);
+    cleanup();
+    expect(await closeButtonName('あ'.repeat(21))).toBe(`「${'あ'.repeat(20)}…」を閉じる`);
+  });
+
+  it('title の ASCII 21 字も 20 字で切り、空白の連なりは 1 つにつぶす', async () => {
+    expect(await closeButtonName(`a  b${'c'.repeat(17)}d`)).toBe(
+      `「a b${'c'.repeat(17)}…」を閉じる`,
+    );
+  });
+
+  it('title に絵文字を含むとき、絵文字の途中で切らない（コードポイントで 20 字）', async () => {
+    expect(await closeButtonName(`${'あ'.repeat(19)}😀😀`)).toBe(
+      `「${'あ'.repeat(19)}😀…」を閉じる`,
+    );
+  });
+
+  it('本文の抜粋は 120 字ちょうどなら切らず、121 字なら 120 字で切る', async () => {
+    expect(await excerptText('い'.repeat(120))).toBe('い'.repeat(120));
+    cleanup();
+    expect(await excerptText('い'.repeat(121))).toBe(`${'い'.repeat(120)}…`);
+  });
+
+  it('本文の ASCII 121 字も 120 字で切り、改行は空白 1 つにつぶす', async () => {
+    expect(await excerptText(`a\nb${'c'.repeat(118)}d`)).toBe(`a b${'c'.repeat(117)}…`);
+  });
+
+  it('本文に絵文字を含むとき、絵文字の途中で切らない（コードポイントで 120 字）', async () => {
+    expect(await excerptText(`${'い'.repeat(119)}😀😀`)).toBe(`${'い'.repeat(119)}😀…`);
+  });
+});
