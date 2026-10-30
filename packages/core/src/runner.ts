@@ -532,8 +532,6 @@ export interface RunnerHostOptions {
   attachmentsRoot?: string;
   // 閉じた担当の lease の世代を覚える数の上限。省略は `FENCE_MEMORY_MAX`。主にテスト用
   fenceMemoryMax?: number;
-  // 別口で受ける1つの大きいファイルの最大バイト（#4128 段3a）。省略は `readRunnerAttachmentStageLimit(env)`。主にテスト用
-  attachmentStageLimit?: number;
   // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
   outboxRoot?: string;
   outboxStagedRoot?: string;
@@ -917,8 +915,7 @@ class Host implements RunnerHost {
     this.#childUser = options.childUser;
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
     this.#fenceMemoryMax = options.fenceMemoryMax ?? FENCE_MEMORY_MAX;
-    this.attachmentStageLimit =
-      options.attachmentStageLimit ?? readRunnerAttachmentStageLimit(this.#env);
+    this.attachmentStageLimit = readRunnerAttachmentStageLimit(this.#env);
     this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
     this.#managerScratchRoot = options.managerScratchRoot ?? '/tmp';
     this.#outboxStagedRoot = options.outboxStagedRoot ?? defaultRunnerOutboxStagedRoot();
