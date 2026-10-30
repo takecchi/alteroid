@@ -96,6 +96,10 @@
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"
     },
+    "./token-cooldown-ms": {
+      "types": "./dist/token-cooldown-ms.d.ts",
+      "import": "./dist/token-cooldown-ms.js"
+    },
     "./threadpool-size": {
       "types": "./dist/threadpool-size.d.ts",
       "import": "./dist/threadpool-size.js"
