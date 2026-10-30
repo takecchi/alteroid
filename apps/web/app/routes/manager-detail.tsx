@@ -846,9 +846,7 @@ function DiagnosticsCard({ manager }: { manager: ManagerSummary }) {
   );
 }
 
-// `askedAt` が届かないときは何も描かない: 版のずれで古いデーモンが持たないことがあり、「不明」と書くほどの情報ではない。
-function AskedAtNote({ askedAt }: { askedAt: string | undefined }) {
-  if (askedAt === undefined) return null;
+function AskedAtNote({ askedAt }: { askedAt: string }) {
   return (
     <p className="mt-1 text-xs text-muted-foreground">
       {formatDateTime(askedAt)}（{formatRelative(askedAt)}）から
@@ -1053,7 +1051,7 @@ function QuestionWaitingRow({
   );
 }
 
-// `kind` が `'question'` 以外はすべて実行許可として扱う: api-client は実行時検証を持たず、版のずれで `undefined` や未知の文字列が届きうる。倒れ先は何も消さない2ボタン。
+// `kind` が `'question'` 以外はすべて実行許可として扱う: api-client は実行時検証を持たず、未知の文字列が届きうる。倒れ先は何も消さない2ボタン。
 function WaitingRow({
   id,
   requestId,
@@ -1066,8 +1064,8 @@ function WaitingRow({
   id: string;
   requestId: string;
   summary: string;
-  kind: ManagerSummary['waiting'][number]['kind'] | undefined;
-  askedAt: string | undefined;
+  kind: ManagerSummary['waiting'][number]['kind'];
+  askedAt: string;
   answerText: string;
   onAnswerChange: (update: (current: string) => string) => void;
 }) {

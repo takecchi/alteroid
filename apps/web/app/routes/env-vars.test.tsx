@@ -67,7 +67,7 @@ function stubCrudScreen(
         };
         rows = [...rows.filter((row) => row.name !== entry.name), updated];
       }
-      return json({ credentials: rows, runners });
+      return json({ credentials: rows, restartRequired: [], runners });
     }
     return json({ credentials: rows });
   }) as typeof fetch;

@@ -46,7 +46,7 @@ function stubServer(rows: unknown[]) {
       throw new TypeError(`Failed to fetch: ${request.url}`);
     if (request.method === 'PUT') {
       puts.push(((await request.json()) as { credentials: unknown[] }).credentials);
-      return json({ credentials: rows, runners: [] });
+      return json({ credentials: rows, restartRequired: [], runners: [] });
     }
     return json({ credentials: rows });
   }) as typeof fetch;
@@ -132,6 +132,7 @@ describe('環境変数の編集の窓 — 書きかけを確認なしに捨て�
       if (request.method === 'PUT')
         return json({
           credentials: [PLAIN_ROW],
+          restartRequired: [],
           runners: [{ runnerId: 'runner-2', ok: false, error: 'つながらない' }],
         });
       return json({ credentials: [PLAIN_ROW] });
