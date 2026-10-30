@@ -14,6 +14,7 @@ import {
 import { useProgress, useSchedule, useUsage } from '@alteroid/swr';
 import { formatRelative, redactBody, usageHref, type Progress } from '@alteroid/logic';
 
+import { StaleNote } from '~/components/stale-note';
 import { useMinuteNow } from '~/lib/use-now';
 import { shiftedUsageDate } from '~/lib/usage-dates';
 
@@ -70,11 +71,7 @@ function ProgressTile() {
         <Spinner />
       ) : (
         <>
-          {progress.error !== undefined && (
-            <HomeTileNote tone="warn">
-              最新の数を取り直せなかった。下の数は前に読めたときのもの。
-            </HomeTileNote>
-          )}
+          {progress.error !== undefined && <StaleNote what="数" />}
           <Stat
             label="実行中の任せた作業"
             value={String(data.inProgress.running)}
@@ -125,11 +122,7 @@ function NextRunTile() {
         <Spinner />
       ) : (
         <>
-          {schedule.error !== undefined && (
-            <HomeTileNote tone="warn">
-              最新の予定を取り直せなかった。下の予定は前に読めたときのもの。
-            </HomeTileNote>
-          )}
+          {schedule.error !== undefined && <StaleNote what="予定" />}
           <UnreadableScheduleNote unreadable={schedule.data.unreadable ?? []} className="mb-2" />
           {shown === undefined ? (
             <p className="text-sm text-muted-foreground">
@@ -190,11 +183,7 @@ function UsageTile() {
         )
       }
     >
-      {usage.error !== undefined && usage.data !== undefined && (
-        <HomeTileNote tone="warn">
-          最新の利用を取り直せなかった。下は前に読めたときのもの。
-        </HomeTileNote>
-      )}
+      {usage.error !== undefined && usage.data !== undefined && <StaleNote what="利用" />}
       {usage.error !== undefined && usage.data === undefined ? (
         <ErrorNote error={usage.error} />
       ) : usage.data === undefined ? (

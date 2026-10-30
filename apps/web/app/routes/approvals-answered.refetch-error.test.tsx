@@ -113,7 +113,10 @@ describe('承認の詳細のパネルの取り直しの失敗', () => {
     state.conversationFails = true;
     window.dispatchEvent(new Event('focus'));
 
-    expect(await screen.findByText(/最新の会話を取り直せなかった/)).toBeTruthy();
+    const note = await screen.findByText(
+      '最新の会話を取り直せなかった。下は前に読めたときのもの。',
+    );
+    expect(note.getAttribute('role')).toBe('status');
     expect(screen.getByText('クローンの発言')).toBeTruthy();
   });
 
@@ -135,7 +138,10 @@ describe('承認の詳細のパネルの取り直しの失敗', () => {
     state.traceFails = true;
     window.dispatchEvent(new Event('focus'));
 
-    expect(await screen.findByText(/最新の行動を取り直せなかった/)).toBeTruthy();
+    const note = await screen.findByText(
+      '最新の行動を取り直せなかった。下は前に読めたときのもの。',
+    );
+    expect(note.getAttribute('role')).toBe('status');
     expect(screen.getByText(/b に沿って進めた/)).toBeTruthy();
   });
 
