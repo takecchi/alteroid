@@ -276,7 +276,7 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
     expect(joined).toContain(
-      '旧台帳（廃止した。データベースにはテーブルが残っている）のこの会話の行',
+      '旧台帳（廃止した。どの読む口からも読めないが、データベースにはテーブルが残っている）のこの会話の行は消していない',
     );
   });
 
@@ -294,5 +294,74 @@ describe('DELETE /conversations/:id（#4218）', () => {
     }
     expect(joined).not.toMatch(/#\d+/);
     expect(joined).not.toMatch(/会話 id/);
+  });
+
+  it('その会話を起点とする Task（閉じた行も）の本文を写した日誌の行は、どの読む口からも出ない。別の会話の Task の行は残る（#4355 の Task 版）', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-x', `鍵は ${SECRET}`);
+    await seedConversation(stores, 'conv-keep', '残る会話');
+    const at = '2026-10-08T10:00:00.000Z';
+    const task = (id: string, conversationId: string, body: string) => ({
+      id,
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued' as const,
+      origin: 'human' as const,
+      source: conversationId,
+      originConversationId: conversationId,
+      title: id,
+      body,
+    });
+    await stores.tasks.add(task('human-1', 'conv-x', `鍵 ${SECRET} を確認`));
+    await stores.tasks.add(task('closed-1', 'conv-x', `鍵 ${SECRET} を閉じた`));
+    await stores.tasks.setStatus('closed-1', 'done', { reason: '済んだ', by: 'human', at });
+    await stores.tasks.add(task('human-keep', 'conv-keep', '残る仕事'));
+    // 台帳から移した行は起点の欄を持たず、会話は source にだけ残る
+    await stores.tasks.add({
+      ...task('migrated-1', 'conv-x', `鍵 ${SECRET} を忘れずに`),
+      origin: 'self' as const,
+      originConversationId: undefined,
+    });
+
+    const copy = await stores.journal.append({
+      type: 'decision',
+      decision: `人間が task を積んだ（human-1）: 鍵 ${SECRET} を確認`,
+      grounds: '人間が直接 API から積んだ',
+    });
+    const closedCopy = await stores.journal.append({
+      type: 'decision',
+      decision: `task を done にした（closed-1）: 鍵 ${SECRET} を閉じた`,
+      grounds: '閉じた行も隠す',
+    });
+    const migratedCopy = await stores.journal.append({
+      type: 'decision',
+      decision: `引き受けた仕事として台帳に載せた（migrated-1）: 鍵 ${SECRET} を忘れずに`,
+      grounds: '台帳から移した行の古い写し',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '人間が task を積んだ（human-keep）: 残る仕事',
+      grounds: '別の会話',
+    });
+    // 一括の行（id の並び）は拾わない
+    await stores.journal.append({
+      type: 'decision',
+      decision: '閉じた id: human-1 human-keep',
+      grounds: '一括',
+    });
+
+    expect((await request(app, 'DELETE', '/conversations/conv-x')).status).toBe(200);
+
+    const journal = await (await request(app, 'GET', '/journal?limit=500')).text();
+    expect(journal).not.toContain(SECRET);
+    expect(journal).toContain('残る仕事');
+    expect(journal).toContain('閉じた id: human-1 human-keep');
+    for (const entry of [copy, closedCopy, migratedCopy]) {
+      expect((await request(app, 'GET', `/journal/${entry.id}`)).status).toBe(404);
+    }
+    const searched = await (
+      await request(app, 'GET', `/journal?q=${encodeURIComponent('秘密の鍵')}&limit=50`)
+    ).text();
+    expect(searched).not.toContain(SECRET);
   });
 });

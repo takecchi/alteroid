@@ -140,7 +140,7 @@ describe('/progress 画面 — 4枚', () => {
     expect(backlog.getByText(/1時間未満 1 \/ 24時間未満 4 \/ 7日未満 6 \/ 7日以上 1/)).toBeTruthy();
     expect(
       backlog.getByText(
-        /未着手 6 \/ 返答済み（まだ閉じていない） 3 \/ マネージャーに任せた 2（他の項目と重なることがあります） \/ 人間からの依頼ではない 4/,
+        /未着手 6 \/ 返答済み（まだ閉じていない） 3 \/ マネージャーへ委譲した 2（他の項目と重なることがあります） \/ 人間からの依頼ではない 4/,
       ),
     ).toBeTruthy();
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
@@ -163,7 +163,7 @@ describe('/progress 画面 — 4枚', () => {
     ).toBeTruthy();
   });
 
-  it('実施中: 実行中・返答待ち・連絡が取れないと、最後の報告の古さ・まだ報告が無い依頼を出す', async () => {
+  it('実施中: 実行中・返答待ち・連絡が取れないと、最後の報告の古さ・まだ報告が無いマネージャーを出す', async () => {
     stubProgress();
     renderPage();
 
@@ -176,14 +176,16 @@ describe('/progress 画面 — 4枚', () => {
     expect(inProgress.getByText('1 件')).toBeTruthy();
   });
 
-  it('片付いた速度: 引き受けた・完了にした・終わった依頼（概算）を出す', async () => {
+  it('片付いた速度: 引き受けた・完了にした・終わったマネージャー（概算）を出す', async () => {
     stubProgress();
     renderPage();
 
     const throughput = within(await card('完了の速度'));
     expect(throughput.getByText('引き受けた').nextElementSibling?.textContent).toContain('4');
     expect(throughput.getByText('完了にした').nextElementSibling?.textContent).toContain('9');
-    expect(throughput.getByText('終わった依頼').nextElementSibling?.textContent).toContain('7');
+    expect(throughput.getByText('終わったマネージャー').nextElementSibling?.textContent).toContain(
+      '7',
+    );
     expect(throughput.getByText(/概算です/)).toBeTruthy();
     expect(throughput.queryByText(/updatedAt/)).toBeNull();
     expect(throughput.getByText(/直近 168 時間/)).toBeTruthy();
@@ -245,7 +247,7 @@ describe('/progress 画面 — 見込みの3状態と版のずれ', () => {
   });
 
   it.each([
-    ['closed_too_few', '期間内に完了した仕事が少なすぎて'],
+    ['closed_too_few', '期間内に完了した件数が少なすぎて'],
     ['tasks_younger_than_window', '記録が期間ぶんたまるまで待つか、短い期間に切り替えてください'],
   ])('unavailable（%s）: 時間を作らず、理由を文で出す', async (reason, text) => {
     stubProgress({
@@ -335,7 +337,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     );
   });
 
-  it('報告のある依頼が無いとき、最後の報告は「—」で、まだ報告が無い依頼は件数で出す', async () => {
+  it('報告したマネージャーが無いとき、最後の報告は「—」で、まだ報告が無いマネージャーは件数で出す', async () => {
     stubProgress({
       body: baseBody({
         inProgress: {
@@ -355,7 +357,9 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(
       inProgress.getByText('最後の報告（いちばん新しい）').nextElementSibling?.textContent,
     ).toMatch(/^—/);
-    expect(inProgress.getByText('まだ報告が無い依頼').nextElementSibling?.textContent).toBe('2 件');
+    expect(inProgress.getByText('まだ報告が無いマネージャー').nextElementSibling?.textContent).toBe(
+      '2 件',
+    );
   });
 
   it('completeness が 0 でなければ、数が少ない可能性の但し書きを出す', async () => {
@@ -397,8 +401,8 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     renderPage();
 
     const inProgress = within(await card('動いているマネージャー'));
-    expect(inProgress.getByText(/読み取れなかった依頼の記録が 2 件あります/)).toBeTruthy();
-    expect(inProgress.getByText(/依頼が無いわけではありません/)).toBeTruthy();
+    expect(inProgress.getByText(/読み取れなかったマネージャーの記録が 2 件あります/)).toBeTruthy();
+    expect(inProgress.getByText(/マネージャーが居ないわけではありません/)).toBeTruthy();
     const backlog = within(await card('待ち行列の未了'));
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
   });
@@ -416,7 +420,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
 
     for (const name of ['待ち行列の未了', '動いているマネージャー', '完了の速度']) {
       expect(
-        within(await card(name)).getByText(/読み取れなかった依頼の記録が 3 件あります/),
+        within(await card(name)).getByText(/読み取れなかったマネージャーの記録が 3 件あります/),
       ).toBeTruthy();
     }
   });
@@ -424,8 +428,10 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
   it('対照: unreadableJobs が 0 なら、未完了・完了の速度にも委譲の断りは出ない（#3929）', async () => {
     stubProgress();
     renderPage();
-    expect(within(await card('待ち行列の未了')).queryByText(/読み取れなかった依頼/)).toBeNull();
-    expect(within(await card('完了の速度')).queryByText(/読み取れなかった依頼/)).toBeNull();
+    expect(
+      within(await card('待ち行列の未了')).queryByText(/読み取れなかったマネージャー/),
+    ).toBeNull();
+    expect(within(await card('完了の速度')).queryByText(/読み取れなかったマネージャー/)).toBeNull();
   });
 
   it('未了が読めた範囲で0件で、読めない行があるなら、いちばん古いもの・中央値の理由を「読めた範囲に」にする（#3929）', async () => {
@@ -443,11 +449,11 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     renderPage();
 
     const backlog = within(await card('待ち行列の未了'));
-    expect(backlog.getAllByText(/読めた範囲に未完了の仕事が無いため/)).toHaveLength(2);
-    expect(backlog.queryByText(/（未完了の仕事が無いため）/)).toBeNull();
+    expect(backlog.getAllByText(/読めた範囲に待ち行列の未了が無いため/)).toHaveLength(2);
+    expect(backlog.queryByText(/（待ち行列の未了が無いため）/)).toBeNull();
   });
 
-  it('対照: 読めない行が無く0件なら、理由は「未完了の仕事が無いため」のまま（#3929）', async () => {
+  it('対照: 読めない行が無く0件なら、理由は「待ち行列の未了が無いため」のまま（#3929）', async () => {
     const base = baseBody();
     stubProgress({
       body: baseBody({
@@ -461,7 +467,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     renderPage();
 
     const backlog = within(await card('待ち行列の未了'));
-    expect(backlog.getAllByText(/（未完了の仕事が無いため）/)).toHaveLength(2);
+    expect(backlog.getAllByText(/（待ち行列の未了が無いため）/)).toHaveLength(2);
     expect(backlog.queryByText(/読めた範囲に/)).toBeNull();
   });
 
@@ -469,7 +475,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     stubProgress();
     renderPage();
     expect(
-      within(await card('動いているマネージャー')).queryByText(/読み取れなかった依頼/),
+      within(await card('動いているマネージャー')).queryByText(/読み取れなかったマネージャー/),
     ).toBeNull();
   });
 

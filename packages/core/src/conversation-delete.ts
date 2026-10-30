@@ -3,6 +3,7 @@ import { lookupConversation, type ConversationLookup } from './conversation-look
 import { removeInboxEventsAndStopDelivery } from './inbox-backlog.js';
 import { scanJournalPages } from './journal-scan.js';
 import type { Stores } from './store.js';
+import { isTaskOfConversation } from './task.js';
 
 /**
  * 人間との会話を論理削除する。
@@ -61,7 +62,7 @@ export const CONVERSATION_DELETE_REMAINS: readonly string[] = [
   '既に蒸留された記憶と、書き終えた日報に写っている可能性がある。記憶と日報を確かめること',
   'この会話に結び付いた承認（クローンからの質問と、許可の求め）の問いと答えの本文は消していない（決着の記録なので外さない）。承認待ちの一覧と各承認の画面で確かめること',
   '日誌のうち、どの会話のものか分からない行（クローンからの質問と答え・クローンの道具の呼び出しの入力・マネージャーとのやりとり）には、言い換えや写しが残りうる',
-  '旧台帳（廃止した。データベースにはテーブルが残っている）のこの会話の行と、その本文を写した日誌の行（積んだ・直した・片付けたとき）は、この削除では消していない。クローンが自分の言葉で言い換えて日誌に書いた行も、会話との結び付きが分からないので残りうる',
+  '旧台帳（廃止した。どの読む口からも読めないが、データベースにはテーブルが残っている）のこの会話の行は消していない。この会話の Task（旧台帳から移した行を含む）の本文を写した日誌の行は読む口から外したが、Task へ移さなかった旧台帳の行の写しと、クローンが自分の言葉で言い換えて日誌に書いた行は、会話との結び付きが分からないので残りうる',
   'クローンやマネージャーが作業ディレクトリへ写した添付は、時間で消えるまで残る',
 ];
 
@@ -82,6 +83,34 @@ export async function isConversationDeleted(
     return !deleted;
   });
   return deleted;
+}
+
+/**
+ * 墓標に id を持たせて外す: Task の本文を写した `decision` 行（`（<id>）` を含む）は会話 id を持たないので、墓標の会話 id では外れないため。
+ * 対象の Task は `TaskStore.removeForConversation` が消すのと同じ選び方（`isTaskOfConversation`。閉じた行も含む）。
+ * 台帳から移した Task は台帳の行と同じ id なので、移す前の台帳の行の写しもこれで隠れる。
+ *
+ * 一括で片付けた行（`閉じた id: a b c`）は拾わない: 本文を写しておらず、ほかの行の記録も含むため。
+ * 墓標を積む前に集める。集められなければ投げて、何も変えない（隠しそこねた写しを残したまま「消した」と言わないため）。
+ */
+async function findTaskCopies(
+  stores: Pick<Stores, 'journal' | 'tasks'>,
+  conversationId: string,
+): Promise<string[]> {
+  const { entries } = await stores.tasks.list({ includeClosed: true });
+  const markers = entries
+    .filter((task) => isTaskOfConversation(task, conversationId))
+    .map((task) => `（${task.id}）`);
+  if (markers.length === 0) return [];
+  const found: string[] = [];
+  await scanJournalPages(stores.journal, { types: ['decision'] }, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'decision') continue;
+      if (markers.some((marker) => entry.decision.includes(marker))) found.push(entry.id);
+    }
+    return true;
+  });
+  return found;
 }
 
 export async function deleteConversation(
@@ -105,11 +134,14 @@ export async function deleteConversation(
     return true;
   });
 
+  const hiddenEntryIds = await findTaskCopies(stores, conversationId);
+
   const tombstone = await stores.journal.append({
     type: 'conversation_deleted',
     deletedConversationId: conversationId,
     deletedBy,
     hiddenCount,
+    ...(hiddenEntryIds.length === 0 ? {} : { hiddenEntryIds }),
   });
 
   const incomplete: string[] = [];

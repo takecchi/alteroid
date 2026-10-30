@@ -272,8 +272,8 @@ function BacklogCard({ progress }: { progress: Progress }) {
   const partial = completeness.unreadable !== 0;
   // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
   const noneReason = partial
-    ? `${NONE}（読めた範囲に未完了の仕事が無いため）`
-    : `${NONE}（未完了の仕事が無いため）`;
+    ? `${NONE}（読めた範囲に待ち行列の未了が無いため）`
+    : `${NONE}（待ち行列の未了が無いため）`;
 
   const items: KeyValueItem[] = [
     {
@@ -294,13 +294,13 @@ function BacklogCard({ progress }: { progress: Progress }) {
     },
     {
       label: '進み具合',
-      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーに任せた ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)} / 判定できない（会話に結んでいない） ${count(byState.unjudgeable)}`,
+      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーへ委譲した ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)} / 判定できない（会話に結んでいない） ${count(byState.unjudgeable)}`,
     },
   ];
 
   return (
     <Card>
-      <CardHeader title="待ち行列の未了" subtitle="引き受けた仕事のうち、まだ終わっていないもの" />
+      <CardHeader title="待ち行列の未了" subtitle="待ち行列に載っていて、まだ終わっていないもの" />
       <Section>
         <StatRow>
           <Stat label="未完了" value={count(backlog.total)} unit="件" />
@@ -328,8 +328,9 @@ function UnreadableJobsNote({ progress }: { progress: Progress }) {
   if (unreadableJobs === 0) return null;
   return (
     <p className="text-xs text-warn">
-      読み取れなかった依頼の記録が {count(unreadableJobs)} 件あります。上の数は読み取れた分だけで、
-      実際はこれ以上です（記録が壊れているだけで、依頼が無いわけではありません）。
+      読み取れなかったマネージャーの記録が {count(unreadableJobs)}{' '}
+      件あります。上の数は読み取れた分だけで、
+      実際はこれ以上です（記録が壊れているだけで、マネージャーが居ないわけではありません）。
     </p>
   );
 }
@@ -342,17 +343,17 @@ function InProgressCard({ progress }: { progress: Progress }) {
       label: '最後の報告（いちばん古い）',
       value:
         lastReport.oldestAt === null
-          ? `${NONE}（報告のある依頼が無い）`
+          ? `${NONE}（報告したマネージャーが無い）`
           : atText(lastReport.oldestAt, observedAt),
     },
     {
       label: '最後の報告（いちばん新しい）',
       value:
         lastReport.newestAt === null
-          ? `${NONE}（報告のある依頼が無い）`
+          ? `${NONE}（報告したマネージャーが無い）`
           : atText(lastReport.newestAt, observedAt),
     },
-    { label: 'まだ報告が無い依頼', value: `${count(lastReport.withoutReport)} 件` },
+    { label: 'まだ報告が無いマネージャー', value: `${count(lastReport.withoutReport)} 件` },
   ];
   return (
     <Card>
@@ -369,7 +370,7 @@ function InProgressCard({ progress }: { progress: Progress }) {
         <KeyValueList items={items} labelWidth="8rem" />
         <UnreadableJobsNote progress={progress} />
         <p className="text-xs text-muted-foreground">
-          「実行中」は動かし始めたという意味で、進んでいるとは限りません。最後の報告が古い依頼は、
+          「実行中」は動かし始めたという意味で、進んでいるとは限りません。最後の報告が古いマネージャーは、
           マネージャーの一覧で確かめてください。
         </p>
       </Section>
@@ -390,7 +391,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
           <Stat label="引き受けた" value={count(throughput.tasksOpened)} unit="件" />
           <Stat label="完了にした" value={count(throughput.tasksClosed)} unit="件" />
           <Stat
-            label="終わった依頼"
+            label="終わったマネージャー"
             value={count(throughput.delegationsEnded.count)}
             unit="件"
             hint="最後に更新された時刻からの概算です（終わった正確な時刻は記録されていません）"
@@ -403,7 +404,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
 }
 
 const UNAVAILABLE_REASONS: Record<string, string> = {
-  closed_too_few: '期間内に完了した仕事が少なすぎて、計算できません。完了が増えると出ます',
+  closed_too_few: '期間内に完了した件数が少なすぎて、計算できません。完了が増えると出ます',
   tasks_younger_than_window:
     '記録の始まりが選んだ期間より新しいため、計算できません。記録が期間ぶんたまるまで待つか、短い期間に切り替えてください',
 };
@@ -425,7 +426,7 @@ function ForecastCard({ progress }: { progress: Progress }) {
     <Card>
       <CardHeader
         title="見込み"
-        subtitle="未完了の仕事がなくなるまでの目安です。約束ではありません"
+        subtitle="待ち行列の未了がなくなるまでの目安です。約束ではありません"
       />
       <Section>
         <ForecastBody forecast={forecast} />
