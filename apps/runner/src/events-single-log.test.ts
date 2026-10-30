@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { connectedSubscriber } from './outbox-subscribers.test-support.js';
 
 // #5692（段1）: まだ書いていない分を、`Outbox` の連番つきの1本の列にした。接続が持つのは「次に書く連番」だけで、
 // 書き込みが成功したときだけ進む。差し戻しが無いので、書けなかった出来事は同じ連番のまま列に残る。
@@ -147,7 +148,7 @@ describe('繋ぎ直しの最中の溜まり（#358 の計器。購読中は、�
     outbox.push(sessionEvent('2'));
     clock = 'T3';
     outbox.push(sessionEvent('3'));
-    const detachAll = outbox.attach(() => undefined);
+    const detachAll = connectedSubscriber(outbox, () => undefined);
     expect(outbox.pending).toBe(0);
     detachAll();
     // 書き終えた後ろに溜まりは無い
@@ -180,24 +181,23 @@ describe('繋ぎ直しの最中の溜まり（#358 の計器。購読中は、�
   });
 });
 
-describe('控えの上限は、まだ書いていない分と読み返し中の分を落とさない（#4669 の上限を、列の上で守る）', () => {
-  it('件数の上限を超えても、購読が次に書く連番より後ろは落とさず、書き終えて前に出た分から古い方を落とす', () => {
+describe('控えの上限は、まだ書いていない分を落とさない（#4669 の上限を、列の上で守る）', () => {
+  it('件数の上限を超えたら、書き終えた分を古い方から落とす（まだ書いていない分は残る）', () => {
     const outbox = new Outbox();
     const total = Outbox.SENT_HISTORY_LIMIT + 5;
     for (let i = 1; i <= total; i += 1) outbox.push(sessionEvent(String(i)));
-    const subscription = outbox.subscribe({ lastEventId: 0, wake: () => undefined });
-    // 読み返しの途中（1件目の手前に居る）で、後ろの分が書き終えた扱いになっても（別の経路が記録）、落とさない
-    outbox.recordSent(sessionEvent(String(total)), total, '2026-01-01T00:00:00.000Z');
-    expect(outbox.sentSince(0)).toHaveLength(total);
-
+    const subscription = outbox.subscribe({ wake: () => undefined });
     for (let item = subscription.peek(); item !== undefined; item = subscription.peek()) {
-      if (item.seq > 6) break;
+      if (item.seq > total - 2) break;
       subscription.wrote(item);
     }
-    // 1〜6 を書き終えて cursor が 7 へ進んだので、1〜5 は落とせる
-    expect(outbox.sentSince(0).map((item) => item.seq)[0]).toBe(6);
-    expect(outbox.sentSince(0)).toHaveLength(Outbox.SENT_HISTORY_LIMIT);
+    // 書き終えたのは total-2 まで。上限（1000件）を超えた古い分だけが落ち、後ろの2件は書いていないので残る
+    expect(outbox.sentSince(0).map((item) => item.seq)[0]).toBe(
+      total - 2 - Outbox.SENT_HISTORY_LIMIT + 1,
+    );
+    expect(outbox.pending).toBe(2);
     subscription.detach();
+    expect(outbox.pending).toBe(2);
   });
 
   it('まだ書いていない分は、件数がいくつ溜まっても落とさない（上限を置かない）', () => {
@@ -206,7 +206,7 @@ describe('控えの上限は、まだ書いていない分と読み返し中の�
     for (let i = 1; i <= total; i += 1) outbox.push(sessionEvent(String(i)));
     expect(outbox.pending).toBe(total);
     const delivered: number[] = [];
-    const detach = outbox.attach((_event, seq) => delivered.push(seq));
+    const detach = connectedSubscriber(outbox, (_event, seq) => delivered.push(seq));
     expect(delivered).toHaveLength(total);
     expect(delivered[0]).toBe(1);
     expect(delivered.at(-1)).toBe(total);
