@@ -33,7 +33,6 @@ useJournalWindowMock.mockImplementation((selected: readonly JournalEntryType[]) 
     loadOlder: () => {},
     horizonNote: undefined,
     isLoadingNewer: false,
-    newerBlocked: false,
     refreshNewer: () => {},
     prepended: false,
   };

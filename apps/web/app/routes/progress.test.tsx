@@ -347,7 +347,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       body: baseBody({
         backlog: {
           ...baseBody().backlog,
-          completeness: { unreadable: 2, trimmedClosed: 0 },
+          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
         },
       }),
     });
@@ -442,21 +442,8 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     }
   });
 
-  it('対照: unreadableJobs が 0 か欄が無いなら、未完了・完了の速度にも委譲の断りは出ない（#3929）', async () => {
+  it('対照: unreadableJobs が 0 なら、未完了・完了の速度にも委譲の断りは出ない（#3929）', async () => {
     stubProgress();
-    renderPage();
-    expect(within(await card('未完了の仕事')).queryByText(/読み取れなかった依頼/)).toBeNull();
-    expect(within(await card('完了の速度')).queryByText(/読み取れなかった依頼/)).toBeNull();
-    cleanup();
-
-    stubProgress({
-      body: baseBody({
-        backlog: {
-          ...baseBody().backlog,
-          completeness: { unreadable: 0, trimmedClosed: 0 },
-        },
-      }),
-    });
     renderPage();
     expect(within(await card('未完了の仕事')).queryByText(/読み取れなかった依頼/)).toBeNull();
     expect(within(await card('完了の速度')).queryByText(/読み取れなかった依頼/)).toBeNull();
@@ -501,19 +488,6 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
 
   it('対照: unreadableJobs が 0 なら、委譲の欠けの但し書きは出ない（#2345）', async () => {
     stubProgress();
-    renderPage();
-    expect(within(await card('実行中の依頼')).queryByText(/読み取れなかった依頼/)).toBeNull();
-  });
-
-  it('対照: 欄が無い（古いデーモン）でも、委譲の欠けの但し書きは出ず、落ちない（#2345）', async () => {
-    stubProgress({
-      body: baseBody({
-        backlog: {
-          ...baseBody().backlog,
-          completeness: { unreadable: 0, trimmedClosed: 0 },
-        },
-      }),
-    });
     renderPage();
     expect(within(await card('実行中の依頼')).queryByText(/読み取れなかった依頼/)).toBeNull();
   });

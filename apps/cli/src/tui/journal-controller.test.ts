@@ -309,7 +309,24 @@ describe('古い側と取りこぼし', () => {
     fire('open');
     await waitFor(() => ids().length === 7);
     expect(ids()).toEqual(['e7', 'e6', 'e5', 'e4', 'e3', 'e2', 'e1']);
-    expect(state().newerBlocked).toBe(false);
+    expect(state().newerFailed).toBe(false);
+  });
+
+  // 新しい側も `next` だけで続きを決める（#5720）: 新規0件で応答が limit ちょうどでも、limit を上げて撃ち直さない
+  it('繋ぎ直しの取り直しが既知の行だけを limit ちょうど返しても、limit を上げて撃ち直さない', async () => {
+    const { api, controller, state, ids, fire } = setup((a) => {
+      a.journalEntries = run(1);
+    });
+    controller.setFilter([], '', 1);
+    await waitFor(() => state().status === 'ready');
+    const before = api.journalListCalls.length;
+    fire('open');
+    await waitFor(() => api.journalListCalls.length === before + 1);
+    // 撃ち直すならマイクロタスクの中で次の呼びが起きる: 実時間を待たず、マクロタスクを1つ回してから数える
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(api.journalListCalls.length).toBe(before + 1);
+    expect(api.journalListCalls.at(-1)).toMatchObject({ since: minute(1), limit: 1 });
+    expect(ids()).toEqual(['e1']);
   });
 
   it('取り直しの最中に SSE の新着が届いても、間の行を取りこぼさない。新着は取り直しが済んでから先頭へ積む', async () => {

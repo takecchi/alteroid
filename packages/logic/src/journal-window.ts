@@ -35,14 +35,12 @@ export function mergeBack(existing: JournalEntry[], incoming: JournalEntry[]): M
 // daemon の zod スキーマを import せず写す: `apps/web` は daemon のスキーマに依存しない設計のため。daemon の上限を変えたら直す。
 export const JOURNAL_MAX_LIMIT = 1000;
 
-export type PageOutcome = 'progress' | 'end' | 'retryLarger' | 'blocked';
-
 export interface PageCursor {
   id: string;
   at: string;
 }
 
-// 古い側の頁の outcome は `next` だけで決める（件数からは推定しない）。デーモンは `next` を常に返す（#2623）。
+// 頁の続きは `next` だけで決める（件数からは推定しない。新しい側も `next` が尽きるまで辿る）。デーモンは `next` を常に返す（#2623）。
 // 欄の無い応答（`next` を返さなかった頃のデーモン）は型の外だが、`null` と同じ終端として止める: 続きの位置が無いので読み進めようが無い。
 export type OlderOutcome = 'progress' | 'end';
 
@@ -58,17 +56,6 @@ export async function readThroughUnreadable<
     page = await fetchAfter(page.next);
   }
   return page;
-}
-
-export function pageOutcome(
-  pageLength: number,
-  limit: number,
-  freshCount: number,
-  maxLimit: number = JOURNAL_MAX_LIMIT,
-): PageOutcome {
-  if (freshCount > 0) return 'progress';
-  if (pageLength < limit) return 'end';
-  return limit < maxLimit ? 'retryLarger' : 'blocked';
 }
 
 export function oldestAt(entries: JournalEntry[]): string | undefined {
@@ -113,15 +100,12 @@ export function olderPageQuery(
 
 export interface PageApplication {
   entries: JournalEntry[];
-  outcome: PageOutcome;
+  outcome: OlderOutcome;
   freshCount: number;
 }
 
 // `applyOlderPage` に通さない: 初期読み込みは窓が空で、`mergeBack` を通す意味が無い（`freshCount` は常に `page.length`）。
-export function applyInitialPage(
-  page: JournalEntry[],
-  next: PageCursor | null,
-): PageApplication & { outcome: OlderOutcome } {
+export function applyInitialPage(page: JournalEntry[], next: PageCursor | null): PageApplication {
   return {
     entries: page,
     outcome: outcomeFromNext(next),
@@ -133,7 +117,7 @@ export function applyOlderPage(
   existing: JournalEntry[],
   page: JournalEntry[],
   next: PageCursor | null,
-): PageApplication & { outcome: OlderOutcome } {
+): PageApplication {
   const merged = mergeBack(existing, page);
   return {
     entries: merged.entries,
@@ -145,7 +129,7 @@ export function applyOlderPage(
 // core の `describeJournalHorizonNote` を共有しない: 本体から値を import するとサーバ専用の層ごとバンドルへ入るため。
 // `end` 以外では出さない: 常に見える注記は、本当に終端に達したときの目印にならない。
 export function journalHorizonNote(
-  outcome: PageOutcome,
+  outcome: OlderOutcome,
   oldestAt: string | null | undefined,
   crossesHorizon: boolean | undefined,
 ): string | undefined {
@@ -159,7 +143,7 @@ export function journalHorizonNote(
 }
 
 export function journalHorizonNoteForHuman(
-  outcome: PageOutcome,
+  outcome: OlderOutcome,
   oldestAt: string | null | undefined,
   crossesHorizon: boolean | undefined,
   formatTime: (iso: string) => string,
@@ -169,20 +153,6 @@ export function journalHorizonNoteForHuman(
     `記録は ${formatTime(oldestAt as string)} より前には遡れない。それより前に本当に何も無かったのか、` +
     '記録が残っていないだけなのかは、この一覧だけからは区別できない。'
   );
-}
-
-export function applyNewerPage(
-  existing: JournalEntry[],
-  page: JournalEntry[],
-  limit: number,
-  maxLimit: number = JOURNAL_MAX_LIMIT,
-): PageApplication {
-  const merged = mergeFront(existing, page);
-  return {
-    entries: merged.entries,
-    outcome: pageOutcome(page.length, limit, merged.freshCount, maxLimit),
-    freshCount: merged.freshCount,
-  };
 }
 
 export function filterByType(

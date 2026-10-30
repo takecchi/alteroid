@@ -2,11 +2,9 @@
 import { matchesJournalSearch } from '@alteroid/core/cli-light';
 import type { JournalEntry } from '@alteroid/core';
 import {
-  JOURNAL_MAX_LIMIT,
   JOURNAL_PAGE,
   JOURNAL_TYPES,
   applyInitialPage,
-  applyNewerPage,
   applyOlderPage,
   journalHorizonNote,
   mergeFront,
@@ -37,7 +35,6 @@ export interface JournalState {
   readonly older: OlderStatus;
   readonly olderLoading: boolean;
   readonly horizonNote: string | undefined;
-  readonly newerBlocked: boolean;
   // 次の取りこぼし確認が成功しても下ろさない: `since` が穴を飛び越えるため（`load()` で読み直すと下りる）
   readonly newerFailed: boolean;
   readonly selectedId: string | null;
@@ -62,7 +59,6 @@ export const initialJournalState: JournalState = {
   older: 'progress',
   olderLoading: false,
   horizonNote: undefined,
-  newerBlocked: false,
   newerFailed: false,
   selectedId: null,
   follow: true,
@@ -139,7 +135,6 @@ export class JournalController {
       status: 'loading',
       error: null,
       olderLoading: false,
-      newerBlocked: false,
       newerFailed: false,
       view: 'list',
       detail: null,
@@ -267,48 +262,35 @@ export class JournalController {
     }
   }
 
-  private async refreshNewerAt(gen: number, startLimit: number): Promise<void> {
-    let limit = startLimit;
-    for (;;) {
-      const current = this.store.getSnapshot();
-      const query = newerPageQuery([...current.entries]);
-      if (query === undefined) return;
-      const first = await this.api.listJournal({
+  private async refreshNewerAt(gen: number, limit: number): Promise<void> {
+    const current = this.store.getSnapshot();
+    const query = newerPageQuery([...current.entries]);
+    if (query === undefined) return;
+    const first = await this.api.listJournal({
+      limit,
+      types: current.types,
+      q: current.q,
+      ...query,
+    });
+    if (gen !== this.gen) return;
+    const rows = [...first.entries];
+    let next = first.next;
+    while (next) {
+      const page = await this.api.listJournal({
         limit,
         types: current.types,
         q: current.q,
         ...query,
+        afterId: next.id,
+        afterAt: next.at,
       });
       if (gen !== this.gen) return;
-      const rows = [...first.entries];
-      let next = first.next;
-      while (next !== undefined && next !== null) {
-        const page = await this.api.listJournal({
-          limit,
-          types: current.types,
-          q: current.q,
-          ...query,
-          afterId: next.id,
-          afterAt: next.at,
-        });
-        if (gen !== this.gen) return;
-        rows.push(...page.entries);
-        next = page.next;
-      }
-      const latest = this.store.getSnapshot();
-      const page = applyNewerPage([...latest.entries], rows, limit);
-      // 継続点を終端まで辿ったなら、新着が無いのは「本当に無い」: 件数で推すのは継続点を返さない古いデーモンのときだけ
-      const applied =
-        first.next !== undefined && page.outcome !== 'progress'
-          ? { ...page, outcome: 'end' as const }
-          : page;
-      if (applied.outcome === 'retryLarger') {
-        limit = JOURNAL_MAX_LIMIT;
-        continue;
-      }
-      this.setEntries(applied.entries, { newerBlocked: applied.outcome === 'blocked' });
-      return;
+      rows.push(...page.entries);
+      next = page.next;
     }
+    // 継続点を終端まで辿ったので、ここで新着が無いのは「本当に無い」: 件数から続きを推さない
+    const latest = this.store.getSnapshot();
+    this.setEntries(mergeFront([...latest.entries], rows).entries);
   }
 
   private flushPending(): void {
