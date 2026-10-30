@@ -144,6 +144,33 @@ const FORCED_EXIT_MS = DAEMON_FORCED_EXIT_MS;
 const RUNNER_PICKUP_WAIT_LIMIT_MS = 50_000;
 const RUNNER_FAREWELL_DEADLINE_MS = RUNNER_PICKUP_WAIT_LIMIT_MS + 2_000;
 
+/**
+ * 停止の骨組み。`main` の中の閉じた関数だと、時計の位置を試験から押さえられないため切り出した（振る舞いは変えていない）。
+ * 強制 exit の時計は先頭（SIGTERM の瞬間）で張る: `drain` の await（日誌・台帳・runner・DB）が返らなくなっても、
+ * 注記どおり「SIGTERM から `forcedExitMs`」で落ちるため。後ろで張ると、固まった停止は器の SIGKILL まで居座る。
+ * 締切の起点も同じ瞬間にする: 最後の蒸留が長引いたぶんは待ちから引かれ、強制 exit を超えないため。
+ */
+export async function shutdownThenExit(deps: {
+  forcedExitMs: number;
+  farewellWindowMs: number;
+  drain: () => Promise<void>;
+  stopClone: (farewellDeadlineAt: number) => Promise<unknown>;
+  closeStorage: () => Promise<unknown>;
+}): Promise<void> {
+  const forced = setTimeout(() => process.exit(0), deps.forcedExitMs);
+  forced.unref();
+  const farewellDeadlineAt = Date.now() + deps.farewellWindowMs;
+
+  await deps.drain();
+  try {
+    await deps.stopClone(farewellDeadlineAt);
+  } catch {
+    // 片付けに失敗しても落ちる
+  }
+  await deps.closeStorage().catch(() => undefined);
+  process.exit(0);
+}
+
 // `server.timeout` は入れず TCP keepalive にする: `write()` のたびにタイマーがリセットされ、イベントが来ないだけの健全な長時間接続を切ってしまうため。
 const TCP_KEEPALIVE_DELAY_MS = 30_000;
 
@@ -1154,9 +1181,15 @@ export async function main(): Promise<void> {
   async function shutdown(): Promise<void> {
     if (stopping) return;
     stopping = true;
-    // 締切の起点は SIGTERM（この関数に入った瞬間）にする: 最後の蒸留が長引いたぶんは待ちから引かれ、強制 exit を超えないため。
-    const farewellDeadlineAt = Date.now() + RUNNER_FAREWELL_DEADLINE_MS;
-
+    await shutdownThenExit({
+      forcedExitMs: FORCED_EXIT_MS,
+      farewellWindowMs: RUNNER_FAREWELL_DEADLINE_MS,
+      drain: drainBeforeClone,
+      stopClone: (farewellDeadlineAt) => clone.stop({ farewellDeadlineAt }),
+      closeStorage: () => storage.close(),
+    });
+  }
+  async function drainBeforeClone(): Promise<void> {
     scheduler.stop();
     dailyReportCatchup?.stop();
     usagePoller.stop();
@@ -1180,16 +1213,6 @@ export async function main(): Promise<void> {
     await httpTiming.stop().catch(() => undefined);
     await runners.stop().catch(() => undefined);
     await clearRuntimeInfo(paths.state).catch(() => undefined);
-
-    const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
-    forced.unref();
-    try {
-      await clone.stop({ farewellDeadlineAt });
-    } catch {
-      // 片付けに失敗しても落ちる
-    }
-    await storage.close().catch(() => undefined);
-    process.exit(0);
   }
 
   await writeRuntimeInfo(paths.state, {
