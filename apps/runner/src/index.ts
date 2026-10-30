@@ -74,11 +74,10 @@ export function createRunnerHttpServer(
 }
 
 // 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
-export function reportRetiredLayerProviderEnv(
-  env: NodeJS.ProcessEnv,
-  write: (line: string) => void = writeStderrSync,
-): void {
-  for (const notice of retiredLayerProviderNotices(env, 'alteroid-runner')) write(`${notice}\n`);
+export function reportRetiredLayerProviderEnv(env: NodeJS.ProcessEnv): void {
+  for (const notice of retiredLayerProviderNotices(env, 'alteroid-runner')) {
+    writeStderrLine(`${notice}\n`);
+  }
 }
 
 // ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
@@ -106,28 +105,23 @@ const ARCHIVE_INLINE_AFTER_MS = PICKUP_WAIT_LIMIT_MS - 20_000;
 //   → 最大 53秒 出し箱の流し切り（`DRAIN_WAIT_MS` 3秒）→ 55秒 forced exit → 60秒 SIGKILL
 // `shutdown()` の待ちを 30秒で切らない: 未 push の確認・退避 ref の push の途中で exit すると、その作業が失われるため。
 
-export const DRAIN_POLL_INTERVAL_MS = 50;
-
 // タイムアウトしても投げない: 待ち切れなかった分は、この後 `formatOutboxShutdownReport` が残りとして報告するため。
-export async function waitForOutboxDrain(outbox: Outbox, maxWaitMs: number): Promise<void> {
+export async function waitForOutboxDrain(outbox: Outbox): Promise<void> {
   await waitForPickups({
     pending: () => outbox.pending,
     subscribed: () => outbox.subscribed,
-    deadlineAt: Date.now() + maxWaitMs,
-    pollMs: DRAIN_POLL_INTERVAL_MS,
+    deadlineAt: Date.now() + DRAIN_WAIT_MS,
   });
 }
 
 // `process.stderr.write` を使わない: fd がパイプだと非同期で、直後の `process.exit()` に巻き込まれて行が消えるため。
-export async function drainAndReportOutbox(
-  outbox: Outbox,
-  options: { waitMs?: number; write?: (line: string) => void } = {},
-): Promise<void> {
+// `writeStderrLine` の書き先は本番では `writeStderrSync`（同期）のまま。試験は `captureStderr` で捕まえる。
+export async function drainAndReportOutbox(outbox: Outbox): Promise<void> {
   if (outbox.subscribed) {
-    await waitForOutboxDrain(outbox, options.waitMs ?? DRAIN_WAIT_MS);
+    await waitForOutboxDrain(outbox);
   }
   const report = formatOutboxShutdownReport(outbox.describeForShutdown());
-  if (report !== null) (options.write ?? writeStderrSync)(report);
+  if (report !== null) writeStderrLine(report);
 }
 
 /**
@@ -139,16 +133,10 @@ export async function shutdownHandingOver(deps: {
   host: Pick<RunnerHost, 'shutdown' | 'pendingPickups' | 'inlineUnpickedArchives'>;
   outbox: Outbox;
   closeListener: () => void;
-  startedAt?: number;
-  drainWaitMs?: number;
-  pickupWaitLimitMs?: number;
-  write?: (line: string) => void;
 }): Promise<void> {
-  const startedAt = deps.startedAt ?? Date.now();
-  const limitMs = deps.pickupWaitLimitMs ?? PICKUP_WAIT_LIMIT_MS;
-  const drainWaitMs = deps.drainWaitMs ?? DRAIN_WAIT_MS;
-  const write = deps.write ?? writeStderrSync;
-  const inlineAtMs = Math.min(ARCHIVE_INLINE_AFTER_MS, limitMs);
+  const startedAt = Date.now();
+  const limitMs = PICKUP_WAIT_LIMIT_MS;
+  const inlineAtMs = ARCHIVE_INLINE_AFTER_MS;
   const afterMs = (atMs: number): number => Math.max(0, startedAt + atMs - Date.now());
 
   // 送り直しの判定を `shutdown()` と並べて走らせる（#4925）: `shutdown()` が長引いても、SIGTERM から `inlineAtMs` で、
@@ -157,7 +145,7 @@ export async function shutdownHandingOver(deps: {
   const inlineAndReport = (lead: string): number => {
     const sent = deps.host.inlineUnpickedArchives();
     if (sent > 0) {
-      write(
+      writeStderrLine(
         `alteroid-runner: ${lead}デーモンが取りに来なかった生ログの退避 ${String(sent)} 件を、本文を載せて送り直した\n`,
       );
     }
@@ -189,7 +177,7 @@ export async function shutdownHandingOver(deps: {
   deps.closeListener();
 
   async function handOverPickups(): Promise<void> {
-    await drainAndReportOutbox(deps.outbox, { waitMs: drainWaitMs, write });
+    await drainAndReportOutbox(deps.outbox);
 
     const pickupsLeftAt = (atMs: number): Promise<number> =>
       waitForPickups({
@@ -202,12 +190,12 @@ export async function shutdownHandingOver(deps: {
     // 上限ぎりぎりまで待ってから送ると、SSE に載せて流し切る時間が残らないため、上限より手前で一度切る
     let left = await pickupsLeftAt(inlineAtMs);
     if (left > 0 && deps.outbox.subscribed && inlineAndReport('') > 0) {
-      await waitForOutboxDrain(deps.outbox, drainWaitMs);
+      await waitForOutboxDrain(deps.outbox);
     }
     // 2段目: 残り（出し箱の退避先など）を上限まで待つ
     left = await pickupsLeftAt(limitMs);
     if (left > 0) {
-      write(
+      writeStderrLine(
         `alteroid-runner: 畳みで預けた物のうち ${String(left)} 件を、デーモンが取りに来ないまま止まる（生ログの退避・出し箱の退避先）\n`,
       );
     }

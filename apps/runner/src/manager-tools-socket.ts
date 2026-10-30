@@ -17,7 +17,6 @@ import { childUserIds } from './child-user-ids.js';
 export async function openManagerToolsSocket(
   childUser: RunnerChildUser | undefined,
   dir: string = DEFAULT_MANAGER_TOOLS_SOCKET_DIR,
-  write: (line: string) => void = (line) => writeStderrLine(line),
 ): Promise<ManagerToolsSocketHost | undefined> {
   const owner = childUserIds(childUser);
   try {
@@ -26,7 +25,7 @@ export async function openManagerToolsSocket(
       ...(owner === undefined ? {} : { childUser: owner }),
     });
   } catch (error) {
-    write(
+    writeStderrLine(
       `alteroid-runner: MCP ${MANAGER_TOOLS_MCP_SERVER_NAME} のソケットを開けなかった` +
         `（マネージャーに output_record を出さない）: ${reasonOf(error)}\n`,
     );
