@@ -133,11 +133,11 @@ export function parseUsageDate(raw: string | null): string {
   return isRealUsageDate(raw) ? raw : '';
 }
 
-const UNKNOWN_MANAGER = '（一覧に無い委譲）';
+const UNKNOWN_MANAGER = '（一覧に無いマネージャー）';
 const UNKNOWN_TOKEN = '（一覧に無い認証トークン）';
 
 const UNREADABLE_MANAGER_NAMES =
-  '委譲の一覧を読めていないので、名前を出せない。委譲は id の先頭8文字で示している。';
+  'マネージャーの一覧を読めていないので、名前を出せない。マネージャーは id の先頭8文字で示している。';
 const UNREADABLE_TOKEN_NAMES =
   '認証トークンの一覧を読めていないので、名前を出せない。認証トークンは id の先頭8文字で示している。';
 
@@ -559,9 +559,9 @@ function UnrecordedManagersCard({
   if (unrecordedManagers.length === 0) {
     return (
       <Card>
-        <CardHeader title="記録の無い委譲" action={<Badge>0</Badge>} />
+        <CardHeader title="記録の無いマネージャー" action={<Badge>0</Badge>} />
         <p className="px-4 py-3 text-sm text-muted-foreground">
-          使用量の記録が1件も無い委譲は、ありません。
+          使用量の記録が1件も無いマネージャーは、ありません。
         </p>
       </Card>
     );
@@ -569,12 +569,12 @@ function UnrecordedManagersCard({
   return (
     <Card>
       <CardHeader
-        title="記録の無い委譲"
+        title="記録の無いマネージャー"
         subtitle="全期間で判定します。開始日・終了日の絞り込みには影響されません"
         action={<Badge>{unrecordedManagers.length}</Badge>}
       />
       <p className="px-4 pt-3 text-sm text-warn">
-        使用量の記録がまだ1件も無い委譲が {unrecordedManagers.length}{' '}
+        使用量の記録がまだ1件も無いマネージャーが {unrecordedManagers.length}{' '}
         件あります。上の合計には入っていません。
       </p>
       <ul className="flex flex-col gap-0.5 px-4 py-3">

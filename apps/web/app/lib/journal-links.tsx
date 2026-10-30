@@ -17,8 +17,8 @@ export function journalEntryLinks(entry: JournalEntry): JournalLink[] {
   if (typeof managerId === 'string' && isDelegationActorId(managerId)) {
     links.push({
       to: `/managers/${managerId}`,
-      label: `委譲 ${managerId} の詳細`,
-      short: '委譲',
+      label: `マネージャー ${managerId} の詳細`,
+      short: 'マネージャー',
     });
   }
   if (entry.type === 'memory_update') {
