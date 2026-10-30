@@ -519,7 +519,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     )
 
     // script は鍵を含みうる。大きさの上限を付けない: 共有すべき既存の上限が daemon にも core にも無く、新しい制限を発明することになるため。
-    .get('/profile', (c) => c.json({ ok: true, profile: host.profile() }))
     .post(
       '/profile',
       validated(
@@ -534,7 +533,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     )
 
     // 袋の形だけをここで受け、中身の検査は `host.setMcpServers` に任せる。
-    .get('/mcp-servers', (c) => c.json({ ok: true, mcpServers: host.mcpServers() }))
     .post(
       '/mcp-servers',
       validated(
@@ -631,8 +629,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         return c.json({ ok: true, ...(placed === undefined ? {} : { plugins: placed }) });
       },
     )
-    // Codex の ChatGPT ログイン。値は受け取るだけで、状態（GET）には指紋しか載せない。
-    .get('/codex-auth', (c) => c.json({ ok: true, codexAuth: host.codexAuth() }))
+    // Codex の ChatGPT ログイン。値は受け取るだけで、応答には指紋しか載せない。
     .post(
       '/codex-auth',
       validated(
