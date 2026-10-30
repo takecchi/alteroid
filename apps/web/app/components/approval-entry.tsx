@@ -95,7 +95,7 @@ export function ApprovalEntry({
         <div className="mt-3 border-t border-border pt-3">
           {approval.conversationId === undefined || approval.conversationId === null ? (
             <p className="text-[11px] text-muted-foreground italic">
-              この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
+              この確認は会話から出たものではない（マネージャーか、クローンが自分で動いた回から出た）
             </p>
           ) : conversationShownAbove ? (
             <SameConversationNote conversationId={approval.conversationId} />

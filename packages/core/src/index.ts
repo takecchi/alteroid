@@ -1221,6 +1221,7 @@ export {
 export {
   containsShellMetacharacters,
   describePermissionRuleBreadth,
+  describePermissionRuleBreadthText,
   matchPermissionRule,
   parsePermissionRule,
   validatePermissionRequest,

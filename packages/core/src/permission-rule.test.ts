@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   containsShellMetacharacters,
   describePermissionRuleBreadth,
+  describePermissionRuleBreadthText,
   matchPermissionRule,
   parsePermissionRule,
   validatePermissionRequest,
@@ -227,5 +228,44 @@ describe('describePermissionRuleBreadth', () => {
       level: 'medium',
       prefixWordCount: 2,
     });
+  });
+});
+
+describe('describePermissionRuleBreadthText（#5907）', () => {
+  it('4つの広さは、頭の語を入れて何が通るかを言う', () => {
+    expect(describePermissionRuleBreadthText('Bash(git status)')).toBe(
+      'この文字列のコマンドだけが通る（最も狭い）',
+    );
+    expect(describePermissionRuleBreadthText('Bash(gh release edit:*)')).toBe(
+      '「gh release edit」で始まるコマンドが通る（狭い）',
+    );
+    expect(describePermissionRuleBreadthText('Bash(git status:*)')).toBe(
+      '「git status」で始まるコマンドが通る（中くらい。後ろの引数は何でもよい）',
+    );
+    expect(describePermissionRuleBreadthText('Bash(git:*)')).toBe(
+      '「git」で始まるコマンドなら何でも通る（広い）',
+    );
+  });
+
+  it('不正な規則は、頭の語を出さず壊れていると言う', () => {
+    expect(describePermissionRuleBreadthText('not-a-rule')).toBe(
+      '⚠️ 規則が不正（照合されない。壊れている可能性がある）',
+    );
+  });
+
+  it('頭の語は displayRule（伏せ字を通した規則）から取る。伏せた結果が読めなければ …', () => {
+    expect(describePermissionRuleBreadthText('Bash(git status:*)', 'Bash(git ***:*)')).toBe(
+      '「git ***」で始まるコマンドが通る（中くらい。後ろの引数は何でもよい）',
+    );
+    expect(describePermissionRuleBreadthText('Bash(git status:*)', '***')).toBe(
+      '「…」で始まるコマンドが通る（中くらい。後ろの引数は何でもよい）',
+    );
+  });
+
+  it('旧い言い方（前方一致・固定 N 語）は出ない', () => {
+    for (const rule of ['Bash(a b)', 'Bash(a b c:*)', 'Bash(a b:*)', 'Bash(a:*)']) {
+      const text = describePermissionRuleBreadthText(rule);
+      expect(text).not.toMatch(/前方一致|固定 \d 語/);
+    }
   });
 });

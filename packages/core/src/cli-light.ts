@@ -17,7 +17,10 @@ export {
   assessPermissionGrantStaleness,
   PERMISSION_GRANT_STALE_DAYS,
 } from './permission-staleness.js';
-export { describePermissionRuleBreadth } from './permission-rule.js';
+export {
+  describePermissionRuleBreadth,
+  describePermissionRuleBreadthText,
+} from './permission-rule.js';
 export { describeRevisionStatus } from './revision-format.js';
 export { describeManagerPeers, type ManagerPeersView } from './manager-peers-format.js';
 export { memoryFreshnessMarker } from './memory-freshness-format.js';
