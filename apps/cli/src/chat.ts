@@ -1678,8 +1678,8 @@ export async function runSlashCommand(
         return 'ok';
       }
       const { entries } = page;
-      // 「空」は `next === null` で0件のときだけ言う: 続きが在るのに「無い」と言わない（`next` を返さない古いデーモンは終端として扱う）
-      if (entries.length === 0 && (page.next ?? null) === null) {
+      // 「空」は `next === null` で0件のときだけ言う: 続きが在るのに「無い」と言わない
+      if (entries.length === 0 && page.next === null) {
         // 探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが、tool_use の input に書かれているかもしれない。
         // `type=` で絞った0件を「日誌はまだ空」と言わない: 絞りを外せば見える日誌まで「無い」と読める。
         if (q === undefined && type === undefined) {
@@ -1701,10 +1701,8 @@ export async function runSlashCommand(
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
         stdout.write(`      id: ${entry.id}\n`);
       }
-      // 件数でなく `next` で言う: 一部が読めない頁は `limit` に届かないまま続きが在る。
-      // `next` を返さない古いデーモンは、従来どおり件数がちょうど `limit` かで言う
-      if (page.next === undefined) noteIfAtLimit(entries.length, limit, '日誌');
-      else if (page.next !== null) writeOlderMayExist(limit, '日誌');
+      // 件数でなく `next` で言う: 一部が読めない頁は `limit` に届かないまま続きが在る
+      if (page.next !== null) writeOlderMayExist(limit, '日誌');
       return 'ok';
     }
 

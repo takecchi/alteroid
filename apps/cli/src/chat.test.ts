@@ -1432,7 +1432,7 @@ function stubClient(
     eventsBody?: unknown;
     memoryDocuments?: MemoryDocLike[];
     journalEntries?: JournalEntryLike[];
-    // 呼ばれた順に返す頁（`next` つき）。尽きたら最後の頁を返す。指定が無ければ `journalEntries` を `next` 無しで返す
+    // 呼ばれた順に返す頁（`next` つき）。尽きたら最後の頁を返す。指定が無ければ `journalEntries` を `next: null`（続き無し）で返す
     journalPages?: { entries: JournalEntryLike[]; next: { id: string; at: string } | null }[];
     journalByIdStatus?: number;
     usageAggregate?: unknown;
@@ -1741,7 +1741,7 @@ function stubClient(
           const pages = options.journalPages;
           return Promise.resolve(reply(200, pages[Math.min(served, pages.length - 1)]));
         }
-        return Promise.resolve(reply(200, { entries: options.journalEntries ?? [] }));
+        return Promise.resolve(reply(200, { entries: options.journalEntries ?? [], next: null }));
       },
       ':id': {
         $get: (args: { param: { id: string } }) => {
@@ -4432,7 +4432,7 @@ describe('chat の /journal', () => {
     });
   });
 
-  it('返った件数が上限（既定20件）ちょうどなら、これより古いかもしれないと言う', async () => {
+  it('続き（next）が在れば、これより古いかもしれないと言う', async () => {
     const read = captureStdout();
     const journalEntries = Array.from({ length: 20 }, (_, index) => ({
       id: `j-${index}`,
@@ -4440,7 +4440,11 @@ describe('chat の /journal', () => {
       type: 'decision',
       decision: `判断 ${index}`,
     }));
-    const { client } = stubClient({ journalEntries });
+    const { client } = stubClient({
+      journalPages: [
+        { entries: journalEntries, next: { id: 'j-19', at: '2026-08-20T00:00:00.000Z' } },
+      ],
+    });
 
     await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
