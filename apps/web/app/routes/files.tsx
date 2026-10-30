@@ -517,6 +517,7 @@ function Thumbnail({ item }: { item: AttachmentItem }) {
           src={state.url}
           alt={item.name}
           title={`${item.name}（${formatBytes(item.size)}）`}
+          triggerLabel={`${item.name} を大きく見る`}
           className="size-14 object-cover"
         />
       ) : (
