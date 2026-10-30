@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { Link, Outlet, useLocation, useParams } from 'react-router';
 
 import {
@@ -19,7 +18,7 @@ import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
-import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
+import { useChipSelection } from '~/lib/use-chip-selection';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
 
 // 「居ないのでも、畳まれたのでもない」を落とさない: 落とすと行が消えたのと区別が付かないため
@@ -229,44 +228,12 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
 // 絞りは画面側で filter せずサーバへ投げる: 窓に読み込んだぶんの中でしか絞れず、CLI やクローンでできることが Web でだけできなくなるため
 const STATUSES = Object.keys(STATUS) as [ManagerStatus, ...ManagerStatus[]];
 
-// 知らない値を残さない: 対応するチップが無く、選択されているのにどのチップも押されて見えない状態になるため
-function parseSelectedStatuses(raw: string | null): readonly ManagerStatus[] {
-  if (raw === null || raw === '') return [];
-  const result: ManagerStatus[] = [];
-  for (const part of raw.split(',')) {
-    if (part === '') continue;
-    if (!(STATUSES as readonly string[]).includes(part)) continue;
-    const status = part as ManagerStatus;
-    if (!result.includes(status)) result.push(status);
-  }
-  return result;
-}
-
 export default function Managers() {
-  // 絞りを画面の state に閉じ込めない（正本は URL）: 開き直すと消え、戻るで戻れず、リンクで共有できないため
-  // replace: true にする: チップの操作ごとに履歴が積まれると「戻る」が使えなくなるため
-  // debounce しない: チップのクリックは1回で完結した操作で、検索語のような「入力の途中」が無いため
-  const [searchParams, replaceParams] = useReplaceSearchParams();
-  // useMemo で包む: 描画のたびに selected が新しい配列になり、それに依存する effect・memo が毎回走り直すため
-  const rawStatus = searchParams.get(STATUS_SEARCH_PARAM);
-  const selected = useMemo(() => parseSelectedStatuses(rawStatus), [rawStatus]);
-
-  function toggle(status: ManagerStatus) {
-    replaceParams((next) => {
-      const current = parseSelectedStatuses(next.get(STATUS_SEARCH_PARAM));
-      const updated = current.includes(status)
-        ? current.filter((s) => s !== status)
-        : [...current, status];
-      if (updated.length === 0) next.delete(STATUS_SEARCH_PARAM);
-      else next.set(STATUS_SEARCH_PARAM, updated.join(','));
-    });
-  }
-
-  function clearSelected() {
-    replaceParams((next) => {
-      next.delete(STATUS_SEARCH_PARAM);
-    });
-  }
+  const {
+    selected,
+    toggle,
+    clear: clearSelected,
+  } = useChipSelection<ManagerStatus>(STATUS_SEARCH_PARAM, STATUSES);
 
   const all = useManagers({ status: [], limit: MANAGERS_PAGE });
   const nothingAtAll =
