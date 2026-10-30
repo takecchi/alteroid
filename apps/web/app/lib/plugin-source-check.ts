@@ -22,5 +22,12 @@ export function describePluginSourceProblem(request: PluginPreviewRequest): stri
   if (issue === undefined || field === undefined) {
     return '取り元の指定が使えない形（何も送っていない）';
   }
-  return `「${field.label}」が使えない形: ${issue.message}。${field.usable}（何も送っていない）`;
+  return `「${field.label}」が使えない形: ${reasonOf(issue)}。${field.usable}（何も送っていない）`;
+}
+
+// 長さの検査（`min`・`max`）は core のスキーマが文を持たず、zod の英語の既定文になるので、画面の語で言う。それ以外は core の日本語の理由
+function reasonOf(issue: { code: string; message: string }): string {
+  if (issue.code === 'too_big') return '長すぎる';
+  if (issue.code === 'too_small') return '空';
+  return issue.message;
 }
