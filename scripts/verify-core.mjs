@@ -265,6 +265,22 @@ export const STEPS = [
       'わざとの場合は理由付きで scripts/check-no-env-passthrough-core.mjs の ALLOWLIST へ' +
       '載せること（scripts/check-no-env-passthrough-core.mjs の doc、Issue #1935 / #1854）',
   },
+  {
+    name: 'agents-md-size',
+    cmd: 'pnpm',
+    args: ['check:agents-md-size'],
+    hint:
+      'AGENTS.md がバイト数の予算を超えた。予算を上げるなら理由付きで ' +
+      'scripts/check-agents-md-size-core.mjs の BUDGET_HISTORY に1件足すこと（Issue #1192）',
+  },
+  {
+    name: 'dockerfile-railway',
+    cmd: 'pnpm',
+    args: ['check:dockerfile-railway'],
+    hint:
+      'Dockerfile に Railway で通らない書き方（RUN --mount）がある' +
+      '（scripts/check-dockerfile-railway-core.mjs の doc、Issue #2685）',
+  },
   { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
   { name: 'lint', cmd: 'pnpm', args: ['lint'] },
   { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },

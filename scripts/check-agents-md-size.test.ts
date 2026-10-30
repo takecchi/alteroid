@@ -1,7 +1,3 @@
-import { readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -110,23 +106,4 @@ describe('check-agents-md-size: AGENTS_MD_MAX_BYTES', () => {
   });
 });
 
-describe('check-agents-md-size: 実ファイル', () => {
-  const ROOT = fileURLToPath(new URL('..', import.meta.url));
-  const AGENTS_MD_PATH = path.join(ROOT, 'AGENTS.md');
-
-  it('AGENTS.md が読める大きさである（走査が壊れて0件・読めないことを緑と読まない足場）', () => {
-    const stat = statSync(AGENTS_MD_PATH);
-    expect(stat.size).toBeGreaterThan(20_000);
-  });
-
-  it('いまの AGENTS.md の実測バイト数が予算以下である', () => {
-    const text = readFileSync(AGENTS_MD_PATH, 'utf8');
-    const bytes = Buffer.byteLength(text, 'utf8');
-    const result = judgeAgentsMdSize({ bytes, lines: 0 });
-    expect(
-      result.ok,
-      `AGENTS.md が ${bytes} B で予算 ${AGENTS_MD_MAX_BYTES} B を超えている。` +
-        'scripts/check-agents-md-size-core.mjs の doc を見て、予算を上げるか本文を削るか判断すること。',
-    ).toBe(true);
-  });
-});
+// 実物の AGENTS.md への当て（予算・読める大きさ）は `pnpm check:agents-md-size`（CI の checks、build より前）だけが持つ。

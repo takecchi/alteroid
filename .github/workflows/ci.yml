@@ -224,11 +224,6 @@ jobs:
       # **AGENTS.md のバイト数にラチェットを置く歯（Issue #1192）。** 静的検査
       # （ビルド済み成果物を読まない）なので、`pnpm build` より前に置く——
       # 落ちるなら他の重い検査より先に、速く落ちるべきである。
-      #
-      # **`pnpm verify`（`scripts/verify-core.mjs` の STEPS）には足していない。**
-      # あちらは #1191 で別の担当が改修中で、この PR ではその中身を1バイトも
-      # 変えない分担にしてある。verify への組み込みは #1191 が着地した後の
-      # 別便にする——いまはこの ci.yml の1行だけが門である。
       - run: pnpm check:agents-md-size
         if: ${{ !cancelled() }}
 
@@ -264,9 +259,9 @@ jobs:
       # このすぐ上に逐語で残っている。
       #
       # ⚠ `scripts/check-stale-token-restart-advice.test.ts` は純関数を合成入力で
-      # 測るだけで、`check-sdk-quotes.test.ts` のような「実物の検査」describe を
-      # 持たない。⟹ `pnpm test` 経由でも実物の repo には当たらない。**実物へ当たる
-      # 経路はこの1行だけである。**
+      # 測るだけで、`pnpm test` 経由では実物の repo に当たらない。**実物へ当たる
+      # 経路はこの1行だけである**（この節の `check:*` はどれも同じ形。試験は判定の
+      # 関数だけを測り、実物の repo への当ては build より前のこの job が持つ）。
       - run: pnpm check:stale-token-restart-advice
         if: ${{ !cancelled() }}
 

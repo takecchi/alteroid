@@ -63,6 +63,8 @@ GATE_NAMES=(
   stale-token-restart-advice
   restart-before-check-advice
   no-env-passthrough
+  agents-md-size
+  dockerfile-railway
   typecheck
   lint
   'format:check'
@@ -79,6 +81,8 @@ GATE_COMMANDS=(
   'pnpm check:stale-token-restart-advice'
   'pnpm check:restart-before-check-advice'
   'pnpm check:no-env-passthrough'
+  'pnpm check:agents-md-size'
+  'pnpm check:dockerfile-railway'
   'pnpm typecheck'
   'pnpm lint'
   'pnpm format:check'

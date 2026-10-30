@@ -45,6 +45,16 @@ function main() {
     return;
   }
 
+  // 既知の2本が対象から漏れたら落とす: 対象の決め方が壊れて、見るべき Dockerfile を見ずに緑になるため。
+  for (const known of ['Dockerfile', 'docker/db.Dockerfile']) {
+    if (!targets.has(known)) {
+      logError(
+        `check-dockerfile-railway: ${known} が対象に入っていない（対象の決め方が壊れていないか）`,
+      );
+      failed = true;
+    }
+  }
+
   const files = [];
   for (const path of targets.keys()) {
     try {

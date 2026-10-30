@@ -12,8 +12,6 @@ import { gitChildEnv } from './git-child-env.js';
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { collectTargets, evaluateFiles, findRunMounts, formatViolations, isDockerfileName, readDockerfilePath, REASON } from './check-dockerfile-railway-core.mjs';
 
-const ROOT = join(import.meta.dirname, '..');
-
 interface Hit {
   line: number;
   text: string;
@@ -239,27 +237,4 @@ describe('対象の決め方', () => {
   });
 });
 
-describe('実際の repo', () => {
-  it('いまの Dockerfile 群（railway/*.json の dockerfilePath を含む）に RUN --mount は無い', () => {
-    const { targets, problems } = collectTargets(ROOT, {
-      readFile: (p: string) => readFileSync(join(ROOT, p), 'utf8'),
-      exists: (p: string) => existsSync(join(ROOT, p)),
-    });
-    expect(problems).toEqual([]);
-    expect([...targets.keys()]).toContain('Dockerfile');
-    expect([...targets.keys()]).toContain('docker/db.Dockerfile');
-    const files = [...targets.keys()].map((path) => ({
-      path,
-      content: readFileSync(join(ROOT, path), 'utf8'),
-    }));
-    expect(evaluateFiles(files)).toEqual([]);
-  });
-
-  it('CLI を実際に走らせて 0 で終わり、1行出す', () => {
-    const out = execFileSync('node', [join(ROOT, 'scripts/check-dockerfile-railway.mjs')], {
-      env: gitChildEnv(),
-      encoding: 'utf8',
-    });
-    expect(out).toContain('check-dockerfile-railway: OK');
-  });
-});
+// 実物の repo への当て（いまの Dockerfile 群に RUN --mount が無い・既知の2本が対象に入る）は `pnpm check:dockerfile-railway`（CI の checks、build より前）だけが持つ。
