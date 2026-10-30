@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 
 import { captureStderr, createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createRunnerApp, Outbox } from './app.js';
+import { createRunnerApp, Outbox, SSE_WRITE_DEADLINE_MS } from './app.js';
 import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
@@ -22,6 +22,15 @@ function newHost(): RunnerHost {
   });
 }
 
+// 偽の時計で締め切り（`SSE_WRITE_DEADLINE_MS`）を進める。ストリームの読み書きは本物のまま（時計だけを偽にする）。
+function fakeClock(): void {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 function hangOnHello(): { spy: ReturnType<typeof vi.spyOn>; calls: string[] } {
   const calls: string[] = [];
   const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
@@ -34,84 +43,66 @@ function hangOnHello(): { spy: ReturnType<typeof vi.spyOn>; calls: string[] } {
   return { spy, calls };
 }
 
+// 来ないときは、テストのタイムアウトで落ちる（期限は偽の時計では張らない）。
 async function readUntil(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   needle: string,
-  budgetMs: number,
 ): Promise<string> {
   const decoder = new TextDecoder();
   let seen = '';
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<'期限切れ'>((resolve) => {
-    timer = setTimeout(() => resolve('期限切れ'), budgetMs);
-    timer.unref?.();
-  });
-  try {
-    while (!seen.includes(needle)) {
-      const next = await Promise.race([reader.read(), expired]);
-      if (next === '期限切れ') break;
-      if (next.done) break;
-      seen += decoder.decode(next.value, { stream: true });
-    }
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
+  while (!seen.includes(needle)) {
+    const next = await reader.read();
+    if (next.done) break;
+    seen += decoder.decode(next.value, { stream: true });
   }
   return seen;
 }
 
-async function readUntilClosed(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  budgetMs: number,
-): Promise<'closed' | 'timeout'> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<'timeout'>((resolve) => {
-    timer = setTimeout(() => resolve('timeout'), budgetMs);
-    timer.unref?.();
-  });
-  try {
+// 終わったかどうかは旗で見る（偽の時計の下で期限を張らない）。
+function watchClosed(reader: ReadableStreamDefaultReader<Uint8Array>): { closed: () => boolean } {
+  let closed = false;
+  void (async () => {
     for (;;) {
-      const next = await Promise.race([reader.read(), expired]);
-      if (next === 'timeout') return 'timeout';
-      if (next.done) return 'closed';
+      const next = await reader.read();
+      if (next.done) {
+        closed = true;
+        return;
+      }
     }
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  })();
+  return { closed: () => closed };
 }
 
 describe('runner の /events: 最初の hello 書き込みも締め切りで塞ぐ', () => {
-  it('hello が締め切りを過ぎたら stream.abort() で畳み、応答が終わる', async () => {
+  it('hello が締め切りを過ぎたら stream.abort() で畳み、応答が終わる（手前では畳まない）', async () => {
+    fakeClock();
     const host = newHost();
     const outbox = new Outbox();
 
     const { spy, calls } = hangOnHello();
     try {
       const lines = await captureStderr(async () => {
-        const app = createRunnerApp({
-          host,
-          outbox,
-          tokenSha256: TOKEN_SHA256,
-          sseHeartbeatMs: 60_000,
-          sseWriteDeadlineMs: 20,
-          ...appDefaults(),
-        });
+        const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
 
         const response = await app.request('/events', { headers: bearer() });
         const body = response.body;
         if (body === null) throw new Error('SSE の応答に本文が無い');
-        const reader = body.getReader();
+        const watch = watchClosed(body.getReader());
 
-        await expect.poll(() => calls.length, { timeout: 1000 }).toBe(1);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(calls).toHaveLength(1);
         expect(calls[0]).toBe('hello');
 
-        const outcome = await readUntilClosed(reader, 2000);
-        expect(outcome).toBe('closed');
+        await vi.advanceTimersByTimeAsync(SSE_WRITE_DEADLINE_MS - 1);
+        expect(watch.closed()).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(watch.closed()).toBe(true);
       });
 
       const logged = lines.join('');
       expect(logged).toContain('alteroid-runner:');
       expect(logged).toContain('hello');
-      expect(logged).toContain('20ms');
+      expect(logged).toContain(`${String(SSE_WRITE_DEADLINE_MS)}ms`);
       expect(logged).not.toContain('書きかけの1件を含め');
       expect(logged).toContain('（この接続が抱えていた 0 件を箱へ戻します）');
 
@@ -122,6 +113,7 @@ describe('runner の /events: 最初の hello 書き込みも締め切りで塞�
   });
 
   it('hello 待ち中に抱えていた滞留も、畳んだとき outbox へ全部戻る（1件も落ちない）', async () => {
+    fakeClock();
     const host = newHost();
     const outbox = new Outbox();
     const events: RunnerEvent[] = [
@@ -134,22 +126,15 @@ describe('runner の /events: 最初の hello 書き込みも締め切りで塞�
     const { spy } = hangOnHello();
     try {
       const lines = await captureStderr(async () => {
-        const app = createRunnerApp({
-          host,
-          outbox,
-          tokenSha256: TOKEN_SHA256,
-          sseHeartbeatMs: 60_000,
-          sseWriteDeadlineMs: 20,
-          ...appDefaults(),
-        });
+        const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
 
         const response = await app.request('/events', { headers: bearer() });
         const body = response.body;
         if (body === null) throw new Error('SSE の応答に本文が無い');
-        const reader = body.getReader();
+        const watch = watchClosed(body.getReader());
 
-        const outcome = await readUntilClosed(reader, 2000);
-        expect(outcome).toBe('closed');
+        await vi.advanceTimersByTimeAsync(SSE_WRITE_DEADLINE_MS);
+        expect(watch.closed()).toBe(true);
       });
 
       expect(outbox.pending).toBe(2);
@@ -168,25 +153,18 @@ describe('runner の /events: 最初の hello 書き込みも締め切りで塞�
     const outbox = new Outbox();
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-a', sessionId: 'sess-a' };
 
-    const app = createRunnerApp({
-      host,
-      outbox,
-      tokenSha256: TOKEN_SHA256,
-      sseHeartbeatMs: 60_000,
-      sseWriteDeadlineMs: 2_000,
-      ...appDefaults(),
-    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
 
     const response = await app.request('/events', { headers: bearer() });
     const body = response.body;
     if (body === null) throw new Error('SSE の応答に本文が無い');
     const reader = body.getReader();
 
-    const hello = await readUntil(reader, 'event: hello', 1000);
+    const hello = await readUntil(reader, 'event: hello');
     expect(hello).toContain('event: hello');
 
     outbox.push(event);
-    const seen = await readUntil(reader, JSON.stringify(event), 1000);
+    const seen = await readUntil(reader, JSON.stringify(event));
     expect(seen).toContain(JSON.stringify(event));
 
     await reader.cancel();

@@ -366,6 +366,24 @@ describe('alteroid profile set', () => {
     expect(text).toContain('これから起こす仕事には即座に効きます');
   });
 
+  it('応答に行が無ければ、指紋は「?」と出す（応答の上位の sha256 は読まない）', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    setReply('PUT', '/profile/default', {
+      status: 200,
+      body: updateBody([], { sha256: 'top999', bytes: 15 }),
+    });
+    const dir = await makeTempDir('alteroid-profile-set-');
+    const path = join(dir, 'profile.sh');
+    await writeFile(path, 'export FOO=bar\n', 'utf8');
+    const read = captureStdout();
+
+    await profileSetCommand(undefined, { file: path });
+
+    const text = read();
+    expect(text).toContain('プロファイルの行 default を更新しました (sha256 ?)');
+    expect(text).not.toContain('top999');
+  });
+
   it('一部の runner へ反映できなかったら、成功の見出しを出さず警告にして、文を出した後で例外にする（#3157）', async () => {
     setReply('GET', '/profile', { status: 200, body: profileBody([]) });
     setReply('PUT', '/profile/default', {

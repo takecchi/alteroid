@@ -29,8 +29,7 @@ interface InboxRemoveManyResult {
   matched: number;
   targeted: number;
   removedIds: string[];
-  /** 古いデーモンの応答には無い。 */
-  droppedFromDelivery?: number;
+  droppedFromDelivery: number;
   remaining: number;
 }
 
@@ -121,7 +120,7 @@ const STOPPED_REMOVAL_IDS_SHOWN = 10;
 
 interface StoppedRemoval {
   removedIds: string[];
-  droppedFromDelivery: number | undefined;
+  droppedFromDelivery: number;
 }
 
 // daemon の `inboxRemoveManyStoppedResponseSchema` の読み側: CLI は daemon の実行時コードを取り込まない（型だけ）ので、必要な 2 欄だけを手で読む。
@@ -131,11 +130,8 @@ function readStoppedRemoval(body: unknown): StoppedRemoval | null {
   const { removedIds } = body;
   if (!Array.isArray(removedIds) || removedIds.length === 0) return null;
   if (!removedIds.every((id): id is string => typeof id === 'string')) return null;
-  const dropped = 'droppedFromDelivery' in body ? body.droppedFromDelivery : undefined;
-  return {
-    removedIds,
-    droppedFromDelivery: typeof dropped === 'number' ? dropped : undefined,
-  };
+  if (!('droppedFromDelivery' in body) || typeof body.droppedFromDelivery !== 'number') return null;
+  return { removedIds, droppedFromDelivery: body.droppedFromDelivery };
 }
 
 function reportStoppedRemoval(stopped: StoppedRemoval): never {
@@ -144,9 +140,7 @@ function reportStoppedRemoval(stopped: StoppedRemoval): never {
   stdout.write(`⚠ 途中で止まった。ここまでに ${count} 件を消した（取り消せない）。消した id:\n`);
   for (const id of shown) stdout.write(`  ${redactError(id)}\n`);
   if (count > shown.length) stdout.write(`  ほか ${count - shown.length} 件\n`);
-  if (stopped.droppedFromDelivery !== undefined) {
-    stdout.write(`配達の待ち行列からも外したのは ${stopped.droppedFromDelivery} 件。\n`);
-  }
+  stdout.write(`配達の待ち行列からも外したのは ${stopped.droppedFromDelivery} 件。\n`);
   stdout.write(
     '止まった塊より先は消していない（残りは受信箱に在る）。' +
       '打ち直す前に alteroid inbox で現状を確かめること（打ち直すと対象は選び直しになる）。\n',
@@ -188,14 +182,11 @@ function report(
   stdout.write(`消した id（${result.removedIds.length}件）:\n`);
   for (const id of result.removedIds) stdout.write(`  ${id}\n`);
 
-  // 古いデーモンの応答には無い: 0 と推測して書くと、配達待ちから外せていないのに「0 件外した」と読めるため
-  if (result.droppedFromDelivery !== undefined) {
-    stdout.write(
-      `配達の待ち行列からも外したのは ${result.droppedFromDelivery} 件` +
-        '（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。' +
-        '既に取り出して処理中のものは取り消せない。）\n',
-    );
-  }
+  stdout.write(
+    `配達の待ち行列からも外したのは ${result.droppedFromDelivery} 件` +
+      '（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。' +
+      '既に取り出して処理中のものは取り消せない。）\n',
+  );
   const raced = result.targeted - result.removedIds.length;
   if (raced > 0) {
     stdout.write(

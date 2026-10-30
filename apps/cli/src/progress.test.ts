@@ -67,7 +67,7 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
         buckets: { under1h: 1, under24h: 3, under7d: 5, over7d: 3 },
       },
       byState: { untouched: 2, responded: 5, delegated: 3, notApplicable: 5 },
-      completeness: { unreadable: 0, trimmedClosed: 0 },
+      completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
     },
     inProgress: {
       running: 2,
@@ -186,22 +186,15 @@ describe('progressCommand', () => {
     replies.push({
       status: 200,
       body: body({
-        backlog: { ...base.backlog, completeness: { unreadable: 2, trimmedClosed: 0 } },
+        backlog: {
+          ...base.backlog,
+          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+        },
       }),
     });
     const read = captureStdout();
     await progressCommand();
     expect(read()).toContain('数が欠けうる（読めなかった行 2 件');
-  });
-
-  it('欄 unreadableJobs の無い古いデーモンの応答でも、「undefined」を書かず、読めない委譲について何も言わない（#2382）', async () => {
-    replies.push({ status: 200, body: body() });
-    const read = captureStdout();
-    await progressCommand();
-    const text = read();
-    expect(text).toContain('積み上がり');
-    expect(text).not.toContain('undefined');
-    expect(text).not.toContain('読めない委譲');
   });
 
   it('対照: unreadableJobs が 0 なら何も言わず、1 以上なら言う（#2382）', async () => {

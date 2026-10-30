@@ -251,7 +251,7 @@ export const runnerSessionOpenResultSchema = z.object({
   cwd: z.string().optional(),
   /**
    * `true` のとき message が届いたのは起動時の env（鍵）が凍った旧プロセスで、鍵が現役かは分からない。
-   * `undefined` は「分からない」: 古い runner は短絡したかを名乗れない。
+   * resume では runner が `true`/`false` を必ず返す。欄が無い・`true` と読めない応答は `false`（短絡していない）と同じに読む（デーモンの `HttpRunner`）。
    */
   reusedLiveSession: z.boolean().optional(),
   /** `undefined` は「分からない」（欄を持たない古い runner）。デーモンは追っている世代を持たない側へ倒す。 */
@@ -589,8 +589,8 @@ export const runnerRescueRefDeleteResultSchema = z.discriminatedUnion('outcome',
 export type RunnerRescueRefDeleteResult = z.infer<typeof runnerRescueRefDeleteResultSchema>;
 
 /**
- * `decision` は省略されうる: 旧 runner は `{ ok: true }` だけを返す。受け取る側は欠けた回を allow/deny の既定値へ倒さず、
- * キーを省いたまま運ぶ。`'unreadable'` を畳まず3値目にする: 呼び手へ「答え直せ」と伝えるには、本当の拒否と区別できる値が要るため。
+ * `decision` は省略されうる: runner は届いた回（`ok: true`）にだけ付け、宛先が無い回（`ok: false`）には付けない。
+ * 受け取る側は欠けた回を allow/deny の既定値へ倒さず、キーを省いたまま運ぶ。`'unreadable'` を畳まず3値目にする: 呼び手へ「答え直せ」と伝えるには、本当の拒否と区別できる値が要るため。
  */
 export const runnerAnswerResultSchema = z.object({
   ok: z.boolean(),
@@ -1202,7 +1202,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 生ログの退避。`body`（本文をそのまま載せる。古い形）か `ref`（本文は runner に預け、デーモンが
    * `GET /managers/:id/archive/:archiveId` で取りに行く）のどちらか一方を持つ（#4485）。
    * 本文を SSE の1行で運ぶと、数十 MB の行をデーモンが受け取り・解析する間ループが塞がり、ヒープも膨らむ。
-   * `ref` を送るのは、SSE の接続で `archive-ref` を名乗ったデーモンにだけ（`archive-ref.ts`。古いデーモンは `body` 無しの出来事を落とすため）。
+   * runner はいつも預けて `ref` を送る（`archive-ref.ts`。名乗りで切り替えるのは #5701 でやめた）。
    * 両方とも無い出来事は、デーモンが「取れなかった」として跡を残す。
    */
   z.object({
@@ -1517,6 +1517,7 @@ export interface RunnerClient {
   /**
    * `hello()` が読む `GET /health` から接続の瞬間に一度だけ読む値で、heartbeat では更新しない（それは `identity()` の役目）。
    * 省略されたとき名簿は `unheard` のまま: 「版を名乗った上で分からない」（`unknown`）と混同しない。
+   * 省略するのは版を名乗る口を持たない実装（`LocalRunner` 等）だけ。`HttpRunner` は `/health` に欄が無くても `unknown` を入れる。
    */
   readonly revision?: RunnerRevisionReport;
   /**

@@ -65,7 +65,6 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 5,
         ...appDefaults(),
       });
 
@@ -98,7 +97,6 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
       host,
       outbox,
       tokenSha256: TOKEN_SHA256,
-      sseHeartbeatMs: 5,
       ...appDefaults(),
     });
 

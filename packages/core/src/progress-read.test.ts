@@ -74,6 +74,21 @@ describe('progress_read — 作業の進捗を読む道具（#2241 の 3）', ()
     expect(reply).toContain('観測時刻: 2026-09-30T12:00:00.000Z');
   });
 
+  it('読めない委譲の行の断りは unreadableJobs が 0 のとき出さず、1件以上のとき件数つきで出す（#5723）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    const view = await readProgress(await seed(), { now: NOW });
+    const withJobs = (unreadableJobs: number) => ({
+      ...view,
+      backlog: {
+        ...view.backlog,
+        completeness: { ...view.backlog.completeness, unreadableJobs },
+      },
+    });
+    expect(describeProgress(withJobs(0))).not.toContain('読めない委譲の行');
+    expect(describeProgress(withJobs(2))).toContain('読めない委譲の行が 2 件ある');
+  });
+
   it('windowHours の既定は 168、指定するとその窓になる', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);

@@ -60,17 +60,14 @@ function DroppedBody({ state }: { state: DroppedState }) {
 }
 
 // core の関数を import せず字面を自前で持つ: packages/core を Web のバンドルへ引き込まないため
-// undefined を「不明」と書かず空文字にする: 由来を持たない印は古い版のデーモンのものだけで、新しい語を出すと区別が2つに見えるため
 // default 節の値をそのまま画面に出さない: 分岐キーの生の値が画面に出てしまうため
-export function describeDroppedTraceOriginNote(origin: DroppedState['origin'] | undefined): string {
+export function describeDroppedTraceOriginNote(origin: DroppedState['origin']): string {
   switch (origin) {
     case 'daemon':
       return (
         'ここに出るのは、本体（クローンの動きを含む）が残した記録だけです。' +
         'マネージャーが動く実行環境の側で起きた失敗は出ません。'
       );
-    case undefined:
-      return '';
     default: {
       const unreachable: never = origin;
       void unreachable;

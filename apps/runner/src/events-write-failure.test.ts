@@ -77,7 +77,6 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
 
@@ -131,7 +130,6 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
         ...appDefaults(),
       });
       const lines = await captureStderr(async () => {

@@ -3,24 +3,15 @@ import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { createRunnerHost, type AttachmentLimits, type RunnerHost } from '@alteroid/core';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createRunnerHost, type RunnerHost } from '@alteroid/core';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
-import { appDefaults, stubAttachmentLimitsEnv } from './app-defaults.test-support.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
-
-const LIMITS: AttachmentLimits = {
-  maxImageBytes: 1024,
-  maxFileBytes: 1024,
-  maxLargeFileBytes: 0,
-  maxPerMessage: 2,
-  maxTotalBytes: 2048,
-  retentionDays: 30,
-};
 
 function fakeSdk(): typeof sdkQuery {
   return ((params: { prompt: AsyncIterable<unknown> }) => {
@@ -50,7 +41,6 @@ const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('he
 
 let host: RunnerHost | undefined;
 afterEach(async () => {
-  vi.unstubAllEnvs();
   await host?.shutdown();
   host = undefined;
 });
@@ -71,7 +61,6 @@ async function setup(stageLimit = 1_000_000) {
   });
   // env 経由で読めたこと（既定の 2 GiB へ倒れていないこと）
   expect(host.attachmentStageLimit).toBe(stageLimit);
-  stubAttachmentLimitsEnv(LIMITS);
   const app = createRunnerApp({
     host,
     outbox: new Outbox(),

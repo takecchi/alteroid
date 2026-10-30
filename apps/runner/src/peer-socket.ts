@@ -30,14 +30,13 @@ interface PeerSocketPlan {
 }
 
 /** 名指しの既定の一覧は provider の記述子が持つ。 */
-export function peerDefaultModelsOf(provider: AgentProviderId): readonly string[] | undefined {
+function peerDefaultModelsOf(provider: AgentProviderId): readonly string[] | undefined {
   return agentProviderOf(provider).defaultPeerModels;
 }
 
 export function planPeerSocket(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
-  dir: string = DEFAULT_PEER_SOCKET_DIR,
 ): PeerSocketPlan {
   // 綴りの不正は起動時に止める（資格が届いてからでは、誰も見ていないところで落ちる）
   // provider ごとに1回だけ解く: モデルの一覧と案内の文は同じ解決（出所つき）から作る。
@@ -60,7 +59,7 @@ export function planPeerSocket(
   return {
     openSocket: () =>
       createPeerSocketHost({
-        socketPath: join(dir, PEER_SOCKET_FILENAME),
+        socketPath: join(DEFAULT_PEER_SOCKET_DIR, PEER_SOCKET_FILENAME),
         ...(owner === undefined ? {} : { childUser: owner }),
       }),
     models,

@@ -2,15 +2,32 @@ import { statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { captureStderr } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { openManagerToolsSocket } from './manager-tools-socket.js';
 
+// 置き場所は本番と同じ口（core の既定の置き場所）から読む。試験ではその定数だけを、1本ごとの置き場所へ差し替える。
+// 値ではなく getter で返す: 既定値は呼ぶたびに読まれるので、1本ごとに別の置き場所へ向けられる。
+const socketDir = vi.hoisted(() => ({ current: '' }));
+vi.mock('@alteroid/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alteroid/core')>();
+  return {
+    ...actual,
+    get DEFAULT_MANAGER_TOOLS_SOCKET_DIR() {
+      return socketDir.current;
+    },
+  };
+});
+
 describe('openManagerToolsSocket（#2987）', () => {
+  beforeEach(() => {
+    socketDir.current = join(makeTempDirSync('alteroid-manager-tools-socket-'), 'manager');
+  });
+
   it('資格を待たずに開き、置き場所は 0711・ソケットは 0600 になる', async () => {
-    const dir = join(makeTempDirSync('alteroid-manager-tools-socket-'), 'manager');
-    const host = await openManagerToolsSocket(undefined, dir);
+    const dir = socketDir.current;
+    const host = await openManagerToolsSocket(undefined);
     try {
       expect(host?.socketPath).toBe(join(dir, 'manager.sock'));
       expect(statSync(dir).mode & 0o777).toBe(0o711);
@@ -25,9 +42,10 @@ describe('openManagerToolsSocket（#2987）', () => {
     // 置き場所の親がファイルなので mkdir が落ちる
     const blocker = join(root, 'not-a-dir');
     writeFileSync(blocker, '');
+    socketDir.current = join(blocker, 'manager');
     let host: Awaited<ReturnType<typeof openManagerToolsSocket>>;
     const lines = await captureStderr(async () => {
-      host = await openManagerToolsSocket(undefined, join(blocker, 'manager'));
+      host = await openManagerToolsSocket(undefined);
     });
     expect(host).toBeUndefined();
     expect(lines).toHaveLength(1);

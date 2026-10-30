@@ -58,7 +58,6 @@ async function helloOf(target: RunnerHost): Promise<Record<string, unknown>> {
     host: target,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    sseHeartbeatMs: 60_000,
     ...appDefaults(),
   });
   const response = await app.request('/events', {

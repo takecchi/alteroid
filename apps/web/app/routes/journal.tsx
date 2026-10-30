@@ -12,7 +12,6 @@ import {
   FilterChips,
   Spinner,
   useMeasuredHeight,
-  WarnNote,
 } from '@alteroid/ui';
 import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
 import {
@@ -215,11 +214,6 @@ function JournalBody({
         retrying={isLoadingOlder || journalWindow.isLoadingNewer}
         className="mb-4"
       />
-      {journalWindow.newerBlocked && (
-        <BlockedNote className="mb-4">
-          新着の取りこぼし確認が、同じ時刻の記録の詰まりで止まった。この画面を開き直すと直る場合がある。
-        </BlockedNote>
-      )}
 
       <div ref={listRef}>
         {listUnavailable && !isLoadingInitial ? null : (
@@ -284,9 +278,4 @@ function JournalBody({
       )}
     </>
   );
-}
-
-// Empty や「これより古い記録は無い」と同じ顔にしない: 終端でも空でもない、本物の限界だと分かる形にするため
-function BlockedNote({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <WarnNote className={className}>{children}</WarnNote>;
 }

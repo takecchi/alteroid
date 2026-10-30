@@ -367,29 +367,6 @@ describe('alteroid inbox remove — 応答の表示', () => {
     expect(text).not.toContain('消せなかった');
   });
 
-  it('古いデーモン（droppedFromDelivery が無い応答）では、外せた件数を推測して出さない', async () => {
-    replies = [
-      {
-        status: 200,
-        body: {
-          ok: true,
-          dryRun: false,
-          totalPending: 1,
-          matched: 1,
-          targeted: 1,
-          removedIds: ['e-1'],
-          remaining: 0,
-        },
-      },
-    ];
-    const read = captureStdout();
-    await inboxRemoveCommand({ types: 'manager_message', reason: 'r', execute: true });
-
-    const text = read();
-    expect(text).toContain('e-1');
-    expect(text).not.toContain('配達の待ち行列');
-  });
-
   it('試算（dryRun）は、配達待ちの件数も消せなかった旨も出さない', async () => {
     replies = [
       {
@@ -487,7 +464,8 @@ describe('alteroid inbox remove — サーバの断りをそのまま投げる',
       { error: '記録が書けなかった', removedIds: [], droppedFromDelivery: 0 },
       { error: '記録が書けなかった' },
       { error: '記録が書けなかった', removedIds: 'evt-1' },
-      { error: '記録が書けなかった', removedIds: ['evt-1', 2] },
+      { error: '記録が書けなかった', removedIds: ['evt-1', 2], droppedFromDelivery: 0 },
+      { error: '記録が書けなかった', removedIds: ['evt-1'] },
     ];
     for (const body of bodies) {
       replies = [{ status: 500, body }];

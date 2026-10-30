@@ -24,14 +24,10 @@ function at(iso: string | null, now: number): string {
   return `${iso}（${formatElapsedAgo(iso, now)}）`;
 }
 
-/** `completeness.unreadableJobs` を任意にする: 古いデーモンの応答には無く、CLI は応答を型で検査せず渡すから。 */
+/** `byState.unjudgeable` を任意にする: 古いデーモンの応答には無く、CLI は応答を型で検査せず渡すから。無いものは 0 と書かず出さない。 */
 export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
-  backlog: Omit<ProgressView['backlog'], 'completeness' | 'byState'> & {
-    /** `unjudgeable` も任意: 古いデーモンの応答には無く、無いものは 0 と書かず出さない。 */
+  backlog: Omit<ProgressView['backlog'], 'byState'> & {
     byState: Omit<ProgressView['backlog']['byState'], 'unjudgeable'> & { unjudgeable?: number };
-    completeness: Omit<ProgressView['backlog']['completeness'], 'unreadableJobs'> & {
-      unreadableJobs?: number;
-    };
   };
 };
 
@@ -158,7 +154,7 @@ export function describeProgress(view: ProgressViewInput, fold: ProgressFold = F
     );
   }
   // 欄が無い（古いデーモンの応答）ときは何も言わない: 「undefined 件」とも 0 件とも書かない。
-  if (unreadableJobs !== undefined && unreadableJobs !== 0) {
+  if (unreadableJobs !== 0) {
     lines.push(
       '',
       `※ 読めない委譲の行が ${String(unreadableJobs)} 件ある。実施中・窓で終えた委譲・進行中（委譲あり）の数は、` +

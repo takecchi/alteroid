@@ -1271,8 +1271,6 @@ export const profileUpdateResponseSchema = z.object({
     clone: profileComposedFingerprintSchema,
     runner: profileComposedFingerprintSchema,
   }),
-  sha256: z.string().optional(),
-  bytes: z.number().optional(),
   clone: z.object({
     ok: z.boolean(),
     error: z.string().optional(),

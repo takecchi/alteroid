@@ -70,7 +70,7 @@ describe('HttpRunner#resume() は大きな生ログを送る間もループへ�
     const resumed = client.resume(command);
     // 送り始めた後に積む: 送り手が順番を返さなければ、本文を作り終えるまでこれは回らない
     setImmediate(() => order.push('immediate'));
-    expect(await resumed).toEqual({ cwd: '/workspace' });
+    expect(await resumed).toEqual({ cwd: '/workspace', reusedLiveSession: false });
     await client.close?.();
 
     expect(received).toEqual(command);

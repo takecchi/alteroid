@@ -20,13 +20,6 @@ export async function droppedCommand(): Promise<void> {
   }
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.dropped.$get();
-  // 404 を 0 件と同じ文言にしない: 跡が無いのではなくデーモンの版が古いため
-  if (response.status === 404) {
-    throw new Error(
-      'このデーモンには GET /dropped が無い（版が古い可能性がある。' +
-        'alteroid daemon stop && alteroid chat でデーモンを更新してください）',
-    );
-  }
   if (!response.ok) {
     throw new Error(
       await describeFailedResponse(

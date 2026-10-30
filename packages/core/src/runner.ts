@@ -6919,7 +6919,7 @@ class RunnerSession {
       return;
     }
     if (result.body.length === 0) return;
-    // 本文を SSE の1行で運ばない（#4485）: 数十 MB の行を受け取って解析する間、デーモンのループが塞がるため。預けられなければ（古いデーモン）本文を載せる
+    // 本文を SSE の1行で運ばない（#4485）: 数十 MB の行を受け取って解析する間、デーモンのループが塞がるため。本文を載せるのは、預ける口（`stashArchive`）を渡されていないときだけ
     const ref = this.#stashArchive?.(result.body);
     this.#emit(
       ref === undefined

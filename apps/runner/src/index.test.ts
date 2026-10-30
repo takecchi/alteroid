@@ -157,39 +157,54 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     }),
   };
 
-  it('未設定なら reclaim（撃つ）として観測し、view はそのまま乗る', () => {
-    expect(reclaimScanOf({}, CHILD, view)).toEqual({ childUid: 1001, mode: 'reclaim', view });
-    expect(reclaimScanOf({}, CHILD, view)).toEqual(
-      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, view),
+  it('未設定なら reclaim（撃つ）として観測し、view と引き取り手はそのまま乗る', () => {
+    expect(reclaimScanOf({}, CHILD, view, null)).toEqual({
+      childUid: 1001,
+      mode: 'reclaim',
+      view,
+      delegationSubreaper: null,
+    });
+    expect(reclaimScanOf({}, CHILD, view, '/usr/bin/tini')).toEqual({
+      childUid: 1001,
+      mode: 'reclaim',
+      view,
+      delegationSubreaper: '/usr/bin/tini',
+    });
+    expect(reclaimScanOf({}, CHILD, view, null)).toEqual(
+      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, view, null),
     );
   });
 
   it('observe を明示すれば、同じ view のまま撃たない構えになる', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, view)).toEqual({
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, view, null)).toEqual({
       childUid: 1001,
       mode: 'observe',
       view,
+      delegationSubreaper: null,
     });
   });
 
   it('空文字も未設定と同じく reclaim', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, view)).toEqual({
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, view, null)).toEqual({
       childUid: 1001,
       mode: 'reclaim',
       view,
+      delegationSubreaper: null,
     });
   });
 
   it('off なら欄ごと出さない（undefined）', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, view)).toBeUndefined();
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, view, null)).toBeUndefined();
   });
 
   it('知らない値なら落とす（黙って既定へ倒れない）', () => {
-    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD, view)).toThrow(/知らない値/);
+    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD, view, null)).toThrow(
+      /知らない値/,
+    );
   });
 
   it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
-    expect(reclaimScanOf({}, undefined, view)).toBeUndefined();
+    expect(reclaimScanOf({}, undefined, view, null)).toBeUndefined();
   });
 });
 
@@ -237,45 +252,42 @@ describe('socketOwnerOf', () => {
 });
 
 describe('childUserOf（#3807）', () => {
-  // 自身の UID を明示する: 実行ユーザーに左右されないため。
-  const ROOT = 0;
+  // runner 自身の UID は本物（process.getuid()）。降ろす先は、それと必ず食い違う値にする: 実行ユーザーに左右されないため。
+  const OWN = process.getuid?.() ?? 0;
+  const CHILD = OWN + 1000;
 
   it('未設定なら降ろさない', () => {
-    expect(childUserOf({}, ROOT)).toBeUndefined();
-    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '' }, ROOT)).toBeUndefined();
+    expect(childUserOf({})).toBeUndefined();
+    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '' })).toBeUndefined();
   });
 
   it('正しい値は通す。GID は UID に揃え、別々に置けばそのまま使う', () => {
-    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000' }, ROOT)).toEqual({
-      uid: 1000,
-      gid: 1000,
+    expect(childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(CHILD) })).toEqual({
+      uid: CHILD,
+      gid: CHILD,
     });
     expect(
-      childUserOf(
-        {
-          ALTEROID_RUNNER_CHILD_UID: '1000',
-          ALTEROID_RUNNER_CHILD_GID: '2000',
-          ALTEROID_RUNNER_CHILD_HOME: '/home/child',
-        },
-        ROOT,
-      ),
-    ).toEqual({ uid: 1000, gid: 2000, home: '/home/child' });
+      childUserOf({
+        ALTEROID_RUNNER_CHILD_UID: String(CHILD),
+        ALTEROID_RUNNER_CHILD_GID: '2000',
+        ALTEROID_RUNNER_CHILD_HOME: '/home/child',
+      }),
+    ).toEqual({ uid: CHILD, gid: 2000, home: '/home/child' });
   });
 
-  it('runner 自身と同じ UID（0）は、境界にならないので断る', () => {
-    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: '0' }, ROOT)).toThrow(/自身の UID/);
-    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000' }, 1000)).toThrow(/自身の UID/);
+  it('runner 自身と同じ UID は、境界にならないので断る', () => {
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(OWN) })).toThrow(/自身の UID/);
   });
 
   it.each(['abc', '-1', '1.5', '0x10', '1e3'])('UID が非負の整数でない（%s）なら断る', (value) => {
-    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: value }, ROOT)).toThrow(
+    expect(() => childUserOf({ ALTEROID_RUNNER_CHILD_UID: value })).toThrow(
       /ALTEROID_RUNNER_CHILD_UID は非負の整数/,
     );
   });
 
   it.each(['abc', '-1', '1.5'])('GID が非負の整数でない（%s）なら断る', (value) => {
     expect(() =>
-      childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000', ALTEROID_RUNNER_CHILD_GID: value }, ROOT),
+      childUserOf({ ALTEROID_RUNNER_CHILD_UID: String(CHILD), ALTEROID_RUNNER_CHILD_GID: value }),
     ).toThrow(/ALTEROID_RUNNER_CHILD_GID は非負の整数/);
   });
 });

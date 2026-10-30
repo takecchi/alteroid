@@ -234,10 +234,8 @@ function idOf(name: string, raw: string): number {
 }
 
 // UID が runner 自身と同じなら落とす: 境界にならず、孤児の回収が runner 自身まで候補に入れるため。
-export function childUserOf(
-  env: NodeJS.ProcessEnv,
-  ownUid: number | undefined = process.getuid?.(),
-): RunnerChildUser | undefined {
+export function childUserOf(env: NodeJS.ProcessEnv): RunnerChildUser | undefined {
+  const ownUid = process.getuid?.();
   const uid = envValue(env, 'ALTEROID_RUNNER_CHILD_UID');
   if (uid === undefined) return undefined;
   const gid = envValue(env, 'ALTEROID_RUNNER_CHILD_GID') ?? uid;
@@ -273,6 +271,8 @@ export function reclaimScanOf(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
   view: ReclaimSessionView,
+  // 委譲の引き取り手（`delegationSubreaperOf`）。探したが無ければ `null`
+  delegationSubreaper: string | null,
 ): ReclaimScanOptions | undefined {
   const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
   if (raw === 'off') return undefined;
@@ -285,7 +285,7 @@ export function reclaimScanOf(
     );
   }
   if (childUser === undefined) return undefined;
-  return { childUid: childUser.uid, mode: raw, view };
+  return { childUid: childUser.uid, mode: raw, view, delegationSubreaper };
 }
 
 export const DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY = 'ALTEROID_RUNNER_DONE_TREE_REAP_AFTER_MINUTES';
@@ -315,13 +315,12 @@ export function doneTreeReapAfterMsOf(env: NodeJS.ProcessEnv): number | undefine
 export function delegationSubreaperOf(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
-  isExecutable: (path: string) => boolean = executableFile,
 ): string | undefined {
   if (childUser === undefined) return undefined;
   for (const dir of (envValue(env, 'PATH') ?? '').split(delimiter)) {
     if (!isAbsolute(dir)) continue;
     const candidate = join(dir, 'tini');
-    if (isExecutable(candidate)) return candidate;
+    if (executableFile(candidate)) return candidate;
   }
   return undefined;
 }
@@ -457,14 +456,17 @@ export async function main(): Promise<void> {
     },
   };
 
-  const reclaimScan = reclaimScanOf(process.env, childUser, sessionView);
+  const reclaimScan = reclaimScanOf(
+    process.env,
+    childUser,
+    sessionView,
+    delegationSubreaper ?? null,
+  );
 
   // `createRunnerApp` は既定を持たず、ここで組んだものを必ず受ける: 既定の読み手は降ろす UID を知らず、観測が動かないため。
   // 引き取り手（#4494）も観測に載せる: 起動ログにしか出ないと、クローンから効いているかを確かめられないため。走査があるのは子の UID へ降ろす構成だけなので、`null` は「探したが無かった」である
   const taskBreakdownReader = new TaskBreakdownReader({
-    ...(reclaimScan === undefined
-      ? {}
-      : { reclaim: { ...reclaimScan, delegationSubreaper: delegationSubreaper ?? null } }),
+    ...(reclaimScan === undefined ? {} : { reclaim: reclaimScan }),
   });
 
   // 回収が無効なら起こさない: 走査しても何も撃たず、`/proc` を読むだけになるため。

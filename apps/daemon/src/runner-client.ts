@@ -444,6 +444,9 @@ class HttpRunner implements RunnerClient {
 
   readonly #droppedManagerKeys = new Set<string>();
 
+  // 走っている `/health` の読み（指紋の4つの口が分け合う）。済んだら外す: 値を覚え置くと、次の呼びが古い指紋を読むため
+  #healthInFlight: Promise<HealthBody> | null = null;
+
   get runnerIdKnown(): boolean {
     return this.#runnerIdKnown;
   }
@@ -498,10 +501,8 @@ class HttpRunner implements RunnerClient {
       this.workspacePath = body.workspacePath;
       this.#workspacePathKnown = true;
     }
-    // `revision` が無ければ触らない: 無条件に呼ぶと、フィールド不在の古い runner まで `unknown` へ倒れ、「訊けたが分からない」と「報告する口が無い」が区別できなくなるため
-    if (body.revision !== undefined) {
-      this.revision = revisionReportOf(body.revision);
-    }
+    // 欄が無い回も `unknown`（訊けたが分からない）で採る: 名簿が `unheard` を使うのは「報告する口を持たない実装」（`LocalRunner` 等）だけで、HTTP で訊けた相手は `unheard` にしないため
+    this.revision = revisionReportOf(body.revision);
     if (typeof body.instanceId === 'string' && body.instanceId.length > 0) {
       this.instanceId = body.instanceId;
     }
@@ -882,13 +883,13 @@ class HttpRunner implements RunnerClient {
     const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
       body.sessionGeneration,
     );
-    // 欄が無い・形が崩れた回は `false` へ倒さず `undefined`（分からない）にする: 古い runner は短絡したかを名乗れないため
+    // 欄が無い・形が崩れた回は `false`（短絡していない）と読む: runner は短絡した回に `true`、起こし直した回に `false` を必ず返すので、`true` と読めなかった回は流しただけではない
     const reused = runnerSessionOpenResultSchema.shape.reusedLiveSession.safeParse(
       body.reusedLiveSession,
     );
     return {
       ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
-      ...(reused.success && reused.data !== undefined ? { reusedLiveSession: reused.data } : {}),
+      reusedLiveSession: reused.success && reused.data === true,
       ...(generation.success && generation.data !== undefined
         ? { sessionGeneration: generation.data }
         : {}),
@@ -919,7 +920,7 @@ class HttpRunner implements RunnerClient {
     const decision = runnerAnswerResultSchema.shape.decision.safeParse(body.decision);
     return {
       delivered: body.ok === true,
-      // 欠けた回を allow/deny の既定値へ倒さず欄そのものを省く: ローリング再デプロイの窓では、この変更前の runner が `decision` を持たない応答を返すため
+      // 欠けた回を allow/deny の既定値へ倒さず欄そのものを省く: runner は届いた回（`ok: true`）にだけ `decision` を付け、宛先が無い回（`ok: false`）には付けないため
       ...(decision.success && decision.data !== undefined ? { decision: decision.data } : {}),
     };
   }
@@ -978,9 +979,22 @@ class HttpRunner implements RunnerClient {
     };
   }
 
+  // 同時に重なった読みは、走っている1回の本文を分け合う（#5716）: 一覧の指紋は1台へ credentials・profile・mcpServers を同時に訊くため。
+  // 分け合った呼びは同じ時点の値を読み、その1回が落ちれば揃って落ちる。`identity()`・`resources()` は取り消し（`signal`）を呼び手ごとに持つので分け合わない
+  #readHealth(): Promise<HealthBody> {
+    if (this.#healthInFlight !== null) return this.#healthInFlight;
+    const reading = (async () => {
+      const response = await this.#call('GET', '/health');
+      return (await response.json()) as HealthBody;
+    })().finally(() => {
+      if (this.#healthInFlight === reading) this.#healthInFlight = null;
+    });
+    this.#healthInFlight = reading;
+    return reading;
+  }
+
   async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     return fingerprintsOf(body.credentials);
   }
 
@@ -993,8 +1007,7 @@ class HttpRunner implements RunnerClient {
   }
 
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外したプロファイルと一致」と読み、外したはずのプロファイルが runner に残り続けるため
     if (body.profile === undefined || body.profile === null) return undefined;
     const parsed = runnerProfileFingerprintSchema.safeParse(body.profile);
@@ -1010,8 +1023,7 @@ class HttpRunner implements RunnerClient {
 
   // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外した登録と一致」と読み、外したはずの登録が runner に残り続けるため
   async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     if (body.mcpServers === undefined || body.mcpServers === null) return undefined;
     const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
     if (!parsed.success) throw new Error('runner の /health の mcpServers の欄を読めなかった');
@@ -1041,8 +1053,7 @@ class HttpRunner implements RunnerClient {
 
   // 欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒さない）: 外したはずの plugin が runner に残り続けるため
   async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
-    const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
+    const body = await this.#readHealth();
     if (body.plugins === undefined || body.plugins === null) return undefined;
     const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
     if (!parsed.success) throw new Error('runner の /health の plugins の欄を読めなかった');

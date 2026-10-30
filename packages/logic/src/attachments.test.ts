@@ -55,6 +55,7 @@ describe('デーモンの上限を渡したとき（#3204）', () => {
   const limits = {
     maxImageBytes: 40 * MIB,
     maxFileBytes: 200 * MIB,
+    maxLargeFileBytes: 0,
     maxPerMessage: 2,
     maxTotalBytes: 100 * MIB,
   };

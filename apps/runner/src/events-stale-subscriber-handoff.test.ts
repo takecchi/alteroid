@@ -80,8 +80,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 60_000,
         ...appDefaults(),
       });
 
@@ -156,8 +154,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 60_000,
         ...appDefaults(),
       });
 
