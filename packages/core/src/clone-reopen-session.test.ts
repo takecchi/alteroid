@@ -196,7 +196,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
       body: '弾かれた生ログ',
     });
     expect(s.sideQueries()).toBe(before);
-    expect(await s.stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await s.stores.sessions.listTranscriptGraves()).toEqual([]);
     const lines = await selfLines(s.stores);
     expect(lines.some((line) => line.includes('蒸留に失敗した'))).toBe(false);
     await s.clone.stop();
@@ -212,7 +212,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await s.reopen({ reason, distill: true, actor });
     await waitFor(() => s.sideQueries() > before, '蒸留のサイドクエリが呼ばれること');
     await waitFor(
-      async () => (await s.stores.sessions.getTranscriptGrave()) !== null,
+      async () => (await s.stores.sessions.listTranscriptGraves()).length > 0,
       '蒸留が落ちて墓標が立つこと',
     );
     const lines = await selfLines(s.stores);

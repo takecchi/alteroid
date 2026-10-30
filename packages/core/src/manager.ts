@@ -148,6 +148,7 @@ import type {
   RunnerAttachment,
   RunnerClient,
   RunnerCredentialFingerprint,
+  RunnerEntry,
   RunnerEvent,
   ScratchSweepItem,
   RunnerExecutionResources,
@@ -911,7 +912,7 @@ export interface RunnerPushOutcome {
 }
 
 /**
- * 3つの押し込みは互いに独立して落ちる（`#pushCredentials` の doc）ので1つの状態へ畳まない:
+ * 3つの押し込みは互いに独立して落ちる（`#pushSpecs` の doc）ので1つの状態へ畳まない:
  * 「どれが原因か」が見えなくなる。まだ試みていない欄は省き、`undefined` を「成功した」の
  * 既定値で埋めない（取れない軸に0の行を作らない）。
  */
@@ -923,6 +924,22 @@ export interface RunnerPushHealth {
   plugins?: RunnerPushOutcome;
   /** 委譲先の許可規則（#4952）。 */
   permissionRules?: RunnerPushOutcome;
+}
+
+/** `#pushSetting` が見る、置く種類1つぶんの違い（#5871）。`ManagerPool#pushSpecs` が表にする。 */
+interface PushSpec {
+  readonly kind: keyof RunnerPushHealth;
+  /** `undefined` はその口を配線していない種類で、何もしない。返すのは「runner が断った」とき（投げずに失敗を報せる口）の理由と日誌の本文で、受け入れられたら `undefined`。 */
+  readonly sync: ((runner: RunnerClient) => Promise<PushRefusal | undefined>) | undefined;
+  /** 呼びが投げたときの日誌の本文。 */
+  readonly thrown: (runnerId: string, reason: string) => string;
+}
+
+interface PushRefusal {
+  /** 帳面（`RunnerPushOutcome.error`）へ書く理由。 */
+  readonly error: string;
+  /** 日誌の本文（接頭辞は `#journalPushFailure` が付ける）。 */
+  readonly body: string;
 }
 
 /**
@@ -4336,7 +4353,7 @@ class Pool implements ManagerPool {
       // 指紋が分からないときは断らず流し、世代は書かない。
       const observed = record.attached
         ? this.#sessionTokenFingerprintOf(managerId)
-        : this.#observedTokenFingerprint(record.job.runnerId, managerId);
+        : this.#observedSessionField('sessionTokenFingerprints', record.job.runnerId, managerId);
       if (observed === undefined || activeFingerprint === undefined) return {};
       if (observed === activeFingerprint) return { fingerprintMatched: true };
     }
@@ -5031,14 +5048,27 @@ class Pool implements ManagerPool {
     }
   }
 
-  /** 聞けていない・欄を返さない runner のときは `undefined`（「分からない」）。 */
-  #observedTokenFingerprint(runnerId: string | undefined, managerId: string): string | undefined {
+  /**
+   * 名簿の最後の観測を読むだけで往復しない。聞けていない・欄を返さない runner・キーが無い委譲のときは `undefined`（「分からない」。0 ではない）。
+   * `field` は `RunnerEntry` の観測の欄（委譲ごとのキーを持つ記録）の名前。
+   */
+  #observedSessionField<
+    K extends
+      | 'sessionBackgroundTasks'
+      | 'sessionClassifierDenials'
+      | 'sessionPeerApprovals'
+      | 'sessionTokenFingerprints',
+  >(
+    field: K,
+    runnerId: string | undefined,
+    managerId: string,
+  ): NonNullable<RunnerEntry[K]>[string] | undefined {
     if (runnerId === undefined) return undefined;
     for (const entry of this.#runners.entries()) {
       if (entry.runnerId !== runnerId) continue;
-      const fingerprints = entry.sessionTokenFingerprints;
-      if (fingerprints !== undefined && Object.hasOwn(fingerprints, managerId)) {
-        return fingerprints[managerId];
+      const observed = entry[field] as Readonly<Record<string, unknown>> | undefined;
+      if (observed !== undefined && Object.hasOwn(observed, managerId)) {
+        return observed[managerId] as NonNullable<RunnerEntry[K]>[string];
       }
     }
     return undefined;
@@ -5052,49 +5082,9 @@ class Pool implements ManagerPool {
     const record = this.#records.get(managerId);
     if (record === undefined) return undefined;
     return (
-      this.#observedTokenFingerprint(record.job.runnerId, managerId) ??
+      this.#observedSessionField('sessionTokenFingerprints', record.job.runnerId, managerId) ??
       record.tokenFingerprintAtReattach
     );
-  }
-
-  /** 聞けていない・欄を返さない runner のときは `undefined`（0 ではない）。 */
-  #observedBackgroundTasks(runnerId: string | undefined, managerId: string): number | undefined {
-    if (runnerId === undefined) return undefined;
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId !== runnerId) continue;
-      const tasks = entry.sessionBackgroundTasks;
-      if (tasks !== undefined && Object.hasOwn(tasks, managerId)) return tasks[managerId];
-    }
-    return undefined;
-  }
-
-  // `#observedBackgroundTasks` と同じ読み方: 名簿の最後の観測を読むだけで往復しない。キーが無いのは「分からない」
-  #observedClassifierDenials(
-    runnerId: string | undefined,
-    managerId: string,
-  ): readonly ClassifierDenialOverLimit[] | undefined {
-    if (runnerId === undefined) return undefined;
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId !== runnerId) continue;
-      const denials = entry.sessionClassifierDenials;
-      if (denials !== undefined && Object.hasOwn(denials, managerId)) return denials[managerId];
-    }
-    return undefined;
-  }
-
-  #observedPeerApprovals(
-    runnerId: string | undefined,
-    managerId: string,
-  ): { count: number; oldestSince: string } | undefined {
-    if (runnerId === undefined) return undefined;
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId !== runnerId) continue;
-      const approvals = entry.sessionPeerApprovals;
-      if (approvals !== undefined && Object.hasOwn(approvals, managerId)) {
-        return approvals[managerId];
-      }
-    }
-    return undefined;
   }
 
   // 名簿・現役の世代は1回だけ引いて使い回す: 一覧を作っている間に動いても、同じ応答の中では全件を同じ像で比べる
@@ -5140,11 +5130,23 @@ class Pool implements ManagerPool {
   // 聞けていない委譲には欄を作らない（0 を捏造しない）。走行中の像（`#records`）に在る委譲だけに添える
   #withObserved(record: ManagerRecord, summary: ManagerSummary): ManagerSummary {
     let result = summary;
-    const tasks = this.#observedBackgroundTasks(record.job.runnerId, record.job.id);
+    const tasks = this.#observedSessionField(
+      'sessionBackgroundTasks',
+      record.job.runnerId,
+      record.job.id,
+    );
     if (tasks !== undefined) result = { ...result, liveBackgroundTasks: tasks };
-    const denials = this.#observedClassifierDenials(record.job.runnerId, record.job.id);
+    const denials = this.#observedSessionField(
+      'sessionClassifierDenials',
+      record.job.runnerId,
+      record.job.id,
+    );
     if (denials !== undefined) result = { ...result, classifierDenials: denials };
-    const peerApprovals = this.#observedPeerApprovals(record.job.runnerId, record.job.id);
+    const peerApprovals = this.#observedSessionField(
+      'sessionPeerApprovals',
+      record.job.runnerId,
+      record.job.id,
+    );
     if (peerApprovals !== undefined) {
       result = { ...result, pendingPeerApprovals: { ...peerApprovals } };
     }
@@ -8520,142 +8522,162 @@ class Pool implements ManagerPool {
   // -------------------------------------------------------------------------
 
   /**
-   * runner が自分で取りに行く形にしない: 取りに行けるなら runner に記憶ストアの鍵があることになる（AGENTS.md「runner に記憶ストアの鍵を足さないこと」）。
-   * 失敗しても委譲は止めないが、降りていないことは日誌に残す: 黙って古い環境で走ると「鍵が届いていない」のか「権限が足りない」のかを切り分けられない。
+   * runner へ置く設定の表（#5871）。置く種類ごとの違い（呼ぶ口・失敗の文言）だけをここに持ち、成否の記録・日誌・続け方は `#pushSetting` の1本が受け持つ。
+   * 並びは `#pushEnvironmentTo` が使う順そのもの: 鍵を先に降ろす（#4841）。runner はプロファイルを受け取った時点の env（鍵を含む）で評価して固めるので、後に降ろすと `"$GH_TOKEN"` や gh を叩く行が鍵の無い env で評価されたまま残る。
+   * 種類ごとに別の呼びにする: 片方が落ちても片方は降りるべき（プロファイルの評価が落ちた器へ、無関係な鍵まで降りないことを避ける）。
+   * 日誌には値・本文を書かない: 失敗の理由は runner の文言をそのまま運ぶが、各 `parse*` が値を載せない形で作っている（files の中身・規則の command の全文・MCP の値）。
+   * `sync` が無い（その口を配線していない）種類は何もしない。
    */
-  async #pushProfile(runner: RunnerClient): Promise<void> {
-    if (this.#stopped || this.#profile === undefined) return;
+  #pushSpecs(): { readonly ordered: readonly PushSpec[]; readonly agentToken: PushSpec } {
+    const profile = this.#profile;
+    const credentials = this.#credentials;
+    const mcpServers = this.#mcpServers;
+    const plugins = this.#plugins;
+    const permissionRules = this.#permissionRules;
+    const syncRunnerToken = this.#syncRunnerToken;
+    return {
+      ordered: [
+        {
+          kind: 'credentials',
+          // runner が自分で取りに行く形にしない: 取りに行けるなら runner に記憶ストアの鍵があることになる（AGENTS.md「runner に記憶ストアの鍵を足さないこと」）。
+          // プロファイルと別の呼びにする: 1つにまとめると、プロファイルの評価が落ちた器へは無関係な鍵まで降りない。
+          sync:
+            credentials === undefined
+              ? undefined
+              : async (runner) => {
+                  await credentials.syncRunner(runner);
+                  return undefined;
+                },
+          thrown: (runnerId, reason) =>
+            `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reason}`,
+        },
+        {
+          kind: 'profile',
+          // 失敗しても委譲は止めないが、降りていないことは日誌に残す: 黙って古い環境で走ると「鍵が届いていない」のか「権限が足りない」のかを切り分けられない。
+          sync:
+            profile === undefined
+              ? undefined
+              : async (runner) => {
+                  // 更新と同じ列に入れる: 直に読んで直に書くと、更新の最中に古い本文で上書きしうる。
+                  const result = await profile.syncRunner(runner);
+                  if (result === null || result.ok) return undefined;
+                  // `result.output` は日誌へ書かず長さだけを書く: 生の stderr にはシェルが返した行や echo から鍵の値そのものが乗りうり、日誌は永続でクローンも人間も後から読む。
+                  const outputChars = result.output?.length ?? 0;
+                  return {
+                    error: result.error ?? '理由不明',
+                    body:
+                      `${runner.runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
+                      `${result.error ?? '理由不明'}` +
+                      (outputChars === 0
+                        ? ''
+                        : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
+                          '出力は profile_write / PUT /profile/:name で書き直したときの応答で読める）'),
+                  };
+                },
+          thrown: (runnerId, reason) =>
+            `${runnerId} へ実行環境プロファイルを降ろせなかった: ${reason}`,
+        },
+        {
+          kind: 'mcpServers',
+          sync:
+            mcpServers === undefined
+              ? undefined
+              : async (runner) => {
+                  await mcpServers.syncRunner(runner);
+                  return undefined;
+                },
+          thrown: (runnerId, reason) =>
+            `${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reason}`,
+        },
+        {
+          kind: 'plugins',
+          sync:
+            plugins === undefined
+              ? undefined
+              : async (runner) => {
+                  await plugins.syncRunner(runner);
+                  return undefined;
+                },
+          thrown: (runnerId, reason) =>
+            `${runnerId} へ plugin を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの plugin を持たずに走る）: ${reason}`,
+        },
+        {
+          kind: 'permissionRules',
+          // 委譲先の許可規則（#4952）。
+          sync:
+            permissionRules === undefined
+              ? undefined
+              : async (runner) => {
+                  await permissionRules.syncRunner(runner);
+                  return undefined;
+                },
+          thrown: (runnerId, reason) =>
+            `${runnerId} へ委譲先の許可規則を降ろせなかった（この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載っていない。前に降りた一覧が残っていればそれが効いている）: ${reason}`,
+        },
+      ],
+      // 失敗しても委譲は止めない。ただし黙って古いトークンで走らせない: 跡を残す。
+      agentToken: {
+        kind: 'agentToken',
+        sync:
+          syncRunnerToken === undefined
+            ? undefined
+            : async (runner) => {
+                await syncRunnerToken(runner);
+                return undefined;
+              },
+        thrown: (runnerId, reason) =>
+          `${runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reason}`,
+      },
+    };
+  }
+
+  /**
+   * 投げ直さない: 委譲経路を日誌の失敗で止めず、応答を受け取って判断し直す相手がここには居ない（tools.ts の `appendJournalOrThrow` とは非対称）。
+   * `this.#journalPushFailure` を経由し、直に `this.#stores.journal.append` を呼ばない: 日誌 append の失敗を配布の失敗として書いてしまううえ、append 自体が落ちると跡が残らない（`#journal` は `self_dropped` へ残す）。
+   */
+  async #pushSetting(spec: PushSpec, runner: RunnerClient): Promise<void> {
+    if (this.#stopped || spec.sync === undefined) return;
     const runnerId = runner.runnerId;
     try {
-      // 更新と同じ列に入れる: 直に読んで直に書くと、更新の最中に古い本文で上書きしうる。
-      const result = await this.#profile.syncRunner(runner);
-      if (result === null || result.ok) {
-        this.#notePushOutcome(runnerId, 'profile', { status: 'ok', at: this.#nowIso() });
+      const refusal = await spec.sync(runner);
+      if (refusal === undefined) {
+        this.#notePushOutcome(runnerId, spec.kind, { status: 'ok', at: this.#nowIso() });
         return;
       }
-
-      this.#notePushOutcome(runnerId, 'profile', {
+      this.#notePushOutcome(runnerId, spec.kind, {
         status: 'failed',
         at: this.#nowIso(),
-        error: result.error ?? '理由不明',
+        error: refusal.error,
       });
-      // `result.output` は日誌へ書かず長さだけを書く: 生の stderr にはシェルが返した行や echo から鍵の値そのものが乗りうり、日誌は永続でクローンも人間も後から読む。
-      const outputChars = result.output?.length ?? 0;
-      await this.#journalPushFailure(
-        runnerId,
-        'profile',
-        `${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
-          `${result.error ?? '理由不明'}` +
-          (outputChars === 0
-            ? ''
-            : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
-              '出力は profile_write / PUT /profile/:name で書き直したときの応答で読める）'),
-      );
+      await this.#journalPushFailure(runnerId, spec.kind, refusal.body);
     } catch (error) {
-      // `this.#journal` を経由し、直に `this.#stores.journal.append` を呼ばない: 日誌 append の失敗をプロファイル配布の失敗として書いてしまうため。投げ直さない: 委譲経路を日誌の失敗で止めず、応答を受け取って判断し直す相手がここには居ない（tools.ts の `appendJournalOrThrow` とは非対称）。
-      this.#notePushOutcome(runnerId, 'profile', {
+      this.#notePushOutcome(runnerId, spec.kind, {
         status: 'failed',
         at: this.#nowIso(),
         error: reasonOf(error),
       });
-      await this.#journalPushFailure(
-        runnerId,
-        'profile',
-        `${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
-      );
+      await this.#journalPushFailure(runnerId, spec.kind, spec.thrown(runnerId, reasonOf(error)));
     }
   }
 
-  /** プロファイルと別の呼びにする: 1つにまとめると、プロファイルの評価が落ちた器へは無関係な鍵まで降りない。 */
-  async #pushCredentials(runner: RunnerClient): Promise<void> {
-    if (this.#stopped || this.#credentials === undefined) return;
-    const runnerId = runner.runnerId;
-    try {
-      await this.#credentials.syncRunner(runner);
-      this.#notePushOutcome(runnerId, 'credentials', { status: 'ok', at: this.#nowIso() });
-    } catch (error) {
-      this.#notePushOutcome(runnerId, 'credentials', {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: reasonOf(error),
-      });
-      await this.#journalPushFailure(
-        runnerId,
-        'credentials',
-        `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
-      );
-    }
+  /** 種類を名指しで置き直す（失敗した種類だけを挑み直す `#retryFailedPushes` が使う）。 */
+  async #pushKind(kind: keyof RunnerPushHealth, runner: RunnerClient): Promise<void> {
+    const specs = this.#pushSpecs();
+    const spec = [...specs.ordered, specs.agentToken].find((candidate) => candidate.kind === kind);
+    if (spec !== undefined) await this.#pushSetting(spec, runner);
   }
 
   /**
-   * 別の呼びにする: 片方が落ちても片方は降りるべき。
-   * 日誌には値を書かない: 失敗の理由は runner の文言をそのまま運ぶが、`parseMcpServers` が値を載せない形で作っている。
+   * `#connectTo`（繋いだとき）と `#reattach`（繋ぎ直したとき）が共有する、置く並びの全部。表の並び（鍵が先）→ codex 認証 → 認証トークン。
+   * 1つ失敗しても残りは置く（`#pushSetting` は投げない）。
+   * codex 認証の失敗は相手の側が日誌に残す。
+   * 認証トークンを降ろし忘れない: 器が入れ替わっていれば置いた鍵も消えており、器の環境変数（＝回す前のトークン）のまま走るのに、その食い違いは「マネージャーの側からは見えない」。「実害が出にくい」を「要らない」と読まない。
    */
-  async #pushMcpServers(runner: RunnerClient): Promise<void> {
-    if (this.#stopped || this.#mcpServers === undefined) return;
-    const runnerId = runner.runnerId;
-    try {
-      await this.#mcpServers.syncRunner(runner);
-      this.#notePushOutcome(runnerId, 'mcpServers', { status: 'ok', at: this.#nowIso() });
-    } catch (error) {
-      this.#notePushOutcome(runnerId, 'mcpServers', {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: reasonOf(error),
-      });
-      await this.#journalPushFailure(
-        runnerId,
-        'mcpServers',
-        `${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
-      );
-    }
-  }
-
-  /**
-   * 日誌には files の中身を書かない（名前と runner の失敗理由だけ）。
-   */
-  async #pushPlugins(runner: RunnerClient): Promise<void> {
-    if (this.#stopped || this.#plugins === undefined) return;
-    const runnerId = runner.runnerId;
-    try {
-      await this.#plugins.syncRunner(runner);
-      this.#notePushOutcome(runnerId, 'plugins', { status: 'ok', at: this.#nowIso() });
-    } catch (error) {
-      this.#notePushOutcome(runnerId, 'plugins', {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: reasonOf(error),
-      });
-      await this.#journalPushFailure(
-        runnerId,
-        'plugins',
-        `${runnerId} へ plugin を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの plugin を持たずに走る）: ${reasonOf(error)}`,
-      );
-    }
-  }
-
-  /**
-   * 委譲先の許可規則（#4952）。別の呼びにする: 片方が落ちても片方は降りるべき。
-   * 日誌に規則の本文（command の全文）を書かない: 失敗の理由は runner の文言をそのまま運ぶが、`parseDelegatedPermissionRules` が値を載せない形で作っている。
-   */
-  async #pushPermissionRules(runner: RunnerClient): Promise<void> {
-    if (this.#stopped || this.#permissionRules === undefined) return;
-    const runnerId = runner.runnerId;
-    try {
-      await this.#permissionRules.syncRunner(runner);
-      this.#notePushOutcome(runnerId, 'permissionRules', { status: 'ok', at: this.#nowIso() });
-    } catch (error) {
-      this.#notePushOutcome(runnerId, 'permissionRules', {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: reasonOf(error),
-      });
-      await this.#journalPushFailure(
-        runnerId,
-        'permissionRules',
-        `${runnerId} へ委譲先の許可規則を降ろせなかった（この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載っていない。前に降りた一覧が残っていればそれが効いている）: ${reasonOf(error)}`,
-      );
-    }
+  async #pushEnvironmentTo(runner: RunnerClient): Promise<void> {
+    const specs = this.#pushSpecs();
+    for (const spec of specs.ordered) await this.#pushSetting(spec, runner);
+    await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
+    await this.#pushSetting(specs.agentToken, runner);
   }
 
   /**
@@ -8699,15 +8721,8 @@ class Pool implements ManagerPool {
         });
       });
       // 委譲を始める前に環境を整える: 名乗り（`hello`）任せにすると、最初のマネージャーが届く前に走り出し、「たまに鍵が無い」という形で現れる。器が作り直されていれば置いたものは消えている。
-      // 鍵を先に降ろす（#4841）: runner はプロファイルを受け取った時点の env（鍵を含む）で評価して固めるので、後に降ろすと `"$GH_TOKEN"` や gh を叩く行が鍵の無い env で評価されたまま残る
-      await this.#pushCredentials(runner);
-      await this.#pushProfile(runner);
-      await this.#pushMcpServers(runner);
-      await this.#pushPlugins(runner);
-      await this.#pushPermissionRules(runner);
-      // 失敗は相手の側が日誌に残す。
-      await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
-      await this.#pushAgentToken(runner);
+      // 鍵を先に降ろす（#4841）: 並びは `#pushSpecs` の表の順。
+      await this.#pushEnvironmentTo(runner);
       this.#settlePushRetry(runner.runnerId);
     })().catch((error: unknown) => {
       this.#connections.delete(runner);
@@ -8742,7 +8757,7 @@ class Pool implements ManagerPool {
       });
       if (runner === null) return;
 
-      // 併存は関門より前に確かめる: `this.#runners.get` は同名の行が2つ以上あっても黙って一方を返すので、関門（`#claimForResume`）に着く前に `#pushProfile` と `runner.list()` が誤解決した相手へ走ってしまう。関門は複製せず、進んでよい状態かを覗くだけ。
+      // 併存は関門より前に確かめる: `this.#runners.get` は同名の行が2つ以上あっても黙って一方を返すので、関門（`#claimForResume`）に着く前にプロファイルの配布（`#pushSetting`。日誌の文言には旧名の `#pushProfile` が残る）と `runner.list()` が誤解決した相手へ走ってしまう。関門は複製せず、進んでよい状態かを覗くだけ。
       // この断りは `held` と違って時間で解けないので「遷移のときだけ書く」dedup（`refusedBefore`）には乗せない: 初回だけ言うと、見逃した後・デーモン再起動後は永久に見えなくなる。
       const sighting = this.#sighting(runnerId);
       if (sighting.duplicates !== undefined && sighting.duplicates > 1) {
@@ -8789,15 +8804,8 @@ class Pool implements ManagerPool {
       // `#connections` は触らず別の窓口（`#reattachPushes`）に置く: `#connectTo` の失敗時の後始末が誰の Promise かを見ずに消すため、上書きすると古い接続の失敗がこの降ろし直しを巻き添えで消しうる。
       const push = (async () => {
         // 繋ぎ直してきた runner は器ごと入れ替わっていることがあり、置いた鍵とプロファイルは消えているので降ろし直す。
-        // 鍵を先に降ろす（#4841）: runner はプロファイルを受け取った時点の env（鍵を含む）で評価して固めるので、後に降ろすと `"$GH_TOKEN"` や gh を叩く行が鍵の無い env で評価されたまま残る
-        await this.#pushCredentials(runner);
-        await this.#pushProfile(runner);
-        await this.#pushMcpServers(runner);
-        await this.#pushPlugins(runner);
-        await this.#pushPermissionRules(runner);
-        await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
-        // 認証トークンを降ろし忘れない: 器が入れ替わっていれば置いた鍵も消えており、器の環境変数（＝回す前のトークン）のまま走るのに、その食い違いは `#pushAgentToken` の doc が言うとおり「マネージャーの側からは見えない」。「実害が出にくい」を「要らない」と読まない。
-        await this.#pushAgentToken(runner);
+        // 鍵を先に降ろす（#4841）: 並びは `#pushSpecs` の表の順。認証トークンも降ろし忘れない（`#pushEnvironmentTo` の注記）。
+        await this.#pushEnvironmentTo(runner);
         this.#settlePushRetry(runnerId);
       })();
       this.#reattachPushes.set(runnerId, push);
@@ -12067,28 +12075,6 @@ class Pool implements ManagerPool {
     return denied;
   }
 
-  // 失敗しても委譲は止めない（`#pushProfile` と同じ）。ただし黙って古いトークンで走らせない: 跡を残す。
-  async #pushAgentToken(runner: RunnerClient): Promise<void> {
-    if (this.#stopped || this.#syncRunnerToken === undefined) return;
-    try {
-      await this.#syncRunnerToken(runner);
-      this.#notePushOutcome(runner.runnerId, 'agentToken', { status: 'ok', at: this.#nowIso() });
-    } catch (error) {
-      this.#notePushOutcome(runner.runnerId, 'agentToken', {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: reasonOf(error),
-      });
-      // `this.#stores.journal.append(...).catch(() => undefined)` で直に揉み消さない: append 自体が落ちると跡が残らない（`#journal` は `self_dropped` へ残す）。
-      // 投げ直さない: マネージャーの委譲経路には、投げ直した例外を受け取って判断し直す相手がいない。
-      await this.#journalPushFailure(
-        runner.runnerId,
-        'agentToken',
-        `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
-      );
-    }
-  }
-
   // 同じ本文が続くあいだは2件目以降を畳む: 直らない障害では挑み直しのたびに同じ行が毎分積まれるため。
   // 畳むのは日誌の1行だけ。帳面（`#pushHealth`）・挑み直し・クローンへの通知は畳まない。
   async #journalPushFailure(
@@ -12232,12 +12218,17 @@ class Pool implements ManagerPool {
     if (inFlight !== undefined) await inFlight.catch(() => undefined);
     if (this.#stopped) return;
 
-    if (health.profile?.status === 'failed') await this.#pushProfile(runner);
-    if (health.credentials?.status === 'failed') await this.#pushCredentials(runner);
-    if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
-    if (health.mcpServers?.status === 'failed') await this.#pushMcpServers(runner);
-    if (health.plugins?.status === 'failed') await this.#pushPlugins(runner);
-    if (health.permissionRules?.status === 'failed') await this.#pushPermissionRules(runner);
+    // 並びは繋いだときと別（既存の順を保つ）。
+    for (const kind of [
+      'profile',
+      'credentials',
+      'agentToken',
+      'mcpServers',
+      'plugins',
+      'permissionRules',
+    ] as const) {
+      if (health[kind]?.status === 'failed') await this.#pushKind(kind, runner);
+    }
     this.#settlePushRetry(runnerId);
   }
 

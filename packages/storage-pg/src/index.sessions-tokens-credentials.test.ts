@@ -429,15 +429,15 @@ describe('PgSessionRegistry', () => {
 
   describe('墓標の compare-and-set（#1157）', () => {
     it('一致すれば下ろして true', async () => {
-      await stores.sessions.setTranscriptGrave({ archiveId: 'arc-1' });
+      await stores.sessions.addTranscriptGrave({ archiveId: 'arc-1' });
       expect(await stores.sessions.clearTranscriptGraveIf('arc-1')).toBe(true);
-      expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+      expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
     });
 
     it('⛔ 入れ替わっていたら下ろさず false（新しい墓標を消さない）', async () => {
-      await stores.sessions.setTranscriptGrave({ archiveId: 'arc-new' });
+      await stores.sessions.addTranscriptGrave({ archiveId: 'arc-new' });
       expect(await stores.sessions.clearTranscriptGraveIf('arc-old')).toBe(false);
-      expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
+      expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId: 'arc-new' }]);
     });
 
     it('そもそも無ければ false', async () => {
@@ -445,18 +445,17 @@ describe('PgSessionRegistry', () => {
     });
 
     it('捨てた回の墓標も同じ形', async () => {
-      await stores.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-1' });
+      await stores.sessions.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-1' });
       expect(await stores.sessions.clearLostSessionGraveIf('sess-1')).toBe(true);
-      expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+      expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
     });
 
     it('⛔ 捨てた回の墓標も、入れ替わっていたら下ろさず false', async () => {
-      await stores.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
+      await stores.sessions.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
       expect(await stores.sessions.clearLostSessionGraveIf('sess-old')).toBe(false);
-      expect(await stores.sessions.getLostSessionGrave()).toEqual({
-        projectKey: 'proj',
-        sessionId: 'sess-new',
-      });
+      expect(await stores.sessions.listLostSessionGraves()).toEqual([
+        { projectKey: 'proj', sessionId: 'sess-new' },
+      ]);
     });
   });
 
@@ -471,40 +470,47 @@ describe('PgSessionRegistry', () => {
   });
 
   it('墓標を覚えて忘れられる。そして resume 素材を捨てても消えない', async () => {
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
 
     await stores.sessions.setCloneSessionId('sess-1');
-    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.addTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
 
     await stores.sessions.setCloneSessionId(null);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
 
-    await stores.sessions.setTranscriptGrave(null);
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    await stores.sessions.clearTranscriptGraveIf('sess-1-2026.jsonl');
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
   });
 
   it('2つの墓標は互いを消さない。そして resume 素材を捨てても両方残る', async () => {
     await stores.sessions.setCloneSessionId('sess-1');
-    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
-    await stores.sessions.setLostSessionGrave({
+    await stores.sessions.addTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.addLostSessionGrave({
       projectKey: '-workspace',
       sessionId: 'sess-old',
     });
 
     await stores.sessions.setCloneSessionId(null);
 
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
-    expect(await stores.sessions.getLostSessionGrave()).toEqual({
-      projectKey: '-workspace',
-      sessionId: 'sess-old',
-    });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([
+      { projectKey: '-workspace', sessionId: 'sess-old' },
+    ]);
 
-    await stores.sessions.setLostSessionGrave(null);
-    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
-    await stores.sessions.setTranscriptGrave(null);
+    await stores.sessions.clearLostSessionGraveIf('sess-old');
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
+    await stores.sessions.clearTranscriptGraveIf('sess-1-2026.jsonl');
   });
 
   it('生ログの scope を覚える。resume 素材を捨てても消えない', async () => {
@@ -519,62 +525,62 @@ describe('PgSessionRegistry', () => {
   });
 
   describe('読み出し不能の跡（#1147）', () => {
-    it('行が無いときは跡を残さず null を返す（getTranscriptGrave、陰性対照）', async () => {
+    it('行が無いときは跡を残さず空を返す（listTranscriptGraves、陰性対照）', async () => {
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await stores.sessions.getTranscriptGrave();
+        value = await stores.sessions.listTranscriptGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines).toHaveLength(0);
     });
 
-    it('千切れた JSON の行を読んだときは跡を残して null を返す（getTranscriptGrave）', async () => {
+    it('千切れた JSON の行を読んだときは跡を残して空を返す（listTranscriptGraves）', async () => {
       await db.execute(
-        sql`insert into daemon_state (key, value) values ('clone_transcript_grave', '{"archiveId":"arc-1')`,
+        sql`insert into daemon_state (key, value) values ('clone_transcript_grave_queue', '[{"archiveId":"arc-1')`,
       );
 
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await stores.sessions.getTranscriptGrave();
+        value = await stores.sessions.listTranscriptGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       const joined = lines.join('');
       expect(joined).toContain('生ログの墓標');
       expect(joined).toContain('読み出せませんでした');
     });
 
-    it('JSON としては読めるがスキーマに合わない行も、跡を残して null を返す（getTranscriptGrave）', async () => {
+    it('JSON としては読めるがスキーマに合わない行も、跡を残して空を返す（listTranscriptGraves）', async () => {
       await db.execute(
-        sql`insert into daemon_state (key, value) values ('clone_transcript_grave', '{}')`,
+        sql`insert into daemon_state (key, value) values ('clone_transcript_grave_queue', '{}')`,
       );
 
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await stores.sessions.getTranscriptGrave();
+        value = await stores.sessions.listTranscriptGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines.join('')).toContain('生ログの墓標');
     });
 
-    it('行が無いときは跡を残さず null を返す（getLostSessionGrave、陰性対照）', async () => {
+    it('行が無いときは跡を残さず空を返す（listLostSessionGraves、陰性対照）', async () => {
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await stores.sessions.getLostSessionGrave();
+        value = await stores.sessions.listLostSessionGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       expect(lines).toHaveLength(0);
     });
 
-    it('千切れた JSON の行を読んだときは跡を残して null を返す（getLostSessionGrave）', async () => {
+    it('千切れた JSON の行を読んだときは跡を残して空を返す（listLostSessionGraves）', async () => {
       await db.execute(
-        sql`insert into daemon_state (key, value) values ('clone_lost_session', '{"projectKey":"proj-1","sessionId":"sess-1')`,
+        sql`insert into daemon_state (key, value) values ('clone_lost_session_queue', '[{"projectKey":"proj-1","sessionId":"sess-1')`,
       );
 
       let value: unknown = 'sentinel';
       const lines = await captureStderr(async () => {
-        value = await stores.sessions.getLostSessionGrave();
+        value = await stores.sessions.listLostSessionGraves();
       });
-      expect(value).toBeNull();
+      expect(value).toEqual([]);
       const joined = lines.join('');
       expect(joined).toContain('再開素材を捨てた回の墓標');
       expect(joined).toContain('読み出せませんでした');
@@ -584,11 +590,11 @@ describe('PgSessionRegistry', () => {
       const secret = 'ghp_000000000000000000000000000000000000';
       await db.execute(
         sql`insert into daemon_state (key, value)
-            values ('clone_transcript_grave', ${`{"archiveId":"${secret}`})`,
+            values ('clone_transcript_grave_queue', ${`[{"archiveId":"${secret}`})`,
       );
 
       const lines = await captureStderr(async () => {
-        await stores.sessions.getTranscriptGrave();
+        await stores.sessions.listTranscriptGraves();
       });
       expect(lines.join('')).not.toContain(secret);
     });
