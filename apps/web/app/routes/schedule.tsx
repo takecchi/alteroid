@@ -542,7 +542,7 @@ function useRequestTab(initialValue: string) {
 }
 
 // kind は変えさせない: kind を変えて送ると upsert は別の依頼を新しく作り、元の依頼が残るため
-// 編集できるのは仕込まれた行だけで、それは必ず spec を持つ（既定の日報・発意は `spec` が無いが、編集の口が無い）
+// 編集できるのは仕込まれた行だけで、それは必ず spec を持つ（予約の kind（`RESERVED_SCHEDULE_KINDS`）の行は `spec` が無いが、編集の口が無い）
 type ScheduledEntry = ScheduleEntry & { spec: ScheduleSpec };
 
 function isScheduled(entry: ScheduleEntry): entry is ScheduledEntry {
