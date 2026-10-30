@@ -76,12 +76,10 @@ export async function conversationsListCommand(
       ),
     );
   }
-  const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } = await response.json();
+  const page = await response.json();
   // `renderConversationsList` は改行で終わらずに返す（`mutate-selftest.mjs` が固定している）ので、ここで足す。
   const unreadLine = await fetchUnreadTotalLine(client);
-  stdout.write(
-    `${unreadLine}\n${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now, nextCursor)}\n`,
-  );
+  stdout.write(`${unreadLine}\n${renderConversationsList(page, CONVERSATIONS_LIST_HINTS, now)}\n`);
 }
 
 /**
@@ -109,17 +107,37 @@ export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string
   }
 }
 
+export interface ConversationsListPage {
+  conversations: ConversationSummary[];
+  scanned: number;
+  reachedStart: boolean;
+  hiddenByLimit: number;
+  nextCursor?: string | undefined;
+}
+
+/** 案内に出す打ち方。`alteroid conversations list` と chat の `/conversations` で、ここだけが違う。 */
+export interface ConversationsListHints {
+  scan: string;
+  limit: string;
+  next: (cursor: string) => string;
+  show: string;
+}
+
+export const CONVERSATIONS_LIST_HINTS: ConversationsListHints = {
+  scan: '--scan',
+  limit: '--limit',
+  next: (cursor) => `alteroid conversations list --cursor ${cursor}`,
+  show: 'alteroid conversations show <id>',
+};
+
 /**
  * `scanned` は常に出す: 省くと、返ってきた件数が「これで全部」に見えてしまう。
- * `reachedStart`（窓が日誌の先頭に届いたか）と `hiddenByLimit`（窓の中で `--limit` に収まらず落とした数）は別の条件。
+ * `reachedStart`（窓が日誌の先頭に届いたか）と `hiddenByLimit`（窓の中で limit に収まらず落とした数）は別の条件。
  */
 export function renderConversationsList(
-  conversations: ConversationSummary[],
-  scanned: number,
-  reachedStart: boolean,
-  hiddenByLimit: number,
-  now: number = Date.now(),
-  nextCursor?: string,
+  { conversations, scanned, reachedStart, hiddenByLimit, nextCursor }: ConversationsListPage,
+  hints: ConversationsListHints,
+  now: number,
 ): string {
   const lines: string[] = [];
   if (conversations.length === 0) {
@@ -139,7 +157,7 @@ export function renderConversationsList(
   lines.push('');
   lines.push(
     `（人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話・古い発言は窓の外に` +
-      '残っているかもしれない（判定できない） — 広げるには --scan、表示件数を増やすには --limit）',
+      `残っているかもしれない（判定できない） — 広げるには ${hints.scan}、表示件数を増やすには ${hints.limit}）`,
   );
   // `reachedStart` が真のときは出さない: 常に出ているものになって情報でなくなる。
   if (!reachedStart) {
@@ -148,16 +166,20 @@ export function renderConversationsList(
         'かもしれない）',
     );
   }
+  // 「limit を増やせば出る」とは言わない: limit の上限（200）や窓の外は増やしても出ず、誤った案内になる（#3851）。
   if (hiddenByLimit > 0) {
     lines.push(
       `…ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
-        `新しい順に ${conversations.length} 件だけ出した）。--limit を増やせば出る。`,
+        `新しい順に ${conversations.length} 件だけ出した）。`,
     );
   }
+  // 継続点だけが、limit の上限や窓の外を辿る手段。
   if (nextCursor !== undefined) {
-    lines.push(`続きを読むには: alteroid conversations list --cursor ${nextCursor}`);
+    lines.push(`続きを読むには: ${hints.next(nextCursor)}`);
   }
-  lines.push('中身を読むには: alteroid conversations show <id>');
+  if (conversations.length > 0) {
+    lines.push(`中身を読むには: ${hints.show}`);
+  }
   return lines.join('\n');
 }
 
