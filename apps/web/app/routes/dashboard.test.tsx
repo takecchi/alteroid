@@ -553,12 +553,22 @@ describe('「次の自動実行」カード', () => {
     expect(screen.getByRole('link', { name: '予定へ' }).getAttribute('href')).toBe('/schedule');
   });
 
-  it('description が truncate で切られていても title で全文が引ける', async () => {
+  it('description は title にも全文を持つ', async () => {
     renderHome({
       schedule: { entries: [entry(LONG_DESCRIPTION, '2026-08-15T05:00:00.000Z')] },
     });
 
     expect(await screen.findByTitle(LONG_DESCRIPTION)).toBeTruthy();
+  });
+
+  it('description は途中で切らず（truncate しない）、折り返して全文を出す', async () => {
+    renderHome({
+      schedule: { entries: [entry(LONG_DESCRIPTION, '2026-08-15T05:00:00.000Z')] },
+    });
+
+    const label = await screen.findByText(LONG_DESCRIPTION);
+    expect(label.closest('div')?.className).not.toMatch(/truncate/);
+    expect(label.closest('div')?.className).toMatch(/break-words/);
   });
 
   it('いちばん近い1件を出し、残りは件数で言う（並びの先頭ではなく時刻で選ぶ）', async () => {

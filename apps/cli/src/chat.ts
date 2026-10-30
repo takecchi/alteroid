@@ -1667,7 +1667,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      // 読めない行だけの頁は `entries: []` でも `next` が在る: TUI と同じく `readThroughUnreadable` で読み進める。
+      // 読めない行だけの頁は `entries: []` でも `next` が在る: `readThroughUnreadable` で読み進める。
       // 継続点の頁が失敗したら、その応答の説明を出して終える（最初の頁と同じ扱い）
       let failed: Response | undefined;
       const page = await readThroughUnreadable(await response.json(), async (cursor) => {
@@ -3504,7 +3504,7 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
         message: `知らないキーです: ${token.slice(0, token.indexOf('=') + 1)}${usable}`,
       };
     } else if (limit === undefined) {
-      // 件数は CLI の chat と TUI で同じ規則で読む:`1e1`・`0x10` を数として通さない
+      // 件数は CLI の chat の規則で読む:`1e1`・`0x10` を数として通さない
       const count = parseCountArg(token, JOURNAL_MAX_LIMIT);
       if (!count.ok) return { ok: false, message: count.message };
       limit = token;
@@ -3689,7 +3689,7 @@ export async function endConversationOnExit(
   write(
     `会話 ${conversationId} を終えられませんでした（${reason}）。会話は終わっておらず、` +
       '学びの蒸留も走っていません。あとで Web の会話画面の「会話を終える」か、' +
-      `alteroid tui で /conversations から開き直して /end で終えられます\n`,
+      `alteroid chat で /conversations から開き直して /end で終えられます\n`,
   );
 }
 

@@ -544,9 +544,10 @@ export function selfInitiativeEntry(options: { everyMinutes: number }): Schedule
 
   return {
     kind: SELF_INITIATIVE_KIND,
+    // この文は web の予定の画面・ホームの「次の自動実行」・CLI の予定の一覧にそのまま出る。生の値（queued / needs_decision）は web の待ち行列の画面と同じ併記で残す: CLI・クローンの語と結べなくなるため
     description:
-      `${Math.max(1, Math.floor(everyMinutes))} 分ごとに確かめ、動ける仕事（待ち行列の queued / needs_decision・旧台帳の未了）があるときと、` +
-      '直近24時間に発意 tick を回していないときだけ、記憶にある目的から次にやることを決める（手で起こした回は常に回す）',
+      `${Math.max(1, Math.floor(everyMinutes))} 分ごとに確かめ、動ける仕事（待ち行列の順番待ち（queued）・判断待ち（needs_decision）の行、旧台帳の未了）があるときと、` +
+      '直近24時間に一度も回していないときだけ、記憶にある目的から次にやることを決める（手で起こした回は常に回す）',
     nextAt(after) {
       return new Date(after.getTime() + interval);
     },

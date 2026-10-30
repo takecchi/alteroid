@@ -101,11 +101,6 @@ export default tseslint.config(
     files: WEB_UI_FILES,
     extends: [reactHooks.configs.flat.recommended],
   },
-  // TUI（`apps/cli/src/tui`）には hooks の規則だけを掛ける: 依存配列の取りこぼしは「古い値をつかんだまま動き続ける」形で出て目視では見つからず、Web UI の他の規則（core の値 import 禁止・層の向き）はブラウザバンドルの話なため。
-  {
-    files: ['apps/cli/src/tui/**/*.{ts,tsx}'],
-    extends: [reactHooks.configs.flat.recommended],
-  },
   // `@alteroid/core`（バレル export）を Web UI から値で import させない: `index.ts` がサーバ専用のドメイン層を丸ごと再エクスポートしており、値で import するとブラウザバンドルへ引き込んで本番でルートが開けなくなり、型検査は検出しないため（`import type` は build で消える）。`allowTypeImports: true` で型だけの import は通す。
   // `*.test.{ts,tsx}` は対象外: ルーティングされずブラウザバンドルに入らないため。
   {

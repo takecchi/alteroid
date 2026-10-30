@@ -174,6 +174,7 @@ import {
 import { resolveModelTier } from './model-tier.js';
 import { heuristicChars } from './quantity.js';
 import { resolvePermissionModeFor, type PermissionModeName } from './permission-mode.js';
+import { resolveEnvSwitch } from './env-switch.js';
 import { placedEnvValue } from './placed-env.js';
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
@@ -396,9 +397,7 @@ export const CLONE_HUMAN_PRIORITY_ENV_KEY = 'ALTEROID_CLONE_HUMAN_PRIORITY';
 
 // 未設定・空・空白は有効のまま: 「読めなかった」を「切られた」と読むと、変数が届かなかっただけの器で人間の待ちが黙って戻るため
 export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env[CLONE_HUMAN_PRIORITY_ENV_KEY]?.trim().toLowerCase();
-  if (raw === undefined || raw === '') return true;
-  return !['0', 'false', 'off', 'no'].includes(raw);
+  return resolveEnvSwitch(env, CLONE_HUMAN_PRIORITY_ENV_KEY, true, 'クローンの人間優先の設定');
 }
 
 export function resolveClonePermissionMode(

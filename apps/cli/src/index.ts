@@ -69,7 +69,6 @@ import {
   permissionRevokeCommand,
 } from './permission.js';
 import { resetCommand } from './reset.js';
-import { launchTui, opensTuiByDefault } from './tui/launch.js';
 import { interruptCommand } from './interrupt.js';
 import { reopenCommand } from './reopen.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
@@ -270,13 +269,6 @@ program
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
     await (await import('./chat.js')).chatCommand();
-  });
-
-program
-  .command('tui')
-  .description('全画面の TUI を開く（会話・承認待ち・委譲・日誌・記憶の 5 画面。端末でだけ動く）')
-  .action(async () => {
-    await launchTui();
   });
 
 const conversationsCommand = program
@@ -1270,10 +1262,7 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  const run = opensTuiByDefault(process.argv.slice(2), process.stdin, process.stdout)
-    ? launchTui()
-    : program.parseAsync(process.argv);
-  run.catch((error: unknown) => {
+  program.parseAsync(process.argv).catch((error: unknown) => {
     process.exit(reportCliFailure(error));
   });
 }

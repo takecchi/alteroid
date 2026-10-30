@@ -46,6 +46,13 @@ describe('NAV_ITEMS', () => {
     }
   });
 
+  it('行の名前は、直上の見出し（section）と同じ語にしない（見出しと項目が同じ語で2回続かない）', () => {
+    for (const item of NAV_ITEMS) {
+      if (item.section === undefined) continue;
+      expect(item.label, item.to).not.toBe(item.section);
+    }
+  });
+
   it('各行の `to` はその行自身の経路に属する（押した先で自分が選ばれる）', () => {
     for (const item of NAV_ITEMS) {
       expect(isNavItemActive(item, item.to), item.to).toBe(true);

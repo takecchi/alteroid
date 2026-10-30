@@ -8571,7 +8571,7 @@ class Pool implements ManagerPool {
                       (outputChars === 0
                         ? ''
                         : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
-                          '出力は profile_write / PUT /profile で書き直したときの応答で読める）'),
+                          '出力は profile_write / PUT /profile/:name で書き直したときの応答で読める）'),
                   };
                 },
           thrown: (runnerId, reason) =>

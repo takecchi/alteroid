@@ -1278,7 +1278,8 @@ describe('入力欄の補足文', () => {
 
     const body = await screen.findByLabelText('何を引き受けたか');
     const bodyHint = document.getElementById(body.getAttribute('aria-describedby') ?? '');
-    expect(bodyHint?.textContent).toMatch(/commitment_list/);
+    expect(bodyHint?.textContent).toMatch(/クローンへ渡す一覧は長い本文を先頭だけに切る/);
+    expect(bodyHint?.textContent).not.toMatch(/commitment_list/);
     expect(bodyHint?.textContent).not.toMatch(/一覧側の仕事/);
     expect((body as HTMLTextAreaElement).placeholder).not.toMatch(/一覧側/);
 

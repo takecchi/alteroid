@@ -142,7 +142,8 @@ function NextRunTile() {
                   ? `ほか ${schedule.data.entries.length - 1} 件`
                   : undefined
               }
-              className="[&_p:first-child]:truncate"
+              // 切らずに折り返して全文を読ませる: truncate だと「queu…」のように何の語か読めない
+              className="[&_p:first-child]:break-words"
             />
           )}
         </>

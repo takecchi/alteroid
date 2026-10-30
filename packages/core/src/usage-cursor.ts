@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+
 // 錨の位置を探索しない: 費用は増える一方なので、値の比較だけで頁を切れるため
 // asOf の比較を `>=` にしない: asOf を作った行自身が呼ぶたびに risen へ載り続けるため。旧形式の cursor（tiedAtAsOf なし）は断らず `>` のみで読む
 const usageCursorSchema = z.object({
@@ -13,21 +15,13 @@ const usageCursorSchema = z.object({
 export type UsageCursor = z.infer<typeof usageCursorSchema>;
 
 export function encodeUsageCursor(cursor: UsageCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  return encodeCursor(cursor);
 }
 
-export type DecodeUsageCursorResult = { ok: true; cursor: UsageCursor } | { ok: false };
+export type DecodeUsageCursorResult = DecodeCursorResult<UsageCursor>;
 
 export function decodeUsageCursor(raw: string): DecodeUsageCursorResult {
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    return { ok: false };
-  }
-  const parsed = usageCursorSchema.safeParse(json);
-  if (!parsed.success) return { ok: false };
-  return { ok: true, cursor: parsed.data };
+  return decodeCursor(usageCursorSchema, raw);
 }
 
 export interface UsageCursorEntry {

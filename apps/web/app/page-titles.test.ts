@@ -77,6 +77,13 @@ describe('設定のまとまりの題名（#2844）', () => {
   });
 });
 
+describe('仕事のまとまりの名前', () => {
+  it('左ナビの項目は、開いた先の h1 と同じ「未了の仕事」（見出し「仕事」と同じ語にしない）', () => {
+    expect(NAV_ITEMS.find((i) => i.to === '/commitments')?.label).toBe('未了の仕事');
+    expect(read('routes/commitments.tsx')).toContain('title="未了の仕事"');
+  });
+});
+
 describe('予定のまとまりの名前（#2844）', () => {
   it('左ナビのまとまり・タブ・h1 が「予定」の語で揃う（スケジュールの語を使わない）', () => {
     expect(SCHEDULE_TABS[0]).toEqual({ to: '/schedule', label: '予定' });

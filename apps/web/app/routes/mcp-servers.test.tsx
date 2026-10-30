@@ -240,6 +240,24 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([]);
   });
 
+  it('JSON が不正なとき、JS の構文エラーの英語の文は出さず、位置と見直す点を画面の言葉で言う', async () => {
+    const { puts } = stubMcp();
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), {
+      target: { value: '{ mcpServers: {} }' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).toContain('JSON として読めない（送っていない）。');
+    expect(text).toContain('文字目の付近');
+    expect(text).toContain('カンマ・引用符・括弧の対応を確かめること');
+    expect(text).not.toMatch(/Expected|Unexpected|property name|in JSON/);
+    expect(puts).toEqual([]);
+  });
+
   it('400 なら不正な欄の位置を出し、前のものが残ると言う（確認は畳み、編集中の本文は残す）', async () => {
     const { puts } = stubMcp({
       put: {

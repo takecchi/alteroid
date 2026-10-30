@@ -48,7 +48,7 @@ function appWith(stores: Stores, applier: ProfileApplier) {
 }
 
 async function putProfile(app: ReturnType<typeof createApp>, script: string) {
-  return app.request('/profile', {
+  return app.request('/profile/default', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ script }),
@@ -75,7 +75,7 @@ function rejectingApplier(failure: { error: string; output: string }): ProfileAp
   };
 }
 
-describe('PUT /profile の失敗の detail は、シェルの stderr の鍵の値を載せない（issue #2429）', () => {
+describe('PUT /profile/:name の失敗の detail は、シェルの stderr の鍵の値を載せない（issue #2429）', () => {
   let stores: Stores;
 
   beforeEach(() => {

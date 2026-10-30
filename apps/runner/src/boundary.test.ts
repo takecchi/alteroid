@@ -108,7 +108,13 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
           '/mcp-servers',
           JSON.stringify({ mcpServers: { evil: { command: 'attacker' } } }),
         ),
-        getMcpServers: await call('GET', '/mcp-servers'),
+        // 自分に効く環境（プロファイル・Codex のログイン）を自分で差し替えられないこと
+        setProfile: await call('POST', '/profile', JSON.stringify({ script: 'export A=attacker' })),
+        setCodexAuth: await call(
+          'POST',
+          '/codex-auth',
+          JSON.stringify({ codexAuth: { value: 'attacker', revision: 'r1' } }),
+        ),
         // 自分のセッションに許可規則を自分で足せないこと（#4952）
         setPermissionRules: await call(
           'POST',
@@ -186,7 +192,8 @@ describe('制御面の境界', () => {
       transcript: 401,
       setCredentials: 401,
       setMcpServers: 401,
-      getMcpServers: 401,
+      setProfile: 401,
+      setCodexAuth: 401,
       setPermissionRules: 401,
     });
     expect(host.mcpServers()).toBeUndefined();

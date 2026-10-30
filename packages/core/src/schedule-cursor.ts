@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
 import type { ScheduledRequest } from './schema.js';
 
 const scheduleCursorSchema = z.object({ kind: z.string().min(1) });
@@ -7,21 +8,13 @@ const scheduleCursorSchema = z.object({ kind: z.string().min(1) });
 export type ScheduleCursor = z.infer<typeof scheduleCursorSchema>;
 
 export function encodeScheduleCursor(cursor: ScheduleCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  return encodeCursor(cursor);
 }
 
-export type DecodeScheduleCursorResult = { ok: true; cursor: ScheduleCursor } | { ok: false };
+export type DecodeScheduleCursorResult = DecodeCursorResult<ScheduleCursor>;
 
 export function decodeScheduleCursor(raw: string): DecodeScheduleCursorResult {
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    return { ok: false };
-  }
-  const parsed = scheduleCursorSchema.safeParse(json);
-  if (!parsed.success) return { ok: false };
-  return { ok: true, cursor: parsed.data };
+  return decodeCursor(scheduleCursorSchema, raw);
 }
 
 export function resolveScheduleCursor(

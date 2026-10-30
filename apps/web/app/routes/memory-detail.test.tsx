@@ -85,6 +85,32 @@ function docRoute(doc: MemoryDocument): Parameters<typeof stubFetch>[0] {
   };
 }
 
+describe('URL の名前が形に合わない（取得の前に web が断る）', () => {
+  it.each(['Bad Name', '-leading', 'UPPER', 'a'.repeat(129)])(
+    '「%s」は取得せず、名前が使えない形だと言う（スラッグとは言わない）',
+    async (slug) => {
+      const stub = renderDetail(slug, () => json({ error: '記憶のスラッグが不正' }, 400));
+
+      expect(
+        await screen.findByText(/記憶の名前が使えない形。使えるのは半角の英小文字・数字と/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/スラッグ/)).toBeNull();
+      expect(
+        stub.entries.filter((entry) => (entry.request?.url ?? '').includes('/memory')),
+      ).toEqual([]);
+    },
+  );
+
+  it('対照: 形に合う名前は取得する', async () => {
+    const stub = renderDetail('notes', docRoute(DOC));
+
+    await screen.findByRole('heading', { name: '見出し' });
+    expect(stub.entries.some((entry) => (entry.request?.url ?? '').includes('/memory/notes'))).toBe(
+      true,
+    );
+  });
+});
+
 describe('既定タブ', () => {
   it('記憶が在るときはプレビューが既定で、本文が Markdown として描かれる', async () => {
     renderDetail('notes', docRoute(DOC));

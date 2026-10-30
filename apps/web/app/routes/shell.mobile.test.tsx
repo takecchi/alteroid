@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -102,6 +102,30 @@ describe('狭い画面（375px）', () => {
     expect(screen.queryByRole('dialog', { name: 'メニュー' })).toBeNull();
     expect(screen.queryByRole('link', { name: /ホーム/ })).toBeNull();
   });
+
+  it('Esc で閉じても、行き先を選んで閉じても、焦点は「メニューを開く」へ戻る（body に落ちない）', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell();
+
+    renderShell();
+    await screen.findByText('ダッシュボードの中身');
+    const hamburger = screen.getByRole('button', { name: 'メニューを開く' });
+
+    // 実機はボタンを押すと焦点が移るので、click の前に focus する（fireEvent.click は焦点を動かさない）
+    hamburger.focus();
+    fireEvent.click(hamburger);
+    await screen.findByRole('dialog', { name: 'メニュー' });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'メニュー' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(hamburger));
+
+    // 行き先の画面に焦点の決まった扱いは無い（移動で焦点を動かす処理が無い）ので、同じくボタンへ戻す
+    hamburger.focus();
+    fireEvent.click(hamburger);
+    fireEvent.click(await screen.findByRole('link', { name: /ホーム/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'メニュー' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(hamburger));
+  });
 });
 
 describe('狭い画面のドロワー', () => {
@@ -124,7 +148,7 @@ describe('狭い画面のドロワー', () => {
       'ホーム',
       '会話',
       '承認待ち',
-      '仕事',
+      '未了の仕事',
       'マネージャー',
       '日報',
       '日誌',

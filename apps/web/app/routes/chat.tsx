@@ -95,6 +95,7 @@ import {
   retainedBy,
   applyFocusIntent,
   pendingOwnLines,
+  claimedFailedGroups,
   heldApprovalIds,
   hasHumanWithClientMessageId,
   isSettledApproval,
@@ -1282,7 +1283,10 @@ export function ChatPane({
           settleReply();
           markFailedTurn('failed');
           setFailures((prev) =>
-            new Map(prev).set(stream.id, new TurnFailedError(event.message, event.kind)),
+            new Map(prev).set(
+              stream.id,
+              new TurnFailedError(event.message, event.kind, replyGroup),
+            ),
           );
           if (owns()) refetchApprovalsRef.current();
           break;
@@ -2233,7 +2237,16 @@ export function ChatPane({
       ? endFailure.error
       : undefined;
   // has で存在を確かめてから読む: throw undefined のような例外だと、get が undefined を返しただけでは「無い」と「積まれている値が undefined」を区別できない
-  const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
+  const storedFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
+  // 履歴に同じターンの失敗の行が載ったら、入力欄の上の帯は畳む（同じ枠が二重に出ないように）。
+  // 載るまでは出す: 受信の途中で受けた失敗を見落とさせないため。TurnFailedError だけが対象で、止める・終える・消す・送れなかった失敗は履歴に行を持たないので畳まない。
+  // 「もう一度送る」は履歴の行が持つので、畳んでも再送の手段は消えない
+  const visibleFailure =
+    storedFailure instanceof TurnFailedError &&
+    storedFailure.replyGroup !== undefined &&
+    claimedFailedGroups(failedTurns, shownId, historyLines).has(storedFailure.replyGroup)
+      ? undefined
+      : storedFailure;
 
   const visibleDeleteFailure =
     deleteFailure !== undefined && deleteFailure.conversationId === shownId

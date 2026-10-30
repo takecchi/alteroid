@@ -9499,7 +9499,7 @@ describe('実行環境プロファイル', () => {
       profile: profileService(stores),
     });
 
-    const put = await withProfile.request('/profile', {
+    const put = await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export SOME_API_TOKEN=abc123' }),
@@ -9524,7 +9524,7 @@ describe('実行環境プロファイル', () => {
     });
 
     const put = (await (
-      await withProfile.request('/profile', {
+      await withProfile.request('/profile/default', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ script: 'export OK=1' }),
@@ -9551,7 +9551,7 @@ describe('実行環境プロファイル', () => {
       profile: profileService(stores, { runners: [runner] }),
     });
 
-    const response = await withProfile.request('/profile', {
+    const response = await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export OK=1' }),
@@ -9685,8 +9685,8 @@ describe('実行環境プロファイル', () => {
       expect((await get()).entries.map((e) => e.name)).toEqual(['b']);
     });
 
-    it('旧来の PUT /profile {script} は全行を default 1行（all）に置き換える。空なら全部外す', async () => {
-      const { app, put, get } = appWithRunner();
+    it('全行を外すには、行ごとに DELETE する。全文を差し替える PUT /profile は無い', async () => {
+      const { app, put, remove, get } = appWithRunner();
       await put('a', { script: 'export A=1', scope: 'runner' });
       await put('b', { script: 'export B=1', scope: 'app' });
 
@@ -9695,16 +9695,11 @@ describe('実行環境プロファイル', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ script: 'export WHOLE=1' }),
       });
-      expect(whole.status).toBe(200);
-      expect((await get()).entries).toMatchObject([
-        { name: 'default', script: 'export WHOLE=1\n', scope: 'all' },
-      ]);
+      expect(whole.status).toBe(404);
+      expect((await get()).entries.map((e) => e.name)).toEqual(['a', 'b']);
 
-      await app.request('/profile', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ script: '' }),
-      });
+      await remove('a');
+      await remove('b');
       expect(await get()).toEqual({ entries: [], clone: {}, runner: {} });
     });
 
@@ -9732,7 +9727,7 @@ describe('実行環境プロファイル', () => {
     });
     await stores.profile.set('default', 'export GOOD=1', 'all');
 
-    const response = await withProfile.request('/profile', {
+    const response = await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'if [ ; then' }),
@@ -9756,7 +9751,7 @@ describe('実行環境プロファイル', () => {
     });
     const secretScript = 'export DUMMY_PROFILE_SECRET_MARKER=leak-if-you-see-this';
 
-    const response = await withProfile.request('/profile', {
+    const response = await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: secretScript }),
@@ -9774,7 +9769,6 @@ describe('実行環境プロファイル', () => {
     expect(entry).toBeDefined();
     const serialized = JSON.stringify(entry);
     expect(serialized).toContain(row?.sha256);
-    expect(serialized).toContain(`${String(row?.bytes)} bytes`);
     expect(serialized).toContain('runner-primary=ok');
     expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
     expect(serialized).not.toContain('leak-if-you-see-this');
@@ -9788,22 +9782,18 @@ describe('実行環境プロファイル', () => {
       shutdown: () => undefined,
       profile: profileService(stores),
     });
-    await withProfile.request('/profile', {
+    await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export OK=1' }),
     });
-    await withProfile.request('/profile', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ script: '' }),
-    });
+    await withProfile.request('/profile/default', { method: 'DELETE' });
 
     const journal = await stores.journal.list({ types: ['decision'] });
     const decisions = journal
       .map((e) => (e.type === 'decision' ? e.decision : ''))
       .filter((decision) => decision.includes('実行環境プロファイル'));
-    expect(decisions[0]).toContain('外した');
+    expect(decisions[0]).toContain('（外す）');
   });
 
   it('runner が1台落ちても、配布の失敗が日誌に残る（スクリプト本文は書かない）', async () => {
@@ -9821,7 +9811,7 @@ describe('実行環境プロファイル', () => {
     });
     const secretScript = 'export DUMMY_PROFILE_SECRET_MARKER=leak-if-you-see-this';
 
-    const response = await withProfile.request('/profile', {
+    const response = await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: secretScript }),
@@ -9846,7 +9836,7 @@ describe('実行環境プロファイル', () => {
       profile: profileService(stores, { rejects: '壊れている' }),
     });
 
-    const response = await withProfile.request('/profile', {
+    const response = await withProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'if [ ; then' }),
@@ -9880,7 +9870,7 @@ describe('実行環境プロファイル', () => {
       profile: profileService(throwingStores),
     });
 
-    const response = await withThrowingProfile.request('/profile', {
+    const response = await withThrowingProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export OK=1' }),
@@ -9893,8 +9883,8 @@ describe('実行環境プロファイル', () => {
       .filter((decision) => decision.includes('実行環境プロファイル'))
       .reverse();
     expect(decisions).toHaveLength(2);
-    expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている');
-    expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった');
+    expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている（行 default）');
+    expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった（行 default）');
   });
 
   it('反映も書き戻しも落ちたときは、日誌の決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
@@ -9935,7 +9925,7 @@ describe('実行環境プロファイル', () => {
       profile: createProfileService({ stores: throwingStores, applier }),
     });
 
-    const response = await withThrowingProfile.request('/profile', {
+    const response = await withThrowingProfile.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export OK=1' }),
@@ -9947,9 +9937,9 @@ describe('実行環境プロファイル', () => {
       .filter((decision) => decision.includes('実行環境プロファイル'))
       .reverse();
     expect(decisions).toHaveLength(2);
-    expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている');
+    expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている（行 default）');
     expect(decisions[1]).toBe(
-      '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）',
+      '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）（行 default）',
     );
     expect(decisions[1]).not.toContain('差し替えられなかった');
   });
@@ -9975,7 +9965,7 @@ describe('実行環境プロファイル', () => {
     });
 
     const lines = await captureStderr(async () => {
-      const response = await withProfile.request('/profile', {
+      const response = await withProfile.request('/profile/default', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ script: 'export OK=1' }),
@@ -10372,7 +10362,7 @@ describe('宣言と実物の一致（/profile）', () => {
 
   it('宣言していないフィールドを外へ出さない（clone.profile は載らない）', async () => {
     const { app } = withRealApplier();
-    const response = await app.request('/profile', {
+    const response = await app.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
@@ -10387,7 +10377,7 @@ describe('宣言と実物の一致（/profile）', () => {
 
   it('宣言したフィールドは載る（parse がぜんぶ落としているのではない）', async () => {
     const { app } = withRealApplier();
-    const response = await app.request('/profile', {
+    const response = await app.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
@@ -11157,10 +11147,10 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     expect(response.status).toBe(404);
   });
 
-  it('PUT /profile: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {
+  it('PUT /profile/:name: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {
     const SECRET = 'CRED-PROFILE-DUMMY';
 
-    const response = await app.request('/profile', {
+    const response = await app.request('/profile/default', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ notScript: `export SECRET_IN_PROFILE=${SECRET}` }),
@@ -12684,7 +12674,7 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect(decisions[1]).toContain('MCP サーバの登録を差し替えられなかった（github）');
   });
 
-  // 既定の 400 は本文をそのまま `data` に載せて返す（`PUT /profile` の hook の doc）: 値が返ると、欄の綴りを1つ間違えただけで鍵が応答へ載る。
+  // 既定の 400 は本文をそのまま `data` に載せて返す（`PUT /profile/:name` の hook の doc）: 値が返ると、欄の綴りを1つ間違えただけで鍵が応答へ載る。
   it('形が不正なら保存せず、400 の本文に送られた値を載せない', async () => {
     await put({ mcpServers: { github: { command: 'gh-mcp' } } });
 

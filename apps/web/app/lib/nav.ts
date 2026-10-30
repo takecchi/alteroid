@@ -63,7 +63,7 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
   { to: '/', label: 'ホーム', paths: ['/'] },
   { to: '/chat', label: '会話', paths: ['/chat'] },
   { to: '/approvals', label: '承認待ち', paths: prefixesOf(APPROVALS_TABS) },
-  { to: '/commitments', label: '仕事', paths: prefixesOf(WORK_TABS), section: '仕事' },
+  { to: '/commitments', label: '未了の仕事', paths: prefixesOf(WORK_TABS), section: '仕事' },
   { to: '/managers', label: 'マネージャー', paths: ['/managers'], section: '仕事' },
   { to: '/reports', label: '日報', paths: ['/reports'], section: '記録' },
   { to: '/journal', label: '日誌', paths: prefixesOf(JOURNAL_TABS), section: '記録' },

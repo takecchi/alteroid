@@ -104,11 +104,11 @@ function TasksPage() {
             {open.length === 0 ? (
               <Empty>
                 {unreadable.length > 0
-                  ? '読めた範囲では、開いている task はない。'
-                  : '開いている task はない。'}
+                  ? '読めた範囲では、開いている行はない。'
+                  : '開いている行はない。'}
               </Empty>
             ) : (
-              <ol aria-label="開いている task（優先順）">
+              <ol aria-label="開いている行（優先順）">
                 {open.map((task, index) => (
                   <OpenRow key={task.id} task={task} position={index + 1} openTasks={open} />
                 ))}
@@ -125,11 +125,11 @@ function TasksPage() {
                 <Empty>
                   {unreadable.length > 0
                     ? // 読めない行は閉じた行かもしれないので、閉じた側も言い切れない。
-                      '読めた範囲では、閉じた task はない。'
-                    : '閉じた task はまだない。'}
+                      '読めた範囲では、閉じた行はない。'
+                    : '閉じた行はまだない。'}
                 </Empty>
               ) : (
-                <ul aria-label="閉じた task">
+                <ul aria-label="閉じた行">
                   {closed.map((task) => (
                     <ClosedRow key={task.id} task={task} />
                   ))}
@@ -262,7 +262,7 @@ function PushForm({ openTasks }: { openTasks: readonly Task[] }) {
 
   return (
     <Card className="mb-4">
-      <CardHeader title="task を積む" subtitle="引き受けたことを、待ち行列に載せる" />
+      <CardHeader title="待ち行列に積む" subtitle="引き受けたことを、行として載せる" />
       <div className="flex flex-col gap-2 px-4 py-3">
         <label htmlFor={titleId} className="text-xs font-medium text-muted-foreground">
           タイトル（一行・200字まで）
