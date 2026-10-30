@@ -4,7 +4,7 @@ import { useSWRConfig } from 'swr';
 import { useApiContext } from '../api';
 import { sseRetryDelay, type JournalEntry } from '@alteroid/logic';
 
-import { isKeyOfType, KEY } from './queries';
+import { isConversationKeyOf, isKeyOfType, isOwnDeletedConversation, KEY } from './queries';
 
 const RECENT_LIMIT = 200;
 
@@ -182,7 +182,20 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる:一覧・未読数・開いている本文・台帳を読み直す
       void mutate((key) => isKeyOfType(key, 'conversations'));
       void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
-      void mutate((key) => isKeyOfType(key, 'conversation'));
+      // 自分が消した会話の本文だけは読み直さず捨てる: 消した画面が開いたままだと、読み直しが 404 になるため（#5935）。
+      // 別の画面・別のブラウザで開いている会話は読み直す: その 404 が「消された」の知らせになる
+      if (isOwnDeletedConversation(entry.deletedConversationId)) {
+        void mutate((key) => isConversationKeyOf(key, entry.deletedConversationId), undefined, {
+          revalidate: false,
+        });
+        void mutate(
+          (key) =>
+            isKeyOfType(key, 'conversation') &&
+            !isConversationKeyOf(key, entry.deletedConversationId),
+        );
+      } else {
+        void mutate((key) => isKeyOfType(key, 'conversation'));
+      }
       void mutate((key) => isKeyOfType(key, 'commitments'));
       break;
     default: {
