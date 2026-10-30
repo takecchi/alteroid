@@ -63,7 +63,7 @@ function start(
   const api = fakeApi();
   setup(api);
   const controller = new ChatController(api);
-  const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+  const feed = new HeaderFeed(api);
   const approvals = new ApprovalsController(api, { debounceMs: 10 });
   approvals.attach(feed);
   const managers = new ManagersController(api, { debounceMs: 10 });
