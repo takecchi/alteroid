@@ -1,3 +1,5 @@
+import { readEnvSwitch } from './env-switch.js';
+
 /**
  * 安全分類器（safeguards）にセッションごと弾かれ続けていることの検知の、
  * 判定の部品と文言。状態そのものは `Clone` が持つ（`#refusalStreak` ほか）。
@@ -30,11 +32,7 @@ export interface RefusalAutoReopenSetting {
  * それ以外は有効のまま `unrecognized` に載せる。**投げない**（失敗の報告の途中で呼ばれるため。`bash-guard-mode.ts` は起動時に落とすが、ここでは落とせない）。
  */
 export function resolveRefusalAutoReopen(env: NodeJS.ProcessEnv): RefusalAutoReopenSetting {
-  const given = env[REFUSAL_AUTO_REOPEN_ENV]?.trim().toLowerCase();
-  if (given === undefined || given === '') return { enabled: true };
-  if (['off', 'false', '0', 'no', 'disabled'].includes(given)) return { enabled: false };
-  if (['on', 'true', '1', 'yes', 'enabled'].includes(given)) return { enabled: true };
-  return { enabled: true, unrecognized: given };
+  return readEnvSwitch(env, REFUSAL_AUTO_REOPEN_ENV, true);
 }
 
 const SAFEGUARDS_FLAGGED_MARKER = 'safeguards flagged';
