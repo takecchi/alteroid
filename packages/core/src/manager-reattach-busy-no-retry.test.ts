@@ -92,10 +92,10 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string }> {
+      async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           managerId: command.managerId,
@@ -105,7 +105,7 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
           waiting: [],
           sessionId: command.sessionId,
         });
-        return {};
+        return { cwd: command.cwd };
       },
       async send() {
         return true;

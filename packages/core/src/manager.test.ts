@@ -1072,11 +1072,11 @@ describe('マネージャー', () => {
       async connect(onEvent) {
         wired.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(): Promise<{ cwd?: string }> {
-        return {};
+      async resume(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
       async send() {
         return true;
@@ -1149,11 +1149,11 @@ describe('マネージャー', () => {
       async connect(onEvent) {
         wired.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(): Promise<{ cwd?: string }> {
-        return {};
+      async resume(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
       async send() {
         return true;
@@ -1234,11 +1234,11 @@ describe('マネージャー', () => {
         async connect(onEvent) {
           wired.emit = onEvent;
         },
-        async start(): Promise<{ cwd?: string }> {
-          return {};
+        async start(command): Promise<{ cwd: string }> {
+          return { cwd: command.cwd };
         },
-        async resume(): Promise<{ cwd?: string }> {
-          return {};
+        async resume(command): Promise<{ cwd: string }> {
+          return { cwd: command.cwd };
         },
         async send() {
           return true;
@@ -2222,10 +2222,10 @@ function swappableRunner(runnerId = 'runner-primary') {
       // 同期的に名乗らせると引き取りとの順序が現実と変わり、器のずれを作れなくなる。
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       state.resumes.push(command);
       state.alive.push({
         managerId: command.managerId,
@@ -2235,7 +2235,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     // 本物と同じ 404 を返す: 黙って成功させると、`alive` から消えたセッションへの送信が
     // 届いたことになり、台帳の `attached` が嘘になる窓を再現できないため。
@@ -3095,7 +3095,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     };
 
     fake.reconnect();
@@ -6620,12 +6620,12 @@ class FakePoolRunner implements RunnerClient {
       ...(capabilities === undefined ? {} : { capabilities }),
     });
   }
-  async start(command: { managerId: string }): Promise<{ cwd?: string }> {
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
     this.started.push(command.managerId);
-    return {};
+    return { cwd: command.cwd };
   }
-  async resume(): Promise<{ cwd?: string }> {
-    return {};
+  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;
@@ -8507,11 +8507,11 @@ class FakeBacklogMergeRunner implements RunnerClient {
     };
   }
   async connect(): Promise<void> {}
-  async start(): Promise<{ cwd?: string }> {
-    return {};
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
-  async resume(): Promise<{ cwd?: string }> {
-    return {};
+  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;
@@ -9321,7 +9321,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     };
 
     let generation = 0;

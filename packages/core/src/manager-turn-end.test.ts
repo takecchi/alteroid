@@ -203,12 +203,12 @@ class TranscriptRunner implements RunnerClient {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
     });
   }
-  async start(command: { managerId: string }): Promise<{ cwd?: string }> {
+  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
     this.starts.push(command.managerId);
-    return {};
+    return { cwd: command.cwd };
   }
-  async resume(): Promise<{ cwd?: string }> {
-    return {};
+  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
+    return { cwd: command.cwd };
   }
   async send(): Promise<boolean> {
     return true;

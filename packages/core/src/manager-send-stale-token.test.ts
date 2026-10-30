@@ -56,7 +56,7 @@ function staleRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -64,9 +64,9 @@ function staleRunner() {
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       alive.push({
         managerId: command.managerId,
@@ -76,7 +76,7 @@ function staleRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId, text) {
       sends.push({ managerId, text });

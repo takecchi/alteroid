@@ -243,12 +243,12 @@ const agentPluginLoadSchema = z.object({
 });
 
 /**
- * `cwd` は省略されうる: 旧 runner は `{ ok: true }` だけを返す。受け取る側は欠けた回を「頼んだ値のまま」へ倒さず、
- * `cwd` キーを省いたまま運ぶ（欠けた軸に0を書かない）。
+ * `cwd` は必須: runner は start・resume のどの経路でも実際に開いた作業場を返す。欄が無い・形が崩れた応答
+ * （`cwd` を返さない古い runner の `{ ok: true }`）は、受け取る側（デーモンの `HttpRunner`）が読めないものとして投げる。
  */
 export const runnerSessionOpenResultSchema = z.object({
   ok: z.boolean(),
-  cwd: z.string().optional(),
+  cwd: z.string(),
   /**
    * `true` のとき message が届いたのは起動時の env（鍵）が凍った旧プロセスで、鍵が現役かは分からない。
    * resume では runner が `true`/`false` を必ず返す。欄が無い・`true` と読めない応答は `false`（短絡していない）と同じに読む（デーモンの `HttpRunner`）。
@@ -261,7 +261,7 @@ export const runnerSessionOpenResultSchema = z.object({
 export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSchema>;
 
 export interface RunnerResumeResult {
-  cwd?: string;
+  cwd: string;
   reusedLiveSession?: boolean;
   sessionGeneration?: string;
 }
@@ -1571,7 +1571,7 @@ export interface RunnerClient {
   /**
    * `cwd` は省略されうる（`runnerSessionOpenResultSchema` の doc）。呼び出し側は欠けた回を「頼んだ値のまま」へ倒さず「未確認」と読む。
    */
-  start(command: RunnerStartCommand): Promise<{ cwd?: string; sessionGeneration?: string }>;
+  start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration?: string }>;
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<RunnerResumeResult>;
   /**
