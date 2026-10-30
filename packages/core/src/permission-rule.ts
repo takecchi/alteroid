@@ -122,6 +122,31 @@ export function describePermissionRuleBreadth(rule: string): PermissionRuleBread
   return { level, prefixWordCount };
 }
 
+/**
+ * 一覧に出す一致の説明。Web の許可の画面と CLI の `permission list` が同じ文を出すため、文はここ1か所で作る（#5907）。
+ * 頭の語は `displayRule`（伏せ字を通した規則）から {@link parsePermissionRule} で取る: 画面に出す文へ鍵が入らないため。
+ * 広さの判定は伏せる前の `rule` で行う（伏せ字の置き換えで語数が変わっても広さは変わらない）。
+ * 伏せた結果が規則として読めなくなったときは、頭の語を `…` にする。
+ */
+export function describePermissionRuleBreadthText(
+  rule: string,
+  displayRule: string = rule,
+): string {
+  const breadth = describePermissionRuleBreadth(rule);
+  if (breadth.level === 'invalid') return '⚠️ 規則が不正（照合されない。壊れている可能性がある）';
+  if (breadth.level === 'exact') return 'この文字列のコマンドだけが通る（最も狭い）';
+  const shown = parsePermissionRule(displayRule);
+  const head = shown.ok ? shown.command : '…';
+  switch (breadth.level) {
+    case 'narrow':
+      return `「${head}」で始まるコマンドが通る（狭い）`;
+    case 'medium':
+      return `「${head}」で始まるコマンドが通る（中くらい。後ろの引数は何でもよい）`;
+    case 'broad':
+      return `「${head}」で始まるコマンドなら何でも通る（広い）`;
+  }
+}
+
 export interface PermissionRequestCandidate {
   rule: string;
   allows: readonly string[];
