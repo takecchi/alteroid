@@ -16,7 +16,7 @@ import {
   useSaveMemory,
   useMemoryDocument,
 } from '@alteroid/swr';
-import { formatCreatedAt, formatDateTime, redactBody } from '@alteroid/logic';
+import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
 
 import {
   LeaveGuardScope,
@@ -24,6 +24,7 @@ import {
   useReleaseLeaveGuard,
   useReportDirty,
 } from '~/lib/leave-guard';
+import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/memory-detail';
@@ -225,64 +226,20 @@ function MemoryDetailBody({ slug }: { slug: string }) {
       )}
       <ErrorNote error={failure} className="mb-3" />
       {deleteConflict !== undefined && (
-        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
-          <p className="font-medium text-destructive">
-            {deleteConflict.current === null
-              ? '読んだ後に、この記憶はほかで消された。こちらでは消していない。'
-              : '読んだ後に、この記憶がほかで書き換えられた。消していない。'}
-          </p>
-          {deleteConflict.current !== null && (
-            <>
-              <p className="mt-2 text-xs text-muted-foreground">
-                いまの内容（{formatDateTime(deleteConflict.current.document.updatedAt)} に更新）
-              </p>
-              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {/* 伏せる: 本体の表示（<Markdown>）と揃える。下書きは編集欄に生のまま残っている */}
-                {redactBody(deleteConflict.current.document.content)}
-              </pre>
-              <p className="mt-2 text-xs text-muted-foreground">
-                この内容でも消すなら、もう一度「削除」を押して確認してください。
-              </p>
-            </>
-          )}
-          <div className="mt-3">
-            <Button size="sm" onClick={() => setDeleteConflict(undefined)}>
-              閉じる
-            </Button>
-          </div>
-        </div>
+        <DeleteConflictNotice
+          noun="記憶"
+          current={deleteConflict.current === null ? null : deleteConflict.current.document}
+          onClose={() => setDeleteConflict(undefined)}
+        />
       )}
       {conflict !== undefined && (
-        <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
-          <p className="font-medium text-destructive">
-            {conflict.current === null
-              ? '読んだ後に、この記憶がほかで消された。保存していない（下書きはそのまま残してある）。'
-              : '読んだ後に、この記憶がほかで書き換えられた。保存していない（下書きはそのまま残してある）。'}
-          </p>
-          {conflict.current !== null && (
-            <>
-              <p className="mt-2 text-xs text-muted-foreground">
-                いまの内容（{formatDateTime(conflict.current.document.updatedAt)} に更新）
-              </p>
-              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
-                {redactBody(conflict.current.document.content)}
-              </pre>
-            </>
-          )}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={busy}
-              onClick={() => save(conflict.current === null ? null : conflict.current.version)}
-            >
-              自分の内容で上書きする
-            </Button>
-            <Button size="sm" disabled={busy} onClick={discardDraft}>
-              自分の下書きを捨てて、いまの内容を読み直す
-            </Button>
-          </div>
-        </div>
+        <ConflictNotice
+          noun="記憶"
+          current={conflict.current === null ? null : conflict.current.document}
+          busy={busy}
+          onOverwrite={() => save(conflict.current === null ? null : conflict.current.version)}
+          onDiscard={discardDraft}
+        />
       )}
 
       {isLoading && !missing ? (
