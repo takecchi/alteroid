@@ -177,6 +177,8 @@ describe('退避 ref（#1266）', () => {
       o.args.includes('--count') &&
       !o.args.includes('--min-parents=3')
         ? spawn(process.execPath, ['-e', 'process.stdout.write("junk\\n")'], {
+            // 親の process.env を丸ごと継がせない（#1971）: 本物の git の子と同じく、呼び手が組んだ env だけを渡す
+            env: o.env as NodeJS.ProcessEnv,
             stdio: ['ignore', 'pipe', 'pipe'],
           })
         : realSpawn(o);
