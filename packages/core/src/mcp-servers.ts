@@ -1,21 +1,79 @@
 import { createHash } from 'node:crypto';
 
-import { compareCodeUnits } from './code-unit-order.js';
-import { mcpServersSchema, type McpServers } from './mcp-servers-schema.js';
-import { assertNoNul, stripNul } from './nul-guard.js';
+import { z } from 'zod';
 
-// 形のスキーマは mcp-servers-schema.ts（ブラウザの束にも入れられる小さな入口）。ここから再び出す: 既存の import 先を変えないため
-export {
+import { compareCodeUnits } from './code-unit-order.js';
+import { assertNoNul, stripNul } from './nul-guard.js';
+import {
   isReservedMcpServerName,
-  mcpHttpServerConfigSchema,
-  mcpServerConfigSchema,
-  mcpServerNameSchema,
-  mcpServersSchema,
-  mcpSseServerConfigSchema,
-  mcpStdioServerConfigSchema,
-  type McpServerEntryConfig,
-  type McpServers,
+  MCP_NUL_ONLY_RULE,
+  MCP_RESERVED_NAME_RULE,
+  MCP_SERVER_NAME_PATTERN,
+  MCP_SERVER_NAME_RULE,
+  MCP_TYPE_HTTP,
+  MCP_TYPE_SSE,
+  MCP_TYPE_STDIO,
 } from './mcp-servers-schema.js';
+
+// 未知の欄は黙って捨てずに拒む（z.strictObject）: 捨てると綴りを間違えた `headers` が
+// 「保存できたのに効かない」になる。`env` / `headers` / `args` には秘密が入りうるので、日誌には名前だけを書く。
+// 名前の規則・予約名・NUL だけの値・type の値は mcp-servers-schema.ts（zod なし。web の保存前の検査と共有）から取る。
+// 欄の型と未知の欄の判定は、ここ（zod）と mcp-servers-schema.ts の checkMcpServers で同じ判定になる（mcp-servers-schema.test.ts が突き合わせる）。
+
+export { isReservedMcpServerName };
+
+export const mcpServerNameSchema = z
+  .string()
+  .regex(MCP_SERVER_NAME_PATTERN, MCP_SERVER_NAME_RULE)
+  .refine((name) => !isReservedMcpServerName(name), {
+    message: MCP_RESERVED_NAME_RULE,
+  });
+
+const stringMapSchema = z.record(z.string(), z.string());
+
+const commonFields = {
+  timeout: z.number().int().positive().optional(),
+  alwaysLoad: z.boolean().optional(),
+};
+
+// NUL だけの値は、`prepareMcpServersForWrite` が NUL を落とすと空になる。落とした後の形で断る。
+const nonEmptyAfterNul = z
+  .string()
+  .min(1)
+  .refine((value) => stripNul(value).length > 0, { message: MCP_NUL_ONLY_RULE });
+
+export const mcpStdioServerConfigSchema = z.strictObject({
+  type: z.literal(MCP_TYPE_STDIO).optional(),
+  command: nonEmptyAfterNul,
+  args: z.array(z.string()).optional(),
+  env: stringMapSchema.optional(),
+  ...commonFields,
+});
+
+export const mcpHttpServerConfigSchema = z.strictObject({
+  type: z.literal(MCP_TYPE_HTTP),
+  url: nonEmptyAfterNul,
+  headers: stringMapSchema.optional(),
+  ...commonFields,
+});
+
+export const mcpSseServerConfigSchema = z.strictObject({
+  type: z.literal(MCP_TYPE_SSE),
+  url: nonEmptyAfterNul,
+  headers: stringMapSchema.optional(),
+  ...commonFields,
+});
+
+export const mcpServerConfigSchema = z.union([
+  mcpStdioServerConfigSchema,
+  mcpHttpServerConfigSchema,
+  mcpSseServerConfigSchema,
+]);
+
+export const mcpServersSchema = z.record(mcpServerNameSchema, mcpServerConfigSchema);
+
+export type McpServerEntryConfig = z.infer<typeof mcpServerConfigSchema>;
+export type McpServers = z.infer<typeof mcpServersSchema>;
 
 export interface StoredMcpServers {
   mcpServers: McpServers;
