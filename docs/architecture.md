@@ -703,7 +703,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
 
-**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxLargeFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す（`maxLargeFileBytes` は外部ストレージが有効なときだけ 0 でない。名乗らない古いデーモンは 0 として読む）。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
+**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxLargeFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す（`maxLargeFileBytes` は外部ストレージが有効なときだけ 0 でない）。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
 
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**

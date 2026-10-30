@@ -16,16 +16,16 @@ export const ATTACHMENT_OTHER_MAX_BYTES = 25 * MIB;
 export const ATTACHMENT_MAX_COUNT = 10;
 export const ATTACHMENT_TOTAL_MAX_BYTES = 50 * MIB;
 
-// `maxLargeFileBytes` は任せる（名乗らない旧いサーバの応答は 0＝枠なしとして読む）
 export type AttachmentCheckLimits = Pick<
   AttachmentLimits,
-  'maxImageBytes' | 'maxFileBytes' | 'maxPerMessage' | 'maxTotalBytes'
-> &
-  Partial<Pick<AttachmentLimits, 'maxLargeFileBytes'>>;
+  'maxImageBytes' | 'maxFileBytes' | 'maxLargeFileBytes' | 'maxPerMessage' | 'maxTotalBytes'
+>;
 
+// 既定は大きいファイルの別枠を持たない（0＝枠なし）: 別枠は外部ストレージが有効なサーバだけが名乗る
 export const DEFAULT_ATTACHMENT_CHECK_LIMITS: AttachmentCheckLimits = {
   maxImageBytes: ATTACHMENT_IMAGE_MAX_BYTES,
   maxFileBytes: ATTACHMENT_OTHER_MAX_BYTES,
+  maxLargeFileBytes: 0,
   maxPerMessage: ATTACHMENT_MAX_COUNT,
   maxTotalBytes: ATTACHMENT_TOTAL_MAX_BYTES,
 };
