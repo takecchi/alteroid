@@ -211,19 +211,20 @@ describe('summarizeProgress — backlog', () => {
         job('j-rd-2', { status: 'running', taskId: 'rd' }),
         job('j-mg', { status: 'running', taskId: 'mg' }),
         job('j-cl', { status: 'running', taskId: 'cl' }),
+        job('j-u-wait', { status: 'waiting_human', taskId: 'u' }),
       ],
     ).backlog;
     expect(b.byState).toEqual({
       untouched: 2,
       responded: 2,
-      delegated: 3,
+      delegated: 4,
       notApplicable: 1,
       unjudgeable: 0,
     });
     expect(b.byState.untouched + b.byState.responded + b.byState.notApplicable).toBe(b.total);
   });
 
-  it('委譲あり: Job.taskId がその task を指し、isRunningJobStatus が真（running）のものだけ。終わった・人間待ち・別の task は数えない', () => {
+  it('委譲あり: Job.taskId がその task を指し、終わっていない（running・waiting_human）ものだけ。終わった（done・failed・lost・stopped）・別の task・会話 id だけの結び付きは数えない', () => {
     const b = summarize(
       [
         row('t1', OLD, { originConversationId: 'c1' }),
@@ -237,9 +238,10 @@ describe('summarizeProgress — backlog', () => {
         job('c', { status: 'waiting_human', taskId: 't3' }),
         job('d', { status: 'running', taskId: 'other' }),
         job('e', { status: 'running', conversationId: 'c4' }),
+        job('f', { status: 'lost', taskId: 't4' }),
       ],
     ).backlog;
-    expect(b.byState.delegated).toBe(1);
+    expect(b.byState.delegated).toBe(2);
   });
 
   it('originConversationId の無い human の task は untouched でなく unjudgeable に数える（返事を結べない）', () => {

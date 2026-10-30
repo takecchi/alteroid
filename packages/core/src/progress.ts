@@ -105,7 +105,7 @@ export interface ProgressBacklog {
    * `untouched` / `responded` / `unjudgeable` / `notApplicable` は排他で、足すと `total` になる。
    * `unjudgeable` は会話（`originConversationId`）の無い human の task: 返事を結べないので「未着手」に数えない。
    * `delegated` は他と排他ではない（未着手のまま委譲が走っている task が在りうる）。
-   * `Job.taskId` がその task を指す、走っている（`isRunningJobStatus`）委譲が在れば数える。
+   * `Job.taskId` がその task を指す、終わっていない（`isTerminalJobStatus` が偽: running・waiting_human）委譲が在れば数える（台帳のときの数え方のまま）。
    */
   byState: {
     untouched: number;
@@ -234,7 +234,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
   // 委譲は task から辿る（`Job.taskId`）。会話 id では結ばない: task が委譲を直接指すので、起点の会話が無い task の委譲も数えられる
   const delegatedTaskIds = new Set<string>();
   for (const job of jobs) {
-    if (job.taskId !== undefined && isRunningJobStatus(job.status))
+    if (job.taskId !== undefined && !isTerminalJobStatus(job.status))
       delegatedTaskIds.add(job.taskId);
   }
 

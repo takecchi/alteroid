@@ -7893,6 +7893,19 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect((await read()).backlog.byState.delegated).toBe(1);
   });
 
+  it('人間待ち（waiting_human）の委譲も、Job.taskId がその task を指していれば delegated に数える（台帳のときの数え方のまま）', async () => {
+    await addTask('cmt-w', ago(10), { originConversationId: 'conv-w' });
+    await stores.jobs.putJob({
+      id: 'job-waiting-human',
+      createdAt: ago(3),
+      updatedAt: ago(3),
+      status: 'waiting_human',
+      taskId: 'cmt-w',
+      summary: 'x',
+    });
+    expect((await read()).backlog.byState.delegated).toBe(1);
+  });
+
   it('unreadable はストアが返したまま completeness と basis に載る（0 に丸めない）。刈りの件数は載せない', async () => {
     const real = stores.tasks;
     stores.tasks = {
