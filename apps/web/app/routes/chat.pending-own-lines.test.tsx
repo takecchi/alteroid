@@ -56,6 +56,36 @@ describe('pendingOwnLines（issue #446 の筋書き2）', () => {
   });
 });
 
+// デーモンは返信の途中に届いた人間の発言の所で日誌の本文を割り（#4391・#4392）、道具の境目は空行でつないで1発言に書く。
+// 手元では、どの境目でも行を分ける（同じ replyGroup）。
+describe('pendingOwnLines: 人間の発言で分かれた返信の照合', () => {
+  const 返信 = (text: string, index: number) => ({
+    key: `c-${String(index)}`,
+    role: 'clone' as const,
+    text,
+    of: 'conv-a',
+    replyGroup: 'g-1',
+  });
+  const 履歴 = (text: string) => ({ key: `h-${text}`, role: 'clone' as const, text, of: 'conv-a' });
+
+  it('人間の発言の前と後が日誌の別々の発言なら、それぞれ引き取られる（後ろの道具の境目は空行で連結して当てる）', () => {
+    const lines = [返信('前半', 0), 返信('後半', 1), 返信('道具の後', 2)];
+    const history = [履歴('前半'), 履歴('後半\n\n道具の後')];
+
+    expect(pendingOwnLines(lines, 'conv-a', history, undefined, [])).toEqual([]);
+  });
+
+  it('人間の発言の境目を区切らずに連結しない: 割らない古いデーモンの1発言（前半後半）には当てず、手元の行は残る', () => {
+    const lines = [返信('前半', 0), 返信('後半', 1)];
+    const history = [履歴('前半後半')];
+
+    expect(pendingOwnLines(lines, 'conv-a', history, undefined, []).map((l) => l.text)).toEqual([
+      '前半',
+      '後半',
+    ]);
+  });
+});
+
 const ChatRoute = Chat as unknown as (props: {
   loaderData: { conversationId: string | undefined };
 }) => React.ReactElement;
