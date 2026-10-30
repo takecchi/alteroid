@@ -1,74 +1,21 @@
 import { createHash } from 'node:crypto';
 
-import { z } from 'zod';
-
 import { compareCodeUnits } from './code-unit-order.js';
+import { mcpServersSchema, type McpServers } from './mcp-servers-schema.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
-import { MCP_SERVER_NAME } from './tools.js';
 
-// 未知の欄は黙って捨てずに拒む（z.strictObject）: 捨てると綴りを間違えた `headers` が
-// 「保存できたのに効かない」になる。`env` / `headers` / `args` には秘密が入りうるので、日誌には名前だけを書く。
-
-/** 名前は道具名の一部（`mcp__<名前>__<道具>`）になる。緩めると `allowedTools` の照合が壊れる。 */
-const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-
-/** 大文字小文字を無視して比べる: 接頭辞 `mcp__alteroid__` で自作ツールを許可しているので、見分けにくい綴りの別サーバを入口で止める。 */
-export function isReservedMcpServerName(name: string): boolean {
-  return name.toLowerCase() === MCP_SERVER_NAME.toLowerCase();
-}
-
-export const mcpServerNameSchema = z
-  .string()
-  .regex(MCP_SERVER_NAME_PATTERN, '英数字・-・_ の1〜64文字で書くこと')
-  .refine((name) => !isReservedMcpServerName(name), {
-    message: `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない`,
-  });
-
-const stringMapSchema = z.record(z.string(), z.string());
-
-const commonFields = {
-  timeout: z.number().int().positive().optional(),
-  alwaysLoad: z.boolean().optional(),
-};
-
-// NUL だけの値は、`prepareMcpServersForWrite` が NUL を落とすと空になる。落とした後の形で断る。
-const nonEmptyAfterNul = z
-  .string()
-  .min(1)
-  .refine((value) => stripNul(value).length > 0, { message: 'NUL（\\u0000）だけの値は空と同じ' });
-
-export const mcpStdioServerConfigSchema = z.strictObject({
-  type: z.literal('stdio').optional(),
-  command: nonEmptyAfterNul,
-  args: z.array(z.string()).optional(),
-  env: stringMapSchema.optional(),
-  ...commonFields,
-});
-
-export const mcpHttpServerConfigSchema = z.strictObject({
-  type: z.literal('http'),
-  url: nonEmptyAfterNul,
-  headers: stringMapSchema.optional(),
-  ...commonFields,
-});
-
-export const mcpSseServerConfigSchema = z.strictObject({
-  type: z.literal('sse'),
-  url: nonEmptyAfterNul,
-  headers: stringMapSchema.optional(),
-  ...commonFields,
-});
-
-export const mcpServerConfigSchema = z.union([
-  mcpStdioServerConfigSchema,
+// 形のスキーマは mcp-servers-schema.ts（ブラウザの束にも入れられる小さな入口）。ここから再び出す: 既存の import 先を変えないため
+export {
+  isReservedMcpServerName,
   mcpHttpServerConfigSchema,
+  mcpServerConfigSchema,
+  mcpServerNameSchema,
+  mcpServersSchema,
   mcpSseServerConfigSchema,
-]);
-
-export const mcpServersSchema = z.record(mcpServerNameSchema, mcpServerConfigSchema);
-
-export type McpServerEntryConfig = z.infer<typeof mcpServerConfigSchema>;
-export type McpServers = z.infer<typeof mcpServersSchema>;
+  mcpStdioServerConfigSchema,
+  type McpServerEntryConfig,
+  type McpServers,
+} from './mcp-servers-schema.js';
 
 export interface StoredMcpServers {
   mcpServers: McpServers;

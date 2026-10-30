@@ -258,7 +258,8 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     expect(puts).toEqual([]);
   });
 
-  it('400 なら不正な欄の位置を出し、前のものが残ると言う（確認は畳み、編集中の本文は残す）', async () => {
+  // web の検査を通った形を daemon が断ったとき（規則のずれ）は、daemon の文をそのまま出す
+  it('形に合う登録を 400 で断られたら、daemon の文をそのまま出し、前のものが残ると言う（確認は畳み、編集中の本文は残す）', async () => {
     const { puts } = stubMcp({
       put: {
         status: 400,
@@ -268,7 +269,7 @@ describe('/mcp-servers 画面 — 差し替える', () => {
     renderScreen();
 
     fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
-    const bad = '{ "mcpServers": { "x": {} } }';
+    const bad = '{ "mcpServers": { "x": { "command": "npx" } } }';
     fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), {
       target: { value: bad },
     });
@@ -279,9 +280,141 @@ describe('/mcp-servers 画面 — 差し替える', () => {
       await screen.findByText('MCP サーバの登録の形が不正（保存していない）: mcpServers.x.command'),
     ).toBeTruthy();
     expect(screen.getByText('前の登録がそのまま残っている。')).toBeTruthy();
-    expect(puts).toEqual([{ mcpServers: { x: {} } }]);
+    expect(puts).toEqual([{ mcpServers: { x: { command: 'npx' } } }]);
     expect(screen.getByLabelText<HTMLTextAreaElement>('MCP サーバの新しい登録').value).toBe(bad);
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+  });
+
+  // #5903: 送る前に、daemon が使う core のスキーマで形を見る。どのサーバのどの欄がどう違うかを画面の語で言う
+  async function typeAndAskSave(value: string) {
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), { target: { value } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+  }
+
+  it.each([
+    [
+      'url が数値',
+      '{"mcpServers":{"demo":{"type":"http","url":5}}}',
+      'demo の url は文字列で書く（いまは数値）。（送っていない）',
+    ],
+    [
+      'url が無い',
+      '{"mcpServers":{"demo":{"type":"sse"}}}',
+      'demo の url が無い。文字列で書く。（送っていない）',
+    ],
+    [
+      'command が無い',
+      '{"mcpServers":{"demo":{}}}',
+      'demo の command が無い。文字列で書く。（送っていない）',
+    ],
+    [
+      'args の中が文字列でない',
+      '{"mcpServers":{"demo":{"command":"npx","args":["-y",1]}}}',
+      'demo の args[1] は文字列で書く（いまは数値）。（送っていない）',
+    ],
+    [
+      'env の値が文字列でない',
+      '{"mcpServers":{"demo":{"command":"npx","env":{"KEY":true}}}}',
+      'demo の env.KEY は文字列で書く（いまは真偽値）。（送っていない）',
+    ],
+    [
+      '未知の欄',
+      '{"mcpServers":{"demo":{"command":"npx","header":{}}}}',
+      'demo に使えない欄がある: header。綴りを確かめる（未知の欄は保存できない）。（送っていない）',
+    ],
+    [
+      'type が3つの外',
+      '{"mcpServers":{"demo":{"type":"ws","url":"x"}}}',
+      'demo の type は stdio・http・sse のどれかで書く（いまは文字列）。（送っていない）',
+    ],
+    [
+      'type が無いのに url',
+      '{"mcpServers":{"demo":{"url":"https://example.com/mcp"}}}',
+      'demo は type が無いので、コマンドで起動する形（stdio）として読むが、url がある。url で繋ぐ形なら type に http か sse を書く。（送っていない）',
+    ],
+    [
+      'timeout が 0',
+      '{"mcpServers":{"demo":{"command":"npx","timeout":0}}}',
+      'demo の timeout は 0 より大きい整数で書く。（送っていない）',
+    ],
+    [
+      '空の command',
+      '{"mcpServers":{"demo":{"command":""}}}',
+      'demo の command が空。値を書く。（送っていない）',
+    ],
+  ])('形が合わない（%s）: 送らず、サーバと欄を画面の語で言う', async (_name, text, expected) => {
+    const { puts } = stubMcp();
+    renderScreen();
+
+    await typeAndAskSave(text);
+
+    const alert = screen.getByRole('alert').textContent ?? '';
+    expect(alert).toBe(expected);
+    expect(alert).not.toMatch(/Invalid|expected|received/);
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+    expect(puts).toEqual([]);
+  });
+
+  it('サーバの名前が使えない形なら、名前を挙げて送らない', async () => {
+    const { puts } = stubMcp();
+    renderScreen();
+
+    await typeAndAskSave('{"mcpServers":{"a b":{"command":"npx"}}}');
+
+    expect(screen.getByRole('alert').textContent).toContain('サーバの名前「a b」は使えない。');
+    expect(puts).toEqual([]);
+  });
+
+  it('形に合う登録（対照）は確認へ進み、送れる', async () => {
+    const { puts } = stubMcp();
+    renderScreen();
+
+    await typeAndAskSave(
+      '{"mcpServers":{"demo":{"type":"http","url":"https://example.com/mcp","headers":{"A":"b"},"timeout":3000}}}',
+    );
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+
+    await waitFor(() => expect(puts.length).toBe(1));
+    expect(await screen.findByText(/MCP 連携の登録は保存した/)).toBeTruthy();
+    expect(screen.queryByText(/（送っていない）/)).toBeNull();
+  });
+
+  it('新しい失敗を出すときは前の失敗の文を消す（daemon の 400 のあとに JSON として読めない、のあとに形が不正）', async () => {
+    stubMcp({
+      put: { status: 400, body: { error: 'MCP サーバの登録の形が不正（保存していない）: x' } },
+    });
+    renderScreen();
+
+    await typeAndAskSave('{"mcpServers":{"demo":{"command":"npx"}}}');
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    expect(await screen.findByText(/MCP サーバの登録の形が不正（保存していない）: x/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), {
+      target: { value: '{ "mcpServers": ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(screen.getByRole('alert').textContent).toContain('JSON として読めない');
+    expect(screen.queryByText(/MCP サーバの登録の形が不正（保存していない）/)).toBeNull();
+    expect(screen.queryByText('前の登録がそのまま残っている。')).toBeNull();
+  });
+
+  it('形が不正の失敗を出すときも、前の daemon の失敗の文を消す', async () => {
+    stubMcp({
+      put: { status: 400, body: { error: 'MCP サーバの登録の形が不正（保存していない）: x' } },
+    });
+    renderScreen();
+
+    await typeAndAskSave('{"mcpServers":{"demo":{"command":"npx"}}}');
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+    expect(await screen.findByText(/MCP サーバの登録の形が不正（保存していない）: x/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('MCP サーバの新しい登録'), {
+      target: { value: '{"mcpServers":{"demo":{"url":5,"type":"http"}}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(screen.getByRole('alert').textContent).toContain('demo の url は文字列で書く');
+    expect(screen.queryByText(/MCP サーバの登録の形が不正（保存していない）/)).toBeNull();
   });
 
   it('「登録を全部外す」は確認を挟んでから空の mcpServers を PUT する（alteroid mcp clear と同じ）', async () => {
