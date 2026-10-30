@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { commandBasename, stripCommandPrefixes } from './outward-commands.js';
 import { isManagerScratchDirName } from './unpushed-work.js';
 
 /** 担当1本あたりに覚える、git を打った場所の数の上限。 */
@@ -31,14 +32,14 @@ export function gitDirsFromBashCommand(command: string, cwd: string | undefined)
   const found: string[] = [];
   let current = cwd !== undefined && path.isAbsolute(cwd) ? cwd : undefined;
   for (const segment of command.split(/&&|\|\||;|\||\n/)) {
-    const words = stripPrefixes(segment.trim().split(/\s+/).filter(Boolean));
+    const words = stripCommandPrefixes(segment.trim().split(/\s+/).filter(Boolean));
     const head = words[0];
     if (head === undefined) continue;
     if (head === 'cd') {
       current = resolveDir(current, words[1]);
       continue;
     }
-    if (basenameOf(head) !== 'git') continue;
+    if (commandBasename(head) !== 'git') continue;
     let dir = current;
     for (let i = 1; i < words.length; i += 1) {
       const word = words[i] ?? '';
@@ -64,25 +65,4 @@ function resolveDir(base: string | undefined, target: string | undefined): strin
   if (/[~$`"'*?]/.test(target) || target === '-') return undefined;
   if (path.isAbsolute(target)) return path.normalize(target);
   return base === undefined ? undefined : path.resolve(base, target);
-}
-
-function basenameOf(token: string): string {
-  const at = token.lastIndexOf('/');
-  return at === -1 ? token : token.slice(at + 1);
-}
-
-const TIMEOUT_OPTIONS_WITH_VALUE = new Set(['-k', '-s', '--kill-after', '--signal']);
-
-// 先頭の `NAME=value` と `timeout <オプション> <秒>` を外す（`outward-commands.ts` と同じ形）
-function stripPrefixes(tokens: readonly string[]): string[] {
-  let rest = [...tokens];
-  while (rest.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0] ?? '')) rest = rest.slice(1);
-  if (basenameOf(rest[0] ?? '') === 'timeout') {
-    rest = rest.slice(1);
-    while ((rest[0] ?? '').startsWith('-')) {
-      rest = rest.slice(TIMEOUT_OPTIONS_WITH_VALUE.has(rest[0] ?? '') ? 2 : 1);
-    }
-    rest = rest.slice(1);
-  }
-  return rest;
 }

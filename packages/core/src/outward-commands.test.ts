@@ -1,6 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
-import { OUTWARD_COMMANDS, outwardCommandsIn } from './outward-commands.js';
+import {
+  commandBasename,
+  OUTWARD_COMMANDS,
+  outwardCommandsIn,
+  stripCommandPrefixes,
+} from './outward-commands.js';
+
+// git-worktree-hints.ts と共有する頭の外し方（#5666）
+describe('stripCommandPrefixes / commandBasename', () => {
+  it('先頭の NAME=value を外す', () => {
+    expect(stripCommandPrefixes(['A=1', 'B_2=x', 'git', 'push'])).toEqual(['git', 'push']);
+  });
+
+  it('timeout とそのオプション・秒数を外す（-k / -s は値を取り、--kill-after=5 は1語）', () => {
+    expect(stripCommandPrefixes(['timeout', '-k', '5', '-s', 'KILL', '530', 'gh', 'pr'])).toEqual([
+      'gh',
+      'pr',
+    ]);
+    expect(
+      stripCommandPrefixes(['A=1', '/usr/bin/timeout', '--kill-after=5', '60', 'git']),
+    ).toEqual(['git']);
+  });
+
+  it('頭が無ければそのまま', () => {
+    expect(stripCommandPrefixes(['git', '-C', '/w', 'push'])).toEqual(['git', '-C', '/w', 'push']);
+    expect(stripCommandPrefixes([])).toEqual([]);
+  });
+
+  it('commandBasename は最後の / より後ろ', () => {
+    expect(commandBasename('/usr/bin/git')).toBe('git');
+    expect(commandBasename('git')).toBe('git');
+  });
+});
 
 describe('OUTWARD_COMMANDS: 背景待ちでも待たずに配る「外へ出す」コマンドの一覧', () => {
   it('一覧は固定してある（足す・外すときはこの歯も直す）', () => {
