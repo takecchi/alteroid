@@ -1046,6 +1046,27 @@ describe('器の入れ替えの判定材料', () => {
     expect(again?.instanceId).toBe(identity?.instanceId);
   });
 
+  // 名簿の心拍は `identity` があればそれだけを呼ぶ（runner-protocol.ts）。HttpRunner は常に `identity` を持つので、
+  // 予備の `ping` は持たない（#5709。持つと、呼ばれない往復の実装が残る）
+  it('HttpRunner は心拍を identity() だけで受け、予備の ping() を持たない', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+    cleanups.push(() => client.close());
+    expect(typeof client.identity).toBe('function');
+    expect(client.ping).toBeUndefined();
+  });
+
   it('hello() が /health の instanceId を拾う（新しい往復を増やさない）', async () => {
     let calls = 0;
     const client = await createHttpRunner({
