@@ -14,6 +14,7 @@ import {
   WarnNote,
 } from '@alteroid/ui';
 import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
+import { denialActorTag, describeDenialFollowUp } from '@alteroid/core/denial-format';
 import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
@@ -68,30 +69,6 @@ function summarizeDenials(denials: ManagerDenial[]) {
     rest: Math.max(recent.length - LIST_DENIED_TOOLS, 0),
     total: denials.reduce((sum, entry) => sum + entry.count, 0),
   };
-}
-
-// manager.ts の同名の関数を import せず写す: この画面は別のデプロイで @alteroid/core を読まないため
-export function describeDenialFollowUp(
-  denials: readonly Pick<ManagerDenial, 'lastAt'>[],
-  lastReportAt: string | undefined,
-): string | null {
-  if (denials.length === 0) return null;
-  const times = denials.map((denial) => denial.lastAt);
-  if (times.some((time) => time === undefined)) {
-    return '最後に止められた時刻が取れていない拒否が在るので、止められた後に報告が届いたかは判定できない';
-  }
-  const latest = (times as string[]).reduce((a, b) => (a > b ? a : b));
-  if (lastReportAt !== undefined && lastReportAt > latest) {
-    return (
-      `最後に止められた（${latest}）後にも報告が届いている（${lastReportAt}）。` +
-      '止められた道具を別の手で越えたかまでは見ていない'
-    );
-  }
-  return `最後に止められた（${latest}）後の報告はまだ届いていない`;
-}
-
-export function denialActorTag(actor: ManagerDenial['actor']): string {
-  return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
 }
 
 // 「止まっている」と断定しない: 拒否の出所は数から取れず、器側の拒否と alteroid 自身のフックの拒否で帰結が違うため

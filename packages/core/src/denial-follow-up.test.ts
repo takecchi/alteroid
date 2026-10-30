@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeDenialFollowUp } from './manager.js';
+import { denialActorTag, describeDenialFollowUp } from './denial-format.js';
+
+describe('denialActorTag', () => {
+  it('層を3値のまま出す（取れていない層をマネージャー側へ混ぜない）', () => {
+    expect(denialActorTag('manager')).toBe(' [マネージャー]');
+    expect(denialActorTag('worker')).toBe(' [作業者]');
+    expect(denialActorTag(undefined)).toBe(' [層不明]');
+  });
+});
 
 describe('describeDenialFollowUp（#1455）', () => {
   const T1 = '2026-09-24T07:00:00.000Z';

@@ -7,6 +7,7 @@ import {
   approvalUpdatedAt,
   commitmentUpdatedAt,
   describeAnsweredVia,
+  denialActorTag,
   describeDenialFollowUp,
   describeManagerState,
   describeQuestionLines,
@@ -3023,12 +3024,6 @@ const LIST_DENIED_TOOLS = 3;
 type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>['managers'][number];
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
 type ManagerUnpushedWorkObservation = NonNullable<ManagerListItem['lastUnpushedWorkObservation']>;
-
-// `packages/core/src/tools.ts` の `denialActorTag` と同じ書式に揃える: 片方だけ直すと、クローンと人間が同じ拒否を見て違う判断をする。
-// `undefined`（層が取れていない）を消したりマネージャー側へ混ぜたりしない。
-function denialActorTag(actor: ManagerDenial['actor']): string {
-  return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
-}
 
 // 状態を置き換えない: 札は `[running]` のまま残し、その下に並べる。
 // 拒否の出所はこの数からは取れない: 器の分類器・deny 規則の拒否なら担い手は本当に詰むが、alteroid 自身の `PreToolUse` フックの拒否なら
