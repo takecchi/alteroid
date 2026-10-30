@@ -30,7 +30,7 @@ const SAMPLE_NAV_ITEMS: AppSidebarItem[] = [
     ),
   },
   { to: '/approvals', label: '承認待ち', icon: BellRing, badge: <Badge tone="warn">3</Badge> },
-  { to: '/commitments', label: '仕事', icon: ListChecks, section: '仕事' },
+  { to: '/commitments', label: '未了の仕事', icon: ListChecks, section: '仕事' },
   { to: '/managers', label: 'マネージャー', icon: Users, section: '仕事' },
   { to: '/reports', label: '日報', icon: BookText, section: '記録' },
   { to: '/journal', label: '日誌', icon: Activity, section: '記録' },
