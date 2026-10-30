@@ -141,7 +141,13 @@ describe('plugin の送りの期限（本文の大きさに見合う）', () => 
       await new Promise((r) => setTimeout(r, delayMs));
       return Response.json({
         ok: true,
-        plugin: { name: 'p-one', sha: 'a'.repeat(40), contentSha256: 'c'.repeat(64) },
+        plugin: {
+          name: 'p-one',
+          sha: 'a'.repeat(40),
+          contentSha256: 'c'.repeat(64),
+          enableHooks: false,
+          enableMcp: false,
+        },
       });
     }) as typeof fetch;
   }
