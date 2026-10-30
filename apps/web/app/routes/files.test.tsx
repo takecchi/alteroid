@@ -477,6 +477,22 @@ describe('ファイル画面: アップロード', () => {
     );
   });
 
+  it('上げるのが失敗したら、ファイル名と、サーバの文をそのまま出す', async () => {
+    renderFiles();
+    await screen.findByText('ファイルはまだありません');
+    const failing = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      if (request?.method === 'POST') return json({ error: 'boom' }, 500);
+      return failing(input, init);
+    }) as typeof fetch;
+    const file = new NodeFile(['x'], 'bad.txt', { type: 'text/plain' }) as unknown as File;
+    fireEvent.change(screen.getByLabelText('アップロードするファイル'), {
+      target: { files: [file] },
+    });
+    expect(await screen.findByText('bad.txt: boom')).toBeTruthy();
+  });
+
   it('上限を超えるものは上げる前に断る', async () => {
     renderFiles();
     await screen.findByText('ファイルはまだありません');
