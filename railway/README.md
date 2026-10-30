@@ -794,7 +794,7 @@ railway ssh --service Postgres 'psql -c "select tablename from pg_tables where s
 - **`daemon_state.clone_session_id`** — クローンが続けているセッションの id。消すとクローンは**新しいセッションから始まる**（会話の続きが切れる。記憶を残しても切れる）
 - **`commitments`** — 引き受けたまま終わっていない仕事。消すと**やり残しを誰も思い出さない**
 - **`env_profile_entries`**（と旧形式の `env_profile`）— 実行環境プロファイル（`.zprofile` 相当。名前付きの行。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile list` で行を数え、`alteroid profile show <名前>` で本文を控える。**`truncate` で `daemon_state` も消えるので、旧 `env_profile` に行が残っていると、次の起動で `default` 行として蘇る**（旧表も一緒に消すこと）
-- **`tasks`** — 順序と状態を持つ待ち行列（#5470）。`commitments` とは別の表で、台帳から自動では移っていない。消すと**並べた順序と状態ごとなくなる**
+- **`tasks`** — 引き受けた仕事の待ち行列（順序と状態を持つ。#5470）。消すと**やり残しを誰も思い出さない**（並べた順序と状態ごとなくなる）
 - **`practices`**（と版の履歴 `practice_versions`）— 仕事のやり方（#1282・#1420）。クローンが書くが、**人間が読んで書き換えるもの**でもある。`POST /reset` は消す側（「仕事のやり方」）なのでそれに揃えた。消す前に `alteroid practice list` で slug を数え、`alteroid practice show <slug>` で本文を控える（版の履歴は `alteroid practice history <slug>`）
 
 そして器を止める操作そのものの代償も残る — **走行中のマネージャーは畳まれ、`/workspace` の未 push の変更は消える**（「先に読む」3）。
