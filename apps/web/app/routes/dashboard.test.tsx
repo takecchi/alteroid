@@ -768,7 +768,8 @@ describe('「作業の進捗」カード', () => {
       window.dispatchEvent(new Event('focus'));
     });
 
-    expect(await screen.findByText(/最新の数を取り直せなかった/)).toBeTruthy();
+    const note = await screen.findByText('最新の数を取り直せなかった。下は前に読めたときのもの。');
+    expect(note.getAttribute('role')).toBe('status');
     expect(screen.getByText(/未了の仕事 5 件/)).toBeTruthy();
 
     globalThis.fetch = healthy;
