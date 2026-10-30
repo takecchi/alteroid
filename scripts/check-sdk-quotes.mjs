@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// 使い方: pnpm check:sdk-quotes
-// CI の別ステップにしない: `check-sdk-quotes.test.ts` が同じ core を実物に当てており、`pnpm test` に既に載っているため。
+// 使い方: pnpm check:sdk-quotes（CI の checks で build より前に走る。実物に当てる経路はこれだけ）
 
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -29,6 +28,20 @@ function main() {
 
   const files = listScannableFiles(REPO_ROOT);
   const quotes = collectMarkedQuotes(files);
+
+  // 0件を緑と読まない: 型定義の読み違い・走査の空振り・印の拾い損ねで、食い違いがあっても当たり0件になるため。
+  const emptiness = [
+    sdk.text.length <= 1000 && `SDK の型定義が ${sdk.text.length} 文字しかない（${sdk.typesPath}）`,
+    files.length <= 100 && `走査したファイルが ${files.length} 件しかない`,
+    quotes.length === 0 && `${MARKER} の付いた逐語が1件も見つからない`,
+  ].filter(Boolean);
+  if (emptiness.length > 0) {
+    for (const reason of emptiness)
+      logError(`check-sdk-quotes: NG — ${reason}（検査が空振りしていないか）`);
+    process.exitCode = 1;
+    return;
+  }
+
   const defects = findQuoteDefects(quotes, sdk.text);
 
   if (defects.length > 0) {

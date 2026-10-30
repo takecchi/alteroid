@@ -59,6 +59,14 @@ function main() {
   }
 
   const { bytes, lines } = countBytesAndLines(text);
+  // 空に近い AGENTS.md を緑と読まない: 読み違い・取り違えで予算の内に収まって見えるため。
+  if (bytes <= 20_000) {
+    logError(
+      `check-agents-md-size: NG — ${AGENTS_MD_PATH} が ${formatBytes(bytes)} しかない（読み違いか取り違えではないか）`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   const result = judgeAgentsMdSize({ bytes, lines });
   const first = BUDGET_HISTORY[0];
   const growthBytes = result.bytes - first.bytes;

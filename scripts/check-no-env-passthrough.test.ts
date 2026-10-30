@@ -1,13 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { ALLOWLIST, ALLOWLIST_MISSING_ENV, classifyChildProcessCallEnv, classifyEnvPassthroughHits, findEnvPassthroughHits, findMissingEnvChildProcessCalls, isTargetPath, listTargetFiles, maskCommentsAndStrings } from './check-no-env-passthrough-core.mjs';
-
-const ROOT = join(import.meta.dirname, '..');
+import { ALLOWLIST, ALLOWLIST_MISSING_ENV, classifyChildProcessCallEnv, classifyEnvPassthroughHits, findEnvPassthroughHits, findMissingEnvChildProcessCalls, isTargetPath, maskCommentsAndStrings } from './check-no-env-passthrough-core.mjs';
 
 interface Hit {
   path: string;
@@ -794,100 +789,11 @@ describe('check-no-env-passthrough: isTargetPath', () => {
   });
 });
 
-describe('実リポジトリの検査（main が緑であることの確認、#1935）', () => {
-  it('ALLOWLIST の each entry が listTargetFiles(ROOT) に実在する（消えたパスを残さない）', () => {
-    const targetPaths = new Set(listTargetFiles(ROOT) as string[]);
-    for (const entry of ALLOWLIST as AllowlistEntry[]) {
-      expect(
-        targetPaths.has(entry.path),
-        `ALLOWLIST の \`${entry.path}\` が走査対象に無い（消えたなら ALLOWLIST からも消すこと）`,
-      ).toBe(true);
-      expect(entry.reason.trim().length > 0, `ALLOWLIST の \`${entry.path}\` の reason が空`).toBe(
-        true,
-      );
+// 実物の repo への当て（違反・古い許可・マスクの空振り）は `pnpm check:no-env-passthrough`（CI の checks、build より前）だけが持つ。
+describe('check-no-env-passthrough: 許可一覧の形', () => {
+  it('ALLOWLIST と ALLOWLIST_MISSING_ENV の各項目に理由がある', () => {
+    for (const entry of [...ALLOWLIST, ...ALLOWLIST_MISSING_ENV] as AllowlistEntry[]) {
+      expect(entry.reason.trim().length > 0, `\`${entry.path}\` の reason が空`).toBe(true);
     }
-  });
-
-  it('対象ファイルに、許可されていない env 丸渡しが無い。ALLOWLIST に古い許可も残っていない', () => {
-    const paths = listTargetFiles(ROOT) as string[];
-    expect(paths.length).toBeGreaterThan(0);
-
-    const files = paths.map((path) => ({ path, content: readFileSync(join(ROOT, path), 'utf8') }));
-    const hits = findEnvPassthroughHits(files) as Hit[];
-    const { violations, stale } = classifyEnvPassthroughHits(hits, ALLOWLIST) as {
-      violations: Hit[];
-      stale: AllowlistEntry[];
-    };
-
-    expect(
-      violations,
-      violations.length === 0
-        ? ''
-        : `${violations.length}件の未許可の env 丸渡し:\n` +
-            violations
-              .map((h) => `  ${h.path}:${h.line} ${h.describe}\n    ${h.snippet}`)
-              .join('\n') +
-            '\n必要な鍵だけを明示的に組み立てるか、理由付きで ALLOWLIST へ載せること（#1935）。',
-    ).toEqual([]);
-
-    expect(
-      stale,
-      stale.length === 0
-        ? ''
-        : `ALLOWLIST に古い許可が${stale.length}件残っている: ${stale.map((e) => e.path).join(', ')}\n` +
-            '直してしまって当たりが無くなったなら、ALLOWLIST から消すこと。',
-    ).toEqual([]);
-  });
-
-  it('ALLOWLIST_MISSING_ENV の each entry が listTargetFiles(ROOT) に実在する（消えたパスを残さない、#1971）', () => {
-    const targetPaths = new Set(listTargetFiles(ROOT) as string[]);
-    for (const entry of ALLOWLIST_MISSING_ENV as AllowlistEntry[]) {
-      expect(
-        targetPaths.has(entry.path),
-        `ALLOWLIST_MISSING_ENV の \`${entry.path}\` が走査対象に無い（消えたなら ALLOWLIST_MISSING_ENV からも消すこと）`,
-      ).toBe(true);
-      expect(
-        entry.reason.trim().length > 0,
-        `ALLOWLIST_MISSING_ENV の \`${entry.path}\` の reason が空`,
-      ).toBe(true);
-    }
-  });
-
-  it('対象ファイルに、許可されていない env 無し子プロセス呼び出しが無い。ALLOWLIST_MISSING_ENV に古い許可も残っていない（#1971）', () => {
-    const paths = listTargetFiles(ROOT) as string[];
-    const files = paths.map((path) => ({ path, content: readFileSync(join(ROOT, path), 'utf8') }));
-    const hits = findMissingEnvChildProcessCalls(files) as Hit[];
-    const { violations, stale } = classifyEnvPassthroughHits(hits, ALLOWLIST_MISSING_ENV) as {
-      violations: Hit[];
-      stale: AllowlistEntry[];
-    };
-
-    expect(
-      violations,
-      violations.length === 0
-        ? ''
-        : `${violations.length}件の未許可の env 無し子プロセス呼び出し:\n` +
-            violations
-              .map((h) => `  ${h.path}:${h.line} ${h.describe}\n    ${h.snippet}`)
-              .join('\n') +
-            '\n必要な鍵だけを明示的に組み立てるか、理由付きで ALLOWLIST_MISSING_ENV へ載せること（#1971）。',
-    ).toEqual([]);
-
-    expect(
-      stale,
-      stale.length === 0
-        ? ''
-        : `ALLOWLIST_MISSING_ENV に古い許可が${stale.length}件残っている: ${stale.map((e) => e.path).join(', ')}\n` +
-            '直してしまって当たりが無くなったなら、ALLOWLIST_MISSING_ENV から消すこと。',
-    ).toEqual([]);
-  });
-
-  it('走査対象が空虚でない（マスクが壊れて中身を全部食べていないことの確認）', () => {
-    const paths = listTargetFiles(ROOT) as string[];
-    const combined = paths
-      .map((path) => maskCommentsAndStrings(readFileSync(join(ROOT, path), 'utf8')) as string)
-      .join('\n');
-    expect(combined.length).toBeGreaterThan(10000);
-    expect(combined).toContain('describe(');
   });
 });

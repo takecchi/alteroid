@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { readFileSync, symlinkSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -14,7 +13,6 @@ import {
   EXCLUDED_PREFIXES,
   findQuoteDefects,
   listScannableFiles,
-  MARKER,
   resolveSdkTypes,
   SCANNED_EXTENSIONS,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない検査スクリプト）を読む
@@ -433,28 +431,4 @@ describe('check-sdk-quotes: resolveSdkTypes — 「見つからない」を緑�
   });
 });
 
-describe('実物の検査（インストール済みの sdk.d.ts に当てる）', () => {
-  const REPO_ROOT = join(import.meta.dirname, '..');
-
-  it('印の付いた逐語がすべて、いまの SDK の sdk.d.ts に当たる', () => {
-    // 見つからなければ投げる: スキップすると「0件」と「走らなかった」が混ざるため。
-    const sdk = resolveSdkTypes(REPO_ROOT, createRequire, existsSync, readFileSync) as {
-      typesPath: string;
-      version: string;
-      text: string;
-    };
-    expect(sdk.text.length).toBeGreaterThan(1000);
-
-    const files = listScannableFiles(REPO_ROOT) as { path: string }[];
-    expect(files.length).toBeGreaterThan(100);
-
-    const quotes = collectMarkedQuotes(files) as Quote[];
-    expect(quotes.length).toBeGreaterThan(0);
-
-    const defects = findQuoteDefects(quotes, sdk.text) as Defect[];
-    expect(
-      defects.map((d) => `${d.path}:${d.line} ${d.reason}\n    ${d.quote ?? ''}`),
-      `SDK ${sdk.version}（${sdk.typesPath}）と食い違う ${MARKER} が在る`,
-    ).toEqual([]);
-  });
-});
+// 実物への当て（いまの SDK の sdk.d.ts に印の付いた逐語が当たる）は `pnpm check:sdk-quotes`（CI の checks、build より前）だけが持つ。

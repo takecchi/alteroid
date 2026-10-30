@@ -11,6 +11,7 @@ import {
   findEnvPassthroughHits,
   findMissingEnvChildProcessCalls,
   listTargetFiles,
+  maskCommentsAndStrings,
 } from './check-no-env-passthrough-core.mjs';
 import { log, logError } from './cli-log.mjs';
 
@@ -42,6 +43,16 @@ function main() {
       continue;
     }
     files.push({ path, content });
+  }
+
+  // 当たり0件を緑と読まない: マスクが壊れて中身を全部食べると、違反があっても0件になるため。
+  const masked = files.map((file) => maskCommentsAndStrings(file.content)).join('\n');
+  if (masked.length <= 10_000 || !masked.includes('describe(')) {
+    logError(
+      'check-no-env-passthrough: NG — コメントと文字列を伏せた後の本文が空に近い（maskCommentsAndStrings が中身を食べていないか）',
+    );
+    process.exitCode = 1;
+    return;
   }
 
   const hits = findEnvPassthroughHits(files);
