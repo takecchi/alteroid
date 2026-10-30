@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -34,5 +37,23 @@ describe('isRunningJobStatus（9回目の横断レビュー指摘の唯一の正
 
   it('JOB_STATUS_LIKE_VALUES は jobStatusSchema.options と同じ集合を持つ', () => {
     expect(new Set(JOB_STATUS_LIKE_VALUES)).toEqual(new Set(jobStatusSchema.options));
+  });
+});
+
+describe('job-status-running は軽い出口として出さない（#5814）', () => {
+  // 呼び手が core の中（progress.ts・tools.ts）だけで、subpath から読む者がいないため
+  const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+
+  it('package.json の exports に subpath が無い', () => {
+    const pkg = JSON.parse(readFileSync(`${packageRoot}package.json`, 'utf8')) as {
+      exports: Record<string, unknown>;
+    };
+    expect(Object.keys(pkg.exports)).not.toContain('./job-status-running');
+  });
+
+  it('tsup の entry に載っていない', () => {
+    expect(readFileSync(`${packageRoot}tsup.config.ts`, 'utf8')).not.toContain(
+      'src/job-status-running.ts',
+    );
   });
 });
