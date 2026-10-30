@@ -36,10 +36,11 @@ describe('vitest.workspace-config.ts の配線（#2157）', () => {
   });
 
   it(
-    '歯B（統合）: packages/api-client のディレクトリで vitest を直接叩いても setupFiles' +
+    '歯B（統合）: packages/core のディレクトリで vitest を直接叩いても setupFiles' +
       '（scrubSecretEnv によるダミー GH_TOKEN の除去）が効く',
     async () => {
-      const targetPackageDir = path.join(ROOT, 'packages/api-client');
+      // packages/api-client には置かない: `test-shard-files.test.ts` が api-client/src を2回に分けて列挙するので、その間に probe が出入りすると shard の境目がずれ、本物のファイルが重なるか抜けていた。
+      const targetPackageDir = path.join(ROOT, 'packages/core');
 
       // probe は `.gitignore` 済みの `src/generated/` に置く: `.gitignore` に入らない未追跡の `.test.ts` は、`pnpm test` を並べて回すと repo を走査する歯が拾うため。
       // `makeTempDir` は使わない: `os.tmpdir()` の下はパッケージの `vitest.config.ts` の include に一致しないため。

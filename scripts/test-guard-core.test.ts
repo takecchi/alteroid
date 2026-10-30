@@ -34,6 +34,7 @@ import {
   parseAggregateLines,
   parsePassedCount,
   readIncludeGlobs,
+  readFilesForScan,
   readObservationDeclaration,
   resolveReporterArgs,
   resolveScopedArgs,
@@ -1000,6 +1001,23 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
     if (!result.ok) {
       expect(result.exitCode).toBe(EXIT_SCAN_EMPTY);
     }
+  });
+});
+
+describe('readFilesForScan', () => {
+  // 守る揺れ: 並んで走る試験が置いては消す probe を、列挙した後・読む前に消されて ENOENT で落ちていた（no-direct-mkdtemp の歯）
+  it('列挙してから読むまでに消えたファイルは飛ばし、残りは読む', () => {
+    const root = makeTempDirSync('test-guard-read-files-');
+    writeFileSync(join(root, 'a.test.ts'), 'A\n');
+    expect(readFilesForScan(root, ['a.test.ts', 'gone.test.ts'])).toEqual([
+      { path: 'a.test.ts', content: 'A\n' },
+    ]);
+  });
+
+  it('ENOENT 以外の読めなさは投げる（ディレクトリを読もうとした）', () => {
+    const root = makeTempDirSync('test-guard-read-files-');
+    mkdirSync(join(root, 'dir.test.ts'));
+    expect(() => readFilesForScan(root, ['dir.test.ts'])).toThrow(/EISDIR/);
   });
 });
 
