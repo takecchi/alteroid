@@ -54,7 +54,7 @@ vi.mock('./digest.js', async (importOriginal) => {
 
 const SMALL: FixtureConfig = {
   memory: 'small',
-  commitments: 20,
+  tasks: 20,
   jobs: 6,
   journalRows: 20,
   humanChars: 80,
@@ -176,7 +176,7 @@ describe('文脈量の測り（#5469 P0）', () => {
       const report = await buildReport();
       writeFileSync(process.env['CONTEXT_SIZE_OUT']!, report);
       expect(report).toContain('## データ量への感度');
-      expect(BASELINE.commitments).toBe(327);
+      expect(BASELINE.tasks).toBe(327);
     },
     300_000,
   );

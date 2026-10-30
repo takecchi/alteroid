@@ -4,7 +4,21 @@ import type { TaskOrigin, JobStatus, Task, TaskClosedBy, TaskStatus } from './sc
 import { compareIsoInstant } from './iso-instant.js';
 
 // Task の状態遷移と並びの規則。純関数だけを置き、メモリ・fs・pg の3実装が同じものを呼ぶ。
-// 3実装が規則をそれぞれ持つと必ずずれる（`findOpenManagerDuplicate` と同じ理由）。pg も「全行を読む → ここの関数で次の行を作る → 変わった行だけ書く」の形で、規則を SQL に書き直さない。
+// 3実装が規則をそれぞれ持つと必ずずれる。pg も「全行を読む → ここの関数で次の行を作る → 変わった行だけ書く」の形で、規則を SQL に書き直さない。
+
+const TITLE_MAX = 60;
+const EMPTY_TITLE = '（本文なし）';
+
+/** 本文の先頭の空でない行を、`…` を含めて60字までに切る。全文は body に残るので、ここは一覧用の短い一行。 */
+export function taskTitleFromBody(body: string): string {
+  const first = body
+    .split('\n')
+    .find((line) => line.trim().length > 0)
+    ?.trim();
+  if (first === undefined) return EMPTY_TITLE;
+  const chars = [...first];
+  return chars.length <= TITLE_MAX ? first : `${chars.slice(0, TITLE_MAX - 1).join('')}…`;
+}
 
 export function isTaskClosed(status: TaskStatus): boolean {
   return status === 'done' || status === 'cancelled';
@@ -181,9 +195,9 @@ export function listTaskRows(rows: readonly TaskRow[], includeClosed: boolean): 
 /**
  * 会話の削除で消す Task か（`TaskStore.removeForConversation` の3実装が共有する）。読めない行にも使うので、欄は未検証の値として受ける。
  *
- * 起点の欄（`originConversationId`）だけで引かない: 台帳から移した行は起点の欄を持たず（`taskFromCommitment`）、
+ * 起点の欄（`originConversationId`）だけで引かない: 台帳から移した行（撤去済みの移行 `alteroid tasks migrate` が作った行）は起点の欄を持たず、
  * 会話は `source` にしか残らない。本文は人間の発言そのものなので、欄だけで引くと会話を消しても読めてしまう。
- * `source` で引くのは台帳の `removeForConversation` と同じ `human` / `self` だけ（`manager` / `external` の `source` は会話 id ではない）。
+ * `source` で引くのは `human` / `self` だけ（`manager` / `external` の `source` は会話 id ではない）。
  * pg の `PgTaskStore.removeForConversation` はこの条件を SQL で書き直しているので、変えるときは両方を直す。
  */
 export function isTaskOfConversation(
@@ -199,7 +213,7 @@ function compareText(a: string, b: string): number {
 }
 
 /**
- * 書き込む前の整え。id の NUL は断り（行を指す鍵なので）、本文系の NUL は落として残す（`CommitmentStore.open` と同じ作法）。
+ * 書き込む前の整え。id の NUL は断り（行を指す鍵なので）、本文系の NUL は落として残す。
  * `taskSchema` を通すので、型を外れた値は例外になる。
  */
 export function prepareTask(entry: Task): Task {
@@ -299,7 +313,7 @@ export function setTaskRowKeep(
   };
 }
 
-/** 本文（title / body）の「版」。`editedAt ?? createdAt`（`commitmentBodyVersion` と同じ作り）。`updatedAt` は状態の更新で動くので本文の版に使えない。 */
+/** 本文（title / body）の「版」。`editedAt ?? createdAt`。`updatedAt` は状態の更新で動くので本文の版に使えない。 */
 export function taskBodyVersion(task: Pick<Task, 'createdAt' | 'editedAt'>): string {
   return task.editedAt ?? task.createdAt;
 }

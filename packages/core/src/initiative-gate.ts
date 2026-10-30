@@ -22,7 +22,7 @@ export type InitiativeRunReason = 'manual' | 'movable_task' | 'daily_check' | 'r
 /**
  * 発意 tick をモデルのターンとして回すかを決める（#5469 P6a）。回すのは次のどれか:
  * (d) 手で起こした回、(a) 待ち行列に動ける task（queued / needs_decision）がある、
- * (c) 直近24時間に発意 tick のターンを回していない。旧台帳（`CommitmentStore`）は見ない: Task だけで決める（#5910）。
+ * (c) 直近24時間に発意 tick のターンを回していない。Task だけで決める（#5910）。
  *
  * 読みが1つでも失敗したら回す側へ倒す: 黙って起こさない側へ倒すと、仕事が静かに止まるため。
  * 読めない行（`unreadable`）も同じ側へ倒す: 読めない task が動ける task かもしれず、「無い」とは言えないため。

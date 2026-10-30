@@ -17,9 +17,6 @@ import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type { ConversationReadPosition } from './conversation-read.js';
 import type { CodexChatgptAuthRecord, CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 import type {
-  Commitment,
-  CommitmentClosedBy,
-  CommitmentEditedBy,
   InboxEvent,
   Job,
   JournalEntry,
@@ -54,7 +51,6 @@ import {
   type StoredPlugin,
 } from './plugins.js';
 import {
-  commitmentSchema,
   inboxEventSchema,
   jobSchema,
   journalEntrySchema,
@@ -112,7 +108,6 @@ import type {
   PersonaStore,
   PermissionGrantStore,
   ProfileStore,
-  CommitmentStore,
   TaskStore,
   PracticeStore,
   ScheduleStore,
@@ -129,12 +124,8 @@ import type {
   UsageStore,
 } from './store.js';
 import {
-  CommitmentConflictError,
-  commitmentVersionMatches,
   compareProfileEntryNames,
-  withoutClosedRecord,
   ensureTrailingNewline,
-  findOpenManagerDuplicate,
   JournalAnchorNotFoundError,
   MemoryConflictError,
   memoryVersionMatches,
@@ -282,7 +273,6 @@ export function createMemoryStores(): Stores {
   const permissionGrantRows = new Map<string, PermissionGrant>();
   const schedules = new Map<string, ScheduledRequest>();
   const schedulePhases = new Map<string, SchedulePhase>();
-  const commitments = new Map<string, Commitment>();
   const practices = new Map<string, Practice>();
   // `practices` の削除に連動しない: `remove()` 後も配列を切り詰めず、番号は消える前の続きから振る。
   const practiceVersions = new Map<string, PracticeVersion[]>();
@@ -781,114 +771,6 @@ export function createMemoryStores(): Stores {
       const removed = { schedules: schedules.size, phases: schedulePhases.size };
       schedules.clear();
       schedulePhases.clear();
-      return removed;
-    },
-  };
-
-  // `open` の冪等性を本物と同じにする: 「常に上書き」だと、配り直しで閉じた未了が開き直る壊れ方がテストから見えない。
-  const commitmentStore: CommitmentStore = {
-    async list(options) {
-      const all = [...commitments.values()].map(isolate);
-      const open = all
-        .filter((entry) => entry.closedAt === undefined)
-        // 実時刻で比べる: 文字列比較だとオフセット表記の違う行で pg の `asc(at)` と並びが食い違う
-        .sort((a, b) => compareIsoInstant(a.at, b.at));
-      // `unreadable` は常に空: ここは `commitmentSchema.parse` を経た行しか持たない。
-      // `trimmedClosed` も常に `0`: 保持上限も削除経路も無い（fs だけが `CLOSED_HISTORY_LIMIT` を超えた行を消す）。
-      // fs だけを踏む歯はこの偽物では書けない。
-      if (options?.includeClosed !== true)
-        return { entries: open, unreadable: [], trimmedClosed: 0 };
-      const closed = all
-        .filter((entry) => entry.closedAt !== undefined)
-        .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''));
-      return { entries: [...open, ...closed], unreadable: [], trimmedClosed: 0 };
-    },
-    async get(id) {
-      const found = commitments.get(id);
-      return found === undefined ? null : isolate(found);
-    },
-    // 判定と書き込みのあいだに `await` を挟まない: 原子なのは同期のまま書くからで、挟むと2つの `Clone` のあいだで競合が生まれる。
-    async open(entry) {
-      // id（鍵）の NUL は断り、本文と source（鍵ではない）は落として残す。
-      assertNoNul('commitment.id', entry.id);
-      const parsed = commitmentSchema.parse({
-        ...entry,
-        body: stripNul(entry.body),
-        ...(entry.source === undefined ? {} : { source: stripNul(entry.source) }),
-      });
-      if (commitments.has(parsed.id)) return { opened: false, folded: false };
-      const duplicate = findOpenManagerDuplicate([...commitments.values()], parsed);
-      if (duplicate !== undefined) return { opened: false, folded: true, foldedInto: duplicate.id };
-      commitments.set(parsed.id, isolate(parsed));
-      return { opened: true, folded: false };
-    },
-    async close(id, at, reason, by: CommitmentClosedBy) {
-      const existing = commitments.get(id);
-      if (!existing || existing.closedAt !== undefined) return false;
-      commitments.set(id, {
-        ...existing,
-        closedAt: at,
-        closedReason: stripNul(reason),
-        closedBy: by,
-      });
-      return true;
-    },
-    // 実際に閉じた id だけを返す。重複 id は `Set` で畳む（`CommitmentStore.closeMany` の doc）。
-    async closeMany(ids: readonly string[], at, reason, by: CommitmentClosedBy) {
-      const closedIds: string[] = [];
-      for (const id of new Set(ids)) {
-        const existing = commitments.get(id);
-        if (!existing || existing.closedAt !== undefined) continue;
-        commitments.set(id, {
-          ...existing,
-          closedAt: at,
-          closedReason: stripNul(reason),
-          closedBy: by,
-        });
-        closedIds.push(id);
-      }
-      return closedIds;
-    },
-    // 判定と書き込みのあいだに `await` を挟まない（`open` と同じ）。`autoCloseWhenBack` も外す理由は `CommitmentStore.reopen` の doc。
-    async reopen(id) {
-      const existing = commitments.get(id);
-      if (!existing) return { kind: 'not-found' };
-      if (existing.closedAt === undefined) return { kind: 'not-closed' };
-      const reopened = withoutClosedRecord(existing);
-      const duplicate = findOpenManagerDuplicate([...commitments.values()], reopened);
-      if (duplicate !== undefined) return { kind: 'duplicate-open', openId: duplicate.id };
-      commitments.set(id, reopened);
-      return { kind: 'reopened', before: isolate(existing) };
-    },
-    // `origin` の判定はしない: 呼び出し側が確かめてから呼ぶ（`CommitmentStore.editBody` の doc。呼ぶ口は外れた）。
-    async editBody(id, body, at, by: CommitmentEditedBy, options) {
-      const existing = commitments.get(id);
-      if (!existing && options?.ifMatch !== undefined) throw new CommitmentConflictError(id, null);
-      if (!existing || existing.closedAt !== undefined) return { kind: 'not-edited' };
-      if (!commitmentVersionMatches(existing, options?.ifMatch)) {
-        throw new CommitmentConflictError(id, isolate(existing));
-      }
-      commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
-      // `before` は読んだ行そのもの（同じ同期の区間で書き換えている）
-      return { kind: 'edited', before: isolate(existing) };
-    },
-    async removeForConversation(conversationId) {
-      if (hasNul(conversationId)) return 0;
-      let removed = 0;
-      for (const [id, entry] of [...commitments]) {
-        if (
-          (entry.origin === 'human' || entry.origin === 'self') &&
-          entry.source === conversationId
-        ) {
-          commitments.delete(id);
-          removed += 1;
-        }
-      }
-      return removed;
-    },
-    async clear() {
-      const removed = commitments.size;
-      commitments.clear();
       return removed;
     },
   };
@@ -2019,7 +1901,6 @@ export function createMemoryStores(): Stores {
     journal,
     jobs: jobStore,
     schedules: scheduleStore,
-    commitments: commitmentStore,
     tasks: taskStore,
     practices: practiceStore,
     inbox: inboxStore,

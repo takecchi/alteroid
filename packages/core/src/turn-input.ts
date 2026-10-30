@@ -96,7 +96,6 @@ export function composeTurnInputText(input: TurnInputText): string {
     input.contextWindowFold +
     input.droppedSignals +
     input.redelivery +
-    input.superseded +
     input.validity +
     input.mergedBatchTruncation +
     input.commitment +
@@ -112,7 +111,6 @@ export interface TurnInputText {
   /** 前のターンが枠以外の理由で失敗して外れた合図の要旨（#4633）。 */
   readonly droppedSignals: string;
   readonly redelivery: string;
-  readonly superseded: string;
   readonly validity: string;
   readonly mergedBatchTruncation: string;
   readonly commitment: string;

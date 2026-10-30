@@ -3,15 +3,16 @@
  * 乱数を使わない: 同じ引数なら同じ文字列になり、測り直しの差が「コードが動いたとき」だけになるため。
  */
 
-import type { Commitment, Job, JobStatus } from './schema.js';
+import type { Job, JobStatus, Task } from './schema.js';
 import type { Stores } from './store.js';
+import { taskTitleFromBody } from './task.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const SENTENCES = [
   '依頼の背景と狙いを先に書き、確かめた事実と確かめていないことを分けて報告する。',
   'リポジトリの現物を読んでから判断し、食い違ったら現物を採るという運用を続けている。',
-  '台帳の未了は件数が増えるほど毎回の判断の費用が増えるので、閉じ方を決めておく。',
+  '待ち行列の未了は件数が増えるほど毎回の判断の費用が増えるので、閉じ方を決めておく。',
   'PR は ready にしてから CI の緑を確かめ、マージの許可は依頼者が出す。',
   'GitHub の通知は件名だけで判断せず、本文と差分を読んでから返事を書く。',
   'メールの下書きは送る前に人間へ見せ、署名と宛先を確かめる。',
@@ -70,22 +71,27 @@ export async function seedMemory(stores: Stores, size: MemoryFixtureSize): Promi
 const ORIGINS = ['manager', 'manager', 'manager', 'human', 'external', 'self'] as const;
 
 /** 未了 `open` 件。いちばん古い行が `oldestDaysAgo` 日前になるよう、一定の間隔で並べる。 */
-export async function seedCommitments(
+export async function seedTasks(
   stores: Stores,
   open: number,
   now: number,
   oldestDaysAgo = 30,
-  idPrefix = 'commit-',
+  idPrefix = 'task-',
 ): Promise<void> {
   for (let index = 0; index < open; index += 1) {
     const ageMs = open === 1 ? 0 : ((open - 1 - index) / (open - 1)) * oldestDaysAgo * DAY_MS;
-    const entry: Commitment = {
+    const at = new Date(now - ageMs).toISOString();
+    const body = fillerText(180, index);
+    const entry: Task = {
       id: `${idPrefix}${String(index).padStart(5, '0')}`,
-      at: new Date(now - ageMs).toISOString(),
+      createdAt: at,
+      updatedAt: at,
+      status: 'queued',
       origin: ORIGINS[index % ORIGINS.length]!,
-      body: `${fillerText(180, index)}`,
+      title: taskTitleFromBody(body),
+      body,
     };
-    await stores.commitments.open(entry);
+    await stores.tasks.add(entry);
   }
 }
 

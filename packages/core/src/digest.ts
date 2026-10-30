@@ -178,7 +178,7 @@ export interface ActivityDigestOptions {
 /** 件数の形の要約（#4938 の案2）で、件数だけにした節の中身は道具で引けることを名乗る1行。 */
 export const DIGEST_COUNTS_TOOLS_NOTE =
   '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
-  '待ち行列は `task_list`、旧台帳は `commitment_list`、回答待ちは `approvals_list`、' +
+  '待ち行列は `task_list`、回答待ちは `approvals_list`、' +
   '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
 
 /** 手が止まっている担当の行の次に出す固定の1行（依頼と直近の報告を載せていないことを名乗る）。 */
@@ -193,7 +193,7 @@ export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; r
   {
     id: 'timer-counts-tools-note',
     text: DIGEST_COUNTS_TOOLS_NOTE,
-    ref: '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）',
+    ref: '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`approvals_list`・`journal_read`・`usage_read`）',
   },
   {
     id: 'timer-counts-idle-managers-note',
@@ -611,38 +611,6 @@ export const DIGEST_LIST_SECTION_NAMES: readonly string[] = [
  */
 export const TASK_QUEUE_SECTION_HEADING_HEAD = '## 待ち行列の先頭';
 
-// 旧台帳に開いている行が残る間だけ出す1行（節ではなく件数だけ）。台帳の移行（P7）が済めばこの1行ごと撤去する。
-// 0件でも読めない行だけは在りうるので、両方0のときだけ出さない（読めない行を 0 に丸めない）
-export function describeLegacyLedgerLine(open: number, unreadable: number): string[] {
-  if (open === 0 && unreadable === 0) return [];
-  const unreadablePart =
-    unreadable > 0 ? `読めない行が ${unreadable} 件ある（片付いたのではない）。` : '';
-  return [
-    `- 旧台帳に開いている ${open} 件は未了で、Task に同じ id が無い。${unreadablePart}中身は \`commitment_list\` で読む` +
-      '（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
-  ];
-}
-
-/**
- * 旧台帳に開いている行のうち、同じ id の task が（閉じたものも含めて）無い行の数と、読めない行の数。digest の1行と発意 tick の門（`initiative-gate.ts`）が同じ数え方を使うための共有。
- * 人間の依頼は台帳と Task に同じ id で載り、返答で task だけが done になる（台帳の行は開いたまま）ので、その行は数えない。
- * 読みが失敗したら投げる（丸めない）。台帳が空なら task の全件読みは要らない。
- * #5469 P7 で台帳を撤去するときに、この関数ごと消える。
- */
-export async function countLegacyOnlyOpen(
-  stores: Pick<Stores, 'commitments' | 'tasks'>,
-): Promise<{ readonly open: number; readonly unreadable: number }> {
-  const legacyLedger = await stores.commitments.list();
-  const taskIds =
-    legacyLedger.entries.length === 0
-      ? new Set<string>()
-      : new Set((await stores.tasks.list({ includeClosed: true })).entries.map((task) => task.id));
-  return {
-    open: legacyLedger.entries.filter((entry) => !taskIds.has(entry.id)).length,
-    unreadable: legacyLedger.unreadable.length,
-  };
-}
-
 // `liveness` を必須にしない: 省略時は全件 `/セッション不明` になり、黙って「繋がっている」と名乗らないため
 // `awaitingBackground` を必須にしない: 省略時は何も書き足さず、取れていないことを「手が空いている」と偽らないため
 export async function buildActivityDigest(
@@ -668,11 +636,9 @@ export async function buildActivityDigest(
   const standingList = await stores.schedules.list();
   const standing = standingList.entries;
   const unreadableStandingNote = describeUnreadableSchedules(standingList.unreadable);
-  // 継続中の依頼・待ち行列・旧台帳の未了を期間で切らない: 切ると、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちるため
-  // 待ち行列は `list()` の並びのまま持つ（器は並べ直さない）。旧台帳は件数だけを使う（節は出さない）
+  // 継続中の依頼・待ち行列の未了を期間で切らない: 切ると、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちるため
+  // 待ち行列は `list()` の並びのまま持つ（器は並べ直さない）
   const taskList = await stores.tasks.list();
-  const legacy = await countLegacyOnlyOpen(stores);
-  const legacyLedgerLine = describeLegacyLedgerLine(legacy.open, legacy.unreadable);
 
   // 境界を JS 側で切り直す: `JournalQuery.until` は含む側で `DigestWindow.until` は含まない。クエリ側を外すと OOM に戻り、JS 側を外すと境界のミリ秒が1件ずれるため
   const withinWindow = (entry: JournalEntry): boolean => compareIsoInstant(entry.at, untilIso) < 0;
@@ -873,7 +839,7 @@ export async function buildActivityDigest(
   // 依頼ごとに節を選ぶ欄は足さない: 共通の既定にする決め（2026-10-18）で、依頼の側に節の名前を覚えさせないため。
   // 件数の行に担当の status 別の数・継続中の依頼の数を重ねて載せない: 中身を出した2節と二重になり、食い違って見えるため
   if (options.shape === 'counts') {
-    // 担当・継続中の依頼の読めない行は、上の2節が自分の断りを持っている。旧台帳の読めない行は旧台帳の1行が持つ
+    // 担当・継続中の依頼の読めない行は、上の2節が自分の断りを持っている。
     const unreadableParts = [
       ['承認待ち', approvalList.unreadable.length],
       ['待ち行列の task', taskList.unreadable.length],
@@ -895,7 +861,6 @@ export async function buildActivityDigest(
         ` / 人間からの発言 ${humanTurnsCount}`,
       // 定期の依頼は仕事の一覧を前提にしない: 件数の1行だけで、先頭の描画は出さない
       `- ${describeTaskQueueCount(taskList)}`,
-      ...legacyLedgerLine,
       // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
       ...(unreadableLine === ''
         ? []
@@ -938,9 +903,6 @@ export async function buildActivityDigest(
           `- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: ${standingList.unreadable.length} 件`,
         ]),
   ];
-
-  // 旧台帳に開いている行が残る間だけ、件数の1行（節ではなく件数だけ）。撤去は P7
-  sections.push(...legacyLedgerLine);
 
   // 待ち行列の先頭（#5469 P6b）。並びは `stores.tasks.list()` のまま。0件でも件数の行は出す（0 は「無かった」という情報）
   sections.push(

@@ -12,7 +12,7 @@ import type { Stores } from './store.js';
  * 既存の行は書き換えない（日誌は追記専用）。別表に印を持たないのは、印と監査の記録が別々に書けて
  * 「墓標は在るのに外れていない」「外れているのに墓標が無い」の片方だけの状態を作らないためである。
  *
- * **墓標を先に積む。** 墓標が積めなければ何も変えずに投げる。墓標の後の手当て（添付・台帳・受信箱・
+ * **墓標を先に積む。** 墓標が積めなければ何も変えずに投げる。墓標の後の手当て（添付・Task・受信箱・
  * 既読・進行中の購読）は1つずつ試し、落ちたものは `incomplete` に名前を残して続ける——会話は既に
  * どの読む口からも外れているので、途中で止めて「消せなかった」と言うより、残ったものを正直に言うほうが
  * 正しい。
@@ -22,7 +22,7 @@ import type { Stores } from './store.js';
 export interface DeleteConversationDeps {
   stores: Pick<
     Stores,
-    'journal' | 'attachments' | 'commitments' | 'tasks' | 'inbox' | 'conversationReads' | 'jobs'
+    'journal' | 'attachments' | 'tasks' | 'inbox' | 'conversationReads' | 'jobs'
   >;
   /** 受信箱の待ち行列から落とす口（`CloneHost.dropQueuedInboxEvents`）。 */
   dropQueuedInboxEvents: (ids: readonly string[]) => Promise<number>;
@@ -40,7 +40,6 @@ export type DeleteConversationResult =
       /** 読む口から外れた発言の件数（墓標を積む直前に数えた値）。 */
       hiddenCount: number;
       attachmentsRemoved: number;
-      commitmentsRemoved: number;
       /** その会話を起点とする Task の件数（未了・閉じた行とも消す）。 */
       tasksRemoved: number;
       /** 受信箱から外した、まだ処理していない人間の発言の件数。 */
@@ -62,7 +61,7 @@ export const CONVERSATION_DELETE_REMAINS: readonly string[] = [
   '既に蒸留された記憶と、書き終えた日報に写っている可能性がある。記憶と日報を確かめること',
   'この会話に結び付いた承認（クローンからの質問と、許可の求め）の問いと答えの本文は消していない（決着の記録なので外さない）。承認待ちの一覧と各承認の画面で確かめること',
   '日誌のうち、どの会話のものか分からない行（クローンからの質問と答え・クローンの道具の呼び出しの入力・マネージャーとのやりとり）には、言い換えや写しが残りうる',
-  '台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し、その本文を写した日誌の行（積んだ・直した・片付けたとき）も読む口から外した。ただし、台帳をまとめて片付けた日誌の行（閉じた id の並びと理由）と、クローンが自分の言葉で言い換えて日誌に書いた行は、会話との結び付きが分からないので残りうる',
+  '旧台帳（廃止した。データベースにはテーブルが残っている）のこの会話の行と、その本文を写した日誌の行（積んだ・直した・片付けたとき）は、この削除では消していない。クローンが自分の言葉で言い換えて日誌に書いた行も、会話との結び付きが分からないので残りうる',
   'クローンやマネージャーが作業ディレクトリへ写した添付は、時間で消えるまで残る',
 ];
 
@@ -83,35 +82,6 @@ export async function isConversationDeleted(
     return !deleted;
   });
   return deleted;
-}
-
-/**
- * 墓標に id を持たせて外す: 台帳の行の本文を写した `decision` 行は会話 id を持たないので、墓標の会話 id では外れないため。
- *
- * 一括で片付けた行（`閉じた id: a b c`）は拾わない: 本文を写しておらず、ほかの台帳の行の記録も含むため。
- * 墓標を積む前に集める。集められなければ投げて、何も変えない（隠しそこねた写しを残したまま「消した」と言わないため）。
- */
-async function findCommitmentCopies(
-  stores: Pick<Stores, 'journal' | 'commitments'>,
-  conversationId: string,
-): Promise<string[]> {
-  const { entries } = await stores.commitments.list({ includeClosed: true });
-  const markers = entries
-    .filter(
-      (entry) =>
-        (entry.origin === 'human' || entry.origin === 'self') && entry.source === conversationId,
-    )
-    .map((entry) => `（${entry.id}）`);
-  if (markers.length === 0) return [];
-  const found: string[] = [];
-  await scanJournalPages(stores.journal, { types: ['decision'] }, (page) => {
-    for (const entry of page) {
-      if (entry.type !== 'decision') continue;
-      if (markers.some((marker) => entry.decision.includes(marker))) found.push(entry.id);
-    }
-    return true;
-  });
-  return found;
 }
 
 export async function deleteConversation(
@@ -135,14 +105,11 @@ export async function deleteConversation(
     return true;
   });
 
-  const hiddenEntryIds = await findCommitmentCopies(stores, conversationId);
-
   const tombstone = await stores.journal.append({
     type: 'conversation_deleted',
     deletedConversationId: conversationId,
     deletedBy,
     hiddenCount,
-    ...(hiddenEntryIds.length === 0 ? {} : { hiddenEntryIds }),
   });
 
   const incomplete: string[] = [];
@@ -210,13 +177,7 @@ export async function deleteConversation(
     0,
   );
 
-  const commitmentsRemoved = await attempt(
-    '台帳からこの会話の行を消す',
-    () => stores.commitments.removeForConversation(conversationId),
-    0,
-  );
-
-  // Task の本文には人間の発言の全文が入る（起点の会話から開いた行）。台帳と同じく、会話を消したら読めないように物理的に消す（#5899）
+  // Task の本文には人間の発言の全文が入る（起点の会話から開いた行）。会話を消したら読めないように物理的に消す（#5899）
   const tasksRemoved = await attempt(
     'Task からこの会話を起点とする行を消す',
     () => stores.tasks.removeForConversation(conversationId),
@@ -245,7 +206,6 @@ export async function deleteConversation(
     deletedAt: tombstone.at,
     hiddenCount,
     attachmentsRemoved,
-    commitmentsRemoved,
     tasksRemoved,
     queuedDropped,
     approvalsLinked,

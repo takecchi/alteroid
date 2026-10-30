@@ -4,8 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { chunkIdsByChars } from './tools.js';
 
-// 道具 `commitment_close_many` は #5923 で外した（人間側の `POST /commitments/close-many` は段2bまで残る）。ここに残すのは、
-// Task の一括（`task_set_status_many`）と daemon が共有する id 列の塊割りの歯だけ
+// Task の一括（`task_set_status_many`）と daemon が共有する id 列の塊割りの歯だけを置く
 
 describe('chunkIdsByChars（id の列を文字数の予算で塊に割る）', () => {
   it('14a. 塊を全部つなげると元の列に戻る（1つも落とさない・順序も保つ）', () => {

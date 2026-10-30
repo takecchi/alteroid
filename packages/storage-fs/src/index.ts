@@ -7,7 +7,6 @@ import { FsTranscriptArchive } from './archive.js';
 import { FsAttachmentStore } from './attachments.js';
 import { FsAuthStore } from './auth.js';
 import { FsCodexChatgptAuthStore } from './codex-auth.js';
-import { FsCommitmentStore } from './commitments.js';
 import { FsCredentialVaultStore } from './credentials.js';
 import { FsEventReceiptStore } from './event-receipts.js';
 import { FsInboxStore } from './inbox.js';
@@ -32,7 +31,6 @@ export { FsTranscriptArchive } from './archive.js';
 export { writeFileAtomic } from './atomic.js';
 export { FsAttachmentStore } from './attachments.js';
 export { FsAuthStore } from './auth.js';
-export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsCredentialVaultStore } from './credentials.js';
 export { LockTimeoutError, withPathLock } from './file-lock.js';
 export { FsEventReceiptStore } from './event-receipts.js';
@@ -66,7 +64,6 @@ export function createFsStores(
     journal,
     jobs: new FsJobStore(paths.jobs),
     schedules: new FsScheduleStore(paths.jobs),
-    commitments: new FsCommitmentStore(paths.jobs),
     tasks: new FsTaskStore(paths.jobs),
     practices: new FsPracticeStore(paths.jobs),
     inbox: new FsInboxStore(paths.jobs),

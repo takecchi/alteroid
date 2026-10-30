@@ -1,7 +1,7 @@
-import { taskFromCommitment } from './commitment-task-migration.js';
 import { compareIsoInstant } from './iso-instant.js';
-import type { Commitment, InboxEvent, Task } from './schema.js';
+import type { InboxEvent, Task } from './schema.js';
 import type { Stores } from './store.js';
+import { taskTitleFromBody } from './task.js';
 
 // 人間の依頼を Task として積む（#5469 P5 の自動起票）と、起点の会話へ返答したターンの終わりに queued の task を自動で done にする（自動 done）。
 // 純関数と、Task ストア・日誌への書き込みだけを置く。いつ呼ぶかは clone.ts（`#commit` と `turn_ended`）。
@@ -9,7 +9,6 @@ import type { Stores } from './store.js';
 /**
  * Task を作る合図は人間の発言（human_message）だけ。回答（human_answer）では作らない:
  * 回答は「問いを出した側の task」への答えであり、新しい依頼ではない（問いを出した側の task は ask_human のターンで開いたまま残り、回答を受けたターンの返答で閉じる）。
- * 回答は台帳には移行期のあいだ載る（`commitmentFor`）が、Task の元にはならない。
  */
 export function opensHumanTask(event: InboxEvent): event is HumanMessageEvent {
   return event.type === 'human_message';
@@ -17,15 +16,32 @@ export function opensHumanTask(event: InboxEvent): event is HumanMessageEvent {
 
 type HumanMessageEvent = Extract<InboxEvent, { type: 'human_message' }>;
 
-/** 台帳へ開く行（`commitmentFor`）と同じ発言から、同じ id の Task を作る。起点の会話は発言の会話。 */
-export function taskFromHumanIntake(
-  entry: Commitment,
-  event: HumanMessageEvent,
-  now: string,
-): Task {
-  // id・source・title・body・status・置き場所は P7a の移行（`taskFromCommitment`）と同じ規則を使う:
-  // id が元の台帳の行と同じなので、移行が `existed` で二重に作らず、自動起票も移行済みの行を二重に作らない
-  return { ...taskFromCommitment(entry, now), originConversationId: event.conversationId };
+/**
+ * 人間の発言から、合図と同じ id の Task を作る。起点の会話は発言の会話。
+ * 本文は全文を入れる: `body` を要約にすると頼まれた内容が二度と取れない（切るのは表示側）。
+ * id が合図と同じなので、`TaskStore.add` の `existed` が配り直しでの二重起票を防ぐ。
+ */
+export function taskFromHumanIntake(event: HumanMessageEvent, now: string): Task {
+  const body = `${event.text}${attachmentNote(event.attachments)}`;
+  return {
+    id: event.id,
+    createdAt: event.at,
+    updatedAt: now,
+    status: 'queued',
+    origin: 'human',
+    source: event.conversationId,
+    originConversationId: event.conversationId,
+    title: taskTitleFromBody(body),
+    body,
+  };
+}
+
+function attachmentNote(attachments: readonly { name: string }[] | undefined): string {
+  if (attachments === undefined || attachments.length === 0) return '';
+  // 先頭の数件だけ名前を出し、残りは件数にする: 添付の多い1件が一覧・日報の1行を伸ばし続けないため（日誌の一行表示と揃える）
+  const shown = attachments.slice(0, 3).map((a) => a.name);
+  const rest = attachments.length - shown.length;
+  return `［添付 ${attachments.length}件: ${shown.join('、')}${rest > 0 ? `、ほか ${rest} 件` : ''}］`;
 }
 
 /** 返答の経路。日誌に「どの返答で閉じたか」として残す。 */
