@@ -511,12 +511,6 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  // 名乗りの中身を取らない: 別の runner_id を返されたとき黙って書き換えると台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わるため。本文は読み捨てる: 読まずに放ると10秒ごとに繋ぎが積み上がるため
-  async ping(options?: { signal?: AbortSignal }): Promise<void> {
-    const response = await this.#call('GET', '/health', undefined, options?.signal);
-    await response.text().catch(() => '');
-  }
-
   // 読むが採らない（`this.runnerId` / `this.workspacePath` を書き換えない）: 書き換えると台帳の鎖が音もなく繋ぎ変わるため
   // `revision` は常に返す（`known` か `unknown`）: 「応答は返ってきたのに版の状態が分からない」を作らず、名簿が `unheard` と混同しないため
   // 欄を1つずつ `safeParse` する: まとめて弾くと、この欄の形が崩れただけで `runnerId` / `instanceId` / `revision` まで道連れになるため
@@ -558,7 +552,7 @@ class HttpRunner implements RunnerClient {
       ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
     };
   }
-  // 採るのは資源だけにする（`runnerId` / `workspacePath` を採らず、`ping()` に相乗りさせない）: 器が入れ替わったとき台帳の鎖が黙って繋ぎ変わるため
+  // 採るのは資源だけにする（`runnerId` / `workspacePath` を採らず、心拍の `identity()` に相乗りさせない）: 器が入れ替わったとき台帳の鎖が黙って繋ぎ変わるため
   // 材料は1つずつ検証する: まとめて弾くと、`cpu` の形が崩れただけで `managers` まで落ち、資源を報告できる器が「何も報告しない器」に見えるため
   async resources(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources> {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
