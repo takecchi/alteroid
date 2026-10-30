@@ -151,6 +151,28 @@ export function gate(): { promise: Promise<void>; open: () => void } {
   return { promise, open };
 }
 
+// 一致する要求だけを、open() まで応答せずに止める（送信中の表示を測るため）。stubFetch・手書きの fetch のどちらにも、差した後に呼んで被せる
+// 止めた要求も、open() の後は元の fetch へ渡る。何本止めたかは held() で読む
+export function holdRequests(match: (request: { url: string; method: string }) => boolean): {
+  open: () => void;
+  held: () => number;
+} {
+  const inner = globalThis.fetch;
+  const hold = gate();
+  let held = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      input instanceof Request ? input.url : typeof input === 'string' ? input : String(input);
+    const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+    if (match({ url, method })) {
+      held += 1;
+      await hold.promise;
+    }
+    return inner(input, init);
+  }) as typeof fetch;
+  return { open: hold.open, held: () => held };
+}
+
 export async function untilOpenSettled(
   router: { state: { location: { pathname: string } } },
   conversationId: string,

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Access from './access';
 
@@ -257,6 +257,74 @@ describe('/access 画面 — grant / revoke', () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByText('本当に取り消す'));
     await waitForCall(stub.calls, /\/access\/acct-a\/revoke$/);
+  });
+});
+
+describe('/access 画面 — 送信中・失敗・成功後の表示', () => {
+  let grantFails = false;
+  let revokeFails = false;
+
+  function stubWithFailures(accounts: unknown[]) {
+    grantFails = false;
+    revokeFails = false;
+    return stubFetch((url) => {
+      if (/\/access\/[^/]+\/grant$/.test(url)) {
+        return grantFails ? json({ error: '許可できなかった' }, 500) : json({ ok: true }, 200);
+      }
+      if (/\/access\/[^/]+\/revoke$/.test(url)) {
+        return revokeFails ? json({ error: '取り消せなかった' }, 500) : json({ ok: true }, 200);
+      }
+      if (url.includes('/access')) return json({ accounts }, 200);
+      return undefined;
+    });
+  }
+
+  const grantButton = () =>
+    screen.getByRole<HTMLButtonElement>('button', { name: 'granted@example.com を許可する' });
+
+  it('許可する: 送信中はボタンが押せず、終われば押せる。失敗は出て、送り直すと消える', async () => {
+    stubWithFailures([account({ id: 'acct-b', grantedAt: null, grantedBy: null, granted: false })]);
+    await renderAccess();
+
+    grantFails = true;
+    fireEvent.click(grantButton());
+    expect(await screen.findByText('許可できなかった')).toBeTruthy();
+    expect(grantButton().disabled).toBe(false);
+
+    grantFails = false;
+    const hold = holdRequests(({ url }) => /\/access\/acct-b\/grant$/.test(url));
+    fireEvent.click(grantButton());
+    expect(screen.queryByText('許可できなかった')).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(grantButton().disabled).toBe(true);
+    hold.open();
+    await waitFor(() => expect(grantButton().disabled).toBe(false));
+    expect(screen.queryByText('許可できなかった')).toBeNull();
+  });
+
+  it('取り消し: 失敗では確認の枠が残って理由が出る。送信中は押せず、成功すると確認の枠が閉じる', async () => {
+    stubWithFailures([account({ id: 'acct-a', granted: true })]);
+    await renderAccess();
+    const confirm = () =>
+      screen.getByRole<HTMLButtonElement>('button', {
+        name: 'granted@example.com の許可を本当に取り消す',
+      });
+
+    fireEvent.click(screen.getByText('許可を取り消す'));
+    revokeFails = true;
+    fireEvent.click(confirm());
+    expect(await screen.findByText('取り消せなかった')).toBeTruthy();
+    expect(confirm().disabled).toBe(false);
+
+    revokeFails = false;
+    const hold = holdRequests(({ url }) => /\/access\/acct-a\/revoke$/.test(url));
+    fireEvent.click(confirm());
+    expect(screen.queryByText('取り消せなかった')).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(confirm().disabled).toBe(true);
+    hold.open();
+    await waitFor(() => expect(screen.queryByText('本当に取り消す')).toBeNull());
+    expect(screen.getByText('許可を取り消す')).toBeTruthy();
   });
 });
 

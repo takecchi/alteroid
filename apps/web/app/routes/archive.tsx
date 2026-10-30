@@ -1,5 +1,6 @@
 import { JournalTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { useAction } from '~/lib/use-action';
 import { useState, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 
@@ -157,9 +158,8 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
   const navigate = useNavigate();
   const removeArchive = useRemoveArchive();
   const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
+  const { busy, failure, run } = useAction();
   const [confirming, setConfirming] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
 
   const removed = entry.removedAt !== undefined;
   const denied = failure instanceof ApiError && failure.status === 409;
@@ -181,18 +181,12 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
     void navigate(detailPath);
   }
 
-  async function remove(overrideReason?: string) {
-    setBusy(true);
-    setFailure(undefined);
-    try {
+  function remove(overrideReason?: string) {
+    return run(async () => {
       await removeArchive(entry.id, overrideReason);
       // ここで楽観的に表示を変えない: 成功すれば一覧の取り直しで removedAt が付いた行に置き換わるため
       setReason('');
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (

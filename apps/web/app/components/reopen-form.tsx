@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { Button, ErrorNote, Input } from '@alteroid/ui';
 
 import { useReportDirty } from '~/lib/leave-guard';
+import { useAction } from '~/lib/use-action';
 
 // 閉じた行を否定する口。commitments と tasks の閉じた行で共有する。
 // 閉じた主体（器が自動で閉じた行も含む）で出し分けない: 否定できる相手を画面の側で狭めると、サーバの規則が変わった日に画面だけがずれる。
@@ -18,21 +19,12 @@ export function ReopenForm({
   const reasonId = useId();
   const [opened, setOpened] = useState(false);
   const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, setFailure, run } = useAction();
   useReportDirty(dirtyId, reason.trim() !== '');
 
   async function submit() {
     if (busy || reason.trim() === '') return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await onReopen(reason.trim());
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    await run(() => onReopen(reason.trim()));
   }
 
   if (!opened) {

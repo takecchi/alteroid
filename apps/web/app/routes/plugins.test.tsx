@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import PluginsPage from './plugins';
 
@@ -250,6 +250,58 @@ describe('/plugins 画面 — 外す', () => {
     );
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(calls.deletes).toEqual([]);
+  });
+
+  it('送信中は「外す」が押せず、終われば確認の枠が閉じて結果が出る', async () => {
+    const calls = stubPlugins();
+    renderScreen();
+    const removeButton = () =>
+      screen.getByRole<HTMLButtonElement>('button', {
+        name: 'プラグイン demo を外す',
+        hidden: true,
+      });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'プラグイン demo を外す' }));
+    const hold = holdRequests(({ method }) => method === 'DELETE');
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '本当に外す' }),
+    );
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(removeButton().disabled).toBe(true);
+    expect(calls.deletes).toEqual([]);
+
+    hold.open();
+    expect(await screen.findByText(/プラグイン「demo」を外した/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(removeButton().disabled).toBe(false);
+  });
+
+  it('断られたら理由が出て確認の枠は閉じる。前の結果は次に外し始めた瞬間に消え、失敗の注記は成功で消える', async () => {
+    const failing = { status: 500, body: { error: '外せなかった' } };
+    const ok = { name: 'demo', appliesFrom: '次のセッションから', runners: [] };
+    stubPlugins({ remove: { status: 200, body: ok } });
+    renderScreen();
+    const confirmRemoval = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'プラグイン demo を外す' }));
+      fireEvent.click(
+        within(await screen.findByRole('alertdialog')).getByRole('button', { name: '本当に外す' }),
+      );
+    };
+
+    await confirmRemoval();
+    expect(await screen.findByText(/プラグイン「demo」を外した/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    stubPlugins({ remove: failing });
+    await confirmRemoval();
+    expect(await screen.findByText('外せなかった')).toBeTruthy();
+    expect(screen.queryByText(/プラグイン「demo」を外した/)).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    stubPlugins({ remove: { status: 200, body: ok } });
+    await confirmRemoval();
+    expect(await screen.findByText(/プラグイン「demo」を外した/)).toBeTruthy();
+    expect(screen.queryByText('外せなかった')).toBeNull();
   });
 });
 

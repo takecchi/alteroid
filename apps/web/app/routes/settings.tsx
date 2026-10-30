@@ -2,6 +2,7 @@
 // 読むのは subpath の側だけにする: revision.ts は焼き込んだ正典と zod を読むので初期チャンクへ入れられないため
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useAction } from '~/lib/use-action';
 import { useLogout } from '~/lib/use-logout';
 import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useRef, useState } from 'react';
@@ -575,8 +576,7 @@ function ShutdownDaemon() {
   const shutdownDaemon = useShutdownDaemon();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [confirmText, setConfirmText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, setFailure, run } = useAction();
   const [done, setDone] = useState(false);
 
   const canConfirm = confirmText.trim().toLowerCase() === 'stop';
@@ -590,16 +590,10 @@ function ShutdownDaemon() {
 
   async function runShutdown() {
     if (!canConfirm) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
+    await run(async () => {
       await shutdownDaemon();
       setDone(true);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (
@@ -733,8 +727,7 @@ function ReopenCloneSession() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [reason, setReason] = useState('');
   const [distill, setDistill] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, setFailure, run } = useAction();
   const [result, setResult] = useState<ReopenCloneSessionResult | null>(null);
 
   function openDialog() {
@@ -744,15 +737,9 @@ function ReopenCloneSession() {
   }
 
   async function runReopen() {
-    setBusy(true);
-    setFailure(undefined);
-    try {
+    await run(async () => {
       setResult(await reopenCloneSession({ distill, reason }));
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (
@@ -861,8 +848,7 @@ function ResetWorkspace() {
   const resetWorkspace = useResetWorkspace();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [confirmText, setConfirmText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, setFailure, run } = useAction();
   const [cleared, setCleared] = useState<WorkspaceResetSummary | null>(null);
 
   const canConfirm = confirmText.trim().toLowerCase() === 'reset';
@@ -876,15 +862,9 @@ function ResetWorkspace() {
 
   async function runReset() {
     if (!canConfirm) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
+    await run(async () => {
       setCleared(await resetWorkspace());
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (

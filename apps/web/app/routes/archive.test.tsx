@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Archive from './archive';
 import { formatDateTime } from '@alteroid/logic';
@@ -364,6 +364,45 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await waitFor(() => {
       expect(screen.getByText('本文は削除済み')).toBeTruthy();
     });
+  });
+});
+
+describe('/archive 画面 — 削除の送信中の表示', () => {
+  it('送信中は「本文を消す」が押せず、前の断りは送り直した瞬間に消える。終われば本文は削除済みになる', async () => {
+    stubArchiveScreen(
+      [
+        {
+          id: 'sess-5-a.jsonl',
+          sessionId: 'sess-5',
+          at: '2026-09-01T00:00:00.000Z',
+          storedBytes: 10,
+        },
+      ],
+      { denyManagerId: 'mgr-1' },
+    );
+    await renderArchive();
+    const removeButton = () =>
+      screen.getByRole<HTMLButtonElement>('button', { name: `${rowName(AT)}の本文を消す` });
+
+    fireEvent.click(removeButton());
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
+    );
+    expect(await screen.findByText(/走行中のマネージャー mgr-1 の退避なので消せない/)).toBeTruthy();
+    expect(removeButton().disabled).toBe(false);
+
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: '走行中のマネージャーの退避を上書きする理由' }),
+      { target: { value: '本番障害の調査で緊急に消す必要があった' } },
+    );
+    const hold = holdRequests(({ method }) => method === 'DELETE');
+    fireEvent.click(screen.getByRole('button', { name: `${rowName(AT)}の本文を理由を付けて消す` }));
+    expect(screen.queryByText(/走行中のマネージャー mgr-1 の退避なので消せない/)).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(removeButton().disabled).toBe(true);
+
+    hold.open();
+    await waitFor(() => expect(screen.getByText('本文は削除済み')).toBeTruthy());
   });
 });
 
