@@ -528,6 +528,14 @@ describe('版が混ざる窓: runner と daemon は別々にデプロイされ�
     expect(parsed.liveBackgroundTasks).toBeUndefined();
   });
 
+  it('欄の無い応答は、スキーマが落とす（0 本とも「分からない」とも読まない。#5763）', () => {
+    const parsed = runnerManagerStateSchema.safeParse(base);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+      'liveBackgroundTasks',
+    ]);
+  });
+
   it('新しい daemon は、欄付きの応答を読める', () => {
     expect(
       runnerManagerStateSchema.parse({ ...base, liveBackgroundTasks: 3 }).liveBackgroundTasks,
