@@ -434,9 +434,9 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     expect(urls).toEqual(['http://127.0.0.1:4517/attachments/limits']);
   });
 
-  it('古いデーモンの 404 は既定値（確定）、接続失敗・壊れた応答は null（一時的）', async () => {
+  it('404・接続失敗・壊れた応答は、どれも null（一時的）', async () => {
     stubLimits(() => new Response('not found', { status: 404 }));
-    expect(await fetchAttachmentLimits(target)).toEqual(DEFAULT_ATTACHMENT_LIMITS);
+    expect(await fetchAttachmentLimits(target)).toBeNull();
     vi.stubGlobal('fetch', () => Promise.reject(new Error('ECONNREFUSED')));
     expect(await fetchAttachmentLimits(target)).toBeNull();
     stubLimits(() => Response.json({ maxImageBytes: 'x' }));
@@ -487,13 +487,16 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     expect(urls).toHaveLength(3);
   });
 
-  it('404（古いデーモン）は覚えて、取り直さない', async () => {
+  it('404 のあとも覚えず、次の /attach で取り直してデーモンの値を使う（#5765）', async () => {
     const path = await bigFile();
-    const urls = stubLimits(() => new Response('', { status: 404 }));
+    const urls = stubSequence([
+      () => new Response('', { status: 404 }),
+      () => Response.json(raised),
+    ]);
     const draft = createAttachmentDraft(target);
     expect((await draft.add(path)).ok).toBe(false);
-    expect((await draft.add(path)).ok).toBe(false);
-    expect(urls).toHaveLength(1);
+    expect((await draft.add(path)).ok).toBe(true);
+    expect(urls).toHaveLength(2);
   });
 
   it('上限を上げたデーモンでは、既定値を超えてデーモンの内側にある添付を先に断らず、上げる前の読み込み検査も通す。取るのは1回', async () => {
