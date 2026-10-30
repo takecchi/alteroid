@@ -7,7 +7,7 @@ import { formatDateTime, redactBody } from '@alteroid/logic';
 // 「いまの内容」の見せ方（やり方だけ種類と題の行を足す。`summary`）だけ。
 
 /** 衝突の相手方（ほかで書かれた、いまの内容）。消されていたら `null`。 */
-export type ConflictCurrent = { updatedAt: string; content: string };
+type ConflictCurrent = { updatedAt: string; content: string };
 
 const BAND_CLASS = 'mb-3 rounded-lg border border-destructive/50 p-3 text-sm';
 

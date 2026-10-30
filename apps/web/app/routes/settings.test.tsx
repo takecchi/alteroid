@@ -7,7 +7,7 @@ import { storeCredential, type Credential } from '@alteroid/logic';
 import type { ClonePluginLoadObservation, DaemonRevision, RunnerSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
-import Settings, { RESET_CONFIRM_GROUPS_FOR_TEST, RESET_SUMMARY_LABELS } from './settings';
+import Settings, { RESET_CONFIRM_GROUPS, RESET_SUMMARY_LABELS } from './settings';
 
 const BASE: RunnerSummary = {
   label: 'http://runner:4518',
@@ -838,7 +838,7 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
   });
 
   it('消した後の報告の見出し（RESET_SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
-    const covered = new Set(RESET_CONFIRM_GROUPS_FOR_TEST.flatMap((group) => group.keys));
+    const covered = new Set(RESET_CONFIRM_GROUPS.flatMap((group) => group.keys));
     const labelKeys = RESET_SUMMARY_LABELS.map(([key]) => key);
 
     for (const key of labelKeys) {

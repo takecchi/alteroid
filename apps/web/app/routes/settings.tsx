@@ -530,7 +530,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
 ];
 
 // 確認の文は RESET_SUMMARY_LABELS から組み立てる: 1つの日本語ラベルが複数の WorkspaceResetSummary キーをまとめて指すことがあるため
-const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
+export const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
   { label: '記憶', keys: ['memory'] },
   { label: '日誌', keys: ['journal'] },
   { label: 'ジョブ', keys: ['jobs'] },
@@ -549,8 +549,6 @@ const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)
     keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
   },
 ];
-
-export const RESET_CONFIRM_GROUPS_FOR_TEST = RESET_CONFIRM_GROUPS;
 
 const RESET_CONFIRM_SUMMARY = RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
 

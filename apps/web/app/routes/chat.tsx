@@ -422,13 +422,13 @@ export function pendingOwnLines(
   lines: Line[],
   shownId: string | undefined,
   historyLines: Line[],
-  failedTurns?: ReadonlyMap<string, FailedTurn>,
+  failedTurns: ReadonlyMap<string, FailedTurn> | undefined,
   /**
    * 編集で畳まれた返答（履歴で `supersededBy` が付いた outbound）。手元の返答がこれに当たったら引き取る（表に残さない）。
    * 渡さないと、返答の途中で過去の発言を編集したとき、畳まれた側の返答は照合先が履歴から消え、手元の行として居座る。
    * 畳むかどうかはサーバの `supersededBy` を読むだけで、規則はここで持たない。
    */
-  foldedLines: readonly Line[] = [],
+  foldedLines: readonly Line[],
 ): Line[] {
   const claimedGroups = claimedFailedGroups(failedTurns, shownId, historyLines);
   const owned = ownedBy(lines, shownId).filter(

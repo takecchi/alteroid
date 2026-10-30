@@ -22,34 +22,34 @@ describe('pendingOwnLines（issue #446 の筋書き2）', () => {
     const lines = [行('やあ')];
     const historyLines = [行('やあ')];
 
-    expect(pendingOwnLines(lines, 'conv-a', historyLines)).toHaveLength(0);
+    expect(pendingOwnLines(lines, 'conv-a', historyLines, undefined, [])).toHaveLength(0);
   });
 
   it('一致が無ければ、理由を問わず残る（履歴が空でも、本文が違っても）', () => {
     const lines = [行('やあ'), 行('元気？')];
-    expect(pendingOwnLines(lines, 'conv-a', [])).toHaveLength(2);
-    expect(pendingOwnLines(lines, 'conv-a', [行('別の話')])).toHaveLength(2);
+    expect(pendingOwnLines(lines, 'conv-a', [], undefined, [])).toHaveLength(2);
+    expect(pendingOwnLines(lines, 'conv-a', [行('別の話')], undefined, [])).toHaveLength(2);
   });
 
   it('role が違えば一致しない（同じ本文でも human と clone は別物）', () => {
     const lines = [行('了解', 'human')];
     const historyLines = [行('了解', 'clone')];
 
-    expect(pendingOwnLines(lines, 'conv-a', historyLines)).toHaveLength(1);
+    expect(pendingOwnLines(lines, 'conv-a', historyLines, undefined, [])).toHaveLength(1);
   });
 
   it('同じ本文が複数あっても1件ずつしか消さない（多重集合の照合）', () => {
     const lines = [行('ok'), 行('ok'), 行('ok')];
     const historyLines = [行('ok')];
 
-    const pending = pendingOwnLines(lines, 'conv-a', historyLines);
+    const pending = pendingOwnLines(lines, 'conv-a', historyLines, undefined, []);
     expect(pending).toHaveLength(2);
   });
 
   it('いま見ている会話（shownId）以外の行は、一致のいかんによらず結果に出さない（ownedBy と同じ絞り）', () => {
     const lines = [行('やあ', 'human', 'conv-a'), 行('別の話', 'human', 'conv-b')];
 
-    const pending = pendingOwnLines(lines, 'conv-a', []);
+    const pending = pendingOwnLines(lines, 'conv-a', [], undefined, []);
 
     expect(pending).toHaveLength(1);
     expect(pending[0]?.text).toBe('やあ');
@@ -257,15 +257,27 @@ describe('過去と同じ本文を送っても、送った発言は消えない�
   it('別の id を持つ履歴の同じ本文は、id を持つ手元の行を引き取らない。同じ id なら引き取る', () => {
     const own = 行('はい', 'human', { clientMessageId: 'new' });
     expect(
-      pendingOwnLines([own], 'conv-a', [行('はい', 'human', { clientMessageId: 'old' })]),
+      pendingOwnLines(
+        [own],
+        'conv-a',
+        [行('はい', 'human', { clientMessageId: 'old' })],
+        undefined,
+        [],
+      ),
     ).toHaveLength(1);
     expect(
-      pendingOwnLines([own], 'conv-a', [
-        行('はい', 'human', { clientMessageId: 'old' }),
-        行('はい', 'human', { clientMessageId: 'new' }),
-      ]),
+      pendingOwnLines(
+        [own],
+        'conv-a',
+        [
+          行('はい', 'human', { clientMessageId: 'old' }),
+          行('はい', 'human', { clientMessageId: 'new' }),
+        ],
+        undefined,
+        [],
+      ),
     ).toHaveLength(0);
-    expect(pendingOwnLines([own], 'conv-a', [行('はい', 'human')])).toHaveLength(0);
+    expect(pendingOwnLines([own], 'conv-a', [行('はい', 'human')], undefined, [])).toHaveLength(0);
   });
 
   it('画面: 履歴に同じ本文の過去の発言があっても、送った直後に自分の吹き出しが出る', async () => {
