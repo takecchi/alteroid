@@ -9424,22 +9424,25 @@ class Pool implements ManagerPool {
     }
   }
 
-  /** 「世代が無い」を `stale` にも `current` にも倒さない: 古い runner との後方互換。 */
+  /**
+   * 追っている世代が無い間（再起動の直後・resume の応答待ち・世代を返さない古い runner）は `unknown`（世代を見ない）。
+   * 追っている世代があるのに値の無い出来事は、食い違いと同じ `stale` に倒す（runner は出来事に必ず世代を載せる。#5764）。
+   */
   #judgeSessionGeneration(
     record: ManagerRecord,
     event: RunnerEvent,
   ): 'stale' | 'current' | 'unknown' {
     if (!isSessionScopedEvent(event)) return 'unknown';
-    const given = event.sessionGeneration;
     const tracked = record.sessionGeneration;
-    if (given === undefined || given.length === 0 || tracked === undefined) return 'unknown';
-    return given === tracked ? 'current' : 'stale';
+    if (tracked === undefined) return 'unknown';
+    return event.sessionGeneration === tracked ? 'current' : 'stale';
   }
 
   /** 出来事に付いて届いた世代を覚える（#5195）。古い順に捨てて上限で締める: 担当の像は起こし直しのたびに世代が増えるため。 */
   #observeSessionGeneration(record: ManagerRecord, event: RunnerEvent): void {
     if (!isSessionScopedEvent(event)) return;
     const given = event.sessionGeneration;
+    // 記録する値が無いだけ（型のための guard）。判定は `#judgeSessionGeneration` が持つ
     if (given === undefined || given.length === 0) return;
     const observed = (record.observedSessionGenerations ??= new Set<string>());
     observed.delete(given);
