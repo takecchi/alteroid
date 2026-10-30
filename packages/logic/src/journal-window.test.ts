@@ -4,7 +4,6 @@ import type { JournalEntry } from './types.js';
 
 import {
   applyInitialPage,
-  applyNewerPage,
   applyOlderPage,
   filterByType,
   filterRecent,
@@ -16,7 +15,6 @@ import {
   newestAt,
   oldestAt,
   olderPageQuery,
-  pageOutcome,
   readThroughUnreadable,
   shiftForPrepend,
 } from './journal-window.js';
@@ -77,32 +75,7 @@ describe('mergeBack（末尾＝過去側へ差し込む）', () => {
   });
 });
 
-describe('pageOutcome（このページの後、次に何をすべきか）', () => {
-  it('新規が1件でもあれば progress', () => {
-    expect(pageOutcome(50, 50, 1, 1000)).toBe('progress');
-    expect(pageOutcome(1, 50, 1, 1000)).toBe('progress');
-  });
-
-  it('新規0件・応答が limit 未満 → 本当の終端（end）', () => {
-    expect(pageOutcome(3, 50, 0, 1000)).toBe('end');
-    expect(pageOutcome(0, 50, 0, 1000)).toBe('end');
-    expect(pageOutcome(999, 1000, 0, 1000)).toBe('end');
-  });
-
-  it('新規0件・応答が limit ちょうど・limit がまだ上限未満 → retryLarger', () => {
-    expect(pageOutcome(50, 50, 0, 1000)).toBe('retryLarger');
-  });
-
-  it('新規0件・応答が limit ちょうど・limit が上限に達している → blocked', () => {
-    expect(pageOutcome(1000, 1000, 0, 1000)).toBe('blocked');
-  });
-
-  it('既定の maxLimit は JOURNAL_MAX_LIMIT（1000）', () => {
-    expect(pageOutcome(1000, 1000, 0)).toBe('blocked');
-  });
-});
-
-describe('applyOlderPage / applyNewerPage（マージと判定を1回で行う合成）', () => {
+describe('applyOlderPage（マージと判定を1回で行う合成）', () => {
   it('applyOlderPage は末尾へ足し、outcome は next だけで決める', () => {
     const oldest = entry('oldest', '2026-08-20T00:00:00.000Z');
     const existing = [entry('a', '2026-08-20T00:02:00.000Z'), oldest];
@@ -119,19 +92,6 @@ describe('applyOlderPage / applyNewerPage（マージと判定を1回で行う�
     const ended = applyOlderPage(existing, [oldest], null);
     expect(ended.entries).toBe(existing);
     expect(ended.outcome).toBe('end');
-  });
-
-  it('applyNewerPage は先頭へ足す', () => {
-    const newest = entry('newest', '2026-08-20T00:02:00.000Z');
-    const existing = [newest, entry('a', '2026-08-20T00:01:00.000Z')];
-    const result = applyNewerPage(
-      existing,
-      [entry('fresher', '2026-08-20T00:03:00.000Z'), newest],
-      50,
-    );
-    expect(result.entries.map((e) => e.id)).toEqual(['fresher', 'newest', 'a']);
-    expect(result.outcome).toBe('progress');
-    expect(result.freshCount).toBe(1);
   });
 });
 
@@ -305,10 +265,8 @@ describe('journalHorizonNote（issue #1510 の積み残し）', () => {
     expect(journalHorizonNote('end', '2026-09-12T20:21:05.123Z', false)).toBeUndefined();
   });
 
-  it('outcome が progress/retryLarger/blocked なら、crossesHorizon が真でも注記は無い', () => {
+  it('outcome が progress なら、crossesHorizon が真でも注記は無い', () => {
     expect(journalHorizonNote('progress', '2026-09-12T20:21:05.123Z', true)).toBeUndefined();
-    expect(journalHorizonNote('retryLarger', '2026-09-12T20:21:05.123Z', true)).toBeUndefined();
-    expect(journalHorizonNote('blocked', '2026-09-12T20:21:05.123Z', true)).toBeUndefined();
   });
 
   it('oldestAt が無い（サーバが since/until 無しの応答を返した）なら、crossesHorizon が真でも注記は無い', () => {
@@ -418,11 +376,9 @@ describe('journalHorizonNoteForHuman（issue #2806）', () => {
   const fmt = (iso: string) => `<${iso.slice(0, 10)}>`;
 
   it('出す条件は journalHorizonNote と同じ', () => {
-    for (const outcome of ['progress', 'retryLarger', 'blocked'] as const) {
-      expect(
-        journalHorizonNoteForHuman(outcome, '2026-10-03T01:00:00.000Z', true, fmt),
-      ).toBeUndefined();
-    }
+    expect(
+      journalHorizonNoteForHuman('progress', '2026-10-03T01:00:00.000Z', true, fmt),
+    ).toBeUndefined();
     expect(
       journalHorizonNoteForHuman('end', '2026-10-03T01:00:00.000Z', false, fmt),
     ).toBeUndefined();
