@@ -25,6 +25,11 @@ import {
   fetchConversationApprovals,
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
+import type {
+  ConversationMessage,
+  ConversationsListPage,
+  ConversationSummary,
+} from '../conversations.js';
 import { describeFailedResponse } from '../format.js';
 import { requestInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
@@ -50,36 +55,9 @@ export type ChatEvent =
   | { type: 'error'; message: string; kind?: TurnFailureKind }
   | { type: 'done' };
 
-export interface ConversationList {
-  conversations: ConversationSummary[];
-  scanned: number;
-  reachedStart: boolean;
-  hiddenByLimit: number;
-  nextCursor?: string;
-}
-
-export interface ConversationSummary {
-  conversationId: string;
-  startedAt: string;
-  updatedAt: string;
-  messages: number;
-  preview: string;
-}
-
-export interface ConversationMessage {
-  id: string;
-  at: string;
-  role: 'inbound' | 'outbound';
-  text: string;
-  // 取り下げた発言だけに付く。古いデーモンは付けない（その場合は今までどおり普通の発言として出す）
-  delivery?: 'withdrawn';
-  attachments?: { id: string; name: string; mediaType: string; size: number }[];
-  supersededBy?: string;
-  supersedes?: string;
-  turnFailure?: 'failed' | 'held';
-  // 古いデーモンは付けない（その場合は `other` 扱い）
-  turnFailureKind?: TurnFailureKind;
-}
+// 型の持ち主は `conversations.ts`（`alteroid conversations` と同じ応答を読むため）。
+export type { ConversationMessage, ConversationSummary };
+export type ConversationList = ConversationsListPage;
 
 export interface HeaderCounts {
   pendingApprovals: number;
