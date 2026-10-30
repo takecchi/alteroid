@@ -18,6 +18,7 @@ export default defineConfig({
     'src/attachment-wording.ts',
     'src/attachment-usage-keys.ts',
     'src/redact.ts',
+    'src/plugin-source-input.ts',
     'src/manager-activity.ts',
     'src/cgroup-events-format.ts',
     'src/system-error-format.ts',
@@ -27,7 +28,6 @@ export default defineConfig({
     'src/denial-format.ts',
     'src/memory-freshness-format.ts',
     'src/github-ci-format.ts',
-    'src/plugin-source-input.ts',
     // 副作用だけの小さな入口（`UV_THREADPOOL_SIZE` を置く）。デーモンと runner が最初の import にする。何も import しない: 先に評価させるため（#4890）
     'src/threadpool-size.ts',
   ],

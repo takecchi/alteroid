@@ -44,6 +44,10 @@
       "types": "./dist/redact.d.ts",
       "import": "./dist/redact.js"
     },
+    "./plugin-source-input": {
+      "types": "./dist/plugin-source-input.d.ts",
+      "import": "./dist/plugin-source-input.js"
+    },
     "./attachment-wording": {
       "types": "./dist/attachment-wording.d.ts",
       "import": "./dist/attachment-wording.js"
@@ -91,10 +95,6 @@
     "./journal-diagnostics-format": {
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"
-    },
-    "./plugin-source-input": {
-      "types": "./dist/plugin-source-input.d.ts",
-      "import": "./dist/plugin-source-input.js"
     },
     "./threadpool-size": {
       "types": "./dist/threadpool-size.d.ts",
