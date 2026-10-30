@@ -1,4 +1,4 @@
-import { DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import { DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './daemon-self-notice.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { InboxEvent } from './schema.js';
 

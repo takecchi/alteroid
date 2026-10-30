@@ -136,6 +136,12 @@ describe('ReportLanguageNotices', () => {
     expect(text).toContain('これは知らせで、止める指示ではない。');
   });
 
+  it('切り口に絵文字がかかっても、例に孤立したサロゲートが残らない（#5973）', () => {
+    const text = describeReportLanguageNotice(`${'x'.repeat(79)}😀${'x'.repeat(20)}`);
+    expect(text).toContain(`例: "${'x'.repeat(79)}…"`);
+    expect(text).not.toMatch(/\p{Surrogate}/u);
+  });
+
   it('担い手ごとに10分に1回まで。間隔の内に見つけた分は、間隔が明けても添えない', () => {
     const notices = new ReportLanguageNotices();
     expect(notices.observe('manager', ['Types pass'], 0)).toBe(true);
