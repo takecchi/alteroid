@@ -2669,6 +2669,60 @@ describe('chat の台帳コマンド', () => {
   });
 });
 
+// 台帳の撤去の段2b: 人間の側から台帳へ書く命令は無い（読む `/commitments` `/commitment` は段3まで残る）
+describe('chat に台帳へ書く命令は無い', () => {
+  it.each(['/commit 積む本文', '/done 1 片付けた', '/commit-edit 1 直す', '/commit-reopen 1 理由'])(
+    '%s は不明なコマンドで、何も送らず失敗として渡す',
+    async (line) => {
+      const out = captureStdout();
+      const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+      const failed: string[] = [];
+
+      await runSlashCommand(
+        line,
+        ...slashArgs(client, { ...emptyListed(), commitments: ['cmt-1'] }, {
+          onFailed: (reason) => failed.push(reason),
+        }),
+      );
+
+      expect(calls).toEqual([]);
+      expect(out()).toContain('不明なコマンド');
+      expect(failed).toHaveLength(1);
+    },
+  );
+
+  it('/help に書く命令は載らず、読む命令は載る', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
+
+    const text = read();
+    expect(text).toContain('/commitments');
+    expect(text).toContain('/commitment <番号|id>');
+    expect(text).not.toMatch(/^\/commit /m);
+    expect(text).not.toMatch(/^\/done /m);
+    expect(text).not.toContain('/commit-edit');
+    expect(text).not.toContain('/commit-reopen');
+  });
+
+  it('/commitments の一覧は書く命令を案内しない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      commitments: [
+        commitment({ id: 'cmt-1' }),
+        commitment({ id: 'cmt-2', closedAt: '2026-08-17T00:00:00.000Z', closedReason: '済' }),
+      ],
+    });
+
+    await runSlashCommand('/commitments all', ...slashArgs(client, emptyListed()));
+
+    const text = read();
+    expect(text).not.toContain('/done');
+    expect(text).not.toContain('/commit-reopen');
+  });
+});
+
 // 書き込み系のスラッシュコマンドは、サーバの失敗（404・409・5xx）も失敗として返す（#5240）。表示した文をそのまま onFailed へ渡し、
 // 成功の回は渡さない。渡さないと、非対話（パイプ・スクリプト）で止まらず、終了状態も成功と同じになる。
 describe('書き込み系のスラッシュコマンドは HTTP の失敗を onFailed に渡す（#5240）', () => {
