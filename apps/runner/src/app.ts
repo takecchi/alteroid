@@ -115,13 +115,17 @@ function matches(header: string | undefined, expectedHex: string): boolean {
   return timingSafeEqual(sha256(token), expected);
 }
 
-interface OutboxPending {
-  count: number;
-  oldestAt?: string;
-}
-
 // 連番を `RunnerEvent` に載せない: wire の形を変えずに、取りこぼしの手当てを配送層だけで済ませるため。
 type OutboxSeq = number;
+
+// 列の1件。連番と `queuedAt` は `push` のときに1回だけ振り、以後は書き換えない（差し戻しで振り直すと、次の接続で同じ出来事が2回届き、最古の時刻の計器が嘘になるため）。
+export interface OutboxItem {
+  event: RunnerEvent;
+  queuedAt: string;
+  seq: OutboxSeq;
+  // 書き出した本文（`JSON.stringify(event)`）の字数。書き終えるまで無い
+  chars?: number;
+}
 
 export interface OutboxPendingGroup {
   type: string;
@@ -136,25 +140,48 @@ export interface OutboxShutdownSnapshot {
     oldestAt?: string;
     groups: OutboxPendingGroup[];
   };
-  // 'detached' の件数は 0 と書かない: `#probe` が外れて取れず、「何も失っていない」と読めてしまうため。
+  // 'detached' の件数は 0 と書かない（#629）: 切れた側の件数は取れなかった時代の区別で、文言の形を保つために残している（#5692 段2 で畳む報告ごと見直す）。
   subscriber:
     | { status: 'never-subscribed' }
     | { status: 'subscribed'; count?: number; oldestAt?: string }
     | { status: 'detached' };
 }
 
-// 溜める量に上限を置かない: 上限は取りこぼしになるため。
+/**
+ * `/events` の1接続が持つのは「次に書く連番」（cursor）だけ。出来事そのものは `Outbox` の列にしか無い。
+ * 書き込みが成功したら `wrote` で進める。失敗・締め切り越え・置き換えのときは進めず、cursor は接続と一緒に捨てる。
+ */
+export interface OutboxSubscription {
+  /** 新しい接続に置き換えられたら true。以後 `wrote` は何も進めない（止まっていた書き込みが後から成功で返っても、書き終えたことにしない）。 */
+  readonly superseded: boolean;
+  /** 次に書く1件。書き終える（`wrote`）まで同じものを返す。 */
+  peek(): OutboxItem | undefined;
+  wrote(item: OutboxItem, chars?: number): void;
+  /** この接続がこれから書く件数（cursor 以降。書きかけの1件を含む）。 */
+  pending(): number;
+  detach(): void;
+}
+
+interface SubscriptionState {
+  cursor: OutboxSeq;
+  superseded: boolean;
+  wake: () => void;
+  onSuperseded: (() => void) | undefined;
+}
+
+// 溜める量に上限を置かない: 上限は取りこぼしになるため。落とすのは、書き終えた分（控え）だけである。
 export class Outbox {
-  readonly #queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
-  #listener: ((event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void) | null = null;
-  #probe: (() => OutboxPending) | null = null;
-  // detach でも戻さない: `#listener` とは別の軸（過去に購読されたか）で、「一度も無い」と「切れた」を分けるため。
+  // 連番の昇順の1本の列。連番が `#written` 以下は書いた分（控え）、より大きいのはまだ書いていない分。
+  readonly #log: OutboxItem[] = [];
+  #current: SubscriptionState | null = null;
+  // detach でも戻さない: `#current` とは別の軸（過去に購読されたか）で、「一度も無い」と「切れた」を分けるため。
   #everSubscribed = false;
-  #drain: (() => { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[]) | null = null;
   readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
-
-  readonly #sent: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq; chars: number }[] = [];
+  // 書き終えた連番の最大。接続が変わっても持ち越す（次の接続は、ここより後ろから書き始める）。
+  #written: OutboxSeq = 0;
+  // `#log` の先頭からの、書き終えた分の件数と字数の合計。
+  #sentCount = 0;
   #sentChars = 0;
   /** 字数で控えから落とした出来事のうち、いちばん新しい連番。繋ぎ直しで、それより前を求められたら送り直せない。 */
   #droppedForCharsThrough: OutboxSeq = 0;
@@ -172,82 +199,133 @@ export class Outbox {
   }
 
   push(event: RunnerEvent): OutboxSeq {
-    return this.requeue(event, this.#now());
-  }
-
-  // 差し戻しは `queuedAt` を打ち直さない: `oldestPendingAt` が戻すたびに新しくなる嘘になるため。連番は新しく振る。
-  requeue(event: RunnerEvent, queuedAt: string): OutboxSeq {
     const seq = this.#nextSeq++;
-    if (this.#listener !== null) {
-      this.#listener(event, seq, queuedAt);
-      return seq;
-    }
-    this.#queue.push({ event, queuedAt, seq });
+    this.#log.push({ event, queuedAt: this.#now(), seq });
+    this.#current?.wake();
     return seq;
   }
 
-  // 古い購読者の分を `#drain` で引き出してから置き換える: 古い購読者は `writeSSE` で止まり自分の `finally` を走らせられず、抱えた分が誰にも配られず消えるため。
-  attach(
-    listener: (event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void,
-    pending?: () => OutboxPending,
-    drain?: () => { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[],
-  ): () => void {
-    if (this.#drain !== null) {
-      const stale = this.#drain();
-      // 控えに在る連番は渡さない: 新しい接続は `sentSince` で同じ控えを既に積んでおり、同じ出来事が2回流れるため。
-      for (const item of stale) {
-        if (!this.isRecorded(item.seq)) listener(item.event, item.seq, item.queuedAt);
-      }
-    }
-    while (this.#queue.length > 0) {
-      const item = this.#queue.shift();
-      if (item !== undefined) listener(item.event, item.seq, item.queuedAt);
-    }
-    this.#listener = listener;
-    this.#probe = pending ?? null;
+  /**
+   * 接続を1本つなぐ。古い接続があれば置き換え（`superseded`）、`onSuperseded` で畳ませる。
+   * 古い接続の分を引き出して渡す必要は無い: 古い側は何も持たず、書き終えていない分は列に残っていて、新しい接続が `#written` の後ろから書くため。
+   */
+  subscribe(options: {
+    lastEventId?: OutboxSeq;
+    wake: () => void;
+    onSuperseded?: () => void;
+  }): OutboxSubscription {
+    const state: SubscriptionState = {
+      cursor: this.#startCursor(options.lastEventId),
+      superseded: false,
+      wake: options.wake,
+      onSuperseded: options.onSuperseded,
+    };
+    const previous = this.#current;
+    this.#current = state;
     this.#everSubscribed = true;
-    this.#drain = drain ?? null;
-    return () => {
-      if (this.#listener !== listener) return;
-      this.#listener = null;
-      this.#probe = null;
-      this.#drain = null;
+    if (previous !== null) {
+      previous.superseded = true;
+      previous.onSuperseded?.();
+    }
+    return {
+      get superseded() {
+        return state.superseded;
+      },
+      peek: () => this.#log[this.#lowerBound(state.cursor)],
+      wrote: (item, chars) => {
+        if (state.superseded) return;
+        this.#markWritten(item, chars);
+        state.cursor = Math.max(state.cursor, item.seq + 1);
+        this.#trim();
+      },
+      pending: () => this.#log.length - this.#lowerBound(state.cursor),
+      detach: () => {
+        if (this.#current === state) this.#current = null;
+      },
     };
   }
 
-  // `chars` は書き出した本文（`JSON.stringify(event)`）の字数。書き出す側が持っているので渡す（2度直列化しない）。省けばここで数える
+  /**
+   * **試験の口（本番の /events は `subscribe` を使う。本番の呼び元は無い）。**
+   * 溜まった分を同期で渡す購読で、畳みの待ちの試験が「脚が繋がっている」を作るために在る。渡した分は書き終えたことにする。
+   */
+  attach(listener: (event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void): () => void {
+    const deliver = (): void => {
+      for (let item = subscription.peek(); item !== undefined; item = subscription.peek()) {
+        listener(item.event, item.seq, item.queuedAt);
+        subscription.wrote(item);
+      }
+    };
+    const subscription = this.subscribe({ wake: deliver });
+    deliver();
+    return () => subscription.detach();
+  }
+
+  /**
+   * **試験の口（本番の /events は `subscribe` の `wrote` を使う。本番の呼び元は無い）。**
+   * 連番を指して書き終えたことにする（列に無い連番なら列へ挿入する）。控えの上限・`sentSince` の試験が、書き込みを通さずに控えを作るために在る。
+   * `chars` は書き出した本文（`JSON.stringify(event)`）の字数。省けばここで数える。
+   */
   recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string, chars?: number): void {
-    // 同じ連番が既に在れば積まない: 読み返して再送した分が控えに二重に入り、デーモンへ同じ出来事が2回届くため。
-    for (let i = this.#sent.length - 1; i >= 0; i--) {
-      const known = this.#sent[i];
-      if (known === undefined || known.seq < seq) break;
-      if (known.seq === seq) return;
+    const index = this.#lowerBound(seq);
+    let item = this.#log[index];
+    if (item === undefined || item.seq !== seq) {
+      item = { event, queuedAt, seq };
+      this.#log.splice(index, 0, item);
+      this.#nextSeq = Math.max(this.#nextSeq, seq + 1);
     }
-    const size = chars ?? JSON.stringify(event).length;
-    this.#sent.push({ event, seq, queuedAt, chars: size });
-    this.#sentChars += size;
-    while (
-      this.#sent.length > Outbox.SENT_HISTORY_LIMIT ||
-      (this.#sentChars > Outbox.SENT_HISTORY_MAX_CHARS && this.#sent.length > 1)
+    this.#markWritten(item, chars);
+    this.#trim();
+  }
+
+  // 書き終えた連番は二度数えない: 読み返して再送した分が控えに二重に入り、デーモンへ同じ出来事が2回届くため。
+  #markWritten(item: OutboxItem, chars?: number): void {
+    if (item.seq <= this.#written) return;
+    if (chars !== undefined) item.chars = chars;
+    this.#written = item.seq;
+    for (
+      let next = this.#log[this.#sentCount];
+      next !== undefined;
+      next = this.#log[this.#sentCount]
     ) {
-      const dropped = this.#sent.shift();
-      if (dropped === undefined) break;
-      this.#sentChars -= dropped.chars;
-      if (this.#sent.length < Outbox.SENT_HISTORY_LIMIT) {
-        this.#droppedForCharsThrough = Math.max(this.#droppedForCharsThrough, dropped.seq);
+      if (next.seq > this.#written) break;
+      next.chars ??= JSON.stringify(next.event).length;
+      this.#sentChars += next.chars;
+      this.#sentCount += 1;
+    }
+  }
+
+  // 古い方から落とすのは、書き終えていて、かつ購読中の接続が次に書く連番より前の分だけ: まだ書いていない分と、繋ぎ直しで読み返している最中の分は落とさない。
+  #trim(): void {
+    const floor = this.#current?.cursor ?? Number.POSITIVE_INFINITY;
+    while (
+      this.#sentCount > Outbox.SENT_HISTORY_LIMIT ||
+      (this.#sentChars > Outbox.SENT_HISTORY_MAX_CHARS && this.#sentCount > 1)
+    ) {
+      const first = this.#log[0];
+      if (first === undefined || first.seq >= floor) break;
+      this.#log.shift();
+      this.#sentCount -= 1;
+      this.#sentChars -= first.chars ?? 0;
+      if (this.#sentCount < Outbox.SENT_HISTORY_LIMIT) {
+        this.#droppedForCharsThrough = Math.max(this.#droppedForCharsThrough, first.seq);
       }
     }
   }
 
-  isRecorded(seq: OutboxSeq): boolean {
-    return this.#sent.some((item) => item.seq === seq);
+  #lowerBound(seq: OutboxSeq): number {
+    let low = 0;
+    let high = this.#log.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if ((this.#log[mid] as OutboxItem).seq < seq) low = mid + 1;
+      else high = mid;
+    }
+    return low;
   }
 
-  sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
-    // 振っていない連番を申告されたら控えを全部返す: runner が入れ替わると連番は1から数え直され、前の runner の高い値で絞ると1件も返らないため。
-    if (lastEventId >= this.#nextSeq)
-      return this.#sent.map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
-    // 字数で落とした分より前を求められたら、送り直せないことを黙らない（#4669）。届いていたかは runner からは分からない
+  // 字数で落とした分より前を求められたら、送り直せないことを黙らない（#4669）。届いていたかは runner からは分からない
+  #noteDroppedBefore(lastEventId: OutboxSeq): void {
     if (lastEventId < this.#droppedForCharsThrough) {
       writeStderrLine(
         `alteroid-runner: 繋ぎ直しで連番 ${String(lastEventId)} より後を求められたが、` +
@@ -255,31 +333,51 @@ export class Outbox {
           `（届いていなければ、その間の出来事は失われた）\n`,
       );
     }
-    return this.#sent
+  }
+
+  // 申告が無ければ、まだ書いていない分だけを書く。申告 L があれば L の次から書く（L が書き終えた分より先なら、届いたものとして飛ばす）。
+  // 振っていない連番の申告は、残っている列を先頭から書く: runner が入れ替わると連番は1から数え直され、前の runner の高い値で絞ると1件も書けないため。
+  #startCursor(lastEventId: OutboxSeq | undefined): OutboxSeq {
+    if (lastEventId === undefined) return this.#written + 1;
+    if (lastEventId >= this.#nextSeq) return this.#log[0]?.seq ?? this.#nextSeq;
+    this.#noteDroppedBefore(lastEventId);
+    return lastEventId + 1;
+  }
+
+  sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
+    const sent = this.#log.slice(0, this.#sentCount);
+    if (lastEventId >= this.#nextSeq) {
+      return sent.map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
+    }
+    this.#noteDroppedBefore(lastEventId);
+    return sent
       .filter((item) => item.seq > lastEventId)
       .map(({ event, queuedAt, seq }) => ({ event, queuedAt, seq }));
   }
 
-  // `#queue` の長さだけを数えない: listener が付いている間は購読側に溜まり、デーモンが読まなくなっても 0 のままになるため。
+  // 購読中は、その接続がこれから書く分（読み返しの最中の分を含む）。購読が無いときは、書き終えた後ろ。
+  #pendingFrom(): OutboxSeq {
+    return this.#current?.cursor ?? this.#written + 1;
+  }
+
   get pending(): number {
-    return this.#queue.length + (this.#probe?.().count ?? 0);
+    return this.#log.length - this.#lowerBound(this.#pendingFrom());
   }
 
   get oldestPendingAt(): string | undefined {
-    const mine = this.#queue[0]?.queuedAt;
-    const theirs = this.#probe?.().oldestAt;
-    if (mine === undefined) return theirs;
-    if (theirs === undefined) return mine;
-    return theirs < mine ? theirs : mine;
+    return this.#log[this.#lowerBound(this.#pendingFrom())]?.queuedAt;
   }
 
   get subscribed(): boolean {
-    return this.#listener !== null;
+    return this.#current !== null;
   }
 
   describeForShutdown(): OutboxShutdownSnapshot {
+    // 購読中は、まだ書いていない分と読み返しの分を購読側の欄（その接続の溜まり）に数え、`queue` は空にする（#629 の報告の形）。
+    // 購読が無いときは、書いていない分を `queue` に内訳つきで出す。
+    const unwritten = this.#current === null ? this.#log.slice(this.#sentCount) : [];
     const groups = new Map<string, OutboxPendingGroup>();
-    for (const item of this.#queue) {
+    for (const item of unwritten) {
       const managerId = 'managerId' in item.event ? item.event.managerId : undefined;
       const key = `${item.event.type} ${managerId ?? ''}`;
       const existing = groups.get(key);
@@ -295,25 +393,21 @@ export class Outbox {
         if (item.queuedAt < existing.oldestAt) existing.oldestAt = item.queuedAt;
       }
     }
-    const probed = this.#probe?.();
+    const oldestPending = this.oldestPendingAt;
     const subscriber: OutboxShutdownSnapshot['subscriber'] =
-      this.#listener !== null
+      this.#current !== null
         ? {
             status: 'subscribed',
-            ...(probed === undefined
-              ? {}
-              : {
-                  count: probed.count,
-                  ...(probed.oldestAt === undefined ? {} : { oldestAt: probed.oldestAt }),
-                }),
+            count: this.pending,
+            ...(oldestPending === undefined ? {} : { oldestAt: oldestPending }),
           }
         : this.#everSubscribed
           ? { status: 'detached' }
           : { status: 'never-subscribed' };
     return {
       queue: {
-        count: this.#queue.length,
-        ...(this.#queue[0] === undefined ? {} : { oldestAt: this.#queue[0].queuedAt }),
+        count: unwritten.length,
+        ...(unwritten[0] === undefined ? {} : { oldestAt: unwritten[0].queuedAt }),
         groups: [...groups.values()],
       },
       subscriber,
@@ -707,47 +801,21 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。
     .get('/events', (c) => {
       return streamSSE(c, async (stream) => {
-        const queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
         let wake: (() => void) | null = null;
         let closed = false;
 
-        let writing: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq } | null = null;
-
-        // 置き換えられた後は何もしない旗: 待っていた書き込みが後から成功で返り、差し戻し済みの出来事を二重に記録するため。
-        let superseded = false;
-
-        // 控えは `outbox.attach(...)` より前に積む: 並び順を「控え（古い）→待ち行列（新しい）」に保つため。
+        // 申告の無い・不正な Last-Event-ID は、無いものとして書いていない分だけを流す。
         const lastEventIdHeader = c.req.header('Last-Event-ID');
-        if (lastEventIdHeader !== undefined) {
-          const lastEventId = Number(lastEventIdHeader);
-          if (Number.isInteger(lastEventId) && lastEventId >= 0) {
-            for (const item of outbox.sentSince(lastEventId)) queue.push(item);
-          }
-        }
+        const lastEventId =
+          lastEventIdHeader === undefined ? Number.NaN : Number(lastEventIdHeader);
 
-        const detach = outbox.attach(
-          // `queuedAt` を打ち直さない: 差し戻しの元の時刻が `oldestPendingAt` に残らなくなるため。
-          (event, seq, queuedAt) => {
-            queue.push({ event, queuedAt, seq });
-            wake?.();
-          },
-          () => {
-            const oldest = writing ?? queue[0];
-            return {
-              count: queue.length + (writing === null ? 0 : 1),
-              ...(oldest === undefined ? {} : { oldestAt: oldest.queuedAt }),
-            };
-          },
-          // 呼ばれた時点で自分の `writing` / `queue` を空にする: 後で自分の `finally` が同じ分をもう一度差し戻し、二重になるため。
-          () => {
-            const drained = writing === null ? [...queue] : [writing, ...queue];
-            queue.length = 0;
-            writing = null;
-            superseded = true;
-            stream.abort();
-            return drained;
-          },
-        );
+        // この接続が持つのは「次に書く連番」だけ。書き終えた分を `wrote` で進めない限り、出来事は列に残る（差し戻しは要らない）。
+        // 置き換えられた後は何もしない: 止まっていた書き込みが後から成功で返っても、書き終えたことにしない（`wrote` が見る）。
+        const subscription = outbox.subscribe({
+          ...(Number.isInteger(lastEventId) && lastEventId >= 0 ? { lastEventId } : {}),
+          wake: () => wake?.(),
+          onSuperseded: () => stream.abort(),
+        });
         stream.onAbort(() => {
           closed = true;
           wake?.();
@@ -779,12 +847,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               }),
             sseWriteDeadlineMs,
           );
-          if (superseded) {
-            // 何もしない: 抱えていた分は `attach` のドレインで既に渡っている。
+          if (subscription.superseded) {
+            // 何もしない: 書き終えていない分は列に残っていて、新しい接続が書く。
           } else if (helloResult.outcome === 'deadline-exceeded') {
             writeStderrLine(
               `alteroid-runner: /events への hello 書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
-                `（この接続が抱えていた ${String(queue.length)} 件を箱へ戻します）\n`,
+                `（この接続が抱えていた ${String(subscription.pending())} 件を箱へ戻します）\n`,
             );
             stream.abort();
             return;
@@ -793,8 +861,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
 
           for (;;) {
-            if (closed || stream.aborted || stream.closed || superseded) break;
-            const item = queue.shift();
+            if (closed || stream.aborted || stream.closed || subscription.superseded) break;
+            const item = subscription.peek();
             if (item === undefined) {
               await new Promise<void>((resolve) => {
                 wake = resolve;
@@ -802,8 +870,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               wake = null;
               continue;
             }
-            // 書き終わるまで `writing` に持つ: `queue` から出た瞬間に忘れると、固着した1件が数えられなくなるため。
-            writing = item;
+            // 書き終える（`wrote`）まで cursor を進めない: 書けたか分からない1件を、次の接続が同じ連番で書き直せるように。
             const data = JSON.stringify(item.event);
             const result = await withDeadline(
               () =>
@@ -814,47 +881,34 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                 }),
               sseWriteDeadlineMs,
             );
-            if (superseded) {
-              // `result` を読まずに抜ける: 抱えていた分は既に新しい購読者へ渡っており、進むと二重に記録するため。
+            if (subscription.superseded) {
+              // `result` を読まずに抜ける: 書き終えていない分は新しい接続が書いており、進むと二重に書く。
               break;
             }
             if (result.outcome === 'deadline-exceeded') {
-              // `writing` を `null` へ戻さない: `finally` が元の `queuedAt` のまま箱へ戻すため。
+              // cursor は進めない: 書きかけの1件も後続も列に残り、次の接続が書く。
               // `break` だけで済ませず `stream.abort()` を呼ぶ: pending の書き込みがある間は `close()` が解決せず、応答が終わらないため。
-              const stuck = 1 + queue.length;
               writeStderrLine(
                 `alteroid-runner: /events への書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
-                  `（書きかけの1件を含め ${String(stuck)} 件を箱へ戻します）\n`,
+                  `（書きかけの1件を含め ${String(subscription.pending())} 件を箱へ戻します）\n`,
               );
               stream.abort();
               break;
             }
-            // 届いたとは限らないので控えへ積む: hono の `write()` は死んだ接続へ書いても例外を出さないため。
-            outbox.recordSent(item.event, item.seq, item.queuedAt, data.length);
-            // 投げたときは `writing` を残したまま抜ける: `finally` が箱へ戻さないと、書けなかった1件だけが静かに失われるため。
-            writing = null;
+            // 届いたとは限らないので控えにする（書き終えた分として列に残す）: hono の `write()` は死んだ接続へ書いても例外を出さないため。
+            subscription.wrote(item, data.length);
           }
         } catch (error) {
           // 書き込みが投げた（相手が読まなくなった接続など）ときはここで受け止め、ほかの /events の跡と同じ1行で書く（#5011）:
           // 外へ抜くと hono の `streamSSE` が `console.error` でスタックごと標準エラーへ出し、跡の書き先（試験の準備）も通らないため。
           // hono の `onError` は使わない: 渡すと相手へ取り決めに無い `event: error` を、壊れた接続へもう一度書こうとするため。
-          // 箱へ戻すのは下の `finally` が今どおり担い、接続を閉じるのは hono の `run` が今どおりする
-          const pending = (writing === null ? 0 : 1) + queue.length;
+          // 書けなかった分は cursor が進んでいないので列に残り、接続を閉じるのは hono の `run` が今どおりする
           writeStderrLine(
-            `alteroid-runner: /events への書き込みが失敗したため接続を畳みます（${String(pending)} 件を箱へ戻します）: ${reasonOf(error)}\n`,
+            `alteroid-runner: /events への書き込みが失敗したため接続を畳みます（${String(subscription.pending())} 件を箱へ戻します）: ${reasonOf(error)}\n`,
           );
         } finally {
           stopHeartbeat?.();
-          detach();
-          // 書きかけの1件も戻す: 書けたか分からず、落とすより二重に届くほうを選ぶため。
-          // `push` ではなく `requeue` で戻す: `queuedAt` が打ち直され、`oldestPendingAt` が戻すたびに新しくなるため。
-          // 控えに在る連番（読み返しの分）は戻さない: 連番を振り直すと控えの元の連番と別物になり、次の接続で2回届くため。
-          if (writing !== null && !outbox.isRecorded(writing.seq)) {
-            outbox.requeue(writing.event, writing.queuedAt);
-          }
-          for (const item of queue) {
-            if (!outbox.isRecorded(item.seq)) outbox.requeue(item.event, item.queuedAt);
-          }
+          subscription.detach();
         }
       });
     })
