@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
 import {
@@ -26,11 +26,11 @@ import {
   omitKey,
   useApprovalDraftState,
   usePersistApprovalDrafts,
+  usePersistApprovalLeftoverSources,
 } from '~/lib/use-approval-draft-state';
 import {
   chatDraftEpoch,
   describeApprovalLeftover,
-  saveApprovalLeftoverSources,
   settleStoredApprovalDraft,
   type ApprovalLeftoverSource,
   type ApprovalLeftoverSources,
@@ -185,16 +185,7 @@ export default function Approvals() {
         .filter((entry) => entry.text !== '')
     );
   }, [approvalsList, isValidating, knownSources, unansweredIds, sendingIds, drafts]);
-  const liveLeftoverSources = useMemo<ApprovalLeftoverSources>(
-    () =>
-      Object.fromEntries(
-        Object.entries(knownSources).filter(([id]) => id in drafts.texts || id in drafts.questions),
-      ),
-    [knownSources, drafts],
-  );
-  useEffect(() => {
-    saveApprovalLeftoverSources(liveLeftoverSources);
-  }, [liveLeftoverSources]);
+  usePersistApprovalLeftoverSources(knownSources, drafts);
   // 設問のある承認は、まとめ送信の対象に入らない（選んだ内容は `pendingDrafts` に数えない）。
   const questionApprovalCount = (approvalsList ?? []).filter(
     (approval) => unansweredIds.has(approval.id) && (approval.questions?.length ?? 0) > 0,
