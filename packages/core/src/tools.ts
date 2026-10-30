@@ -400,10 +400,10 @@ import {
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import {
-  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  formatUnpushedWorkObservationWorktrees,
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
@@ -2342,20 +2342,6 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
     );
   }
   return null;
-}
-
-function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly {
-    relativePath: string;
-    branch: string | null;
-    branchCarriedFromAt?: string;
-  }[],
-): string {
-  return worktrees.length === 0
-    ? '見つかった作業ツリー0本'
-    : worktrees
-        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
-        .join(' / ');
 }
 
 function unpushedWorkObservationIncompleteSuffix(
