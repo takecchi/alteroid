@@ -1,5 +1,6 @@
 // 切れたら張り直す: 間にプロキシが挟まると無通信で黙って切られ、画面が「静かなだけ」に見える（実際には死んでいる）ため
 import type { JournalEntry } from '@alteroid/core';
+import { sseRetryDelay } from '@alteroid/logic';
 
 import type { HeaderCounts, TuiApi } from './api.js';
 import { affectsCounts } from './journal-targets.js';
@@ -10,13 +11,6 @@ export type LiveStatus = 'connecting' | 'live' | 'offline';
 export interface HeaderState {
   readonly counts: HeaderCounts | null;
   readonly live: LiveStatus;
-}
-
-export const RETRY_BASE_MS = 1_000;
-export const RETRY_MAX_MS = 30_000;
-
-export function retryDelay(attempt: number, base = RETRY_BASE_MS, max = RETRY_MAX_MS): number {
-  return Math.min(base * 2 ** attempt, max);
 }
 
 const QUIET_TYPES = new Set([
@@ -37,8 +31,6 @@ export function affectsHeader(type: string, entry: JournalEntry | null): boolean
 }
 
 export interface HeaderFeedOptions {
-  retryBaseMs?: number;
-  retryMaxMs?: number;
   refetchDebounceMs?: number;
 }
 
@@ -154,7 +146,7 @@ export class HeaderFeed {
     }
     if (this.stopped || abort.signal.aborted) return;
     this.setLive('offline');
-    const wait = retryDelay(this.attempt, this.options.retryBaseMs, this.options.retryMaxMs);
+    const wait = sseRetryDelay(this.attempt);
     this.attempt += 1;
     this.retryTimer = setTimeout(() => void this.connect(), wait);
   }

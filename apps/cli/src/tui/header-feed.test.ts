@@ -1,15 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeApi, said } from './fake-api.js';
-import { affectsHeader, HeaderFeed, retryDelay } from './header-feed.js';
-
-describe('retryDelay（指数バックオフ）', () => {
-  it('1 秒から倍々で、30 秒で頭打ち', () => {
-    expect([0, 1, 2, 3, 4, 5, 6, 10].map((n) => retryDelay(n))).toEqual([
-      1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000,
-    ]);
-  });
-});
+import { affectsHeader, HeaderFeed } from './header-feed.js';
 
 describe('affectsHeader', () => {
   it('件数に響かない量の多い種別だけを除く', () => {
