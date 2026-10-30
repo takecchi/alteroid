@@ -219,7 +219,7 @@ describe('器ごとの枠', () => {
       expect(l.nodes.filter((n) => n.kind === 'manager')).toHaveLength(3);
       const unknown = l.containers.find((c) => c.key === 'runner:unknown-runner')!;
       expect(unknown.state).toBe('unknown');
-      expect(unknown.label).toBe('器の分からない委譲');
+      expect(unknown.label).toBe('器の分からないマネージャー');
       const node = (key: string) => l.nodes.find((n) => n.key === key)!.box;
       expect(inside(unknown.box, node('m-m1'))).toBe(true);
       expect(inside(unknown.box, node('m-m2'))).toBe(true);

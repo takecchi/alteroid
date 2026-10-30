@@ -865,7 +865,7 @@ describe('/usage 画面の絞り込み欄（issue #2795）', () => {
 
     const manager = screen.getByLabelText('マネージャー') as HTMLSelectElement;
     expect(manager.value).toBe('gone-1');
-    expect(within(manager).getByText('（一覧に無い委譲）')).toBeTruthy();
+    expect(within(manager).getByText('（一覧に無いマネージャー）')).toBeTruthy();
     expect((screen.getByLabelText('認証トークン') as HTMLSelectElement).value).toBe('gone-2');
   });
 });
@@ -1129,7 +1129,7 @@ describe('/usage 画面の記録の無い委譲', () => {
 
     renderUsage();
 
-    expect(await screen.findByText(/記録の無い委譲/)).toBeTruthy();
+    expect(await screen.findByText(/記録の無いマネージャー/)).toBeTruthy();
     const link = await screen.findByRole('link', { name: /^未記録の依頼（/ });
     expect(link.getAttribute('href')).toBe('/managers/mgr-unrecorded');
     expect(screen.queryByText(/mgr-unrecorded/)).toBeNull();
@@ -1146,9 +1146,9 @@ describe('/usage 画面の記録の無い委譲', () => {
 
     renderUsage();
 
-    const heading = await screen.findByText(/記録の無い委譲/);
+    const heading = await screen.findByText(/記録の無いマネージャー/);
     expect(heading).toBeTruthy();
-    expect(await screen.findByText(/記録が1件も無い委譲は、ありません/)).toBeTruthy();
+    expect(await screen.findByText(/記録が1件も無いマネージャーは、ありません/)).toBeTruthy();
   });
 
   it('台帳がまだ空（since が null）でも、取りこぼしがあれば出す', async () => {
@@ -1164,7 +1164,7 @@ describe('/usage 画面の記録の無い委譲', () => {
     renderUsage();
 
     expect(await screen.findByText(/まだ使用量の記録がありません/)).toBeTruthy();
-    expect(await screen.findByText(/（一覧に無い委譲）/)).toBeTruthy();
+    expect(await screen.findByText(/（一覧に無いマネージャー）/)).toBeTruthy();
   });
 
   it('「合計」カードの直後に置く', async () => {
@@ -1183,7 +1183,7 @@ describe('/usage 画面の記録の無い委譲', () => {
     const totalCard = totalHeading.closest('[data-slot="card"]');
     if (totalCard === null) throw new Error('合計カードが見つからない');
     const nextCard = totalCard.nextElementSibling;
-    expect(nextCard?.textContent).toContain('記録の無い委譲');
+    expect(nextCard?.textContent).toContain('記録の無いマネージャー');
   });
 });
 

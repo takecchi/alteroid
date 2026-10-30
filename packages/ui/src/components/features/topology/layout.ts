@@ -146,7 +146,7 @@ export const DAEMON_CONTAINER_LABEL = 'alteroid 本体';
 const HUMAN_TASK = '画面・端末';
 
 export const UNKNOWN_RUNNER_KEY = 'unknown-runner';
-export const UNKNOWN_RUNNER_LABEL = '器の分からない委譲';
+export const UNKNOWN_RUNNER_LABEL = '器の分からないマネージャー';
 
 interface RunnerGroup {
   key: string;
