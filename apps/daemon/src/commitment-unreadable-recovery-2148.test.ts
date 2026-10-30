@@ -2,7 +2,6 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { CloneHost, Stores } from '@alteroid/core';
-import { createCloneTools } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -84,31 +83,6 @@ async function pgStoresWithBadRow(): Promise<Stores> {
   return stores;
 }
 
-function toolCaller(stores: Stores) {
-  const tools = createCloneTools({
-    stores,
-    emit: () => undefined,
-    conversationId: () => undefined,
-    memoryCause: () => 'clone',
-  });
-  return async (
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<{ text: string; isError: boolean }> => {
-    const found = tools.find((entry) => entry.name === name);
-    if (!found) throw new Error(`ツール ${name} が無い`);
-    try {
-      const result = await found.handler(args as never, {});
-      const text = (result.content ?? [])
-        .map((block) => (block.type === 'text' ? block.text : ''))
-        .join('');
-      return { text, isError: (result as { isError?: boolean }).isError === true };
-    } catch (error) {
-      return { text: error instanceof Error ? error.message : String(error), isError: true };
-    }
-  };
-}
-
 describe.each([
   ['fs', fsStoresWithBadRow],
   ['pg', pgStoresWithBadRow],
@@ -164,34 +138,6 @@ describe.each([
       const close = await app.request('/commitments/never-existed/close', json({ reason: 'x' }));
       expect(close.status).toBe(404);
     });
-
-    it('commitment_close は読めない約束も閉じられる（本文は漏れない）', async () => {
-      const call = toolCaller(stores);
-      const result = await call('commitment_close', { id: BAD_ID, reason: '閉じた' });
-      expect(result.isError).toBe(false);
-      expect(result.text).toContain('読めない形で入っていた');
-      expect(result.text).toContain('片付けた');
-      expect(result.text).not.toContain(BAD_BODY);
-
-      const list = await stores.commitments.list({ includeClosed: true });
-      expect(list.unreadable.some((row) => row.id === BAD_ID)).toBe(true);
-    });
-
-    it('commitment_close で既に閉じた読めない約束をもう一度閉じようとすると、その旨を平文で返す（isError にはしない）', async () => {
-      const call = toolCaller(stores);
-      await call('commitment_close', { id: BAD_ID, reason: '閉じた' });
-      const again = await call('commitment_close', { id: BAD_ID, reason: 'もう一度' });
-      expect(again.isError).toBe(false);
-      expect(again.text).toContain('読めない形で入っているため');
-      expect(again.text).not.toContain(BAD_BODY);
-    });
-
-    it('commitment_close は本当に無い id なら今までどおり', async () => {
-      const call = toolCaller(stores);
-      const result = await call('commitment_close', { id: 'never-existed', reason: 'x' });
-      expect(result.isError).toBe(false);
-      expect(result.text).toContain('台帳');
-    });
   });
 
   describe('(3) 名乗る（本文の書き直しは通さない）', () => {
@@ -204,14 +150,6 @@ describe.each([
       expect(patch.status, `本文: ${JSON.stringify(body)}`).toBe(409);
       expect(body.error).toContain('close');
       expect(body.error).not.toContain(BAD_BODY);
-    });
-
-    it('commitment_edit は読めない約束で isError（本文は漏れない）', async () => {
-      const call = toolCaller(stores);
-      const result = await call('commitment_edit', { id: BAD_ID, body: '書き直したい' });
-      expect(result.isError).toBe(true);
-      expect(result.text).toContain('close');
-      expect(result.text).not.toContain(BAD_BODY);
     });
 
     it('本当に無い id は PATCH でも今までどおり 404', async () => {

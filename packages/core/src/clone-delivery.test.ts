@@ -397,25 +397,3 @@ describe('CloneDelivery — chainRecord は #recordChain の直列化そのも�
     expect(called).toBe(true);
   });
 });
-
-describe('CloneDelivery — getCommitted/setCommitted/deleteCommitted（素通しの同期メソッド）', () => {
-  it('setCommitted で積んだ Promise がそのまま getCommitted で引ける（同一性が保たれる）', () => {
-    const delivery = new CloneDelivery();
-    const outcome = Promise.resolve<'opened'>('opened');
-    delivery.setCommitted('evt-1', outcome);
-    expect(delivery.getCommitted('evt-1')).toBe(outcome);
-  });
-
-  it('deleteCommitted で消すと getCommitted は undefined', () => {
-    const delivery = new CloneDelivery();
-    delivery.setCommitted('evt-1', Promise.resolve<'opened'>('opened'));
-    delivery.deleteCommitted('evt-1');
-    expect(delivery.getCommitted('evt-1')).toBeUndefined();
-  });
-
-  it('積んでいない id を getCommitted/deleteCommitted しても例外にならない', () => {
-    const delivery = new CloneDelivery();
-    expect(delivery.getCommitted('never')).toBeUndefined();
-    expect(() => delivery.deleteCommitted('never')).not.toThrow();
-  });
-});

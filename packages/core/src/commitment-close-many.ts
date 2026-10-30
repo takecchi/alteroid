@@ -14,7 +14,7 @@ import {
   describeStringLengthViolation,
 } from './tool-arg-checks.js';
 
-// 道具 `commitment_close_many`（クローン）と `POST /commitments/close-many`（人間）が共有する。絞り込みの検証・当て方・塊ごとの閉じ方を2箇所に書くと、「下見した結果と閉じる集合が食い違わない」ことの保証が2つの実装の一致に落ちるため、1つの実装に置く。
+// `POST /commitments/close-many`（人間）と、クローンの Task の一括（`task_set_status_many`。検証の `describeCloseManyViolation` と塊割りの `closeManyInChunks` を使う。#5923 で台帳の道具 `commitment_close_many` は外れた）が共有する。絞り込みの検証・当て方・塊ごとの閉じ方を2箇所に書くと、「下見した結果と閉じる集合が食い違わない」ことの保証が2つの実装の一致に落ちるため、1つの実装に置く。
 // 日誌を書く順序は共有しない: 道具は「閉じてから書く」、HTTP は「先に書き、書けなければ閉じない」（`POST /commitments/:id/close`）で、呼び手の流儀が違うため。差し込み口（`CloseManyChunkHooks`）で呼び手に渡す。
 
 export const CLOSE_MANY_LIMIT_DEFAULT = 500;
@@ -42,7 +42,11 @@ export interface CloseManyInput extends CloseManyFilterInput {
  * 入力の検証。断るなら人間（と AI）が読む断り文を返し、通すなら `null`。
  * 検査の順序と文言は道具が持っていたものそのまま: 先に当たった違反だけを返す。
  */
-export function describeCloseManyViolation(input: CloseManyInput): string | null {
+export function describeCloseManyViolation(
+  input: CloseManyInput,
+  // 全部の起点を並べた呼びを断る文に出す「空にできてしまう」対象の名前。`task_set_status_many`（Task）と共有するための差し込み口で、台帳（既定）の文面は変えない
+  subject: string = '台帳',
+): string | null {
   const { origin, source, q, until, reason, limit } = input;
   const limitError = describeIntRangeViolation('limit', limit, {
     min: 1,
@@ -67,7 +71,7 @@ export function describeCloseManyViolation(input: CloseManyInput): string | null
   if (commitmentOriginSchema.options.every((known) => origin.includes(known))) {
     return (
       'origin に在る起点を全部（human / manager / external / self）並べた呼びは断る——' +
-      'それは絞り込みが無いのと同じで、1回で台帳を空にできてしまう。' +
+      `それは絞り込みが無いのと同じで、1回で${subject}を空にできてしまう。` +
       '閉じたい起点だけを名指しすること（例 origin: ["external"]）。**1件も閉じていない。**'
     );
   }

@@ -1234,7 +1234,7 @@ export {
   type PermissionGrantStaleness,
   type PermissionGrantStalenessInput,
 } from './permission-staleness.js';
-// 道具 `commitment_close_many` と `POST /commitments/close-many` が共有する検証・絞り込み・塊ごとの閉じ方
+// `task_set_status_many`（検証・塊割り）と `POST /commitments/close-many` が共有する検証・絞り込み・塊ごとの閉じ方
 export {
   CLOSE_MANY_IDS_SHOWN,
   CLOSE_MANY_JOURNAL_ID_CHARS,

@@ -6,19 +6,16 @@ import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
-import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 // #5297: 断り書きの骨組みの文を、同じ会話の2回目から参照にする。
 // 全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。ここで新しい条件は足していない。
 // #5469 P6c: 骨組みは「待ち行列の先頭・task として積んだ・全文と並べ替え」に替わった（旧: 台帳の件数・commitment_close・commitment_list）。
-// 台帳の閉じ方の骨組み（回答 human_answer のターンにだけ出る）は下の別の describe が同じ畳みを確かめる。
+// #5923: クローンは台帳へ書かなくなったので、台帳の閉じ方（commitment_close）の骨組みと、その畳みの歯（回答のターン）は外した。
 
 const SKELETON = '返事をしたターンの終わりに自動で done になる';
 const TAIL_FULL = '全文は `task_list`。並べ替えは `task_move`。';
 const QUEUE_HEAD = '[system] 待ち行列（';
-const CLOSE_SKELETON = '返事をしただけでは閉じない';
-const BUNDLE_SKELETON = '閉じるのは id ごとである';
 
 interface SdkScript {
   contextTotals?: readonly number[];
@@ -405,74 +402,6 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
       expect(bundle).toContain('`task_keep`');
       expect(bundle).toContain('`manager_start`');
     }
-    await s.clone.stop();
-  });
-});
-
-describe('回答（human_answer）のターンは Task に積まず、台帳の閉じ方を出す。骨組みは同じ畳みに乗る', () => {
-  let answerSeq = 0;
-  async function answerTurn(s: Boot): Promise<{ input: string; id: string }> {
-    const before = s.inputs.length;
-    answerSeq += 1;
-    const id = `evt-answer-${String(answerSeq)}`;
-    s.clone.post({
-      type: 'human_answer',
-      id,
-      at: new Date().toISOString(),
-      approvalId: `apv-${String(answerSeq)}`,
-      answer: `回答${String(answerSeq)}`,
-    });
-    await waitFor(() => s.inputs.length > before, `入力 ${String(before + 1)} 本目`);
-    return { input: s.inputs[before] ?? '', id };
-  }
-
-  it('⭐ 1回目は台帳の閉じ方の全文、2回目は参照。Task に積んだとは言わない', async () => {
-    const s = boot();
-    const first = await answerTurn(s);
-    const second = await answerTurn(s);
-
-    expect(first.input).toContain(
-      `いま届いたこの一件は台帳の行として開いた（id: \`${first.id}\`）。`,
-    );
-    expect(first.input).toContain('`commitment_close`');
-    expect(first.input).toContain(CLOSE_SKELETON);
-    expect(first.input).not.toContain('として積んだ');
-
-    expect(second.input).toContain(
-      `いま届いたこの一件は台帳の行として開いた（id: \`${second.id}\`）。`,
-    );
-    expect(second.input).toContain('閉じ方は会話の上と同じ: `commitment_close`');
-    expect(second.input).not.toContain(CLOSE_SKELETON);
-    expect(second.input).not.toContain('として積んだ');
-    await s.clone.stop();
-  });
-
-  it('⭐ Task に積めなかった束（2件）は、台帳の行として開いた＋「id ごとに閉じる」の骨組みを出す（積んだとは言わない）', async () => {
-    const stores = createMemoryStores();
-    const failing: Stores = {
-      ...stores,
-      tasks: {
-        ...stores.tasks,
-        add: () => Promise.reject(new Error('task が積めない（テスト用）')),
-      },
-    };
-    let release1: () => void = () => undefined;
-    const hold1 = new Promise<void>((resolve) => {
-      release1 = resolve;
-    });
-    const s = boot({ holdResultAt: { 1: hold1 } }, failing);
-    s.clone.post(humanMessage('先客'));
-    await waitFor(() => s.inputs.length >= 1, '先客の入力');
-    s.clone.post(humanMessage('束B1'));
-    s.clone.post(humanMessage('束B2'));
-    release1();
-    await waitFor(() => s.inputs.length >= 2, '束の入力');
-
-    const bundle = s.inputs[1] ?? '';
-    expect(bundle).toContain('いま届いたこの 2 件は台帳の行として開いた（id: ');
-    expect(bundle).toContain(BUNDLE_SKELETON);
-    expect(bundle).toContain('Task として積めなかった');
-    expect(bundle).not.toContain('として積んだ');
     await s.clone.stop();
   });
 });

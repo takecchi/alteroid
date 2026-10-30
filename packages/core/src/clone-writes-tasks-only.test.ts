@@ -111,7 +111,11 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     '%s に、消した道具の名前が残っていない',
     (file) => {
       const source = readFileSync(`${root}${file}`, 'utf8');
-      const hits = source.split('\n').filter((line) => removed.test(line));
+      // 許す2種: 日誌に残っている人間の操作の種別ラベル（`HUMAN_ACTION_LABEL`。古い日誌の行を読むために残す）と、古い台帳の閉じた主体を読む側の文言（読みは段3で外す）
+      const historical = /^\s+commitment_(close|reopen): '|片付けた時刻（commitment_close）/;
+      const hits = source
+        .split('\n')
+        .filter((line) => removed.test(line) && !historical.test(line));
       expect(hits, `${file} に消した道具の名前が在る`).toEqual([]);
     },
   );

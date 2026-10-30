@@ -110,7 +110,6 @@ import {
   droppedTraceLedgerSince,
   journalEntryShape,
   noteDroppedRecord,
-  noteUnreadableRecord,
   reasonOf,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
@@ -161,8 +160,6 @@ import {
   InvalidProgressWindowError,
   readProgress,
 } from './progress-read.js';
-import { editCommitmentBodyJournalFirst } from './commitment-edit.js';
-import { describeClosedRecord, reopenCommitmentJournalFirst } from './commitment-reopen.js';
 import { removeScheduleJournalFirst } from './schedule-remove.js';
 import {
   removeArchiveChunkJournalFirst,
@@ -333,7 +330,6 @@ import {
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
   describeUnreadableInboxEvents,
-  describeUnreadableCommitment,
   describeUnreadableJobs,
   describeUnreadableManagerRow,
   describeUnreadablePractices,
@@ -419,11 +415,14 @@ import {
   CLOSE_MANY_LIMIT_MAX,
   CLOSE_MANY_SOURCES_SHOWN,
   closeManyInChunks,
-  countTrimmedJustClosed,
   describeCloseManyFilter,
-  describeCloseManyViolation,
-  selectCloseManyTargets,
 } from './commitment-close-many.js';
+import {
+  TASK_STATUS_MANY_TARGETS,
+  describeTaskStatusManyViolation,
+  selectTaskStatusManyTargets,
+  taskStatusManyStore,
+} from './task-set-status-many.js';
 import {
   describeArrayLengthViolation,
   describeBlankViolation,
@@ -633,15 +632,11 @@ export const CLONE_TOOL_NAMES = [
   'schedule_create',
   'schedule_remove',
   'commitment_list',
-  'commitment_open',
-  'commitment_close',
-  'commitment_close_many',
-  'commitment_reopen',
-  'commitment_edit',
   'task_list',
   'task_add',
   'task_move',
   'task_set_status',
+  'task_set_status_many',
   'task_keep',
   'task_say',
   'progress_read',
@@ -688,14 +683,10 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'daily_report_write',
   'schedule_create',
   'schedule_remove',
-  'commitment_open',
-  'commitment_close',
-  'commitment_close_many',
-  'commitment_reopen',
-  'commitment_edit',
   'task_add',
   'task_move',
   'task_set_status',
+  'task_set_status_many',
   'task_keep',
   'task_say',
   'inbox_remove_many',
@@ -784,14 +775,10 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   daily_report_write: false,
   schedule_create: false,
   schedule_remove: false,
-  commitment_open: false,
-  commitment_close: false,
-  commitment_close_many: false,
-  commitment_reopen: false,
-  commitment_edit: false,
   task_add: false,
   task_move: false,
   task_set_status: false,
+  task_set_status_many: false,
   task_keep: false,
   task_say: false,
   inbox_remove_many: false,
@@ -1498,9 +1485,9 @@ const CLOSES_MAX = 5;
 const CLOSES_SCHEMA = z
   .array(z.object({ id: z.string(), reason: z.string() }))
   .optional()
-  .describe('任意。この呼びで片付いた台帳の行を、id と理由で閉じる（返事だけでは閉じない）');
+  .describe('任意。この呼びで片付いた task を、id と理由で done にする（返事だけでは閉じない）');
 
-// 件数と各 reason の形は、本来の作業の前に丸ごと検査する（`commitment_close` と同じ検査）
+// 件数と各 reason の形は、本来の作業の前に丸ごと検査する（`task_set_status` の reason と同じ検査）
 function describeClosesViolation(closes: readonly { id: string; reason: string }[] | undefined) {
   const lengthError = describeArrayLengthViolation('closes', closes, { max: CLOSES_MAX });
   if (lengthError !== null) return `${lengthError}何もしていない。`;
@@ -1597,9 +1584,9 @@ function formatCloseManyStoppedMessage(args: {
       ? '⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止'
       : '⚠⚠ 一括は途中で止まった・この塊の日誌が未記録・残りの塊は閉じていない',
     lastChunk
-      ? `commitment_close_many は対象の全件を処理し終えた（閉じた行は戻らない）。` +
+      ? `task_set_status_many は対象の全件を処理し終えた（閉じた task を戻すには task_set_status で1件ずつ queued にする）。` +
         `最後の ${failed.chunk.number}/${failed.chunk.total} 塊目の日誌を書けなかった。`
-      : `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
+      : `task_set_status_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
         `${failed.chunk.number}/${failed.chunk.total} 塊目まで閉じたところで、この塊の日誌を書けなかった。`,
     `ここまでに閉じた id は ${closedTotal} 件` +
       `（前の塊の ${journaledIds.length} 件は日誌に記録済み、この塊の ${failed.closed.length} 件は未記録）。`,
@@ -1631,7 +1618,8 @@ function formatCloseManyStoppedMessage(args: {
   ].join('\n');
 }
 
-// 閉じる側（台帳の書き込み）が投げた回: 日誌が落ちた回（`formatCloseManyStoppedMessage`）と違い、この塊は閉じていない。ここまでに閉じた分は前の塊で、日誌に記録済み
+// 閉じる側（task の書き込み）が投げた回: 日誌が落ちた回（`formatCloseManyStoppedMessage`）と違い、この塊の日誌は書いていない。ここまでに閉じた分は前の塊で、日誌に記録済み
+// task は1件ずつ書くので、失敗した塊は途中まで閉じていることがありうる（その分は日誌に無い）: 「閉じていない」と言い切らず、task_list で確かめさせる
 function formatCloseManyCloseFailedMessage(args: {
   failedChunk: { number: number; total: number };
   journaledIds: readonly string[];
@@ -1648,9 +1636,9 @@ function formatCloseManyCloseFailedMessage(args: {
   const unclosedChunks = failedChunk.total - failedChunk.number + 1;
   const raced = processedCount - journaledIds.length;
   return [
-    '⚠⚠ 一括は途中で止まった・この塊の台帳の書き込みが失敗した・この塊以降は閉じていない',
-    `commitment_close_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
-      `${failedChunk.number}/${failedChunk.total} 塊目の台帳の書き込みが失敗した（この塊は閉じていない）。`,
+    '⚠⚠ 一括は途中で止まった・この塊の task の書き込みが失敗した・この塊以降は閉じ切っていない',
+    `task_set_status_many は途中で止まった（全件は閉じていない。「完了した」ではない）。` +
+      `${failedChunk.number}/${failedChunk.total} 塊目の task の書き込みが失敗した（この塊は途中まで閉じている可能性があり、その分の日誌は無い）。`,
     journaledIds.length === 0
       ? 'ここまでに閉じた id は 0 件（1 塊目で失敗したので、1件も閉じていない）。'
       : `ここまでに閉じた id は ${journaledIds.length} 件（前の塊の分。日誌に記録済み）。`,
@@ -1666,8 +1654,8 @@ function formatCloseManyCloseFailedMessage(args: {
             hiddenPrior > 0 ? ` …ほか ${hiddenPrior} 件は省略（日誌に残してある）` : ''
           }`,
         ]),
-    `この塊以降の ${unclosedChunks} 塊は閉じていない。同じ絞り込みでもう一度呼べば続きを閉じられる（閉じた行は未了から外れているので、閉じ直しにはならない）。` +
-      '失敗した塊の中身は commitment_list で確かめること。',
+    `この塊以降の ${unclosedChunks} 塊は閉じ切っていない。同じ絞り込みでもう一度呼べば続きを閉じられる（閉じた task は開いている一覧から外れているので、閉じ直しにはならない）。` +
+      '失敗した塊の中身は task_list で確かめること。',
     ...(restCount === 0
       ? []
       : [
@@ -1760,53 +1748,6 @@ async function describeMissingCommitment(stores: Stores, id: string): Promise<st
     `この記憶ストアは保持上限を超えた片付き行を物理削除しており、累計 ${trimmedClosed} 件ある。` +
     'この id がその中に在ったかどうかは、どこにも残っていない（消えた件数は数えているが、id は控えていない）。' +
     '日誌側の記録が唯一の手掛かりになる。'
-  );
-}
-
-// 「記録が無い」を「名乗っていない」と断定しない: 古い行には記録が無いため「取り違えた可能性がある」に留める
-async function describeCommitmentNotOnLedger(
-  stores: Stores,
-  id: string,
-  search: JournalSlicedSearchOptions = {},
-): Promise<string> {
-  const notOnLedger = `引き受けた仕事 ${id} は台帳に無い。`;
-  let recorded: JournalEntry[];
-  let coverage: JournalSearchCoverage;
-  try {
-    // 1本の問い合わせで日誌の先頭まで読まない（#5140）: 当たらない id では本番の大きさで問い合わせの期限に届き、取り違えの助言が出ずに「判定できない」に倒れるため。`journal_read` の語の検索と同じく1日ずつ遡り、時間の予算で止める
-    const searched = await searchJournalBackwardInSlices(
-      stores.journal,
-      { q: id, limit: 1 },
-      search,
-    );
-    recorded = searched.entries;
-    coverage = searched.coverage;
-  } catch (error) {
-    // 「在った」「無かった」のどちらへも倒さない: 判定できないという3つ目の状態を持つ
-    noteUnreadableRecord('機械が名乗った id の記帳（commitment_close の read-through）', id, error);
-    return `${notOnLedger}**どちらかは判定できない**（日誌を読めなかった: ${reasonOf(error)}）。`;
-  }
-  if (recorded.length > 0) {
-    return (
-      `${notOnLedger}**ただしこの id を機械が名乗った記録は日誌に在る**` +
-      `（${recorded[0]?.at} の行）。⟹ 台帳に載った後に行が消えたということである。` +
-      'id の取り違えではない。'
-    );
-  }
-  // 予算で打ち切ったら「無い」と言い切らない: 探していない古い側に記録が在りうるため
-  if (coverage.kind === 'budget') {
-    return (
-      `${notOnLedger}**この id を機械が名乗った記録は、日誌の ${coverage.from} 〜 ${coverage.to} には無い。` +
-      `それより古い側は、時間の予算（${String((search.budgetMs ?? JOURNAL_SEARCH_BUDGET_MS) / 1000)} 秒）を使い切って見ていない**` +
-      ' ⟹ id の取り違えか、古い行が消えたのかは判定できない（`commitment_list` で実在する id を確かめること）。' +
-      `古い側を探すなら journal_read q="${id}" until=${journalSearchContinuationUntil(coverage.from)} を打つ。`
-    );
-  }
-  return (
-    `${notOnLedger}**そしてこの id を機械が名乗った記録も日誌に無い** ⟹ id を取り違えた` +
-    '可能性がある（`commitment_list` で実在する id を確かめること）。' +
-    '⚠️ **ただし「記録が無い」は「名乗っていない」と同義ではない** —— 記録自体が落ちた場合と、' +
-    '記録を残すようになる前に開いた行の場合がある。'
   );
 }
 
@@ -3176,73 +3117,58 @@ export function createCloneTools(context: ToolContext) {
   const getConversationId = context.conversationId;
   const getWorkConversationId = context.workConversationId ?? getConversationId;
 
-  // `commitment_close` の本体（`closes` 付きの呼びも同じものを使う。挙動がずれないよう1つだけ持つ）
-  // `via`: どの呼びで閉じたか。日誌の grounds にそのまま書く（decision の文面は変えない）
-  async function closeCommitmentBody(
+  // `closes` の1件分: Task を done にする。`task_set_status` と同じ作法（遷移は `setStatus` が持ち、日誌は `taskStatusChangeEntry`）
+  // `via`: どの呼びで閉じたか。日誌の grounds にそのまま書く
+  async function closeTaskBody(
     id: string,
     reason: string,
-    via: string = 'commitment_close',
+    via: string = 'task_set_status',
   ): Promise<string> {
     const reasonError =
       describeStringLengthViolation('reason', reason, { min: 1 }) ??
       describeBlankViolation('reason', reason);
     if (reasonError !== null) return reasonError;
-    // 読めない行でも閉じられるようにする: 投げ直さず、下の `close()` の戻り値だけで「閉じられたか」を判定する
-    let existing: Commitment | null;
-    let unreadable = false;
+    const unreadableNote = `task ${id} は読めない形で入っている。読めない形のまま書き直さないので、閉じていない。`;
+    let existing: Task | null;
     try {
-      existing = await stores.commitments.get(id);
+      existing = await stores.tasks.get(id);
     } catch (error) {
-      if (!(error instanceof UnreadableCommitmentError)) throw error;
-      existing = null;
-      unreadable = true;
+      if (error instanceof UnreadableTaskError) return unreadableNote;
+      throw error;
     }
-    if (existing === null && !unreadable) {
-      return await describeCommitmentNotOnLedger(stores, id, context.journalSearch);
+    if (existing === null) {
+      return `task ${id} は無い（task_list で実在する id を確かめること）。`;
     }
-    if (existing !== null && existing.closedAt !== undefined) {
-      return `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`;
+    if (existing.closedAt !== undefined) {
+      return `${id} は既に ${existing.closedAt} に閉じてある（${existing.closedReason ?? '理由の記録なし'}）。`;
     }
-    // 片付いているかの判定は台帳の戻り値に任せる: 直前の `get` の後に他の経路が先に閉じていると、実際には閉じていないのに日誌へ「片付けた」と書くことになるため
-    if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'clone'))) {
-      let after: Commitment | null;
-      try {
-        after = await stores.commitments.get(id);
-      } catch (error) {
-        if (!(error instanceof UnreadableCommitmentError)) throw error;
-        return `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）。`;
-      }
-      // 読み直した行の形どおりに言う: 消えていた（保持上限で刈られた・会話の取り消しで消えた）回と、閉じていない回を「片付けてある」に潰さないため
-      if (after === null) {
-        return (
-          `${await describeCommitmentNotOnLedger(stores, id, context.journalSearch)}` +
-          '（確かめた直後に台帳から無くなっていた）。この呼びでは閉じていない。'
-        );
-      }
-      if (after.closedAt === undefined) {
-        return (
-          `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
-          'commitment_list で確かめてから、もう一度 commitment_close を試すこと。'
-        );
-      }
-      return `${id} は既に ${after.closedAt} に片付けてある（${after.closedReason ?? '理由の記録なし'}）。`;
+    // 閉じたかどうかは `setStatus` の戻り値に任せる: 直前の `get` の後に他の経路が先に閉じていると、実際には閉じていないのに日誌へ書くことになるため
+    let result;
+    try {
+      result = await stores.tasks.setStatus(id, 'done', {
+        reason,
+        by: 'clone',
+        at: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof UnreadableTaskError) return unreadableNote;
+      throw error;
     }
-    // 自分で閉じたことは日誌に残す: 台帳の片付き行は保持上限で物理削除されうるので、日誌の記録が唯一の手掛かりになるため
+    if (result.kind === 'not-found') {
+      return `task ${id} は無い（確かめた直後に消えていた）。この呼びでは閉じていない。`;
+    }
+    if (result.kind === 'unchanged') return `${id} は既に done。`;
+    if (result.kind === 'rejected') {
+      return `${id} は ${result.from} から done へは移せない（閉じた件から戻せるのは queued だけ）。この呼びでは閉じていない。`;
+    }
+    // 自分で閉じたことは日誌に残す（`task_set_status` と同じ行）
     await appendJournalOrThrow(
-      'commitment_close',
+      'task_set_status',
       stores.journal,
-      {
-        type: 'decision',
-        decision: unreadable
-          ? `読めない形で入っていた仕事を自分で片付けた（${id}）: ${reason}`
-          : `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
-        grounds: `クローン自身が ${via} で閉じた（人間はこれを読んで後から否定する）`,
-      },
+      taskStatusChangeEntry(id, result.before, 'done', reason, via),
       'act-completed',
     );
-    return unreadable
-      ? `${id}（読めない形で入っていた仕事）を片付けた。中身が読めないため、本文の書き直しはできない。`
-      : `${id} を片付けた。`;
+    return `${id} を done にした。`;
   }
 
   // `closes` 付きの呼びの仕上げ: 本来の作業が通ったときだけ閉じ、閉じた id ごとの結果を各1行で応答の末尾へ足す。
@@ -3263,17 +3189,17 @@ export function createCloneTools(context: ToolContext) {
     for (const entry of closes) {
       try {
         lines.push(
-          `closes ${entry.id}: ${await closeCommitmentBody(entry.id, entry.reason, `${via} の closes`)}`,
+          `closes ${entry.id}: ${await closeTaskBody(entry.id, entry.reason, `${via} の closes`)}`,
         );
       } catch (error) {
-        // 単独の `commitment_close` は日誌が書けないと `isError` で返る。ここも握り潰して成功の1行にせず、`isError` で合図する
+        // 単独の `task_set_status` は日誌が書けないと `isError` で返る。ここも握り潰して成功の1行にせず、`isError` で合図する
         // （本来の作業の結果は先頭に残す: 作業は済んでいるので、応答ごと失敗に見えて同じ送信をやり直されないため）
         failed = true;
         lines.push(
           error instanceof JournalNotRecordedError
-            ? `closes ${entry.id}: **台帳の行は閉じている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。` +
+            ? `closes ${entry.id}: **task は done にしている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。` +
                 '人間が後から読めるよう、journal_write で閉じたことを書き残すこと。'
-            : `closes ${entry.id}: 閉じる処理が失敗した（${reasonOf(error)}）。閉じたかどうかは commitment_list で確かめること。`,
+            : `closes ${entry.id}: 閉じる処理が失敗した（${reasonOf(error)}）。閉じたかどうかは task_list で確かめること。`,
         );
       }
     }
@@ -5705,9 +5631,9 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'commitment_list',
       [
-        '引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
-        '人間の依頼・人間の回答（ask_human への答え）は、届いた時点で自動的にここへ載る（同じ id で task にも載る）。マネージャーの報告・外部イベントは受信箱には届くが、ここへは自動では載らない（必要なら自分で commitment_open / task_add する）。',
-        '**載っているものは、あなたが閉じるまで消えない。**',
+        '旧台帳（読むだけ）に残っている、引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
+        '**この台帳へはもう何も載らない**（人間の依頼は同じ id で task に載り、あなたが引き受けるものは task_add で足す）。ここに在るのは、以前に載った行だけである。',
+        '**閉じる道具はもう無い**（片付けるなら同じ仕事の task を task_set_status で閉じる。task の無い古い行は、人間が閉じる）。',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
         '一覧の各件で更新が出ないときは作成と同じ（更新＝最後に変わった時刻）。includeClosed なしは全件が未了で、状態の札は行に付かない。',
@@ -6014,171 +5940,14 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    tool(
-      'commitment_open',
-      [
-        '自分で気づいたことを、引き受けた仕事として台帳に載せる。',
-        '人間が「あ、これ直さないと」と思ったときにメモするのと同じもので、',
-        'いま手を付けないなら**必ずここへ置くこと** — 会話の文脈はやがて要約に潰れ、',
-        '記憶は時計を持たないので、そこにだけ置いた宿題は思い出せるかどうかの賭けになる。',
-        '記憶へ書くのは判断の根拠のほうで、両方やってよい。',
-      ].join(' '),
-      {
-        body: z
-          .string()
-          .describe(
-            `何を引き受けたか。後日のあなたが読んでそのまま動ける粒度で書く（対象・狙い・どこまでやるか。${formatStringLengthJa({ min: 1 })}）`,
-          ),
-        source: z
-          .string()
-          .optional()
-          .describe('関係する相手や出所（マネージャー id・会話 id など。分かるときだけ）'),
-      },
-      async ({ body, source }) => {
-        // NUL を落とした後の値で検める: 台帳の入口は本文から NUL を落として残すので、生の値で数えると NUL だけの本文が通って空になるため
-        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
-        if (bodyError !== null) return text(bodyError);
-        // 空白だけの本文も断る（#4816）: 何も言っていない行が台帳と進捗の未了に残り続けるため
-        if (stripNul(body).trim().length === 0) {
-          return text(
-            'body が空白だけです。何を引き受けたかを、後日のあなたが読んで動ける言葉で書いてください。',
-          );
-        }
-        // source も NUL を落とした後で見る: NUL だけだと空の source の行になるため
-        if (source !== undefined && stripNul(source).length === 0) {
-          return text(
-            'source が空です。NUL だけ・空文字は指定できません。source は分かるときだけ、実のある文字列で渡し、無いなら省略してください。',
-          );
-        }
-        const entry = {
-          id: randomUUID(),
-          at: new Date().toISOString(),
-          origin: 'self' as const,
-          ...(source === undefined ? {} : { source }),
-          body,
-        };
-        await stores.commitments.open(entry);
-        // 「載せた」と名乗る前に、書いた後のストアを読み直して確かめる: 書き込みが静かに失敗しても呼び出し側からは例外が無かったとしか見えないため
-        // 無い・読めないのどちらも「名乗らない」へ倒す: 載ったと確認できていないため
-        let confirmed: Commitment | null;
-        try {
-          confirmed = await stores.commitments.get(entry.id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          confirmed = null;
-        }
-        if (confirmed === null) {
-          return text(
-            `台帳へ書き込んだが、直後に読み直しても ${entry.id} の行を確認できなかった` +
-              '（無い、または読めない）。**「載せた」とは言えない。** ' +
-              `commitment_list id=${entry.id} で確かめ、載っていなければ同じ内容で` +
-              'もう一度 commitment_open を試すこと。',
-          );
-        }
-        // 存在を確かめられた行だけ日誌に残す: 確かめられていない書き込みを「載せた」と残すと、誤った名乗りを日誌へ複製するため
-        await appendJournalOrThrow(
-          'commitment_open',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: `引き受けた仕事として台帳に載せた（${entry.id}）: ${body}`,
-            grounds: '手を付ける前に忘れないため（記憶は時計を持たない）',
-          },
-          'act-completed',
-        );
-        return text(`台帳に載せた（${entry.id}）。片付いたら commitment_close で閉じること。`);
-      },
-    ),
-
-    tool(
-      'commitment_close',
-      [
-        '引き受けた仕事が片付いたことを記録する。**返事をしただけでは閉じない。**',
-        '委譲したなら、マネージャーが報告を返して始末がつくまでは開いたままにしておくこと。',
-        'やらないと決めたのなら、それも片付いたうちである（理由にそう書いて閉じる）。',
-        '閉じた行を後から否定するなら `commitment_reopen` で開き直す（`commitment_open` で積み直すと受け取った時刻と起点が切れる）。',
-      ].join(' '),
-      {
-        id: z.string().describe('commitment_list に出ている id'),
-        reason: z
-          .string()
-          .describe(
-            `何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由。${formatStringLengthJa({ min: 1 })}）。` +
-              '人間はこれを読んで後から否定する',
-          ),
-      },
-      async ({ id, reason }) => text(await closeCommitmentBody(id, reason)),
-    ),
-
-    tool(
-      'commitment_reopen',
-      [
-        '閉じた行を未了へ開き直す。クローンが閉じた行も、人間が閉じた行も、器が自動で閉じた行（`closedBy: daemon`）も、後から否定できる。',
-        '**`commitment_open` で積み直さない**: 受け取った時刻と起点が切れる。`commitment_open` は同じ id なら何もしない（冪等）ので、閉じた行は蘇らない。',
-        '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と `autoCloseWhenBack` が外れ、代わりに消えない印 `autoCloseDeclined` が付く',
-        '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じることはない）。',
-        '**開き直す前の閉じた時刻・閉じた主体・理由は日誌へ逐語で残る**（行からは消えるため）。',
-      ].join(' '),
-      {
-        id: z.string().describe('commitment_list（includeClosed: true）に出ている、閉じた行の id'),
-        reason: z
-          .string()
-          .describe(
-            `なぜ開き直すか（閉じたのが誤りだった理由、状況が変わった理由。${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
-          ),
-      },
-      async ({ id, reason }) => {
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) return text(reasonError);
-        // 閉じた記録は行から消えるので、日誌へ逐語で残してから行から外す（`reopenCommitmentJournalFirst`）: 残さないと「誰がいつ何と言って閉じたか」が二度と読めない。
-        // 2つの開き直しが両方「閉じている」を読んで二重に日誌へ残っても、台帳の1操作（`reopen`）で負けた側が打ち消しの行を足す。
-        const result = await reopenCommitmentJournalFirst(stores, id, (before) => ({
-          type: 'decision',
-          decision: `閉じた仕事を自分で開き直した（${id}）: ${reason}`,
-          grounds:
-            'クローン自身が commitment_reopen で開き直した。開き直す前の記録: ' +
-            describeClosedRecord(before),
-        }));
-        if (result.kind === 'journal-failed') {
-          // 開き直す前に落ちたので何も起きていない（`act-not-performed`）
-          noteDroppedRecord('日誌', journalEntryShape(result.entry), result.error);
-          throw new JournalNotRecordedError(
-            'commitment_reopen',
-            result.entry,
-            'act-not-performed',
-            result.error,
-          );
-        }
-        if (result.kind === 'unreadable') {
-          return text(
-            `${reasonOf(result.error)}。読めない形のまま書き直さないので、開き直していない。`,
-          );
-        }
-        if (result.kind === 'not-found') {
-          return text(await describeCommitmentNotOnLedger(stores, id, context.journalSearch));
-        }
-        if (result.kind === 'not-closed') {
-          return text(`${id} は閉じていない（未了のまま在る）。何もしていない。`);
-        }
-        if (result.kind === 'duplicate-open') {
-          return text(
-            `同じ担当・同じ本文の未了の行 ${result.openId} が既に在るので、${id} は開き直していない。`,
-          );
-        }
-        return text(`${id} を開き直した（閉じた記録は日誌に残してある）。`);
-      },
-    ),
-
-    // 台帳（commitment_*）とは別の器: ここだけが順序と状態を持つ。台帳から既存の行を移すのは P7（移行）で、人間の依頼だけは届いた時点で両方に載る（#5469 P5。移行期の二重）
+    // 引き受けた仕事の器はここだけ: 順序と状態を持つ。旧台帳（commitment_list。読むだけ）から既存の行を移すのは P7 の移行で、クローンは台帳へ書かない（#5923）
     tool(
       'task_list',
       [
         'task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。',
         '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
         '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
-        '引き受けた仕事の台帳（commitment_list）とは別の器。人間の発言は、台帳の行と同じ id で届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。',
+        '引き受けた仕事の器はこれだけ（旧台帳の commitment_list は読むだけ）。人間の発言は、届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。自分で引き受けるもの・手を付けない気づき・未了の問いは task_add で足す。',
         '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、答えの無い問い（ask_human・request_permission。前のターンのものを含む）が残っている会話の task（不要になった問いは approval_withdraw で取り下げると対象に戻る）、結び付いた委譲（manager_start の taskId）が走っている（running / waiting_human）task は閉じない。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
@@ -6344,7 +6113,7 @@ export function createCloneTools(context: ToolContext) {
         '起点の会話は、いまのターンの会話か、報告を読んでいる委譲の起点に自動で結ばれる。どちらも無ければ新しい会話ができる（task_say の宛先になる）。',
         '知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、その会話への返答で器が自動で done にしないよう、task_keep で「続く」の印を付ける。',
         '置き場所を省くと既定の位置に入る（自分で足した件は末尾）。to で先頭・末尾・特定の task の前後を指せる。',
-        '引き受けた仕事の台帳（commitment_open）とは別の器で、片方に足してももう片方には載らない。',
+        '手を付けない気づき・人間へ出したまま答えを得ていない問い（問いの全文と選択肢を逐語で）もここへ足す。旧台帳へは書けない。',
       ].join(' '),
       {
         title: z
@@ -6535,7 +6304,7 @@ export function createCloneTools(context: ToolContext) {
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
-        // 開き直し（閉じた件を queued へ）は閉じた記録を行から外すので、日誌を先に書いて、書けてから外す（commitment_reopen と同じ線。#5176）:
+        // 開き直し（閉じた件を queued へ）は閉じた記録を行から外すので、日誌を先に書いて、書けてから外す（#5176）:
         // 外した後に日誌が落ちると、閉じた時刻・主体・理由が行にも日誌にも残らない
         let journaledFirst: Task | undefined;
         if (status === 'queued') {
@@ -6684,7 +6453,7 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'progress_read',
       [
-        '作業の進捗を、task（待ち行列の行）と委譲の行から数え直して読む。引き受けた仕事の台帳（commitment_open）の行は数えない。',
+        '作業の進捗を、task（待ち行列の行）と委譲の行から数え直して読む。旧台帳（commitment_list）の行は数えない。',
         '積み上がり（未了の task の件数・起点別・齢）・実施中（委譲）・窓の中の消化・見込みを返す。',
         '**率（%）は出さない**（task に総量が無く、分母が定まらない）。取れないものは 0 にせず、状態か理由で言う。',
         '**GitHub（Issue / PR / CI）は観測していない**——出力にある「観測していない」は 0 件という意味ではない。',
@@ -6770,170 +6539,73 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     tool(
-      'commitment_edit',
+      'task_set_status_many',
       [
-        '台帳に載っている**自分の**行の本文を後から直す（誤字・言葉足らず・状況が変わって書き直したいとき）。',
-        '**直せるのは `origin` が `self` の行、つまりあなた自身が `commitment_open` で載せた行だけである。**',
-        '人間が積んだ行（`human`）は人間自身が Web UI から直す。マネージャーの報告（`manager`）は誰も直せない。',
-        '片付いた行は直せない（積み直すこと）。',
-        '**編集の前後の本文は日誌へ逐語で残る**ので、直した後でも元の本文は読み戻せる。',
-      ].join(' '),
-      {
-        id: z.string().describe('commitment_list に出ている id'),
-        body: z
-          .string()
-          .describe(
-            `直した後の本文（全文。差分ではない）。後日のあなたが読んでそのまま動ける粒度で書く（${formatStringLengthJa({ min: 1 })}）`,
-          ),
-      },
-      async ({ id, body }) => {
-        // NUL を落とした後の値で検める: 台帳の入口は本文から NUL を落として残すので、生の値で数えると NUL だけの本文が通って空になるため
-        const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
-        if (bodyError !== null) return text(bodyError);
-        // 空白だけの本文も断る（#4816）: 何も言っていない行が台帳と進捗の未了に残り続けるため
-        if (stripNul(body).trim().length === 0) {
-          return text(
-            'body が空白だけです。何を引き受けたかを、後日のあなたが読んで動ける言葉で書いてください。',
-          );
-        }
-        // 読めない行は本文の書き直しを通さず名乗るだけにとどめる: 読める本文が無い以上、書き直して読める行へ戻る保証も無いため
-        let existing;
-        try {
-          existing = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          throw new Error(describeUnreadableCommitment(error), { cause: error });
-        }
-        if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
-        // `origin` の判定はストアではなくここでする: 書き換えられるのは常に自分自身の言葉だけという線を人間側とクローン側で同じ形にするため
-        if (existing.origin !== 'self') {
-          return text(
-            `${id} は origin:'${existing.origin}' なので直せない。` +
-              (existing.origin === 'human'
-                ? '人間が積んだ行は人間自身が Web UI / API から直す。'
-                : 'マネージャーの報告（manager）や外から届いた出来事（external）の本文は誰も直せない。') +
-              '書き換えてよいのは、あなたが commitment_open で載せた行（self）だけである。',
-          );
-        }
-        // 台帳の行は編集後の本文だけを持つので、編集前の本文は日誌にしか残らない: 日誌へ編集の前後を逐語で先に残してから書き直す（`editCommitmentBodyJournalFirst`）。
-        // 書けなければ書き直さない（`act-not-performed`）。行は try の外で作る（作る側の例外を「日誌に書けなかった」と取り違えない）。
-        const entry: JournalEntryInput = {
-          type: 'decision',
-          decision: `引き受けた仕事の本文を直した（${id}）: 編集前「${existing.body}」→ 編集後「${body}」`,
-          grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
-        };
-        const result = await editCommitmentBodyJournalFirst(stores, existing, body, 'clone', entry);
-        if (result.kind === 'journal-failed') {
-          noteDroppedRecord('日誌', journalEntryShape(result.entry), result.error);
-          throw new JournalNotRecordedError(
-            'commitment_edit',
-            result.entry,
-            'act-not-performed',
-            result.error,
-          );
-        }
-        if (result.kind !== 'edited') {
-          // 読み直した行の形どおりに言う（commitment_close と同じ）。読めない形になっていても道具ごと落とさない
-          let after: Commitment | null;
-          try {
-            after = await stores.commitments.get(id);
-          } catch (error) {
-            if (!(error instanceof UnreadableCommitmentError)) throw error;
-            return text(
-              `${describeUnreadableCommitment(error)}（直す直前に読めない形になっていた）。この呼びでは直していない。`,
-            );
-          }
-          if (after === null) {
-            return text(
-              `${await describeCommitmentNotOnLedger(stores, id, context.journalSearch)}` +
-                '（確かめた直後に台帳から無くなっていた）。この呼びでは直していない。',
-            );
-          }
-          if (after.closedAt === undefined) {
-            return text(
-              `${id} は直せなかった（台帳には未了のまま在るが、書き直しが通らなかった）。` +
-                'commitment_list で確かめてから、もう一度 commitment_edit を試すこと。',
-            );
-          }
-          return text(
-            `${id} は既に ${after.closedAt} に片付けてある` +
-              `（${after.closedReason ?? '理由の記録なし'}）ので直せない。` +
-              '片付いた行を書き直したいなら、commitment_open で新しく載せること。',
-          );
-        }
-        return text(`${id} の本文を直した（元の本文は日誌に残してある）。`);
-      },
-    ),
-
-    tool(
-      'commitment_close_many',
-      [
-        '台帳の未了の行を、**絞り込みを渡してまとめて閉じる**。',
-        '1件ずつの `commitment_close` では到達できない数（数千件）が溜まったときの口である。',
-        '**既定は試算で、1件も閉じない。** 実際に閉じるには `dryRun: false` を明示すること —— ',
-        '閉じた行は `commitment_reopen` で1件ずつ開き直せるが、まとめて開き直す口は無いので、数千件の撃ち間違えは実質戻せない。',
+        '開いている task（queued / waiting / needs_decision）を、**絞り込みを渡してまとめて done / cancelled にする**。',
+        '1件ずつの `task_set_status` では手に負えない数の task が溜まったときの口である。',
+        '**既定は試算で、1件も変えない。** 実際に変えるには `dryRun: false` を明示すること —— ',
+        '閉じた task は `task_set_status` で queued へ1件ずつ開き直せるが、まとめて開き直す口は無いので、撃ち間違えは実質戻せない。',
         '**`origin` は必須で、在る起点（human / manager / external / self）を全部並べた呼びは断る**' +
           '（「全部閉じる」を1回で撃てる形は作らない）。',
-        '行は消えない（`closedAt` / `closedReason` が付くだけ）。ただし片付き履歴に保持上限のある置き場（fs）では、' +
-          '上限を超えた片付きの行が古い側から消え、1回で上限を超えて閉じたときは閉じたばかりの行も消える（そのときは応答で件数を言う）。' +
-          '**閉じた id は全部日誌に残る。**',
+        '**変えた id は全部日誌に残る。** 閉じる理由（reason）は task の行にも残り、人間はこれを読んで後から否定する。',
       ].join(''),
       {
         origin: z
           .array(z.enum(commitmentOriginSchema.options))
           .describe(
             `例 {"origin":["self"]}。配列で渡し、値は引用符で囲む。` +
-              `閉じる対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。` +
-              'manager の行を巻き込むつもりなら manager と自分で打つこと',
+              `対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。`,
           ),
         source: z
           .array(z.string())
           .optional()
           .describe(
-            `例 {"source":["token-pool"]}。配列で渡し、値は引用符で囲む。` +
-              `出所の**完全一致**（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。q の部分一致とは別物で、` +
-              '器が自分へ出している合図だけを狙い撃つためにある',
+            `例 {"source":["mgr-1"]}。配列で渡し、値は引用符で囲む。` +
+              `出所の**完全一致**（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。q の部分一致とは別物`,
           ),
         q: z
           .string()
           .optional()
           .describe(
-            `本文か出所への部分一致（大文字小文字を区別しない。${formatStringLengthJa({ min: 1 })}）。commitment_list の q と同じ当て方`,
+            `タイトル・本文・出所への部分一致（大文字小文字を区別しない。${formatStringLengthJa({ min: 1 })}）`,
           ),
         until: z
           .string()
           .optional()
           .describe(
-            `この時刻までに載った行だけを対象にする（ISO8601。${formatStringLengthJa({ min: 1 })}。その瞬間ちょうどの行は含む）。` +
+            `この時刻までに積んだ（createdAt）task だけを対象にする（ISO8601。${formatStringLengthJa({ min: 1 })}。その瞬間ちょうどの task は含む）。` +
               '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-11T19:00:00Z。時差の無い形は断る）。' +
-              '閉じている最中に届いた新しい行を巻き込まないために使う',
+              '変えている最中に積まれた新しい task を巻き込まないために使う',
           ),
+        status: z
+          .enum(TASK_STATUS_MANY_TARGETS)
+          .describe('移す先の状態（done=終わった / cancelled=取りやめた。閉じる状態だけ）'),
         reason: z
           .string()
           .describe(
-            `何をもってこの絞り込みに当たる行が片付いたとするか（${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
+            `何をもってこの絞り込みに当たる task を閉じてよいとするか（${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
           ),
         dryRun: z
           .boolean()
           .optional()
           .describe(
-            '省略すると true（何件当たるかを数えるだけで1件も閉じない）。実際に閉じるときだけ false を明示する',
+            '省略すると true（何件当たるかを数えるだけで1件も変えない）。実際に変えるときだけ false を明示する',
           ),
         limit: z
           .number()
           .optional()
           .describe(
-            `1回の呼びで閉じる上限（${formatIntRangeJa({ min: 1, max: CLOSE_MANY_LIMIT_MAX })}。省略すると 500）。**古い側から**閉じる。` +
+            `1回の呼びで変える上限（${formatIntRangeJa({ min: 1, max: CLOSE_MANY_LIMIT_MAX })}。省略すると 500）。**古い側から**変える。` +
               '残りは同じ絞り込みでもう一度呼べば続けられる',
           ),
       },
-      async ({ origin, source, q, until, reason, dryRun, limit }) => {
-        // 検証・絞り込み・塊ごとの閉じ方は `POST /commitments/close-many`（人間）と共有する（`commitment-close-many.ts`）
-        const input = { origin, source, q, until, reason, dryRun, limit };
-        const violation = describeCloseManyViolation(input);
+      async ({ origin, source, q, until, status, reason, dryRun, limit }) => {
+        // 検証は daemon の `POST /commitments/close-many` と同じ関数を共有する（`commitment-close-many.ts` の `describeCloseManyViolation`）
+        const input = { origin, source, q, until, status, reason, dryRun, limit };
+        const violation = describeTaskStatusManyViolation(input);
         if (violation !== null) return text(violation);
 
-        const selection = await selectCloseManyTargets(stores.commitments, input);
+        const selection = await selectTaskStatusManyTargets(stores.tasks, input);
         const {
           openEntries,
           afterOrigin,
@@ -6944,13 +6616,12 @@ export function createCloneTools(context: ToolContext) {
           rest: remainingCount,
           effectiveLimit,
           unreadableCount,
-          trimmedClosed: trimmedBefore,
         } = selection;
 
         const filterText = describeCloseManyFilter(input);
         // 漏斗（段ごとの残数）を必ず出す: 「0件だった」と「絞り込みが間違っていた」はどの段で0になったかでしか区別できないため
         const funnel = [
-          `未了 ${openEntries.length} 件`,
+          `開いている task ${openEntries.length} 件`,
           `origin=[${origin.join(', ')}] で ${afterOrigin.length} 件`,
           ...(source === undefined ? [] : [`source（完全一致）で ${afterSource.length} 件`]),
           ...(q === undefined ? [] : [`q で ${afterQ.length} 件`]),
@@ -6961,8 +6632,8 @@ export function createCloneTools(context: ToolContext) {
           unreadableCount === 0
             ? []
             : [
-                `⚠ 読めない行が ${unreadableCount} 件ある。` +
-                  'この道具は絞り込みを当てられないので対象に含めていない（commitment_list で確かめること）。',
+                `⚠ 読めない task の行が ${unreadableCount} 件ある。` +
+                  'この道具は絞り込みを当てられないので対象に含めていない（task_list で確かめること）。',
               ];
 
         if (matched.length === 0) {
@@ -6970,22 +6641,21 @@ export function createCloneTools(context: ToolContext) {
           let why: string;
           if (openEntries.length === 0) {
             why =
-              '台帳に未了が1件も無い。**絞り込みの問題ではない**（閉じるべきものがそもそも無い）。';
+              '開いている task が1件も無い。**絞り込みの問題ではない**（変えるべきものがそもそも無い）。';
           } else if (afterOrigin.length === 0) {
             const breakdown = commitmentOriginSchema.options
               .map(
-                (known) =>
-                  `${known} ${openEntries.filter((entry) => entry.origin === known).length}`,
+                (known) => `${known} ${openEntries.filter((task) => task.origin === known).length}`,
               )
               .join(' / ');
             why =
-              `未了 ${openEntries.length} 件のうち origin=[${origin.join(', ')}] に当たる行が0件——` +
-              `**絞り込みが外れている。** いま未了に在る起点の内訳: ${breakdown}`;
+              `開いている ${openEntries.length} 件のうち origin=[${origin.join(', ')}] に当たる task が0件——` +
+              `**絞り込みが外れている。** いま開いている task の起点の内訳: ${breakdown}`;
           } else if (source !== undefined && afterSource.length === 0) {
             const counts = new Map<string, number>();
-            for (const entry of afterOrigin) {
-              if (entry.source === undefined) continue;
-              counts.set(entry.source, (counts.get(entry.source) ?? 0) + 1);
+            for (const task of afterOrigin) {
+              if (task.source === undefined) continue;
+              counts.set(task.source, (counts.get(task.source) ?? 0) + 1);
             }
             const top = [...counts.entries()]
               .sort((a, b) => b[1] - a[1])
@@ -6995,25 +6665,25 @@ export function createCloneTools(context: ToolContext) {
             const rest = counts.size - Math.min(counts.size, CLOSE_MANY_SOURCES_SHOWN);
             why =
               `origin では ${afterOrigin.length} 件当たったが source=[${source.join(', ')}] の完全一致で0件——` +
-              `**この source は台帳に無い。** 当たった行に実在する source（多い順）: ` +
-              `${top === '' ? '（source を持つ行が無い）' : top}` +
+              `**この source は開いている task に無い。** 当たった task に実在する source（多い順）: ` +
+              `${top === '' ? '（source を持つ task が無い）' : top}` +
               `${rest > 0 ? ` …ほか ${rest} 種は省略` : ''}`;
           } else if (q !== undefined && afterQ.length === 0) {
             why =
-              `source までで ${afterSource.length} 件当たったが q="${q}" に当たる行が0件` +
-              '（本文と出所の両方を見て当たらなかった）。';
+              `source までで ${afterSource.length} 件当たったが q="${q}" に当たる task が0件` +
+              '（タイトル・本文・出所を見て当たらなかった）。';
           } else {
             const oldest = afterQ.reduce(
-              (acc, entry) => (acc === undefined || entry.at < acc ? entry.at : acc),
+              (acc, task) => (acc === undefined || task.createdAt < acc ? task.createdAt : acc),
               undefined as string | undefined,
             );
             why =
-              `q までで ${afterQ.length} 件当たったが until=${until} より前の行が0件` +
-              `（当たった行のうち最も古いのは ${oldest ?? '不明'}）。`;
+              `q までで ${afterQ.length} 件当たったが until=${until} より前の task が0件` +
+              `（当たった task のうち最も古いのは ${oldest ?? '不明'}）。`;
           }
           return text(
             [
-              '絞り込みに当たる未了は0件だった。**1件も閉じていない。**',
+              '絞り込みに当たる開いている task は0件だった。**1件も閉じていない。**',
               funnel,
               why,
               ...unreadableNote,
@@ -7030,17 +6700,17 @@ export function createCloneTools(context: ToolContext) {
               ];
 
         if (dryRun !== false) {
-          // 省略された `dryRun` は試算にする: 開き直す口（`commitment_reopen`）は1件ずつで、まとめて開き直す口が無く、撃ち間違えた一括 close は実質戻せないため
-          const shown = targets.slice(0, CLOSE_MANY_IDS_SHOWN).map((entry) => entry.id);
+          // 省略された `dryRun` は試算にする: 開き直す口は1件ずつで、まとめて開き直す口が無く、撃ち間違えた一括の変更は実質戻せないため
+          const shown = targets.slice(0, CLOSE_MANY_IDS_SHOWN).map((task) => task.id);
           const hidden = targets.length - shown.length;
           return text(
             [
-              `**試算（dryRun）。1件も閉じていない。** 実際に閉じるには dryRun: false を渡すこと。`,
+              `**試算（dryRun）。1件も閉じていない。** 実際に ${status} にするには dryRun: false を渡すこと。`,
               funnel,
               `絞り込み: ${filterText}`,
-              `この呼びで閉じるのは ${targets.length} 件（当たったのは ${matched.length} 件）。` +
-                `いちばん古いのは ${targets[0]?.at ?? '不明'}、いちばん新しいのは ${
-                  targets[targets.length - 1]?.at ?? '不明'
+              `この呼びで ${status} にするのは ${targets.length} 件（当たったのは ${matched.length} 件）。` +
+                `いちばん古いのは ${targets[0]?.createdAt ?? '不明'}、いちばん新しいのは ${
+                  targets[targets.length - 1]?.createdAt ?? '不明'
                 }。`,
               `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
                 hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
@@ -7051,21 +6721,21 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // 塊ごとに「閉じる → その塊の id を日誌へ書く」を交互に回す: まとめて閉じてから日誌を書くと、器が落ちたとき閉じたのに記録が無い行が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できるため
+        // 塊ごとに「変える → その塊の id を日誌へ書く」を交互に回す: まとめて変えてから日誌を書くと、器が落ちたとき閉じたのに記録が無い task が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できるため
         // 「日誌に N 件」は実際に書いた件数で数える: 塊の数で言うと、塊が丸ごと競合になった回に無い日誌の行を名乗るため
         let journaledChunks = 0;
-        // 日誌が塊の途中で落ちたとき、閉じた id を応答へ出すために持つ（`closeManyInChunks` は例外で抜けると id を返さない）
+        // 日誌が塊の途中で落ちたとき、変えた id を応答へ出すために持つ（`closeManyInChunks` は例外で抜けると id を返さない）
         const journaledIds: string[] = [];
         let unjournaled:
           { chunk: { number: number; total: number }; closed: readonly string[] } | undefined;
-        // 処理し終えた塊の id の合計: 競合で閉じられなかった件数は、まだ処理していない塊を混ぜずに数えるため
+        // 処理し終えた塊の id の合計: 競合で変えられなかった件数は、まだ処理していない塊を混ぜずに数えるため
         let processedCount = 0;
         let closeFailure: { chunk: { number: number; total: number }; error: unknown } | undefined;
         let closedIds: string[];
         try {
           closedIds = await closeManyInChunks(
-            stores.commitments,
-            targets.map((entry) => entry.id),
+            taskStatusManyStore(stores.tasks, status),
+            targets.map((task) => task.id),
             { reason, by: 'clone', at: new Date().toISOString() },
             {
               closeFailed: async (chunk, error) => {
@@ -7073,23 +6743,23 @@ export function createCloneTools(context: ToolContext) {
               },
               after: async (chunk, closed) => {
                 processedCount += chunk.ids.length;
-                // 1件も閉じられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も閉じなかった」を意味するため
+                // 1件も変えられなかった塊では日誌へ書かない: 抜けている塊番号そのものが「その塊は1件も変えなかった」を意味するため
                 if (closed.length === 0) return;
                 journaledChunks += 1;
                 unjournaled = { chunk, closed };
                 await appendJournalOrThrow(
-                  'commitment_close_many',
+                  'task_set_status_many',
                   stores.journal,
                   {
                     type: 'decision',
                     decision:
-                      `引き受けた仕事を絞り込みで一括して片付けた` +
+                      `task を絞り込みでまとめて ${status} にした` +
                       `（${chunk.number}/${chunk.total} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
                       `絞り込み: ${filterText}\n` +
-                      `閉じた id: ${closed.join(' ')}`,
+                      `変えた id: ${closed.join(' ')}`,
                     // `grounds` には id を置かない: この欄は操作の由来を名乗る文で、控えを置く場所ではないため
                     grounds:
-                      'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
+                      '自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）',
                   },
                   'act-completed',
                 );
@@ -7099,7 +6769,7 @@ export function createCloneTools(context: ToolContext) {
             },
           );
         } catch (error) {
-          // 閉じる側の失敗（`closeMany` の例外）: この塊は閉じていない。前の塊の分は日誌に記録済み
+          // 閉じる側の失敗（`setStatus` の例外）: この塊は閉じ切っていない。前の塊の分は日誌に記録済み
           if (closeFailure !== undefined) {
             throw new CloseManyStoppedError(
               formatCloseManyCloseFailedMessage({
@@ -7128,22 +6798,16 @@ export function createCloneTools(context: ToolContext) {
           throw error;
         }
 
-        // 閉じたと言った行が刈られていたら言う（理由は `countTrimmedJustClosed`）
-        const trimmedJustClosed = await countTrimmedJustClosed(
-          stores.commitments,
-          closedIds,
-          trimmedBefore,
-        );
-        // 当たったのに閉じられなかった分を黙らせない: 「全部閉じた」と読まれると次の呼びの判断が狂うため
+        // 当たったのに変えられなかった分を黙らせない: 「全部閉じた」と読まれると次の呼びの判断が狂うため
         const raced = targets.length - closedIds.length;
         const shownClosed = closedIds.slice(0, CLOSE_MANY_IDS_SHOWN);
         const hiddenClosed = closedIds.length - shownClosed.length;
         return text(
           [
-            `**${closedIds.length} 件を片付けた**（理由: ${reason}）。`,
+            `**${closedIds.length} 件を ${status} にした**（理由: ${reason}）。`,
             funnel,
             `絞り込み: ${filterText}`,
-            `閉じた id（先頭 ${shownClosed.length} 件）: ${shownClosed.join(', ')}${
+            `変えた id（先頭 ${shownClosed.length} 件）: ${shownClosed.join(', ')}${
               hiddenClosed > 0
                 ? ` …ほか ${hiddenClosed} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
                 : ''
@@ -7151,14 +6815,8 @@ export function createCloneTools(context: ToolContext) {
             ...(raced === 0
               ? []
               : [
-                  `⚠ 対象 ${targets.length} 件のうち ${raced} 件は閉じられなかった` +
-                    '（この呼びの最中に他の経路が先に閉じた）。',
-                ]),
-            ...(trimmedJustClosed === 0
-              ? []
-              : [
-                  `⚠ 閉じた ${closedIds.length} 件のうち ${trimmedJustClosed} 件は、片付き履歴の保持上限を超えたため、` +
-                    '閉じた直後に台帳から消えた（commitment_list では読めない）。閉じたことと id は日誌に残っている。',
+                  `⚠ 対象 ${targets.length} 件のうち ${raced} 件は変えられなかった` +
+                    '（この呼びの最中に他の経路が先に閉じた・消えた・読めない形だった）。',
                 ]),
             ...restNote,
             ...unreadableNote,
@@ -7184,7 +6842,7 @@ export function createCloneTools(context: ToolContext) {
         '**人間起点の合図（`human_message` / `human_answer`）はそもそも選べない。**' +
           'あなたは自分の側の都合で溜まった合図だけを畳める——人間から届いた合図を' +
           '自分の判断で畳む口は、この道具には無い（オーナー判断）。',
-        '**行は消える。** `commitment_close_many` の「閉じる（closedAt を付けるだけで行は残る）」とは違い、',
+        '**行は消える。** `task_set_status_many` の「閉じる（closedAt を付けるだけで行は残る）」とは違い、',
         '受信箱は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない',
         '（`InboxStore` の doc）。**消した id は全部日誌に残る。**',
       ].join(''),

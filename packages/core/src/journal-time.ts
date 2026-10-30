@@ -29,7 +29,7 @@ export function isReadableJournalTimeBoundary(value: string): boolean {
 const OFFSET_QUALIFIED_TIME_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-// 元に戻せない一括操作（`commitment_close_many` の `until`・`inbox_remove_many` の `before`）の門: 時差が無いとサーバーの地方時刻として読まれ、境界が時差ぶんずれたまま消す・閉じる対象が決まる。
+// 元に戻せない一括操作（`task_set_status_many` の `until`・`inbox_remove_many` の `before`）の門: 時差が無いとサーバーの地方時刻として読まれ、境界が時差ぶんずれたまま消す・閉じる対象が決まる。
 export function isOffsetQualifiedTimeBoundary(value: string): boolean {
   return OFFSET_QUALIFIED_TIME_PATTERN.test(value) && isReadableJournalTimeBoundary(value);
 }

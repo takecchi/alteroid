@@ -238,7 +238,7 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       memory_append: ['slug', 'content', 'summary'],
       memory_write: ['slug', 'content', 'summary'],
       memory_delete: ['slug', 'summary'],
-      commitment_close_many: ['origin', 'reason'],
+      task_set_status_many: ['origin', 'status', 'reason'],
     };
 
     for (const [name, fields] of Object.entries(expected)) {

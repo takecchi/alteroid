@@ -82,7 +82,7 @@ export function describeSuperseded(decision: SupersededDecision, managerId: stri
       `⚠ **この委譲（${managerId}）からは、この合図より後に報告が ${decision.reports} 件届いている**` +
         `（最新: ${decision.latestAt}）。`,
       '⟹ **この報告の中身は既に古いかもしれない。** 手を動かす前に、その' +
-        ` ${decision.reports} 件を先に読むこと（\`manager_list\` / \`commitment_list\`）。`,
+        ` ${decision.reports} 件を先に読むこと（\`manager_list\` / \`manager_report\`）。`,
       '⚠ ただし「新しい報告が在る」は「この報告が要らない」ではない —— 別の話題のこともある。' +
         '読むのは中身であって件数ではない。',
       ...(decision.uncertain === undefined
@@ -94,6 +94,6 @@ export function describeSuperseded(decision: SupersededDecision, managerId: stri
   return sectionBlock([
     `⚠ **この委譲（${managerId}）の、この合図より後の報告を数えられなかった**（${decision.detail}）。`,
     'これは「0 件」ではなく「**数えられなかった**」である。要るなら `manager_list` / ' +
-      '`commitment_list` を自分で呼ぶこと。',
+      '`manager_report` を自分で呼ぶこと。',
   ]);
 }
