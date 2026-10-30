@@ -4,12 +4,13 @@ import { ReopenForm } from '~/components/reopen-form';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
+import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { UNREADABLE_IDS_SHOWN, unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link, useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation } from 'react-router';
 
 import {
   Markdown,
@@ -60,22 +61,17 @@ export default function Commitments() {
 const CLOSED_PARAM = 'closed';
 
 function CommitmentsPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, replaceParams] = useReplaceSearchParams();
   const rawClosed = searchParams.get(CLOSED_PARAM);
   const showClosed = rawClosed === '1';
   const invalidClosed =
     rawClosed !== null && rawClosed !== '' && rawClosed !== '1' ? rawClosed : null;
   const duplicateClosed = searchParams.getAll(CLOSED_PARAM).length > 1;
   const toggleClosed = () =>
-    setSearchParams(
-      (previous) => {
-        const params = new URLSearchParams(previous);
-        if (showClosed) params.delete(CLOSED_PARAM);
-        else params.set(CLOSED_PARAM, '1');
-        return params;
-      },
-      { replace: true },
-    );
+    replaceParams((params) => {
+      if (showClosed) params.delete(CLOSED_PARAM);
+      else params.set(CLOSED_PARAM, '1');
+    });
   const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
 
   // ここで並べ直さない: 並べ直すと齢の見え方が CLI・クローンと食い違う。

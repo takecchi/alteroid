@@ -17,7 +17,9 @@ const WEB_UI_SOURCE_DIRS = [
   'packages/logic/src',
   'packages/swr/src',
 ].map((dir) => path.join(ROOT, dir));
-const JOURNAL_PATH = path.join(ROOT, 'apps/web/app/routes/journal.tsx');
+// 検出器の対照: URL の検索パラメータを書き換える外枠（#5633）で、useSearchParams と URLSearchParams を必ず持つ
+const CONTROL_REL_PATH = 'apps/web/app/lib/use-replace-search-params.ts';
+const CONTROL_PATH = path.join(ROOT, CONTROL_REL_PATH);
 
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router']);
 
@@ -378,12 +380,12 @@ describe('(B) 抽出したファイルのどれにも、外から来る読み取
   });
 });
 
-// この対照が赤いときは、検出器より先に対照（`journal.tsx`）が消えていないか疑う: 消えていたら (C) を消さず、禁止経路を確実に持つ別の実在ファイルへ `JOURNAL_PATH` を差し替える。
+// この対照が赤いときは、検出器より先に対照（`CONTROL_REL_PATH`）が消えていないか疑う: 消えていたら (C) を消さず、禁止経路を確実に持つ別の実在ファイルへ `CONTROL_REL_PATH` を差し替える。
 const DIAGNOSIS_WHEN_CONTROL_FAILS = [
   'この対照が落ちた理由は2つある。まず「対照が消えた」ほうを疑うこと:',
-  '  (1) journal.tsx が useSearchParams / URLSearchParams を使わなくなった・',
+  `  (1) ${CONTROL_REL_PATH} が useSearchParams / URLSearchParams を使わなくなった・`,
   '      移動した・削除された → 直すのは検出器ではなく対照。同じく禁止経路を',
-  '      確実に持つ実在ファイルを選び直して JOURNAL_PATH を差し替える。',
+  '      確実に持つ実在ファイルを選び直して CONTROL_REL_PATH を差し替える。',
   '      (C) を消さないこと。',
   '  (2) 検出器そのものが壊れた。',
   '⟹ 見分け方: 上の合成 fixture 群が緑のままここだけ赤いなら (1)。',
@@ -395,14 +397,17 @@ describe('(C) 検出器・抽出器が「黙って何も返さなくなる」壊
     expect(filesTouchingApiBaseUrlConfig.length).toBeGreaterThan(0);
   });
 
-  it('journal.tsx は接続先に触っていないので (A) の一覧に入らない', () => {
-    expect(filesTouchingApiBaseUrlConfig).not.toContain('apps/web/app/routes/journal.tsx');
+  it('対照のファイルは接続先に触っていないので (A) の一覧に入らない', () => {
+    expect(filesTouchingApiBaseUrlConfig).not.toContain(CONTROL_REL_PATH);
   });
 
-  it('検出器の自己検証: journal.tsx の正当な useSearchParams / URLSearchParams を実際に検出する', () => {
+  it('検出器の自己検証: 対照のファイルの正当な useSearchParams / URLSearchParams を実際に検出する', () => {
     // 禁止経路を確実に持つ実在ファイルへ同じ検出器を当てる: 検出器が壊れて何も拾わなくなっても、対象4ファイルが偶然どれも禁止経路を持たないことと区別が付かず緑になるため。
-    const journalSource = readFileSync(JOURNAL_PATH, 'utf8');
-    const found = findForbiddenExternalInputReferences(journalSource, 'journal.tsx');
+    const controlSource = readFileSync(CONTROL_PATH, 'utf8');
+    const found = findForbiddenExternalInputReferences(
+      controlSource,
+      path.basename(CONTROL_REL_PATH),
+    );
 
     expect(
       found.map((f) => f.rule),
