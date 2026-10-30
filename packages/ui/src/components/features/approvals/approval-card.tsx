@@ -91,11 +91,7 @@ export function ApprovalCard({
         >
           {state === 'withdrawn' ? '取り下げ済' : state === 'answered' ? '回答済' : '未回答'}
         </Badge>
-        {time !== undefined ? (
-          time
-        ) : createdAt !== undefined ? (
-          <Timestamp at={createdAt} />
-        ) : null}
+        {time !== undefined ? time : createdAt !== undefined ? <Timestamp at={createdAt} /> : null}
         {jobLink !== undefined && <span className="font-mono">{jobLink}</span>}
       </div>
 
