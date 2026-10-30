@@ -233,7 +233,7 @@ describe('doneTreeReapAfterMsOf（終わって久しい done の担当の木を�
     expect(doneTreeReapAfterMsOf({ [key]: '90' })).toBe(90 * 60_000);
   });
 
-  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', ' 10', '1e3', '99999999999999999999'])(
+  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', '1 0', '1e3', '99999999999999999999'])(
     '正の整数でも off でもない値（%s）は黙って既定へ倒さず落とす',
     (value) => {
       expect(() => doneTreeReapAfterMsOf({ [key]: value })).toThrow(/知らない値/);
@@ -264,7 +264,7 @@ describe('socketOwnerOf', () => {
     ).toEqual({ uid: 1000, gid: 1000 });
   });
 
-  it.each(['abc', '1.5', '-1', ' 1000', '1e3', '99999999999999999999'])(
+  it.each(['abc', '1.5', '-1', '10 00', '1e3', '99999999999999999999'])(
     'UID が非負の整数でない値（%s）なら、黙って chown を飛ばさず落とす',
     (value) => {
       expect(() => socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: value })).toThrow(
@@ -320,7 +320,7 @@ describe('listenPlanOf（待ち受けの口）', () => {
     ).toMatchObject({ port: 65535, hostname: '::' });
   });
 
-  it.each(['0', '65536', '-1', 'abc', '4518.5', ' 4518', '1e3', '04518'])(
+  it.each(['0', '65536', '-1', 'abc', '4518.5', '45 18', '1e3', '04518'])(
     '1〜65535 の整数でないポート（%s）は落とす',
     (value) => {
       expect(() => listenPlanOf({ ALTEROID_RUNNER_PORT: value })).toThrow(

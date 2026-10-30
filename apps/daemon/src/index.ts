@@ -48,6 +48,7 @@ import {
   runTokenTrial,
   installUncaughtNet,
   placedClonePermissionMode,
+  placedEnvValue,
   placedManagerModels,
   reasonOf,
   redactErrorText,
@@ -172,8 +173,9 @@ function runnerSeeds(options: {
 }): RunnerSource[] {
   const urls = parseRunnerUrls(process.env);
   if (urls.length > 0) {
-    const token = process.env.ALTEROID_RUNNER_TOKEN;
-    if (token === undefined || token.length === 0) {
+    // runner と同じ読み方（前後の空白を落とす）で読む: 片側だけ落とすと、同じ値を置いても鍵が食い違って 401 になるため。
+    const token = placedEnvValue(process.env, 'ALTEROID_RUNNER_TOKEN');
+    if (token === null) {
       throw new Error(
         `${RUNNER_URLS_ENV} / ${RUNNER_URL_ENV} があるのに ALTEROID_RUNNER_TOKEN が無い` +
           '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
