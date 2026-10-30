@@ -33,7 +33,7 @@ function UnreadableApprovalsWarn({ count, className }: { count: number; classNam
   );
 }
 
-// 未了の仕事の件数を「人間の番」の件数にしない: API は未了を「人間が動かすもの」と「そうでないもの」に分けて持たないため
+// 待ち行列の未了の件数を「人間の番」の件数にしない: API は未了を「人間が動かすもの」と「そうでないもの」に分けて持たないため
 export function AwaitingYou() {
   const approvals = useApprovals();
   const progress = useProgress();
@@ -126,12 +126,12 @@ export function AwaitingYou() {
           <AwaitingCountRow
             label="未了"
             action={
-              <Link to="/commitments" className={HOME_LINK_CLASS}>
-                仕事へ
+              <Link to="/tasks" className={HOME_LINK_CLASS}>
+                待ち行列へ
               </Link>
             }
           >
-            未了の仕事 <span className="text-foreground">{backlog.total}</span> 件
+            待ち行列の未了 <span className="text-foreground">{backlog.total}</span> 件
             {backlogPartial ? '（読めない行があり、下限）' : ''}
           </AwaitingCountRow>
         )}

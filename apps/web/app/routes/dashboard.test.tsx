@@ -455,15 +455,15 @@ describe('「承認待ち一覧」', () => {
     expect(screen.queryByRole('link', { name: '答える' })).toBeNull();
   });
 
-  it('承認待ちがあれば、質問・「答える」・未了の仕事の件数を出す。件数は全体で、人間の番とは言わない', async () => {
+  it('承認待ちがあれば、質問・「答える」・待ち行列の未了の件数を出す。件数は全体で、人間の番とは言わない', async () => {
     renderHome({ approvals: [approval(0)] });
 
     expect(await screen.findByText('質問 0')).toBeTruthy();
     expect(screen.getByRole('link', { name: '答える' }).getAttribute('href')).toBe('/approvals');
-    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    const row = (await screen.findByRole('link', { name: '待ち行列へ' })).closest('li')!;
     expect(within(row).getByText('5')).toBeTruthy();
-    expect(within(row).getByRole('link', { name: '仕事へ' }).getAttribute('href')).toBe(
-      '/commitments',
+    expect(within(row).getByRole('link', { name: '待ち行列へ' }).getAttribute('href')).toBe(
+      '/tasks',
     );
     expect(screen.queryByText(/人間の番/)).toBeNull();
   });
@@ -480,14 +480,14 @@ describe('「承認待ち一覧」', () => {
       },
     });
 
-    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    const row = (await screen.findByRole('link', { name: '待ち行列へ' })).closest('li')!;
     expect(row.textContent).toContain('下限');
   });
 
   it('対照: 欠けていない既定の応答では、下限と言わない', async () => {
     renderHome({ approvals: [approval(0)] });
 
-    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    const row = (await screen.findByRole('link', { name: '待ち行列へ' })).closest('li')!;
     expect(row.textContent).not.toContain('下限');
   });
 
@@ -495,7 +495,7 @@ describe('「承認待ち一覧」', () => {
     renderHome({ approvals: [approval(0)], progress: 'fail' });
 
     expect(await screen.findByText('質問 0')).toBeTruthy();
-    expect(screen.queryByRole('link', { name: '仕事へ' })).toBeNull();
+    expect(screen.queryByRole('link', { name: '待ち行列へ' })).toBeNull();
   });
 });
 
@@ -627,9 +627,9 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     const card = (await screen.findByText('作業の進捗')).closest<HTMLElement>(
       '[data-slot="card"]',
     )!;
-    await within(card).findByText('実行中の任せた作業');
+    await within(card).findByText('動いているマネージャー');
     expect(card.textContent).not.toMatch(INTERNAL);
-    expect(card.textContent).toContain('閉じた仕事 12 件');
+    expect(card.textContent).toContain('片付いた 12 件');
   });
 
   it('作業の進捗が空のときは、次に何をすればよいかを言う', async () => {
@@ -641,7 +641,7 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
       },
     });
 
-    expect(await screen.findByText(/何かを任せると、ここに出る/)).toBeTruthy();
+    expect(await screen.findByText(/何かを頼むと、ここに出る/)).toBeTruthy();
   });
 
   it('閉じた件数は tasksClosed のとおりに言い、「以上」を付けない（task の閉じた記録は刈られない。#5910）', async () => {
@@ -651,7 +651,7 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
         throughput: { ...PROGRESS_BODY.throughput, tasksClosed: 21 },
       },
     });
-    expect((await screen.findByText(/閉じた仕事 21 件/)).textContent).not.toContain('以上');
+    expect((await screen.findByText(/片付いた 21 件/)).textContent).not.toContain('以上');
   });
 
   it('今日の利用: 記録が無いときも「台帳」と言わず、待てばよいことを言う', async () => {
@@ -669,11 +669,11 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
 });
 
 describe('「作業の進捗」カード', () => {
-  it('実行中の任せた作業・未了・閉じた件数を出し、割合は出さない。詳しくは /progress', async () => {
+  it('動いているマネージャー・未了・閉じた件数を出し、割合は出さない。詳しくは /progress', async () => {
     renderHome();
 
-    expect(await screen.findByText('実行中の任せた作業')).toBeTruthy();
-    expect(screen.getByText(/未了の仕事 5 件・直近 7 日で閉じた仕事 12 件/)).toBeTruthy();
+    expect(await screen.findByText('動いているマネージャー')).toBeTruthy();
+    expect(screen.getByText(/待ち行列の未了 5 件・直近 7 日で片付いた 12 件/)).toBeTruthy();
     expect(screen.queryByText('%')).toBeNull();
     expect(linkTo('/progress')).toBeTruthy();
   });
@@ -690,7 +690,7 @@ describe('「作業の進捗」カード', () => {
     };
     renderHome({ progress: empty });
 
-    expect(await screen.findByText(/いま動いている作業も未了の仕事も無い/)).toBeTruthy();
+    expect(await screen.findByText(/いま動いているマネージャーも、待ち行列の未了も無い/)).toBeTruthy();
     expect(screen.queryByText(/数は下限/)).toBeNull();
   });
 
@@ -722,7 +722,7 @@ describe('「作業の進捗」カード', () => {
       renderHome({ progress: { ...empty, backlog: { ...empty.backlog, completeness } } });
 
       expect(await screen.findByText(/読めなかった行があり、数は下限/)).toBeTruthy();
-      expect(screen.queryByText(/未了の仕事も無い/)).toBeNull();
+      expect(screen.queryByText(/待ち行列の未了も無い/)).toBeNull();
       cleanup();
     }
   });
@@ -734,12 +734,12 @@ describe('「作業の進捗」カード', () => {
       '[data-slot="card"]',
     )!;
     expect(await within(card).findByRole('alert')).toBeTruthy();
-    expect(within(card).queryByText('実行中の任せた作業')).toBeNull();
+    expect(within(card).queryByText('動いているマネージャー')).toBeNull();
   });
 
   it('取れたあとの取り直しが失敗しても、古い数は残したまま、その場で失敗を言う', async () => {
     renderHome();
-    expect(await screen.findByText(/未了の仕事 5 件/)).toBeTruthy();
+    expect(await screen.findByText(/待ち行列の未了 5 件/)).toBeTruthy();
     expect(screen.queryByText(/取り直せなかった/)).toBeNull();
 
     const healthy = globalThis.fetch;
@@ -755,13 +755,13 @@ describe('「作業の進捗」カード', () => {
 
     const note = await screen.findByText('最新の数を取り直せなかった。下は前に読めたときのもの。');
     expect(note.getAttribute('role')).toBe('status');
-    expect(screen.getByText(/未了の仕事 5 件/)).toBeTruthy();
+    expect(screen.getByText(/待ち行列の未了 5 件/)).toBeTruthy();
 
     globalThis.fetch = healthy;
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
     await waitFor(() => expect(screen.queryByText(/取り直せなかった/)).toBeNull());
-    expect(screen.getByText(/未了の仕事 5 件/)).toBeTruthy();
+    expect(screen.getByText(/待ち行列の未了 5 件/)).toBeTruthy();
   });
 });

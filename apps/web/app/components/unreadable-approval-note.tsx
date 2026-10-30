@@ -4,8 +4,7 @@ import { type UnreadableApproval } from '@alteroid/logic';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 
 /**
- * 読めない承認待ちが在ることを、一覧の上で断る（commitments 画面の
- * `UnreadableNote` と同じ形）。**0件なら描かない**（0 の行を作らない）。
+ * 読めない承認待ちが在ることを、一覧の上で断る。**0件なら描かない**（0 の行を作らない）。
  *
  * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
  * **「回答済みでも取り下げ済みでもない」を落とさない**——落とすと、行が消えたのと区別が付かない。

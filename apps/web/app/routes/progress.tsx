@@ -73,7 +73,7 @@ export default function ProgressPage() {
     <Page
       tabs={<WorkTabs />}
       title="作業の進捗"
-      description="たまっている仕事、実行中の依頼、期間内に片付いた数、完了の目安。読み取り専用で、件数と時間だけを並べます"
+      description="待ち行列にたまっている数、動いているマネージャー、期間内に片付いた数、完了の目安。読み取り専用で、件数と時間だけを並べます"
     >
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">集計する期間</span>
@@ -300,7 +300,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
 
   return (
     <Card>
-      <CardHeader title="未完了の仕事" subtitle="引き受けた仕事のうち、まだ終わっていないもの" />
+      <CardHeader title="待ち行列の未了" subtitle="引き受けた仕事のうち、まだ終わっていないもの" />
       <Section>
         <StatRow>
           <Stat label="未完了" value={count(backlog.total)} unit="件" />
@@ -356,7 +356,7 @@ function InProgressCard({ progress }: { progress: Progress }) {
   ];
   return (
     <Card>
-      <CardHeader title="実行中の依頼" subtitle="マネージャーに任せた仕事のうち、動いているもの" />
+      <CardHeader title="動いているマネージャー" subtitle="依頼文を渡したマネージャーのうち、動いているもの" />
       <Section>
         <StatRow>
           <Stat label="実行中" value={count(inProgress.running)} unit="件" />

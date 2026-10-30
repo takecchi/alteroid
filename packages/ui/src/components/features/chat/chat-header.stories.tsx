@@ -56,7 +56,6 @@ export const AfterDelete: Story = {
         result={{
           hiddenCount: 12,
           attachmentsRemoved: 2,
-          commitmentsRemoved: 1,
           incomplete: ['受信箱の未処理の発言を外せなかった'],
           remainsIn: [
             'クローンの SDK セッションの生ログ',

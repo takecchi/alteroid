@@ -561,7 +561,6 @@ export interface WorkspaceResetSummary {
   schedules: number;
   schedulePhases: number;
   inbox: number;
-  commitments: number;
   tasks: number;
   practices: number;
   archive: number;
@@ -951,7 +950,7 @@ export function useDeleteConversation() {
         .then(unwrap);
       saveChatDraft(conversationId, '');
       saveChatDraftMark(conversationId, undefined);
-      // 一覧・未読数・本文・台帳を捨てる。`use-journal-live.ts` の `conversation_deleted` と同じ束（墓標の SSE を待たずに揃える）
+      // 一覧・未読数・本文を捨てる。`use-journal-live.ts` の `conversation_deleted` と同じ束（墓標の SSE を待たずに揃える）
       await Promise.all([
         mutate((key) => isKeyOfType(key, 'conversations')),
         mutate((key) => isKeyOfType(key, 'conversationUnreadCount')),
@@ -960,7 +959,6 @@ export function useDeleteConversation() {
         mutate(
           (key) => isKeyOfType(key, 'conversation') && !isConversationKeyOf(key, conversationId),
         ),
-        mutate((key) => isKeyOfType(key, 'commitments')),
       ]);
       return result;
     },

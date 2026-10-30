@@ -112,7 +112,6 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       void mutate(KEY.report(entry.date));
       break;
     case 'tool_use':
-      // クローンには台帳を書く道具がもう無い（#5923）ので、tool_use では台帳を取り直さない
       // クローン自身の `tool_use` では `managers` を落とさない: マネージャーが動いていないのに、クローンの作業中ずっと再取得を続けることになる
       if (!isCloneActor(entry.actor)) {
         void mutate((key) => isKeyOfType(key, 'managers'));
@@ -123,10 +122,8 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       if (entry.with === 'manager') {
         void mutate((key) => isKeyOfType(key, 'managers'));
         invalidateManagerDetail(mutate);
-        void mutate((key) => isKeyOfType(key, 'commitments'));
       }
       if (entry.with === 'human') {
-        void mutate((key) => isKeyOfType(key, 'commitments'));
         void mutate((key) => isKeyOfType(key, 'conversations'));
         void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
         // 一覧だけでなく本文も落とす: 開いた会話の画面が一度読んだ履歴のまま止まるため
@@ -166,11 +163,10 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     case 'github_observation':
       break;
     case 'conversation_deleted':
-      // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる:一覧・未読数・開いている本文・台帳を読み直す
+      // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる:一覧・未読数・開いている本文を読み直す
       void mutate((key) => isKeyOfType(key, 'conversations'));
       void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
       void mutate((key) => isKeyOfType(key, 'conversation'));
-      void mutate((key) => isKeyOfType(key, 'commitments'));
       break;
     default: {
       // `never` で網羅性を型に縛る: switch 文自体は網羅性を検査せず、`void` の関数では return 漏れの型エラーも出ない。

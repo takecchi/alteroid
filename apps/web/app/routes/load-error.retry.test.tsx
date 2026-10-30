@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Archive from './archive';
-import Commitments from './commitments';
 import Dropped from './dropped';
 import EnvVars from './env-vars';
 import Journal from './journal';
@@ -63,12 +62,6 @@ const CASES: Case[] = [
     Page: EnvVars,
     ok: { '/credentials': { credentials: [] } },
     title: '環境変数の一覧を読み込めませんでした',
-  },
-  {
-    name: '/commitments',
-    Page: Commitments,
-    ok: { '/commitments': { entries: [] } },
-    title: '未了の仕事の一覧を読み込めませんでした',
   },
   {
     name: '/managers',

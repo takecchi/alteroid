@@ -68,10 +68,10 @@ function ProgressTile() {
         <>
           {progress.error !== undefined && <StaleNote what="数" />}
           <Stat
-            label="実行中の任せた作業"
+            label="動いているマネージャー"
             value={String(data.inProgress.running)}
             unit="件"
-            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.tasksClosed} 件`}
+            hint={`待ち行列の未了 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で片付いた ${data.throughput.tasksClosed} 件`}
           />
           {progressPartial(data) ? (
             // 「無い」と言い切らない: 数が下限でしかないため
@@ -80,7 +80,7 @@ function ProgressTile() {
             data.inProgress.running === 0 &&
             data.backlog.total === 0 && (
               <HomeTileNote>
-                いま動いている作業も未了の仕事も無い。何かを任せると、ここに出る。
+                いま動いているマネージャーも、待ち行列の未了も無い。何かを頼むと、ここに出る。
               </HomeTileNote>
             )
           )}

@@ -25,7 +25,6 @@ const DELETED = {
   deletedAt: '2026-10-08T00:00:00.000Z',
   hiddenCount: 1,
   attachmentsRemoved: 0,
-  commitmentsRemoved: 0,
   queuedDropped: 0,
   approvalsLinked: 0,
   incomplete: [],
