@@ -191,7 +191,6 @@ export interface ArchiveFolderOptions {
   readonly graceMs?: number;
   readonly limit?: number;
   readonly signal?: AbortSignal;
-  readonly onResult?: (result: FoldArchiveOnceResult) => void;
 }
 
 export interface ArchiveFolder {
@@ -226,7 +225,6 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
             `alteroidd: 退避済み生ログを ${result.folded} 件畳んだが、うち ${result.journalDroppedIds.length} 件は日誌に書けなかった\n`,
           );
         }
-        options.onResult?.(result);
         return result;
       })
       .catch((error: unknown) => {
