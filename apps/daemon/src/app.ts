@@ -859,6 +859,13 @@ const loginBody = z.object({
 });
 const claimBody = z.object({ claimSecret: z.string().min(1) });
 
+// `reasonOf` は各段の頭に `${name}: ` を付ける。`PluginFetchError` の message は人間向けの完結した文なので、web がそのまま出す本文からは自分のクラス名だけを外す（伏せ字・切り詰め・cause の連なりは `reasonOf` のまま）。web 側で頭を削らない: 文が変わると黙って外れる。
+function reasonWithoutOwnName(error: Error): string {
+  const reason = reasonOf(error);
+  const head = `${error.name}: `;
+  return reason.startsWith(head) ? reason.slice(head.length) : reason;
+}
+
 function loginErrorDetail(reason: string): string {
   switch (reason) {
     case 'invalid_state':
@@ -9574,7 +9581,7 @@ export function createApp(deps: AppDeps) {
         } catch (error) {
           if (!(error instanceof PluginFetchError)) throw error;
           const status = error.kind === 'invalid' ? 400 : error.kind === 'unavailable' ? 502 : 503;
-          return c.json({ error: reasonOf(error) }, status);
+          return c.json({ error: reasonWithoutOwnName(error) }, status);
         }
         // 同じ名前の plugin が既にあれば、確定が置き換えになることを言う。その時点の SHA は預かりに結び付け、確定で突き合わせる（#4797）
         const current = (await deps.stores.plugins.list()).find((p) => p.name === fetched.name);
