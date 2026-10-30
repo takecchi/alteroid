@@ -248,8 +248,8 @@ export class Outbox {
   }
 
   /**
-   * 溜まった分を同期で渡す購読（`/events` は使わない。畳みの待ちの試験が「脚が繋がっている」を作るための口）。
-   * 渡した分は書き終えたことにする。
+   * **試験の口（本番の /events は `subscribe` を使う。本番の呼び元は無い）。**
+   * 溜まった分を同期で渡す購読で、畳みの待ちの試験が「脚が繋がっている」を作るために在る。渡した分は書き終えたことにする。
    */
   attach(listener: (event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void): () => void {
     const deliver = (): void => {
@@ -263,7 +263,11 @@ export class Outbox {
     return () => subscription.detach();
   }
 
-  // `chars` は書き出した本文（`JSON.stringify(event)`）の字数。書き出す側が持っているので渡す（2度直列化しない）。省けばここで数える
+  /**
+   * **試験の口（本番の /events は `subscribe` の `wrote` を使う。本番の呼び元は無い）。**
+   * 連番を指して書き終えたことにする（列に無い連番なら列へ挿入する）。控えの上限・`sentSince` の試験が、書き込みを通さずに控えを作るために在る。
+   * `chars` は書き出した本文（`JSON.stringify(event)`）の字数。省けばここで数える。
+   */
   recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string, chars?: number): void {
     const index = this.#lowerBound(seq);
     let item = this.#log[index];
@@ -371,7 +375,9 @@ export class Outbox {
   }
 
   describeForShutdown(): OutboxShutdownSnapshot {
-    const unwritten = this.#log.slice(this.#sentCount);
+    // 購読中は、まだ書いていない分と読み返しの分を購読側の欄（その接続の溜まり）に数え、`queue` は空にする（#629 の報告の形）。
+    // 購読が無いときは、書いていない分を `queue` に内訳つきで出す。
+    const unwritten = this.#current === null ? this.#log.slice(this.#sentCount) : [];
     const groups = new Map<string, OutboxPendingGroup>();
     for (const item of unwritten) {
       const managerId = 'managerId' in item.event ? item.event.managerId : undefined;
@@ -389,10 +395,14 @@ export class Outbox {
         if (item.queuedAt < existing.oldestAt) existing.oldestAt = item.queuedAt;
       }
     }
-    // 書いていない分は全部、上の `queue` に数えた。購読側が別に抱えている分は無いので 0 件
+    const oldestPending = this.oldestPendingAt;
     const subscriber: OutboxShutdownSnapshot['subscriber'] =
       this.#current !== null
-        ? { status: 'subscribed', count: 0 }
+        ? {
+            status: 'subscribed',
+            count: this.pending,
+            ...(oldestPending === undefined ? {} : { oldestAt: oldestPending }),
+          }
         : this.#everSubscribed
           ? { status: 'detached' }
           : { status: 'never-subscribed' };
