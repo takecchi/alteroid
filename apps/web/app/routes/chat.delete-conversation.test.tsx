@@ -207,6 +207,36 @@ describe('「会話を削除」ボタン', () => {
     expect(loadPendingAttachmentsNote('conv-keep')).toBeDefined();
   });
 
+  it('消したあと、その会話は取り直さない（404 を出さない）。一覧は取り直す（#5905）', async () => {
+    let deleted = false;
+    const gets: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (method === 'DELETE') {
+        deleted = true;
+        return json(DELETED);
+      }
+      if (deleted) gets.push(url);
+      if (deleted && url.includes(`/conversations/${CONVERSATION_ID}`)) {
+        return json({ error: '会話が無い', code: 'conversation_not_found' }, 404);
+      }
+      const reply = conversationRoutes(url);
+      if (reply === undefined) throw new TypeError(`Failed to fetch: ${url}`);
+      return reply;
+    }) as typeof fetch;
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    await openConfirm();
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
+    await screen.findByText(/会話を削除しました/);
+    await act(async () => {});
+
+    expect(gets.filter((url) => url.includes(`/conversations/${CONVERSATION_ID}`))).toEqual([]);
+    expect(gets.some((url) => /\/conversations\?/.test(url))).toBe(true);
+  });
+
   it('404 なら、その error を出し、/chat へは移らない', async () => {
     stubDaemon(() =>
       json({ error: '会話が無い: conv-del-1', code: 'conversation_not_found' }, 404),

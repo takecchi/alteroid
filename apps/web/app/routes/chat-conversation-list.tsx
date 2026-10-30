@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { ConversationList as UiConversationList } from '@alteroid/ui';
 import { useConversations } from '@alteroid/swr';
 
+import { plainPreview } from '~/lib/plain-preview';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 const CONVERSATION_PAGE_SIZE = 30;
@@ -57,7 +58,7 @@ export function ConversationList({
     <UiConversationList
       items={data?.conversations.map((conversation) => ({
         id: conversation.conversationId,
-        preview: conversation.preview,
+        preview: plainPreview(conversation.preview),
         updatedLabel: formatRelativeAtMinute(conversation.updatedAt, now),
         messages: conversation.messages,
         messagesAtLeast: data.windowsComplete === false,
