@@ -61,7 +61,7 @@ export const PROGRESS_BODY = {
       buckets: { under1h: 0, under24h: 1, under7d: 4, over7d: 0 },
     },
     byState: { untouched: 1, responded: 1, delegated: 2, notApplicable: 1 },
-    completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
+    completeness: { unreadable: 0, unreadableJobs: 0 },
   },
   inProgress: {
     running: 3,
@@ -70,10 +70,9 @@ export const PROGRESS_BODY = {
     lastReport: { oldestAt: null, newestAt: null, withoutReport: 0 },
   },
   throughput: {
-    commitmentsOpened: 14,
-    commitmentsClosed: 12,
+    tasksOpened: 14,
+    tasksClosed: 12,
     delegationsEnded: { count: 4, basis: 'updatedAt' },
-    mayBeUndercounted: false,
   },
   forecast: { state: 'not_converging', basis: {} },
   github: { state: 'not_observed', reason: 'なし' },

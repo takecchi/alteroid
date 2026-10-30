@@ -86,9 +86,9 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
     expect((await decideInitiativeTick(stores, schedule())).run).toBe(false);
   });
 
-  it('(b) 旧台帳に、同じ id の task が無い開いた行があれば回す', async () => {
+  it('旧台帳に開いた行が在っても、task が無ければ回さない（Task だけで決める。旧台帳の理由は無い。#5910）', async () => {
     const stores = createMemoryStores();
-    await recordTickTurn(stores);
+    const lastTickAt = await recordTickTurn(stores);
     await stores.commitments.open({
       id: 'cm-legacy',
       at: new Date().toISOString(),
@@ -96,24 +96,12 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
       body: '旧台帳だけに在る行',
     });
     expect(await decideInitiativeTick(stores, schedule())).toEqual({
-      run: true,
-      because: 'legacy_ledger_open',
+      run: false,
+      queued: 0,
+      needsDecision: 0,
+      waiting: 0,
+      lastTickAt,
     });
-  });
-
-  it('(b) 旧台帳の行に同じ id の task が（閉じていても）在れば数えない', async () => {
-    const stores = createMemoryStores();
-    await recordTickTurn(stores);
-    await stores.commitments.open({
-      id: 'shared-id',
-      at: new Date().toISOString(),
-      origin: 'human',
-      body: '人間の依頼',
-    });
-    await stores.tasks.add(
-      makeTask({ id: 'shared-id', status: 'done', closedAt: new Date().toISOString() }),
-    );
-    expect((await decideInitiativeTick(stores, schedule())).run).toBe(false);
   });
 
   it('(c) 直近24時間に発意 tick のターンが無ければ、動ける仕事が無くても回す', async () => {
@@ -168,13 +156,10 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
       });
     });
 
-    it('旧台帳が読めない', async () => {
+    it('旧台帳が読めなくても、門は台帳を見ないので畳む（Task だけで決める。#5910）', async () => {
       const base = await readyToSkip();
       const stores: Stores = { ...base, commitments: { ...base.commitments, list: boom } };
-      expect(await decideInitiativeTick(stores, schedule())).toEqual({
-        run: true,
-        because: 'read_failed',
-      });
+      expect((await decideInitiativeTick(stores, schedule())).run).toBe(false);
     });
 
     it('日誌が読めない', async () => {

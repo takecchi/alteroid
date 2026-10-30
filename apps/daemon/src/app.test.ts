@@ -7667,7 +7667,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
         notApplicable: number;
         unjudgeable: number;
       };
-      completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
+      completeness: { unreadable: number; unreadableJobs: number };
     };
     inProgress: {
       running: number;
@@ -7676,9 +7676,8 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       lastReport: { oldestAt: string | null; newestAt: string | null; withoutReport: number };
     };
     throughput: {
-      commitmentsOpened: number;
-      commitmentsClosed: number;
-      mayBeUndercounted: boolean;
+      tasksOpened: number;
+      tasksClosed: number;
       delegationsEnded: { count: number; basis: string };
     };
     forecast: {
@@ -7696,6 +7695,26 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     return (await response.json()) as ProgressBody;
   };
 
+  // 進捗は台帳ではなく Task から数える（#5910）。台帳（commitments）へ積んでも数に出ない。
+  const addTask = async (
+    id: string,
+    createdAt: string,
+    over: Partial<Parameters<typeof stores.tasks.add>[0]> = {},
+  ) => {
+    await stores.tasks.add({
+      id,
+      createdAt,
+      updatedAt: createdAt,
+      status: 'queued',
+      origin: 'human',
+      title: `title ${id}`,
+      body: `body ${id}`,
+      ...over,
+    });
+  };
+  const closeTask = (id: string, at: string) =>
+    stores.tasks.setStatus(id, 'done', { at, by: 'human', reason: '終わった' });
+
   it('空のストアでも 200 で、取れないものは 0 ではなく null / unavailable で返る', async () => {
     const body = await read();
 
@@ -7711,9 +7730,21 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       withoutReport: 0,
     });
     expect(body.forecast.state).toBe('unavailable');
-    expect(body.forecast.reason).toBe('ledger_younger_than_window');
+    expect(body.forecast.reason).toBe('tasks_younger_than_window');
     expect(body.throughput.delegationsEnded).toEqual({ count: 0, basis: 'updatedAt' });
-    expect(body.throughput.mayBeUndercounted).toBe(false);
+    expect(Object.keys(body.throughput).sort()).toEqual([
+      'delegationsEnded',
+      'tasksClosed',
+      'tasksOpened',
+    ]);
+    expect(body.backlog.completeness).toEqual({ unreadable: 0, unreadableJobs: 0 });
+  });
+
+  it('台帳（commitments）に積んだ行は進捗に数えない（Task だけから数える。#5910）', async () => {
+    await stores.commitments.open({ id: 'ledger-only', at: ago(300), origin: 'human', body: 'x' });
+    const body = await read();
+    expect(body.backlog.total).toBe(0);
+    expect(body.throughput.tasksOpened).toBe(0);
   });
 
   it('観測の記録が無ければ github は not_observed で、理由が付く（0 件とは言わない）', async () => {
@@ -7723,36 +7754,14 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(Object.keys(body.github).sort()).toEqual(['reason', 'state']);
   });
 
-  it('台帳と委譲の数が core の summarizeProgress と一致する（入力は /commitments と同じ導出値つきの行）', async () => {
-    await stores.commitments.open({
-      id: 'o-responded',
-      at: ago(250),
-      origin: 'human',
-      source: 'conv-1',
-      body: 'a',
-    });
-    await stores.commitments.open({
-      id: 'o-delegated',
-      at: ago(240),
-      origin: 'human',
-      source: 'conv-2',
-      body: 'b',
-    });
-    await stores.commitments.open({
-      id: 'o-external',
-      at: ago(230),
-      origin: 'external',
-      body: 'c',
-    });
-    await stores.commitments.open({ id: 'o-plain', at: ago(220), origin: 'human', body: 'd' });
+  it('task と委譲から数える: 開いた・閉じた件数・byOrigin・byState・見込みが Task の行どおりになる', async () => {
+    await addTask('o-responded', ago(250), { originConversationId: 'conv-1' });
+    await addTask('o-delegated', ago(240), { originConversationId: 'conv-2' });
+    await addTask('o-external', ago(230), { origin: 'external' });
+    await addTask('o-plain', ago(220));
     for (const [i, closedAgo] of [10, 20, 30].entries()) {
-      await stores.commitments.open({
-        id: `closed-${i}`,
-        at: ago(300),
-        origin: 'manager',
-        body: 'done',
-      });
-      await stores.commitments.close(`closed-${i}`, ago(closedAgo), '終わった', 'human');
+      await addTask(`closed-${i}`, ago(300), { origin: 'manager' });
+      await closeTask(`closed-${i}`, ago(closedAgo));
     }
     await stores.journal.append({
       type: 'exchange',
@@ -7766,7 +7775,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       createdAt: ago(100),
       updatedAt: ago(100),
       status: 'running',
-      conversationId: 'conv-2',
+      taskId: 'o-delegated',
       summary: 'x',
       lastReportAt: ago(2),
     });
@@ -7821,19 +7830,20 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.inProgress.awaitingHuman).toBe(1);
     expect(body.inProgress.lost).toBe(1);
     expect(body.inProgress.lastReport.withoutReport).toBe(1);
-    expect(body.throughput.commitmentsClosed).toBe(3);
-    expect(body.throughput.commitmentsOpened).toBe(0);
+    expect(body.throughput.tasksClosed).toBe(3);
+    expect(body.throughput.tasksOpened).toBe(0);
     expect(body.throughput.delegationsEnded.count).toBe(2);
     expect(body.forecast.state).toBe('estimated');
     expect(body.forecast.hoursToDrain).toBeCloseTo(224, 6);
 
-    const ledger = (await (await app.request('/commitments?includeClosed=true')).json()) as {
-      entries: never[];
-      unreadable: never[];
-      trimmedClosed: number;
-    };
     const expected = summarizeProgress({
-      commitments: ledger,
+      tasks: {
+        ...(await stores.tasks.list({ includeClosed: true })),
+        entries: (await stores.tasks.list({ includeClosed: true })).entries.map((entry) => ({
+          ...entry,
+          respondedAt: entry.id === 'o-responded' ? 'responded' : undefined,
+        })),
+      },
       jobs: await stores.jobs.listJobs(),
       unreadableJobs: (await stores.jobs.listUnreadableJobs()).length,
       now: new Date(body.observedAt),
@@ -7846,14 +7856,8 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     });
   });
 
-  it('返答が日誌に載ると byState が untouched から responded へ動く（respondedAt が core へ渡っている）', async () => {
-    await stores.commitments.open({
-      id: 'cmt-1',
-      at: ago(1),
-      origin: 'human',
-      source: 'conv-r',
-      body: '直して',
-    });
+  it('返答が日誌に載ると byState が untouched から responded へ動く（originConversationId の会話の返答が core へ渡っている）', async () => {
+    await addTask('cmt-1', ago(1), { originConversationId: 'conv-r' });
     expect((await read()).backlog.byState).toMatchObject({ untouched: 1, responded: 0 });
 
     await stores.journal.append({
@@ -7866,20 +7870,14 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect((await read()).backlog.byState).toMatchObject({ untouched: 0, responded: 1 });
   });
 
-  it('走行中の委譲が在れば delegated が増え、終わっていれば増えない（activeManagerIds が core へ渡っている）', async () => {
-    await stores.commitments.open({
-      id: 'cmt-1',
-      at: ago(10),
-      origin: 'human',
-      source: 'conv-d',
-      body: '調べて',
-    });
+  it('Job.taskId がその task を指す走行中の委譲が在れば delegated が増え、終わっていれば増えない', async () => {
+    await addTask('cmt-1', ago(10), { originConversationId: 'conv-d' });
     await stores.jobs.putJob({
       id: 'job-finished',
       createdAt: ago(5),
       updatedAt: ago(4),
       status: 'done',
-      conversationId: 'conv-d',
+      taskId: 'cmt-1',
       summary: 'x',
     });
     expect((await read()).backlog.byState.delegated).toBe(0);
@@ -7889,34 +7887,29 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       createdAt: ago(3),
       updatedAt: ago(3),
       status: 'running',
-      conversationId: 'conv-d',
+      taskId: 'cmt-1',
       summary: 'x',
     });
     expect((await read()).backlog.byState.delegated).toBe(1);
   });
 
-  it('unreadable / trimmedClosed はストアが返したまま completeness と basis に載る（0 に丸めない）', async () => {
-    const real = stores.commitments;
-    stores.commitments = {
+  it('unreadable はストアが返したまま completeness と basis に載る（0 に丸めない）。刈りの件数は載せない', async () => {
+    const real = stores.tasks;
+    stores.tasks = {
       ...real,
       async list(options) {
         const { entries } = await real.list(options);
         return {
           entries,
           unreadable: [
-            { id: 'broken-1', at: ago(1), reason: '壊れている1' },
-            { id: 'broken-2', at: ago(2), reason: '壊れている2' },
+            { id: 'broken-1', createdAt: ago(1), reason: '壊れている1' },
+            { id: 'broken-2', createdAt: ago(2), reason: '壊れている2' },
           ],
-          trimmedClosed: 7,
         };
       },
     };
     const body = await read();
-    expect(body.backlog.completeness).toEqual({
-      unreadable: 2,
-      trimmedClosed: 7,
-      unreadableJobs: 0,
-    });
+    expect(body.backlog.completeness).toEqual({ unreadable: 2, unreadableJobs: 0 });
     expect(body.forecast.basis.unreadable).toBe(2);
   });
 
@@ -7949,7 +7942,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   });
 
   it('応答は宣言した OpenAPI 応答スキーマを通っている（余剰も欠けも無い）', async () => {
-    await stores.commitments.open({ id: 'cmt-1', at: ago(300), origin: 'human', body: 'x' });
+    await addTask('cmt-1', ago(300));
     const body = await read();
     expect(progressResponseSchema.parse(body)).toEqual(body);
     expect(Object.keys(body).sort()).toEqual([

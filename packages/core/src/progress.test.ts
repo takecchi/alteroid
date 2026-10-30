@@ -4,8 +4,8 @@ import {
   MIN_CLOSED_IN_WINDOW,
   PROGRESS_FORECAST_METHOD,
   summarizeProgress,
-  type ProgressCommitmentRow,
-  type ProgressCommitments,
+  type ProgressTaskRow,
+  type ProgressTasks,
 } from './progress.js';
 import { commitmentOriginSchema, jobStatusSchema, type Job } from './schema.js';
 
@@ -15,22 +15,29 @@ const FROM = '2026-09-23T12:00:00.000Z';
 const TO = '2026-09-30T12:00:00.000Z';
 const OLD = '2026-08-01T00:00:00.000Z';
 
-function row(id: string, at: string, overrides: Partial<ProgressCommitmentRow> = {}) {
-  const r: ProgressCommitmentRow = { id, at, origin: 'human', body: `body ${id}`, ...overrides };
+// 進捗は Task（`TaskStore.list({ includeClosed: true })`）から数える（#5910）。開いた時刻は `createdAt`、
+// 返事を結ぶ会話は `originConversationId`。
+function row(id: string, createdAt: string, overrides: Partial<ProgressTaskRow> = {}) {
+  const r: ProgressTaskRow = {
+    id,
+    createdAt,
+    updatedAt: createdAt,
+    status: overrides.closedAt === undefined ? 'queued' : 'done',
+    origin: 'human',
+    title: `title ${id}`,
+    body: `body ${id}`,
+    ...overrides,
+  };
   return r;
 }
 
-function ledger(
-  entries: ProgressCommitmentRow[],
-  extra: { unreadable?: number; trimmedClosed?: number } = {},
-): ProgressCommitments {
+function tasks(entries: ProgressTaskRow[], extra: { unreadable?: number } = {}): ProgressTasks {
   return {
     entries,
     unreadable: Array.from({ length: extra.unreadable ?? 0 }, (_, i) => ({
       id: `u${i}`,
       reason: '読めない',
-    })) as unknown as ProgressCommitments['unreadable'],
-    trimmedClosed: extra.trimmedClosed ?? 0,
+    })),
   };
 }
 
@@ -46,17 +53,12 @@ function job(id: string, overrides: Partial<Job> = {}): Job {
 }
 
 function summarize(
-  entries: ProgressCommitmentRow[],
+  entries: ProgressTaskRow[],
   jobs: Job[] = [],
-  extra: {
-    unreadable?: number;
-    trimmedClosed?: number;
-    unreadableJobs?: number;
-    windowHours?: number;
-  } = {},
+  extra: { unreadable?: number; unreadableJobs?: number; windowHours?: number } = {},
 ) {
   return summarizeProgress({
-    commitments: ledger(entries, extra),
+    tasks: tasks(entries, extra),
     jobs,
     unreadableJobs: extra.unreadableJobs ?? 0,
     now: NOW,
@@ -64,7 +66,7 @@ function summarize(
   });
 }
 
-function closedInWindow(n: number, prefix = 'k'): ProgressCommitmentRow[] {
+function closedInWindow(n: number, prefix = 'k'): ProgressTaskRow[] {
   return Array.from({ length: n }, (_, i) =>
     row(`${prefix}${i}`, OLD, { closedAt: '2026-09-25T00:00:00.000Z' }),
   );
@@ -79,7 +81,7 @@ describe('summarizeProgress — 窓', () => {
     for (const windowHours of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() =>
         summarizeProgress({
-          commitments: ledger([]),
+          tasks: tasks([]),
           jobs: [],
           unreadableJobs: 0,
           now: NOW,
@@ -89,7 +91,7 @@ describe('summarizeProgress — 窓', () => {
     }
     expect(() =>
       summarizeProgress({
-        commitments: ledger([]),
+        tasks: tasks([]),
         jobs: [],
         unreadableJobs: 0,
         now: new Date('invalid'),
@@ -115,14 +117,25 @@ describe('summarizeProgress — backlog', () => {
     });
   });
 
-  it('台帳が空でも最古と中央値は null', () => {
+  it('task が空でも最古と中央値は null', () => {
     const b = summarize([]).backlog;
     expect(b.total).toBe(0);
     expect(b.age.oldestAt).toBeNull();
     expect(b.age.medianHours).toBeNull();
   });
 
-  it('byOrigin は commitmentOriginSchema の全値をキーに持ち、片付いた行は数えない', () => {
+  it('開いている＝queued / waiting / needs_decision（closedAt が無い）。閉じた task は数えない', () => {
+    const b = summarize([
+      row('q', OLD, { status: 'queued' }),
+      row('w', OLD, { status: 'waiting' }),
+      row('n', OLD, { status: 'needs_decision' }),
+      row('d', OLD, { status: 'done', closedAt: '2026-08-02T00:00:00.000Z' }),
+      row('c', OLD, { status: 'cancelled', closedAt: '2026-08-02T00:00:00.000Z' }),
+    ]).backlog;
+    expect(b.total).toBe(3);
+  });
+
+  it('byOrigin は commitmentOriginSchema の全値をキーに持ち、片付いた task は数えない', () => {
     const b = summarize([
       row('h1', OLD, { origin: 'human' }),
       row('h2', OLD, { origin: 'human' }),
@@ -134,7 +147,7 @@ describe('summarizeProgress — backlog', () => {
     expect(b.total).toBe(3);
   });
 
-  it('齢の境界: 1h ちょうどは <24h、24h ちょうどは <7d、7d ちょうどは ≥7d、59分は <1h', () => {
+  it('齢は createdAt から数える: 1h ちょうどは <24h、24h ちょうどは <7d、7d ちょうどは ≥7d、59分は <1h', () => {
     const b = summarize([
       row('a', '2026-09-30T11:01:00.000Z'),
       row('b', '2026-09-30T11:00:00.000Z'),
@@ -143,6 +156,14 @@ describe('summarizeProgress — backlog', () => {
     ]).backlog;
     expect(b.age.buckets).toEqual({ under1h: 1, under24h: 1, under7d: 1, over7d: 1 });
     expect(b.age.oldestAt).toBe('2026-09-23T12:00:00.000Z');
+  });
+
+  it('齢は updatedAt ではなく createdAt で決まる（状態を動かしても齢は若返らない）', () => {
+    const b = summarize([
+      row('a', '2026-09-01T00:00:00.000Z', { updatedAt: '2026-09-30T11:59:00.000Z' }),
+    ]).backlog;
+    expect(b.age.buckets.over7d).toBe(1);
+    expect(b.age.oldestAt).toBe('2026-09-01T00:00:00.000Z');
   });
 
   it('中央値: 奇数件は真ん中、偶数件は中央2つの平均（時間）。入力順に依らない', () => {
@@ -161,46 +182,72 @@ describe('summarizeProgress — backlog', () => {
     expect(even.age.medianHours).toBe(20);
   });
 
-  it('now より未来の at は齢 0（<1h）として数え、負の齢を作らない', () => {
+  it('now より未来の createdAt は齢 0（<1h）として数え、負の齢を作らない', () => {
     const b = summarize([row('f', '2026-09-30T13:00:00.000Z')]).backlog;
     expect(b.age.buckets.under1h).toBe(1);
     expect(b.age.medianHours).toBe(0);
   });
 
-  it('区分は Web の見せ方に揃う: human は 未着手/返答済み、human 以外は notApplicable、delegated は排他でない', () => {
-    const b = summarize([
-      row('u', OLD, { source: 'c1' }),
-      row('r', OLD, { source: 'c2', respondedAt: '2026-08-02T00:00:00.000Z' }),
-      row('ud', OLD, { source: 'c3', activeManagerIds: ['m1'] }),
-      row('rd', OLD, {
-        source: 'c4',
-        respondedAt: '2026-08-02T00:00:00.000Z',
-        activeManagerIds: ['m2', 'm3'],
-      }),
-      row('e', OLD, { source: 'c5', activeManagerIds: [] }),
-      row('mg', OLD, { origin: 'manager', activeManagerIds: ['m4'] }),
-      row('cl', OLD, {
-        source: 'c6',
-        respondedAt: '2026-08-02T00:00:00.000Z',
-        closedAt: '2026-08-03T00:00:00.000Z',
-      }),
-    ]).backlog;
+  it('区分: human は 未着手/返答済み、human 以外は notApplicable。委譲あり（Job.taskId が走行中）は排他でない', () => {
+    const b = summarize(
+      [
+        row('u', OLD, { originConversationId: 'c1' }),
+        row('r', OLD, { originConversationId: 'c2', respondedAt: '2026-08-02T00:00:00.000Z' }),
+        row('ud', OLD, { originConversationId: 'c3' }),
+        row('rd', OLD, {
+          originConversationId: 'c4',
+          respondedAt: '2026-08-02T00:00:00.000Z',
+        }),
+        row('mg', OLD, { origin: 'manager' }),
+        row('cl', OLD, {
+          originConversationId: 'c6',
+          respondedAt: '2026-08-02T00:00:00.000Z',
+          closedAt: '2026-08-03T00:00:00.000Z',
+        }),
+      ],
+      [
+        job('j-ud', { status: 'running', taskId: 'ud' }),
+        job('j-rd-1', { status: 'running', taskId: 'rd' }),
+        job('j-rd-2', { status: 'running', taskId: 'rd' }),
+        job('j-mg', { status: 'running', taskId: 'mg' }),
+        job('j-cl', { status: 'running', taskId: 'cl' }),
+      ],
+    ).backlog;
     expect(b.byState).toEqual({
-      untouched: 3,
+      untouched: 2,
       responded: 2,
-      delegated: 2,
+      delegated: 3,
       notApplicable: 1,
       unjudgeable: 0,
     });
     expect(b.byState.untouched + b.byState.responded + b.byState.notApplicable).toBe(b.total);
   });
 
-  it('source の無い human の行は untouched でなく unjudgeable に数え、source のある行は今までどおり（#4817）', () => {
+  it('委譲あり: Job.taskId がその task を指し、isRunningJobStatus が真（running）のものだけ。終わった・人間待ち・別の task は数えない', () => {
+    const b = summarize(
+      [
+        row('t1', OLD, { originConversationId: 'c1' }),
+        row('t2', OLD, { originConversationId: 'c2' }),
+        row('t3', OLD, { originConversationId: 'c3' }),
+        row('t4', OLD, { originConversationId: 'c4' }),
+      ],
+      [
+        job('a', { status: 'running', taskId: 't1' }),
+        job('b', { status: 'done', taskId: 't2' }),
+        job('c', { status: 'waiting_human', taskId: 't3' }),
+        job('d', { status: 'running', taskId: 'other' }),
+        job('e', { status: 'running', conversationId: 'c4' }),
+      ],
+    ).backlog;
+    expect(b.byState.delegated).toBe(1);
+  });
+
+  it('originConversationId の無い human の task は untouched でなく unjudgeable に数える（返事を結べない）', () => {
     const b = summarize([
       row('nosrc', OLD),
-      row('nosrc-d', OLD, { activeManagerIds: ['m1'] }),
-      row('src', OLD, { source: 'c1' }),
-      row('src-r', OLD, { source: 'c2', respondedAt: '2026-08-02T00:00:00.000Z' }),
+      row('nosrc-d', OLD),
+      row('src', OLD, { originConversationId: 'c1' }),
+      row('src-r', OLD, { originConversationId: 'c2', respondedAt: '2026-08-02T00:00:00.000Z' }),
       row('mg', OLD, { origin: 'manager' }),
     ]).backlog;
     expect(b.byState.unjudgeable).toBe(2);
@@ -212,15 +259,15 @@ describe('summarizeProgress — backlog', () => {
     ).toBe(b.total);
   });
 
-  it('completeness は unreadable と trimmedClosed をそのまま運ぶ（unreadable は total に入らない）', () => {
-    const b = summarize([row('a', OLD)], [], { unreadable: 2, trimmedClosed: 5 }).backlog;
-    expect(b.completeness).toEqual({ unreadable: 2, trimmedClosed: 5, unreadableJobs: 0 });
+  it('completeness は unreadable をそのまま運ぶ（unreadable は total に入らない）。刈りの件数の欄は無い', () => {
+    const b = summarize([row('a', OLD)], [], { unreadable: 2 }).backlog;
+    expect(b.completeness).toEqual({ unreadable: 2, unreadableJobs: 0 });
     expect(b.total).toBe(1);
   });
 
-  it('completeness.unreadableJobs は読めない委譲の行の数をそのまま運ぶ（台帳の欠けとは別の欄）（#2345）', () => {
+  it('completeness.unreadableJobs は読めない委譲の行の数をそのまま運ぶ（task の欠けとは別の欄）（#2345）', () => {
     const b = summarize([row('a', OLD)], [], { unreadableJobs: 3 }).backlog;
-    expect(b.completeness).toEqual({ unreadable: 0, trimmedClosed: 0, unreadableJobs: 3 });
+    expect(b.completeness).toEqual({ unreadable: 0, unreadableJobs: 3 });
   });
 });
 
@@ -281,7 +328,7 @@ describe('summarizeProgress — inProgress', () => {
 });
 
 describe('summarizeProgress — throughput（窓は両端を含む）', () => {
-  it('opened / closed は at / closedAt が [from, to] の中の行を数える', () => {
+  it('tasksOpened / tasksClosed は createdAt / closedAt が [from, to] の中の task を数える', () => {
     const t = summarize([
       row('at-from', FROM),
       row('before-from', '2026-09-23T11:59:59.999Z'),
@@ -292,8 +339,16 @@ describe('summarizeProgress — throughput（窓は両端を含む）', () => {
       row('cl-to', OLD, { closedAt: TO }),
       row('cl-after', OLD, { closedAt: '2026-09-30T12:00:00.001Z' }),
     ]).throughput;
-    expect(t.commitmentsOpened).toBe(2);
-    expect(t.commitmentsClosed).toBe(2);
+    expect(t.tasksOpened).toBe(2);
+    expect(t.tasksClosed).toBe(2);
+  });
+
+  it('throughput は新しい欄名だけを持つ（commitmentsOpened / commitmentsClosed / mayBeUndercounted は無い）', () => {
+    expect(Object.keys(summarize([]).throughput).sort()).toEqual([
+      'delegationsEnded',
+      'tasksClosed',
+      'tasksOpened',
+    ]);
   });
 
   it('終わった委譲は、終端状態かつ updatedAt が窓の中のものだけ。近似であることを basis に残す', () => {
@@ -314,7 +369,7 @@ describe('summarizeProgress — throughput（窓は両端を含む）', () => {
 });
 
 describe('summarizeProgress — forecast', () => {
-  const anchored = (rows: ProgressCommitmentRow[]) => [row('anchor', OLD), ...rows];
+  const anchored = (rows: ProgressTaskRow[]) => [row('anchor', OLD), ...rows];
 
   it('estimated: open / (closedInWindow / windowHours)。basis と notice を伴う', () => {
     const f = summarize(
@@ -410,149 +465,64 @@ describe('summarizeProgress — forecast', () => {
     expect(f).toMatchObject({ state: 'unavailable', reason: 'closed_too_few' });
   });
 
-  describe('ledger_younger_than_window', () => {
-    it('台帳の最古の at が from より新しい', () => {
+  describe('tasks_younger_than_window', () => {
+    it('task の最古の createdAt が from より新しい', () => {
       const f = summarize([
-        ...closedInWindow(3).map((r) => ({ ...r, at: '2026-09-24T00:00:00.000Z' })),
+        ...closedInWindow(3).map((r) => ({ ...r, createdAt: '2026-09-24T00:00:00.000Z' })),
         row('o', '2026-09-25T00:00:00.000Z'),
       ]).forecast;
-      expect(f).toMatchObject({ state: 'unavailable', reason: 'ledger_younger_than_window' });
+      expect(f).toMatchObject({ state: 'unavailable', reason: 'tasks_younger_than_window' });
     });
 
-    it('最古の at がちょうど from なら窓を覆っている（若くない）', () => {
+    it('最古の createdAt がちょうど from なら窓を覆っている（若くない）', () => {
       const f = summarize([
         row('edge', FROM),
-        ...closedInWindow(3).map((r) => ({ ...r, at: FROM })),
+        ...closedInWindow(3).map((r) => ({ ...r, createdAt: FROM })),
       ]).forecast;
       expect(f.state).not.toBe('unavailable');
     });
 
     it('最古が from の 1ms 後なら若い', () => {
       const f = summarize([row('edge', '2026-09-23T12:00:00.001Z')]).forecast;
-      expect(f).toMatchObject({ state: 'unavailable', reason: 'ledger_younger_than_window' });
+      expect(f).toMatchObject({ state: 'unavailable', reason: 'tasks_younger_than_window' });
     });
 
-    it('行が1つも無い台帳（unreadable だけでも）は若い扱い', () => {
+    it('task が1つも無い（unreadable だけでも）場合は若い扱い', () => {
       expect(summarize([]).forecast).toMatchObject({
         state: 'unavailable',
-        reason: 'ledger_younger_than_window',
+        reason: 'tasks_younger_than_window',
       });
       expect(summarize([], [], { unreadable: 2 }).forecast).toMatchObject({
         state: 'unavailable',
-        reason: 'ledger_younger_than_window',
+        reason: 'tasks_younger_than_window',
       });
     });
   });
 
-  describe('history_incomplete（trimmedClosed の境界）', () => {
-    it('trimmedClosed = 0 なら、片付き行が窓の中にしか無くても history_incomplete にしない', () => {
-      const f = summarize(anchored(closedInWindow(3))).forecast;
-      expect(f.state).toBe('estimated');
-    });
-
-    it('trimmedClosed > 0 で、残っている片付き行の最古が窓より前なら estimated（窓の中は欠けていない）', () => {
-      const f = summarize(
-        anchored([
-          row('old-closed', OLD, { closedAt: '2026-09-23T11:59:59.999Z' }),
-          ...closedInWindow(3),
-          row('o', '2026-09-01T00:00:00.000Z'),
-        ]),
-        [],
-        { trimmedClosed: 7 },
-      ).forecast;
-      expect(f.state).toBe('estimated');
-    });
-
-    it('trimmedClosed > 0 で、残っている最古の closedAt が窓の中なら history_incomplete', () => {
-      const f = summarize(anchored(closedInWindow(3)), [], { trimmedClosed: 1 }).forecast;
-      expect(f).toMatchObject({ state: 'unavailable', reason: 'history_incomplete' });
-    });
-
-    it('残っている最古の closedAt がちょうど from なら history_incomplete（窓は from を含む）', () => {
-      const f = summarize(
-        anchored([...closedInWindow(3), row('edge', OLD, { closedAt: FROM })]),
-        [],
-        { trimmedClosed: 1 },
-      ).forecast;
-      expect(f).toMatchObject({ state: 'unavailable', reason: 'history_incomplete' });
-    });
-
-    it('trimmedClosed > 0 で片付き行が1件も残っていなければ history_incomplete（判定できないので数を作らない）', () => {
-      const f = summarize(anchored([]), [], { trimmedClosed: 1 }).forecast;
-      expect(f).toMatchObject({ state: 'unavailable', reason: 'history_incomplete' });
-    });
-  });
-
-  describe('throughput.mayBeUndercounted（#3698。history_incomplete と同じ条件を、見込みの順序と独立に計算する）', () => {
-    const under = (
-      entries: ProgressCommitmentRow[],
-      extra: { trimmedClosed?: number } = {},
-    ): boolean => summarize(entries, [], extra).throughput.mayBeUndercounted;
-
-    it('trimmedClosed = 0 なら偽（片付き行が窓の中にしか無くても）', () => {
-      expect(under(anchored(closedInWindow(3)))).toBe(false);
-    });
-
-    it('trimmedClosed > 0 で、残っている最古の closedAt が窓より前なら偽', () => {
-      expect(
-        under(anchored([row('old-closed', OLD, { closedAt: '2026-09-23T11:59:59.999Z' })]), {
-          trimmedClosed: 7,
-        }),
-      ).toBe(false);
-    });
-
-    it('trimmedClosed > 0 で、残っている最古の closedAt が窓の中なら真', () => {
-      expect(under(anchored(closedInWindow(3)), { trimmedClosed: 1 })).toBe(true);
-    });
-
-    it('残っている最古の closedAt がちょうど from なら真（窓は from を含む）', () => {
-      expect(under(anchored([row('edge', OLD, { closedAt: FROM })]), { trimmedClosed: 1 })).toBe(
-        true,
-      );
-    });
-
-    it('trimmedClosed > 0 で片付き行が1件も残っていなければ真', () => {
-      expect(under(anchored([]), { trimmedClosed: 1 })).toBe(true);
-    });
-
-    it('ledger_younger_than_window が見込みで先に勝つ台帳でも、刈りがあれば真（独立に計算する）', () => {
-      const s = summarize([row('young', '2026-09-25T00:00:00.000Z')], [], { trimmedClosed: 3 });
-      expect(s.forecast).toMatchObject({ reason: 'ledger_younger_than_window' });
-      expect(s.throughput.mayBeUndercounted).toBe(true);
-    });
-
-    it('未了が0件で見込みが estimated(0) でも、刈りがあれば真', () => {
-      const s = summarize(closedInWindow(3), [], { trimmedClosed: 2 });
-      expect(s.forecast).toMatchObject({ state: 'estimated', hoursToDrain: 0 });
-      expect(s.throughput.mayBeUndercounted).toBe(true);
-    });
-
-    it('台帳が窓より若くても、刈りが無ければ偽', () => {
-      expect(under([row('young', '2026-09-25T00:00:00.000Z')])).toBe(false);
-    });
+  it('見込みの理由は closed_too_few / tasks_younger_than_window の2つだけ（刈りの理由 history_incomplete・旧名 ledger_younger_than_window は返さない）', () => {
+    const reasons = new Set<string>();
+    for (const forecast of [
+      summarize([]).forecast,
+      summarize(anchored(closedInWindow(1))).forecast,
+      summarize(anchored(closedInWindow(3))).forecast,
+    ]) {
+      if (forecast.state === 'unavailable') reasons.add(forecast.reason);
+    }
+    expect([...reasons].sort()).toEqual(['closed_too_few', 'tasks_younger_than_window']);
   });
 
   describe('複数の reason が当たるときの優先順位', () => {
-    it('ledger_younger_than_window は history_incomplete と closed_too_few に先立つ', () => {
-      const f = summarize([row('young', '2026-09-25T00:00:00.000Z')], [], {
-        trimmedClosed: 3,
-      }).forecast;
-      expect(f).toMatchObject({ reason: 'ledger_younger_than_window' });
-    });
-
-    it('history_incomplete は closed_too_few に先立つ', () => {
-      const f = summarize(anchored(closedInWindow(1)), [], { trimmedClosed: 3 }).forecast;
-      expect(f).toMatchObject({ reason: 'history_incomplete' });
+    it('tasks_younger_than_window は closed_too_few に先立つ', () => {
+      const f = summarize([row('young', '2026-09-25T00:00:00.000Z')]).forecast;
+      expect(f).toMatchObject({ reason: 'tasks_younger_than_window' });
     });
   });
 
   describe('未了が0件', () => {
-    it('閉じた件数が足りなくても、台帳が窓より若くても、履歴が欠けていても estimated で hoursToDrain は 0', () => {
-      const f = summarize(
-        [row('only', '2026-09-25T00:00:00.000Z', { closedAt: '2026-09-26T00:00:00.000Z' })],
-        [],
-        { trimmedClosed: 2 },
-      ).forecast;
+    it('閉じた件数が足りなくても、task が窓より若くても estimated で hoursToDrain は 0', () => {
+      const f = summarize([
+        row('only', '2026-09-25T00:00:00.000Z', { closedAt: '2026-09-26T00:00:00.000Z' }),
+      ]).forecast;
       expect(f.state).toBe('estimated');
       if (f.state !== 'estimated') return;
       expect(f.hoursToDrain).toBe(0);
@@ -567,7 +537,7 @@ describe('summarizeProgress — forecast', () => {
       expect(f.basis).toMatchObject({ open: 0, unreadable: 2 });
     });
 
-    it('行が1つも無い台帳は「0」ではなく unavailable（ledger_younger_than_window）', () => {
+    it('task が1つも無いときは「0」ではなく unavailable（tasks_younger_than_window）', () => {
       expect(summarize([]).forecast.state).toBe('unavailable');
     });
   });

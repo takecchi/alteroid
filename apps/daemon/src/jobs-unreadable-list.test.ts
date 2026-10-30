@@ -266,11 +266,7 @@ describe.each([
       text = describeProgress(await readProgress(stores, { now: new Date() }));
     });
 
-    expect(body?.backlog.completeness).toEqual({
-      unreadable: 0,
-      trimmedClosed: 0,
-      unreadableJobs: 1,
-    });
+    expect(body?.backlog.completeness).toEqual({ unreadable: 0, unreadableJobs: 1 });
     expect(text).toContain('※ 読めない委譲の行が 1 件ある');
   });
 
