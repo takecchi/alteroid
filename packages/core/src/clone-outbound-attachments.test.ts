@@ -10,6 +10,7 @@ import { fakeScriptedSdk, fakeSdk, waitForTerminal, wireEvents } from './clone-t
 import type { ScriptedStep } from './clone-test-harness.js';
 import { createClone } from './clone.js';
 import { credentialSourceRefusal, guessMediaTypeFromPath } from './file-put.js';
+import { guessOutboxMediaType } from './runner-outbox.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { AttachmentRef, ChatStreamEvent } from './schema.js';
@@ -94,6 +95,26 @@ describe('guessMediaTypeFromPath', () => {
   it('拡張子から推し、分からなければ octet-stream', () => {
     expect(guessMediaTypeFromPath('/a/b.PNG')).toBe('image/png');
     expect(guessMediaTypeFromPath('/a/b.unknownext')).toBe('application/octet-stream');
+  });
+
+  // 拡張子の表は1つ（#5800）: クローンの file_put・担い手の報告・CLI の /attach が同じ型を付ける
+  it('担い手の報告の型の推定も同じ表を引き、Office・tsv・htm・mov・mkv も型つきで届く（#5800）', () => {
+    const names = [
+      'r.docx',
+      'r.xlsx',
+      'r.pptx',
+      'r.tsv',
+      'r.htm',
+      'r.mov',
+      'r.mkv',
+      'r.PNG',
+      'r.md',
+    ];
+    for (const name of names) {
+      expect(guessOutboxMediaType(name)).toBe(guessMediaTypeFromPath(name));
+      expect(guessMediaTypeFromPath(name)).not.toBe('application/octet-stream');
+    }
+    expect(guessMediaTypeFromPath('r.mkv')).toBe('video/x-matroska');
   });
 });
 
