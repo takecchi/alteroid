@@ -618,7 +618,6 @@ function CommitmentBodyEditor({
   commitment,
   onCancel,
   onRequestCancel,
-  onDirtyChange,
   onTrack,
   onSettling,
 }: {
@@ -628,7 +627,6 @@ function CommitmentBodyEditor({
   /** 確認なしで閉じる。保存に成功したときだけ使う（保存直後は下書きが元と違って見えるため）。 */
   onCancel: () => void;
   onRequestCancel: () => void;
-  onDirtyChange: (dirty: boolean) => void;
 }) {
   const editCommitment = useEditCommitment();
   const keyboardHints = useKeyboardHintsVisible();
@@ -652,10 +650,6 @@ function CommitmentBodyEditor({
   const latestDraft = useLatest(draft);
 
   useReportDirty(commitment.id, dirty);
-  useEffect(() => {
-    onDirtyChange(dirty);
-  }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   // unmount では消さない: 行が一覧から外れたときに、ページが断りとして残すため。
   useEffect(() => {
     onTrack({ draft: dirty ? draft : undefined });
@@ -935,12 +929,11 @@ function OpenRow({
   const {
     editing,
     setEditing,
-    setDirty: setEditDirty,
     confirmingDiscard,
     setConfirmingDiscard,
     closeEditor,
     requestCloseEditor,
-  } = useDiscardGuard(() => {
+  } = useDiscardGuard(commitment.id, () => {
     restoreToggleFocus.current = true;
     track({ draft: undefined, editFailure: undefined });
   });
@@ -982,7 +975,6 @@ function OpenRow({
           commitment={commitment}
           onCancel={closeEditor}
           onRequestCancel={requestCloseEditor}
-          onDirtyChange={setEditDirty}
           onTrack={track}
           onSettling={settling}
         />

@@ -3,9 +3,9 @@ import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
-import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { LeaveGuardScope, useIsReportedDirty, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
 
 import {
@@ -88,7 +88,7 @@ function SchedulePage() {
    * アンマウントされて下書きも「ほかで消された」の案内も黙って消える。写しで同じ鍵の行を残し、枠を保つ。
    */
   const [editingEntry, setEditingEntry] = useState<ScheduleEntry | undefined>(undefined);
-  const [editDirty, setEditDirty] = useState(false);
+  const editDirty = useIsReportedDirty(EDIT_DIRTY_ID);
   const [switchingTo, setSwitchingTo] = useState<{ next: string | undefined } | undefined>(
     undefined,
   );
@@ -345,7 +345,6 @@ function SchedulePage() {
                       entry={entry}
                       onCancel={() => requestEditing(undefined)}
                       onSaved={() => openEditing(undefined)}
-                      onDirtyChange={setEditDirty}
                     />
                   )}
                 </li>
@@ -552,12 +551,10 @@ function ScheduleEditForm({
   entry,
   onCancel,
   onSaved,
-  onDirtyChange,
 }: {
   entry: ScheduledEntry;
   onCancel: () => void;
   onSaved: () => void;
-  onDirtyChange: (dirty: boolean) => void;
 }) {
   const createSchedule = useCreateSchedule();
   const [specDraft, setSpecDraft] = useState<ScheduleSpecDraft>(() => initialSpecDraft(entry.spec));
@@ -580,10 +577,6 @@ function ScheduleEditForm({
     specDraft.minutes !== initialSpec.minutes ||
     specDraft.expression !== initialSpec.expression;
   useReportDirty(EDIT_DIRTY_ID, dirty);
-  useEffect(() => {
-    onDirtyChange(dirty);
-  }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   const ready = request.trim() !== '';
 
