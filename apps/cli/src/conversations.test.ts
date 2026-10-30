@@ -147,7 +147,8 @@ describe('alteroid conversations list', () => {
 
     const text = read();
     expect(text).toContain('…ほか 4 件は省略');
-    expect(text).toContain('--limit を増やせば');
+    // limit の上限（200）や窓の外は増やしても出ないので、増やせば出るとは言わない（#3851 の /conversations と揃える。#5809）
+    expect(text).not.toContain('--limit を増やせば');
     expect(text).not.toContain('先頭には届いていない');
   });
 
@@ -260,7 +261,10 @@ describe('alteroid conversations list', () => {
 
     await conversationsListCommand();
 
-    expect(read()).toContain('会話はまだありません');
+    const text = read();
+    expect(text).toContain('会話はまだありません');
+    // 開ける会話が無いので、開き方の案内は出さない（#5809）
+    expect(text).not.toContain('中身を読むには');
   });
 
   it('クエリが不正（400）なら、読めなかったと言う', async () => {

@@ -87,7 +87,8 @@ import { createClient, type DaemonClient } from './client.js';
 import {
   fetchUnreadTotalLine,
   markConversationReadAfterReply,
-  unreadMark,
+  renderConversationsList,
+  type ConversationsListHints,
 } from './conversations.js';
 import {
   approvalLine,
@@ -1205,6 +1206,13 @@ export async function runResumeCommand(
   return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks, turn);
 }
 
+const SLASH_CONVERSATIONS_HINTS: ConversationsListHints = {
+  scan: 'scan=<N>',
+  limit: 'limit=<N>',
+  next: (cursor) => `/conversations cursor=${cursor}`,
+  show: '/conversation <番号|id>',
+};
+
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
                      行末の \\ で次の行へ続けて1発言にする（/ で始まる行は除く）。端末では貼り付けた複数行も1発言になり、Enter で送る
                      // で始めると、先頭の / を 1 つ外した文をそのまま発言として送る（例: //var/log/app.log を見て）
@@ -1750,50 +1758,12 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
-        await response.json();
+      const page = await response.json();
       stdout.write(`${await fetchUnreadTotalLine(auxClient)}\n`);
       listed.conversations.length = 0;
-      if (conversations.length === 0) {
-        stdout.write('（会話はまだありません）\n');
-      } else {
-        conversations.forEach((conversation, index) => {
-          listed.conversations.push(conversation.conversationId);
-          stdout.write(
-            `  [${index + 1}] ${conversation.conversationId}` +
-              `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
-              `  (${conversation.messages}件)${unreadMark(conversation.unreadCount)}\n`,
-          );
-          stdout.write(`      ${redactBody(conversation.preview)}\n`);
-        });
-      }
-      // 0件でも scanned を出す: 0件が「本当に無い」か「窓の外に残っている」かを人間が区別できなくなる。
-      // 広げる手の在り処は常に示す: 隠すと、広げる必要があるかもしれないことにすら気づけない。
-      stdout.write(
-        `  （人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
-          '残っているかもしれません — 判定できません。さらに見るには ' +
-          '`/conversations scan=<N>`（表示件数を増やすには limit=<N>。' +
-          'alteroid conversations list --scan / --limit でも同じことができます）\n',
-      );
-      if (!reachedStart) {
-        stdout.write(
-          `  （人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い会話が` +
-            '残っているかもしれません）\n',
-        );
-      }
-      if (hiddenByLimit > 0) {
-        stdout.write(
-          `  …ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
-            `新しい順に ${conversations.length} 件だけ出した）\n`,
-        );
-      }
-      // `limit` の上限 200 や `scan` の窓の外は、増やしても出ない。継続点だけが辿る手段。
-      if (nextCursor !== undefined) {
-        stdout.write(`  続きを読むには: /conversations cursor=${nextCursor}\n`);
-      }
-      if (conversations.length > 0) {
-        stdout.write('  /conversation <番号|id> で中身を読めます\n');
-      }
+      listed.conversations.push(...page.conversations.map((c) => c.conversationId));
+      // `alteroid conversations list` と同じ描画: 2つに割れると、経過や文体が片方だけずれる（#5809）。
+      stdout.write(`${renderConversationsList(page, SLASH_CONVERSATIONS_HINTS, Date.now())}\n`);
       return 'ok';
     }
 
