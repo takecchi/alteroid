@@ -5065,14 +5065,37 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('conv-1');
     expect(text).toContain('設計の相談');
-    expect(text).toContain('作成: 2026-08-16T10:00:00.000Z');
-    expect(text).toContain('更新: 2026-08-16T10:05:00.000Z');
+    // alteroid conversations list と同じ描画（renderConversationsList）で、経過を添える（#5809）
+    expect(text).toMatch(/作成: 2026-08-16T10:00:00\.000Z（[^）]+前）/);
+    expect(text).toMatch(/更新: 2026-08-16T10:05:00\.000Z（[^）]+前）/);
     expect(text).toContain('137');
-    expect(text).toContain('/conversation <番号|id>');
-    expect(text).toContain('alteroid conversations list --scan');
-    expect(text).toContain('--limit');
+    expect(text).toContain('中身を読むには: /conversation <番号|id>');
+    expect(text).toContain('広げるには scan=<N>、表示件数を増やすには limit=<N>');
     expect(text).not.toContain('先頭には届いていない');
     expect(text).not.toContain('…ほか');
+  });
+
+  it('/conversations の窓の注記は、CLI のほかの一覧と同じ文体（だ体）で書く（#5809）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-1',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 4,
+          preview: '設計の相談',
+        },
+      ],
+      conversationsScanned: 2000,
+      conversationsReachedStart: false,
+    });
+
+    await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
+
+    const text = read();
+    expect(text).toContain('判定できない');
+    expect(text).not.toMatch(/かもしれません|判定できません|読めます/);
   });
 
   it('/conversations は reachedStart が偽なら、先頭に届いていないと言う', async () => {
@@ -5173,10 +5196,12 @@ describe('chat の /conversations と /conversation', () => {
     await runSlashCommand('/conversations', ...slashArgs(client, emptyListed()));
 
     const text = read();
-    expect(text).toContain('会話はまだありません');
+    expect(text).toContain('会話はまだありません。');
     expect(text).toContain('5000');
-    expect(text).toContain('判定できません');
-    expect(text).toContain('alteroid conversations list --scan');
+    expect(text).toContain('判定できない');
+    expect(text).toContain('広げるには scan=<N>');
+    // 開ける会話が無いので、開き方の案内は出さない
+    expect(text).not.toContain('中身を読むには');
   });
 
   describe('未読の総数の1行（alteroid conversations list と同じ fetchUnreadTotalLine）', () => {
