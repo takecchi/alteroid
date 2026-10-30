@@ -2152,7 +2152,7 @@ describe('/edit（#3681）', () => {
     await type(h.stdin, '/detach all');
     h.stdin.write(ENTER);
     h.stdin.write(ENTER);
-    await waitFor(() => h.frame().includes('本文も添付も無いので送っていない'));
+    await waitFor(() => h.frame().includes('本文も添付も無いので送っていません'));
     await type(h.stdin, '/edit-cancel');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('編集をやめた'));
