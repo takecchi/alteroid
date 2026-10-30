@@ -8,6 +8,7 @@ import {
   loadApprovalDrafts,
   loadApprovalLeftoverSources,
   saveApprovalDrafts,
+  saveApprovalLeftoverSources,
   settleApprovalDraft,
   type ApprovalDrafts,
   type ApprovalLeftoverSource,
@@ -16,7 +17,8 @@ import {
 
 // 承認の画面（approvals.tsx）と会話の画面（chat.tsx）は、承認カードの下書きを同じ形・同じ保存先（sessionStorage）で持つ。
 // 持ち方を2か所に書くと、片方だけ epoch の扱いや畳み方がずれる。ここは両方で同じものだけを持つ。
-// 送信中の id・残った下書きの導出・控えの保存は画面ごとに違う（送信中は ref と state の二重か state だけか、導出は一覧の読み方、控えは何を残すか）ので持たない。
+// 送信中の id・残った下書きの導出は画面ごとに違う（送信中は ref と state の二重か state だけか、導出は一覧の読み方）ので持たない。
+// 控えの保存は形が同じ（下書きの残っている控えだけを残す）で、違うのは渡す控えだけなので、`usePersistApprovalLeftoverSources` に置く。
 
 /** `Record` から1つの key を落とした新しい `Record` を作る（key が無ければ同じ参照を返す）。 */
 export function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -153,4 +155,21 @@ export function usePersistApprovalDrafts(
       draftsEpoch.current,
     );
   }, [drafts, draftsEpoch, keep]);
+}
+
+/**
+ * 答えが通った承認の控えを `sessionStorage` へ写す。下書きの残っている承認の控えだけを残す（下書きを閉じた・送り切った控えは要らない）。
+ * どの控えを渡すかは画面ごとに違う（承認の画面は一覧から集めた分も含める）ので、呼び元が渡す。
+ */
+export function usePersistApprovalLeftoverSources(
+  sources: ApprovalLeftoverSources,
+  drafts: ApprovalDrafts,
+): void {
+  useEffect(() => {
+    saveApprovalLeftoverSources(
+      Object.fromEntries(
+        Object.entries(sources).filter(([id]) => id in drafts.texts || id in drafts.questions),
+      ),
+    );
+  }, [sources, drafts]);
 }

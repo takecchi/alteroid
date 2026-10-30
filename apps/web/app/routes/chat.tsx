@@ -49,7 +49,6 @@ import {
   loadEditDrafts,
   loadPendingAttachmentsNote,
   newClientMessageId,
-  saveApprovalLeftoverSources,
   saveChatDraft,
   saveChatDraftMark,
   saveEditDraft,
@@ -74,7 +73,11 @@ import { errorText } from '~/lib/error-text';
 import { LeaveGuardScope, useIsMounted, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { useFollowScroll } from '~/lib/use-follow-scroll';
 import { useLatest } from '~/lib/use-latest';
-import { useApprovalDraftState, usePersistApprovalDrafts } from '~/lib/use-approval-draft-state';
+import {
+  useApprovalDraftState,
+  usePersistApprovalDrafts,
+  usePersistApprovalLeftoverSources,
+} from '~/lib/use-approval-draft-state';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import {
@@ -602,15 +605,7 @@ export function ChatPane({
     [settledApprovalIds, leftoverSources],
   );
   usePersistApprovalDrafts(approvalDraftState, keepApprovalDraft);
-  useEffect(() => {
-    saveApprovalLeftoverSources(
-      Object.fromEntries(
-        Object.entries(leftoverSources).filter(
-          ([id]) => id in approvalDrafts.texts || id in approvalDrafts.questions,
-        ),
-      ),
-    );
-  }, [leftoverSources, approvalDrafts]);
+  usePersistApprovalLeftoverSources(leftoverSources, approvalDrafts);
   const leftovers = useMemo(
     () =>
       Object.entries(leftoverSources)
