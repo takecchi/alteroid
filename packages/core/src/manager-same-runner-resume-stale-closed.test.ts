@@ -321,15 +321,6 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       await pool.stop();
     });
 
-    it('世代を持たない closed(lost) は、従来どおり lost にする（古い runner との後方互換）', async () => {
-      const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
-      runnerA.emit?.(lostClosed());
-      await settle();
-      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-same');
-      expect(after?.status).toBe('lost');
-      await pool.stop();
-    });
-
     it('追っている世代があるのに世代を持たない closed(lost) は、食い違いと同じに捨てて running のまま（#5764）', async () => {
       const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
       runnerA.emit?.(lostClosed());
@@ -401,7 +392,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       await pool.stop();
     });
 
-    it('古い世代の report は、台帳の lastReport を書き換えない。新しい世代・世代なしの report は従来どおり書く', async () => {
+    it('古い世代の report は、台帳の lastReport を書き換えない。世代なしの report も同じに書き換えない（#5764）', async () => {
       const { pool, stores, runnerA } = await resumedOnSameRunner({ generation: 'gen-new' });
       const report = (text: string, sessionGeneration?: string): RunnerEvent => ({
         type: 'report',
@@ -420,9 +411,10 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       runnerA.emit?.(report('古いセッションの報告', 'gen-old'));
       await settle();
       expect(await lastReport()).toBe('新しいセッションの報告');
+      // 世代なしの report は、追っている世代があれば食い違いと同じに捨てる（#5764）
       runnerA.emit?.(report('世代なしの報告'));
       await settle();
-      expect(await lastReport()).toBe('世代なしの報告');
+      expect(await lastReport()).toBe('新しいセッションの報告');
       await pool.stop();
     });
   });
