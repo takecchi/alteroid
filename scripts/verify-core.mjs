@@ -280,7 +280,7 @@ const WORKSPACE_CONCURRENCY_FLAG = '--workspace-concurrency';
 
 // `=` の形と空白区切りの形の両方を受ける: 片方だけだと、もう片方が静かに無視されて既定へ落ち、「効かない」ことが出力に出ないため。
 // 1以上の整数でなければ落とす: 黙って既定へ倒すと、打ち間違いが「効かなかった」という無言の形で出るため。
-export function readWorkspaceConcurrency(args) {
+function readWorkspaceConcurrency(args) {
   const eqPrefix = WORKSPACE_CONCURRENCY_FLAG + '=';
   const eqArg = args.find((a) => a.startsWith(eqPrefix));
   let raw;

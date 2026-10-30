@@ -20,7 +20,7 @@ function readEscapeDirective(lines) {
   return DEFAULT_ESCAPE;
 }
 
-export function splitInstructions(content) {
+function splitInstructions(content) {
   const lines = content.split(/\r?\n/);
   const escape = readEscapeDirective(lines);
   const instructions = [];

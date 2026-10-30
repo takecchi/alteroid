@@ -9,7 +9,7 @@
 // 欄が無い版・行は数えずに「取れなかった件数」を出す（0 に丸めない）。
 
 /** #5469 P8 前段（result-hist.md）で置いた仮定。実測と並べて、当たったかを見る。 */
-export const ASSUMPTIONS = {
+const ASSUMPTIONS = {
   /** 要約直後の文脈 P（tokens）。固定 約 66K + 要約本文と再注入 約 20K。 */
   floorTokens: 86_000,
   /** 要約の閾値 T = 窓 300K − 余白 33K。 */
@@ -28,17 +28,17 @@ export const ASSUMPTIONS = {
 };
 
 /** 仮定と実測の差を「概ね一致」と見る幅。 */
-export const AGREEMENT_TOLERANCE = 0.25;
+const AGREEMENT_TOLERANCE = 0.25;
 
 /** 枠の知らせ（デーモンの runner 登録簿が出す外部の合図）の source。復旧の知らせも同じ source で出るので、枠の知らせの推定は多めに出うる。`daemon-self-notice.ts` の DAEMON_RUNNER_REGISTRY_SOURCE と同じ値。 */
-export const QUOTA_SOURCE = 'runner-registry';
+const QUOTA_SOURCE = 'runner-registry';
 
 /** 行を turn_timing へ結ぶ最大の時間差（ms）。同じターンの終わりの記帳は数 ms〜数秒の差に収まる。 */
-export const MATCH_WINDOW_MS = 30_000;
+const MATCH_WINDOW_MS = 30_000;
 
-export const CLASS_ORDER = ['human', 'report', 'timer', 'initiative', 'external', 'quota', 'other'];
+const CLASS_ORDER = ['human', 'report', 'timer', 'initiative', 'external', 'quota', 'other'];
 
-export const CLASS_LABELS = {
+const CLASS_LABELS = {
   human: '人間',
   report: '報告',
   timer: '定期 tick',

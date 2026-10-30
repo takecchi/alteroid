@@ -59,7 +59,7 @@ export function needsTzPin(fileHits) {
   return fileHits.some((h) => h.category === 'B' && !h.exempt);
 }
 
-export function formatTzGuardMessage(violations) {
+function formatTzGuardMessage(violations) {
   const byPath = new Map();
   for (const h of violations) {
     if (!byPath.has(h.path)) byPath.set(h.path, []);
@@ -87,7 +87,7 @@ export function formatTzGuardMessage(violations) {
   ].join('\n');
 }
 
-export function formatStaleAllowlistMessage(stalePaths) {
+function formatStaleAllowlistMessage(stalePaths) {
   return [
     `check-test-tz-fixed: 許可リストに載っているが、もう TZ 固定が必要な hit が無いファイルが ${stalePaths.length} 件ある:`,
     ...stalePaths.map((p) => `  ${p}`),

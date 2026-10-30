@@ -9,7 +9,7 @@ const HEX40 = /^[0-9a-f]{40}$/;
 const ENV_NAMES: ReadonlySet<string> = new Set(['client', 'ssr']);
 
 // 並行して走る他人の vitest の現役ディレクトリを消さないための線: vitest 1 回がこれより長く走ることは無い、という判断。
-export const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 export interface SweepStat {
   isDirectory(): boolean;
@@ -23,7 +23,7 @@ export interface SweepFs {
   readdir(path: string): string[];
 }
 
-export const realSweepFs: SweepFs = {
+const realSweepFs: SweepFs = {
   lstat: (p) => lstatSync(p),
   readdir: (p) => readdirSync(p),
 };
@@ -55,7 +55,7 @@ export function isStaleVitestTmpDir(
   return true;
 }
 
-export function isDirectChildOfTmpdirWithVitestName(p: unknown): p is string {
+function isDirectChildOfTmpdirWithVitestName(p: unknown): p is string {
   return (
     typeof p === 'string' &&
     VITEST_TMPDIR_NAME.test(basename(p)) &&

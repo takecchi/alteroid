@@ -7,9 +7,9 @@ import { extractClosingKeywordReferences } from './check-pr-closing-keywords-cor
 // 閾値を上げない: 上げるほど、人手のレビューが要らない偶然の一致が一覧に混ざるため。
 export const DEFAULT_THRESHOLD_SECONDS = 10;
 
-export const TRAILER_CLOSE_ACTOR = 'github-actions[bot]';
+const TRAILER_CLOSE_ACTOR = 'github-actions[bot]';
 
-export const TRAILER_CLOSE_MAX_DELAY_SECONDS = 90;
+const TRAILER_CLOSE_MAX_DELAY_SECONDS = 90;
 
 function findNearestPriorMerge(mergedPRs, closedAtMs) {
   let best = null;

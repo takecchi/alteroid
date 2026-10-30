@@ -1,10 +1,10 @@
 // CSS 全体のサイズ予算にせず `data:font/` を直接見る: 無関係な CSS の増減で誤って落ちるため（オーナー判断）。
 
-export const INLINE_FONT = /data:font\//i;
+const INLINE_FONT = /data:font\//i;
 
-export const INLINE_APP_FONT = /data:application\/font-/i;
+const INLINE_APP_FONT = /data:application\/font-/i;
 
-export const INLINE_APP_X_FONT = /data:application\/x-font-/i;
+const INLINE_APP_X_FONT = /data:application\/x-font-/i;
 
 export const PATTERNS = [
   { name: 'data:font/', re: INLINE_FONT },
