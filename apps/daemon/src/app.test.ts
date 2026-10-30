@@ -10094,7 +10094,8 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     const response = await put(withCredentials(), [{ name: 'GH_TOKEN', value: DUMMY_VALUE }]);
     const body: unknown = await response.json();
     expect(credentialsUpdateResponseSchema.safeParse(body).success).toBe(true);
-    const { restartRequired: _dropped, ...withoutField } = body as Record<string, unknown>;
+    const withoutField: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+    delete withoutField.restartRequired;
     expect(credentialsUpdateResponseSchema.safeParse(withoutField).success).toBe(false);
   });
 
