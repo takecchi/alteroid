@@ -785,7 +785,7 @@ async function throwIfProfileChanged(
 
 /**
  * `ifMatch` は読んだときの行の版（#4592）。`string` はその版の行が在ること、`null` は行が無いこと（無いときだけ作る）。
- * 省けば比べない（古いデーモン・版を持っていない呼び手）。
+ * 省けば比べない（版を持っていない呼び手）。
  */
 export function useSetProfileEntry() {
   const api = useApi();
@@ -807,21 +807,6 @@ export function useSetProfileEntry() {
       });
       throwIfProfileRejected(result);
       await throwIfProfileChanged(result, () => mutate(KEY.profile));
-      const updated = unwrap(result);
-      await mutate(KEY.profile);
-      return updated;
-    },
-    [api, mutate],
-  );
-}
-
-export function useSetProfileLegacy() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (script: string): Promise<ProfileUpdateResult> => {
-      const result = await api.api.PUT('/profile', { body: { script } });
-      throwIfProfileRejected(result);
       const updated = unwrap(result);
       await mutate(KEY.profile);
       return updated;

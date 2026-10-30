@@ -562,7 +562,7 @@ describe('/profile 画面 — 行を外す', () => {
   });
 });
 
-describe('/profile 画面 — 古いデーモン（旧形式の応答）', () => {
+describe('/profile 画面 — 旧い形の応答（entries が無い）', () => {
   const OLD = {
     script: `${SECRET_LINE}\n`,
     updatedAt: '2026-09-20T00:00:00.000Z',
@@ -570,95 +570,25 @@ describe('/profile 画面 — 古いデーモン（旧形式の応答）', () =>
     bytes: 41,
   };
 
-  function stubOldDaemon(initial: unknown = OLD) {
-    const calls: { method: string; path: string; body?: unknown }[] = [];
-    let current = initial;
+  function stubOldDaemon() {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : null;
       const url = request?.url ?? String(input);
       const method = request?.method ?? init?.method ?? 'GET';
-      const path = new URL(url).pathname;
-      if (method === 'PUT' && path === '/profile') {
-        const body = (request !== null ? await request.json() : JSON.parse(String(init?.body))) as {
-          script: string;
-        };
-        calls.push({ method, path, body });
-        current = body.script.length === 0 ? { script: '' } : { ...OLD, script: body.script };
-        return json(
-          { updatedAt: 'T', sha256: 'n'.repeat(12), bytes: 5, clone: { ok: true }, runners: [] },
-          200,
-        );
-      }
-      calls.push({ method, path });
-      if (method === 'GET' && path === '/profile') return json(current, 200);
+      if (method === 'GET' && new URL(url).pathname === '/profile') return json(OLD, 200);
       return json({ error: 'Not Found' }, 404);
     }) as typeof fetch;
-    return { calls };
   }
 
-  it('落ちずに default 1行として本文が見え、デーモンが古い旨を出す。識別用の値・渡す先は消さない', async () => {
+  it('読み替えずに、読めない形で届いた旨のエラーを出し、一覧の本文は出さない', async () => {
     stubOldDaemon();
     renderScreen();
 
-    expect(await screen.findByText('default')).toBeTruthy();
-    expect(screen.getByText(/サーバが古いので/)).toBeTruthy();
-    expect(screen.getByText('共通')).toBeTruthy();
-    expect(screen.getByText('41 バイト')).toBeTruthy();
-    expect(screen.getByText(/o{12}/)).toBeTruthy();
+    expect(
+      await screen.findByText(/プロファイルの応答が読めない形で届いた（entries が無い）/),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: / を編集する$/ })).toBeNull();
     expect(document.body.textContent).not.toContain('very-secret-value');
-    fireEvent.click(screen.getByRole('button', { name: / の本文を表示する$/ }));
-    expect(screen.getByLabelText('プロファイルの行 default の本文').textContent).toContain(
-      SECRET_LINE,
-    );
-  });
-
-  it('行ごとの書き込み（外す・追加）は出さない', async () => {
-    stubOldDaemon();
-    renderScreen();
-
-    await screen.findByText('default');
-    expect(screen.queryByRole('button', { name: / の行を外す$/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: '行を追加する' })).toBeNull();
-  });
-
-  it('本文の編集は従来の PUT /profile {script} へ倒れる（名前・渡す先は固定）', async () => {
-    const { calls } = stubOldDaemon();
-    renderScreen();
-
-    fireEvent.click(await screen.findByRole('button', { name: / を編集する$/ }));
-    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').disabled).toBe(true);
-    expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの渡す先').disabled).toBe(true);
-    const next = 'export NEW=1\n';
-    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
-      target: { value: next },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
-    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
-
-    expect(await screen.findByText(/プロファイルの行 default を更新した。/)).toBeTruthy();
-    expect(calls.filter((call) => call.method === 'PUT')).toEqual([
-      { method: 'PUT', path: '/profile', body: { script: next } },
-    ]);
-    expect(calls.some((call) => call.path.startsWith('/profile/'))).toBe(false);
-  });
-
-  it('何も置かれていない旧形式（script が空）は「置かれていない」。追加は default 1行だけ', async () => {
-    const { calls } = stubOldDaemon({ script: '' });
-    renderScreen();
-
-    expect(await screen.findByText('置かれていない')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '行を追加する' }));
-    expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').value).toBe('default');
-    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
-      target: { value: 'export A=1\n' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
-    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
-
-    expect(await screen.findByText(/プロファイルの行 default を更新した。/)).toBeTruthy();
-    expect(calls.filter((call) => call.method === 'PUT').map((call) => call.path)).toEqual([
-      '/profile',
-    ]);
   });
 });
 

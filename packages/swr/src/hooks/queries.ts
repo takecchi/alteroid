@@ -639,7 +639,7 @@ export function useCredentials() {
 // フォーカス・再接続で再取得しない: 本文には鍵が入りうるので、画面が開いているあいだ勝手に何度も運ばせない
 export function useProfile() {
   const api = useApi();
-  // 古いデーモン（`entries` 無しの応答）も `default` 1行として読める形にする: 「新しい画面 × 古いデーモン」の窓が必ず生じるため
+  // `entries` 無しの応答（旧い形）は normalizeProfile が投げる。SWR の error として見える
   return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap).then(normalizeProfile), {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,

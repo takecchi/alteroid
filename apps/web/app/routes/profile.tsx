@@ -28,14 +28,8 @@ import {
   useProfile,
   useRemoveProfileEntry,
   useSetProfileEntry,
-  useSetProfileLegacy,
 } from '@alteroid/swr';
-import {
-  formatDateTime,
-  hasRunnerPushFailure,
-  LEGACY_PROFILE_NOTICE,
-  redactError,
-} from '@alteroid/logic';
+import { formatDateTime, hasRunnerPushFailure, redactError } from '@alteroid/logic';
 import type {
   NormalizedProfile,
   ProfileEntryView,
@@ -107,9 +101,6 @@ function ProfileBody() {
               行は名前の辞書順につなげて効く（Linux の /etc/profile.d と同じ並べ方）。
             </p>
             <ErrorNote error={error} />
-            {data?.legacy === true && (
-              <p className="text-[11px] break-words text-warn">{LEGACY_PROFILE_NOTICE}</p>
-            )}
             {isLoading ? (
               <Spinner />
             ) : (
@@ -140,8 +131,6 @@ function ProfileBody() {
           <ProfileEditor
             key={editorSerial}
             isCurrent={() => editorSerialRef.current === editorSerial}
-            legacy={data.legacy}
-            hasDefault={data.entries.some((entry) => entry.name === 'default')}
             entries={data.entries}
             editor={editor}
             setEditor={setEditor}
@@ -215,29 +204,26 @@ function ProfileList({
   }
   return (
     <div className="flex flex-col gap-3 text-sm">
-      {!profile.legacy && (
-        <KeyValueList
-          labelWidth="8rem"
-          items={[
-            {
-              label: 'クローン用の合成',
-              value: profile.clone.sha256 ?? '（掛かる行なし）',
-              mono: true,
-            },
-            {
-              label: 'マネージャー用の合成',
-              value: profile.runner.sha256 ?? '（掛かる行なし）',
-              mono: true,
-            },
-          ]}
-        />
-      )}
+      <KeyValueList
+        labelWidth="8rem"
+        items={[
+          {
+            label: 'クローン用の合成',
+            value: profile.clone.sha256 ?? '（掛かる行なし）',
+            mono: true,
+          },
+          {
+            label: 'マネージャー用の合成',
+            value: profile.runner.sha256 ?? '（掛かる行なし）',
+            mono: true,
+          },
+        ]}
+      />
       <ul className="-mx-4">
         {profile.entries.map((entry) => (
           <EntryRow
             key={entry.name}
             entry={entry}
-            legacy={profile.legacy}
             onEdit={() => onEdit(entry)}
             onRemoved={onRemoved}
           />
@@ -252,12 +238,10 @@ function ProfileList({
 
 function EntryRow({
   entry,
-  legacy,
   onEdit,
   onRemoved,
 }: {
   entry: ProfileEntryView;
-  legacy: boolean;
   onEdit: () => void;
   onRemoved: (name: string, update: ProfileUpdateResult | null) => void;
 }) {
@@ -317,7 +301,7 @@ function EntryRow({
         <Button size="sm" aria-label={`${entry.name} を編集する`} onClick={onEdit}>
           編集する
         </Button>
-        {!confirming && !legacy && (
+        {!confirming && (
           <Button
             variant="danger"
             size="sm"
@@ -371,14 +355,12 @@ interface EditorState {
   original?: Pick<ProfileEntryView, 'script' | 'scope'>;
   /**
    * 編集を開いた時点（または直前に自分が保存した時点）の行の版。保存の `ifMatch` に送る（#4592）。
-   * 新しい行の入力では持たない（送るときに一覧から決める）。古いデーモンは版を返さないので `undefined`。
+   * 新しい行の入力では持たない（送るときに一覧から決める）。
    */
   baseVersion?: string;
 }
 
 function ProfileEditor({
-  legacy,
-  hasDefault,
   entries,
   editor,
   setEditor,
@@ -386,8 +368,6 @@ function ProfileEditor({
   onSaved,
   isCurrent,
 }: {
-  legacy: boolean;
-  hasDefault: boolean;
   entries: readonly ProfileEntryView[];
   editor: EditorState | null;
   setEditor: (next: EditorState | null) => void;
@@ -397,7 +377,6 @@ function ProfileEditor({
   isCurrent: () => boolean;
 }) {
   const setEntry = useSetProfileEntry();
-  const setLegacy = useSetProfileLegacy();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -427,14 +406,12 @@ function ProfileEditor({
     setBusy(true);
     setFailure(undefined);
     try {
-      const update = legacy
-        ? await setLegacy(state.script)
-        : await setEntry(
-            state.name,
-            state.script,
-            state.scope,
-            override === undefined ? ifMatchFor(state) : override.ifMatch,
-          );
+      const update = await setEntry(
+        state.name,
+        state.script,
+        state.scope,
+        override === undefined ? ifMatchFor(state) : override.ifMatch,
+      );
       // 結果は閉じるかどうかと関係なく出す: 書き込みは起きており、行の名前つきの文言なので別の行を開いていても取り違えないため
       onSaved(`行 ${state.name} を更新した`, update);
       if (isCurrent()) {
@@ -502,25 +479,19 @@ function ProfileEditor({
 
         {editor === null ? (
           <div>
-            {legacy && hasDefault ? (
-              <span className={SMALL_NOTE}>
-                接続先のサーバが古いと、一覧の「編集する」から本文だけ直せる。
-              </span>
-            ) : (
-              <Button
-                size="sm"
-                onClick={() =>
-                  open({
-                    name: legacy ? 'default' : '',
-                    existing: legacy,
-                    script: '',
-                    scope: 'all',
-                  })
-                }
-              >
-                行を追加する
-              </Button>
-            )}
+            <Button
+              size="sm"
+              onClick={() =>
+                open({
+                  name: '',
+                  existing: false,
+                  script: '',
+                  scope: 'all',
+                })
+              }
+            >
+              行を追加する
+            </Button>
           </div>
         ) : (
           <>
@@ -546,7 +517,6 @@ function ProfileEditor({
               <Select
                 aria-label="プロファイルの渡す先"
                 value={editor.scope}
-                disabled={legacy}
                 onChange={(event) => {
                   setEditor({ ...editor, scope: event.target.value as ProfileScope });
                   setConfirming(false);
