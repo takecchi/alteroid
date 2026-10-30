@@ -123,7 +123,7 @@ describe('droppedCommand', () => {
     expect(read()).toBe(`${renderDropped(VIEW_WITH_TRACES)}\n`);
   });
 
-  it('404（この口を持たない古いデーモン）は、0件と違う文言を書く', async () => {
+  it('404 も、ほかの失敗と同じ「読めなかった（HTTP 404）」の失敗として出る（0件の文言にも、版が古いという言い分けにもしない）', async () => {
     replies.push({ status: 404, body: {} });
     const read = captureStdout();
 
@@ -132,14 +132,15 @@ describe('droppedCommand', () => {
       (e: unknown) => e as Error,
     );
     expect(error).not.toBeNull();
+    expect(error?.message).toContain('握り潰しの跡を読めませんでした（HTTP 404）');
+    expect(error?.message).not.toContain('版が古い');
     expect(error?.message).not.toContain(
       'このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない',
     );
-    expect(error?.message).toContain('版が古い可能性がある');
     expect(read()).toBe('');
   });
 
-  it('応答が失敗（404 以外の ok でない）なら、読めなかったと例外で言う（#3446）', async () => {
+  it('応答が失敗（ok でない）なら、読めなかったと例外で言う（#3446）', async () => {
     replies.push({ status: 500, body: {} });
     const read = captureStdout();
 

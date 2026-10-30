@@ -173,12 +173,12 @@ describe('PUT /profile の失敗の detail は、シェルの stderr の鍵の�
     const body = (await response.json()) as {
       clone: { ok: boolean; names?: string[] };
       runners: unknown[];
-      sha256?: string;
+      entries: { sha256: string }[];
     };
     expect(body.clone.ok).toBe(true);
     expect(body.clone.names).toEqual(['OK_2429']);
     expect(body.runners).toEqual([]);
-    expect(typeof body.sha256).toBe('string');
+    expect(typeof body.entries[0]?.sha256).toBe('string');
   });
 
   it('対照: 成功でも set -x の出力（clone.output）に値は出ない', async () => {

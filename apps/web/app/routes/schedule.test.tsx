@@ -612,22 +612,16 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     });
   });
 
-  // entry.spec が無ければ既定の周期を埋めて送らない: POST /schedule は upsert なので、読めない周期を推測で埋めると本文だけ直したつもりの保存が周期を黙って書き換えるため
-  it('entry.spec が無いときは、既定の周期で POST しない（保存自体を止める）', async () => {
-    stubSchedule([REQUEST_ENTRY]);
+  it('spec を持つ行は、編集を開くと行の周期が欄に入り、保存できる状態になる', async () => {
+    stubSchedule([SPEC_ENTRY]);
     renderSchedule();
 
     fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
-    const panel = await screen.findByRole('group', { name: `${REQUEST_ENTRY.kind} を編集` });
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
-    expect(within(panel).queryByLabelText('時刻')).toBeNull();
-    expect(within(panel).queryByLabelText('周期')).toBeNull();
-
+    expect((within(panel).getByLabelText('時刻') as HTMLInputElement).value).toBe('09:00');
     const save = within(panel).getByRole('button', { name: '保存する' });
-    expect(save.hasAttribute('disabled')).toBe(true);
-
-    fireEvent.click(save);
-    expect(sent).toEqual([]);
+    expect(save.hasAttribute('disabled')).toBe(false);
   });
 });
 

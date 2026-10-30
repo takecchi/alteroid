@@ -9532,14 +9532,15 @@ describe('実行環境プロファイル', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ script: 'export OK=1' }),
       })
-    ).json()) as { sha256: string; entries: { sha256: string }[] };
+    ).json()) as { entries: { sha256: string }[] };
     const get = (await (await withProfile.request('/profile')).json()) as {
       entries: { sha256: string }[];
     };
 
     expect(get.entries.map((e) => e.sha256)).toEqual(put.entries.map((e) => e.sha256));
-    // 1行だけなので、全部をつないだ指紋も行の指紋と同じになる
-    expect(put.sha256).toBe(get.entries[0]?.sha256);
+    // 応答の上位には指紋を載せない（行ごとの指紋だけを読む）
+    expect(put).not.toHaveProperty('sha256');
+    expect(put).not.toHaveProperty('bytes');
   });
 
   it('runner へ降ろし、結果を返す', async () => {
@@ -9764,7 +9765,10 @@ describe('実行環境プロファイル', () => {
       body: JSON.stringify({ script: secretScript }),
     });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { sha256: string; bytes: number };
+    // 1行だけなので、全部をつないだ指紋と長さは、その行のものと同じである
+    const body = (await response.json()) as { entries: { sha256: string; bytes: number }[] };
+    const row = body.entries[0];
+    expect(row).toBeDefined();
 
     const journal = await stores.journal.list({ types: ['decision'] });
     const entry = journal.find(
@@ -9772,8 +9776,8 @@ describe('実行環境プロファイル', () => {
     );
     expect(entry).toBeDefined();
     const serialized = JSON.stringify(entry);
-    expect(serialized).toContain(body.sha256);
-    expect(serialized).toContain(`${String(body.bytes)} bytes`);
+    expect(serialized).toContain(row?.sha256);
+    expect(serialized).toContain(`${String(row?.bytes)} bytes`);
     expect(serialized).toContain('runner-primary=ok');
     expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
     expect(serialized).not.toContain('leak-if-you-see-this');
@@ -10617,14 +10621,15 @@ describe('宣言と実物の一致（/profile）', () => {
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      sha256?: string;
-      bytes?: number;
+      entries: { sha256: string; bytes: number }[];
       clone: { ok: boolean; names?: string[] };
       runners: unknown[];
     };
 
-    expect(body.sha256).toBeDefined();
-    expect(body.bytes).toBeDefined();
+    expect(body.entries[0]?.sha256).toBeDefined();
+    expect(body.entries[0]?.bytes).toBeDefined();
+    expect(body).not.toHaveProperty('sha256');
+    expect(body).not.toHaveProperty('bytes');
     expect(body.clone.ok).toBe(true);
     expect(body.clone.names).toEqual(['SEE_IT_LEAK']);
     expect(body.runners).toEqual([]);
