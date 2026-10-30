@@ -104,11 +104,17 @@ export async function verifyCommitmentTaskMigrationContract(
 
     const report = await execute(stores);
 
-    if ((await taskIds(stores)) !== 'h1,h2') fail(`Task が h1,h2 でなく ${await taskIds(stores)}`);
+    // s1（self）は at では h1 と h2 のあいだだが、human 起点が先の既定の置き場所で h2 の後ろに並ぶ
+    if ((await taskIds(stores)) !== 'h1,h2,s1') {
+      fail(`Task が h1,h2,s1 でなく ${await taskIds(stores)}`);
+    }
     const tasks = (await stores.tasks.list()).entries;
     const h1 = tasks[0];
     const h2 = tasks[1];
-    if (h1 === undefined || h2 === undefined) return fail('Task が2件無い');
+    const s1 = tasks[2];
+    if (h1 === undefined || h2 === undefined || s1 === undefined) return fail('Task が3件無い');
+    if (s1.status !== 'queued' || s1.origin !== 'self') fail('s1 が queued / self でない');
+    if (s1.originConversationId !== undefined) fail('s1 に引けない起点の会話を付けた');
     if (h1.status !== 'queued' || h1.origin !== 'human') fail('h1 が queued / human でない');
     if (h1.createdAt !== '2026-10-01T00:00:00.000Z' || h1.updatedAt !== NOW) fail('h1 の時刻');
     if (h1.title !== '一行目' || h1.body !== '一行目\n二行目') fail('h1 の title / body');
@@ -121,7 +127,7 @@ export async function verifyCommitmentTaskMigrationContract(
     }
     const hc = ledger.find((row) => row.id === 'hc');
     if (hc?.closedReason !== '元の理由' || hc.closedBy !== 'human') fail('閉じた行を書き換えた');
-    for (const id of ['h1', 'h2']) {
+    for (const id of ['h1', 'h2', 's1']) {
       const row = ledger.find((item) => item.id === id);
       if (row?.closedBy !== 'daemon') fail(`${id} を daemon が閉じていない`);
       if (!row.closedReason?.includes(id)) fail(`${id} の閉じた理由に Task の id が無い`);
@@ -129,7 +135,6 @@ export async function verifyCommitmentTaskMigrationContract(
     for (const [id, origin] of [
       ['m1', 'manager'],
       ['e1', 'external'],
-      ['s1', 'self'],
     ] as const) {
       const row = ledger.find((item) => item.id === id);
       if (row?.closedBy !== 'daemon') fail(`${id} を daemon が閉じていない`);
@@ -149,8 +154,8 @@ export async function verifyCommitmentTaskMigrationContract(
     if (report.execution === undefined) return fail('実行の結果が無い');
     const { migrated, retired, closeOnly, failed, alreadyClosed } = report.execution;
     if (
-      migrated !== 2 ||
-      retired !== 3 ||
+      migrated !== 3 ||
+      retired !== 2 ||
       closeOnly !== 0 ||
       failed.length !== 0 ||
       alreadyClosed !== 0
@@ -365,17 +370,27 @@ export async function verifyCommitmentTaskMigrationContract(
           entry(id, at, 'human', source === undefined ? {} : { source }),
         );
       }
-      // human 以外は Task にならないので、source が会話でも起点の会話の数に入らない
+      // manager・external は Task にならないので、source が会話でも起点の会話の数に入らない
       await stores.commitments.open(
         entry('m1', '2026-10-01T12:00:00.000Z', 'manager', { source: 'conv-A' }),
+      );
+      await stores.commitments.open(
+        entry('e1', '2026-10-01T13:00:00.000Z', 'external', { source: 'conv-A' }),
+      );
+      // self は Task になるので、source が会話 id なら起点の会話を引く（manager の id などで引けなければ付けずに移す）
+      await stores.commitments.open(
+        entry('s1', '2026-10-07T00:00:00.000Z', 'self', { source: 'conv-B' }),
+      );
+      await stores.commitments.open(
+        entry('s2', '2026-10-08T00:00:00.000Z', 'self', { source: 'mgr-1' }),
       );
 
       const plan = await migrateCommitmentsToTasks(stores, { dryRun: true, now: NOW });
       const counts = plan.summary.originConversation;
-      if (counts.fromConversation !== 1 || counts.fromApproval !== 1 || counts.unresolved !== 4) {
+      if (counts.fromConversation !== 2 || counts.fromApproval !== 1 || counts.unresolved !== 5) {
         fail(`計画の内訳が違う: ${JSON.stringify(counts)}`);
       }
-      if (plan.unresolvedOriginIds.join(',') !== 'h3,h4,h5,h6') {
+      if (plan.unresolvedOriginIds.join(',') !== 'h3,h4,h5,h6,s2') {
         fail(`引けなかった id が違う: ${plan.unresolvedOriginIds.join(',')}`);
       }
       const via = (id: string) => plan.items.find((item) => item.id === id)?.originConversation;
@@ -387,16 +402,17 @@ export async function verifyCommitmentTaskMigrationContract(
       const origin = async (id: string) => (await stores.tasks.get(id))?.originConversationId;
       if ((await origin('h1')) !== 'conv-A') fail('会話 id が起点の会話にならなかった');
       if ((await origin('h2')) !== 'conv-B') fail('承認の会話 id が起点の会話にならなかった');
-      for (const id of ['h3', 'h4', 'h5', 'h6']) {
+      if ((await origin('s1')) !== 'conv-B') fail('self の会話 id が起点の会話にならなかった');
+      for (const id of ['h3', 'h4', 'h5', 'h6', 's2']) {
         const task = await stores.tasks.get(id);
         if (task === null) fail(`${id} が移っていない（引けなくても移す）`);
         if (task.originConversationId !== undefined) fail(`${id} に宛先を付けた`);
       }
       const done = report.execution?.originConversation;
       if (
-        done?.fromConversation !== 1 ||
+        done?.fromConversation !== 2 ||
         done.fromApproval !== 1 ||
-        done.unresolvedIds.join(',') !== 'h3,h4,h5,h6'
+        done.unresolvedIds.join(',') !== 'h3,h4,h5,h6,s2'
       ) {
         fail(`実行の内訳が違う: ${JSON.stringify(done)}`);
       }

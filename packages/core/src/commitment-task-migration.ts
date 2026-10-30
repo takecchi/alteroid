@@ -25,11 +25,11 @@ export interface OriginConversationResolution {
 }
 
 export type CommitmentMigrationAction =
-  /** 開いている human 起点の行。Task を作って台帳を閉じる。 */
+  /** 開いている human・self 起点の行。Task を作って台帳を閉じる。 */
   | 'task'
   /** Task が既に在る（途中で落ちた再実行の復旧）。Task は作らず台帳を閉じるだけ。 */
   | 'close-only'
-  /** human 以外の開いている行。Task にせず台帳を閉じる（日誌へ本文を残す）。 */
+  /** manager・external の開いている行。Task にせず台帳を閉じる（日誌へ本文を残す）。 */
   | 'retire'
   /** 閉じた行。移さず台帳に残す（件数だけ数える）。 */
   | 'skip-closed';
@@ -63,7 +63,7 @@ export interface CommitmentMigrationSummary {
   toTask: number;
   /** Task が既に在り、台帳を閉じるだけの件数。 */
   closeOnly: number;
-  /** human 以外の開いている行を畳む件数。 */
+  /** manager・external の開いている行を畳む件数。 */
   retire: number;
   /** 閉じていて移さない件数。 */
   skipClosed: number;
@@ -250,9 +250,13 @@ function actionFor(
   existingTaskIds: ReadonlySet<string>,
 ): CommitmentMigrationAction {
   if (commitment.closedAt !== undefined) return 'skip-closed';
-  if (commitment.origin !== 'human') return 'retire';
+  if (!MIGRATED_ORIGINS.has(commitment.origin)) return 'retire';
   return existingTaskIds.has(commitment.id) ? 'close-only' : 'task';
 }
+
+// self（クローンが自分で載せた宿題）も移す: 閉じるに任せると、手を付けていない宿題が日誌に埋もれるため（#5900）。manager・external は台帳の外に元が在るので畳む
+// Task の置き場所は `placeTask` の既定が決める: human は「human 起点の最後の直後」、self は末尾なので、at の順に add しても human が先になる
+const MIGRATED_ORIGINS: ReadonlySet<CommitmentOrigin> = new Set(['human', 'self']);
 
 const TITLE_MAX = 60;
 const EMPTY_TITLE = '（本文なし）';
@@ -279,7 +283,7 @@ export function taskFromCommitment(
     createdAt: commitment.at,
     updatedAt: now,
     status: 'queued',
-    origin: 'human',
+    origin: commitment.origin,
     ...(commitment.source === undefined ? {} : { source: commitment.source }),
     ...(originConversationId === undefined ? {} : { originConversationId }),
     title: migrationTaskTitle(commitment.body),
@@ -310,7 +314,7 @@ export interface CommitmentMigrationExecution {
   migrated: number;
   /** Task が既に在り、台帳だけを閉じた行（途中で落ちた再実行の復旧・`add` が existed を返した行）。 */
   closeOnly: number;
-  /** human 以外を畳んだ行。 */
+  /** manager・external を畳んだ行。 */
   retired: number;
   /** 閉じようとしたら既に閉じていた行（別の書き手が先に閉じた）。 */
   alreadyClosed: number;
@@ -336,7 +340,7 @@ export interface CommitmentMigrationReport {
   unreadableCommitments: { id?: string }[];
   /** 読めない Task の行の件数（台帳の id と無関係なものも含む）。 */
   unreadableTasks: number;
-  /** 開いている human 行の id と同じ id で在る、読めない Task の行。existed と同じ扱いで台帳を閉じるだけにした。 */
+  /** 開いている human・self 行の id と同じ id で在る、読めない Task の行。existed と同じ扱いで台帳を閉じるだけにした。 */
   unreadableTaskCollisions: string[];
   /** 移す行（`task`）のうち、起点の会話を引けなかった行の id。付けずに移す。 */
   unresolvedOriginIds: string[];
@@ -357,7 +361,7 @@ export type MigrateCommitmentsOptions = {
 );
 
 /**
- * 台帳 → Task の移行。1行ごとに (1) Task を add（human のみ）→ (2) 日誌（decision）→ (3) 台帳を close。
+ * 台帳 → Task の移行。1行ごとに (1) Task を add（human・self のみ）→ (2) 日誌（decision）→ (3) 台帳を close。
  * - 日誌が書けなければ閉じない（開き直しと同じ「日誌が先」の線）。
  * - 途中で落ちても再実行で続きから進む: Task は id が元の id なので existed になり、台帳を閉じるだけが続く。
  *   このとき (2) の日誌は2回書かれうる（Task を書いた後・日誌の前後で落ちた行）。日誌は追記専用で「何が起きたかの記録」なので、欠けるより重複するほうを選ぶ。
