@@ -286,13 +286,15 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
 
   const PAGE = Array.from({ length: 100 }, (_, i) => pastDecision(`p${i}`, i));
 
-  it('until には一覧の末尾（最古）の at を渡す（先頭の at と取り違えたら落ちる）', async () => {
+  const PAGE_NEXT = { id: PAGE.at(-1)!.id, at: PAGE.at(-1)!.at };
+
+  it('afterId/afterAt には next の継続点を渡す。until は付けない', async () => {
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      if (new URL(url).searchParams.has('until')) {
-        return json({ entries: [], scanned: 0 });
+      if (new URL(url).searchParams.has('afterId')) {
+        return json({ entries: [], scanned: 0, next: null });
       }
-      return json({ entries: PAGE, scanned: PAGE.length });
+      return json({ entries: PAGE, scanned: PAGE.length, next: PAGE_NEXT });
     });
 
     renderJournal({ status: 'live', recent: [] });
@@ -305,19 +307,22 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
     });
 
     const secondCall = stub.calls.filter((url) => url.includes('/journal'))[1]!;
-    expect(new URL(secondCall).searchParams.get('until')).toBe(PAGE.at(-1)!.at);
+    const params = new URL(secondCall).searchParams;
+    expect(params.get('afterId')).toBe(PAGE_NEXT.id);
+    expect(params.get('afterAt')).toBe(PAGE_NEXT.at);
+    expect(params.has('until')).toBe(false);
   });
 
   it('読み足しが失敗しても一覧は残り、「もう一度試す」で撃ち直せる。成功すると帯が消える', async () => {
     let olderCalls = 0;
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      if (new URL(url).searchParams.has('until')) {
+      if (new URL(url).searchParams.has('afterId')) {
         olderCalls += 1;
         if (olderCalls === 1) return json({ error: 'boom' }, 500);
-        return json({ entries: [], scanned: 0 });
+        return json({ entries: [], scanned: 0, next: null });
       }
-      return json({ entries: PAGE, scanned: PAGE.length });
+      return json({ entries: PAGE, scanned: PAGE.length, next: PAGE_NEXT });
     });
 
     renderJournal({ status: 'live', recent: [] });
@@ -383,29 +388,19 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
     expect(second.searchParams.get('horizon')).toBe('true');
   });
 
-  it('retryLarger（同じ境界が limit ちょうど埋まった）のとき limit を JOURNAL_MAX_LIMIT へ上げて撃ち直す', async () => {
-    // 呼び出し回数で応答を決め limit の値では決めない: limit の値で分岐すると、limit を上げない変異で同じ分岐へ入り続けて撃ち直しが止まらなくなるため
-    let journalCalls = 0;
+  it('next が無い応答は、件数が limit ちょうどでも続きがあると推定せず終端として扱う (#5708)', async () => {
+    // `next` を返さなかった頃のデーモンの応答を再現する（今のデーモンは常に返す）
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      journalCalls += 1;
-      if (journalCalls <= 2) {
-        return json({ entries: PAGE, scanned: PAGE.length });
-      }
-      return json({ entries: [], scanned: 0 });
+      return json({ entries: PAGE, scanned: PAGE.length });
     });
 
     renderJournal({ status: 'live', recent: [] });
     await waitForLoaded();
 
-    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
-
-    await waitFor(() => {
-      expect(stub.calls.filter((url) => url.includes('/journal')).length).toBeGreaterThanOrEqual(3);
-    });
-
-    const thirdCall = stub.calls.filter((url) => url.includes('/journal'))[2]!;
-    expect(new URL(thirdCall).searchParams.get('limit')).toBe('1000');
+    expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /もっと遡る/ })).toBeNull();
+    expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(1);
   });
 });
 
@@ -423,15 +418,16 @@ describe('日誌の地平（issue #1510 の積み残し）', () => {
   }
 
   const PAGE = Array.from({ length: 100 }, (_, i) => pastDecision(`p${i}`, i));
+  const PAGE_NEXT = { id: PAGE.at(-1)!.id, at: PAGE.at(-1)!.at };
 
   it('窓が地平より前にかかっていたら、「これより古い記録は無い」に続けて注記を出す', async () => {
     const OLDEST_AT = '2026-08-14T00:00:00.000Z';
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      if (new URL(url).searchParams.has('until')) {
-        return json({ entries: [], oldestAt: OLDEST_AT, crossesHorizon: true });
+      if (new URL(url).searchParams.has('afterId')) {
+        return json({ entries: [], next: null, oldestAt: OLDEST_AT, crossesHorizon: true });
       }
-      return json({ entries: PAGE });
+      return json({ entries: PAGE, next: PAGE_NEXT });
     });
 
     renderJournal({ status: 'live', recent: [] });
@@ -452,14 +448,15 @@ describe('日誌の地平（issue #1510 の積み残し）', () => {
   it('窓が地平より後ろなら（本当に終端だと言い切れる）、注記は出ない', async () => {
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      if (new URL(url).searchParams.has('until')) {
+      if (new URL(url).searchParams.has('afterId')) {
         return json({
           entries: [],
+          next: null,
           oldestAt: '2026-08-14T00:00:00.000Z',
           crossesHorizon: false,
         });
       }
-      return json({ entries: PAGE });
+      return json({ entries: PAGE, next: PAGE_NEXT });
     });
 
     renderJournal({ status: 'live', recent: [] });
@@ -783,7 +780,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect(screen.queryByText(NOTE)).toBeNull();
   });
 
-  it('検索したまま遡ると、2頁目の要求に q と until の両方が載る', async () => {
+  it('検索したまま遡ると、2頁目の要求に q と継続点（afterId/afterAt）の両方が載る', async () => {
     const base = new Date('2026-08-20T00:00:00.000Z').getTime();
     const page: JournalEntry[] = Array.from({ length: 100 }, (_, i) => ({
       type: 'decision',
@@ -795,8 +792,14 @@ describe('日誌画面の検索欄（issue #250）', () => {
 
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      if (new URL(url).searchParams.has('until')) return json({ entries: [], scanned: 0 });
-      return json({ entries: page, scanned: page.length });
+      if (new URL(url).searchParams.has('afterId')) {
+        return json({ entries: [], scanned: 0, next: null });
+      }
+      return json({
+        entries: page,
+        scanned: page.length,
+        next: { id: page.at(-1)!.id, at: page.at(-1)!.at },
+      });
     });
 
     renderJournal({ status: 'live', recent: [] }, [`/?q=${encodeURIComponent('トマト')}`]);
@@ -809,7 +812,8 @@ describe('日誌画面の検索欄（issue #250）', () => {
     });
 
     const second = new URL(stub.calls.filter((url) => url.includes('/journal'))[1]!);
-    expect(second.searchParams.get('until')).toBe(page.at(-1)!.at);
+    expect(second.searchParams.get('afterId')).toBe(page.at(-1)!.id);
+    expect(second.searchParams.get('afterAt')).toBe(page.at(-1)!.at);
     expect(second.searchParams.get('q')).toBe('トマト');
   });
 

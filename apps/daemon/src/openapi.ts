@@ -445,7 +445,7 @@ export const journalNextSchema = z.object({ id: z.string(), at: isoDateTimeSchem
 
 export const journalListResponseSchema = z.object({
   entries: z.array(journalEntrySchema),
-  next: journalNextSchema.optional(),
+  next: journalNextSchema,
   // `oldestAt` / `crossesHorizon` は `since` / `until` / `horizon=true` のいずれかを渡した呼びにだけ載る: どれも渡さない既存の呼びの応答を変えないため。
   oldestAt: isoDateTimeSchema.nullable().optional(),
   crossesHorizon: z.boolean().optional(),

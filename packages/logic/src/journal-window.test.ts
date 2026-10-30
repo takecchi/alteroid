@@ -103,19 +103,20 @@ describe('pageOutcome（このページの後、次に何をすべきか）', ()
 });
 
 describe('applyOlderPage / applyNewerPage（マージと判定を1回で行う合成）', () => {
-  it('applyOlderPage は末尾へ足し、end/retryLarger/blocked を返す', () => {
+  it('applyOlderPage は末尾へ足し、outcome は next だけで決める', () => {
     const oldest = entry('oldest', '2026-08-20T00:00:00.000Z');
     const existing = [entry('a', '2026-08-20T00:02:00.000Z'), oldest];
+    const cursor = { id: 'c', at: '2026-08-19T00:00:00.000Z' };
 
     const progressed = applyOlderPage(
       existing,
       [oldest, entry('older', '2026-08-19T00:00:00.000Z')],
-      50,
+      cursor,
     );
     expect(progressed.entries.map((e) => e.id)).toEqual(['a', 'oldest', 'older']);
     expect(progressed.outcome).toBe('progress');
 
-    const ended = applyOlderPage(existing, [oldest], 50);
+    const ended = applyOlderPage(existing, [oldest], null);
     expect(ended.entries).toBe(existing);
     expect(ended.outcome).toBe('end');
   });
@@ -135,33 +136,24 @@ describe('applyOlderPage / applyNewerPage（マージと判定を1回で行う�
 });
 
 describe('applyInitialPage（窓の無い初期読み込み1回の適用。issue #1530）', () => {
-  it('page.length が limit 未満なら、中身がいくつあっても end（freshCount を待たない）', () => {
+  it('next が null なら、中身がいくつあっても end（freshCount を待たない）', () => {
     const page = [entry('a', '2026-08-20T00:02:00.000Z'), entry('b', '2026-08-20T00:01:00.000Z')];
-    const result = applyInitialPage(page, 100);
+    const result = applyInitialPage(page, null);
     expect(result.entries).toBe(page);
     expect(result.outcome).toBe('end');
     expect(result.freshCount).toBe(2);
   });
 
-  it('page.length が0でも end（空の日誌）', () => {
-    const result = applyInitialPage([], 100);
+  it('page.length が0でも next が null なら end（空の日誌）', () => {
+    const result = applyInitialPage([], null);
     expect(result.outcome).toBe('end');
     expect(result.freshCount).toBe(0);
   });
 
-  it('page.length が limit ちょうどなら progress（まだ続きがあるかもしれない）', () => {
-    const base = new Date('2026-08-20T00:00:00.000Z').getTime();
-    const page = Array.from({ length: 100 }, (_, i) =>
-      entry(`p${i}`, new Date(base - i * 60_000).toISOString()),
-    );
-    const result = applyInitialPage(page, 100);
-    expect(result.outcome).toBe('progress');
-  });
-
-  it('applyOlderPage との違い——既存が空でも freshCount>0 なら applyOlderPage は progress のまま', () => {
+  it('next が非 null なら progress（まだ続きがある）', () => {
     const page = [entry('a', '2026-08-20T00:02:00.000Z')];
-    expect(applyOlderPage([], page, 100).outcome).toBe('progress');
-    expect(applyInitialPage(page, 100).outcome).toBe('end');
+    const result = applyInitialPage(page, { id: 'c', at: '2026-08-20T00:00:00.000Z' });
+    expect(result.outcome).toBe('progress');
   });
 });
 
@@ -192,19 +184,21 @@ describe('newerPageQuery / olderPageQuery（どちらの端を、どちらのク
     expect(newerPageQuery(entries)).toEqual({ since: '2026-08-20T00:02:00.000Z' });
   });
 
-  it('過去方向は、末尾（最古）の at を until に載せる', () => {
-    expect(olderPageQuery(entries)).toEqual({ until: '2026-08-20T00:01:00.000Z' });
+  it('過去方向は、継続点 next だけを afterId/afterAt に載せる（末尾の at から until へは戻らない）', () => {
+    expect(olderPageQuery({ id: 'c', at: '2026-08-20T00:01:00.000Z' })).toEqual({
+      afterId: 'c',
+      afterAt: '2026-08-20T00:01:00.000Z',
+    });
+    expect(olderPageQuery(undefined)).toBeUndefined();
   });
 
-  it('一覧が空なら undefined（撃つ材料が無い＝撃たない）', () => {
+  it('一覧が空なら newerPageQuery は undefined（撃つ材料が無い＝撃たない）', () => {
     expect(newerPageQuery([])).toBeUndefined();
-    expect(olderPageQuery([])).toBeUndefined();
   });
 
-  it('1件だけなら両方向とも同じ at を指す（境界は inclusive で、その1件が必ず再度返る）', () => {
+  it('1件だけなら新着方向は、その1件の at を指す（境界は inclusive で、その1件が必ず再度返る）', () => {
     const one = [entry('only', '2026-08-20T00:00:00.000Z')];
     expect(newerPageQuery(one)).toEqual({ since: '2026-08-20T00:00:00.000Z' });
-    expect(olderPageQuery(one)).toEqual({ until: '2026-08-20T00:00:00.000Z' });
   });
 });
 
@@ -334,64 +328,53 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
   );
 
   it('applyInitialPage: 499 件で返っても next が非 null なら progress（end にしない）', () => {
-    expect(applyInitialPage(page499, 500, cursor).outcome).toBe('progress');
+    expect(applyInitialPage(page499, cursor).outcome).toBe('progress');
   });
 
-  it('applyInitialPage: next が null なら、limit ちょうどでも end（本当の終端）', () => {
+  it('applyInitialPage: next が null なら、件数に関わらず end（本当の終端）', () => {
     const exact = Array.from({ length: 3 }, (_, i) =>
       entry(`e${i}`, `2026-08-20T00:0${i}:00.000Z`),
     );
-    expect(applyInitialPage(exact, 3, null).outcome).toBe('end');
+    expect(applyInitialPage(exact, null).outcome).toBe('end');
   });
 
   it('applyInitialPage: 空の頁でも next が非 null なら progress', () => {
-    expect(applyInitialPage([], 500, cursor).outcome).toBe('progress');
-  });
-
-  it('applyInitialPage: next の欄が無い（古いデーモン）なら従来どおり件数で推す', () => {
-    expect(applyInitialPage(page499, 500).outcome).toBe('end');
-    expect(applyInitialPage(page499, 499).outcome).toBe('progress');
+    expect(applyInitialPage([], cursor).outcome).toBe('progress');
   });
 
   it('applyOlderPage: next が非 null なら、短い頁（freshCount 0 を含む）でも progress', () => {
     const existing = [entry('a', '2026-08-20T00:02:00.000Z')];
     const older = [entry('b', '2026-08-20T00:01:00.000Z')];
-    expect(applyOlderPage(existing, older, 500, 1000, cursor).outcome).toBe('progress');
-    expect(applyOlderPage(existing, [], 500, 1000, cursor).outcome).toBe('progress');
+    expect(applyOlderPage(existing, older, cursor).outcome).toBe('progress');
+    expect(applyOlderPage(existing, [], cursor).outcome).toBe('progress');
   });
 
-  it('applyOlderPage: next が null なら end。next が無ければ従来の判定（短い頁は end）', () => {
+  it('applyOlderPage: next が null なら end', () => {
     const existing = [entry('a', '2026-08-20T00:02:00.000Z')];
     const older = [entry('b', '2026-08-20T00:01:00.000Z')];
-    expect(applyOlderPage(existing, older, 500, 1000, null).outcome).toBe('end');
-    expect(applyOlderPage(existing, existing, 1, 1000).outcome).toBe('retryLarger');
+    expect(applyOlderPage(existing, older, null).outcome).toBe('end');
   });
 
   it('古い側の頁は next だけで続きを決め、next が無い（undefined）なら件数から推定せず終わりとする (#5708)', () => {
+    // 型は `null` までしか許さない。`next` を返さなかった頃のデーモンの応答を実行時だけで再現する
+    const missingNext = undefined as unknown as null;
     const existing = [entry('a', '2026-08-20T00:02:00.000Z')];
-    // limit ちょうどで新規 0 件でも、件数からの retryLarger にしない
-    expect(applyOlderPage(existing, existing, 1, 1000, undefined).outcome).toBe('end');
-    // 件数が limit に満たなくても、limit 以上でも、結果は同じ
-    expect(applyInitialPage(page499, 499, undefined).outcome).toBe('end');
-    expect(applyInitialPage(page499, 500, undefined).outcome).toBe('end');
+    // 新規 0 件の頁でも、件数からの retryLarger にしない
+    expect(applyOlderPage(existing, existing, missingNext).outcome).toBe('end');
+    // 件数が多くても、`progress` へ推定しない
+    expect(applyInitialPage(page499, missingNext).outcome).toBe('end');
     // 継続点が無ければ、末尾の at から until へ戻らない
-    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')])).toBeUndefined();
+    expect(olderPageQuery(missingNext)).toBeUndefined();
   });
 
-  it('olderPageQuery: 継続点が在れば afterId/afterAt で読む（一覧が空でも）。null なら撃たない', () => {
-    expect(olderPageQuery([], cursor)).toEqual({ afterId: 'c', afterAt: cursor.at });
-    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')], cursor)).toEqual({
-      afterId: 'c',
-      afterAt: cursor.at,
-    });
-    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')], null)).toBeUndefined();
-    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')])).toEqual({
-      until: '2026-08-20T00:02:00.000Z',
-    });
+  it('olderPageQuery: 継続点が在れば afterId/afterAt で読む。null／未取得なら撃たない', () => {
+    expect(olderPageQuery(cursor)).toEqual({ afterId: 'c', afterAt: cursor.at });
+    expect(olderPageQuery(null)).toBeUndefined();
+    expect(olderPageQuery(undefined)).toBeUndefined();
   });
 
   describe('readThroughUnreadable（空なのに終端でない頁を読み継ぐ）', () => {
-    type P = { entries: JournalEntry[]; next?: { id: string; at: string } | null };
+    type P = { entries: JournalEntry[]; next: { id: string; at: string } | null };
     const real = entry('r', '2026-08-20T00:00:00.000Z');
 
     it('空で next が非 null の間、継続点で読み継ぎ、読めた頁か終端の頁で止まる', async () => {
@@ -411,7 +394,7 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
       expect(result).toEqual({ entries: [real], next: null });
     });
 
-    it('空でも next が null／欄が無いなら読み継がない（終端・古いデーモン）', async () => {
+    it('空でも next が null なら読み継がない（終端）', async () => {
       const never = async (): Promise<P> => {
         throw new Error('呼ばれない');
       };
@@ -419,7 +402,6 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
         entries: [],
         next: null,
       });
-      expect(await readThroughUnreadable<P>({ entries: [] }, never)).toEqual({ entries: [] });
     });
 
     it('1件でも読めた頁は、next が非 null でもそのまま返す', async () => {

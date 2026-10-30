@@ -186,7 +186,7 @@ function JournalBody({
 
     if (
       !journalWindow.isLoadingOlder &&
-      (journalWindow.olderStatus === 'progress' || journalWindow.olderStatus === 'retryLarger') &&
+      journalWindow.olderStatus === 'progress' &&
       handle.findItemIndex(offset + handle.viewportSize) + EDGE_THRESHOLD_ITEMS > count
     ) {
       journalWindow.loadOlder();
@@ -262,7 +262,7 @@ function JournalBody({
 
       {!isLoadingInitial && entries.length > 0 && (
         <div className="mt-3">
-          {(olderStatus === 'progress' || olderStatus === 'retryLarger') && (
+          {olderStatus === 'progress' && (
             <button
               type="button"
               onClick={loadOlder}
@@ -279,12 +279,6 @@ function JournalBody({
           )}
           {olderStatus === 'end' && horizonNote !== undefined && (
             <p className="py-2 text-center text-xs text-muted-foreground">{horizonNote}</p>
-          )}
-          {olderStatus === 'blocked' && (
-            <BlockedNote>
-              同じ時刻の記録が多く並んでいて、これより古い記録へ自動では進めない（いま{' '}
-              {entries.length} 件）。
-            </BlockedNote>
           )}
         </div>
       )}

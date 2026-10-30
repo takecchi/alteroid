@@ -13,8 +13,8 @@ import {
   newerPageQuery,
   olderPageQuery,
   readThroughUnreadable,
+  type OlderOutcome,
   type PageCursor,
-  type PageOutcome,
 } from '@alteroid/logic';
 
 import type { TuiApi } from './api.js';
@@ -24,7 +24,7 @@ import { JOURNAL_RETAIN_CHARS, trimToBudget } from './journal-window.js';
 import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
 
-export type OlderStatus = PageOutcome | 'budget';
+export type OlderStatus = OlderOutcome | 'budget';
 
 export interface JournalState {
   readonly view: 'list' | 'filter' | 'detail';
@@ -163,7 +163,7 @@ export class JournalController {
       );
       if (gen !== this.gen) return;
       this.olderCursor = page.next;
-      const applied = applyInitialPage([...page.entries], pageSize, page.next);
+      const applied = applyInitialPage([...page.entries], page.next);
       const merged = mergeFront(applied.entries, this.pending).entries;
       this.pending = [];
       const budgeted = trimToBudget(merged, this.budget());
@@ -190,70 +190,56 @@ export class JournalController {
   async loadOlder(): Promise<void> {
     const s = this.store.getSnapshot();
     if (s.status !== 'ready' || s.olderLoading) return;
-    if (s.older !== 'progress' && s.older !== 'retryLarger') return;
+    if (s.older !== 'progress') return;
     if (s.chars >= this.budget()) {
       this.patch({ older: 'budget' });
       return;
     }
     const gen = this.gen;
     this.patch({ olderLoading: true, error: null });
-    let limit = s.pageSize;
+    const limit = s.pageSize;
     try {
-      for (;;) {
-        const current = this.store.getSnapshot();
-        const query = olderPageQuery([...current.entries], this.olderCursor);
-        if (query === undefined) {
-          this.patch({ olderLoading: false });
-          return;
-        }
-        // `horizon` で求める: 継続点で読むと `until` が付かず地平の材料が付かないため
-        const first = await this.api.listJournal({
+      const current = this.store.getSnapshot();
+      const query = olderPageQuery(this.olderCursor);
+      if (query === undefined) {
+        this.patch({ olderLoading: false });
+        return;
+      }
+      // `horizon` で求める: 継続点で読むと `until` が付かず地平の材料が付かないため
+      const first = await this.api.listJournal({
+        limit,
+        types: current.types,
+        q: current.q,
+        ...query,
+        horizon: true,
+      });
+      const page = await readThroughUnreadable(first, (cursor) =>
+        this.api.listJournal({
           limit,
           types: current.types,
           q: current.q,
-          ...query,
-          ...('afterId' in query ? { horizon: true } : {}),
-        });
-        const page = await readThroughUnreadable(first, (cursor) =>
-          this.api.listJournal({
-            limit,
-            types: current.types,
-            q: current.q,
-            afterId: cursor.id,
-            afterAt: cursor.at,
-            horizon: true,
-          }),
-        );
-        if (gen !== this.gen) return;
-        this.olderCursor = page.next;
-        const latest = this.store.getSnapshot();
-        const applied = applyOlderPage(
-          [...latest.entries],
-          [...page.entries],
-          limit,
-          JOURNAL_MAX_LIMIT,
-          page.next,
-        );
-        if (applied.outcome === 'retryLarger') {
-          // 黙って終端に見せない: limit を上げて同じ境界を撃ち直す
-          limit = JOURNAL_MAX_LIMIT;
-          continue;
-        }
-        const budgeted = trimToBudget(applied.entries, this.budget());
-        this.patch({
-          entries: budgeted.entries,
-          chars: budgeted.chars,
-          older: budgeted.dropped > 0 ? 'budget' : applied.outcome,
-          trimmed: latest.trimmed + budgeted.dropped,
-          horizonNote:
-            budgeted.dropped > 0
-              ? undefined
-              : journalHorizonNote(applied.outcome, page.oldestAt, page.crossesHorizon),
-          olderLoading: false,
-          selectedId: latest.selectedId,
-        });
-        return;
-      }
+          afterId: cursor.id,
+          afterAt: cursor.at,
+          horizon: true,
+        }),
+      );
+      if (gen !== this.gen) return;
+      this.olderCursor = page.next;
+      const latest = this.store.getSnapshot();
+      const applied = applyOlderPage([...latest.entries], [...page.entries], page.next);
+      const budgeted = trimToBudget(applied.entries, this.budget());
+      this.patch({
+        entries: budgeted.entries,
+        chars: budgeted.chars,
+        older: budgeted.dropped > 0 ? 'budget' : applied.outcome,
+        trimmed: latest.trimmed + budgeted.dropped,
+        horizonNote:
+          budgeted.dropped > 0
+            ? undefined
+            : journalHorizonNote(applied.outcome, page.oldestAt, page.crossesHorizon),
+        olderLoading: false,
+        selectedId: latest.selectedId,
+      });
     } catch (error) {
       if (gen !== this.gen) return;
       this.patch({ olderLoading: false, error: messageOf(error) });

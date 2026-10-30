@@ -229,7 +229,7 @@ describe('絞り込み', () => {
 });
 
 describe('古い側と取りこぼし', () => {
-  it('古い側は until（最古の at）で読み足す。境界の重複は足さず、満たない頁で終端', async () => {
+  it('古い側は next の継続点（afterId/afterAt）で読み足す。until は使わず、next が null の頁で終端', async () => {
     const { api, controller, state, ids } = setup((a) => {
       a.journalEntries = run(5);
     });
@@ -238,31 +238,36 @@ describe('古い側と取りこぼし', () => {
     expect(ids()).toEqual(['e5', 'e4']);
     expect(state().older).toBe('progress');
     await controller.loadOlder();
-    expect(api.journalListCalls.at(-1)).toMatchObject({ limit: 2, until: minute(4) });
-    expect(ids()).toEqual(['e5', 'e4', 'e3']);
-    await controller.loadOlder();
-    await controller.loadOlder();
-    expect(ids()).toEqual(['e5', 'e4', 'e3', 'e2', 'e1']);
+    expect(api.journalListCalls.at(-1)).toMatchObject({
+      limit: 2,
+      afterId: 'e4',
+      afterAt: minute(4),
+    });
+    expect(api.journalListCalls.at(-1)).not.toHaveProperty('until');
+    expect(ids()).toEqual(['e5', 'e4', 'e3', 'e2']);
     expect(state().older).toBe('progress');
     await controller.loadOlder();
+    expect(ids()).toEqual(['e5', 'e4', 'e3', 'e2', 'e1']);
     expect(state().older).toBe('end');
     const calls = api.journalListCalls.length;
     await controller.loadOlder();
     expect(api.journalListCalls).toHaveLength(calls);
   });
 
-  it('同じ時刻の行が詰まって進まないときは limit を上げて撃ち直し、それでも進まなければ blocked', async () => {
-    const { api, controller, state } = setup((a) => {
+  it('同じ時刻の行が limit より多く並んでも、継続点で進み、limit を上げて撃ち直さない', async () => {
+    const { api, controller, state, ids } = setup((a) => {
       a.journalEntries = [
         journalEntry('a', 'exchange', minute(2)),
         journalEntry('b', 'exchange', minute(2)),
+        journalEntry('c', 'exchange', minute(2)),
       ];
     });
     controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
     expect(state().older).toBe('progress');
     await controller.loadOlder();
-    expect(api.journalListCalls.slice(-2).map((c) => c.limit)).toEqual([2, 1000]);
+    expect(api.journalListCalls.slice(-2).map((c) => c.limit)).toEqual([2, 2]);
+    expect(ids()).toEqual(['a', 'b', 'c']);
     expect(state().older).toBe('end');
   });
 
@@ -273,9 +278,9 @@ describe('古い側と取りこぼし', () => {
     controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
     controller.moveSelection(1);
-    await waitFor(() => ids().length === 3);
-    expect(ids()).toEqual(['e4', 'e3', 'e2']);
-    expect(api.journalListCalls.at(-1)).toMatchObject({ until: minute(3) });
+    await waitFor(() => ids().length === 4);
+    expect(ids()).toEqual(['e4', 'e3', 'e2', 'e1']);
+    expect(api.journalListCalls.at(-1)).toMatchObject({ afterId: 'e3' });
   });
 
   it('繋ぎ直した（open）ら、最新の at を since にして取りこぼしを埋める', async () => {
@@ -295,7 +300,6 @@ describe('古い側と取りこぼし', () => {
   // 取り直しは `next` が null になるまで読む（#4836。Web の #4577 と同じ形）
   it('切れていた間に pageSize を超える行が溜まっても、繋ぎ直し（open）で間の行が全部窓に入る', async () => {
     const { api, controller, state, ids, fire } = setup((a) => {
-      a.journalCursors = true;
       a.journalEntries = run(2);
     });
     controller.setFilter([], '', 2);
@@ -310,7 +314,6 @@ describe('古い側と取りこぼし', () => {
 
   it('取り直しの最中に SSE の新着が届いても、間の行を取りこぼさない。新着は取り直しが済んでから先頭へ積む', async () => {
     const { api, controller, state, ids, push, fire } = setup((a) => {
-      a.journalCursors = true;
       a.journalEntries = run(2);
     });
     controller.setFilter([], '', 2);
@@ -442,7 +445,6 @@ describe('詳細', () => {
 describe('継続点 next（Issue #2604 / #2605）', () => {
   it('limit 未満で返っても next が先を指すなら end にせず、続きを読んで古い行へ届く', async () => {
     const { api, controller, state, ids } = setup((a) => {
-      a.journalCursors = true;
       a.journalEntries = run(6);
       a.journalUnreadable = new Set(['e5']);
     });
@@ -459,7 +461,6 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
 
   it('最初の頁が丸ごと読めなくても、空と描かずに古い側まで読み継ぐ', async () => {
     const { controller, state, ids } = setup((a) => {
-      a.journalCursors = true;
       a.journalEntries = run(8);
       a.journalUnreadable = new Set(['e8', 'e7', 'e6']);
     });
@@ -471,7 +472,6 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
 
   it('本当の終端: 件数がちょうど limit でも next が null なら end で、読み足さない', async () => {
     const { api, controller, state, ids } = setup((a) => {
-      a.journalCursors = true;
       a.journalEntries = run(3);
     });
     controller.setFilter([], '', 3);

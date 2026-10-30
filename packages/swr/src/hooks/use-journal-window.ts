@@ -16,8 +16,8 @@ import {
   notOlderThanWindow,
   olderPageQuery,
   readThroughUnreadable,
+  type OlderOutcome,
   type PageCursor,
-  type PageOutcome,
 } from '@alteroid/logic';
 import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
 
@@ -39,7 +39,7 @@ export interface JournalWindow {
   loadMoreError: unknown;
   retryLoadMore: () => void;
 
-  olderStatus: PageOutcome;
+  olderStatus: OlderOutcome;
   isLoadingOlder: boolean;
   loadOlder: () => void;
 
@@ -61,7 +61,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   const [error, setError] = useState<unknown>(undefined);
   const [olderError, setOlderError] = useState<unknown>(undefined);
   const [newerError, setNewerError] = useState<unknown>(undefined);
-  const [olderStatus, setOlderStatus] = useState<PageOutcome>('progress');
+  const [olderStatus, setOlderStatus] = useState<OlderOutcome>('progress');
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [isLoadingNewer, setLoadingNewer] = useState(false);
   const [newerBlocked, setNewerBlocked] = useState(false);
@@ -97,7 +97,6 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
       limit: number,
       extra?: {
         since?: string;
-        until?: string;
         afterId?: string;
         afterAt?: string;
         horizon?: 'true';
@@ -135,7 +134,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         if (cancelled) return;
         // `applyOlderPage` ではなく `applyInitialPage` を使う: 初期読み込みは窓を持たず、`limit` 未満で返った時点で `'end'` と言い切れる
         // （`applyOlderPage` だと日誌が短くても `'progress'` になり、「もっと遡る」を1回押すまで終端と地平の注記が出ない）
-        const applied = applyInitialPage(data.entries, JOURNAL_PAGE, data.next);
+        const applied = applyInitialPage(data.entries, data.next);
         olderCursorRef.current = data.next;
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
@@ -157,16 +156,13 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     };
   }, [api, buildQuery]);
 
-  // `useCallback` にしない: `limit` を上げて撃ち直す再帰があり、メモ化した束縛の自己参照を避けるため
-  function loadOlderAt(limit: number): void {
-    const query = olderPageQuery(entriesRef.current, olderCursorRef.current);
+  function loadOlderAt(): void {
+    const query = olderPageQuery(olderCursorRef.current);
     if (query === undefined) return;
     setLoadingOlder(true);
     api.api
       .GET('/journal', {
-        params: {
-          query: buildQuery(limit, 'afterId' in query ? { ...query, horizon: 'true' } : query),
-        },
+        params: { query: buildQuery(JOURNAL_PAGE, { ...query, horizon: 'true' }) },
       })
       .then(unwrap)
       .then((first) =>
@@ -174,7 +170,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
           api.api
             .GET('/journal', {
               params: {
-                query: buildQuery(limit, {
+                query: buildQuery(JOURNAL_PAGE, {
                   afterId: cursor.id,
                   afterAt: cursor.at,
                   horizon: 'true',
@@ -186,21 +182,10 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
       )
       .then((data) => {
         setOlderError(undefined);
-        const applied = applyOlderPage(
-          entriesRef.current,
-          data.entries,
-          limit,
-          JOURNAL_MAX_LIMIT,
-          data.next,
-        );
+        const applied = applyOlderPage(entriesRef.current, data.entries, data.next);
         olderCursorRef.current = data.next;
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
-        if (applied.outcome === 'retryLarger') {
-          // 黙って終端に見せない: limit を上げて同じ境界を撃ち直す
-          loadOlderAt(JOURNAL_MAX_LIMIT);
-          return;
-        }
         setOlderStatus(applied.outcome);
         setHorizonNote(
           journalHorizonNoteForHuman(applied.outcome, data.oldestAt, data.crossesHorizon, (iso) =>
@@ -217,8 +202,8 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
 
   const loadOlder = useCallback(() => {
     if (isLoadingOlder || isLoadingInitial) return;
-    if (olderStatus !== 'progress' && olderStatus !== 'retryLarger') return;
-    loadOlderAt(JOURNAL_PAGE);
+    if (olderStatus !== 'progress') return;
+    loadOlderAt();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadingOlder, isLoadingInitial, olderStatus]);
 
@@ -319,7 +304,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   const loadMoreError = olderError ?? newerError;
   const retryLoadMore = useCallback(() => {
     if (olderError !== undefined) {
-      if (!isLoadingOlder) loadOlderAt(JOURNAL_PAGE);
+      if (!isLoadingOlder) loadOlderAt();
     } else if (newerError !== undefined) {
       if (!isLoadingNewer) refreshNewerAt(JOURNAL_PAGE);
     }

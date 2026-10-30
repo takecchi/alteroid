@@ -10482,7 +10482,7 @@
                       "type": "boolean"
                     }
                   },
-                  "required": ["entries"],
+                  "required": ["entries", "next"],
                   "additionalProperties": false
                 }
               }

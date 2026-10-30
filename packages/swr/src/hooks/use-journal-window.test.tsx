@@ -106,12 +106,16 @@ describe('useJournalWindow: 読み足しの失敗', () => {
     let olderCalls = 0;
     stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
-      if (new URL(url).searchParams.has('until')) {
+      if (new URL(url).searchParams.has('afterId')) {
         olderCalls += 1;
         if (olderCalls === 1) return json({ error: 'boom' }, 500);
-        return json({ entries: [], scanned: 0 });
+        return json({ entries: [], scanned: 0, next: null });
       }
-      return json({ entries: first, scanned: first.length });
+      return json({
+        entries: first,
+        scanned: first.length,
+        next: { id: first[99]!.id, at: first[99]!.at },
+      });
     });
 
     render(
