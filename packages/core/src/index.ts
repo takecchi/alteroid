@@ -742,6 +742,8 @@ export {
   type WorkspacePolicy,
 } from './manager.js';
 export { WORKER_TOOL_RUNNING_AFTER_MS } from './runner-worker-tool-watch.js';
+export { DAEMON_FORCED_EXIT_MS, DAEMON_SHUTDOWN_GRACE_MS } from './shutdown-grace.js';
+
 /** 「落ちた」は停止の証明ではない: 引き取ってよいかは lease の期限で判定する。 */
 export {
   LEASE_DRAIN_MS,

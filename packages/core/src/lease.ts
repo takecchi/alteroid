@@ -1,6 +1,6 @@
 import type { JobLease } from './schema.js';
 
-// 写しである: 正本は `railway/runner.json` の `drainingSeconds` と `compose.yaml`（`runner`）の `stop_grace_period` で、実行中のプロセスからは読めない。runner 側にも同じ数の写し（`apps/runner/src/index.ts` の `SHUTDOWN_GRACE_MS`）があり、変えるときは両方変えること。
+// 写しである: 正本は `railway/runner.json` の `drainingSeconds` と `compose.yaml`（`runner`）の `stop_grace_period` で、実行中のプロセスからは読めない。runner 自身の畳みの猶予（`apps/runner/src/index.ts` の `SHUTDOWN_GRACE_MS`）もこの値を引くので、コード側の持ち場はここ1つ。
 export const LEASE_DRAIN_MS = 60_000;
 
 // デーモン自身の入れ替えより長くする: 短いと、デーモンだけを再デプロイしている間に runner が走行中のマネージャーを自分で畳んでしまう。

@@ -26,6 +26,7 @@ import {
   runnerPluginsDirOptions,
   ANTHROPIC_ROUTE_NONE_LINE,
   DEFAULT_PROFILE_PATH,
+  LEASE_DRAIN_MS,
   installUncaughtNet,
   agentProviderOf,
   placedEnvValue,
@@ -79,8 +80,8 @@ export function runnerIdOf(env: NodeJS.ProcessEnv): string {
   return placedEnvValue(env, 'ALTEROID_RUNNER_ID') ?? 'runner-primary';
 }
 
-// 猶予は `railway/runner.json` の `drainingSeconds` と `compose.yaml` の `stop_grace_period` の写し: 実行中のプロセスからは読めないため。デーモン側と共有しない: Service ごとの設定で、片方だけ延ばす日があるため。
-const SHUTDOWN_GRACE_MS = 60_000;
+// 猶予は core の `LEASE_DRAIN_MS` を引く（正本は `railway/runner.json` の `drainingSeconds` と `compose.yaml` の `stop_grace_period`。実行中のプロセスからは読めないため、コード側は core の1つだけが写しを持つ）。デーモン側（`DAEMON_SHUTDOWN_GRACE_MS`）と共有しない: Service ごとの設定で、片方だけ延ばす日があるため。
+const SHUTDOWN_GRACE_MS = LEASE_DRAIN_MS;
 
 // `SHUTDOWN_GRACE_MS` ちょうどにしない: 猶予が切れる時刻には SIGKILL が来て、自分の意思で `exit` する最後の口が負けるため。
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
