@@ -273,6 +273,8 @@ export function reclaimScanOf(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
   view: ReclaimSessionView,
+  // 委譲の引き取り手（`delegationSubreaperOf`）。探したが無ければ `null`
+  delegationSubreaper: string | null,
 ): ReclaimScanOptions | undefined {
   const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
   if (raw === 'off') return undefined;
@@ -285,7 +287,7 @@ export function reclaimScanOf(
     );
   }
   if (childUser === undefined) return undefined;
-  return { childUid: childUser.uid, mode: raw, view };
+  return { childUid: childUser.uid, mode: raw, view, delegationSubreaper };
 }
 
 export const DONE_TREE_REAP_AFTER_MINUTES_ENV_KEY = 'ALTEROID_RUNNER_DONE_TREE_REAP_AFTER_MINUTES';
@@ -457,14 +459,17 @@ export async function main(): Promise<void> {
     },
   };
 
-  const reclaimScan = reclaimScanOf(process.env, childUser, sessionView);
+  const reclaimScan = reclaimScanOf(
+    process.env,
+    childUser,
+    sessionView,
+    delegationSubreaper ?? null,
+  );
 
   // `createRunnerApp` は既定を持たず、ここで組んだものを必ず受ける: 既定の読み手は降ろす UID を知らず、観測が動かないため。
   // 引き取り手（#4494）も観測に載せる: 起動ログにしか出ないと、クローンから効いているかを確かめられないため。走査があるのは子の UID へ降ろす構成だけなので、`null` は「探したが無かった」である
   const taskBreakdownReader = new TaskBreakdownReader({
-    ...(reclaimScan === undefined
-      ? {}
-      : { reclaim: { ...reclaimScan, delegationSubreaper: delegationSubreaper ?? null } }),
+    ...(reclaimScan === undefined ? {} : { reclaim: reclaimScan }),
   });
 
   // 回収が無効なら起こさない: 走査しても何も撃たず、`/proc` を読むだけになるため。

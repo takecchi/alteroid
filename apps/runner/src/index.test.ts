@@ -157,39 +157,54 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     }),
   };
 
-  it('未設定なら reclaim（撃つ）として観測し、view はそのまま乗る', () => {
-    expect(reclaimScanOf({}, CHILD, view)).toEqual({ childUid: 1001, mode: 'reclaim', view });
-    expect(reclaimScanOf({}, CHILD, view)).toEqual(
-      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, view),
+  it('未設定なら reclaim（撃つ）として観測し、view と引き取り手はそのまま乗る', () => {
+    expect(reclaimScanOf({}, CHILD, view, null)).toEqual({
+      childUid: 1001,
+      mode: 'reclaim',
+      view,
+      delegationSubreaper: null,
+    });
+    expect(reclaimScanOf({}, CHILD, view, '/usr/bin/tini')).toEqual({
+      childUid: 1001,
+      mode: 'reclaim',
+      view,
+      delegationSubreaper: '/usr/bin/tini',
+    });
+    expect(reclaimScanOf({}, CHILD, view, null)).toEqual(
+      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, view, null),
     );
   });
 
   it('observe を明示すれば、同じ view のまま撃たない構えになる', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, view)).toEqual({
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, view, null)).toEqual({
       childUid: 1001,
       mode: 'observe',
       view,
+      delegationSubreaper: null,
     });
   });
 
   it('空文字も未設定と同じく reclaim', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, view)).toEqual({
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, view, null)).toEqual({
       childUid: 1001,
       mode: 'reclaim',
       view,
+      delegationSubreaper: null,
     });
   });
 
   it('off なら欄ごと出さない（undefined）', () => {
-    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, view)).toBeUndefined();
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, view, null)).toBeUndefined();
   });
 
   it('知らない値なら落とす（黙って既定へ倒れない）', () => {
-    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD, view)).toThrow(/知らない値/);
+    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD, view, null)).toThrow(
+      /知らない値/,
+    );
   });
 
   it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
-    expect(reclaimScanOf({}, undefined, view)).toBeUndefined();
+    expect(reclaimScanOf({}, undefined, view, null)).toBeUndefined();
   });
 });
 
