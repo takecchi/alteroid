@@ -290,6 +290,27 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(screen.queryByText(/1000000/)).toBeNull();
   });
 
+  it('確認を Esc で閉じたら、焦点は押していた「本文を消す」へ戻る（body に落ちない）', async () => {
+    stubArchiveScreen([
+      {
+        id: 'sess-3-a.jsonl',
+        sessionId: 'sess-3',
+        at: '2026-09-01T00:00:00.000Z',
+        storedBytes: 10,
+      },
+    ]);
+    await renderArchive();
+    const trigger = await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByRole('alertdialog');
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
   it('「本文を消す」で DELETE /archive/:id を叩き、成功すれば一覧が「本文は削除済み」に変わる', async () => {
     const { deletes } = stubArchiveScreen([
       {

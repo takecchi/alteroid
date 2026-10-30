@@ -398,6 +398,62 @@ describe('ファイル画面: 操作', () => {
     expect(server.log.filter((c) => c.method === 'DELETE')).toHaveLength(1);
   });
 
+  it('削除の確認を Esc で閉じたら、焦点は押していた「削除」へ戻る（body に落ちない）', async () => {
+    server.items = [item('a', { name: 'a.txt' })];
+    renderFiles();
+    await screen.findByText('a.txt');
+    const trigger = screen.getByRole('button', { name: 'a.txt を削除' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByRole('alertdialog');
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('「保存を外す」を押したあと、焦点は同じ位置のボタンへ戻る（実行中の disabled で body に落ちない）', async () => {
+    server.items = [item('a', { name: 'a.txt', keptAt: '2026-10-02T00:00:00.000Z' })];
+    renderFiles();
+    await screen.findByText('a.txt');
+    const button = screen.getByRole('button', { name: 'a.txt の保存を外す' });
+    // jsdom は disabled になった要素から焦点を外さないので、ブラウザの振る舞い（focus fixup）を真似る
+    // （jsdom は disabled の要素から焦点を外せないので、一瞬だけ disabled を戻して外す）
+    const target = button as HTMLButtonElement;
+    new MutationObserver(() => {
+      if (!target.disabled || document.activeElement !== target) return;
+      target.disabled = false;
+      target.blur();
+      target.disabled = true;
+    }).observe(target, { attributes: true, attributeFilter: ['disabled'] });
+    button.focus();
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(rowOf('a.txt').textContent).toMatch(/に消える/));
+    const after = screen.getByRole('button', { name: 'a.txt の保存をする' });
+    await waitFor(() => expect(document.activeElement).toBe(after));
+  });
+
+  it('画像のプレビューを Esc で閉じたら、焦点は開いた画像のボタンへ戻る（body に落ちない）', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:preview');
+    URL.revokeObjectURL = vi.fn();
+    server.items = [item('p1', { name: 'one.png', mediaType: 'image/png' })];
+    renderFiles();
+    await screen.findByText('one.png');
+    const image = await screen.findByAltText('one.png');
+    const trigger = image.closest('button')!;
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByRole('dialog');
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
   it('期限切れで先に消えていた行（404）は、案内を出して一覧から外す', async () => {
     server.items = [item('a', { name: 'a.txt' })];
     renderFiles();

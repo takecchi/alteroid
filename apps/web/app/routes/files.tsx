@@ -407,7 +407,21 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
   const life = describeAttachmentLifetime(item);
   const fromLabel = ATTACHMENT_FROM_LABELS[attachmentFromOf(item.uploadedBy)];
 
+  // 押したボタンは実行中 disabled になり、ブラウザは disabled になった要素から焦点を外して body へ落とす。終わったら押したボタンへ戻す
+  // ボタンに ref を渡さず行から引く: 共通の Button は ref を受けない型のため
+  const rowRef = useRef<HTMLLIElement>(null);
+  const pressed = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (busy !== undefined || pressed.current === undefined) return;
+    const kind = pressed.current;
+    pressed.current = undefined;
+    // 利用者が自分で焦点を移していたら奪わない
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    rowRef.current?.querySelector<HTMLElement>(`[data-file-action="${kind}"]`)?.focus();
+  }, [busy]);
+
   async function guarded(kind: 'download' | 'kept' | 'delete', action: () => Promise<void>) {
+    pressed.current = kind;
     setBusy(kind);
     setFailure(undefined);
     try {
@@ -421,7 +435,10 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
   }
 
   return (
-    <li className="flex flex-col gap-2 border-b border-border px-4 py-3 text-xs last:border-b-0 sm:flex-row sm:items-start">
+    <li
+      ref={rowRef}
+      className="flex flex-col gap-2 border-b border-border px-4 py-3 text-xs last:border-b-0 sm:flex-row sm:items-start"
+    >
       <Thumbnail item={item} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -438,6 +455,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
             loading={busy === 'download'}
             disabled={busy !== undefined}
             aria-label={`${item.name} をダウンロード`}
+            data-file-action="download"
             onClick={() =>
               void guarded('download', async () => {
                 saveBlob(await fetchAttachment(api, item.id), item.name);
@@ -451,6 +469,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
             loading={busy === 'kept'}
             disabled={busy !== undefined}
             aria-label={`${item.name} の保存を${life.kept ? '外す' : 'する'}`}
+            data-file-action="kept"
             onClick={() =>
               void guarded('kept', async () => {
                 await setKept(item.id, !life.kept);
@@ -465,6 +484,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
             loading={busy === 'delete'}
             disabled={busy !== undefined}
             aria-label={`${item.name} を削除`}
+            data-file-action="delete"
             onClick={() => setConfirming(true)}
           >
             削除
