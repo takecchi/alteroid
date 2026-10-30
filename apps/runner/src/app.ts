@@ -1115,5 +1115,3 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
   return app;
 }
-
-export type RunnerAppType = ReturnType<typeof createRunnerApp>;
