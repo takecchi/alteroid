@@ -57,9 +57,6 @@ export default function EnvVars() {
   );
 }
 
-// 行ごとの flex にしない: 列の開始位置を全行で揃えるため、一覧全体で列幅を共有する（各行は subgrid で受ける）
-const LIST_COLUMNS = 'grid-cols-[max-content_minmax(0,2fr)_minmax(0,3fr)_auto]';
-
 // 伏せ字を値の長さに合わせない: 長さも伝えないため
 const MASK = '******';
 
@@ -150,7 +147,7 @@ function EnvVarList() {
       ) : listUnavailable ? null : shownEntries.length === 0 ? (
         <Empty>置かれた環境変数がまだ1件も無い。</Empty>
       ) : (
-        <div role="list" className={`grid ${LIST_COLUMNS}`}>
+        <div role="list">
           {[...shownEntries]
             .sort((a, b) => a.name.localeCompare(b.name))
             .map((entry) => (
@@ -251,21 +248,28 @@ function EnvVarRow({
   return (
     <div
       role="listitem"
-      className="col-span-4 grid grid-cols-subgrid items-center gap-x-3 border-b border-border px-4 py-2 last:border-b-0"
+      className="flex items-center gap-x-3 border-b border-border px-4 py-2 last:border-b-0"
     >
-      <Badge tone={scope.tone}>{scope.label}</Badge>
-      <span className="truncate font-mono text-sm" title={entry.name}>
-        {entry.name}
-        {entry.restartRequired === true && (
-          <span className="ml-2 font-sans text-[11px] text-muted-foreground">再起動で効く</span>
-        )}
-      </span>
-      <span
-        className="truncate font-mono text-sm text-muted-foreground"
-        title={`更新 ${formatDateTime(entry.updatedAt)}${entry.secret ? `（識別用の値 ${entry.sha256}）` : ''}`}
-      >
-        {shownValue}
-      </span>
+      {/* 名前を上の段、渡す先の札と値を下の段にする（幅を問わず同じ形）: 名前は truncate せず折り返す。1行に4列を並べると、375px では名前が「ALTERO…」まで削られ、PC でも長い名前で「再起動で効く」が切れた（#5858）。値だけが長ければ下の段で切る */}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <span className="min-w-0 font-mono text-sm break-all">{entry.name}</span>
+          {entry.restartRequired === true && (
+            <span className="shrink-0 text-[11px] whitespace-nowrap text-muted-foreground">
+              再起動で効く
+            </span>
+          )}
+        </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <Badge tone={scope.tone}>{scope.label}</Badge>
+          <span
+            className="min-w-0 truncate font-mono text-xs text-muted-foreground"
+            title={`更新 ${formatDateTime(entry.updatedAt)}${entry.secret ? `（識別用の値 ${entry.sha256}）` : ''}`}
+          >
+            {shownValue}
+          </span>
+        </div>
+      </div>
       {/* メニューを modal にしない: メニューの項目からダイアログを開くと、Radix のモーダルなメニューが閉じるときに body の pointer-events: none を戻し損ねるため */}
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
