@@ -453,12 +453,17 @@ async function deleteSpilledFile(
   return c.body(null, 204);
 }
 
+// 本文かクエリを schema で検め、形が違えば `{ ok: false, error }` の 400 で断る。
 // zValidator の既定の 400 を使わない: ZodError の整形が変わった時点で、本文（鍵・スクリプト・依頼文・メッセージ等）が返りうるため。
-function rejectInvalidAs(error: string) {
-  return (result: { success: boolean }, c: Context) => {
+function validated<Target extends 'json' | 'query', Schema extends z.ZodType>(
+  target: Target,
+  schema: Schema,
+  error: string,
+) {
+  return zValidator(target, schema, (result, c: Context) => {
     if (!result.success) return c.json({ ok: false, error }, 400);
     return undefined;
-  };
+  });
 }
 
 export function createRunnerApp(deps: RunnerAppDeps) {
@@ -551,11 +556,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .post(
       '/credentials',
-      zValidator(
-        'json',
-        runnerSetCredentialsCommandSchema,
-        rejectInvalidAs('鍵の入力の形が不正（置いていない）'),
-      ),
+      validated('json', runnerSetCredentialsCommandSchema, '鍵の入力の形が不正（置いていない）'),
       async (c) => {
         const fingerprints = await host.setCredentials(c.req.valid('json').credentials);
         return c.json({ ok: true, credentials: fingerprints });
@@ -566,10 +567,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .get('/profile', (c) => c.json({ ok: true, profile: host.profile() }))
     .post(
       '/profile',
-      zValidator(
+      validated(
         'json',
         runnerSetProfileCommandSchema,
-        rejectInvalidAs('プロファイルの入力の形が不正（置いていない）'),
+        'プロファイルの入力の形が不正（置いていない）',
       ),
       async (c) => {
         const result = await host.setProfile(c.req.valid('json').script);
@@ -581,10 +582,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .get('/mcp-servers', (c) => c.json({ ok: true, mcpServers: host.mcpServers() }))
     .post(
       '/mcp-servers',
-      zValidator(
+      validated(
         'json',
         runnerSetMcpServersCommandSchema,
-        rejectInvalidAs('MCP サーバの登録の袋の形が不正（置いていない）'),
+        'MCP サーバの登録の袋の形が不正（置いていない）',
       ),
       (c) => {
         try {
@@ -603,10 +604,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      */
     .post(
       '/permission-rules',
-      zValidator(
+      validated(
         'json',
         runnerSetPermissionRulesCommandSchema,
-        rejectInvalidAs('許可規則の一覧の袋の形が不正（置いていない）'),
+        '許可規則の一覧の袋の形が不正（置いていない）',
       ),
       (c) => {
         try {
@@ -639,11 +640,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             413,
           ),
       }),
-      zValidator(
-        'json',
-        runnerSetPluginCommandSchema,
-        rejectInvalidAs('plugin の入力の形が不正（置いていない）'),
-      ),
+      validated('json', runnerSetPluginCommandSchema, 'plugin の入力の形が不正（置いていない）'),
       async (c) => {
         try {
           const placed = await host.setPlugin(
@@ -669,10 +666,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         maxSize: RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
         onError: (c) => c.json({ ok: false, error: '本文が大きすぎる（外していない）' }, 413),
       }),
-      zValidator(
+      validated(
         'json',
         runnerRetainPluginsCommandSchema,
-        rejectInvalidAs('plugin の一覧の形が不正（外していない）'),
+        'plugin の一覧の形が不正（外していない）',
       ),
       (c) => {
         const placed = host.retainPlugins(c.req.valid('json').names);
@@ -683,10 +680,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .get('/codex-auth', (c) => c.json({ ok: true, codexAuth: host.codexAuth() }))
     .post(
       '/codex-auth',
-      zValidator(
+      validated(
         'json',
         runnerSetCodexAuthCommandSchema,
-        rejectInvalidAs('Codex の ChatGPT ログインの袋の形が不正（置いていない）'),
+        'Codex の ChatGPT ログインの袋の形が不正（置いていない）',
       ),
       async (c) => {
         try {
@@ -701,7 +698,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     // この制御面の口だけ（デーモンだけが叩ける。合鍵のハッシュで守る）。
     .post(
       '/codex-auth/write-back',
-      zValidator('json', runnerTakeCodexAuthWriteBackCommandSchema, rejectInvalidAs('指紋が無い')),
+      validated('json', runnerTakeCodexAuthWriteBackCommandSchema, '指紋が無い'),
       (c) =>
         c.json({
           ok: true,
@@ -871,11 +868,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .post(
       '/managers',
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
-      zValidator(
-        'json',
-        runnerStartCommandSchema,
-        rejectInvalidAs('起動命令の入力の形が不正（置いていない）'),
-      ),
+      validated('json', runnerStartCommandSchema, '起動命令の入力の形が不正（置いていない）'),
       async (c) => {
         try {
           const { cwd, sessionGeneration } = await host.start(c.req.valid('json'));
@@ -891,11 +884,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .post(
       '/managers/:id/resume',
-      zValidator(
-        'json',
-        runnerResumeCommandSchema,
-        rejectInvalidAs('再開命令の入力の形が不正（置いていない）'),
-      ),
+      validated('json', runnerResumeCommandSchema, '再開命令の入力の形が不正（置いていない）'),
       async (c) => {
         const command = c.req.valid('json');
         // `bodyLimit` を掛けない: 本文の生ログ `entries` は上限が無く大きく、掛けると正当な resume を壊すため。添付の `data` の合計だけを比べる。
@@ -935,11 +924,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .post(
       '/managers/:id/messages',
       bodyLimit({ maxSize: attachmentBodyMax, onError: tooLarge }),
-      zValidator(
-        'json',
-        runnerMessageCommandSchema,
-        rejectInvalidAs('メッセージの入力の形が不正（置いていない）'),
-      ),
+      validated('json', runnerMessageCommandSchema, 'メッセージの入力の形が不正（置いていない）'),
       async (c) => {
         const command = c.req.valid('json');
         let delivered: boolean;
@@ -958,11 +943,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .post(
       '/managers/:id/answers',
-      zValidator(
-        'json',
-        runnerAnswerCommandSchema,
-        rejectInvalidAs('回答の入力の形が不正（置いていない）'),
-      ),
+      validated('json', runnerAnswerCommandSchema, '回答の入力の形が不正（置いていない）'),
       async (c) => {
         const outcome = await host.answer(c.req.param('id'), c.req.valid('json'));
         return c.json({
@@ -974,10 +955,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .post(
       '/rescue-refs/delete',
-      zValidator(
+      validated(
         'json',
         runnerRescueRefDeleteRequestSchema,
-        rejectInvalidAs('退避 ref の後始末の入力の形が不正（消していない）'),
+        '退避 ref の後始末の入力の形が不正（消していない）',
       ),
       async (c) => {
         const result = await host.deleteRescueRef(c.req.valid('json'), {
@@ -1026,10 +1007,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     // 本文は `bodyLimit` で縛らず、置き場が流しながら数えて `size` と上限で断る。置き先と作法は命令の添付と同じ。
     .put(
       '/managers/:id/attachments/:attachmentId',
-      zValidator(
+      validated(
         'query',
         attachmentStageQuery,
-        rejectInvalidAs('別口の添付の控え（クエリ）の形が不正（置いていない）'),
+        '別口の添付の控え（クエリ）の形が不正（置いていない）',
       ),
       async (c) => {
         const contentType = c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase();
