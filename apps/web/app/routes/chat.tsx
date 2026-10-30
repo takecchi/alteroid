@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import {
@@ -11,15 +10,11 @@ import {
   ChatTurnFailure,
   ChatWithdrawnMessage,
   ConversationDeletedNotice,
-  ConversationList as UiConversationList,
   Drawer,
-  Button,
   Card,
   Empty,
   ErrorNote,
   Spinner,
-  TurnFailureNote,
-  type TurnFailureKind,
   useIsMobile,
   EMPTY_QUESTIONS_DRAFT,
 } from '@alteroid/ui';
@@ -30,7 +25,6 @@ import {
   useRecordOwnMessage,
   useConversation,
   useConversationApprovals,
-  useConversations,
   useMarkConversationRead,
   findConversationByClientMessageId,
   getChatStream,
@@ -65,9 +59,7 @@ import {
 import type {
   ChatDraftMark,
   ConversationDeleteResult,
-  ConversationMessage,
   MessageAttachment,
-  PendingApproval,
   PendingAttachmentsNote,
 } from '@alteroid/logic';
 
@@ -75,17 +67,56 @@ import {
   ApprovalAnswerCard,
   approvalDetailPath,
   approvalStateOf,
-  isApprovalAnswered,
-  isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import { errorText } from '~/lib/error-text';
-import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import { LeaveGuardScope, useIsMounted, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import { useFollowScroll } from '~/lib/use-follow-scroll';
+import { useLatest } from '~/lib/use-latest';
 import { useApprovalDraftState, usePersistApprovalDrafts } from '~/lib/use-approval-draft-state';
-import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
+import {
+  sizedOf,
+  attachmentMarkOf,
+  attachmentIds,
+  carriedAttachments,
+  withoutSentText,
+  isClientMessageIdMismatch,
+  afterFailure,
+  sameAsStashed,
+  hasEditDraft,
+  approvalFromAskEvent,
+  ownedBy,
+  retainedBy,
+  applyFocusIntent,
+  pendingOwnLines,
+  heldApprovalIds,
+  hasHumanWithClientMessageId,
+  isSettledApproval,
+  foldedSpans,
+  buildEditVersions,
+  describeCloneInterruptOutcome,
+  type PendingAttachment,
+  type DraftHandling,
+  type EditDraft,
+  type Line,
+  type FocusIntent,
+  type FailedTurn,
+  type EditedVersion,
+} from './chat-lines';
+
+// 試験が './chat' から読む名前: 移した先の chat-lines から再 export して、試験の import を変えずに通す
+export {
+  describeCloneInterruptOutcome,
+  ownedBy,
+  pendingOwnLines,
+  retainedBy,
+  type FailedTurn,
+} from './chat-lines';
+import { ConversationList } from './chat-conversation-list';
+import { ComposerNotices, TurnFailedError, turnFailureAction } from './chat-notices';
 import type { Route } from './+types/chat';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
@@ -93,25 +124,7 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
 }
 
 let replyGroupSeq = 0;
-// 厳密一致（scrollTop + clientHeight === scrollHeight）は小数の丸めで成立しないことがあるので余裕を持たせる
-const BOTTOM_THRESHOLD_PX = 32;
 const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
-
-class TurnFailedError extends Error {
-  constructor(
-    message: string,
-    readonly failureKind: TurnFailureKind,
-  ) {
-    super(message);
-  }
-}
-
-const turnFailureAction = (kind: TurnFailureKind) =>
-  kind === 'auth' ? (
-    <Link to="/tokens" className="text-xs underline underline-offset-2">
-      認証トークンの画面を開く
-    </Link>
-  ) : undefined;
 
 class StreamClosedEarlyError extends Error {
   constructor() {
@@ -142,514 +155,7 @@ function isStreamTerminal(event: ChatStreamEvent): boolean {
 // lazy にする: 添付のある発言が出たときだけ読み込み、最初の読み込みへ入れない（バンドル予算のため）
 const MessageAttachments = lazy(() => import('~/components/message-attachments'));
 
-interface PendingAttachment {
-  key: string;
-  file?: File;
-  meta?: MessageAttachment;
-}
-
 const DRAFT_SAVE_DELAY_MS = 400;
-
-function sizedOf(item: PendingAttachment): { name: string; size: number; type: string } {
-  return {
-    name: item.file?.name ?? item.meta?.name ?? '',
-    size: item.file?.size ?? item.meta?.size ?? 0,
-    type: item.file?.type ?? item.meta?.mediaType ?? '',
-  };
-}
-
-const attachmentMarkOf = (entry: {
-  attachments?: PendingAttachment[];
-  lostAttachments?: { count: number; names: string[] };
-  supersedes?: string;
-}): Pick<ChatDraftMark, 'attachmentCount' | 'attachmentNames' | 'attachments'> => {
-  const items = entry.attachments ?? [];
-  const isEdit = entry.supersedes !== undefined;
-  const gone = isEdit ? items.filter((item) => item.meta === undefined) : items;
-  const restorable = isEdit
-    ? items.flatMap((item) => (item.meta === undefined ? [] : [item.meta]))
-    : [];
-  const kept = restorable.length > 0 ? { attachments: restorable } : {};
-  if (gone.length > 0) {
-    return {
-      ...kept,
-      attachmentCount: gone.length,
-      attachmentNames: gone.map((item) => sizedOf(item).name),
-    };
-  }
-  return entry.lostAttachments === undefined
-    ? kept
-    : {
-        ...kept,
-        attachmentCount: entry.lostAttachments.count,
-        attachmentNames: entry.lostAttachments.names,
-      };
-};
-
-function attachmentIds(items: readonly PendingAttachment[]): string[] {
-  return items.flatMap((item) => (item.meta === undefined ? [] : [item.meta.id]));
-}
-
-function carriedAttachments(items: readonly MessageAttachment[]): PendingAttachment[] {
-  return items.map((meta) => ({ key: `e-${meta.id}`, meta }));
-}
-
-// 前や途中を直したときは全部残す: どこまでが送った分か推測して削ると使い手の編集を失わせる
-function withoutSentText(current: string, sent: string): string {
-  return current.startsWith(sent) ? current.slice(sent.length) : current;
-}
-
-// keep は入力欄に触らない: 触ると、別の発言を書きかけていた入力欄が黙って空になる
-type DraftHandling = 'clear' | 'clearSent' | 'keep';
-
-function isAttachmentMissing(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 400 && error.code === 'attachment_missing';
-}
-
-function isClientMessageIdMismatch(error: unknown): boolean {
-  return (
-    error instanceof ApiError && error.status === 409 && error.code === 'client_message_id_mismatch'
-  );
-}
-
-function expireUploads(items: PendingAttachment[], message: string): PendingAttachment[] {
-  const named = (item: PendingAttachment) =>
-    item.meta !== undefined && message.includes(item.meta.id);
-  if (items.some((item) => item.file === undefined && named(item))) return items;
-  const reuploadable = items.filter((item) => item.file !== undefined && item.meta !== undefined);
-  const expired = new Set(
-    (reuploadable.some(named) ? reuploadable.filter(named) : reuploadable).map((item) => item.key),
-  );
-  return items.map((item) => (expired.has(item.key) ? { key: item.key, file: item.file } : item));
-}
-
-// 載っていなければ空にする: 全部の名前を並べると、切れていないものまで疑わせる
-function expiredCarriedNames(items: readonly PendingAttachment[], message: string): string[] {
-  return items.flatMap((item) =>
-    item.file === undefined && item.meta !== undefined && message.includes(item.meta.id)
-      ? [item.meta.name]
-      : [],
-  );
-}
-
-function afterFailure(
-  caught: unknown,
-  attachments: PendingAttachment[],
-  clientMessageId: string,
-): { attachments: PendingAttachment[]; clientMessageId: string } {
-  const expired = isAttachmentMissing(caught)
-    ? expireUploads(attachments, (caught as ApiError).message)
-    : attachments;
-  return {
-    attachments: expired,
-    clientMessageId:
-      isClientMessageIdMismatch(caught) || expired.some((item, i) => item !== attachments[i])
-        ? newClientMessageId()
-        : clientMessageId,
-  };
-}
-
-function sameAsStashed(
-  stashed: { text: string; attachments?: PendingAttachment[] },
-  text: string,
-  attachments: readonly PendingAttachment[],
-): boolean {
-  const before = stashed.attachments ?? [];
-  return (
-    stashed.text === text &&
-    before.length === attachments.length &&
-    before.every((item, index) => item.key === attachments[index]?.key)
-  );
-}
-
-interface EditDraft {
-  text: string;
-  attachments: MessageAttachment[];
-  added: PendingAttachment[];
-  lost: string[];
-}
-
-function hasEditDraft(draft: EditDraft | undefined, line: Line): boolean {
-  if (draft === undefined) return false;
-  if (draft.text !== line.text || draft.added.length > 0 || draft.lost.length > 0) return true;
-  const original = line.attachments ?? [];
-  return (
-    draft.attachments.length !== original.length ||
-    draft.attachments.some((item, index) => item.id !== original[index]?.id)
-  );
-}
-
-interface Line {
-  key: string;
-  role: 'human' | 'clone' | 'system';
-  text: string;
-  transient?: boolean;
-  // 省略できない形にする: 足し忘れた行が「持ち主なし」として黙って混ざらず、ビルドで落ちるため
-  of: string | undefined;
-  // 編集の入口を出すかはこの欄の有無だけで決める: role === 'human' だけで判定すると、サーバにまだ無い楽観行にも出る
-  // turnFailure は文面では見分けない
-  turnFailure?: 'failed' | 'held';
-  turnFailureKind?: TurnFailureKind;
-  replyGroup?: string;
-  journalId?: string;
-  attachments?: readonly MessageAttachment[];
-  clientMessageId?: string;
-  withdrawn?: true;
-  // 時刻は createdAt に固定する: 回答・取り下げは同じカードの状態として出し、別の行にしない。
-  // 生配信（SSE の ask_human）が作る行は質問しか知らない最小の形で、履歴が同じ承認を持つようになったら pendingOwnLines が承認 id で引き取る
-  approval?: PendingApproval;
-}
-
-// 承認のカードは本文ではなく承認 id で結ぶ: 回答で本文は変わらないが状態は変わる
-function lineMatchKey(line: Line): string {
-  return line.approval !== undefined
-    ? `approval\u0000${line.approval.id}`
-    : `${line.role}\u0000${line.text}`;
-}
-
-function approvalFromAskEvent(approvalId: string, question: string): PendingApproval {
-  const now = new Date().toISOString();
-  return { id: approvalId, createdAt: now, updatedAt: now, question };
-}
-
-// 前の会話の中身を出さない保証はここが持つ。切り替え時に lines を捨てる処理では足りない:
-// React が切り替え前の更新を基底から貼り直すと前の会話の lines が丸ごと戻るため。
-// filter にとどめる（lines を壊さない）: React は古い props で描き直すことがあり、壊す形だと送ったばかりの発言ごと消える。
-export function ownedBy(lines: Line[], shownId: string | undefined): Line[] {
-  return lines.filter((line) => line.of === shownId);
-}
-
-// 直前の会話も残す: 貼り直しで shownId が一瞬古い値へ戻る回に「いま」だけで刈ると、本物の行まで落ちる。
-// of === undefined も残す: 新しい会話では open が届いて of を付け直すまで、送った発言のほうが会話 id より先に画面へ乗る。
-// 同じ会話の往復で増える手元の写しは刈らない。**その刈り込みはこの関数の役目ではなく、pendingOwnLines が持つ。**
-export function retainedBy(
-  lines: Line[],
-  shownId: string | undefined,
-  previousShownId: string | undefined,
-): Line[] {
-  return lines.filter(
-    (line) => line.of === undefined || line.of === shownId || line.of === previousShownId,
-  );
-}
-
-type FocusIntent =
-  { kind: 'edit'; lineKey: string } | { kind: 'approval'; approvalId: string } | { kind: 'end' };
-
-const FOCUSABLE = 'textarea, input, select, button:not([disabled]), a[href]';
-
-function isFocusLost(): boolean {
-  const active = document.activeElement;
-  return active === null || active === document.body;
-}
-
-function composerInput(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('[data-chat-input]');
-}
-
-// 鉛筆へ戻した直後は false を返す: 確定した発言は置き換わって鉛筆ごと消えることがあり、そのときは入力欄へ戻す
-function applyFocusIntent(intent: FocusIntent): boolean {
-  if (intent.kind === 'edit') {
-    if (!isFocusLost()) return false;
-    const pencil = [...document.querySelectorAll<HTMLElement>('[data-edit-key]')].find(
-      (element) => element.getAttribute('data-edit-key') === intent.lineKey,
-    );
-    if (pencil !== undefined) {
-      pencil.focus();
-      return false;
-    }
-    composerInput()?.focus();
-    return true;
-  }
-  if (intent.kind === 'approval') {
-    const cards = [...document.querySelectorAll<HTMLElement>('[data-approval-card]')];
-    const answered = cards.find(
-      (element) => element.getAttribute('data-approval-card') === intent.approvalId,
-    );
-    if (answered?.getAttribute('data-approval-state') === 'unanswered') return false;
-    const active = document.activeElement;
-    if (!isFocusLost() && !(answered !== undefined && answered.contains(active))) return true;
-    const unanswered = cards.filter(
-      (element) => element.getAttribute('data-approval-state') === 'unanswered',
-    );
-    const index = answered === undefined ? -1 : cards.indexOf(answered);
-    const next = unanswered.find((element) => cards.indexOf(element) > index) ?? unanswered[0];
-    const target = next?.querySelector<HTMLElement>(FOCUSABLE) ?? composerInput();
-    target?.focus();
-    return true;
-  }
-  // 戻した後も見張る（false）: 成功すると会話が切り替わって入力欄が作り直されることがある
-  if (!isFocusLost()) return false;
-  (document.querySelector<HTMLElement>('[data-chat-end]') ?? composerInput())?.focus();
-  return false;
-}
-
-// 履歴に同じ種類の知らせが増えたら手元のターンを引き取る: 失敗したターンの手元の返信は履歴に当たらず居残り、「もう一度送る」を隠すため
-export interface FailedTurn {
-  of: string | undefined;
-  kind: 'failed' | 'held';
-  baseline: number | undefined;
-}
-
-function claimedFailedGroups(
-  failedTurns: ReadonlyMap<string, FailedTurn> | undefined,
-  shownId: string | undefined,
-  historyLines: Line[],
-): Set<string> {
-  const claimed = new Set<string>();
-  if (failedTurns === undefined || failedTurns.size === 0) return claimed;
-  const counts = { failed: 0, held: 0 };
-  for (const line of historyLines) {
-    if (line.turnFailure !== undefined) counts[line.turnFailure] += 1;
-  }
-  const consumed = { failed: 0, held: 0 };
-  for (const [group, turn] of failedTurns) {
-    if (turn.of !== shownId || turn.baseline === undefined) continue;
-    const start = Math.max(turn.baseline, consumed[turn.kind]);
-    if (counts[turn.kind] > start) {
-      claimed.add(group);
-      consumed[turn.kind] = start + 1;
-    }
-  }
-  return claimed;
-}
-
-// 分かれた返信の行を日誌の1発言へ連結するときの区切り: デーモンが境目に入れる空行
-const REPLY_SEGMENT_JOINER = '\n\n';
-
-// 一致が確認できた行だけを落とす: 一致が無ければ理由を問わず残す。履歴の再取得が空を返す窓で、届いたばかりの行を消さないため
-export function pendingOwnLines(
-  lines: Line[],
-  shownId: string | undefined,
-  historyLines: Line[],
-  failedTurns: ReadonlyMap<string, FailedTurn> | undefined,
-  /**
-   * 編集で畳まれた返答（履歴で `supersededBy` が付いた outbound）。手元の返答がこれに当たったら引き取る（表に残さない）。
-   * 渡さないと、返答の途中で過去の発言を編集したとき、畳まれた側の返答は照合先が履歴から消え、手元の行として居座る。
-   * 畳むかどうかはサーバの `supersededBy` を読むだけで、規則はここで持たない。
-   */
-  foldedLines: readonly Line[],
-): Line[] {
-  const claimedGroups = claimedFailedGroups(failedTurns, shownId, historyLines);
-  const owned = ownedBy(lines, shownId).filter(
-    (line) => line.replyGroup === undefined || !claimedGroups.has(line.replyGroup),
-  );
-  const remaining = new Map<string, number>();
-  for (const line of historyLines) {
-    const key = lineMatchKey(line);
-    remaining.set(key, (remaining.get(key) ?? 0) + 1);
-  }
-  // 返答だけを数える: 人間の発言は id で引き取るので、畳まれた本文で当てると別の発言を消しうる
-  const folded = new Map<string, number>();
-  for (const line of foldedLines) {
-    if (line.role !== 'clone') continue;
-    const key = lineMatchKey(line);
-    folded.set(key, (folded.get(key) ?? 0) + 1);
-  }
-  // 見えている履歴を先に使い、無ければ畳まれた返答を使う。どちらかを1つ減らせたら true
-  const take = (key: string, allowFolded: boolean): boolean => {
-    const visible = remaining.get(key) ?? 0;
-    if (visible > 0) {
-      remaining.set(key, visible - 1);
-      return true;
-    }
-    const hidden = allowFolded ? (folded.get(key) ?? 0) : 0;
-    if (hidden > 0) {
-      folded.set(key, hidden - 1);
-      return true;
-    }
-    return false;
-  };
-  // id を持つ手元の人間の行は同じ id の履歴だけが引き取る: 本文だけで見ると、過去の同じ本文（「はい」）がいま送った行を消す
-  const historyIds = new Set<string>();
-  const historyUnlabeled = new Map<string, number>();
-  for (const line of historyLines) {
-    if (line.role !== 'human') continue;
-    if (line.clientMessageId !== undefined) historyIds.add(line.clientMessageId);
-    else historyUnlabeled.set(line.text, (historyUnlabeled.get(line.text) ?? 0) + 1);
-  }
-  const historyApprovals = new Map<string, PendingApproval>();
-  for (const line of historyLines) {
-    if (line.approval !== undefined) historyApprovals.set(line.approval.id, line.approval);
-  }
-  // 分かれた返信は連結した本文で照合する: 日誌はターンの本文を1つの発言として載せるので、行ごとだと二重に出る。
-  // 連続した行の並びごとに照合する（長い並びを先に当てる）: デーモンは承認カードやターン中に届いた人間の発言でターンの本文を割って書くので、1ターンが日誌の複数の発言になる
-  const groups = new Map<string, Line[]>();
-  for (const line of owned) {
-    if (line.replyGroup === undefined || line.role !== 'clone') continue;
-    groups.set(line.replyGroup, [...(groups.get(line.replyGroup) ?? []), line]);
-  }
-  const absorbedKeys = new Set<string>();
-  for (const members of groups.values()) {
-    let start = 0;
-    while (start < members.length) {
-      let next = start + 1;
-      for (let end = members.length; end > start + 1; end -= 1) {
-        const run = members.slice(start, end);
-        const joined = `clone\u0000${run.map((member) => member.text).join(REPLY_SEGMENT_JOINER)}`;
-        // 見えている履歴を先に当て、無ければ畳まれた返答に当てる
-        if ((remaining.get(joined) ?? 0) <= 0 && (folded.get(joined) ?? 0) <= 0) continue;
-        take(joined, true);
-        for (const member of run) absorbedKeys.add(member.key);
-        next = end;
-        break;
-      }
-      start = next;
-    }
-  }
-  const pending: Line[] = [];
-  for (const line of owned) {
-    if (absorbedKeys.has(line.key)) continue;
-    const key = lineMatchKey(line);
-    const labeled = line.role === 'human' && line.clientMessageId !== undefined;
-    let taken: boolean;
-    if (labeled && historyIds.has(line.clientMessageId ?? '')) {
-      historyIds.delete(line.clientMessageId ?? '');
-      taken = true;
-    } else if (labeled) {
-      const unlabeled = historyUnlabeled.get(line.text) ?? 0;
-      taken = unlabeled > 0;
-      if (taken) historyUnlabeled.set(line.text, unlabeled - 1);
-    } else {
-      taken = take(key, line.role === 'clone');
-    }
-    if (taken) {
-      // 承認のカードは手元の位置に残す: 履歴の側へ渡すと発言や本文の上に出てしまう。時刻では並べない（手元の行の時刻は端末の時計で、サーバとずれうる）
-      const approval = historyApprovals.get(line.approval?.id ?? '');
-      if (line.approval !== undefined && approval !== undefined && pending.length > 0) {
-        pending.push({ ...line, approval });
-      }
-      continue;
-    }
-    pending.push(line);
-  }
-  return pending;
-}
-
-function heldApprovalIds(pending: Line[]): Set<string> {
-  const ids = new Set<string>();
-  for (const line of pending) if (line.approval !== undefined) ids.add(line.approval.id);
-  return ids;
-}
-
-// 本文では見ない: 同じ本文の発言が別の経路から届いても取り違えないため
-function hasHumanWithClientMessageId(lines: Line[], clientMessageId: string): boolean {
-  return lines.some((line) => line.role === 'human' && line.clientMessageId === clientMessageId);
-}
-
-interface EditedVersion {
-  text: string;
-  hiddenFollowUps: { role: 'human' | 'clone' | 'approval'; text: string }[];
-  /** その版の発言に付いていた添付。無ければ欄ごと無い（版によって添付を外したり足したりするので、最新の版の添付で代えない）。 */
-  attachments?: readonly MessageAttachment[];
-}
-
-function isSettledApproval(approval: PendingApproval): boolean {
-  return isApprovalAnswered(approval) || isApprovalWithdrawn(approval);
-}
-
-function describeFoldedApproval(approval: PendingApproval): string {
-  const settled = isApprovalWithdrawn(approval)
-    ? '（取り下げ済み）'
-    : approval.answer
-      ? `（回答: ${approval.answer}）`
-      : '（回答済み）';
-  return `${approval.question}${settled}`;
-}
-
-// 畳むかどうかの規則はサーバ（supersededBy）が持つ。ここは承認を見分けるためだけに区間を引く（承認は発言の id を持たないので時刻で当てる）
-function foldedSpans(messages: readonly ConversationMessage[]): { start: string; end: string }[] {
-  const starts = new Map<string, string>();
-  for (const message of messages) {
-    if (message.supersededBy === undefined) continue;
-    const current = starts.get(message.supersededBy);
-    if (current === undefined || message.at < current) starts.set(message.supersededBy, message.at);
-  }
-  const spans: { start: string; end: string }[] = [];
-  for (const [editId, start] of starts) {
-    const edit = messages.find((message) => message.id === editId);
-    if (edit !== undefined) spans.push({ start, end: edit.at });
-  }
-  return spans;
-}
-
-// 畳み込み規則はここで持たない（サーバの computeSupersededIds が持つ。AGENTS.md「畳み込み規則を web 側に再実装しないこと」）。
-// 祖先が窓の外へ落ちていたらそこで打ち切る: 遡れない先を捏造しない
-function buildEditVersions(
-  messages: ConversationMessage[],
-  headId: string,
-  approvals: readonly PendingApproval[] = [],
-): EditedVersion[] | undefined {
-  const byId = new Map(messages.map((message) => [message.id, message]));
-  const head = byId.get(headId);
-  if (head === undefined || head.supersedes === undefined) return undefined;
-
-  const ids: string[] = [headId];
-  for (let cursor = head; cursor.supersedes !== undefined;) {
-    const previous = byId.get(cursor.supersedes);
-    if (previous === undefined) break;
-    ids.unshift(previous.id);
-    cursor = previous;
-  }
-  if (ids.length < 2) return undefined;
-
-  return ids.map((id, index) => {
-    const message = byId.get(id);
-    const nextId = ids[index + 1];
-    const next = nextId === undefined ? undefined : byId.get(nextId);
-    const folded: { at: string; role: 'human' | 'clone' | 'approval'; text: string }[] =
-      nextId === undefined
-        ? []
-        : messages
-            .filter((entry) => entry.supersededBy === nextId && entry.id !== id)
-            .map((entry) => ({
-              at: entry.at,
-              role: entry.role === 'inbound' ? ('human' as const) : ('clone' as const),
-              text: entry.text,
-            }));
-    if (message !== undefined && next !== undefined) {
-      for (const approval of approvals) {
-        if (!isSettledApproval(approval)) continue;
-        if (approval.createdAt < message.at || approval.createdAt >= next.at) continue;
-        folded.push({
-          at: approval.createdAt,
-          role: 'approval',
-          text: describeFoldedApproval(approval),
-        });
-      }
-    }
-    const hiddenFollowUps = folded
-      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-      .map(({ role, text }) => ({ role, text }));
-    return {
-      text: message?.text ?? '',
-      hiddenFollowUps,
-      // 履歴の行と同じく、空の添付は欄ごと持たない
-      ...(message?.attachments === undefined || message.attachments.length === 0
-        ? {}
-        : { attachments: message.attachments }),
-    };
-  });
-}
-
-// CLI の describeInterruptOutcome（apps/cli/src/interrupt.ts）と文言を揃えた二重管理: apps 同士はパッケージを共有しない。CLI 側を直したらここも直す
-export function describeCloneInterruptOutcome(
-  outcome: 'interrupted' | 'withdrawn' | 'not_target' | 'starting' | 'idle' | 'unsupported',
-): string {
-  switch (outcome) {
-    case 'withdrawn':
-      return '順番待ちだった発言を取り下げました（送っていません）。書いた文は入力欄へ戻しました。先客のターンには触れていません。';
-    case 'not_target':
-      return 'いま走っているのは、この発言のターンではない（別の起点の）ターンです。先客のターンは止めていません。';
-    case 'starting':
-      return 'この発言のターンが始まる直前でした（まだ止めていません）。もう一度押してください。';
-    case 'interrupted':
-      return 'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
-    case 'idle':
-      return '走っているターンは無かった（止めるものが無い）。';
-    case 'unsupported':
-      return 'このサーバのクローンは、ターンを止められない。';
-  }
-}
 
 const staysInChat = (pathname: string) => pathname === '/chat' || pathname.startsWith('/chat/');
 
@@ -690,96 +196,6 @@ function ChatScreen({ loaderData }: Route.ComponentProps) {
         onOpenList={isMobile ? () => setListOpen(true) : undefined}
       />
     </div>
-  );
-}
-
-const CONVERSATION_PAGE_SIZE = 30;
-
-// 広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く: 別々に書くと、一覧に何か足したときに片方だけ増える。
-function ConversationList({
-  activeId,
-  onNavigate,
-}: {
-  activeId: string | undefined;
-  // useEffect で URL の変化を見る形にしない: いま開いている会話をもう一度押すと URL が変わらず、ドロワーが覆ったまま残る
-  onNavigate?: (() => void) | undefined;
-}) {
-  const [pages, setPages] = useState(1);
-  const { data, error, isLoading, isValidating, mutate } = useConversations(
-    CONVERSATION_PAGE_SIZE,
-    { keepPreviousData: true, pages },
-  );
-  const now = useMinuteNow();
-  const loadingMore = pages > 1 && isValidating;
-  const moreFailing = pages > 1 && error !== undefined && !isValidating;
-
-  const notes: ReactNode[] = [];
-  // 頁を足したあとの scanned は最後の頁の窓の値でしかない: 足し合わせると窓の重なりを二重に数えるため、範囲を言う
-  const pagesRead = data?.pagesRead ?? 1;
-  if (data !== undefined) {
-    notes.push(
-      pagesRead > 1
-        ? `${pagesRead} 頁ぶんを読んだ（最後の頁の窓は、人間との往復 ${data.scanned} 件を走査）`
-        : `人間との往復 ${data.scanned} 件を走査`,
-    );
-  }
-  if (data?.reachedStart === false) {
-    notes.push(
-      `人間との往復を ${pagesRead > 1 ? `${pagesRead} 頁ぶん` : `${data.scanned} 件`}遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
-    );
-  }
-  if (data?.readStateUnreadable !== undefined) {
-    notes.push(
-      '既読の記録が読めない。未読の太字と件数は、クローンの発言を全部未読として数えた値で、会話を開いても、記録が読めるようになるまで変わらない。',
-    );
-  }
-  if (data !== undefined && data.hiddenByLimit > 0 && data.nextCursor === undefined) {
-    notes.push(
-      `…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`,
-    );
-  }
-
-  return (
-    <UiConversationList
-      items={data?.conversations.map((conversation) => ({
-        id: conversation.conversationId,
-        preview: conversation.preview,
-        updatedLabel: formatRelativeAtMinute(conversation.updatedAt, now),
-        messages: conversation.messages,
-        messagesAtLeast: data.windowsComplete === false,
-        unread: conversation.unreadCount,
-      }))}
-      activeId={activeId}
-      loading={isLoading && data === undefined}
-      error={pages > 1 && data !== undefined ? undefined : error}
-      more={
-        data !== undefined && (data.nextCursor !== undefined || moreFailing)
-          ? {
-              onClick: () => {
-                if (moreFailing) void mutate();
-                else setPages((current) => current + 1);
-              },
-              loading: loadingMore,
-              ...(moreFailing ? { error } : {}),
-            }
-          : undefined
-      }
-      unavailable={data === undefined && error !== undefined}
-      onRetry={() => void mutate()}
-      notes={notes}
-      inDrawer={onNavigate !== undefined}
-      newConversationTabStop
-      renderLink={(target, slot) => (
-        <Link
-          to={target.id === undefined ? '/chat' : `/chat/${target.id}`}
-          aria-current={target.id !== undefined && target.id === activeId ? 'page' : undefined}
-          onClick={onNavigate}
-          className={slot.className}
-        >
-          {slot.children}
-        </Link>
-      )}
-    />
   );
 }
 
@@ -1068,13 +484,6 @@ export function ChatPane({
     undefined,
   );
   const [viewingVersionIndex, setViewingVersionIndex] = useState<Record<string, number>>({});
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  // 測定は onScroll 側で行ってここへ持ち越す: 効果が走る時点では新しい行が既に描かれ scrollHeight が伸びていて、行が来る前の位置は測れない
-  const isAtBottomRef = useRef(true);
-  const justSentOwnLineRef = useRef(false);
-  // 会話の切り替わりを追従の効果自身の中で見分ける: 他の効果の宣言順に依存させないため（ChatPane は切り替えで作り直されず、ref は会話 A の false を持ち越す）
-  const lastSeenShownIdRef = useRef(shownId);
 
   // send は自分のストリームを始めるとき先にこれを畳む: 登録の前に送ると再生と送信の2本が同じ応答を受けて二重に出る
   const pendingResumeRef = useRef<AbortController | undefined>(undefined);
@@ -1216,13 +625,7 @@ export function ChatPane({
   );
   const discardLeftover = approvalDraftState.discard;
   const refetchApprovalsRef = useRef<() => void>(() => {});
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const mountedRef = useIsMounted();
   refetchApprovalsRef.current = () => {
     if (!mountedRef.current) return;
     try {
@@ -1383,10 +786,7 @@ export function ChatPane({
     ];
   }, [historyLines, lines, shownId, failedTurns, foldedLines]);
 
-  const allRef = useRef<Line[]>([]);
-  useEffect(() => {
-    allRef.current = all;
-  }, [all]);
+  const allRef = useLatest(all);
   // 鉛筆を押した時点の元の発言を持つ: いま画面に無い会話の発言でも、元のままかを見分けるため。
   const editOriginals = useRef(new Map<string, Line>());
   const pendingEditSave = useRef<{ drafts: ReadonlyMap<string, EditDraft>; epoch: number } | null>(
@@ -1413,7 +813,7 @@ export function ChatPane({
             },
       );
     }
-  }, []);
+  }, [allRef]);
   useEffect(() => {
     pendingEditSave.current = { drafts: editDrafts, epoch: chatDraftEpoch() };
     const timer = setTimeout(flushEditSave, DRAFT_SAVE_DELAY_MS);
@@ -1496,24 +896,11 @@ export function ChatPane({
     }
   }, [retries, shownId]);
 
-  const handleScroll = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (el === null) return;
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX;
-  }, []);
-
-  useEffect(() => {
-    if (lastSeenShownIdRef.current !== shownId) {
-      lastSeenShownIdRef.current = shownId;
-      isAtBottomRef.current = true;
-    }
-    if (isAtBottomRef.current || justSentOwnLineRef.current) {
-      bottomRef.current?.scrollIntoView({ block: 'end' });
-      // scroll イベントを待たずに確定させる: チャンクが立て続けに届くと、イベントが次の効果の実行に間に合わない
-      isAtBottomRef.current = true;
-    }
-    justSentOwnLineRef.current = false;
-  }, [all.length, lines, shownId]);
+  const { bottomRef, scrollContainerRef, handleScroll, justSentOwnLineRef } = useFollowScroll({
+    length: all.length,
+    lines,
+    shownId,
+  });
 
   // shownIdRef の更新と abort() を1つの効果の同期実行の中に置く: owns() と stopped() が同時に切り替わる（片方だけ壊しても、もう片方が writable() を締める）。
   // stream.id が shownId と同じなら止めない: open で採番した id へ同期したときに止めると、続く text / done が出ないまま会話が終わったように見える
@@ -1548,7 +935,7 @@ export function ChatPane({
       ]);
       return key;
     },
-    [],
+    [justSentOwnLineRef],
   );
 
   // 入力欄へ戻すのは下の effect: 失敗が届いた時点の会話を shownIdRef で当てると、切り替え直後の窓で取り違える
@@ -2806,7 +2193,7 @@ export function ChatPane({
         setDeletingConversation(undefined);
       }
     },
-    [deleteConversation, navigate, dropEditDraft],
+    [deleteConversation, navigate, dropEditDraft, allRef],
   );
 
   const visibleUploading = (uploading.get(shownId) ?? 0) > 0;
@@ -3234,126 +2621,33 @@ export function ChatPane({
           lostAttachmentsNote === undefined &&
           unconfirmedText === undefined &&
           !hasShownFailure ? undefined : (
-            <div className="flex flex-col gap-2">
-              {attachNotice !== undefined && (
-                <p role="alert" className="text-xs break-words whitespace-pre-line text-warn">
-                  {attachNotice}
-                </p>
-              )}
-              {shownLostPending !== undefined && (
-                <div
-                  role="status"
-                  data-lost-pending-attachments
-                  className="flex flex-wrap items-center gap-2 text-xs text-warn"
-                >
-                  <span>
-                    添えていたファイル {shownLostPending.count} 件
-                    {shownLostPending.names.length === 0
-                      ? ''
-                      : `（${shownLostPending.names.join('、')}）`}
-                    は戻せませんでした。必要なら添え直す
-                  </span>
-                  <Button size="sm" variant="ghost" onClick={dismissLostPending}>
-                    閉じる
-                  </Button>
-                </div>
-              )}
-              {unconfirmedText === undefined && lostAttachmentsNote !== undefined && (
-                <p role="status" data-lost-attachments className="text-xs text-warn">
-                  添えていたファイル {lostAttachmentsNote.count} 件
-                  {lostAttachmentsNote.names.length === 0
-                    ? ''
-                    : `（${lostAttachmentsNote.names.join('、')}）`}
-                  は、再読み込みで戻せなかった。必要なら添え直す。このまま送ると、そのファイルの無い版になる
-                </p>
-              )}
-              {unconfirmedText !== undefined && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>
-                    送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
-                  </span>
-                  {lostAttachmentsNote !== undefined && (
-                    <span data-lost-attachments className="basis-full text-warn">
-                      添えていたファイル {lostAttachmentsNote.count} 件
-                      {lostAttachmentsNote.names.length === 0
-                        ? ''
-                        : `（${lostAttachmentsNote.names.join('、')}）`}
-                      は、再読み込みで戻せなかった。添え直してから再送するか、本文だけで再送する
-                    </span>
-                  )}
-                  <Button
-                    size="sm"
-                    onClick={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
-                  >
-                    再送
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setRetries((prev) => {
-                        const next = new Map(prev);
-                        next.delete(shownId);
-                        return next;
-                      });
-                      setDraft((current) => (current === unconfirmedText ? '' : current));
-                    }}
-                  >
-                    破棄
-                  </Button>
-                </div>
-              )}
-              {shownFailure === undefined ||
-              shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
-                <TurnFailureNote
-                  kind={shownFailure.failureKind}
-                  message={shownFailure.message}
-                  action={turnFailureAction}
-                />
-              ) : (
-                <div>
-                  <ErrorNote error={shownFailure} />
-                  {isAttachmentMissing(shownFailure) && (
-                    <p role="alert" className="mt-2 text-xs text-warn">
-                      {(() => {
-                        const items = retries.get(shownId)?.attachments ?? [];
-                        const names = expiredCarriedNames(
-                          items,
-                          (shownFailure as ApiError).message,
-                        );
-                        // 先頭3件と「ほか N 件」にする: 長い案内で本題を押し流さないため
-                        const named =
-                          names.length === 0
-                            ? ''
-                            : `（${names.slice(0, 3).join('、')}${names.length > 3 ? ` ほか ${names.length - 3} 件` : ''}）`;
-                        if (
-                          items.some((item) => item.file !== undefined && item.meta === undefined)
-                        ) {
-                          return items.some((item) => item.file === undefined)
-                            ? `添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付${named}は上げ直せないので、期限切れなら外してから送る。`
-                            : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。';
-                        }
-                        return `添付が期限切れか、サーバに無い${named}。「再送」は同じ添付で送るので、添付を外して付け直してから送る。`;
-                      })()}
-                    </p>
-                  )}
-                  {visibleFailure !== undefined &&
-                    retries.has(shownId) &&
-                    unconfirmedText === undefined && (
-                      <Button
-                        size="sm"
-                        className="mt-2"
-                        onClick={() => {
-                          const stashed = retries.get(shownId);
-                          if (stashed !== undefined) resend(stashed);
-                        }}
-                      >
-                        再送
-                      </Button>
-                    )}
-                </div>
-              )}
-            </div>
+            <ComposerNotices
+              attachNotice={attachNotice}
+              shownLostPending={shownLostPending}
+              lostAttachmentsNote={lostAttachmentsNote}
+              unconfirmedText={unconfirmedText}
+              shownFailure={shownFailure}
+              retryAttachments={retries.get(shownId)?.attachments ?? []}
+              canResend={
+                visibleFailure !== undefined &&
+                retries.has(shownId) &&
+                unconfirmedText === undefined
+              }
+              onDismissLostPending={dismissLostPending}
+              onResendUnconfirmed={() => unconfirmedEntry !== undefined && resend(unconfirmedEntry)}
+              onDiscardUnconfirmed={() => {
+                setRetries((prev) => {
+                  const next = new Map(prev);
+                  next.delete(shownId);
+                  return next;
+                });
+                setDraft((current) => (current === unconfirmedText ? '' : current));
+              }}
+              onResendFailed={() => {
+                const stashed = retries.get(shownId);
+                if (stashed !== undefined) resend(stashed);
+              }}
+            />
           )
         }
       />
