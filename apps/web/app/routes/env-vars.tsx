@@ -35,7 +35,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@alteroid/ui/shadcn';
-import { useCredentials, useRemoveEnvVar, useSetEnvVar } from '@alteroid/swr';
+import { ApiError, useCredentials, useRemoveEnvVar, useSetEnvVar } from '@alteroid/swr';
 import { failedRunnerPushes, formatDateTime, redactError } from '@alteroid/logic';
 import type { EnvVarScope, EnvVarUpdateResult, EnvVarView } from '@alteroid/logic';
 
@@ -62,6 +62,42 @@ const LIST_COLUMNS = 'grid-cols-[max-content_minmax(0,2fr)_minmax(0,3fr)_auto]';
 
 // 伏せ字を値の長さに合わせない: 長さも伝えないため
 const MASK = '******';
+
+// daemon の検査（`CREDENTIAL_NAME` と `CREDENTIAL_NAME_MAX_LENGTH`、packages/core/src/credentials.ts）と同じ値を手で持つ:
+// core の値は画面から import できない（ESLint が止める）。欄の見出し「英大文字・数字・_ のみ」より狭く、先頭は英大文字に限る
+const NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+const NAME_MAX_LENGTH = 128;
+const NAME_ERROR_ID = 'add-env-var-name-error';
+const NAME_RULE_MESSAGE = '名前は英大文字・数字・_ だけで書き、先頭は英大文字にする';
+
+function nameProblem(name: string): string | undefined {
+  if (name.length > NAME_MAX_LENGTH) {
+    return `名前は ${String(NAME_MAX_LENGTH)} 文字までにする（いま ${String(name.length)} 文字）`;
+  }
+  return NAME_PATTERN.test(name) ? undefined : NAME_RULE_MESSAGE;
+}
+
+// 400 の本文は「鍵の入力の形が不正（置いていない）: credentials.0.name」のように内部の位置しか言わない。画面の欄の言葉へ直す。
+// 本文から欄を読めなければ、読めなかったと言って見直す欄を挙げる（推測した欄を言い切らない）
+function describeSaveFailure(caught: unknown): unknown {
+  if (!(caught instanceof ApiError) || caught.status !== 400) return caught;
+  if (!caught.message.includes('入力の形が不正')) return caught;
+  const field = /credentials\.\d+\.(\w+)/.exec(caught.message)?.[1];
+  switch (field) {
+    case 'name':
+      return new Error(`${NAME_RULE_MESSAGE}（置いていない）`);
+    case 'value':
+      return new Error('値の形が不正で、置いていない');
+    case 'scope':
+      return new Error('渡す先の指定が不正で、置いていない');
+    case 'secret':
+      return new Error('シークレット扱いの指定が不正で、置いていない');
+    default:
+      return new Error(
+        '入力の形が不正で、置いていない（どの欄かは読み取れなかった）。名前・値・渡す先を見直す',
+      );
+  }
+}
 
 function EnvVarList() {
   const { data, error, isLoading, isValidating, mutate } = useCredentials();
@@ -331,7 +367,7 @@ function EditEnvVarDialog({
         setResult(update);
       } else onOpenChange(false);
     } catch (caught) {
-      setFailure(caught);
+      setFailure(describeSaveFailure(caught));
     } finally {
       setBusy(false);
     }
@@ -510,6 +546,7 @@ function AddEnvVarForm() {
   const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
   const [confirming, setConfirming] = useState(false);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const [nameError, setNameError] = useState<string | undefined>(undefined);
   useReportDirty('add-env-var', name !== '' || value !== '');
 
   const { data } = useCredentials();
@@ -526,6 +563,10 @@ function AddEnvVarForm() {
   function submit() {
     if (!canSubmit) return;
     setRefusal(undefined);
+    // 確認より前に見る: 形に合わない名前は、置き換えの確認を出す意味も送る意味も無いため
+    const problem = nameProblem(name.trim());
+    setNameError(problem);
+    if (problem !== undefined) return;
     if (listUnknown) {
       setConfirming(true);
     } else if (existing === undefined) {
@@ -555,7 +596,7 @@ function AddEnvVarForm() {
       if (latestName.current === sentName) setScopeTouched(false);
       setValue((current) => unsentInput(current, sentValue));
     } catch (caught) {
-      setFailure(caught);
+      setFailure(describeSaveFailure(caught));
     } finally {
       setBusy(false);
     }
@@ -572,10 +613,24 @@ function AddEnvVarForm() {
           <span className="text-xs text-muted-foreground">名前（英大文字・数字・_ のみ）</span>
           <Input
             value={name}
-            onChange={(event) => setName(event.target.value.toUpperCase())}
+            onChange={(event) => {
+              setName(event.target.value.toUpperCase());
+              setNameError(undefined);
+            }}
             placeholder="TZ"
+            aria-invalid={nameError !== undefined || undefined}
+            aria-describedby={nameError === undefined ? undefined : NAME_ERROR_ID}
           />
         </label>
+        {nameError !== undefined && (
+          <p
+            id={NAME_ERROR_ID}
+            role="alert"
+            className="-mt-2 text-[11px] break-words text-destructive"
+          >
+            {nameError}
+          </p>
+        )}
         {secret ? (
           <SecretValueInput
             label="値"
