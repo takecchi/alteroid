@@ -188,8 +188,23 @@ describe('ApprovalCard: 「許可」「却下」が送る文（#5901）', () => 
     ).toBeTruthy();
   });
 
-  it('allowRecordsPermission: 補助の文に、許可（Bash）の一覧に載ることを足す', () => {
-    render(<ApprovalCard {...base} allowAnswer="許可します" allowRecordsPermission />);
+  it('allowRecordsPermission=not-recorded-operator: 持ち主の鍵では載らないと言う', () => {
+    render(
+      <ApprovalCard
+        {...base}
+        allowAnswer="許可します"
+        allowRecordsPermission="not-recorded-operator"
+      />,
+    );
+    expect(
+      screen.getByText(
+        '「許可」は「許可します」と送る。持ち主の鍵で答えた許可は、許可（Bash）の一覧に載らない（アカウントで入って答えると載る）。「却下」は「いいえ、やらないで」と送る。',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('allowRecordsPermission=records: 補助の文に、許可（Bash）の一覧に載ることを足す', () => {
+    render(<ApprovalCard {...base} allowAnswer="許可します" allowRecordsPermission="records" />);
     expect(
       screen.getByText(
         '「許可」は「許可します」と送り、許可（Bash）の一覧に載る。「却下」は「いいえ、やらないで」と送る。',
