@@ -94,16 +94,6 @@ function refetchMounted(mutate: ReturnType<typeof useSWRConfig>['mutate']): void
   });
 }
 
-// `@alteroid/core` の `CLONE_TOOL_NAMES` の写し: core の実行時コードを画面のバンドルへ持ち込まないため。
-// `commitment_list` は含めない: クローンが一覧を読むたびに画面が取り直すことになる
-const LEDGER_WRITE_TOOLS: ReadonlySet<string> = new Set([
-  'commitment_open',
-  'commitment_close',
-  'commitment_close_many',
-  'commitment_reopen',
-  'commitment_edit',
-]);
-
 function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
   void mutate((key) => isKeyOfType(key, 'journal'));
 
@@ -122,10 +112,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       void mutate(KEY.report(entry.date));
       break;
     case 'tool_use':
-      // 台帳の分岐は `isCloneActor` の関門より前に置く: 台帳を動かすのは主にクローン自身で、関門の後だと落とせない
-      if (LEDGER_WRITE_TOOLS.has(entry.tool)) {
-        void mutate((key) => isKeyOfType(key, 'commitments'));
-      }
+      // クローンには台帳を書く道具がもう無い（#5923）ので、tool_use では台帳を取り直さない
       // クローン自身の `tool_use` では `managers` を落とさない: マネージャーが動いていないのに、クローンの作業中ずっと再取得を続けることになる
       if (!isCloneActor(entry.actor)) {
         void mutate((key) => isKeyOfType(key, 'managers'));
