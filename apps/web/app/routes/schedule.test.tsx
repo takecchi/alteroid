@@ -747,6 +747,10 @@ describe('書きかけの依頼を確認なしで消さない（#3374）', () =>
 
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('保存していない変更があります')).toBeTruthy();
+    expect(
+      within(dialog).getByText('別の依頼の編集に切り替えると、書きかけの内容は失われます。'),
+    ).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: '破棄して切り替える' })).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(screen.queryByRole('group', { name: `${OTHER_ENTRY.kind} を編集` })).toBeNull();
@@ -805,6 +809,9 @@ describe('書きかけの依頼を確認なしで消さない（#3374）', () =>
     await typeRequest(panel, '書きかけ');
 
     fireEvent.click(within(panel).getByRole('button', { name: 'やめる' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('保存していない変更があります')).toBeTruthy();
+    expect(within(dialog).getByText('編集をやめると、書きかけの内容は失われます。')).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
     await waitFor(() => expect(panel.isConnected).toBe(false));
 
