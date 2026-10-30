@@ -1432,7 +1432,11 @@ export {
 } from './workspace-reset.js';
 
 export { MemoryAttachmentStore } from './attachment-memory.js';
-export { checkAndBindOutboundAttachments } from './outbound-attachments.js';
+export {
+  checkAndBindOutboundAttachments,
+  conversationBindingKey,
+  serializeAttachmentBinding,
+} from './outbound-attachments.js';
 export {
   ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
   ATTACHMENT_S3_BUCKET_ENV,
