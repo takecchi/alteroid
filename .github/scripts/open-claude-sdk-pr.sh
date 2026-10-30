@@ -24,11 +24,11 @@
 # 開いている PR があれば、そこへコメントで知らせる（下の「force push 前の
 # 『bot 以外のコミットが無いか』チェック」の実装を見よ）。
 #
-# ## draft で出す条件
+# ## PR は常に ready で出す
 #
-# 検証（build / typecheck / lint / format:check / test）が落ちたら draft にする。
-# 失敗した cron の実行としてログの中に埋もれるより、赤い PR として見えるほうが届く。
-# 「draft ＝ まだ人間が読む状態ではない」という意味は AGENTS.md と揃えてある。
+# 検証はこの経路では回さない。PR に付く本物の CI（`ALTEROID_PR_TOKEN` で作った PR は
+# `pull_request` を起こす）が持つ。赤ければ赤い check として PR に出る。draft にすると
+# `ci` / `image` が走らない（ci.yml の `if:`）ので、検証の失敗を draft で表さない。
 #
 # ## この経路が持っていない状態
 #
@@ -47,7 +47,7 @@
 # （オーナーの手番に触れる）。**ワークフローを赤で終わらせることもしない** —
 # SDK 更新自体は成功しているのに失敗として届き、しかも毎晩赤くなるので、また
 # 無視される側に回る。`SDK_CI_TRIGGERED` が空/未設定のときは「起きない」側へ
-# 倒す（`SDK_VERIFY_OK` と同じ規約）。
+# 倒す。
 
 set -euo pipefail
 
@@ -65,11 +65,7 @@ version="${SDK_VERSION:-}"
 version_before="${SDK_VERSION_BEFORE:-}"
 body_file="${SDK_PR_BODY:-}"
 base="${SDK_PR_BASE:-main}"
-# **空なら false 側へ倒す。** 検証ステップが落ちて出力が空になった場合、
-# 「緑だった」ではなく「確かめられていない」が正しい。
-verify_ok="${SDK_VERIFY_OK:-}"
-# **同じ規約を `SDK_CI_TRIGGERED` にも適用する（#867）。** 空/未設定のときは
-# 「起きる」ではなく「起きない」側へ倒す —— 上の `verify_ok` と同じ理由で、
+# **`SDK_CI_TRIGGERED` は空/未設定のとき「起きる」ではなく「起きない」側へ倒す（#867）。**
 # 「確かめられていない」を楽観側（起きる）に倒すと、CI が付かないまま静かに
 # ready 扱いになりかねない。ワークフロー側は必ず 'true' か 'false' の文字列を
 # 渡すが、渡し忘れ・古い呼び出し元（テストなど）は空になりうるので、ここで
@@ -282,25 +278,13 @@ else
 fi
 
 if [ -z "$number" ]; then
-  if [ "$verify_ok" = 'true' ]; then
-    create_pr --base "$base" --head "$branch" --title "$title" --body-file "$body_file"
-    outcome="PR を新規に作成した（ready${ci_note}）: $title"
-  else
-    create_pr --draft --base "$base" --head "$branch" --title "$title" --body-file "$body_file"
-    outcome="PR を新規に作成した（draft ＝ 検証が緑ではない${ci_note}）: $title"
-  fi
+  create_pr --base "$base" --head "$branch" --title "$title" --body-file "$body_file"
+  outcome="PR を新規に作成した（ready${ci_note}）: $title"
 else
   $GH pr edit "$number" --title "$title" --body-file "$body_file"
-  # `gh pr ready --undo`（draft へ戻す）はプランに依存する。使えない構成では
-  # ここが非0で落ちる ＝ **一番中身を知りたい回に落ちる**ので、落ちても PR 自体は
-  # 残っていることが分かるように outcome を先に置いておく。
-  if [ "$verify_ok" = 'true' ]; then
-    outcome="既存の PR #$number を書き換えた（ready にする${ci_note}）"
-    $GH pr ready "$number"
-    outcome="既存の PR #$number を書き換えた（ready${ci_note}）"
-  else
-    outcome="既存の PR #$number を書き換えた（draft へ戻す${ci_note}）"
-    $GH pr ready --undo "$number"
-    outcome="既存の PR #$number を書き換えた（draft へ戻した ＝ 検証が緑ではない${ci_note}）"
-  fi
+  # 以前の版が draft にした PR を ready へ戻す（既に ready なら何も変わらない）。
+  # 落ちても PR 自体は残っていることが分かるように outcome を先に置いておく。
+  outcome="既存の PR #$number を書き換えた（ready にする${ci_note}）"
+  $GH pr ready "$number"
+  outcome="既存の PR #$number を書き換えた（ready${ci_note}）"
 fi
