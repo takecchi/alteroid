@@ -17,7 +17,7 @@ const row = (
 ): Commitment => ({ id, at, origin, body: `本文-${id}`, ...extra });
 
 describe('planCommitmentMigration（純関数）', () => {
-  it('開いている human は task、それ以外は retire、閉じた行は skip-closed。at の古い順に並べる', () => {
+  it('開いている human と self は task、manager・external は retire、閉じた行は skip-closed。at の古い順に並べる', () => {
     const plan = planCommitmentMigration(
       [
         row('h2', '2026-10-02T00:00:00.000Z', 'human'),
@@ -35,17 +35,24 @@ describe('planCommitmentMigration（純関数）', () => {
       'task:h1',
       'task:h2',
       'retire:x1',
-      'retire:s1',
+      'task:s1',
     ]);
     expect(plan.summary).toMatchObject({
       total: 6,
-      toTask: 2,
+      toTask: 3,
       closeOnly: 0,
-      retire: 3,
+      retire: 2,
       skipClosed: 1,
       oldestAt: '2026-10-01T00:00:00.000Z',
-      newestAt: '2026-10-02T00:00:00.000Z',
+      newestAt: '2026-10-04T00:00:00.000Z',
     });
+    expect(plan.summary.byOrigin.self).toEqual({
+      toTask: 1,
+      closeOnly: 0,
+      retire: 0,
+      skipClosed: 0,
+    });
+    expect(plan.summary.byOrigin.external.retire).toBe(1);
     expect(plan.summary.byOrigin.human).toEqual({
       toTask: 2,
       closeOnly: 0,
@@ -65,6 +72,15 @@ describe('planCommitmentMigration（純関数）', () => {
     );
     expect(plan.rows.map((item) => item.action)).toEqual(['close-only', 'task']);
     expect(plan.summary).toMatchObject({ toTask: 1, closeOnly: 1 });
+  });
+
+  it('Task が既に在る self の行は close-only', () => {
+    const plan = planCommitmentMigration(
+      [row('s1', '2026-10-01T00:00:00.000Z', 'self')],
+      new Set(['s1']),
+    );
+    expect(plan.rows.map((item) => item.action)).toEqual(['close-only']);
+    expect(plan.summary.byOrigin.self.closeOnly).toBe(1);
   });
 
   it('同じ at は id で順序を決める（実行のたびに並びが変わらない）', () => {
@@ -182,6 +198,44 @@ describe('台帳→Task の移行（メモリ）', () => {
     const retired = decisions.find((entry) => entry.decision.includes('m1'));
     expect(retired?.decision).toContain('manager');
     expect(retired?.decision).toContain('本文-m1');
+  });
+
+  it('self の行は origin: self の Task になり、日誌の decision は「Task へ移した」と残る', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open(
+      row('s1', '2026-10-01T00:00:00.000Z', 'self', { body: '気づき\n手を付けていない' }),
+    );
+    await stores.commitments.open(row('x1', '2026-10-01T01:00:00.000Z', 'external'));
+    const report = await execute(stores, '2026-10-29T00:00:00.000Z');
+    expect(report.execution).toMatchObject({ migrated: 1, retired: 1 });
+    const task = await stores.tasks.get('s1');
+    expect(task).toMatchObject({
+      id: 's1',
+      origin: 'self',
+      status: 'queued',
+      title: '気づき',
+      body: '気づき\n手を付けていない',
+    });
+    const decisions = (await stores.journal.list()).flatMap((entry) =>
+      entry.type === 'decision' ? [entry] : [],
+    );
+    const moved = decisions.find((entry) => entry.decision.includes('s1'));
+    expect(moved?.decision).toContain('origin: self');
+    expect(moved?.decision).toContain('Task（同じ id: s1）へ移し');
+    expect(moved?.decision).toContain('気づき\n手を付けていない');
+    const closed = (await stores.commitments.get('s1'))?.closedReason;
+    expect(closed).toContain('s1 へ移した');
+  });
+
+  it('self の Task は、古くても human の Task の後ろに並ぶ', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open(row('s1', '2026-10-01T00:00:00.000Z', 'self'));
+    await stores.commitments.open(row('h1', '2026-10-02T00:00:00.000Z', 'human'));
+    await stores.commitments.open(row('s2', '2026-10-03T00:00:00.000Z', 'self'));
+    await stores.commitments.open(row('h2', '2026-10-04T00:00:00.000Z', 'human'));
+    await execute(stores, '2026-10-29T00:00:00.000Z');
+    const ids = (await stores.tasks.list()).entries.map((task) => task.id);
+    expect(ids).toEqual(['h1', 'h2', 's1', 's2']);
   });
 
   it('多数行でも例外で止まらない', async () => {
