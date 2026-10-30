@@ -112,8 +112,9 @@ function useFakeClock(): void {
 }
 
 // 走査のメモを失効させる。毎回走査させたい試験は、読みの間にこれを挟む。
+// ちょうど TTL ではなく 1ms 超えにする: 境目の判定（`<` か `<=` か）は専用の試験だけが測り、他の試験が境目に巻き込まれて赤くならないため。
 function expireScanMemo(): void {
-  vi.setSystemTime(Date.now() + TTL_MS);
+  vi.setSystemTime(Date.now() + TTL_MS + 1);
 }
 
 function readAfterTtl(reader: TaskBreakdownReader): ReturnType<TaskBreakdownReader['read']> {
