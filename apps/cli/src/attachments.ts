@@ -16,6 +16,7 @@ import {
   attachmentTooLargeMessage,
   classifyAttachmentFrom,
   DEFAULT_ATTACHMENT_LIMITS,
+  guessMediaTypeFromPath,
   type AttachmentFromClass,
   isAttachmentImageMediaType,
   attachmentDiskName,
@@ -33,42 +34,6 @@ import { confirmIrreversible } from './confirm.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
 import { describeFailedResponse } from './format.js';
 import { resolveTarget, type Target } from './target.js';
-
-const MEDIA_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  svg: 'image/svg+xml',
-  pdf: 'application/pdf',
-  txt: 'text/plain',
-  log: 'text/plain',
-  md: 'text/markdown',
-  csv: 'text/csv',
-  json: 'application/json',
-  xml: 'application/xml',
-  yaml: 'application/yaml',
-  yml: 'application/yaml',
-  html: 'text/html',
-  zip: 'application/zip',
-  gz: 'application/gzip',
-  tar: 'application/x-tar',
-  mp4: 'video/mp4',
-  mov: 'video/quicktime',
-  webm: 'video/webm',
-  mkv: 'video/x-matroska',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-};
-
-export const DEFAULT_MEDIA_TYPE = 'application/octet-stream';
-
-export function mediaTypeOfName(name: string): string {
-  const dot = name.lastIndexOf('.');
-  if (dot <= 0 || dot === name.length - 1) return DEFAULT_MEDIA_TYPE;
-  return MEDIA_TYPE_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? DEFAULT_MEDIA_TYPE;
-}
 
 export function describeAttachment(a: {
   id: string;
@@ -147,7 +112,8 @@ export class AttachmentDraft {
     if (!info.isFile()) return { ok: false, reason: `ファイルではない: ${absolute}` };
     if (info.size === 0) return { ok: false, reason: ATTACHMENT_EMPTY_MESSAGE };
     const name = normalizeAttachmentName(basename(absolute));
-    const mediaType = mediaTypeOfName(name);
+    // 拡張子の表は core の1か所（#5800）: クローンの file_put・担い手の報告と同じ型を付ける
+    const mediaType = guessMediaTypeFromPath(name);
     const limits = await this.limits();
     const max = attachmentMaxBytes(limits, isAttachmentImageMediaType(mediaType));
     if (info.size > max) {
