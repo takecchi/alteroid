@@ -361,7 +361,7 @@ async function put(
   })) as UpdateView;
 
   const row = result.entries?.find((entry) => entry.name === name);
-  const sha = row?.sha256 ?? (result as { sha256?: string }).sha256 ?? '?';
+  const sha = row?.sha256 ?? '?';
   stdout.write(
     hasRunnerPushFailure(result)
       ? `警告: プロファイルの行 ${name} は保存しましたが、一部の runner へ反映できていません (sha256 ${sha})\n`

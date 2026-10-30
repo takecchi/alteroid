@@ -1737,7 +1737,6 @@ async function mutateProfile(
         version: entry.version,
       })),
       composed,
-      ...allFingerprint,
       // 成功でも `set -x` の出力（値入り）は `output` に載るので伏せる。
       clone:
         result.clone.output === undefined

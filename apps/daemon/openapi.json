@@ -32542,12 +32542,6 @@
                       "required": ["clone", "runner"],
                       "additionalProperties": false
                     },
-                    "sha256": {
-                      "type": "string"
-                    },
-                    "bytes": {
-                      "type": "number"
-                    },
                     "clone": {
                       "type": "object",
                       "properties": {
@@ -32753,12 +32747,6 @@
                       },
                       "required": ["clone", "runner"],
                       "additionalProperties": false
-                    },
-                    "sha256": {
-                      "type": "string"
-                    },
-                    "bytes": {
-                      "type": "number"
                     },
                     "clone": {
                       "type": "object",
@@ -33042,12 +33030,6 @@
                       },
                       "required": ["clone", "runner"],
                       "additionalProperties": false
-                    },
-                    "sha256": {
-                      "type": "string"
-                    },
-                    "bytes": {
-                      "type": "number"
                     },
                     "clone": {
                       "type": "object",

@@ -341,7 +341,7 @@ function SchedulePage() {
                       />
                     </>
                   )}
-                  {editing === entry.kind && (
+                  {editing === entry.kind && isScheduled(entry) && (
                     <ScheduleEditForm
                       entry={entry}
                       onCancel={() => requestEditing(undefined)}
@@ -378,8 +378,7 @@ const DEFAULT_SPEC_DRAFT: ScheduleSpecDraft = {
 };
 
 // 選ばれた型以外の欄も既定値で埋める: 空欄のままだと type を切り替えた瞬間に無効な値になるため
-function initialSpecDraft(spec?: ScheduleSpec): ScheduleSpecDraft {
-  if (spec === undefined) return DEFAULT_SPEC_DRAFT;
+function initialSpecDraft(spec: ScheduleSpec): ScheduleSpecDraft {
   if (spec.type === 'daily') return { ...DEFAULT_SPEC_DRAFT, type: 'daily', at: spec.at };
   if (spec.type === 'every') {
     return { ...DEFAULT_SPEC_DRAFT, type: 'every', minutes: String(spec.minutes) };
@@ -543,14 +542,20 @@ function useRequestTab(initialValue: string) {
 }
 
 // kind は変えさせない: kind を変えて送ると upsert は別の依頼を新しく作り、元の依頼が残るため
-// entry.spec が無ければ保存させない: 読めない周期を既定値で埋めて送ると、本文だけ直したつもりの保存が周期を黙って書き換えるため
+// 編集できるのは仕込まれた行だけで、それは必ず spec を持つ（既定の日報・発意は `spec` が無いが、編集の口が無い）
+type ScheduledEntry = ScheduleEntry & { spec: ScheduleSpec };
+
+function isScheduled(entry: ScheduleEntry): entry is ScheduledEntry {
+  return entry.spec !== undefined;
+}
+
 function ScheduleEditForm({
   entry,
   onCancel,
   onSaved,
   onDirtyChange,
 }: {
-  entry: ScheduleEntry;
+  entry: ScheduledEntry;
   onCancel: () => void;
   onSaved: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -581,8 +586,7 @@ function ScheduleEditForm({
   }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
-  const specUnknown = entry.spec === undefined;
-  const ready = !specUnknown && request.trim() !== '';
+  const ready = request.trim() !== '';
 
   function submit(ifMatch: string | null | undefined = baseVersion) {
     if (!ready || !begin()) return;
@@ -627,22 +631,9 @@ function ScheduleEditForm({
         <span>名前（変更不可。別の名前にしたいなら外して新しく仕込む）:</span>
         <span className="font-mono break-words">{entry.kind}</span>
       </div>
-      {specUnknown ? (
-        <ErrorNote
-          error={
-            new Error(
-              '接続先のサーバは周期（spec）を返していない（この画面より古い版の可能性）。' +
-                '周期が読めないまま保存すると、上書きで周期が既定値へ黙って変わって' +
-                'しまうので、ここでは保存できない。サーバを更新してから開き直すこと。',
-            )
-          }
-          className="mb-2"
-        />
-      ) : (
-        <div className="mb-2">
-          <ScheduleSpecFields draft={specDraft} onChange={setSpecDraft} />
-        </div>
-      )}
+      <div className="mb-2">
+        <ScheduleSpecFields draft={specDraft} onChange={setSpecDraft} />
+      </div>
       <RequestEditor
         value={request}
         onChange={setRequest}
