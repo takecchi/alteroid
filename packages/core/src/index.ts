@@ -1433,6 +1433,11 @@ export {
 
 export { MemoryAttachmentStore } from './attachment-memory.js';
 export {
+  checkAndBindOutboundAttachments,
+  conversationBindingKey,
+  serializeAttachmentBinding,
+} from './outbound-attachments.js';
+export {
   ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
   ATTACHMENT_S3_BUCKET_ENV,
   ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV,

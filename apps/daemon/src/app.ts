@@ -42,6 +42,7 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  conversationBindingKey,
   MemoryConflictError,
   memoryVersion,
   PracticeConflictError,
@@ -3108,7 +3109,7 @@ export function createApp(deps: AppDeps) {
               meta.managerReportId !== undefined ||
               (meta.conversationId !== undefined && meta.conversationId !== conversationId),
             conflictMessage: '別の会話に結び付いた添付は使えない',
-            serializeKey: `conversation:${conversationId}`,
+            serializeKey: conversationBindingKey(conversationId),
           });
         } catch (error) {
           claim?.settle(false);

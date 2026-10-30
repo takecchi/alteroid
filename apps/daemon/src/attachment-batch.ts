@@ -2,6 +2,7 @@ import {
   AttachmentRejectedError,
   attachmentBatchItemOf,
   reasonOf,
+  serializeAttachmentBinding,
   validateAttachmentBatch,
   type AttachmentBindResult,
   type AttachmentLimits,
@@ -34,21 +35,8 @@ export interface AttachmentBatchOptions {
   readonly conflictMessage: string;
   readonly onlyUploadedBy?: string;
   // 宛先ごとに直列化する: 呼び A が新しく結んだ x を A が戻す前に呼び B が「結び済み」として通ると、A の戻しが B の通った発言の添付を外すため。
+  // 会話へ結ぶ呼びは `conversationBindingKey(id)` を渡す: クローンの発言（core）と同じ列に並べるため（#5676）
   readonly serializeKey: string;
-}
-
-const tails = new Map<string, Promise<unknown>>();
-
-async function serialized<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const previous = tails.get(key) ?? Promise.resolve();
-  const result = previous.then(run, run);
-  const tail = result.catch(() => undefined);
-  tails.set(key, tail);
-  try {
-    return await result;
-  } finally {
-    if (tails.get(key) === tail) tails.delete(key);
-  }
 }
 
 export async function checkAndBindAttachments(
@@ -56,7 +44,10 @@ export async function checkAndBindAttachments(
   options: AttachmentBatchOptions,
 ): Promise<AttachmentBatchResult> {
   if (attachmentIds === undefined || attachmentIds.length === 0) return { ok: true, refs: [] };
-  return serialized(options.serializeKey, () => checkAndBind(attachmentIds, options));
+  // 列は core の1つを使う: daemon だけの列を持つと、クローンの発言と互いを待たないため（#5676）
+  return serializeAttachmentBinding(options.serializeKey, () =>
+    checkAndBind(attachmentIds, options),
+  );
 }
 
 async function checkAndBind(
