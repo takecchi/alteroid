@@ -1,4 +1,3 @@
-import { countLegacyOnlyOpen } from './digest.js';
 import type { Stores } from './store.js';
 
 /** 発意 tick のターンを回した印になる日誌の行の頭（`turn-input.ts` の `describeTurnInput` が `turnInputEntry` で書く、ターンの入力の行）。 */
@@ -21,20 +20,19 @@ export type InitiativeGateDecision =
 export type InitiativeRunReason =
   | 'manual'
   | 'movable_task'
-  | 'legacy_ledger_open' // #5469 P7 で消える
   | 'daily_check'
   | 'read_failed';
 
 /**
  * 発意 tick をモデルのターンとして回すかを決める（#5469 P6a）。回すのは次のどれか:
  * (d) 手で起こした回、(a) 待ち行列に動ける task（queued / needs_decision）がある、
- * (b) 旧台帳に task の無い開いた行がある（#5469 P7 で消える）、(c) 直近24時間に発意 tick のターンを回していない。
+ * (c) 直近24時間に発意 tick のターンを回していない。旧台帳（`CommitmentStore`）は見ない: Task だけで決める（#5910）。
  *
  * 読みが1つでも失敗したら回す側へ倒す: 黙って起こさない側へ倒すと、仕事が静かに止まるため。
  * 読めない行（`unreadable`）も同じ側へ倒す: 読めない task が動ける task かもしれず、「無い」とは言えないため。
  */
 export async function decideInitiativeTick(
-  stores: Pick<Stores, 'tasks' | 'commitments' | 'journal'>,
+  stores: Pick<Stores, 'tasks' | 'journal'>,
   options: { readonly cause: 'schedule' | 'schedule_catchup' | 'manual'; readonly now: Date },
 ): Promise<InitiativeGateDecision> {
   if (options.cause === 'manual') return { run: true, because: 'manual' };
@@ -51,11 +49,6 @@ export async function decideInitiativeTick(
     }
     if (queued + needsDecision > 0) return { run: true, because: 'movable_task' };
     if (tasks.unreadable.length > 0) return { run: true, because: 'read_failed' };
-
-    // #5469 P7 で、台帳を撤去するときにこの分岐ごと消える
-    const legacy = await countLegacyOnlyOpen(stores);
-    if (legacy.open > 0) return { run: true, because: 'legacy_ledger_open' };
-    if (legacy.unreadable > 0) return { run: true, because: 'read_failed' };
 
     const lastTickAt = await lastInitiativeTurnAt(stores, options.now);
     if (lastTickAt === null) return { run: true, because: 'daily_check' };

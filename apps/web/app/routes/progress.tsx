@@ -28,7 +28,7 @@ import {
 } from '@alteroid/logic';
 import type { Progress, ProgressForecast, ProgressForecastBasis } from '@alteroid/logic';
 
-// 割合（%）を出さない: 台帳には締切も総量も無く、分母が定まらないため
+// 割合（%）を出さない: task には締切も総量も無く、分母が定まらないため
 const NONE = '—';
 
 const WINDOWS = [24, 168, 720] as const;
@@ -269,7 +269,6 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
 function BacklogCard({ progress }: { progress: Progress }) {
   const { backlog, github, observedAt } = progress;
   const { byOrigin, age, byState, completeness } = backlog;
-  // trimmedClosed を判定に入れない: 刈られた完了済みの記録は未完了の数に影響しないため
   const partial = completeness.unreadable !== 0;
   // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
   const noneReason = partial
@@ -385,8 +384,8 @@ function ThroughputCard({ progress }: { progress: Progress }) {
       />
       <Section>
         <StatRow>
-          <Stat label="引き受けた" value={count(throughput.commitmentsOpened)} unit="件" />
-          <Stat label="完了にした" value={count(throughput.commitmentsClosed)} unit="件" />
+          <Stat label="引き受けた" value={count(throughput.tasksOpened)} unit="件" />
+          <Stat label="完了にした" value={count(throughput.tasksClosed)} unit="件" />
           <Stat
             label="終わった依頼"
             value={count(throughput.delegationsEnded.count)}
@@ -394,11 +393,6 @@ function ThroughputCard({ progress }: { progress: Progress }) {
             hint="最後に更新された時刻からの概算です（終わった正確な時刻は記録されていません）"
           />
         </StatRow>
-        {throughput.mayBeUndercounted && (
-          <p className="text-xs text-warn">
-            この期間の件数は、古い記録が整理されたため実際より少ない可能性があります。「引き受けた」「完了にした」は「少なくともこれだけ」と読んでください。
-          </p>
-        )}
         <UnreadableJobsNote progress={progress} />
       </Section>
     </Card>
@@ -407,10 +401,8 @@ function ThroughputCard({ progress }: { progress: Progress }) {
 
 const UNAVAILABLE_REASONS: Record<string, string> = {
   closed_too_few: '期間内に完了した仕事が少なすぎて、計算できません。完了が増えると出ます',
-  ledger_younger_than_window:
+  tasks_younger_than_window:
     '記録の始まりが選んだ期間より新しいため、計算できません。記録が期間ぶんたまるまで待つか、短い期間に切り替えてください',
-  history_incomplete:
-    '古い完了済みの記録が整理されていて、期間内の完了を数え落としている可能性があるため、計算できません。短い期間に切り替えてみてください',
 };
 
 function reasonText(reason: string): string {

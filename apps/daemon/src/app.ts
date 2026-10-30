@@ -11160,16 +11160,16 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 取れない行を 0 に丸めない: `unreadable` / `trimmedClosed` はストアが返したまま core へ渡す。`github` は観測の記録を返すだけ（デーモンは GitHub を見に行かない）。
+    // 取れない行を 0 に丸めない: `unreadable` はストアが返したまま core へ渡す（Task は閉じた行を刈らないので、刈りの件数は無い）。`github` は観測の記録を返すだけ（デーモンは GitHub を見に行かない）。
     .get(
       '/progress',
       describeRoute({
         tags: ['progress'],
         summary: '作業の進捗（積み上がり・実施中・片付いた速度・見込み）',
         description:
-          '台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 ' +
+          'Task（待ち行列の行。`GET /tasks`）と委譲（Job）の行を数え直した集計。台帳（`GET /commitments`）の行は数えない。`windowHours`（既定 ' +
           `${DEFAULT_PROGRESS_WINDOW_HOURS}）は速度と見込みを数える窓の長さ（時間、有限の正数）。` +
-          '**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。' +
+          '**率（%）は出さない**（task に総量が無く、分母が定まらない）。' +
           '`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず ' +
           '`null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。' +
           '`github` は観測の記録（`POST /github-observations`）を返すだけで、デーモンは GitHub を見に行かない。' +

@@ -185,6 +185,16 @@ async function buildStores(config: FixtureConfig, now: number): Promise<Stores> 
   const stores = createMemoryStores();
   await seedMemory(stores, config.memory);
   await seedCommitments(stores, config.commitments, now);
+  // 発意の門は Task だけで決める（#5910）: 動ける task が無いと、2回目以降の発意 tick は畳まれてターンが回らず測れない
+  await stores.tasks.add({
+    id: 'task-measure-00001',
+    createdAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    updatedAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    status: 'queued',
+    origin: 'self',
+    title: '測りの入力に置く動ける task',
+    body: '発意の門を通すための1件',
+  });
   await seedJobs(stores, config.jobs, now);
   await seedJournal(stores, config.journalRows);
   await stores.schedules.put({

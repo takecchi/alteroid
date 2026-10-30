@@ -36,14 +36,9 @@ export function HomeTiles() {
   );
 }
 
-// 刈られた完了済みの行を数えない: 未了の数に影響しないため
 function progressPartial(progress: Progress): boolean {
   const { completeness } = progress.backlog;
   return completeness.unreadable !== 0 || completeness.unreadableJobs !== 0;
-}
-
-function closedUndercounted(progress: Progress): boolean {
-  return progress.throughput.mayBeUndercounted;
 }
 
 function windowText(hours: number): string {
@@ -76,7 +71,7 @@ function ProgressTile() {
             label="実行中の任せた作業"
             value={String(data.inProgress.running)}
             unit="件"
-            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.commitmentsClosed} 件${closedUndercounted(data) ? '以上' : ''}`}
+            hint={`未了の仕事 ${data.backlog.total} 件・直近 ${windowText(data.window.hours)}で閉じた仕事 ${data.throughput.tasksClosed} 件`}
           />
           {progressPartial(data) ? (
             // 「無い」と言い切らない: 数が下限でしかないため
