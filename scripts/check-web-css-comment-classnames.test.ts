@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,8 @@ import {
   PLACEHOLDER_ELLIPSIS,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-web-css-comment-classnames-core.mjs';
+// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
+import { listFilesWithExt } from './list-files-with-ext.mjs';
 
 // ビルドが無いときは黙ってスキップせず落とす: スキップすると「検査していない」が「検査して0件だった」と区別できなくなるため。
 describe('check-web-css-comment-classnames: findInvalidCssHits', () => {
@@ -53,9 +55,7 @@ describe('実ビルドの検査（apps/web/build/client/assets/*.css）', () => 
         `${ASSETS_DIR} が無い。先に \`pnpm build\` を走らせたか（AGENTS.md「開発手順」— build が先）`,
       );
     }
-    const cssPaths = readdirSync(ASSETS_DIR)
-      .map((name) => join(ASSETS_DIR, name))
-      .filter((path) => statSync(path).isFile() && path.endsWith('.css'));
+    const cssPaths: string[] = listFilesWithExt(ASSETS_DIR, '.css');
 
     expect(
       cssPaths.length,

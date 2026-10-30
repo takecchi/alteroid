@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { STEPS } from './verify-core.mjs';
+// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
+import { listWorkflowFiles } from './workflow-scan-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -30,9 +32,7 @@ function wiredInVerifySteps(): Set<string> {
 const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
 
 // `ci.yml` 1本ではなく `.github/workflows/` 全体を走査する: required な門が `ci.yml` の外に実在しうり（`no-attribution-trailers`）、1本だけだと免除表に嘘を書く圧力が生まれるため。
-export const WORKFLOW_FILES: string[] = readdirSync(WORKFLOWS_DIR)
-  .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
-  .sort();
+export const WORKFLOW_FILES: string[] = listWorkflowFiles(WORKFLOWS_DIR);
 
 const WORKFLOW_TEXTS: string[] = WORKFLOW_FILES.map((name) =>
   readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8'),
