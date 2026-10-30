@@ -2,7 +2,6 @@
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { describeMcpServersProblem } from '~/lib/mcp-servers-check';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -464,7 +463,7 @@ function toMcpJson(servers: McpServers): string {
   return `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`;
 }
 
-// 形の規則は core のスキーマが正本（デーモンの parseMcpServers と同じもの）。ここは JSON の読みと、外側の形（mcpServers の有無）だけを見る
+// 中身の検査をここでしない: 形の検査はデーモンの parseMcpServers が正本のため
 function parseMcpJson(
   text: string,
 ): { ok: true; servers: McpServers } | { ok: false; error: string } {
@@ -489,8 +488,5 @@ function parseMcpJson(
       error: '{ "mcpServers": { … } } の形で書くこと（.mcp.json と同じ形。送っていない）',
     };
   }
-  // 形は送る前に core のスキーマ（daemon と同じもの）で見て、どのサーバのどの欄が違うかを言う。通ったものも、最後の判断は daemon が持つ（食い違えば daemon の文がそのまま出る）
-  const problem = describeMcpServersProblem(servers as Record<string, unknown>);
-  if (problem !== undefined) return { ok: false, error: `${problem}（送っていない）` };
   return { ok: true, servers: servers as McpServers };
 }
