@@ -763,7 +763,7 @@ for s in runner runner-2 runner-3; do railway down -s "$s" -y; done
 # 2. 誰も繋いでいないことを見てから落とす（認証を残す側）
 railway ssh --service Postgres 'psql \
   -c "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid();" \
-  -c "truncate table approvals, archive, daemon_state, env_profile, env_profile_entries, inbox_events, jobs, journal, memory, schedule_phases, schedules, session_entries, sessions, usage_baseline, usage_daily, usage_ledger restart identity cascade;"'
+  -c "truncate table approvals, archive, daemon_state, env_profile, env_profile_entries, inbox_events, jobs, journal, memory, schedule_phases, schedules, session_entries, sessions, tasks, usage_baseline, usage_daily, usage_ledger restart identity cascade;"'
 
 # 3. 戻す（runner が先）
 for s in runner runner-2 runner-3; do railway redeploy -s "$s" --from-source -y; done
@@ -776,9 +776,10 @@ railway redeploy -s app --from-source -y
 railway ssh --service Postgres 'psql -c "select tablename from pg_tables where schemaname = current_schema() and tablename not like '"'"'auth_%'"'"' order by tablename;"'
 ```
 
-**消えるもののうち忘れやすいのは2つ。** どれも `memory`（記憶）とは別の軸である。
+**消えるもののうち忘れやすいのは3つ。** どれも `memory`（記憶）とは別の軸である。
 
 - **`daemon_state.clone_session_id`** — クローンが続けているセッションの id。消すとクローンは**新しいセッションから始まる**（会話の続きが切れる。記憶を残しても切れる）
+- **`tasks`** — 引き受けたまま終わっていない仕事の待ち行列。消すと**やり残しを誰も思い出さない**
 - **`env_profile_entries`**（と旧形式の `env_profile`）— 実行環境プロファイル（`.zprofile` 相当。名前付きの行。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile list` で行を数え、`alteroid profile show <名前>` で本文を控える。**`truncate` で `daemon_state` も消えるので、旧 `env_profile` に行が残っていると、次の起動で `default` 行として蘇る**（旧表も一緒に消すこと）
 
 そして器を止める操作そのものの代償も残る — **走行中のマネージャーは畳まれ、`/workspace` の未 push の変更は消える**（「先に読む」3）。
