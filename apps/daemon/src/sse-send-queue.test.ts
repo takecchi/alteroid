@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { SseSendQueue, SSE_SEND_QUEUE_MAX_CHARS, SSE_SEND_QUEUE_MAX_ITEMS } from './sse-send-queue.js';
+import {
+  SseSendQueue,
+  SSE_SEND_QUEUE_MAX_CHARS,
+  SSE_SEND_QUEUE_MAX_ITEMS,
+} from './sse-send-queue.js';
 
 // `/chat` 系と `/journal/stream` の購読者1本ぶんの送り待ちを1つの作りにする（#5694）
 describe('SseSendQueue', () => {

@@ -259,17 +259,12 @@ import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal
 import { clientMessageFingerprint } from './client-message-fingerprint.js';
 import { checkAndBindAttachments, type AttachmentBatchResult } from './attachment-batch.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
+import { survivesDeletion, type JournalBus } from './journal-bus.js';
 import {
-  JOURNAL_STREAM_QUEUE_MAX_CHARS,
-  JOURNAL_STREAM_QUEUE_MAX_ENTRIES,
-  JournalStreamQueue,
-  type JournalBus,
-} from './journal-bus.js';
-import {
-  CHAT_STREAM_QUEUE_MAX_CHARS,
-  CHAT_STREAM_QUEUE_MAX_EVENTS,
-  ChatStreamQueue,
-} from './chat-stream-queue.js';
+  SSE_SEND_QUEUE_MAX_CHARS,
+  SSE_SEND_QUEUE_MAX_ITEMS,
+  SseSendQueue,
+} from './sse-send-queue.js';
 import { guardSseWrites } from './sse-write-deadline.js';
 import { httpTimingMiddleware, type HttpTimingRecorder } from './http-timing.js';
 import { Scalar } from '@scalar/hono-api-reference';
@@ -2191,7 +2186,10 @@ export function createApp(deps: AppDeps) {
   }
   // ループを2本の口で別々に持たない: 資格が尽きたときの閉じ方や心拍の扱いが片方だけ変わる。購読は呼び出し側で済ませてからここへ来る（`try` を購読の直後から始めるため）。
   function chatEventPump() {
-    const queue = new ChatStreamQueue(deps.chatStreamQueueLimits);
+    const queue = new SseSendQueue<ChatStreamEvent>({
+      maxItems: deps.chatStreamQueueLimits?.maxEvents,
+      maxChars: deps.chatStreamQueueLimits?.maxChars,
+    });
     let wake: (() => void) | null = null;
     let finished = false;
     return {
@@ -2254,9 +2252,9 @@ export function createApp(deps: AppDeps) {
                 // `error` を送ると画面はターンの失敗として扱うが、ターンは止めていない。終端の無いまま閉じれば、画面は張り直して続きを読む
                 const summary =
                   `/chat の流れの受け手が読むのに追いつかず、送り待ちが上限を超えた` +
-                  `（${String(overflow.events)} 件・${String(overflow.chars)} 字。上限 ` +
-                  `${String(deps.chatStreamQueueLimits?.maxEvents ?? CHAT_STREAM_QUEUE_MAX_EVENTS)} 件・` +
-                  `${String(deps.chatStreamQueueLimits?.maxChars ?? CHAT_STREAM_QUEUE_MAX_CHARS)} 字）。` +
+                  `（${String(overflow.items)} 件・${String(overflow.chars)} 字。上限 ` +
+                  `${String(deps.chatStreamQueueLimits?.maxEvents ?? SSE_SEND_QUEUE_MAX_ITEMS)} 件・` +
+                  `${String(deps.chatStreamQueueLimits?.maxChars ?? SSE_SEND_QUEUE_MAX_CHARS)} 字）。` +
                   '溜めた分を捨ててこの流れを切った。クローンのターンは止めていない（#4662）。';
                 void stores.journal
                   .append({ type: 'external_event', source: 'chat-stream', summary })
@@ -2277,7 +2275,7 @@ export function createApp(deps: AppDeps) {
                 wake = null;
                 continue;
               }
-              const { event, data } = item;
+              const { value: event, data } = item;
               await stream.writeSSE({ event: event.type, data });
               if (event.type === 'done' || event.type === 'error') break;
             }
@@ -3889,13 +3887,16 @@ export function createApp(deps: AppDeps) {
           .filter((value) => value.length > 0);
 
         return streamSSE(c, async (stream) => {
-          const queue = new JournalStreamQueue(deps.journalStreamQueueLimits);
+          const queue = new SseSendQueue<JournalEntry>({
+            maxItems: deps.journalStreamQueueLimits?.maxEntries,
+            maxChars: deps.journalStreamQueueLimits?.maxChars,
+          });
           let wake: (() => void) | null = null;
           let closed = false;
 
           const unsubscribe = bus.subscribe((entry) => {
             // 種別の絞りより先に見る: `type=` で墓標を流さない購読でも、溜めた行は捨てる必要があるため
-            if (entry.type === 'conversation_deleted') queue.pruneForDeletion(entry);
+            if (entry.type === 'conversation_deleted') queue.retain(survivesDeletion(entry));
             if (types !== undefined && !types.includes(entry.type)) return;
             queue.push(entry);
             wake?.();
@@ -3930,9 +3931,9 @@ export function createApp(deps: AppDeps) {
                   // 新しい種類の出来事にしない: 受け手は流れの出来事を日誌の1件として読むため。コメント行で理由を残して閉じ、受け手の張り直しと取り直しに任せる（#4617）
                   const summary =
                     `日誌の流れ（/journal/stream）の購読者が読むのに追いつかず、待ち行列が上限を超えた` +
-                    `（${String(overflow.entries)} 件・${String(overflow.chars)} 字。上限 ` +
-                    `${String(deps.journalStreamQueueLimits?.maxEntries ?? JOURNAL_STREAM_QUEUE_MAX_ENTRIES)} 件・` +
-                    `${String(deps.journalStreamQueueLimits?.maxChars ?? JOURNAL_STREAM_QUEUE_MAX_CHARS)} 字）。` +
+                    `（${String(overflow.items)} 件・${String(overflow.chars)} 字。上限 ` +
+                    `${String(deps.journalStreamQueueLimits?.maxEntries ?? SSE_SEND_QUEUE_MAX_ITEMS)} 件・` +
+                    `${String(deps.journalStreamQueueLimits?.maxChars ?? SSE_SEND_QUEUE_MAX_CHARS)} 字）。` +
                     '溜めた分を捨ててこの購読を切った。受け手は張り直して表示中のデータを取り直す。';
                   await stream.write(`: ${summary}\n\n`).catch(() => undefined);
                   void stores.journal
@@ -3952,7 +3953,7 @@ export function createApp(deps: AppDeps) {
                   wake = null;
                   continue;
                 }
-                await stream.writeSSE({ event: item.entry.type, data: item.data });
+                await stream.writeSSE({ event: item.value.type, data: item.data });
               }
             } finally {
               stopHeartbeat();

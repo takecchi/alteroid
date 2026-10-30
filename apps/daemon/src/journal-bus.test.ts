@@ -1,7 +1,8 @@
 import { createMemoryStores, type JournalEntry } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { createJournalBus, JournalStreamQueue, pruneQueuedForDeletion } from './journal-bus.js';
+import { createJournalBus, pruneQueuedForDeletion, survivesDeletion } from './journal-bus.js';
+import { SseSendQueue } from './sse-send-queue.js';
 
 describe('溜めた行から、墓標が外す行を捨てる（#4379）', () => {
   it('消した会話の exchange と、墓標が名指しした行を捨て、ほかの行は順序のまま残す', async () => {
@@ -107,22 +108,22 @@ describe('/journal/stream の購読者1本ぶんの待ち行列（#4617）', () 
 
   it('積んだ順に取り出し、書き出す data は積んだときの直列化そのもの', async () => {
     const [a, b] = await decisions(2);
-    const queue = new JournalStreamQueue();
+    const queue = new SseSendQueue<JournalEntry>();
     queue.push(a as JournalEntry);
     queue.push(b as JournalEntry);
 
-    expect(queue.shift()).toEqual({ entry: a, data: JSON.stringify(a) });
-    expect(queue.shift()?.entry.id).toBe(b?.id);
+    expect(queue.shift()).toEqual({ value: a, data: JSON.stringify(a) });
+    expect(queue.shift()?.value.id).toBe(b?.id);
     expect(queue.shift()).toBeUndefined();
     expect(queue.overflow).toBeUndefined();
   });
 
   it('件数の上限を超えたら、溜めた分を捨てて溢れたことを覚え、以後は積まない', async () => {
     const entries = await decisions(4);
-    const queue = new JournalStreamQueue({ maxEntries: 2 });
+    const queue = new SseSendQueue<JournalEntry>({ maxItems: 2 });
     for (const entry of entries.slice(0, 3)) queue.push(entry);
 
-    expect(queue.overflow).toEqual({ entries: 3, chars: expect.any(Number) as number });
+    expect(queue.overflow).toEqual({ items: 3, chars: expect.any(Number) as number });
     expect(queue.shift()).toBeUndefined();
     queue.push(entries[3] as JournalEntry);
     expect(queue.shift()).toBeUndefined();
@@ -131,7 +132,7 @@ describe('/journal/stream の購読者1本ぶんの待ち行列（#4617）', () 
   it('字数の上限を超えても溢れる。取り出した分は字数から引かれる', async () => {
     const [a, b, c] = await decisions(3, 'x'.repeat(100));
     const one = JSON.stringify(a).length;
-    const queue = new JournalStreamQueue({ maxChars: one * 2 });
+    const queue = new SseSendQueue<JournalEntry>({ maxChars: one * 2 });
     queue.push(a as JournalEntry);
     queue.push(b as JournalEntry);
     queue.shift();
@@ -139,7 +140,7 @@ describe('/journal/stream の購読者1本ぶんの待ち行列（#4617）', () 
     expect(queue.overflow).toBeUndefined();
 
     queue.push(a as JournalEntry);
-    expect(queue.overflow?.entries).toBe(3);
+    expect(queue.overflow?.items).toBe(3);
   });
 
   it('墓標で捨てた分は字数からも外れる', async () => {
@@ -162,14 +163,14 @@ describe('/journal/stream の購読者1本ぶんの待ち行列（#4617）', () 
     const keptChars = JSON.stringify(kept).length;
     const secretChars = JSON.stringify(secret).length;
     // 2本がちょうど入る上限。捨てた分が字数に残っていれば、もう1本の kept で溢れる
-    const queue = new JournalStreamQueue({ maxChars: secretChars + keptChars });
+    const queue = new SseSendQueue<JournalEntry>({ maxChars: secretChars + keptChars });
     queue.push(secret);
     queue.push(kept);
-    queue.pruneForDeletion(tombstone);
+    queue.retain(survivesDeletion(tombstone));
 
     // 捨てた分が字数に残っていれば、ここで溢れる
     queue.push(kept);
     expect(queue.overflow).toBeUndefined();
-    expect(queue.shift()?.entry.id).toBe(kept.id);
+    expect(queue.shift()?.value.id).toBe(kept.id);
   });
 });
