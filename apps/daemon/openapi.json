@@ -32044,7 +32044,8 @@
                           "credentials",
                           "credentialsProbe",
                           "profileProbe",
-                          "revision"
+                          "revision",
+                          "managerPeers"
                         ],
                         "additionalProperties": false
                       }

@@ -1063,7 +1063,7 @@ const runnerSummarySchema = z.object({
   profileProbe: runnerProbeSchema,
   revision: runnerRevisionStatusSchema,
   pushHealth: runnerPushHealthSchema.optional(),
-  managerPeers: runnerManagerPeersSchema.optional(),
+  managerPeers: runnerManagerPeersSchema,
   pluginLoad: runnerPluginLoadObservationSchema.optional(),
 });
 

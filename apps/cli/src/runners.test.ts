@@ -71,6 +71,8 @@ const RUNNER = {
   credentials: [],
   credentialsProbe: { status: 'asked' as const },
   profileProbe: { status: 'asked' as const },
+  // daemon はいつもこの欄を載せる（#5850）。開いている peer が無い器は行を出さないので、既定はそれにする。
+  managerPeers: { status: 'named' as const, peers: [] },
 };
 
 describe('renderRunners', () => {
@@ -147,6 +149,7 @@ describe('renderRunners', () => {
           credentialsProbe: { status: 'unheard' },
           profileProbe: { status: 'unheard' },
           revision: { status: 'unheard' },
+          managerPeers: { status: 'unknown' },
         },
       ],
       daemonRevision: { status: 'unknown' },
@@ -208,6 +211,7 @@ describe('renderRunners', () => {
           credentialsProbe: { status: 'unheard' },
           profileProbe: { status: 'unheard' },
           revision: { status: 'unheard' },
+          managerPeers: { status: 'unknown' },
         },
       ],
       daemonRevision: { status: 'unknown' },
