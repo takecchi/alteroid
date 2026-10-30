@@ -9473,6 +9473,26 @@ describe('実行環境プロファイル', () => {
     expect(await response.json()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
   });
 
+  it('GET の応答の上位に、1本の時代の互換欄（script・updatedAt・sha256・bytes）は載らない (#5707)', async () => {
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: profileService(stores),
+    });
+    await withProfile.request('/profile/base', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export COMPAT_5707=1' }),
+    });
+
+    const read = (await (await withProfile.request('/profile')).json()) as Record<string, unknown>;
+
+    expect(Object.keys(read).sort()).toEqual(['clone', 'entries', 'runner']);
+    expect(read.entries).toMatchObject([{ name: 'base', script: 'export COMPAT_5707=1\n' }]);
+  });
+
   it('置いたものを読み直せる（人間が自分で直せる）', async () => {
     const withProfile = createApp({
       clone: fake.clone,
