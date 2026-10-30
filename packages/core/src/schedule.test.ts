@@ -1710,6 +1710,22 @@ describe('memoryTidyEntry — 記憶の棚卸しの刻み', () => {
   });
 });
 
+describe('selfInitiativeEntry の説明文 — web の予定の画面とホームにそのまま出る', () => {
+  const { description } = selfInitiativeEntry({ everyMinutes: 60 });
+
+  it('生の値は web の待ち行列の画面と同じ併記で残す（CLI・クローンの語と結べる）', () => {
+    expect(description).toContain('順番待ち（queued）');
+    expect(description).toContain('判断待ち（needs_decision）');
+    expect(description).not.toContain('queued / needs_decision');
+  });
+
+  it('内部の語（発意 tick）を使わず、24時間の条件は言う', () => {
+    expect(description).not.toContain('tick');
+    expect(description).not.toContain('発意');
+    expect(description).toContain('直近24時間に一度も回していない');
+  });
+});
+
 describe('describeUnreadableSchedules — クローンと digest が使う1文（#2343）', () => {
   it('0件は null（何も出さない）', () => {
     expect(describeUnreadableSchedules([])).toBeNull();
