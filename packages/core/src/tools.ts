@@ -6600,7 +6600,7 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ origin, source, q, until, status, reason, dryRun, limit }) => {
-        // 検証は daemon の `POST /commitments/close-many` と同じ関数を共有する（`commitment-close-many.ts` の `describeCloseManyViolation`）
+        // 検証は `commitment-close-many.ts` の `describeCloseManyViolation`（`task_set_status_many` の検証。`task-set-status-many.ts`）
         const input = { origin, source, q, until, status, reason, dryRun, limit };
         const violation = describeTaskStatusManyViolation(input);
         if (violation !== null) return text(violation);

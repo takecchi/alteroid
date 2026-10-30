@@ -541,10 +541,6 @@ export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';
 export { verifyCommitmentReopenContract } from './commitment-reopen-contract.js';
-export { reopenCommitmentJournalFirst, describeClosedRecord } from './commitment-reopen.js';
-export type { JournalFirstReopenResult } from './commitment-reopen.js';
-export { editCommitmentBodyJournalFirst } from './commitment-edit.js';
-export type { JournalFirstEditResult } from './commitment-edit.js';
 export { scheduleReplaceEntry } from './schedule-replace.js';
 export { removeScheduleJournalFirst } from './schedule-remove.js';
 export type { JournalFirstScheduleRemoveResult, ScheduleRemoveTarget } from './schedule-remove.js';
@@ -1237,22 +1233,6 @@ export {
   type PermissionGrantStaleness,
   type PermissionGrantStalenessInput,
 } from './permission-staleness.js';
-// `task_set_status_many`（検証・塊割り）と `POST /commitments/close-many` が共有する検証・絞り込み・塊ごとの閉じ方
-export {
-  CLOSE_MANY_IDS_SHOWN,
-  CLOSE_MANY_JOURNAL_ID_CHARS,
-  CLOSE_MANY_LIMIT_DEFAULT,
-  CLOSE_MANY_LIMIT_MAX,
-  closeManyInChunks,
-  countTrimmedJustClosed,
-  describeCloseManyFilter,
-  describeCloseManyViolation,
-  selectCloseManyTargets,
-  type CloseManyChunk,
-  type CloseManyChunkHooks,
-  type CloseManyInput,
-  type CloseManySelection,
-} from './commitment-close-many.js';
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
