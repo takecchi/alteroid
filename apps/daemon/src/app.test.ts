@@ -11381,6 +11381,41 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     expect(typeof body.error).toBe('string');
   });
 
+  it('PUT /credentials: 2本目の name が不正でも、同じ回に送った値が1つも出ない', async () => {
+    const FIRST = 'CRED-PUT-FIRST-DUMMY';
+    const SECOND = 'CRED-PUT-SECOND-DUMMY';
+
+    const response = await app.request('/credentials', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credentials: [
+          { name: 'GH_TOKEN', value: FIRST },
+          { name: 'not-upper-case', value: SECOND },
+        ],
+      }),
+    });
+
+    // 形の検証は器の有無（503）より先に走る。
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toContain(FIRST);
+    expect(text).not.toContain(SECOND);
+
+    const body = JSON.parse(text) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('data');
+    expect(typeof body.error).toBe('string');
+  });
+
+  it('POST /runners/credentials は口が無い（404）。鍵の配布は PUT /credentials に一本化した（#5890）', async () => {
+    const response = await app.request(
+      '/runners/credentials',
+      json({ credentials: [{ name: 'GH_TOKEN', value: 'CRED-GONE-DUMMY' }] }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
   it('PUT /profile: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {
     const SECRET = 'CRED-PROFILE-DUMMY';
 
