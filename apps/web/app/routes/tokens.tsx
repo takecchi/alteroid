@@ -5,6 +5,7 @@ import { settingsDocumentTitle } from '~/lib/nav';
 import { useEffect, useRef, useState } from 'react';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
+import { useAction } from '~/lib/use-action';
 import { useSearchParams } from 'react-router';
 
 import {
@@ -115,8 +116,7 @@ function AddTokenForm() {
   const addToken = useAddToken();
   const [label, setLabel] = useState('');
   const [value, setValue] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, run } = useAction();
   // 書きかけに値（秘密）も数える: 貼った値を失うと使い手は claude setup-token を回して取り直すことになるため
   useReportDirty('add-token', label !== '' || value !== '');
 
@@ -126,18 +126,12 @@ function AddTokenForm() {
     if (!canSubmit) return;
     const sentLabel = label;
     const sentValue = value;
-    setBusy(true);
-    setFailure(undefined);
-    try {
+    await run(async () => {
       await addToken(label.trim(), value.trim());
       // 空にしない: 応答を待つ間に打ち足した分を消さないため
       setLabel((current) => unsentInput(current, sentLabel));
       setValue((current) => unsentInput(current, sentValue));
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (
@@ -728,8 +722,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
     undefined,
   );
   const [cooldownMsDraft, setCooldownMsDraft] = useState<string | undefined>(undefined);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, run } = useAction();
 
   const rotateOn = rotateOnDraft ?? settings.rotateOn;
   const cooldownMsText = cooldownMsDraft ?? String(settings.cooldownMs);
@@ -737,18 +730,12 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
   useReportDirty('token-policy', dirty);
 
   async function save() {
-    setBusy(true);
-    setFailure(undefined);
-    try {
+    await run(async () => {
       // 「正の整数」等の判定を先回りして弾かない: 変な値でもそのまま送り、断られたらサーバの文言をそのまま見せるため
       await setPolicy({ rotateOn, cooldownMs: Number(cooldownMsText) });
       setRotateOnDraft(undefined);
       setCooldownMsDraft(undefined);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (
@@ -835,24 +822,17 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
     undefined,
   );
   const [cooldownMsText, setCooldownMsText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, run } = useAction();
 
   useReportDirty('token-policy', rotateOnDraft !== undefined || cooldownMsText !== '');
   const canSubmit = rotateOnDraft !== undefined && cooldownMsText.trim().length > 0;
 
   async function save() {
     if (!canSubmit) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
+    await run(async () => {
       // 先回りして弾かない: サーバの 400 をそのまま見せるため
       await setPolicy({ rotateOn: rotateOnDraft, cooldownMs: Number(cooldownMsText) });
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (

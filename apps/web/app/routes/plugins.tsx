@@ -3,6 +3,7 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { isNotFound } from '~/lib/is-not-found';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useAction } from '~/lib/use-action';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router';
 
@@ -96,22 +97,18 @@ function sourceText(source: Source): string {
 function PluginList({ plugins }: { plugins: readonly PluginRow[] }) {
   const removePlugin = useRemovePlugin();
   const [target, setTarget] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, run } = useAction();
   const [removed, setRemoved] = useState<PluginRemoveResult | null>(null);
 
-  async function remove(name: string) {
-    setBusy(true);
-    setFailure(undefined);
-    setRemoved(null);
-    try {
-      setRemoved(await removePlugin(name));
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-      setTarget(null);
-    }
+  function remove(name: string) {
+    return run(async () => {
+      setRemoved(null);
+      try {
+        setRemoved(await removePlugin(name));
+      } finally {
+        setTarget(null);
+      }
+    });
   }
 
   return (

@@ -1,6 +1,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useAction } from '~/lib/use-action';
 import { useState } from 'react';
 
 import {
@@ -142,21 +143,14 @@ function AccountRow({ account }: { account: AccessAccount }) {
 function AccessGrantControl({ account }: { account: AccessAccount }) {
   const grantAccess = useGrantAccess();
   const revokeAccess = useRevokeAccess();
-  const [busy, setBusy] = useState(false);
+  const { busy, failure, run: runAction } = useAction();
   const [confirming, setConfirming] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
 
-  async function run(action: () => Promise<unknown>) {
-    setBusy(true);
-    setFailure(undefined);
-    try {
+  function run(action: () => Promise<unknown>) {
+    return runAction(async () => {
       await action();
       setConfirming(false);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (

@@ -4,6 +4,7 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useAction } from '~/lib/use-action';
 import { useNowMs } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { useRef, useState } from 'react';
@@ -394,22 +395,15 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
 function KeyRow({ view, now }: { view: IntegrationKeyView; now: number }) {
   const revokeKey = useRevokeIntegrationKey();
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, run } = useAction();
   const status = statusOf(view, now);
   const shown = STATUS_VIEW[status];
 
-  async function revoke() {
-    setBusy(true);
-    setFailure(undefined);
-    try {
+  function revoke() {
+    return run(async () => {
       await revokeKey(view.id);
       setConfirming(false);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (
