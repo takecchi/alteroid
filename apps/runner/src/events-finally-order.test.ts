@@ -21,8 +21,8 @@ function newHost(): RunnerHost {
   });
 }
 
-describe('runner の /events: finally の片付け順序と取りこぼし無し', () => {
-  it('stopHeartbeat が detach より先に呼ばれる', async () => {
+describe('runner の /events: finally の片付け順序と取りこぼし無し（#279 心拍・#358/#630 書けなかった分が消えない）', () => {
+  it('stopHeartbeat が detach より先に呼ばれる（#279）', async () => {
     const order: string[] = [];
 
     const realStart = core.startSseHeartbeat;
@@ -36,15 +36,24 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
         };
       });
 
-    const realAttach = Outbox.prototype.attach;
-    const attachSpy = vi.spyOn(Outbox.prototype, 'attach').mockImplementation(function (
+    // /events の接続は `subscribe` で繋ぐ（#5692 で `attach` から変わった）。外し方（`detach`）の呼ばれる順を見る。
+    const realSubscribe = Outbox.prototype.subscribe;
+    const attachSpy = vi.spyOn(Outbox.prototype, 'subscribe').mockImplementation(function (
       this: Outbox,
-      listener: (event: RunnerEvent, seq: number, queuedAt: string) => void,
+      options: Parameters<Outbox['subscribe']>[0],
     ) {
-      const detach = realAttach.call(this, listener);
-      return () => {
-        order.push('detach');
-        detach();
+      const subscription = realSubscribe.call(this, options);
+      return {
+        get superseded() {
+          return subscription.superseded;
+        },
+        peek: () => subscription.peek(),
+        wrote: (item, chars) => subscription.wrote(item, chars),
+        pending: () => subscription.pending(),
+        detach: () => {
+          order.push('detach');
+          subscription.detach();
+        },
       };
     });
 

@@ -21,18 +21,21 @@ function newHost(): RunnerHost {
   });
 }
 
-describe('Outbox.requeue: 元の queuedAt を保ったまま戻す', () => {
-  it('listener が居ないとき、requeue した値の queuedAt が this.#now() ではなく渡した引数のまま', () => {
-    const outbox = new Outbox(() => 'WRONG-NOW-2099-01-01T00:00:00.000Z');
-    const event: RunnerEvent = { type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' };
+// 守る事故: #630 (B)。差し戻しや引き渡しで queuedAt を「いま」に打ち直すと、oldestPendingAt が戻すたびに新しくなり、詰まりの古さを測る計器が嘘になる。
+// #5692 で「差し戻し」自体が無くなった（出来事は列に残り、queuedAt は積んだときの1回だけ）ので、外から見える結果（積んだ時刻のまま答える）で縛る。
+describe('Outbox: queuedAt は積んだときのまま（渡し先が変わっても、畳んでも。#630 (B)）', () => {
+  it('積んだ出来事の oldestPendingAt は、後で時計が進み別の出来事が積まれても、積んだ時刻のまま', () => {
+    let clock = 'OLD-2020-01-01T00:00:00.000Z';
+    const outbox = new Outbox(() => clock);
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+    clock = 'NEW-2099-01-01T00:00:00.000Z';
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-2' });
 
-    outbox.requeue(event, 'ORIGINAL-2020-01-01T00:00:00.000Z');
-
-    expect(outbox.oldestPendingAt).toBe('ORIGINAL-2020-01-01T00:00:00.000Z');
-    expect(outbox.oldestPendingAt).not.toBe('WRONG-NOW-2099-01-01T00:00:00.000Z');
+    expect(outbox.oldestPendingAt).toBe('OLD-2020-01-01T00:00:00.000Z');
+    expect(outbox.oldestPendingAt).not.toBe('NEW-2099-01-01T00:00:00.000Z');
   });
 
-  it('push は requeue(event, this.#now()) に委譲する——新規分は「いま」のまま', () => {
+  it('push は「いま」の時刻を queuedAt にする——新規分は「いま」のまま', () => {
     const outbox = new Outbox(() => 'NOW-2020-06-01T00:00:00.000Z');
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-2', sessionId: 'sess-2' };
 
@@ -41,16 +44,18 @@ describe('Outbox.requeue: 元の queuedAt を保ったまま戻す', () => {
     expect(outbox.oldestPendingAt).toBe('NOW-2020-06-01T00:00:00.000Z');
   });
 
-  it('listener が居るとき、requeue で渡した queuedAt がそのまま listener の第3引数に渡る', () => {
-    const outbox = new Outbox(() => 'WRONG-NOW');
+  it('購読へ渡る queuedAt は、積んだときの値（渡すときの「いま」ではない）', () => {
+    let clock = 'OLD-2020-01-01T00:00:00.000Z';
+    const outbox = new Outbox(() => clock);
     const event: RunnerEvent = { type: 'session', managerId: 'mgr-3', sessionId: 'sess-3' };
+    outbox.push(event);
+    clock = 'WRONG-NOW';
     const received: { event: RunnerEvent; seq: number; queuedAt: string }[] = [];
+
     outbox.attach((ev, seq, queuedAt) => received.push({ event: ev, seq, queuedAt }));
 
-    outbox.requeue(event, 'ORIGINAL-TIME');
-
     expect(received).toHaveLength(1);
-    expect(received[0]?.queuedAt).toBe('ORIGINAL-TIME');
+    expect(received[0]?.queuedAt).toBe('OLD-2020-01-01T00:00:00.000Z');
   });
 });
 

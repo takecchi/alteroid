@@ -15,6 +15,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { formatOutboxShutdownReport, Outbox, type OutboxShutdownSnapshot } from './app.js';
 import { drainAndReportOutbox, DRAIN_POLL_INTERVAL_MS, waitForOutboxDrain } from './index.js';
+import { stuckSubscriber } from './stuck-subscriber.test-support.js';
 
 describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', () => {
   it('何も残っていなければ null（1行も書かない）', () => {
@@ -99,34 +100,38 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
       expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'never-subscribed' });
     });
 
-    it('いま購読されている（#probe あり）: subscribed に件数・最古時刻が乗る', () => {
-      const outbox = new Outbox();
-      const detach = outbox.attach(
-        () => undefined,
-        () => ({ count: 3, oldestAt: '2026-01-01T00:00:00.000Z' }),
-      );
-      expect(outbox.describeForShutdown().subscriber).toEqual({
-        status: 'subscribed',
-        count: 3,
-        oldestAt: '2026-01-01T00:00:00.000Z',
-      });
-      detach();
+    // #5692: 書いていない分は購読の有無に依らず列に1本だけ在るので、#queue の欄に数える。購読側の欄は subscribed（件数0）で文言の形を保つ
+    it('いま購読されている（読まなくなった購読）: 書いていない分は #queue 側に数え、購読側は subscribed（件数0。#629）', () => {
+      const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
+      const stuck = stuckSubscriber(outbox);
+      outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+      outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログの控え' });
+      outbox.push({ type: 'note', managerId: 'mgr-2', text: '何か起きた' });
+
+      const snapshot = outbox.describeForShutdown();
+      expect(snapshot.queue.count).toBe(3);
+      expect(snapshot.queue.oldestAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(snapshot.subscriber).toEqual({ status: 'subscribed', count: 0 });
+      const report = formatOutboxShutdownReport(snapshot);
+      expect(report).toContain('出来事が 3 件、このプロセスの終了と一緒に失われる');
+      expect(report).toContain('購読側が抱えている分: 0 件');
+      stuck.detach();
     });
 
-    it('いま購読されている（#probe 無し）: subscribed だが件数は乗らない（0とは違う）', () => {
+    it('いま購読されていて、溜まりが無い: subscribed（件数0）。一度も無い・切れているとは別の状態', () => {
       const outbox = new Outbox();
       const detach = outbox.attach(() => undefined);
-      expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'subscribed' });
+      outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+      expect(outbox.describeForShutdown().queue.count).toBe(0);
+      expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'subscribed', count: 0 });
       detach();
     });
 
-    it('過去に購読されていたが、いま切れている: detached。件数は取れない（0 を書かない）', () => {
+    it('過去に購読されていたが、いま切れている: detached。件数は取れない（0 を書かない。#629）', () => {
       const outbox = new Outbox();
-      const detach = outbox.attach(
-        () => undefined,
-        () => ({ count: 5, oldestAt: '2026-01-01T00:00:00.000Z' }),
-      );
-      detach();
+      const stuck = stuckSubscriber(outbox);
+      outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+      stuck.detach();
       const snapshot = outbox.describeForShutdown();
       expect(snapshot.subscriber).toEqual({ status: 'detached' });
       expect(snapshot.subscriber).not.toHaveProperty('count');
@@ -228,45 +233,40 @@ describe('waitForOutboxDrain（#634）', () => {
 
   it('listener が付いていて pending が残っていれば待ち、外から0になったら即座に返る', async () => {
     const outbox = new Outbox();
-    let pendingCount = 3;
-    const detach = outbox.attach(
-      () => undefined,
-      () => ({ count: pendingCount }),
-    );
+    const stuck = stuckSubscriber(outbox);
+    for (let i = 0; i < 3; i += 1) {
+      outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: `sess-${String(i)}` });
+    }
     expect(outbox.pending).toBe(3);
 
     const waitPromise = waitForOutboxDrain(outbox, 5_000);
     await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS * 2));
-    pendingCount = 0;
+    stuck.drain();
 
     const start = Date.now();
     await waitPromise;
     expect(Date.now() - start).toBeLessThan(5_000);
-    detach();
+    stuck.detach();
   });
 
   it('listener は付いているが捌けないまま、タイムアウトで諦める（例外は投げない）', async () => {
     const outbox = new Outbox();
-    const detach = outbox.attach(
-      () => undefined,
-      () => ({ count: 1 }),
-    );
+    const stuck = stuckSubscriber(outbox);
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
     const start = Date.now();
     await waitForOutboxDrain(outbox, DRAIN_POLL_INTERVAL_MS * 3);
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(DRAIN_POLL_INTERVAL_MS * 2);
-    detach();
+    stuck.detach();
   });
 
   it('待っている途中で listener が外れたら、タイムアウトを待たずに諦める', async () => {
     const outbox = new Outbox();
-    const detach = outbox.attach(
-      () => undefined,
-      () => ({ count: 1 }),
-    );
+    const stuck = stuckSubscriber(outbox);
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
     const waitPromise = waitForOutboxDrain(outbox, 5_000);
     await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS * 2));
-    detach();
+    stuck.detach();
 
     const start = Date.now();
     await waitPromise;
@@ -299,10 +299,8 @@ describe('drainAndReportOutbox（#634）', () => {
 
   it('listener が付いていれば waitMs の分だけ待ってから書く', async () => {
     const outbox = new Outbox();
-    const detach = outbox.attach(
-      () => undefined,
-      () => ({ count: 1, oldestAt: '2026-01-01T00:00:00.000Z' }),
-    );
+    const stuck = stuckSubscriber(outbox);
+    outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログ' });
     const written: string[] = [];
     const start = Date.now();
     await drainAndReportOutbox(outbox, {
@@ -312,9 +310,10 @@ describe('drainAndReportOutbox（#634）', () => {
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(DRAIN_POLL_INTERVAL_MS * 2);
     expect(written).toHaveLength(1);
-    expect(written[0]).toContain('購読側が抱えている分: 1 件');
-    expect(written[0]).toContain('内訳は取れない');
-    detach();
+    // #5692: 書けなかった分は #queue 側に名指しされ、購読側は件数0
+    expect(written[0]).toContain('type=archive managerId=mgr-1');
+    expect(written[0]).toContain('購読側が抱えている分: 0 件');
+    stuck.detach();
   });
 });
 
