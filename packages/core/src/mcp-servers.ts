@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { compareCodeUnits } from './code-unit-order.js';
-import { assertNoNul, stripNul } from './nul-guard.js';
+import { assertNoNul, stripNul, stripNulDeep } from './nul-guard.js';
 import {
+  isPlainObject,
   isReservedMcpServerName,
   MCP_NUL_ONLY_RULE,
   MCP_RESERVED_NAME_RULE,
@@ -167,19 +168,4 @@ export function prepareMcpServersForWrite(input: unknown): unknown {
     out[name] = prepared;
   }
   return out;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function stripNulDeep(value: unknown): unknown {
-  if (typeof value === 'string') return stripNul(value);
-  if (Array.isArray(value)) return value.map(stripNulDeep);
-  if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [stripNul(k), stripNulDeep(v)]),
-    );
-  }
-  return value;
 }
