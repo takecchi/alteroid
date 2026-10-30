@@ -63,7 +63,10 @@ export function SectionTabs({
 
   return (
     <nav aria-label={label} className="relative min-w-0">
-      <ul ref={listRef} className="-mb-px flex gap-1 overflow-x-auto">
+      <ul
+        ref={listRef}
+        className="-mb-px flex gap-1 overflow-x-auto md:flex-wrap md:overflow-visible"
+      >
         {tabs.map((tab) => (
           <li key={tab.to} className="shrink-0">
             {renderLink(tab, {

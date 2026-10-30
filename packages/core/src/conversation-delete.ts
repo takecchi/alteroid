@@ -22,7 +22,7 @@ import type { Stores } from './store.js';
 export interface DeleteConversationDeps {
   stores: Pick<
     Stores,
-    'journal' | 'attachments' | 'commitments' | 'inbox' | 'conversationReads' | 'jobs'
+    'journal' | 'attachments' | 'commitments' | 'tasks' | 'inbox' | 'conversationReads' | 'jobs'
   >;
   /** 受信箱の待ち行列から落とす口（`CloneHost.dropQueuedInboxEvents`）。 */
   dropQueuedInboxEvents: (ids: readonly string[]) => Promise<number>;
@@ -41,6 +41,8 @@ export type DeleteConversationResult =
       hiddenCount: number;
       attachmentsRemoved: number;
       commitmentsRemoved: number;
+      /** その会話を起点とする Task の件数（未了・閉じた行とも消す）。 */
+      tasksRemoved: number;
       /** 受信箱から外した、まだ処理していない人間の発言の件数。 */
       queuedDropped: number;
       /** この会話に結び付いた承認の件数（承認は外さない）。 */
@@ -56,10 +58,10 @@ export type DeleteConversationResult =
  * 生ログは会話 id で引けず、途中を抜くと resume が壊れうるので、外科的には消さない。
  */
 export const CONVERSATION_DELETE_REMAINS: readonly string[] = [
-  'クローンの SDK セッションの生ログ（session_entries）と archive、いま走っているセッションの文脈には、この会話の発言が残っている（会話の単位では消せない）。秘密を書いたのなら、#4173 のセッションの開き直しと、その鍵の作り直しをすること',
+  'クローンのセッションの生ログとアーカイブ、いま続いているセッションの文脈には、この会話の発言が残っている（会話の単位では消せない）。秘密を書いたのなら、設定の「クローンのセッションを開き直す」で開き直し、その鍵を作り直すこと',
   '既に蒸留された記憶と、書き終えた日報に写っている可能性がある。記憶と日報を確かめること',
-  'この会話に結び付いた承認（ask_human・request_permission）の問いと答えの本文は消していない（決着の記録なので外さない。台帳に残る「承認待ち … への回答」の行も同じ）。承認の一覧・各承認の画面・台帳で確かめること',
-  '会話 id を持たない日誌の行（ask_human の問いと答え・クローンの道具の呼び出しの入力・マネージャーとの往復）には、言い換えや写しが残りうる',
+  'この会話に結び付いた承認（クローンからの質問と、許可の求め）の問いと答えの本文は消していない（決着の記録なので外さない）。承認待ちの一覧と各承認の画面で確かめること',
+  '日誌のうち、どの会話のものか分からない行（クローンからの質問と答え・クローンの道具の呼び出しの入力・マネージャーとのやりとり）には、言い換えや写しが残りうる',
   '台帳のこの会話の行（人間の手で積んだ行とクローンが載せた行）は消し、その本文を写した日誌の行（積んだ・直した・片付けたとき）も読む口から外した。ただし、台帳をまとめて片付けた日誌の行（閉じた id の並びと理由）と、クローンが自分の言葉で言い換えて日誌に書いた行は、会話との結び付きが分からないので残りうる',
   'クローンやマネージャーが作業ディレクトリへ写した添付は、時間で消えるまで残る',
 ];
@@ -214,6 +216,13 @@ export async function deleteConversation(
     0,
   );
 
+  // Task の本文には人間の発言の全文が入る（起点の会話から開いた行）。台帳と同じく、会話を消したら読めないように物理的に消す（#5899）
+  const tasksRemoved = await attempt(
+    'Task からこの会話を起点とする行を消す',
+    () => stores.tasks.removeForConversation(conversationId),
+    0,
+  );
+
   // 未読に数え続けないよう、既読の位置を消した時刻まで進める（索引の行は会話 id と時刻だけで、本文は無い）
   await attempt(
     '既読の位置を進める',
@@ -237,6 +246,7 @@ export async function deleteConversation(
     hiddenCount,
     attachmentsRemoved,
     commitmentsRemoved,
+    tasksRemoved,
     queuedDropped,
     approvalsLinked,
     incomplete,

@@ -46,7 +46,7 @@ function NotFound() {
 
 function Body({ id }: { id: string }) {
   const { data, error, isLoading, isValidating, mutate } = useArchiveBody(id);
-  // 失敗を出さない: 見出しの添え物（日時・使用量）が取れなくても本文は読めるため
+  // 失敗を出さない: 見出しの添え物（日時・容量）が取れなくても本文は読めるため
   const { data: list } = useArchive();
   const entry = list?.entries.find((candidate) => candidate.id === id);
 
@@ -57,7 +57,7 @@ function Body({ id }: { id: string }) {
     <Card>
       <CardHeader
         title={entry === undefined ? '生ログ' : `${formatDateTime(entry.at)} の会話`}
-        {...(entry === undefined ? {} : { subtitle: `使用量 ${formatBytes(entry.storedBytes)}` })}
+        {...(entry === undefined ? {} : { subtitle: `容量 ${formatBytes(entry.storedBytes)}` })}
       />
       {notFound && data === undefined ? (
         <Empty inset="card">その生ログはありません</Empty>

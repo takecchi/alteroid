@@ -54,8 +54,8 @@ export const DuplicateLabels: Story = {
   args: {
     formatValue: usd,
     items: [
-      { id: 'mgr-7f3c2a91', label: '（一覧に無い委譲）（mgr-7f3c）', value: 1.2 },
-      { id: 'mgr-2b8e1c04', label: '（一覧に無い委譲）（mgr-2b8e）', value: 0.4 },
+      { id: 'mgr-7f3c2a91', label: '（一覧に無いマネージャー）（mgr-7f3c）', value: 1.2 },
+      { id: 'mgr-2b8e1c04', label: '（一覧に無いマネージャー）（mgr-2b8e）', value: 0.4 },
     ],
   },
 };

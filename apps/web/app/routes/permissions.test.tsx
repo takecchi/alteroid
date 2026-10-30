@@ -171,13 +171,26 @@ describe('/permissions 画面 — 広さの段階', () => {
 
     await renderPermissions();
 
-    expect(screen.getByText('完全一致（最も狭い。この文字列にしか一致しない）')).toBeTruthy();
-    expect(screen.getByText('前方一致・狭い（固定 3 語まで一致）')).toBeTruthy();
-    expect(screen.getByText('前方一致・中間（固定 2 語まで一致）')).toBeTruthy();
+    expect(screen.getByText('この文字列のコマンドだけが通る（最も狭い）')).toBeTruthy();
+    expect(screen.getByText('「gh release edit」で始まるコマンドが通る（狭い）')).toBeTruthy();
     expect(
-      screen.getByText('前方一致・広い（固定 1 語のみ——この語で始まるコマンドなら何でも通る）'),
+      screen.getByText('「gh release」で始まるコマンドが通る（中くらい。後ろの引数は何でもよい）'),
     ).toBeTruthy();
+    expect(screen.getByText('「gh」で始まるコマンドなら何でも通る（広い）')).toBeTruthy();
     expect(screen.getByText('⚠️ 規則が不正（照合されない。壊れている可能性がある）')).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/前方一致|固定 \d 語/);
+  });
+
+  it('頭の語は伏せ字を通した規則から出す（鍵が文に入らない）', async () => {
+    const token = `ghp_${'a'.repeat(36)}`;
+    stubGrants({
+      body: { grants: [grant({ id: 'g-secret', rule: `Bash(deploy ${token}:*)` })] },
+    });
+
+    await renderPermissions();
+
+    expect(document.body.textContent).toContain('で始まるコマンドが通る（中くらい。');
+    expect(document.body.textContent).not.toContain(token);
   });
 });
 
@@ -206,6 +219,31 @@ describe('/permissions 画面 — 取り消し', () => {
     fireEvent.click(screen.getByText('取り消す'));
     fireEvent.click(screen.getByText('本当に取り消す'));
     await waitForCall(stub.calls, /\/permission-grants\/grant-a\/revoke$/);
+  });
+
+  it('「取り消す」を押したら、焦点は確認の行の「本当に取り消す」へ移る（body に落ちない）', async () => {
+    stubGrants({ body: { grants: [grant({ id: 'grant-a' })] } });
+    await renderPermissions();
+    const trigger = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' });
+    trigger.focus();
+
+    fireEvent.click(trigger);
+
+    const confirm = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を本当に取り消す' });
+    await waitFor(() => expect(document.activeElement).toBe(confirm));
+  });
+
+  it('確認の行で「やめる」を押したら、焦点は「取り消す」へ戻る（body に落ちない）', async () => {
+    stubGrants({ body: { grants: [grant({ id: 'grant-a' })] } });
+    await renderPermissions();
+    fireEvent.click(screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' }));
+    const cancel = screen.getByRole('button', { name: 'やめる' });
+    cancel.focus();
+
+    fireEvent.click(cancel);
+
+    const trigger = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('取り消し済みの行には取り消しボタンが無い', async () => {

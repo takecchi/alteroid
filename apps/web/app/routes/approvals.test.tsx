@@ -127,13 +127,18 @@ describe('/approvals 画面のまとめ送信', () => {
     renderPage();
 
     const textareas = await screen.findAllByPlaceholderText(/答える/);
-    expect(await screen.findByText(/まとめて送る答えはまだ書かれていない/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        /答えを書いたカードはまだない（カードに書くと、ここからまとめて送れる）/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/まとめて送る答えはまだ書かれていない/)).toBeNull();
 
     fireEvent.change(textareas[0]!, { target: { value: '許可する' } });
-    expect(await screen.findByText('1 件に答えを書いた（送るとまとめて1回で届く）')).toBeTruthy();
+    expect(await screen.findByText('1 件に答えを書いた。まとめて送れる')).toBeTruthy();
 
     fireEvent.change(textareas[1]!, { target: { value: '却下する' } });
-    expect(await screen.findByText('2 件に答えを書いた（送るとまとめて1回で届く）')).toBeTruthy();
+    expect(await screen.findByText('2 件に答えを書いた。まとめて送れる')).toBeTruthy();
   });
 
   it('「まとめて送る」は、書かれた分だけを1回の POST /approvals/answer にまとめる', async () => {
@@ -475,7 +480,8 @@ describe('答えの後の行動（issue #847）', () => {
     });
     renderPage();
     fireEvent.click(await screen.findByText('答えの後の行動を見る'));
-    expect(await screen.findByText(/トークンの交代/)).not.toBeNull();
+    expect(await screen.findByText(/トークンの切り替え/)).not.toBeNull();
+    expect(screen.queryByText(/トークンの交代/)).toBeNull();
     expect(screen.getByText(/ 判断$/)).not.toBeNull();
     const items = Array.from(document.querySelectorAll('li')).map((li) => li.textContent ?? '');
     const text = items.join('\n');
@@ -736,7 +742,7 @@ describe('メタ行の job id が委譲の詳細へのリンクになる（issue
 
     const link = await screen.findByRole('link', { name: '詳細を見る' });
     expect(link.getAttribute('href')).toBe('/managers/mgr-42');
-    expect(link.parentElement?.textContent).toBe('委譲: 詳細を見る');
+    expect(link.parentElement?.textContent).toBe('マネージャー: 詳細を見る');
     expect(document.body.textContent).not.toContain('mgr-42');
   });
 
@@ -752,11 +758,16 @@ describe('メタ行の job id が委譲の詳細へのリンクになる（issue
 });
 
 describe('承認カードに、確認が上がった会話を出す（issue #782 の3）', () => {
-  it('① 機構が無い: conversationId が無ければ「会話に紐づいていない」と出し、/conversations は叩かない', async () => {
+  it('① 機構が無い: conversationId が無ければ「会話から出たものではない」と出し、/conversations は叩かない', async () => {
     const { calls } = stubApprovals([approval({ id: 'a-1', question: '質問1' })]);
     renderPage();
 
-    expect(await screen.findByText(/この確認は会話に紐づいていない/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        /この確認は会話から出たものではない（マネージャーか、クローンが自分で動いた回から出た）/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/会話に紐づいていない/)).toBeNull();
     expect(calls.some((url) => url.includes('/conversations/'))).toBe(false);
   });
 
@@ -955,7 +966,12 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     );
     renderPage();
 
-    expect(await screen.findByText(/この確認は会話に紐づいていない/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        /この確認は会話から出たものではない（マネージャーか、クローンが自分で動いた回から出た）/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/会話に紐づいていない/)).toBeNull();
     expect(await screen.findByText('この確認が上がった会話を読み込み中')).toBeTruthy();
     expect(await screen.findByText(/会話 conv-gone は存在しない/)).toBeTruthy();
     expect(screen.queryByRole('link', { name: /この会話をチャットで開く/ })).toBeNull();

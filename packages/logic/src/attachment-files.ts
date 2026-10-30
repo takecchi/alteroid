@@ -37,12 +37,23 @@ export interface AttachmentLifetime {
   text: string;
 }
 
-/** 保存中なら「保存中」、そうでなければ期限（`expiresAt`）を「〇〇に消える」と言う。期限が無い未保存は「期限は不明」。 */
+/** 期限なし（`keptAt` あり）なら「期限なし」、そうでなければ期限（`expiresAt`）を「〇〇に消える」と言う。期限が無い行は「期限は不明」。 */
 export function describeAttachmentLifetime(
   item: Pick<AttachmentItem, 'keptAt' | 'expiresAt'>,
   now: number = Date.now(),
 ): AttachmentLifetime {
-  if (item.keptAt !== undefined) return { kept: true, text: '保存中' };
+  if (item.keptAt !== undefined) return { kept: true, text: '期限なし' };
   if (item.expiresAt === undefined) return { kept: false, text: '期限は不明' };
   return { kept: false, text: `${formatDateTime(item.expiresAt, now)} に消える` };
+}
+
+/**
+ * 期限なしの行へ期限を付けるボタンの文字。押すと保持日数（`retentionDays`）後に消える約束が付くので、日数が読めているときは文字そのものに出す。
+ * 読めない（取得前・失敗・正の整数でない）ときは数字を出さず、日数を言わない形にする。
+ */
+export function attachmentSetExpiryLabel(retentionDays: number | undefined): string {
+  if (retentionDays === undefined || !Number.isInteger(retentionDays) || retentionDays < 1) {
+    return '期限を付ける（保持日数が過ぎたら消える）';
+  }
+  return `期限を付ける（${retentionDays}日後に消える）`;
 }

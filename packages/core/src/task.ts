@@ -178,6 +178,22 @@ export function listTaskRows(rows: readonly TaskRow[], includeClosed: boolean): 
   return [...open, ...closed];
 }
 
+/**
+ * 会話の削除で消す Task か（`TaskStore.removeForConversation` の3実装が共有する）。読めない行にも使うので、欄は未検証の値として受ける。
+ *
+ * 起点の欄（`originConversationId`）だけで引かない: 台帳から移した行は起点の欄を持たず（`taskFromCommitment`）、
+ * 会話は `source` にしか残らない。本文は人間の発言そのものなので、欄だけで引くと会話を消しても読めてしまう。
+ * `source` で引くのは台帳の `removeForConversation` と同じ `human` / `self` だけ（`manager` / `external` の `source` は会話 id ではない）。
+ * pg の `PgTaskStore.removeForConversation` はこの条件を SQL で書き直しているので、変えるときは両方を直す。
+ */
+export function isTaskOfConversation(
+  value: { origin?: unknown; source?: unknown; originConversationId?: unknown },
+  conversationId: string,
+): boolean {
+  if (value.originConversationId === conversationId) return true;
+  return (value.origin === 'human' || value.origin === 'self') && value.source === conversationId;
+}
+
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }

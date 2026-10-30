@@ -1,12 +1,15 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useAction } from '~/lib/use-action';
-import { describePermissionRuleBreadth } from '@alteroid/core/permission-rule';
+import {
+  describePermissionRuleBreadth,
+  describePermissionRuleBreadthText,
+} from '@alteroid/core/permission-rule';
 import {
   assessPermissionGrantStaleness,
   PERMISSION_GRANT_STALE_DAYS,
 } from '@alteroid/core/permission-staleness';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   Page,
@@ -191,15 +194,32 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
     });
   }
 
+  // 確認の行は「取り消す」を差し替えて出すので、押したボタンごと消えて焦点が body に落ちる。切り替えた先の最初のボタンへ移す:
+  // 開いたら「本当に取り消す」へ、やめたら「取り消す」へ
+  // ボタンに ref を渡さず行から引く: 共通の Button は ref を受けない型のため
+  const controlRef = useRef<HTMLDivElement>(null);
+  const moveFocusTo = useRef<'confirm' | 'trigger' | undefined>(undefined);
+  useEffect(() => {
+    const target = moveFocusTo.current;
+    if (target === undefined) return;
+    moveFocusTo.current = undefined;
+    const selector = target === 'confirm' ? '[data-revoke-confirm]' : '[data-revoke-trigger]';
+    controlRef.current?.querySelector<HTMLElement>(selector)?.focus();
+  }, [confirming]);
+
   return (
-    <div className="mt-2 flex flex-col gap-2">
+    <div ref={controlRef} className="mt-2 flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         {!confirming ? (
           <Button
             variant="danger"
             size="sm"
             aria-label={`${shownRule} を取り消す`}
-            onClick={() => setConfirming(true)}
+            data-revoke-trigger
+            onClick={() => {
+              moveFocusTo.current = 'confirm';
+              setConfirming(true);
+            }}
           >
             取り消す
           </Button>
@@ -214,11 +234,19 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
               size="sm"
               loading={busy}
               aria-label={`${shownRule} を本当に取り消す`}
+              data-revoke-confirm
               onClick={() => void run()}
             >
               本当に取り消す
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                moveFocusTo.current = 'trigger';
+                setConfirming(false);
+              }}
+            >
               やめる
             </Button>
           </>
@@ -229,25 +257,17 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
   );
 }
 
-// 文言は CLI の describeBreadth と一字一句揃える: 同じ棚卸しを2つの入口で見る人が違う言葉で同じ意味を読まされないため
+// 文は core の describePermissionRuleBreadthText で作る（CLI と同じ関数。一字一句そろえるため）。頭の語は伏せ字を通した規則から取る
 function describeBreadth(rule: string): { label: string; tone: 'ok' | 'warn' | 'danger' } {
-  const breadth = describePermissionRuleBreadth(rule);
-  switch (breadth.level) {
+  const label = describePermissionRuleBreadthText(rule, redactBody(rule));
+  switch (describePermissionRuleBreadth(rule).level) {
     case 'exact':
-      return { label: '完全一致（最も狭い。この文字列にしか一致しない）', tone: 'ok' };
     case 'narrow':
-      return { label: `前方一致・狭い（固定 ${breadth.prefixWordCount} 語まで一致）`, tone: 'ok' };
+      return { label, tone: 'ok' };
     case 'medium':
-      return {
-        label: `前方一致・中間（固定 ${breadth.prefixWordCount} 語まで一致）`,
-        tone: 'warn',
-      };
+      return { label, tone: 'warn' };
     case 'broad':
-      return {
-        label: `前方一致・広い（固定 ${breadth.prefixWordCount} 語のみ——この語で始まるコマンドなら何でも通る）`,
-        tone: 'danger',
-      };
     case 'invalid':
-      return { label: '⚠️ 規則が不正（照合されない。壊れている可能性がある）', tone: 'danger' };
+      return { label, tone: 'danger' };
   }
 }

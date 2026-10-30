@@ -153,7 +153,9 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     trigger.resolve();
 
     await waitFor(() => {
-      expect(pageText()).toContain(`これより古い委譲は無い（全 ${MANAGERS_PAGE * 2 - 1} 件）。`);
+      expect(pageText()).toContain(
+        `これより古いマネージャーは無い（全 ${MANAGERS_PAGE * 2 - 1} 件）。`,
+      );
     });
     expect(screen.queryByText(/^もっと見る（いま/)).toBeNull();
   });
@@ -179,7 +181,9 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
     fireEvent.click(moreButton());
     await waitFor(() => {
-      expect(pageText()).toContain(`これより古い委譲は無い（全 ${MANAGERS_PAGE * 2 - 1} 件）。`);
+      expect(pageText()).toContain(
+        `これより古いマネージャーは無い（全 ${MANAGERS_PAGE * 2 - 1} 件）。`,
+      );
     });
     expect(screen.queryByText(/^もっと見る（いま/)).toBeNull();
 
@@ -189,7 +193,7 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     await waitFor(() => {
       expect(moreButton().textContent).toBe(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
     });
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
   });
 
   it('最後以外（頁1個目）の取り直しの件数変化は olderStatus を動かさない', async () => {
@@ -232,7 +236,7 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     await waitFor(() => {
       expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE + 5 + MANAGERS_PAGE} 件）`);
     });
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
     expect(moreButton()).toBeTruthy();
   });
 
@@ -272,6 +276,6 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     });
 
     expect(pageText()).toContain(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`);
-    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    expect(screen.queryByText(/これより古いマネージャーは無い/)).toBeNull();
   });
 });

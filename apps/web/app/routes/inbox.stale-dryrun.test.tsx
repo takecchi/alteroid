@@ -70,7 +70,7 @@ describe('/inbox 一括削除 — 試算の応答待ちに絞り込みを変え�
     });
 
     expect(bodies).toHaveLength(1);
-    expect(screen.queryByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeNull();
+    expect(screen.queryByText(/未処理 120 件中 40 件が絞り込みに一致/)).toBeNull();
     expect(screen.queryByRole('button', { name: /実行する/ })).toBeNull();
     // 応答が捨てられたあとは、新しい条件で試算し直せる
     expect(screen.getByRole('button', { name: '試算する' }).hasAttribute('disabled')).toBe(false);
