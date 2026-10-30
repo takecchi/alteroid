@@ -165,8 +165,7 @@ function UsageTile() {
   const from = shiftedUsageDate(browserNow, -USAGE_WINDOW_DAYS);
   const to = shiftedUsageDate(browserNow, USAGE_WINDOW_DAYS);
   const usage = useUsage({ from, to }, { refreshInterval: HOME_REFRESH_MS });
-  // undefined を許す: 型は string だが、古いデーモンの応答には無いため
-  const serverToday: string | undefined = usage.data?.today;
+  const serverToday = usage.data?.today;
   // 窓の外なら分からない側へ倒す: 端末の時計がずれると窓が今日を含まず、今日の行を取りに行っていないのに 0 と出てしまうため
   const today =
     serverToday !== undefined && serverToday >= from && serverToday <= to ? serverToday : undefined;

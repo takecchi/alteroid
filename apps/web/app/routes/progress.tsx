@@ -327,9 +327,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
 }
 
 function UnreadableJobsNote({ progress }: { progress: Progress }) {
-  // 欄が無いことを許す: デーモンが古いと欄が無く、無いときは「0 件」ではなく何も言わないため
-  const unreadableJobs =
-    (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
+  const { unreadableJobs } = progress.backlog.completeness;
   if (unreadableJobs === 0) return null;
   return (
     <p className="text-xs text-warn">
