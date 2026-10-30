@@ -16,12 +16,11 @@ import { childUserIds } from './child-user-ids.js';
 /** 開けなくても runner は止めない: 道具が出ないだけで、委譲そのものは動くため。理由は stderr に1行出す。 */
 export async function openManagerToolsSocket(
   childUser: RunnerChildUser | undefined,
-  dir: string = DEFAULT_MANAGER_TOOLS_SOCKET_DIR,
 ): Promise<ManagerToolsSocketHost | undefined> {
   const owner = childUserIds(childUser);
   try {
     return await createManagerToolsSocketHost({
-      socketPath: join(dir, MANAGER_TOOLS_SOCKET_FILENAME),
+      socketPath: join(DEFAULT_MANAGER_TOOLS_SOCKET_DIR, MANAGER_TOOLS_SOCKET_FILENAME),
       ...(owner === undefined ? {} : { childUser: owner }),
     });
   } catch (error) {
