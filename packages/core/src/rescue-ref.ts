@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
+import { noteEnvValueNotUsed } from './env-value-not-used.js';
 import { clipWithEllipsis } from './excerpt.js';
 import { redactSecretsInBody, secretPatternsInBody, type SecretPatternName } from './redact.js';
 import {
@@ -41,12 +42,28 @@ export const MIN_RESCUE_INTERVAL_MS = 1000;
 /** `setInterval` は 2^31-1 ms を超える値を 1ms 周期へ倒すので、上限はそこで切る。 */
 export const MAX_RESCUE_INTERVAL_MS = 2_147_483_647;
 
+// 置かれた値を既定や範囲の端へ倒したときは黙らせず stderr に1行残す（#5976）
 export function resolveRescueIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[RESCUE_INTERVAL_MS_ENV_KEY]?.trim();
   if (raw === undefined || raw === '') return DEFAULT_RESCUE_INTERVAL_MS;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_RESCUE_INTERVAL_MS;
-  return Math.min(MAX_RESCUE_INTERVAL_MS, Math.max(MIN_RESCUE_INTERVAL_MS, parsed));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    noteEnvValueNotUsed(
+      RESCUE_INTERVAL_MS_ENV_KEY,
+      raw,
+      `正の数として読めないので既定 ${String(DEFAULT_RESCUE_INTERVAL_MS)} を使う`,
+    );
+    return DEFAULT_RESCUE_INTERVAL_MS;
+  }
+  const clamped = Math.min(MAX_RESCUE_INTERVAL_MS, Math.max(MIN_RESCUE_INTERVAL_MS, parsed));
+  if (clamped !== parsed) {
+    noteEnvValueNotUsed(
+      RESCUE_INTERVAL_MS_ENV_KEY,
+      raw,
+      `${String(MIN_RESCUE_INTERVAL_MS)}〜${String(MAX_RESCUE_INTERVAL_MS)} の外なので ${String(clamped)} を使う`,
+    );
+  }
+  return clamped;
 }
 
 /**
@@ -1091,8 +1108,9 @@ async function rescueOne(
         ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin'],
         base,
       );
-      if (ok(counted)) unpushedCount = Number.parseInt(counted.stdout.trim(), 10) || 0;
-      else unpushedCount = 1; // 数えられないなら送る側（失うよりよい）
+      // 数字として読めないときも「数えられない」と同じく送る側へ倒す（#5976）: `|| 0` だと送らなくてよい側へ倒れ、規約と逆向きになるため
+      const count = ok(counted) ? Number.parseInt(counted.stdout.trim(), 10) : Number.NaN;
+      unpushedCount = Number.isInteger(count) && count >= 0 ? count : 1; // 数えられないなら送る側（失うよりよい）
     }
     const headTree =
       head === undefined
