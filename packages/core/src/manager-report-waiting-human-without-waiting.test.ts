@@ -121,13 +121,13 @@ function bridgeRunner(queryFn: typeof sdkQuery): { runnerClient: RunnerClient; h
         if (event !== undefined) onEventCb(event);
       }
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       await host.start(command);
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       await host.resume(command);
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId, text) {
       return host.send(managerId, text);

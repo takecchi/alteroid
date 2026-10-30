@@ -66,10 +66,10 @@ function tokenRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       alive.push({
         liveBackgroundTasks: 0,
         managerId: command.managerId,
@@ -79,7 +79,7 @@ function tokenRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

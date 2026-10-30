@@ -13,6 +13,8 @@ import {
   type RunnerEvent,
   type RunnerManagerState,
   type RunnerOutboxContent,
+  type RunnerResumeCommand,
+  type RunnerStartCommand,
 } from './runner-protocol.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
@@ -55,11 +57,11 @@ function fakeRunner(runnerId: string) {
         }),
       );
     },
-    async start() {
-      return {};
+    async start(command: RunnerStartCommand) {
+      return { cwd: command.cwd };
     },
-    async resume() {
-      return {};
+    async resume(command: RunnerResumeCommand) {
+      return { cwd: command.cwd };
     },
     async send(managerId: string, text: string, attachments?: RunnerAttachment[]) {
       sent.push({ managerId, text, attachments: attachments ?? [] });

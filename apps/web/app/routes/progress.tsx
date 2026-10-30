@@ -269,8 +269,6 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
 function BacklogCard({ progress }: { progress: Progress }) {
   const { backlog, github, observedAt } = progress;
   const { byOrigin, age, byState, completeness } = backlog;
-  // 古いデーモンの応答には無い欄: 無ければ出さない（0 と推測で書かない）
-  const unjudgeable: number | undefined = byState.unjudgeable;
   // trimmedClosed を判定に入れない: 刈られた完了済みの記録は未完了の数に影響しないため
   const partial = completeness.unreadable !== 0;
   // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
@@ -297,7 +295,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
     },
     {
       label: '進み具合',
-      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーに任せた ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)}${unjudgeable === undefined ? '' : ` / 判定できない（会話に結んでいない） ${count(unjudgeable)}`}`,
+      value: `未着手 ${count(byState.untouched)} / 返答済み（まだ閉じていない） ${count(byState.responded)} / マネージャーに任せた ${count(byState.delegated)}（他の項目と重なることがあります） / 人間からの依頼ではない ${count(byState.notApplicable)} / 判定できない（会話に結んでいない） ${count(byState.unjudgeable)}`,
     },
   ];
 
@@ -396,7 +394,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
             hint="最後に更新された時刻からの概算です（終わった正確な時刻は記録されていません）"
           />
         </StatRow>
-        {mayBeUndercounted(throughput) && (
+        {throughput.mayBeUndercounted && (
           <p className="text-xs text-warn">
             この期間の件数は、古い記録が整理されたため実際より少ない可能性があります。「引き受けた」「完了にした」は「少なくともこれだけ」と読んでください。
           </p>
@@ -405,11 +403,6 @@ function ThroughputCard({ progress }: { progress: Progress }) {
       </Section>
     </Card>
   );
-}
-
-// 欄が無いことを許す: 古いデーモンの応答には欄が無く、無いときは注記を出さないため
-function mayBeUndercounted(throughput: Progress['throughput']): boolean {
-  return (throughput as { mayBeUndercounted?: boolean }).mayBeUndercounted === true;
 }
 
 const UNAVAILABLE_REASONS: Record<string, string> = {

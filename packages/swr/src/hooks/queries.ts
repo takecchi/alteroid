@@ -147,19 +147,12 @@ export function useCloneSessionRefusal() {
 
 export function useAttachmentLimits() {
   const api = useApi();
-  return useSWR(
-    KEY.attachmentLimits,
-    async () => {
-      const result = await api.api.GET('/attachments/limits');
-      return result.response.status === 404 ? null : unwrap(result);
-    },
-    {
-      revalidateOnFocus: false,
-      revalidateOnReconnect: false,
-      revalidateIfStale: false,
-      shouldRetryOnError: false,
-    },
-  );
+  return useSWR(KEY.attachmentLimits, () => api.api.GET('/attachments/limits').then(unwrap), {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    revalidateIfStale: false,
+    shouldRetryOnError: false,
+  });
 }
 
 // 頁は `useConversations` と同じ形で辿る（`limit` を増やさず `nextCursor` で。取り直すたびに先頭から辿り直し、どれかの頁の失敗は一覧全体の失敗にする）

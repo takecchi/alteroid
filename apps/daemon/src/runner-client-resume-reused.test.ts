@@ -67,17 +67,22 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
 
 describe('HttpRunner の sessionGeneration（#3170）', () => {
   it('resume: 欄ありは運び、欄なし・形崩れは省く', async () => {
-    expect(await resumeWith({ ok: true, sessionGeneration: 'gen-1' })).toEqual({
+    expect(await resumeWith({ ok: true, cwd: '/workspace', sessionGeneration: 'gen-1' })).toEqual({
+      cwd: '/workspace',
       reusedLiveSession: false,
       sessionGeneration: 'gen-1',
     });
-    expect(await resumeWith({ ok: true })).toEqual({ reusedLiveSession: false });
-    expect(await resumeWith({ ok: true, sessionGeneration: 7 })).toEqual({
+    expect(await resumeWith({ ok: true, cwd: '/workspace' })).toEqual({
+      cwd: '/workspace',
+      reusedLiveSession: false,
+    });
+    expect(await resumeWith({ ok: true, cwd: '/workspace', sessionGeneration: 7 })).toEqual({
+      cwd: '/workspace',
       reusedLiveSession: false,
     });
   });
 
-  it('start: 欄ありは運び、欄なし・形崩れは省く（cwd は従来どおり）', async () => {
+  it('start: 欄ありは運び、欄なし・形崩れは省く（cwd は必須。#5751）', async () => {
     const startWith = async (body: unknown) => {
       const client = await createHttpRunner({
         baseUrl: 'http://runner.test',

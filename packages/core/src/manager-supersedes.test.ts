@@ -61,12 +61,12 @@ function fakeRunner(initiallyAlive: boolean) {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       starts.push(command.managerId);
       await control.beforeStart?.();
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       alive.push({
         liveBackgroundTasks: 0,
@@ -77,7 +77,7 @@ function fakeRunner(initiallyAlive: boolean) {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId, text) {
       sends.push({ managerId, text });

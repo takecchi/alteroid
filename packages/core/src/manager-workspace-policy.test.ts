@@ -146,7 +146,7 @@ function fakeRunner(runnerId: string, workspacePath: string) {
     async connect() {
       /* この検証では使わない */
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       started.push(command);
       alive.push({
         liveBackgroundTasks: 0,
@@ -156,10 +156,10 @@ function fakeRunner(runnerId: string, workspacePath: string) {
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(): Promise<{ cwd?: string }> {
-      return {};
+    async resume(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

@@ -62,7 +62,7 @@ function fakeRunner(
     },
     async start(command: RunnerStartCommand) {
       starts.push(command);
-      return {};
+      return { cwd: command.cwd };
     },
     async resume(command: RunnerResumeCommand) {
       resumes.push(command);
@@ -75,7 +75,7 @@ function fakeRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(managerId: string, text: string, attachments?: RunnerAttachment[]) {
       sent.push({ managerId, text, attachments: attachments ?? [] });

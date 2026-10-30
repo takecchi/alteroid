@@ -229,7 +229,6 @@ export class AttachmentDraft {
 export async function fetchAttachmentLimits(target: Target): Promise<AttachmentLimits | null> {
   try {
     const response = await createClient(target.baseUrl, target.headers).attachments.limits.$get();
-    if (response.status === 404) return DEFAULT_ATTACHMENT_LIMITS;
     if (!response.ok) return null;
     const body: Partial<Record<keyof AttachmentLimits, unknown>> = await response.json();
     // maxLargeFileBytes は 0（枠なし）がありうるので、ほかの欄（正の数）と分けて検査する

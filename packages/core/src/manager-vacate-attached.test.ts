@@ -92,7 +92,7 @@ function fakeRunner(
     async connect() {
       /* この試験群は hello イベントの配送経路を使わない。 */
     },
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       // 起こした瞬間にセッションを載せる: 空だと `sessionGone` 判定が「最初から居ない」で `true` になり、
       // 「確かめた停止」を試験したことにならない。
       sessions.set(command.managerId, {
@@ -103,9 +103,9 @@ function fakeRunner(
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       sessions.set(command.managerId, {
         liveBackgroundTasks: 0,
         managerId: command.managerId,
@@ -115,7 +115,7 @@ function fakeRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

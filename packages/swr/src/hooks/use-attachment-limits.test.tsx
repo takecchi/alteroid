@@ -76,7 +76,7 @@ describe('useAttachmentLimits', () => {
     expect(limitsCalls(stub.calls)).toHaveLength(1);
   });
 
-  it('404（古いデーモン）は null として覚え、取り直さない', async () => {
+  it('404 もほかの失敗と同じく覚えず、次に使われたときに取り直す（#5765）', async () => {
     const stub = stubFetch((url) =>
       url.endsWith('/attachments/limits') ? json({ error: 'not found' }, 404) : undefined,
     );
@@ -85,10 +85,11 @@ describe('useAttachmentLimits', () => {
         <Toggle />
       </Providers>,
     );
-    await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('none'));
+    await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('error'));
+    stub.setRoute((url) => (url.endsWith('/attachments/limits') ? json(LIMITS) : undefined));
     await remount();
-    expect(screen.getByTestId('state').textContent).toBe('none');
-    expect(limitsCalls(stub.calls)).toHaveLength(1);
+    await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('200'));
+    expect(limitsCalls(stub.calls)).toHaveLength(2);
   });
 
   it('接続失敗のあとは、次に使われたときに取り直してデーモンの値を使う', async () => {

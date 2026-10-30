@@ -80,11 +80,8 @@ const items = () =>
     .getAllByRole('listitem')
     .map((li) => li.textContent ?? '');
 
-describe.each([
-  { label: '区切りあり（空行。#4339 以降のデーモン）', joiner: '\n\n' },
-  { label: '区切りなし（古いデーモン）', joiner: '' },
-])('日誌の本文が $label', ({ joiner }) => {
-  const JOURNAL_TEXT = BEFORE_HEAD + BEFORE_TAIL + joiner + AFTER;
+describe('日誌の本文が 区切りあり（空行。#4339 以降のデーモン）', () => {
+  const JOURNAL_TEXT = BEFORE_HEAD + BEFORE_TAIL + '\n\n' + AFTER;
   it('確定した履歴と突き合わさって、写しが会話の末尾に残らない', async () => {
     const afterTool = gate();
     const finished = gate();

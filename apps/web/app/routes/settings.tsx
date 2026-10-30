@@ -212,7 +212,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
   );
 }
 
-// 観測が無いことを「0件」「失敗」と描かない: セッションがまだ始まっていない・知らせない旧い版・init に plugins が無かった、のどれでも言えることが無いため
+// 観測が無いことを「0件」「失敗」と描かない: セッションがまだ始まっていない・観測がまだ届いていない・init に plugins が無かった、のどれでも言えることが無いため
 // errors の null と [] を同じ文言にする: SDK は失敗が無いときこの欄を省き、省略は無事の断定ではないため「失敗の報告は無い」までしか言わない
 // 作業者の分は出せないと明記する: SDK は作業者ごとの読み込み結果を知らせず、載っていないことが「作業者は無事」と読まれるため
 function PluginLoad({
@@ -226,7 +226,7 @@ function PluginLoad({
     return (
       <p className={`mt-2 ${SMALL_NOTE}`}>
         plugin の読み込み:
-        まだ見ていない（この層のセッションがまだ始まっていないか、知らせない旧い版）
+        まだ見ていない（この層のセッションがまだ始まっていないか、観測がまだ届いていない）
       </p>
     );
   }
@@ -277,8 +277,8 @@ function PluginLoad({
   );
 }
 
-// 開閉のどちらも名乗らない器は何も描かない: 理由を送らない旧い版の runner の見え方を変えないため
-// unknown を「頼めない」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
+// 開閉のどちらも名乗らない器は何も描かない: peer を配線しない構成の runner の見え方を変えないため
+// unknown を「頼めない」と描かない: runner が未確定（まだ繋がっていない）か、頼めるかどうかを名乗らない runner は判定できないため
 // 閉じている peer は理由を描く: ログイン済みなのに開いていない器の理由を見せるため
 function ManagerPeers({ runner }: { runner: RunnerSummary }) {
   const view = runner.managerPeers;
@@ -287,7 +287,7 @@ function ManagerPeers({ runner }: { runner: RunnerSummary }) {
     return (
       <p className={`mt-0.5 ${SMALL_NOTE}`}>
         Codex などに作業を頼めるか:
-        不明（この実行環境は名乗らない旧い版か、名乗りをまだ受けていない）
+        不明（この実行環境が頼めるかどうかを名乗っていないか、名乗りをまだ受けていない）
       </p>
     );
   }

@@ -96,7 +96,7 @@ function skewableRunner(runnerId: string): {
     workspacePathKnown: true,
     workspacePath: '/work/project',
     async connect() {},
-    async start(command): Promise<{ cwd?: string }> {
+    async start(command): Promise<{ cwd: string }> {
       sessions.set(command.managerId, {
         liveBackgroundTasks: 0,
         managerId: command.managerId,
@@ -105,11 +105,11 @@ function skewableRunner(runnerId: string): {
         request: command.request,
         waiting: [],
       });
-      return {};
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumed.push(command.managerId);
-      return {};
+      return { cwd: command.cwd };
     },
     async send() {
       return true;

@@ -65,8 +65,8 @@ function shortcutRunner(
     async connect() {
       /* この検証では使わない */
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
     async resume(command): Promise<RunnerResumeResult> {
       if (alive.some((state) => state.managerId === command.managerId)) {
@@ -86,7 +86,9 @@ function shortcutRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
-      return report === 'absent' ? {} : { reusedLiveSession: false };
+      return report === 'absent'
+        ? { cwd: command.cwd }
+        : { cwd: command.cwd, reusedLiveSession: false };
     },
     async send() {
       return true;

@@ -47,8 +47,8 @@ interface Server {
   /** 行ごとの PATCH / DELETE / 中身の取得への応答の差し替え */
   override: (method: string, id: string) => Response | undefined;
   pageSize: number;
-  /** usage.byIntegrationKey の中身。undefined なら欄ごと返さない（古いデーモンの応答） */
-  byIntegrationKey?: Record<string, { count: number; totalBytes: number }> | undefined;
+  /** usage.byIntegrationKey の中身 */
+  byIntegrationKey: Record<string, { count: number; totalBytes: number }>;
   log: { method: string; url: URL; body?: unknown }[];
 }
 
@@ -66,7 +66,7 @@ function usageOf(items: Item[]) {
       integration: ZERO,
       unknown: ZERO,
     },
-    ...(server.byIntegrationKey === undefined ? {} : { byIntegrationKey: server.byIntegrationKey }),
+    byIntegrationKey: server.byIntegrationKey,
   };
 }
 
@@ -74,7 +74,14 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
   storeTestBaseUrl();
-  server = { items: [], failList: 0, override: () => undefined, pageSize: 50, log: [] };
+  server = {
+    items: [],
+    failList: 0,
+    override: () => undefined,
+    pageSize: 50,
+    byIntegrationKey: {},
+    log: [],
+  };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : null;
     const url = new URL(request?.url ?? (typeof input === 'string' ? input : String(input)));
@@ -221,17 +228,8 @@ describe('ファイル画面: 一覧と使用量', () => {
         ]),
       );
 
-    it('byIntegrationKey が無い応答（古いデーモン）でも落ちず、鍵の一覧は出ない', async () => {
-      server.items = [item('a', { name: 'a.txt' })];
-      renderFiles();
-      await screen.findByText('a.txt');
-      expect(screen.getByTestId('usage')).toBeTruthy();
-      expect(screen.queryByTestId('usage-by-key')).toBeNull();
-    });
-
     it('空なら鍵の一覧は出ない', async () => {
       server.items = [item('a', { name: 'a.txt' })];
-      server.byIntegrationKey = {};
       renderFiles();
       await screen.findByText('a.txt');
       expect(screen.queryByTestId('usage-by-key')).toBeNull();

@@ -3771,7 +3771,7 @@ class Pool implements ManagerPool {
     this.#records.set(managerId, record);
     this.#rememberTokenIdentity(managerId);
 
-    let started: { cwd?: string; sessionGeneration?: string };
+    let started: { cwd: string; sessionGeneration?: string };
     try {
       started = await runner.start({
         managerId,
@@ -3789,16 +3789,12 @@ class Pool implements ManagerPool {
     if (started.sessionGeneration !== undefined && started.sessionGeneration.length > 0) {
       record.sessionGeneration = started.sessionGeneration;
     }
-    // 古い runner は `started.cwd` を返さないことがあり、そのときは何もしない（頼んだ値で「確認済み」を埋めない）。
-    let cwdConfirmed: true | undefined;
+    // runner が実際に開いた作業場（`started.cwd`）は必ず返る。頼んだ値と違えば、台帳を実際の値へ書き換える。
     let requestedCwd: string | undefined;
-    if (started.cwd !== undefined) {
-      cwdConfirmed = true;
-      if (started.cwd !== cwd) {
-        requestedCwd = cwd;
-        record.job.cwd = started.cwd;
-        record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, started.cwd);
-      }
+    if (started.cwd !== cwd) {
+      requestedCwd = cwd;
+      record.job.cwd = started.cwd;
+      record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, started.cwd);
     }
     // 名簿を引き直さず、この回に貸し出しを立てた相手を写す。`undefined` で上書きしない: 一度名乗った器の値まで消えて以後判定できなくなる。
     if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
@@ -3839,7 +3835,7 @@ class Pool implements ManagerPool {
     // 引数を増やすと他の全呼び出し元が「該当なし」を渡す羽目になる。
     return {
       ...summary,
-      ...(cwdConfirmed === undefined ? {} : { cwdConfirmed }),
+      cwdConfirmed: true,
       ...(requestedCwd === undefined ? {} : { requestedCwd }),
     };
   }
@@ -9418,22 +9414,25 @@ class Pool implements ManagerPool {
     }
   }
 
-  /** 「世代が無い」を `stale` にも `current` にも倒さない: 古い runner との後方互換。 */
+  /**
+   * 追っている世代が無い間（再起動の直後・resume の応答待ち・世代を返さない古い runner）は `unknown`（世代を見ない）。
+   * 追っている世代があるのに値の無い出来事は、食い違いと同じ `stale` に倒す（runner は出来事に必ず世代を載せる。#5764）。
+   */
   #judgeSessionGeneration(
     record: ManagerRecord,
     event: RunnerEvent,
   ): 'stale' | 'current' | 'unknown' {
     if (!isSessionScopedEvent(event)) return 'unknown';
-    const given = event.sessionGeneration;
     const tracked = record.sessionGeneration;
-    if (given === undefined || given.length === 0 || tracked === undefined) return 'unknown';
-    return given === tracked ? 'current' : 'stale';
+    if (tracked === undefined) return 'unknown';
+    return event.sessionGeneration === tracked ? 'current' : 'stale';
   }
 
   /** 出来事に付いて届いた世代を覚える（#5195）。古い順に捨てて上限で締める: 担当の像は起こし直しのたびに世代が増えるため。 */
   #observeSessionGeneration(record: ManagerRecord, event: RunnerEvent): void {
     if (!isSessionScopedEvent(event)) return;
     const given = event.sessionGeneration;
+    // 記録する値が無いだけ（型のための guard）。判定は `#judgeSessionGeneration` が持つ
     if (given === undefined || given.length === 0) return;
     const observed = (record.observedSessionGenerations ??= new Set<string>());
     observed.delete(given);
@@ -9822,7 +9821,8 @@ class Pool implements ManagerPool {
     delete record.sessionGeneration;
     // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
     this.#beginResumeConfirmation(record.job.id, runner.runnerId);
-    let resumed: Awaited<ReturnType<RunnerClient['resume']>>;
+    // 応答が返らず一覧で引き取った回（下の `resumed = {}`）だけは、runner が開いた値を持たない
+    let resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>;
     try {
       resumed = await runner.resume({
         managerId: record.job.id,
@@ -9866,7 +9866,7 @@ class Pool implements ManagerPool {
         grounds: `resume の失敗: ${reasonOf(error)}。${runner.runnerId} の一覧にこの委譲が居た`,
       });
     }
-    // `resumed.cwd` が返らなければ何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
+    // 応答が返らず引き取った回（`resumed.cwd` が無い）は何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
     // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
     record.cwdSwapNotice = undefined;
     if (resumed.cwd !== undefined && resumed.cwd !== requestedCwd) {

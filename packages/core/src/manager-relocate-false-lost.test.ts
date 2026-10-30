@@ -98,10 +98,10 @@ function fakeRunner(runnerId: string): Fake {
     async connect(onEvent) {
       emitter = onEvent;
     },
-    async start(): Promise<{ cwd?: string }> {
-      return {};
+    async start(command): Promise<{ cwd: string }> {
+      return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd?: string }> {
+    async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       sessions.set(command.managerId, {
         liveBackgroundTasks: 0,
@@ -112,7 +112,7 @@ function fakeRunner(runnerId: string): Fake {
         waiting: [],
         sessionId: command.sessionId,
       });
-      return {};
+      return { cwd: command.cwd };
     },
     async send(_id, message) {
       sends.push(message);

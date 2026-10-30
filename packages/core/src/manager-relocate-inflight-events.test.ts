@@ -92,10 +92,10 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(): Promise<{ cwd?: string }> {
-        return {};
+      async start(command): Promise<{ cwd: string }> {
+        return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd?: string }> {
+      async resume(command): Promise<{ cwd: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           liveBackgroundTasks: 0,
@@ -106,7 +106,7 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
           waiting: [],
           sessionId: command.sessionId,
         });
-        return {};
+        return { cwd: command.cwd };
       },
       async send() {
         return true;

@@ -1046,6 +1046,57 @@ describe('許可確認の回答の応答から decision を読む', () => {
   });
 });
 
+describe('start / resume の応答の cwd は必須（#5751）', () => {
+  const startCommand = { managerId: 'mgr-x', request: '確認', cwd: '/workspace/mgr-x' };
+  const resumeCommand = { ...startCommand, sessionId: 'sess-x' };
+
+  async function clientReplying(body: unknown) {
+    return createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () => Response.json(body)) as typeof fetch,
+    });
+  }
+
+  it('cwd の無い start の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true });
+
+    await expect(client.start(startCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd が文字列でない start の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true, cwd: 42 });
+
+    await expect(client.start(startCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd の無い resume の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true, reusedLiveSession: false });
+
+    await expect(client.resume(resumeCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd が文字列でない resume の応答は、読めないものとして投げる', async () => {
+    const client = await clientReplying({ ok: true, cwd: null });
+
+    await expect(client.resume(resumeCommand)).rejects.toThrow('runner の応答を読めなかった');
+  });
+
+  it('cwd を返す応答は今までどおり読める（回帰なし）', async () => {
+    const client = await clientReplying({
+      ok: true,
+      cwd: '/workspace/mgr-x',
+      sessionGeneration: 'gen-1',
+    });
+
+    expect(await client.start(startCommand)).toEqual({
+      cwd: '/workspace/mgr-x',
+      sessionGeneration: 'gen-1',
+    });
+    expect(await client.resume(resumeCommand)).toMatchObject({ cwd: '/workspace/mgr-x' });
+  });
+});
+
 describe('器の入れ替えの判定材料', () => {
   const cleanups: (() => Promise<void> | void)[] = [];
 

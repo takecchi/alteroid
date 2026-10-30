@@ -65,13 +65,13 @@ function fakeRunner(options: {
         }),
       );
     },
-    async start() {
+    async start(command: Parameters<RunnerClient['start']>[0]) {
       return options.startGeneration === undefined
-        ? {}
-        : { sessionGeneration: options.startGeneration };
+        ? { cwd: command.cwd }
+        : { cwd: command.cwd, sessionGeneration: options.startGeneration };
     },
-    async resume() {
-      return {};
+    async resume(command: Parameters<RunnerClient['resume']>[0]) {
+      return { cwd: command.cwd };
     },
     async send() {
       return true;
