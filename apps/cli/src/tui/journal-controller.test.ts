@@ -312,6 +312,22 @@ describe('古い側と取りこぼし', () => {
     expect(state().newerBlocked).toBe(false);
   });
 
+  // 新しい側も `next` だけで続きを決める（#5720）: 新規0件で応答が limit ちょうどでも、limit を上げて撃ち直さない
+  it('繋ぎ直しの取り直しが既知の行だけを limit ちょうど返しても、limit を上げて撃ち直さない', async () => {
+    const { api, controller, state, ids, fire } = setup((a) => {
+      a.journalEntries = run(1);
+    });
+    controller.setFilter([], '', 1);
+    await waitFor(() => state().status === 'ready');
+    const before = api.journalListCalls.length;
+    fire('open');
+    await waitFor(() => api.journalListCalls.length === before + 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.journalListCalls.length).toBe(before + 1);
+    expect(api.journalListCalls.at(-1)).toMatchObject({ since: minute(1), limit: 1 });
+    expect(ids()).toEqual(['e1']);
+  });
+
   it('取り直しの最中に SSE の新着が届いても、間の行を取りこぼさない。新着は取り直しが済んでから先頭へ積む', async () => {
     const { api, controller, state, ids, push, fire } = setup((a) => {
       a.journalEntries = run(2);
