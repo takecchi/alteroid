@@ -32374,7 +32374,7 @@
         "operationId": "getProfile",
         "tags": ["profile"],
         "summary": "実行環境プロファイル（.zprofile 相当。名前付きの行の集まり）を読む",
-        "description": "器の環境変数を増やす代わりに、名前付きのシェルスクリプトの行を記憶ストアへ置く。行ごとに撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=runner だけ）を持ち、名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。`script` / `updatedAt` / `sha256` / `bytes` は1本の時代の欄で、互換のために残している（deprecated）。",
+        "description": "器の環境変数を増やす代わりに、名前付きのシェルスクリプトの行を記憶ストアへ置く。行ごとに撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=runner だけ）を持ち、名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。",
         "responses": {
           "200": {
             "description": "プロファイルの行（本文つき）と、合成後の指紋。置かれていなければ行は空。",
@@ -32438,21 +32438,9 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "script": {
-                      "type": "string"
-                    },
-                    "updatedAt": {
-                      "type": "string"
-                    },
-                    "sha256": {
-                      "type": "string"
-                    },
-                    "bytes": {
-                      "type": "number"
                     }
                   },
-                  "required": ["entries", "clone", "runner", "script"],
+                  "required": ["entries", "clone", "runner"],
                   "additionalProperties": false
                 }
               }

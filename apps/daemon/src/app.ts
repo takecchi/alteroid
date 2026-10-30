@@ -1561,12 +1561,6 @@ function callbackPage(title: string, detail: string, autoClose = false): string 
 }
 
 function describeProfileEntries(entries: readonly EnvProfileEntry[]) {
-  const all = composeProfileScript(entries, 'all');
-  const newest = entries.reduce<string | undefined>(
-    (latest, entry) =>
-      latest === undefined || entry.updatedAt > latest ? entry.updatedAt : latest,
-    undefined,
-  );
   return {
     entries: entries.map((entry) => ({
       ...entry,
@@ -1575,9 +1569,6 @@ function describeProfileEntries(entries: readonly EnvProfileEntry[]) {
       version: profileEntryVersionOf(entry),
     })),
     ...composedFingerprints(entries),
-    script: all,
-    ...(newest === undefined ? {} : { updatedAt: newest }),
-    ...(all.length === 0 ? {} : { sha256: fingerprintOf(all), bytes: Buffer.byteLength(all) }),
   };
 }
 
@@ -1746,9 +1737,7 @@ async function mutateProfile(
         version: entry.version,
       })),
       composed,
-      ...(described.sha256 === undefined
-        ? {}
-        : { sha256: described.sha256, bytes: described.bytes as number }),
+      ...allFingerprint,
       // 成功でも `set -x` の出力（値入り）は `output` に載るので伏せる。
       clone:
         result.clone.output === undefined
@@ -9158,8 +9147,7 @@ export function createApp(deps: AppDeps) {
         description:
           '器の環境変数を増やす代わりに、名前付きのシェルスクリプトの行を記憶ストアへ置く。' +
           '行ごとに撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=runner だけ）を持ち、' +
-          '名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。' +
-          '`script` / `updatedAt` / `sha256` / `bytes` は1本の時代の欄で、互換のために残している（deprecated）。',
+          '名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。',
         responses: {
           200: {
             description: 'プロファイルの行（本文つき）と、合成後の指紋。置かれていなければ行は空。',

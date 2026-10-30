@@ -9470,7 +9470,7 @@ describe('実行環境プロファイル', () => {
   it('置いていなければ空を返す', async () => {
     const response = await app.request('/profile');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
+    expect(await response.json()).toEqual({ entries: [], clone: {}, runner: {} });
   });
 
   it('GET の応答の上位に、1本の時代の互換欄（script・updatedAt・sha256・bytes）は載らない (#5707)', async () => {
@@ -9509,9 +9509,11 @@ describe('実行環境プロファイル', () => {
     });
     expect(put.status).toBe(200);
 
-    const read = (await (await withProfile.request('/profile')).json()) as { script: string };
+    const read = (await (await withProfile.request('/profile')).json()) as {
+      entries: { script: string }[];
+    };
     // 入口で末尾の改行だけ整える（保存・配布・指紋が同じ文字列を見るため）。
-    expect(read.script).toBe('export SOME_API_TOKEN=abc123\n');
+    expect(read.entries.map((e) => e.script)).toEqual(['export SOME_API_TOKEN=abc123\n']);
   });
 
   it('PUT が返す指紋と GET が返す指紋が一致する', async () => {
@@ -9530,10 +9532,14 @@ describe('実行環境プロファイル', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ script: 'export OK=1' }),
       })
-    ).json()) as { sha256: string };
-    const get = (await (await withProfile.request('/profile')).json()) as { sha256: string };
+    ).json()) as { sha256: string; entries: { sha256: string }[] };
+    const get = (await (await withProfile.request('/profile')).json()) as {
+      entries: { sha256: string }[];
+    };
 
-    expect(get.sha256).toBe(put.sha256);
+    expect(get.entries.map((e) => e.sha256)).toEqual(put.entries.map((e) => e.sha256));
+    // 1行だけなので、全部をつないだ指紋も行の指紋と同じになる
+    expect(put.sha256).toBe(get.entries[0]?.sha256);
   });
 
   it('runner へ降ろし、結果を返す', async () => {
@@ -9582,8 +9588,6 @@ describe('実行環境プロファイル', () => {
           entries: { name: string; script: string; scope: string }[];
           clone: { sha256?: string };
           runner: { sha256?: string };
-          script: string;
-          sha256?: string;
         };
       return { app, runner, put, remove, get };
     }
@@ -9604,7 +9608,10 @@ describe('実行環境プロファイル', () => {
         ['base', 'all'],
         ['rust', 'runner'],
       ]);
-      expect(read.script).toBe('export BASE_SECRET_2690=1\n\nexport RUST=1\n');
+      expect(read.entries.map((e) => e.script)).toEqual([
+        'export BASE_SECRET_2690=1\n',
+        'export RUST=1\n',
+      ]);
     });
 
     it('scope を省いた PUT は既存の行の撒く先を保つ', async () => {
@@ -9700,7 +9707,7 @@ describe('実行環境プロファイル', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ script: '' }),
       });
-      expect(await get()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
+      expect(await get()).toEqual({ entries: [], clone: {}, runner: {} });
     });
 
     it('日誌には行の名前・撒く先の影響・配布の成否が残り、本文は1文字も書かない', async () => {
