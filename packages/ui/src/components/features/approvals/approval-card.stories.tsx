@@ -22,7 +22,6 @@ type Story = StoryObj<typeof meta>;
 
 const base = {
   createdAt: '2026-09-29T20:06:00Z',
-  createdLabel: '42 分前',
   jobLink: (
     <>
       {'job '}

@@ -35,7 +35,8 @@ describe('shadcn の部品の置き場', () => {
     expect(Object.keys(pkg.devDependencies ?? {})).not.toContain('cn');
   });
 
-  it('置き場の部品が全部 `index.ts`（`@alteroid/ui/shadcn`）から出ている', () => {
+  // 使う部品だけを置く方針: 足した部品の出し忘れも、消した部品の `export` 残り（存在しない先への export）も落とす
+  it('置き場の部品と `index.ts`（`@alteroid/ui/shadcn`）の export が過不足なく一致する', () => {
     const index = readFileSync(path.join(uiDir, 'index.ts'), 'utf8');
     const exported = [...index.matchAll(/export \* from '\.\/([a-z-]+)';/g)].map((m) => m[1]);
     const expected = componentFiles()

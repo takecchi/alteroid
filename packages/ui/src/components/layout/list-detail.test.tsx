@@ -172,7 +172,7 @@ describe('ListDetailItems: 項目の className', () => {
   });
 });
 
-describe('ListDetailItems: 一部だけがリンク（extra / lead）', () => {
+describe('ListDetailItems: 一部だけがリンク（lead）', () => {
   function Partial({ initial }: { initial: string | undefined }) {
     const [selected, setSelected] = useState(initial);
     return (
@@ -190,7 +190,6 @@ describe('ListDetailItems: 一部だけがリンク（extra / lead）', () => {
               current: key === selected,
               lead: <span>札{key}</span>,
               children: `題名${key}`,
-              extra: <p>名前-{key}</p>,
             }))}
             renderLink={(props) => (
               <a
@@ -210,11 +209,10 @@ describe('ListDetailItems: 一部だけがリンク（extra / lead）', () => {
     );
   }
 
-  it('リンクは題名だけで、札と extra はリンクの外（選択できる文字）', () => {
+  it('リンクは題名だけで、札はリンクの外（選択できる文字）', () => {
     render(<Partial initial="a" />);
     const link = screen.getByRole('link', { name: '題名b' });
     expect(link.textContent).toBe('題名b');
-    expect(screen.getByText('名前-b').closest('a')).toBeNull();
     expect(screen.getByText('札b').closest('a')).toBeNull();
     expect(link.closest('li')?.querySelectorAll('a')).toHaveLength(1);
   });
