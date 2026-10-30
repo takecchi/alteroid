@@ -91,12 +91,17 @@ export interface RunnerUnknownReport {
 
 // `onUnknown` を借りない: あちらは「こちらが投げた呼びが期限内に返らなかった」で、主語が違うため
 // 本文は載せない（載せるのは `type` とバイト数だけ）: ここへ来るフレームにはマネージャーの報告が入りうるため
+// `handler-failed`: フレームは読めたが、受ける側（`onEvent`）が投げた。壊れたフレームと取り違えない（#5950）
+export type RunnerDroppedReason = 'unparsable' | 'unknown-shape' | 'handler-failed';
+
 export type RunnerDroppedEventReport =
   | {
       phase: 'first';
-      reason: 'unparsable' | 'unknown-shape';
+      reason: RunnerDroppedReason;
       type?: string;
       bytes: number;
+      // `handler-failed` のときだけ。伏せ字を通して短く切った例外の文
+      error?: string;
     }
   | {
       phase: 'closed';
@@ -260,10 +265,14 @@ export function describeRunnerDropped(report: RunnerDroppedEventReport): string 
     const detail = report.dropped.map(({ key, count }) => `${key}×${count}`).join(' / ');
     return `runner から降りてきた出来事を解釈できずに捨てた（この接続の合計）: ${detail}`;
   }
-  const what =
-    report.reason === 'unparsable' ? 'JSON として読めなかった' : 'こちらのスキーマに合わなかった';
+  const what = {
+    unparsable: 'JSON として読めなかった',
+    'unknown-shape': 'こちらのスキーマに合わなかった',
+    'handler-failed': 'フレームは読めたが、受ける側の処理が失敗した',
+  }[report.reason];
   const type = report.type === undefined ? '（type も読めない）' : `type=${report.type}`;
-  return `runner から降りてきた出来事を解釈できずに捨てた（初出）: ${what} ${type} bytes=${report.bytes}`;
+  const error = report.error === undefined ? '' : ` error=${report.error}`;
+  return `runner から降りてきた出来事を解釈できずに捨てた（初出）: ${what} ${type} bytes=${report.bytes}${error}`;
 }
 
 // 言えること／言えないことを行の中に書く: 期限切れは「失敗した」でも「runner が死んだ」でもなく、そう読めない文にしないと、読んだ側が断定へ畳んで再送で二重に実行され、引き取りで同じマネージャーが2台で走るため
@@ -796,23 +805,40 @@ class HttpRunner implements RunnerClient {
         }
 
         if (data.length > 0) {
+          notePhase(`runner-event:${String(data.length)}B`);
+          let raw: unknown;
+          let parsed: ReturnType<typeof runnerEventSchema.safeParse>;
+          // `try` は読む側（`JSON.parse` と `safeParse`）だけに絞る: `onEvent` まで含めると、受ける側が投げたのに「壊れたフレーム」と数えて原因を取り違える（#5950）
           try {
-            notePhase(`runner-event:${String(data.length)}B`);
-            const raw: unknown = JSON.parse(data);
-            const parsed = runnerEventSchema.safeParse(raw);
-            if (parsed.success) {
-              // 種類の印に大きさを添える: 「直前の印」は1つしか残らないので、種類だけだとどの大きさの出来事の後で止まったか分からないため（#4485）
-              notePhase(`runner-event:${parsed.data.type}:${String(data.length)}B`);
-              onEvent(parsed.data);
-              // 受けた後の処理の同期の部分（日誌への書き込みの直列化など）を抜けた印: 無いまま止まっていれば、止めていたのはその処理（#4485）
-              notePhase(`runner-event-handled:${parsed.data.type}`);
-            }
-            // 黙って落とさない: runner が新しい種類の出来事を出し始めても、跡が残らないと気づく主体が誰も居ないため
-            else this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
+            raw = JSON.parse(data);
+            parsed = runnerEventSchema.safeParse(raw);
           } catch {
             // 壊れた1フレームでストリームごと落とさず、黙って捨てもしない（取れない `type` を 0 として積まず、バイト数だけを渡す）
             this.#noteDropped(dropped, 'unparsable', undefined, data.length);
+            continue;
           }
+          if (!parsed.success) {
+            // 黙って落とさない: runner が新しい種類の出来事を出し始めても、跡が残らないと気づく主体が誰も居ないため
+            this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
+            continue;
+          }
+          // 種類の印に大きさを添える: 「直前の印」は1つしか残らないので、種類だけだとどの大きさの出来事の後で止まったか分からないため（#4485）
+          notePhase(`runner-event:${parsed.data.type}:${String(data.length)}B`);
+          try {
+            onEvent(parsed.data);
+          } catch (error) {
+            // 落とす振る舞いは変えない（送り直させない・`#lastEventId` も戻さない）。変えるのは残る理由だけ（#5950）
+            this.#noteDropped(
+              dropped,
+              'handler-failed',
+              parsed.data.type,
+              data.length,
+              runnerErrorBodyOf(error instanceof Error ? error.message : String(error)),
+            );
+            continue;
+          }
+          // 受けた後の処理の同期の部分（日誌への書き込みの直列化など）を抜けた印: 無いまま止まっていれば、止めていたのはその処理（#4485）
+          notePhase(`runner-event-handled:${parsed.data.type}`);
         }
       }
       if (bytesSinceYield >= SSE_READ_YIELD_BYTES) {
@@ -825,9 +851,10 @@ class HttpRunner implements RunnerClient {
   // 初出をその場で1行出す: 閉じるときのまとめだけだと、デーモンが拾われない例外で死んだとき `type` の存在そのものが失われる（失ってよいのは量で、存在ではない）ため
   #noteDropped(
     dropped: Map<string, number>,
-    reason: 'unparsable' | 'unknown-shape',
+    reason: RunnerDroppedReason,
     type: string | undefined,
     bytes: number,
+    error?: string,
   ): void {
     const key = type === undefined ? reason : `${reason}:${type}`;
     const seen = dropped.get(key) ?? 0;
@@ -838,6 +865,7 @@ class HttpRunner implements RunnerClient {
       reason,
       ...(type === undefined ? {} : { type }),
       bytes,
+      ...(error === undefined ? {} : { error }),
     });
   }
 
