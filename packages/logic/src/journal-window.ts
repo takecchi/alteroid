@@ -42,17 +42,19 @@ export interface PageCursor {
   at: string;
 }
 
-// `undefined`（古いデーモン）を `null`（終端）と同じに扱わない: 件数での推定へ倒すため。
-function outcomeFromNext(next: PageCursor | null | undefined): 'end' | 'progress' | undefined {
-  if (next === undefined) return undefined;
-  return next === null ? 'end' : 'progress';
+// 古い側の頁の outcome は `next` だけで決める（件数からは推定しない）。デーモンは `next` を常に返す（#2623）。
+// 欄の無い応答（`next` を返さなかった頃のデーモン）は型の外だが、`null` と同じ終端として止める: 続きの位置が無いので読み進めようが無い。
+export type OlderOutcome = 'progress' | 'end';
+
+function outcomeFromNext(next: PageCursor | null): OlderOutcome {
+  return next ? 'progress' : 'end';
 }
 
 export async function readThroughUnreadable<
-  P extends { entries: readonly unknown[]; next?: PageCursor | null },
+  P extends { entries: readonly unknown[]; next: PageCursor | null },
 >(first: P, fetchAfter: (cursor: PageCursor) => Promise<P>): Promise<P> {
   let page = first;
-  while (page.entries.length === 0 && page.next !== undefined && page.next !== null) {
+  while (page.entries.length === 0 && page.next) {
     page = await fetchAfter(page.next);
   }
   return page;
@@ -102,16 +104,11 @@ export function notOlderThanWindow(
   });
 }
 
+// 古い側は継続点だけで読む: 末尾の `at` を `until` に使うと、読めずに捨てられた行を越えられず、inclusive な `until` は境界の行を再送するため。
 export function olderPageQuery(
-  entries: JournalEntry[],
-  cursor?: PageCursor | null,
-): { until: string } | { afterId: string; afterAt: string } | undefined {
-  // 継続点が在れば `until` を使わない: 末尾の `at` は読めずに捨てられた行を越えられず、inclusive な `until` は境界の行を再送するため。
-  if (cursor !== undefined) {
-    return cursor === null ? undefined : { afterId: cursor.id, afterAt: cursor.at };
-  }
-  const until = oldestAt(entries);
-  return until === undefined ? undefined : { until };
+  cursor: PageCursor | null | undefined,
+): { afterId: string; afterAt: string } | undefined {
+  return cursor ? { afterId: cursor.id, afterAt: cursor.at } : undefined;
 }
 
 export interface PageApplication {
@@ -120,15 +117,14 @@ export interface PageApplication {
   freshCount: number;
 }
 
-// `applyOlderPage` に通さない: 既存が空だと `freshCount` が常に `page.length` になり、短い日誌でも初期読み込みだけでは `'end'` にならないため。
+// `applyOlderPage` に通さない: 初期読み込みは窓が空で、`mergeBack` を通す意味が無い（`freshCount` は常に `page.length`）。
 export function applyInitialPage(
   page: JournalEntry[],
-  limit: number,
-  next?: PageCursor | null,
-): PageApplication {
+  next: PageCursor | null,
+): PageApplication & { outcome: OlderOutcome } {
   return {
     entries: page,
-    outcome: outcomeFromNext(next) ?? (page.length < limit ? 'end' : 'progress'),
+    outcome: outcomeFromNext(next),
     freshCount: page.length,
   };
 }
@@ -136,14 +132,12 @@ export function applyInitialPage(
 export function applyOlderPage(
   existing: JournalEntry[],
   page: JournalEntry[],
-  limit: number,
-  maxLimit: number = JOURNAL_MAX_LIMIT,
-  next?: PageCursor | null,
-): PageApplication {
+  next: PageCursor | null,
+): PageApplication & { outcome: OlderOutcome } {
   const merged = mergeBack(existing, page);
   return {
     entries: merged.entries,
-    outcome: outcomeFromNext(next) ?? pageOutcome(page.length, limit, merged.freshCount, maxLimit),
+    outcome: outcomeFromNext(next),
     freshCount: merged.freshCount,
   };
 }

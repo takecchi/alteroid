@@ -1112,7 +1112,7 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     expect(h.frame()).toContain('遅れて届いた');
   });
 
-  it('先頭まで上がると古い側を自動で読み足す（until）', async () => {
+  it('先頭まで上がると古い側を自動で読み足す（継続点）', async () => {
     const h = start((api) => {
       api.journalEntries = entries(150);
     });
@@ -1121,11 +1121,11 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     h.stdin.write(PGUP);
     for (let i = 0; i < 12; i += 1) h.stdin.write(PGUP);
     await waitFor(() => h.api.journalListCalls.length === 2);
-    expect(h.api.journalListCalls[1]).toMatchObject({ until: minute(51) });
+    expect(h.api.journalListCalls[1]).toMatchObject({ afterAt: minute(51), horizon: true });
+    expect(h.api.journalListCalls[1]).not.toHaveProperty('until');
     await waitFor(() => h.journal.store.getSnapshot().entries.length === 150);
-    await waitFor(() =>
-      h.frame().includes('古い側はまだ在る（先頭まで上がるか m で読み足す · いま 150 件）'),
-    );
+    // 継続点が尽きれば、件数が limit ちょうどかに依らず終端と言える
+    await waitFor(() => h.frame().includes('これより古い記録は無い（全 150 件）'));
   });
 
   it('Enter で 1 件の全文を開き、Esc で一覧へ戻る（PgDn で読み進められる）', async () => {

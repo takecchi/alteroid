@@ -53,7 +53,6 @@ export function olderLineText(state: JournalState): string {
   if (state.error !== null) return `⚠ ${state.error}`;
   switch (state.older) {
     case 'progress':
-    case 'retryLarger':
       return state.olderLoading
         ? '古い側を読んでいる…'
         : `↑ 古い側はまだ在る（先頭まで上がるか m で読み足す · いま ${String(n)} 件）`;
@@ -61,8 +60,6 @@ export function olderLineText(state: JournalState): string {
       return n === 0
         ? ' '
         : `これより古い記録は無い（全 ${String(n)} 件）。${state.horizonNote ?? ''}`.trim();
-    case 'blocked':
-      return `同じ時刻の記録が多く並んでいて、これより古い記録へ自動では進めない（いま ${String(n)} 件）。終端ではない`;
     case 'budget':
       return (
         `持てる量の上限に達した（いま ${String(n)} 件${state.trimmed > 0 ? `・古い側 ${String(state.trimmed)} 件を手放した` : ''}）。` +

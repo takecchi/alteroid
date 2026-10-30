@@ -84,7 +84,6 @@ export interface FakeApi extends TuiApi {
   journalListCalls: JournalListQuery[];
   journalListFails: string | null;
   journalHorizon: { oldestAt?: string | null; crossesHorizon?: boolean };
-  journalCursors: boolean;
   journalUnreadable: Set<string>;
   memoryRows: MemoryRow[];
   memoryDocs: Record<string, MemoryDoc>;
@@ -171,7 +170,6 @@ export function fakeApi(): FakeApi {
     journalListCalls: [],
     journalListFails: null,
     journalHorizon: {},
-    journalCursors: false,
     journalUnreadable: new Set<string>(),
     memoryRows: [],
     memoryDocs: {},
@@ -489,24 +487,15 @@ export function fakeApi(): FakeApi {
         const until = query.until;
         rows = rows.filter((e) => e.at <= until);
       }
-      if (api.journalCursors) {
-        if (query.afterId !== undefined) {
-          const afterId = query.afterId;
-          rows = rows.slice(rows.findIndex((e) => e.id === afterId) + 1);
-        }
-        const raw = rows.slice(0, query.limit);
-        const last = raw[raw.length - 1];
-        return Promise.resolve({
-          entries: raw.filter((e) => !api.journalUnreadable.has(e.id)),
-          next:
-            rows.length > query.limit && last !== undefined ? { id: last.id, at: last.at } : null,
-          ...(query.horizon === true || query.since !== undefined || query.until !== undefined
-            ? api.journalHorizon
-            : {}),
-        });
+      if (query.afterId !== undefined) {
+        const afterId = query.afterId;
+        rows = rows.slice(rows.findIndex((e) => e.id === afterId) + 1);
       }
+      const raw = rows.slice(0, query.limit);
+      const last = raw[raw.length - 1];
       return Promise.resolve({
-        entries: rows.slice(0, query.limit),
+        entries: raw.filter((e) => !api.journalUnreadable.has(e.id)),
+        next: rows.length > query.limit && last !== undefined ? { id: last.id, at: last.at } : null,
         ...(query.horizon === true || query.since !== undefined || query.until !== undefined
           ? api.journalHorizon
           : {}),

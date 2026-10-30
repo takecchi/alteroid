@@ -177,7 +177,7 @@ export interface JournalListQuery {
 
 export interface JournalListResult {
   entries: JournalEntry[];
-  next?: { id: string; at: string } | null;
+  next: { id: string; at: string } | null;
   oldestAt?: string | null;
   crossesHorizon?: boolean;
 }
@@ -619,7 +619,7 @@ export function createTuiApi(target: Target): TuiApi {
       const body = await response.json();
       return {
         entries: body.entries as JournalEntry[],
-        ...(body.next === undefined ? {} : { next: body.next }),
+        next: body.next,
         ...(body.oldestAt === undefined ? {} : { oldestAt: body.oldestAt }),
         ...(body.crossesHorizon === undefined ? {} : { crossesHorizon: body.crossesHorizon }),
       };
