@@ -1904,6 +1904,32 @@ interface StaleHoldStuck {
   backgroundCommands: string[];
 }
 
+// 読めない時刻と無い時刻は数えない: 全部無ければ `undefined`（待ちの数え始めが分からない）
+function earliestMs(times: readonly (string | undefined)[]): number | undefined {
+  return times
+    .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+    .filter((at) => !Number.isNaN(at))
+    .reduce<number | undefined>(
+      (min, at) => (min === undefined ? at : Math.min(min, at)),
+      undefined,
+    );
+}
+
+/**
+ * `Pool#send` の届け方。`mode === 'held-delivery'` は預かった伝言の届け直し（`#deliverHeld`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
+ * `mode === 'usage-rotation'` は鍵の回転・枠の起こし直し（`#nudgeForUsageRotation`）だけが使う: 預かりに回さず（断られたら届かなかったと返し、周回の掃きが間隔を置いて挑み直す）、
+ * 抱えている古い鍵が ready でなければ背景処理が残っていても畳む（#4850）。
+ */
+interface SendDelivery {
+  mode: 'caller' | 'held-delivery' | 'usage-rotation';
+  // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
+  onFoldNoticeDelivered?: (backgroundTasks: number) => void;
+  // 見回り（`deliverHeldMessages`）からの届け直しだけ真（#4982）: 前と同じ判定で断るだけなら新しい判断ではないので、decision を書き直さない
+  pollRetry?: boolean;
+  // 待ちの上限（`HELD_FORCE_FOLD_AFTER_MS`）を過ぎた見回りの回に、畳まずに断った材料を呼び手へ返す（#5041）
+  onStuck?: (stuck: StaleHoldStuck) => void;
+}
+
 function composeHeldStuckNotice(
   managerId: string,
   count: number,
@@ -3841,7 +3867,7 @@ class Pool implements ManagerPool {
     message: string,
     options: ManagerSendOptions = {},
   ): Promise<ManagerSendResult> {
-    const result = await this.#send(managerId, message, options, 'caller');
+    const result = await this.#send(managerId, message, options, { mode: 'caller' });
     // 送ることは止めず、送った側へ注意だけを足す（#4877）: 前任を手で起こすのはクローンの選択でありうるが、黙って起こすと後継と二重に走るため。内部の送り（鍵の回転・預かりの届け直し）は `#send` を直に呼ぶので足さない
     const successor = this.#records.get(managerId)?.job.supersededBy;
     if (
@@ -3859,23 +3885,14 @@ class Pool implements ManagerPool {
     };
   }
 
-  /**
-   * `mode === 'held-delivery'` は預かった伝言の届け直し（`#deliverHeld`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
-   * `mode === 'usage-rotation'` は鍵の回転・枠の起こし直し（`#nudgeForUsageRotation`）だけが使う: 預かりに回さず（断られたら届かなかったと返し、周回の掃きが間隔を置いて挑み直す）、
-   * 抱えている古い鍵が ready でなければ背景処理が残っていても畳む（#4850）。
-   */
+  /** 届け方（`mode` ほか）は `SendDelivery`。 */
   async #send(
     managerId: string,
     message: string,
     options: ManagerSendOptions,
-    mode: 'caller' | 'held-delivery' | 'usage-rotation',
-    // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
-    onFoldNoticeDelivered?: (backgroundTasks: number) => void,
-    // 見回り（`deliverHeldMessages`）からの届け直しだけ真（#4982）: 前と同じ判定で断るだけなら新しい判断ではないので、decision を書き直さない
-    pollRetry = false,
-    // 待ちの上限（`HELD_FORCE_FOLD_AFTER_MS`）を過ぎた見回りの回に、畳まずに断った材料を呼び手へ返す（#5041）
-    onStuck?: (stuck: StaleHoldStuck) => void,
+    delivery: SendDelivery,
   ): Promise<ManagerSendResult> {
+    const { mode, onFoldNoticeDelivered, pollRetry = false, onStuck } = delivery;
     await this.#ensureConnected();
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
@@ -4027,13 +4044,7 @@ class Pool implements ManagerPool {
       // 畳むのは今どおり `#foldStaleTokenSession` が「鍵が現役と食い違い、その鍵が ready でない」と判定した回だけ
       // （ready なら旧セッションへ届ける）。人が走らせる長い仕事を、鍵が使える間に奪わない。
       const awaitingSince = this.#awaitingBackgroundOf(managerId)?.since;
-      const waitStartedAt = [oldestHeldAt, awaitingSince]
-        .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
-        .filter((at) => !Number.isNaN(at))
-        .reduce<number | undefined>(
-          (min, at) => (min === undefined ? at : Math.min(min, at)),
-          undefined,
-        );
+      const waitStartedAt = earliestMs([oldestHeldAt, awaitingSince]);
       const waitedLongEnough =
         mode === 'held-delivery' &&
         oldestHeldAt !== undefined &&
@@ -4043,17 +4054,11 @@ class Pool implements ManagerPool {
       // どちらも分からなければ待たない（#4850 の今まで）: 数え始めの無い待ちは、上限が来ないまま古い鍵で居座るため
       const rotationWaitStartedAt =
         mode === 'usage-rotation'
-          ? [
+          ? earliestMs([
               // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
               this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
               awaitingSince,
-            ]
-              .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
-              .filter((at) => !Number.isNaN(at))
-              .reduce<number | undefined>(
-                (min, at) => (min === undefined ? at : Math.min(min, at)),
-                undefined,
-              )
+            ])
           : undefined;
       const rotationFoldDueAt =
         rotationWaitStartedAt === undefined
@@ -4785,13 +4790,15 @@ class Pool implements ManagerPool {
         managerId,
         composeHeldDelivery(batch),
         {},
-        'held-delivery',
-        (backgroundTasks) => {
-          foldedBackgroundTasks = backgroundTasks;
-        },
-        trigger === 'poll',
-        (material) => {
-          stuck = material;
+        {
+          mode: 'held-delivery',
+          onFoldNoticeDelivered: (backgroundTasks) => {
+            foldedBackgroundTasks = backgroundTasks;
+          },
+          pollRetry: trigger === 'poll',
+          onStuck: (material) => {
+            stuck = material;
+          },
         },
       );
       if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
@@ -6793,7 +6800,7 @@ class Pool implements ManagerPool {
         requesterId,
         text,
         attachments === undefined || attachments.length === 0 ? {} : { attachments },
-        'caller',
+        { mode: 'caller' },
       );
     let target = requester;
     if (targetId !== requesterId) {
@@ -7424,9 +7431,11 @@ class Pool implements ManagerPool {
           ? usageRotationNudge()
           : workerLimitNudge(options.workerLimit.generation),
         {},
-        'usage-rotation',
-        (backgroundTasks) => {
-          foldedBackgroundTasks = backgroundTasks;
+        {
+          mode: 'usage-rotation',
+          onFoldNoticeDelivered: (backgroundTasks) => {
+            foldedBackgroundTasks = backgroundTasks;
+          },
         },
       );
       if (result.outcome === 'delivered' || result.outcome === 'answered') {

@@ -408,17 +408,28 @@ function childEnvLayers(input: {
   for (const name of ROTATABLE_CREDENTIAL_KEYS) delete vessel[name];
   return [
     { source: '器', env: vessel },
-    {
-      source: '袋',
-      env:
-        input.credentials === undefined
-          ? {}
-          : { ...input.credentials.values(), ...input.credentials.env() },
-    },
+    { source: '袋', env: credentialEnv(input.credentials) },
     // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
     // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
     { source: 'プロファイル', env: input.profileEnv },
   ];
+}
+
+function credentialEnv(credentials: CredentialStore | undefined): NodeJS.ProcessEnv {
+  return credentials === undefined ? {} : { ...credentials.values(), ...credentials.env() };
+}
+
+// 層を重ねたあとに `withheldKeys` を落とす: 先に消してから鍵を重ねると、鍵の名前に `ALTEROID_DATABASE_URL` を渡すだけで伏せたはずの値を注入し直せるため
+function composeChildEnv(input: {
+  env: NodeJS.ProcessEnv;
+  credentials: CredentialStore | undefined;
+  profileEnv: Record<string, string>;
+  withheldKeys: readonly string[];
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const layer of childEnvLayers(input)) Object.assign(env, layer.env);
+  for (const key of input.withheldKeys) delete env[key];
+  return env;
 }
 
 // files のバイトは持たない: メモリに残すのは印だけにするため
@@ -762,8 +773,30 @@ interface GitSpawnOptions {
   signal: AbortSignal;
 }
 
+// 子の uid が無いときは runner 自身の権限で、stdin を閉じて起こす。`detached` は付けない（委譲のセッションではないため）
+function gitSpawnFn(
+  childUser: RunnerChildUser | undefined,
+): (options: GitSpawnOptions) => ChildProcess {
+  return childUser === undefined
+    ? (options) =>
+        spawn(options.command, options.args, {
+          ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+          env: options.env,
+          signal: options.signal,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+    : (options) => spawnAsUser(childUser, options);
+}
+
 export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   return new Host(options);
+}
+
+// `exactOptionalPropertyTypes` のもとで、未指定の項目を `undefined` で渡さずキーごと省く（受け手は `in` ではなく値で見るが、型が `x?: T` で `undefined` を許さないため）
+function definedProps<T extends object>(props: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(props).filter(([, value]) => value !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
 }
 
 function sameRuleSet(a: readonly string[], b: readonly string[]): boolean {
@@ -978,15 +1011,7 @@ class Host implements RunnerHost {
         graceMs: resolveScratchSweepGraceMs(this.#env),
         startedAt: Date.now(),
         ...sweepOptions,
-        spawn: (spawnOptions) =>
-          this.#childUser === undefined
-            ? spawn(spawnOptions.command, spawnOptions.args, {
-                ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
-                env: spawnOptions.env,
-                signal: spawnOptions.signal,
-                stdio: ['ignore', 'pipe', 'pipe'],
-              })
-            : this.#spawnAsChildUser(spawnOptions),
+        spawn: gitSpawnFn(this.#childUser),
         env: this.#baseChildEnv(),
         liveManagerIds: () => [...this.#sessions.keys()],
         knownManagerIds: () => [...this.#knownManagerIds],
@@ -1059,9 +1084,7 @@ class Host implements RunnerHost {
             vessel: options.profile,
             baseEnv: () => this.#baseChildEnv(),
             // root で読まない: 降りた先では読めないプロファイルを「置けた」と報告することになるため
-            ...(this.#childUser === undefined
-              ? {}
-              : { spawnFn: (spawnOptions) => this.#spawnAsChildUser(spawnOptions) }),
+            ...(this.#childUser === undefined ? {} : { spawnFn: gitSpawnFn(this.#childUser) }),
           });
     this.#announcedAnthropicRoute = JSON.stringify(this.anthropicRoute());
     this.#log = options.log;
@@ -1618,22 +1641,9 @@ class Host implements RunnerHost {
 
   // 素の `process.env` で評価しない: プロファイル内で `gh` を叩く書き方が評価時だけ失敗するため
   #baseChildEnv(): NodeJS.ProcessEnv {
-    const env = { ...this.#env };
-    if (this.#credentials !== undefined) {
-      Object.assign(env, this.#credentials.values(), this.#credentials.env());
-    }
+    const env = { ...this.#env, ...credentialEnv(this.#credentials) };
     for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
-  }
-
-  #spawnAsChildUser(options: {
-    command: string;
-    args: string[];
-    cwd?: string;
-    env: Record<string, string | undefined>;
-    signal: AbortSignal;
-  }) {
-    return spawnAsUser(this.#childUser as RunnerChildUser, options);
   }
 
   // 実在しない `cwd` を `query()` へそのまま渡さない: 移送先の器に無いと SDK が `chdir` で `ENOENT` になり、libc 不一致に見える形でセッションが開けなくなるため
@@ -1661,16 +1671,28 @@ class Host implements RunnerHost {
       request,
       cwd: this.#resolveCwd(cwd),
       emit: (event) => this.#emit(withSessionGeneration(event, sessionGeneration)),
-      ...(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
+      ...definedProps({
+        queryFn: this.#queryFn,
+        childUser: this.#childUser,
+        credentials: this.#credentials,
+        managerTools: this.#managerTools,
+        spawnAgentProcessFn: this.#spawnAgentProcessFn,
+        delegationSubreaper: this.#delegationSubreaper,
+        handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn,
+        handOverMcpConfigDirFn: this.#handOverMcpConfigDirFn,
+        contextUsageTimeoutMs: this.#contextUsageTimeoutMs,
+        sessionAllowRulesTimeoutMs: this.#sessionAllowRulesTimeoutMs,
+        rescueMaxWorktrees: this.#rescueMaxWorktrees,
+        readCgroupEventCountersFn: this.#readCgroupEventCountersFn,
+        finishUnpushedWorkFn: this.#finishUnpushedWorkFn,
+        workerToolWatchClock: this.#workerToolWatchClock,
+      }),
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
-      ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
-      ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
       bashGuard: this.#bashGuard,
       // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため
       ...(this.#peer === undefined ? {} : { peer: () => this.#sessionPeer() }),
-      ...(this.#managerTools === undefined ? {} : { managerTools: this.#managerTools }),
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
@@ -1719,42 +1741,12 @@ class Host implements RunnerHost {
         this.#noteDelegationProcessSpawned(pid, managerId);
       },
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
-      ...(this.#spawnAgentProcessFn === undefined
-        ? {}
-        : { spawnAgentProcessFn: this.#spawnAgentProcessFn }),
-      ...(this.#delegationSubreaper === undefined
-        ? {}
-        : { delegationSubreaper: this.#delegationSubreaper }),
-      ...(this.#handOverResumeConfigDirFn === undefined
-        ? {}
-        : { handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn }),
-      ...(this.#handOverMcpConfigDirFn === undefined
-        ? {}
-        : { handOverMcpConfigDirFn: this.#handOverMcpConfigDirFn }),
       mcpConfigTmpRoot: this.#mcpConfigTmpRoot,
       liveMcpConfigDirs: this.#liveMcpConfigDirs,
-      ...(this.#contextUsageTimeoutMs === undefined
-        ? {}
-        : { contextUsageTimeoutMs: this.#contextUsageTimeoutMs }),
-      ...(this.#sessionAllowRulesTimeoutMs === undefined
-        ? {}
-        : { sessionAllowRulesTimeoutMs: this.#sessionAllowRulesTimeoutMs }),
-      ...(this.#rescueMaxWorktrees === undefined
-        ? {}
-        : { rescueMaxWorktrees: this.#rescueMaxWorktrees }),
-      ...(this.#readCgroupEventCountersFn === undefined
-        ? {}
-        : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
       ...(this.#readPids === undefined
         ? {}
         : { pidsPressureFn: () => this.#pidsPressureReading() }),
       stashArchive: (body: string) => this.#stashArchive(managerId, body),
-      ...(this.#finishUnpushedWorkFn === undefined
-        ? {}
-        : { finishUnpushedWorkFn: this.#finishUnpushedWorkFn }),
-      ...(this.#workerToolWatchClock === undefined
-        ? {}
-        : { workerToolWatchClock: this.#workerToolWatchClock }),
     });
     this.#generations.set(session, sessionGeneration);
     this.#sessions.set(managerId, session);
@@ -2305,26 +2297,14 @@ class Host implements RunnerHost {
     request: { remote: string; ref: string; commit: string },
     options?: { signal?: AbortSignal },
   ): Promise<RescueRefDeleteResult> {
-    const env: NodeJS.ProcessEnv = { ...this.#env };
-    for (const name of ROTATABLE_CREDENTIAL_KEYS) delete env[name];
-    if (this.#credentials !== undefined) {
-      Object.assign(env, this.#credentials.values(), this.#credentials.env());
-    }
-    Object.assign(env, this.#profile?.env() ?? {});
-    for (const key of this.#withheldEnvKeys) delete env[key];
-    const spawnFn =
-      this.#childUser === undefined
-        ? (spawnOptions: GitSpawnOptions) =>
-            spawn(spawnOptions.command, spawnOptions.args, {
-              ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
-              env: spawnOptions.env,
-              signal: spawnOptions.signal,
-              stdio: ['ignore', 'pipe', 'pipe'] as const,
-            })
-        : (spawnOptions: GitSpawnOptions) => this.#spawnAsChildUser(spawnOptions);
     return deleteRescueRef({
-      spawn: spawnFn,
-      env,
+      spawn: gitSpawnFn(this.#childUser),
+      env: composeChildEnv({
+        env: this.#env,
+        credentials: this.#credentials,
+        profileEnv: this.#profile?.env() ?? {},
+        withheldKeys: this.#withheldEnvKeys,
+      }),
       remote: request.remote,
       ref: request.ref,
       commit: request.commit,
@@ -3074,33 +3054,14 @@ class RunnerSession {
   }
 
   async unpushedWork(options?: { signal?: AbortSignal }): Promise<UnpushedWorkResult> {
-    const spawnFn = this.#gitSpawnFn();
     // `options.signal` で始めた git 呼び出しを止めない: `computeUnpushedWork` 自身のタイムアウトまで走らせ、止めるのは次の作業ツリーへ進む前だけ
     return computeUnpushedWork(this.#cwd, {
-      spawn: spawnFn,
+      spawn: gitSpawnFn(this.#childUser),
       env: this.#childEnv(),
       managerId: this.#id,
       hintDirs: this.#gitDirHints,
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
-  }
-
-  #gitSpawnFn(): (spawnOptions: {
-    command: string;
-    args: string[];
-    cwd?: string;
-    env: Record<string, string | undefined>;
-    signal: AbortSignal;
-  }) => ChildProcess {
-    return this.#childUser === undefined
-      ? (spawnOptions) =>
-          spawn(spawnOptions.command, spawnOptions.args, {
-            ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
-            env: spawnOptions.env,
-            signal: spawnOptions.signal,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          })
-      : (spawnOptions) => this.#spawnAsChildUser(spawnOptions);
   }
 
   async rescueRef(options: { signal?: AbortSignal; waitForRunning?: boolean } = {}): Promise<void> {
@@ -3117,14 +3078,14 @@ class RunnerSession {
     const run = (async (): Promise<void> => {
       try {
         // 本体の先頭を `await` の後に置く: async 関数は最初の `await` まで同期に走るので、引数の組み立て
-        // （`#childEnv`・`#gitSpawnFn`）が同期に投げると `finally` が `this.#rescueRunning = run` より先に走って
+        // （`#childEnv`・`gitSpawnFn`）が同期に投げると `finally` が `this.#rescueRunning = run` より先に走って
         // null にし、その後に解決済みの `run` が入って戻らず、以後の退避が走らなくなる。
         // `finally` で `run` を読んで比べる形は、同期に投げた時点で `run` が未初期化（TDZ）なので使えない
         await Promise.resolve();
         const childEnv = this.#childEnv();
         const worktrees = await runRescue(this.#cwd, {
           managerId: this.#id,
-          spawn: this.#gitSpawnFn(),
+          spawn: gitSpawnFn(this.#childUser),
           env: childEnv,
           memory: this.#rescueMemory,
           ...(this.#rescueMaxWorktrees === undefined
@@ -3879,26 +3840,18 @@ class RunnerSession {
 
   /** 子を別 UID で起こす構成だけ: 子の書ける場所への書き込みを、子の uid の子プロセスで行う口（#5259）。 */
   #childFileWriter(): ChildFileWriter | undefined {
-    if (this.#childUser === undefined) return undefined;
-    return childFileWriter((options) => this.#spawnAsChildUser(options), this.#childEnv());
+    const childUser = this.#childUser;
+    if (childUser === undefined) return undefined;
+    return childFileWriter((options) => spawnAsUser(childUser, options), this.#childEnv());
   }
 
   #childRolloutIo(): RolloutIo | undefined {
-    if (this.#childUser === undefined) return undefined;
-    return childRolloutIo((options) => this.#spawnAsChildUser(options), this.#childEnv());
+    const childUser = this.#childUser;
+    if (childUser === undefined) return undefined;
+    return childRolloutIo((options) => spawnAsUser(childUser, options), this.#childEnv());
   }
 
-  #spawnAsChildUser(options: {
-    command: string;
-    args: string[];
-    cwd?: string;
-    env: Record<string, string | undefined>;
-    signal: AbortSignal;
-  }) {
-    return spawnAsUser(this.#childUser as RunnerChildUser, options);
-  }
-
-  // `#spawnAsChildUser` と共有しない: `detached: true` と pid 追跡を委譲そのものの起動経路にだけ効かせるため
+  // `spawnAsUser` を `detached` なしで呼ぶ口（`gitSpawnFn`・子の書き込み）と共有しない: `detached: true` と pid 追跡を委譲そのものの起動経路にだけ効かせるため
   #spawnDelegationProcess(options: SpawnAgentProcessOptions): DelegationProcessHandle {
     this.#handOverResumeConfigDir(options.env);
     const staged = this.#stageMcpConfig(options);
@@ -4044,16 +3997,12 @@ class RunnerSession {
   // 記憶ストアの所在を子プロセスへ渡さない: 渡さなければ構造的に触れないため
   // 鍵を `this.#env` のスナップショットのまま配らない: 人間が後から差し替えた鍵が永久に届かないため
   #childEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {};
-    for (const layer of childEnvLayers({
+    const env = composeChildEnv({
       env: this.#env,
       credentials: this.#credentials,
       profileEnv: this.#profileEnv(),
-    })) {
-      Object.assign(env, layer.env);
-    }
-    // 伏せるのは最後: 先に消してから鍵を重ねると、鍵の名前に `ALTEROID_DATABASE_URL` を渡すだけで伏せたはずの値を注入し直せるため
-    for (const key of this.#withheldEnvKeys) delete env[key];
+      withheldKeys: this.#withheldEnvKeys,
+    });
     // 伏せる処理の後・最後に置く: プロファイルや `withheldEnvKeys` で出し箱の行き先を差し替えられると、取り込む場所と担い手が書く場所がずれる
     if (this.#outboxDir !== undefined) env[RUNNER_OUTBOX_ENV] = this.#outboxDir;
     // 子の設定ディレクトリを SDK にも見せる: SDK は生ログの写しの鍵を `env.CLAUDE_CONFIG_DIR ?? <runner の homedir>/.claude` から作り、別の HOME で起こした子が書いたパスをその外として捨てる（デーモンへ1行も預からず、器が替わると resume できない）ため。既に置かれていれば子も SDK も同じ値を見るので触らない
@@ -4946,12 +4895,7 @@ class RunnerSession {
     // `agent_type` を作り物で埋めない: SDK の型に無い情報のため
     const agentId = denial.agentId;
     const agentType = denial.agentType;
-    const actor =
-      via === 'live'
-        ? agentId === undefined
-          ? `manager:${this.#id}`
-          : `worker:${this.#id}:${agentType ?? WORKER_AGENT_NAME}`
-        : undefined;
+    const actor = via === 'live' ? actorOf(this.#id, { agentId, agentType }) : undefined;
     this.#emit({
       type: 'permission_denied',
       managerId: this.#id,
@@ -5268,10 +5212,7 @@ class RunnerSession {
   async #onPermissionDenied(
     record: AgentPermissionDeniedRecord,
   ): Promise<AgentPermissionDeniedDecision> {
-    const actor =
-      record.agentId === undefined
-        ? `manager:${this.#id}`
-        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const actor = actorOf(this.#id, record);
     const toolName = record.toolName;
 
     // 道具名や入力の鍵が取れない回より前に置く: 一時規則に当たった呼び出しの拒否は、この先で早く返る回でも決着させるため（#4905）
@@ -5587,10 +5528,7 @@ class RunnerSession {
           return { kind: 'ask', reason };
         }
         if (verdict.blocked) {
-          const actor =
-            record.agentId === undefined
-              ? `manager:${this.#id}`
-              : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+          const actor = actorOf(this.#id, record);
           // 形の歯は `ask` でも deny: 確認に上げると、打つたびにクローンへ確認が積み上がるため（#4947）
           const asked = this.#bashGuard !== 'deny' && !shapeDeny;
 
@@ -5615,7 +5553,7 @@ class RunnerSession {
       if (record.agentId === undefined || record.toolUseId === undefined) return;
       this.#workerTools.begin({
         agentId: record.agentId,
-        actor: `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+        actor: workerActorOf(this.#id, record.agentType),
         tool: record.toolName ?? '(不明)',
         toolUseId: record.toolUseId,
       });
@@ -5626,10 +5564,7 @@ class RunnerSession {
         toolUseId: record.toolUseId,
         toolName: record.toolName,
         toolInput: record.toolInput,
-        useActor:
-          record.agentId === undefined
-            ? `manager:${this.#id}`
-            : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+        useActor: actorOf(this.#id, record),
         nowMs: Date.now(),
       });
     });
@@ -5654,10 +5589,7 @@ class RunnerSession {
       return undefined;
     }
     const original = toolInput as Record<string, unknown>;
-    const actor =
-      record.agentId === undefined
-        ? `manager:${this.#id}`
-        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const actor = actorOf(this.#id, record);
 
     // `gh run watch` の `--compact` は、`timeout` 引数の引き上げより先に当てる: 引き上げは書き換え後の入力を見るため（どちらも `timeout <秒>` の値は変えない）
     let input = original;
@@ -5738,10 +5670,7 @@ class RunnerSession {
     const matchInput = matchInputOf(record.toolInput);
     if (matchInput === undefined) return { kind: 'continue' };
 
-    const actor =
-      record.agentId === undefined
-        ? `manager:${this.#id}`
-        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const actor = actorOf(this.#id, record);
     const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(matchInput));
     this.#noteUnusedExpiredOneShotAllows(key);
     const grant = this.#oneShotAllows.get(key);
@@ -6035,10 +5964,7 @@ class RunnerSession {
     this.#emit({
       type: 'tool_use',
       managerId: this.#id,
-      actor:
-        record.agentId === undefined
-          ? `manager:${this.#id}`
-          : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+      actor: actorOf(this.#id, record),
       tool: record.toolName ?? '(不明)',
       input: record.toolInput,
     });
@@ -6372,10 +6298,7 @@ class RunnerSession {
 
     if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 
-    const actor =
-      record.agentId === undefined
-        ? `manager:${this.#id}`
-        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const actor = actorOf(this.#id, record);
     const tool = record.toolName ?? '(不明)';
     const error =
       typeof record.error === 'string'
@@ -7371,6 +7294,20 @@ export function decideAnswer(
 // 暗号としての強度は要らない: 要るのは「同じ文字列は同じ鍵になる」ことと「鍵を見ても元の文字列が読めない」ことだけのため
 function digestOf(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+// 作業者の名札: 型までしか区別しない表示用の値（許可の一度きりの鍵には `oneShotActorOf` を使う）
+function workerActorOf(managerId: string, agentType: string | undefined): string {
+  return `worker:${managerId}:${agentType ?? WORKER_AGENT_NAME}`;
+}
+
+function actorOf(
+  managerId: string,
+  record: { readonly agentId?: string | undefined; readonly agentType?: string | undefined },
+): string {
+  return record.agentId === undefined
+    ? `manager:${managerId}`
+    : workerActorOf(managerId, record.agentType);
 }
 
 // 区切りに `\u0000` を使う: `actor` / `tool` の値には現れない制御文字のため
