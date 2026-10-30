@@ -1149,6 +1149,25 @@ export function commitmentRespondedAt(
   return replies.find((at) => at > commitment.at);
 }
 
+// 返事を結ぶ会話は task の `originConversationId`（台帳の `source` に当たる）。無い human の task は「判定できない」（`commitmentIsResponseJudgeable` と同じ理由）
+export function taskIsResponseJudgeable<T extends Pick<Task, 'origin' | 'originConversationId'>>(
+  task: T,
+): task is T & { origin: 'human'; originConversationId: string } {
+  return task.origin === 'human' && task.originConversationId !== undefined;
+}
+
+// 作法は `commitmentRespondedAt` と同じ（日誌の `exchange` を読むだけ。`createdAt` より後の最初の返答）
+export function taskRespondedAt(
+  task: Pick<Task, 'origin' | 'originConversationId' | 'createdAt'>,
+  humanOutboundRepliesByConversation: ReadonlyMap<string, readonly string[]>,
+): string | undefined {
+  if (!taskIsResponseJudgeable(task)) return undefined;
+  const replies = humanOutboundRepliesByConversation.get(task.originConversationId);
+  if (replies === undefined) return undefined;
+  // 並べ直さない: ソートは組み立て側で1回だけ行うため
+  return replies.find((at) => at > task.createdAt);
+}
+
 // `at` より後に始まった委譲だけを数える: 行より前の委譲は、別の古い頼みごとに応えたものである可能性が高いため
 export function commitmentActiveDelegationIds(
   commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,

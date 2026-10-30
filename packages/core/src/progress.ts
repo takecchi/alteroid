@@ -1,25 +1,28 @@
 /**
- * 率（%）は出さない: 台帳には締切も総量も無く、委譲の `running` は「走らせた」であって
+ * 進捗は Task（`TaskStore.list({ includeClosed: true })`）と委譲（Job）から数える（#5910）。
+ * 率（%）は出さない: task には締切も総量も無く、委譲の `running` は「走らせた」であって
  * 「進んでいる」ではないので、分母が定まらない。
- * 取れないものは 0 にしない（未了0件の最古の `at`・中央値は `null`、見込みが立たなければ `unavailable`）。
+ * 取れないものは 0 にしない（未了0件の最古の `createdAt`・中央値は `null`、見込みが立たなければ `unavailable`）。
  *
- * 見込みの判定順: 未了0件の `estimated(0)` → `ledger_younger_than_window` → `history_incomplete`
+ * 見込みの判定順: 未了0件の `estimated(0)` → `tasks_younger_than_window`
  * → `closed_too_few` → `not_converging` → `estimated`。
  * - 未了0件の 0 は消化速度に依らない事実なので、材料が欠けていても言える。
- * - 前の 2 つを `closed_too_few` より先にするのは、閉じた件数そのものが数え落とし・短い期間のものである
+ * - `tasks_younger_than_window` を `closed_too_few` より先にするのは、閉じた件数そのものが短い期間のものである
  *   ときに「件数が少ない」と言うと、材料が欠けているという原因を隠すため。
+ * - 閉じた task を物理的に刈る器は無い（`TaskStore` の3実装とも持たない）ので、刈りによる数え落としの印
+ *   （旧台帳の `trimmedClosed`・`history_incomplete`）は持たない。
  */
 
 import { isRunningJobStatus } from './job-status-running.js';
 import {
-  commitmentIsResponseJudgeable,
   commitmentOriginSchema,
-  type Commitment,
+  taskIsResponseJudgeable,
   type CommitmentOrigin,
   type Job,
   type JobStatus,
+  type Task,
+  type UnreadableTask,
 } from './schema.js';
-import type { CommitmentList } from './store.js';
 
 /**
  * `running` / `waiting_human` は含めない: どちらもまだ続く可能性がある。
@@ -51,17 +54,17 @@ export const PROGRESS_FORECAST_NOTICE =
 const HOUR_MS = 3_600_000;
 
 /** 導出を core の中でやり直さない: 日誌（`exchange`）の全履歴という I/O の材料が要るが、この関数は I/O を持たないから。 */
-export type ProgressCommitmentRow = Commitment & {
+export type ProgressTaskRow = Task & {
   respondedAt?: string | undefined;
-  activeManagerIds?: readonly string[] | undefined;
 };
 
-export type ProgressCommitments = Omit<CommitmentList, 'entries'> & {
-  entries: readonly ProgressCommitmentRow[];
-};
+export interface ProgressTasks {
+  entries: readonly ProgressTaskRow[];
+  unreadable: readonly UnreadableTask[];
+}
 
 export interface SummarizeProgressInput {
-  commitments: ProgressCommitments;
+  tasks: ProgressTasks;
   jobs: readonly Job[];
   /** 省略できない: 省略を 0 と読ませない。 */
   unreadableJobs: number;
@@ -87,21 +90,22 @@ export interface ProgressAgeBuckets {
 }
 
 export interface ProgressBacklog {
-  /** 未了（`closedAt` が無い）の総数。`unreadable` は含まない。 */
+  /** 未了（開いている task。`closedAt` が無い）の総数。`unreadable` は含まない。 */
   total: number;
   /** `commitmentOriginSchema` の全値をキーに持つ。0 は「その origin の未了が無い」。 */
   byOrigin: Record<CommitmentOrigin, number>;
   age: {
-    /** 未了の中で最古の `at`。未了が0件なら `null`。 */
+    /** 未了の中で最古の `createdAt`。未了が0件なら `null`。 */
     oldestAt: string | null;
-    /** 未了の齢（`now - at`、時間）の中央値。未了が0件なら `null`。偶数件は中央2つの平均。 */
+    /** 未了の齢（`now - createdAt`、時間）の中央値。未了が0件なら `null`。偶数件は中央2つの平均。 */
     medianHours: number | null;
     buckets: ProgressAgeBuckets;
   };
   /**
    * `untouched` / `responded` / `unjudgeable` / `notApplicable` は排他で、足すと `total` になる。
-   * `unjudgeable` は会話（`source`）の無い human の行: 返事を結べないので「未着手」に数えない。
-   * `delegated` は他と排他ではない（未着手のまま委譲が走っている行が在りうる）。
+   * `unjudgeable` は会話（`originConversationId`）の無い human の task: 返事を結べないので「未着手」に数えない。
+   * `delegated` は他と排他ではない（未着手のまま委譲が走っている task が在りうる）。
+   * `Job.taskId` がその task を指す、走っている（`isRunningJobStatus`）委譲が在れば数える。
    */
   byState: {
     untouched: number;
@@ -110,11 +114,7 @@ export interface ProgressBacklog {
     notApplicable: number;
     unjudgeable: number;
   };
-  /**
-   * `trimmedClosed` は backlog の数には効かない: 刈られるのは片付き行だけで、未了の数・内訳・齢は
-   * 影響を受けない。効くのは窓の中の完了・引き受けの件数と見込み。
-   */
-  completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
+  completeness: { unreadable: number; unreadableJobs: number };
 }
 
 export interface ProgressInProgress {
@@ -133,13 +133,8 @@ export interface ProgressInProgress {
 }
 
 export interface ProgressThroughput {
-  commitmentsOpened: number;
-  commitmentsClosed: number;
-  /**
-   * 見込みの判定順とは独立に計算する: `ledger_younger_than_window` が先に勝つ台帳でも、刈りがあれば真になる。
-   * 引き受けも同じ条件で欠ける（片付き行の `at` は `closedAt` 以前で、刈りは古い `closedAt` から）。
-   */
-  mayBeUndercounted: boolean;
+  tasksOpened: number;
+  tasksClosed: number;
   /** 近似: `Job` に終端時刻の欄が無く、終端後に `updatedAt` が動けば窓の外の終端も数える。 */
   delegationsEnded: { count: number; basis: 'updatedAt' };
 }
@@ -156,8 +151,7 @@ export interface ProgressForecastBasis {
   minClosedInWindow: number;
 }
 
-export type ProgressUnavailableReason =
-  'closed_too_few' | 'ledger_younger_than_window' | 'history_incomplete';
+export type ProgressUnavailableReason = 'closed_too_few' | 'tasks_younger_than_window';
 
 export type ProgressForecast =
   | {
@@ -212,7 +206,7 @@ function jobBucket(status: JobStatus): 'running' | 'awaitingHuman' | 'lost' | 'o
 
 /** 窓が作れないのに数を返すと全部 0 の「進捗なし」に化けるので、不正な `windowHours` / `now` は `RangeError`。 */
 export function summarizeProgress(input: SummarizeProgressInput): ProgressSummary {
-  const { commitments, jobs, unreadableJobs, now, windowHours } = input;
+  const { tasks, jobs, unreadableJobs, now, windowHours } = input;
   const nowMs = now.getTime();
   if (!Number.isFinite(nowMs)) throw new RangeError('summarizeProgress: now が不正な日時');
   if (!Number.isFinite(windowHours) || windowHours <= 0) {
@@ -234,22 +228,24 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
   let oldestOpenAt: { iso: string; ms: number } | null = null;
   let opened = 0;
   let closed = 0;
-  let ledgerOldestMs: number | null = null;
-  let closedOldestMs: number | null = null;
+  let tasksOldestMs: number | null = null;
   let openTotal = 0;
 
-  for (const entry of commitments.entries) {
-    const atMs = Date.parse(entry.at);
-    if (Number.isFinite(atMs) && (ledgerOldestMs === null || atMs < ledgerOldestMs)) {
-      ledgerOldestMs = atMs;
+  // 委譲は task から辿る（`Job.taskId`）。会話 id では結ばない: task が委譲を直接指すので、起点の会話が無い task の委譲も数えられる
+  const delegatedTaskIds = new Set<string>();
+  for (const job of jobs) {
+    if (job.taskId !== undefined && isRunningJobStatus(job.status))
+      delegatedTaskIds.add(job.taskId);
+  }
+
+  for (const entry of tasks.entries) {
+    const atMs = Date.parse(entry.createdAt);
+    if (Number.isFinite(atMs) && (tasksOldestMs === null || atMs < tasksOldestMs)) {
+      tasksOldestMs = atMs;
     }
-    if (inWindow(entry.at)) opened += 1;
+    if (inWindow(entry.createdAt)) opened += 1;
     if (entry.closedAt !== undefined) {
       if (inWindow(entry.closedAt)) closed += 1;
-      const closedMs = Date.parse(entry.closedAt);
-      if (Number.isFinite(closedMs) && (closedOldestMs === null || closedMs < closedOldestMs)) {
-        closedOldestMs = closedMs;
-      }
       continue;
     }
     openTotal += 1;
@@ -257,16 +253,14 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     if (entry.origin !== 'human') {
       byState.notApplicable += 1;
     } else {
-      // 「未着手」に丸めない: 会話に結べない行の「返事なし」は「見えない」であって「未着手」ではなく、丸めると嘘になるため
-      if (!commitmentIsResponseJudgeable(entry)) byState.unjudgeable += 1;
+      // 「未着手」に丸めない: 会話に結べない task の「返事なし」は「見えない」であって「未着手」ではなく、丸めると嘘になるため
+      if (!taskIsResponseJudgeable(entry)) byState.unjudgeable += 1;
       else if (entry.respondedAt !== undefined) byState.responded += 1;
       else byState.untouched += 1;
-      if (entry.activeManagerIds !== undefined && entry.activeManagerIds.length > 0) {
-        byState.delegated += 1;
-      }
     }
+    if (delegatedTaskIds.has(entry.id)) byState.delegated += 1;
     if (Number.isFinite(atMs)) {
-      // 未来の `at`（時計のずれ）は負の齢を作らず 0 にする。
+      // 未来の `createdAt`（時計のずれ）は負の齢を作らず 0 にする。
       const ageHours = Math.max(0, nowMs - atMs) / HOUR_MS;
       openAgesHours.push(ageHours);
       if (ageHours < 1) buckets.under1h += 1;
@@ -274,7 +268,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
       else if (ageHours < 24 * 7) buckets.under7d += 1;
       else buckets.over7d += 1;
       if (oldestOpenAt === null || atMs < oldestOpenAt.ms) {
-        oldestOpenAt = { iso: entry.at, ms: atMs };
+        oldestOpenAt = { iso: entry.createdAt, ms: atMs };
       }
     }
   }
@@ -289,11 +283,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
       buckets,
     },
     byState,
-    completeness: {
-      unreadable: commitments.unreadable.length,
-      trimmedClosed: commitments.trimmedClosed,
-      unreadableJobs,
-    },
+    completeness: { unreadable: tasks.unreadable.length, unreadableJobs },
   };
 
   let running = 0;
@@ -334,13 +324,9 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     },
   };
 
-  const historyIncomplete =
-    commitments.trimmedClosed > 0 && (closedOldestMs === null || closedOldestMs >= fromMs);
-
   const throughput: ProgressThroughput = {
-    commitmentsOpened: opened,
-    commitmentsClosed: closed,
-    mayBeUndercounted: historyIncomplete,
+    tasksOpened: opened,
+    tasksClosed: closed,
     delegationsEnded: { count: delegationsEnded, basis: 'updatedAt' },
   };
 
@@ -350,7 +336,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     openedInWindow: opened,
     windowHours,
     method: PROGRESS_FORECAST_METHOD,
-    unreadable: commitments.unreadable.length,
+    unreadable: tasks.unreadable.length,
     minClosedInWindow: MIN_CLOSED_IN_WINDOW,
   };
   const unavailable = (reason: ProgressUnavailableReason): ProgressForecast => ({
@@ -366,12 +352,10 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
   });
 
   let forecast: ProgressForecast;
-  if (commitments.entries.length > 0 && openTotal === 0) {
+  if (tasks.entries.length > 0 && openTotal === 0) {
     forecast = estimated(0);
-  } else if (ledgerOldestMs === null || ledgerOldestMs > fromMs) {
-    forecast = unavailable('ledger_younger_than_window');
-  } else if (historyIncomplete) {
-    forecast = unavailable('history_incomplete');
+  } else if (tasksOldestMs === null || tasksOldestMs > fromMs) {
+    forecast = unavailable('tasks_younger_than_window');
   } else if (closed < MIN_CLOSED_IN_WINDOW) {
     forecast = unavailable('closed_too_few');
   } else if (opened >= closed) {

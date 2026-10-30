@@ -209,12 +209,12 @@ export {
 export type {
   ProgressAgeBuckets,
   ProgressBacklog,
-  ProgressCommitmentRow,
-  ProgressCommitments,
   ProgressForecast,
   ProgressForecastBasis,
   ProgressInProgress,
   ProgressSummary,
+  ProgressTaskRow,
+  ProgressTasks,
   ProgressThroughput,
   ProgressUnavailableReason,
   ProgressWindow,
@@ -226,6 +226,7 @@ export {
   InvalidProgressWindowError,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
+  readRepliesByConversation,
   readUnreadableJobsForCommitments,
 } from './progress-read.js';
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
