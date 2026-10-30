@@ -40,7 +40,7 @@ describe('shadcn 由来の閉じるボタンは日本語で引ける', () => {
   it('シートの閉じるボタンは「閉じる」', () => {
     render(
       <Sheet open>
-        <SheetContent>
+        <SheetContent side="left">
           <SheetTitle>題</SheetTitle>
           <SheetDescription>説明</SheetDescription>
         </SheetContent>

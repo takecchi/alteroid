@@ -118,6 +118,19 @@ export class MemoryConflictError extends ApiError {
   }
 }
 
+// 版の衝突（記憶・やり方の 409）は、一覧を取り直してから `current` ごと投げる。4か所に同じ形を書くと、取り直す鍵や文言のどれかだけがずれる
+async function throwIfVersionConflict<Current>(
+  result: { response: Response; error?: unknown },
+  refresh: () => Promise<unknown>,
+  fallbackMessage: string,
+  toError: (message: string, current: Current | null) => ApiError,
+): Promise<void> {
+  if (result.response.status !== 409 || result.error === undefined) return;
+  await refresh();
+  const body = result.error as { error?: string; current?: Current | null };
+  throw toError(body.error ?? fallbackMessage, body.current ?? null);
+}
+
 export function useSaveMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -127,17 +140,13 @@ export function useSaveMemory() {
         params: { path: { slug } },
         body: ifMatch === undefined ? { content } : { content, ifMatch },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { document: MemoryDocument; version: string } | null;
-        };
-        throw new MemoryConflictError(
-          body.error ?? '記憶が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]),
+        '記憶が読んだ後に変わっている',
+        (message, current: { document: MemoryDocument; version: string } | null) =>
+          new MemoryConflictError(message, current),
+      );
       const saved = unwrap(result);
       await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
       return { document: saved.document, version: saved.version };
@@ -154,17 +163,13 @@ export function useDeleteMemory() {
       const result = await api.api.DELETE('/memory/{slug}', {
         params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { document: MemoryDocument; version: string } | null;
-        };
-        throw new MemoryConflictError(
-          body.error ?? '記憶が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]),
+        '記憶が読んだ後に変わっている',
+        (message, current: { document: MemoryDocument; version: string } | null) =>
+          new MemoryConflictError(message, current),
+      );
       unwrap(result);
       await mutate(KEY.memory);
     },
@@ -191,17 +196,13 @@ export function useSavePractice() {
         params: { path: { slug } },
         body: ifMatch === undefined ? { kind, title, content } : { kind, title, content, ifMatch },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { practice: Practice; version: string } | null;
-        };
-        throw new PracticeConflictError(
-          body.error ?? 'やり方が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]),
+        'やり方が読んだ後に変わっている',
+        (message, current: { practice: Practice; version: string } | null) =>
+          new PracticeConflictError(message, current),
+      );
       const saved = unwrap(result);
       await Promise.all([
         mutate(KEY.practices),
@@ -222,17 +223,13 @@ export function useDeletePractice() {
       const result = await api.api.DELETE('/practices/{slug}', {
         params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { practice: Practice; version: string } | null;
-        };
-        throw new PracticeConflictError(
-          body.error ?? 'やり方が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]),
+        'やり方が読んだ後に変わっている',
+        (message, current: { practice: Practice; version: string } | null) =>
+          new PracticeConflictError(message, current),
+      );
       unwrap(result);
       await Promise.all([mutate(KEY.practices), mutate(KEY.practiceVersions(slug))]);
     },
