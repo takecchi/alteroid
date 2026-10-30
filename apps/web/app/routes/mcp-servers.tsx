@@ -471,9 +471,11 @@ function parseMcpJson(
   try {
     value = JSON.parse(text);
   } catch (error) {
+    // JS の構文エラーの英語の文は出さない。位置だけ拾って、画面の言葉で言う
+    const position = /position (\d+)/.exec(error instanceof Error ? error.message : '')?.[1];
     return {
       ok: false,
-      error: `JSON として読めない（送っていない）: ${error instanceof Error ? error.message : String(error)}`,
+      error: `JSON として読めない（送っていない）。${position === undefined ? '' : `先頭から ${position} 文字目の付近。`}カンマ・引用符・括弧の対応を確かめること`,
     };
   }
   const servers =

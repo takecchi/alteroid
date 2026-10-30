@@ -330,11 +330,22 @@ export function Empty({
   );
 }
 
+// ブラウザが fetch の失敗にそのまま付ける英語の文（Chrome・Firefox・Safari）。丸ごとこの文のときだけ言い換える
+// `LoadError` の「詳細」には掛けない: 生の文を詳細に残すのはそちらの意図で、ここは主文として出す所だけ
+const BARE_NETWORK_MESSAGE =
+  /^(?:TypeError:\s*)?(?:failed to fetch|networkerror when attempting to fetch resource\.?|load failed|network request failed)$/i;
+
+export function describeNetworkFailure(text: string): string {
+  return BARE_NETWORK_MESSAGE.test(text.trim()) ? '接続先のサーバに届かなかった' : text;
+}
+
 // 握り潰して「読み込み中」のままにしない: ここが出ないと、接続先違いやデーモン停止が「静かなだけ」に見えるため
 export function ErrorNote({ error, className }: { error: unknown; className?: string }) {
   const display = useDisplayText();
   if (error === undefined || error === null) return null;
-  const message = display.error(error instanceof Error ? error.message : String(error));
+  const message = describeNetworkFailure(
+    display.error(error instanceof Error ? error.message : String(error)),
+  );
   return (
     <Alert variant="destructive" className={cn('border-destructive/40', className)}>
       <AlertTriangle aria-hidden />
