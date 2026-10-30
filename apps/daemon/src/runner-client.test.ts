@@ -1287,6 +1287,102 @@ describe('器の入れ替えの判定材料', () => {
   });
 });
 
+describe('/health の managers・pendingEvents・oldestPendingAt の読み（identity() と resources() で同じ，#5832）', () => {
+  const cleanups: (() => Promise<void> | void)[] = [];
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) await cleanup();
+  });
+
+  const AT = '2026-10-30T00:00:00.000Z';
+
+  async function readFields(
+    method: 'identity' | 'resources',
+    health: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const client = await createHttpRunner({
+      baseUrl: 'http://health.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId: 'runner-primary',
+          instanceId: 'boot-1',
+          workspacePath: '/workspace',
+          ...health,
+        })) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+    const read = ((await client[method]?.()) ?? {}) as Record<string, unknown>;
+    // キーの有無で取り出す: 欄が欠けた回に `undefined` の欄が残らず、欄ごと省かれることを縛るため
+    return Object.fromEntries(
+      ['managers', 'pendingEvents', 'oldestPendingAt']
+        .filter((key) => key in read)
+        .map((key) => [key, read[key]]),
+    );
+  }
+
+  describe.each(['identity', 'resources'] as const)('%s()', (method) => {
+    it('3欄が揃っていれば、そのまま採る', async () => {
+      expect(
+        await readFields(method, { managers: 2, pendingEvents: 3, oldestPendingAt: AT }),
+      ).toEqual({ managers: 2, pendingEvents: 3, oldestPendingAt: AT });
+    });
+
+    it('3欄とも無ければ、どの欄も作らない（0 で埋めない）', async () => {
+      expect(await readFields(method, {})).toEqual({});
+    });
+
+    it('0 件は 0 として採る（欄ごと落とさない）', async () => {
+      expect(await readFields(method, { managers: 0, pendingEvents: 0 })).toEqual({
+        managers: 0,
+        pendingEvents: 0,
+      });
+    });
+
+    it('managers の形が壊れていても、他の2欄は落とさない', async () => {
+      for (const broken of ['たくさん', -1, 1.5, null]) {
+        expect(
+          await readFields(method, { managers: broken, pendingEvents: 3, oldestPendingAt: AT }),
+        ).toEqual({ pendingEvents: 3, oldestPendingAt: AT });
+      }
+    });
+
+    it('pendingEvents の形が壊れていても、他の2欄は落とさない', async () => {
+      for (const broken of ['たくさん', -1, 1.5, null]) {
+        expect(
+          await readFields(method, { managers: 2, pendingEvents: broken, oldestPendingAt: AT }),
+        ).toEqual({ managers: 2, oldestPendingAt: AT });
+      }
+    });
+
+    it('oldestPendingAt の形が壊れていても、他の2欄は落とさない', async () => {
+      for (const broken of ['ちょっと前', 123, null]) {
+        expect(
+          await readFields(method, { managers: 2, pendingEvents: 3, oldestPendingAt: broken }),
+        ).toEqual({ managers: 2, pendingEvents: 3 });
+      }
+    });
+
+    it('/health の本文が壊れた JSON なら、読みは投げる（欄の欠けとして握り潰さない）', async () => {
+      let calls = 0;
+      const client = await createHttpRunner({
+        baseUrl: 'http://health.test',
+        token: TOKEN,
+        // 1 回目（接続時の hello）は通し、読みの回だけ壊す
+        fetchFn: (async () => {
+          calls += 1;
+          return calls === 1
+            ? Response.json({ ok: true, runnerId: 'runner-primary', workspacePath: '/workspace' })
+            : new Response('{', { status: 200 });
+        }) as typeof fetch,
+      });
+      cleanups.push(() => client.close());
+      await expect(client[method]?.()).rejects.toThrow();
+    });
+  });
+});
+
 describe('hello() が拾う版', () => {
   const cleanups: (() => Promise<void> | void)[] = [];
 

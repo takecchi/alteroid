@@ -1,14 +1,11 @@
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
-import { EditConflictBand } from '~/components/edit-conflict-band';
 import { FilterNote } from '~/components/filter-note';
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { ReopenForm } from '~/components/reopen-form';
 import { EditedBadge } from '~/components/task-parts';
-import { clipLine } from '~/lib/clip-line';
 import { clipRawValue } from '~/lib/clip-raw-value';
 import { duplicateParamNotice } from '~/lib/duplicate-param-notice';
-import { isNotFound } from '~/lib/is-not-found';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -16,9 +13,8 @@ import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { UNREADABLE_IDS_SHOWN, unreadableIdsNote } from '~/lib/unreadable-ids-note';
 import { unsentInput } from '~/lib/unsent-input';
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Tabs } from 'radix-ui';
-import { Link, useLocation } from 'react-router';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 
 import {
   Markdown,
@@ -31,29 +27,34 @@ import {
   Empty,
   ErrorNote,
   FieldHint,
-  Input,
   Spinner,
   SubmitHint,
   Textarea,
   WarnNote,
-  cn,
-  useKeyboardHintsVisible,
 } from '@alteroid/ui';
 import {
-  CommitmentConflictError,
-  useCloseCommitment,
   useReopenCommitment,
-  useEditCommitment,
   usePushCommitment,
   useCommitments,
   useCommitment,
   ApiError,
-  useConversation,
-  useConversations,
 } from '@alteroid/swr';
 import { formatDateTime, redactBody } from '@alteroid/logic';
-import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
+import type { CommitmentClosedBy } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
+
+import { AnsweredStateBadge, InProgressBadge, OriginBadge } from './commitments-badges';
+import { CommitmentBody } from './commitments-body';
+import { CloseReasonForm, planFocusAfterRemoval } from './commitments-close-reason';
+import { CommitmentBodyEditor } from './commitments-edit';
+import {
+  isEmptyNote,
+  sameNote,
+  snippet,
+  withoutKey,
+  type RowNote,
+  type RowNotePatch,
+} from './commitments-row-note';
 
 /** 並べ替えや優先度の札を足さない: 足すと「やることの一覧」になってしまうため。 */
 export default function Commitments() {
@@ -317,167 +318,6 @@ function TrimmedClosedNote({ trimmedClosed }: { trimmedClosed: number }) {
   );
 }
 
-const ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
-  human: '人間',
-  manager: 'マネージャー',
-  external: '外部',
-  self: '自分',
-};
-
-function originLabel(origin: CommitmentOrigin): string {
-  // Record<string, string | undefined> へ広げて引く: デーモンが先に新しい origin を返すと実行時は undefined になりうるが、
-  // ORIGIN_LABEL の型では `?? origin` が不要に見えるため。倒れ先は空文字でなく生の値（取れないことを消さない）。
-  const labels: Record<string, string | undefined> = ORIGIN_LABEL;
-  const label = labels[origin];
-  if (label !== undefined) return label;
-
-  console.warn(`commitments.tsx: 未知の commitment.origin が来た（バッジ）: ${origin}`);
-  return origin;
-}
-
-function OriginBadge({ commitment }: { commitment: Commitment }) {
-  const label = originLabel(commitment.origin);
-  const source = commitment.source;
-  const hasSource = source !== undefined && source !== null && source !== '';
-  const tone = commitment.origin === 'human' ? 'accent' : 'neutral';
-
-  // origin: 'human' には広げない: source の意味が複数ありえ、/managers/<id> へ飛べる保証が無いため。
-  // 内部 ID（UUID）は文字として出さない。
-  if (commitment.origin === 'manager' && hasSource) {
-    return (
-      <Badge tone={tone}>
-        <Link to={`/managers/${source}`} className="hover:underline">
-          {label}の詳細
-        </Link>
-      </Badge>
-    );
-  }
-  if (commitment.origin === 'human' && hasSource && looksLikeId(source)) {
-    return <HumanConversationBadge label={label} source={source} />;
-  }
-  if (commitment.origin === 'external' && hasSource && !looksLikeId(source)) {
-    return (
-      <Badge tone={tone}>
-        {label}（{source}）
-      </Badge>
-    );
-  }
-  return <Badge tone={tone}>{label}</Badge>;
-}
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function looksLikeId(value: string): boolean {
-  return UUID_PATTERN.test(value);
-}
-
-const CONVERSATION_TITLE_MAX = 24;
-
-// source は承認待ちへの回答の id のこともあるので、会話だと確かめられるまで言い切らない。
-// 一覧に無い id だけ1件引く: 引く口は中身（messages）ごと返し、メタだけの口が無いため。
-function HumanConversationBadge({ label, source }: { label: string; source: string }) {
-  const recent = useConversations();
-  const recentSettled = recent.data !== undefined || recent.error !== undefined;
-  const inRecent = recent.data?.conversations.find((entry) => entry.conversationId === source);
-  const single = useConversation(recentSettled && inRecent === undefined ? source : null, {
-    retryOnNotFound: false,
-  });
-
-  if (inRecent !== undefined) {
-    return <ConversationLink label={label} source={source} preview={inRecent.preview} />;
-  }
-  if (single.data !== undefined) {
-    const messages = single.data.messages;
-    const titled =
-      messages.findLast((message) => message.turnFailure === undefined) ?? messages.at(-1);
-    if (titled !== undefined) {
-      return <ConversationLink label={label} source={source} preview={titled.text} />;
-    }
-    // 200 で空: 窓の外に続きが残っているかもしれないので、無いとは言えない。
-    return <UnconfirmedBadge label={label} />;
-  }
-  if (single.error !== undefined) {
-    if (isNotFound(single.error)) {
-      return <Badge tone="accent">{label}</Badge>;
-    }
-    return <UnconfirmedBadge label={label} />;
-  }
-  return <Badge tone="accent">{label}</Badge>;
-}
-
-function UnconfirmedBadge({ label }: { label: string }) {
-  return (
-    <Badge tone="accent">
-      {label} / <span className="text-muted-foreground">会話？（確かめられなかった）</span>
-    </Badge>
-  );
-}
-
-function ConversationLink({
-  label,
-  source,
-  preview,
-}: {
-  label: string;
-  source: string;
-  preview: string;
-}) {
-  // 伏せてから切る: 会話の書き出しは人間の発言で秘密を含みうる（会話一覧の display.body・CLI と同じ redactBody）
-  const title = clipLine(preview, CONVERSATION_TITLE_MAX);
-  return (
-    <Badge tone="accent">
-      {label} /{' '}
-      <Link to={`/chat/${source}`} className="hover:underline">
-        {title === '' ? '会話' : `会話「${title}」`}
-      </Link>
-    </Badge>
-  );
-}
-
-const MANAGER_PREFIXES = ['[report] ', '[question] ', '[permission] '] as const;
-
-// 接頭辞の形式（`[kind] text`）の持ち主は packages/core/src/clone.ts の commitmentFor。向こうが変えるとここは前方一致しなくなり、本文全体を Markdown で描く。
-function splitManagerPrefix(body: string): { prefix: string | null; rest: string } {
-  for (const prefix of MANAGER_PREFIXES) {
-    if (body.startsWith(prefix)) return { prefix, rest: body.slice(prefix.length) };
-  }
-  return { prefix: null, rest: body };
-}
-
-// JSON として読めない・入れ子や配列を含むときは、欠落させないよう元の文字列のまま返す。
-export function readableExternalBody(body: string): string {
-  const trimmed = body.trim();
-  if (!trimmed.startsWith('{')) return body;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return body;
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return body;
-  const entries = Object.entries(parsed);
-  if (entries.length === 0) return body;
-  const flat = entries.every(
-    ([, value]) =>
-      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean',
-  );
-  if (!flat) return body;
-  if (entries.length === 1 && entries[0]?.[0] === 'note' && typeof entries[0][1] === 'string') {
-    return entries[0][1];
-  }
-  return entries.map(([key, value]) => `${key}: ${String(value)}`).join('\n');
-}
-
-function PlainBody({ body }: { body: string }) {
-  return <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{body}</p>;
-}
-
-// 網羅性チェック専用（引数は never）。戻り値は使わず、本文は渡さない: 渡すと本文でなく起点の生の値が描かれる。
-// 実行時に来たら黙って倒さず console.warn で残す。
-function assertOriginHandled(origin: never): void {
-  console.warn(`commitments.tsx: 未知の commitment.origin が来た: ${String(origin)}`);
-}
-
 // 網羅性チェック専用（引数は never）。never の変数を本文として描かない: string の prop に代入できて型で捕まらず、分岐キーの生の値が出る。
 function assertClosedByHandled(closedBy: never): void {
   console.warn(`commitments.tsx: switch が決めていない commitment.closedBy: ${String(closedBy)}`);
@@ -494,339 +334,6 @@ const KNOWN_COMMITMENT_CLOSED_BY = [
 
 function isKnownCommitmentClosedBy(value: string): value is CommitmentClosedBy {
   return (KNOWN_COMMITMENT_CLOSED_BY as readonly string[]).includes(value);
-}
-
-// 網羅性チェック専用（引数は never）。never の変数を本文として描かない（assertClosedByHandled と同じ）。
-function assertMarkupHandled(markup: never): void {
-  console.warn(`commitments.tsx: switch が決めていない commitment.bodyMarkup: ${String(markup)}`);
-}
-
-const KNOWN_TEXT_MARKUP = ['markdown', 'none'] as const satisfies readonly TextMarkup[];
-
-function isKnownTextMarkup(value: string): value is TextMarkup {
-  return (KNOWN_TEXT_MARKUP as readonly string[]).includes(value);
-}
-
-// bodyMarkup が undefined のときは Markdown のまま: 印が無いことを安全と読まず、いまの既定を変えないため。
-function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: string | undefined }) {
-  if (bodyMarkup === undefined) return <Markdown remoteImages={false}>{rest}</Markdown>;
-
-  if (!isKnownTextMarkup(bodyMarkup)) {
-    console.warn(
-      `commitments.tsx: 未知の commitment.bodyMarkup が来た（undefined とは別扱い）: ${String(bodyMarkup)}`,
-    );
-    return <PlainBody body={rest} />;
-  }
-
-  const markup = bodyMarkup;
-  switch (markup) {
-    case 'markdown':
-      return <Markdown remoteImages={false}>{rest}</Markdown>;
-
-    case 'none':
-      return <PlainBody body={rest} />;
-
-    default:
-      assertMarkupHandled(markup);
-      return <PlainBody body={rest} />;
-  }
-}
-
-// manager を丸ごと Markdown のままにする: text に型で区別されない3種（マネージャーの出力・既に ** を含むデーモンの通知文・SDK のエラー文）が
-// 混ざり、本文を判定せずには分離できないため。human は人間が打った文字が化けないよう素のまま、external は書き手が不明なので化けて困る側（素）へ倒す。
-// closedReason は origin では書き手を判別できないので、ClosedReasonBody が closedBy で描き分ける。
-function CommitmentBody({ commitment }: { commitment: Commitment }) {
-  const body = redactBody(commitment.body);
-  switch (commitment.origin) {
-    case 'self':
-      return <Markdown remoteImages={false}>{body}</Markdown>;
-
-    case 'manager': {
-      const { prefix, rest } = splitManagerPrefix(body);
-      return (
-        <div className="min-w-0">
-          {prefix !== null && (
-            <span className="mr-1 font-mono text-[11px] text-muted-foreground">{prefix}</span>
-          )}
-          <ManagerRestBody rest={rest} bodyMarkup={commitment.bodyMarkup} />
-        </div>
-      );
-    }
-
-    case 'human':
-      return <PlainBody body={body} />;
-
-    case 'external':
-      return <PlainBody body={readableExternalBody(body)} />;
-
-    default:
-      // デーモンが先に新しい origin を返すと実行時にここへ来る: 空白を描かず、素のテキストで本文を消さない。
-      assertOriginHandled(commitment.origin);
-      return <PlainBody body={body} />;
-  }
-}
-
-// origin: 'human' にだけ出す: 他の origin には「クローンが人間へ返答したか」という概念が無く、「未着手」を貼ると当てはまらない。
-// InProgressBadge とは別のバッジのまま: 排他ではなく、1つの2値バッジへ畳むと両方が真の行を表せない。
-function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
-  if (commitment.origin !== 'human') return null;
-  // 「未着手」を出さない: 会話（source）に結べない行の「返事なし」は「見えない」であり、丸めて「未着手」と言うと嘘になるため（#4817、teto（クローン）が案A に決定）
-  if (commitment.source === undefined) {
-    return (
-      <span className="text-xs text-muted-foreground">返事の判定なし（会話に結んでいない）</span>
-    );
-  }
-  if (commitment.respondedAt !== undefined) {
-    return (
-      <Badge tone="accent">
-        返事済み・まだ片付いていない（{formatDateTime(commitment.respondedAt)}）
-      </Badge>
-    );
-  }
-  return <Badge tone="warn">未着手</Badge>;
-}
-
-// この印は自動で閉じる合図ではない: 委譲が終わっても行は消えず閉じない（閉じるのは人間の commitment_close だけ）。
-// 同じ会話の別の行にも付きうる（1対1の紐付けではない）。key は id でよい: 同じ会話の配列内に同じ id は2度現れない。
-function InProgressBadge({ commitment }: { commitment: Commitment }) {
-  if (commitment.origin !== 'human') return null;
-  const ids = commitment.activeManagerIds;
-  if (ids === undefined || ids.length === 0) return null;
-  return (
-    <Badge tone="ok">
-      進行中（委譲あり:{' '}
-      {ids.map((id, index) => (
-        <Fragment key={id}>
-          {index > 0 && ', '}
-          <Link to={`/managers/${id}`} className="hover:underline">
-            {ids.length === 1 ? '詳細を見る' : `詳細${index + 1}`}
-          </Link>
-        </Fragment>
-      ))}
-      ）
-    </Badge>
-  );
-}
-
-const EDITOR_TAB_TRIGGER_CLASS =
-  'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground';
-const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
-
-// 誰の行を書き換えられるかは画面に写さない: サーバ側の線が変わった日に画面だけが黙ってずれるため（403 の本文を ErrorNote に出す）。
-// draft は Tabs.Root の外に置く: 非活性の Tabs.Content は unmount されるので、内側だとタブを切り替えた瞬間に入力が消える。
-function CommitmentBodyEditor({
-  commitment,
-  onCancel,
-  onRequestCancel,
-  onDirtyChange,
-  onTrack,
-  onSettling,
-}: {
-  commitment: Commitment;
-  onTrack: (patch: RowNotePatch) => void;
-  onSettling: (on: boolean) => void;
-  /** 確認なしで閉じる。保存に成功したときだけ使う（保存直後は下書きが元と違って見えるため）。 */
-  onCancel: () => void;
-  onRequestCancel: () => void;
-  onDirtyChange: (dirty: boolean) => void;
-}) {
-  const editCommitment = useEditCommitment();
-  const keyboardHints = useKeyboardHintsVisible();
-  const [draft, setDraft] = useState<string | undefined>(undefined);
-  const [tab, setTab] = useState<string>('preview');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  // 一覧の取り直しで commitment が変わっても版は追従しない: 追従すると、裏の編集を見ずに上書きできる。
-  const [baseVersion, setBaseVersion] = useState(() => commitment.editedAt ?? commitment.at);
-  // 保存の応答は新しい版を返さないので、取り直した一覧の本文が送った本文と一致したときだけ自分の書き込みの版として取り込む。版だけで追うと、裏で入った編集の版まで拾って上書きする。
-  const [ownSent, setOwnSent] = useState<string | undefined>(undefined);
-  if (ownSent !== undefined && commitment.body.trim() === ownSent) {
-    setBaseVersion(commitment.editedAt ?? commitment.at);
-    setOwnSent(undefined);
-  }
-  const [conflict, setConflict] = useState<Commitment | undefined>(undefined);
-
-  const value = draft ?? commitment.body;
-  // trim した値どうしで比べる: 送るのは trim した本文で、末尾の空白だけの下書きを変更ありにすると、保存が押せるのに同じ本文を送ることになる。
-  const dirty = draft !== undefined && draft.trim() !== commitment.body.trim();
-  const latestDraft = useLatest(draft);
-
-  useReportDirty(commitment.id, dirty);
-  useEffect(() => {
-    onDirtyChange(dirty);
-  }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
-  // unmount では消さない: 行が一覧から外れたときに、ページが断りとして残すため。
-  useEffect(() => {
-    onTrack({ draft: dirty ? draft : undefined });
-  }, [dirty, draft, onTrack]);
-
-  function save(ifMatch: string = baseVersion) {
-    // ⌘/Ctrl+S は dirty で止まるボタンを通らずここへ直接来るので、門はここに置く。
-    if (busy) return;
-    if (!dirty) return;
-    if (draft === undefined || draft.trim() === '') return;
-    setBusy(true);
-    setFailure(undefined);
-    onTrack({ editFailure: undefined });
-    onSettling(true);
-    const sent = draft.trim();
-    editCommitment(commitment.id, sent, ifMatch).then(
-      () => {
-        setConflict(undefined);
-        // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
-        if (latestDraft.current?.trim() === sent) onCancel();
-        else setOwnSent(sent);
-        setBusy(false);
-        onSettling(false);
-      },
-      (caught: unknown) => {
-        if (caught instanceof CommitmentConflictError && caught.current !== null) {
-          setConflict(caught.current);
-          setBusy(false);
-          onSettling(false);
-          return;
-        }
-        // 失敗の記録と「待ちが終わった」は同じ処理の中で行う: 別の描画だと、行が消えた断りが失敗の無い形で一瞬出る。
-        setFailure(caught);
-        onTrack({ editFailure: caught });
-        setBusy(false);
-        onSettling(false);
-      },
-    );
-  }
-
-  function adoptConflictVersion(next: Commitment): string {
-    const version = next.editedAt ?? next.at;
-    setBaseVersion(version);
-    setOwnSent(undefined);
-    setConflict(undefined);
-    return version;
-  }
-
-  return (
-    <div className="mt-2 rounded-md border border-border">
-      <Tabs.Root value={tab} onValueChange={setTab}>
-        <Tabs.List className="flex gap-1 border-b border-border px-2">
-          <Tabs.Trigger
-            value="preview"
-            className={cn(
-              EDITOR_TAB_TRIGGER_CLASS,
-              tab === 'preview' && EDITOR_TAB_TRIGGER_ACTIVE_CLASS,
-            )}
-          >
-            プレビュー
-          </Tabs.Trigger>
-          <Tabs.Trigger
-            value="edit"
-            className={cn(
-              EDITOR_TAB_TRIGGER_CLASS,
-              tab === 'edit' && EDITOR_TAB_TRIGGER_ACTIVE_CLASS,
-            )}
-          >
-            編集
-          </Tabs.Trigger>
-        </Tabs.List>
-
-        <Tabs.Content value="preview" className="px-2 py-2">
-          <CommitmentBody commitment={{ ...commitment, body: value }} />
-        </Tabs.Content>
-
-        <Tabs.Content value="edit" className="px-2 py-2">
-          <Textarea
-            aria-label={`「${snippet(commitment.body)}」の本文`}
-            className="min-h-32 font-mono text-xs leading-relaxed"
-            maxHeight="60vh"
-            onSubmitShortcut={() => save()}
-            submitDisabled={!dirty || value.trim() === '' || busy}
-            value={value}
-            spellCheck={false}
-            // Enter は改行のまま: 長文になりうる本文欄なので Enter 単体では送信せず、IME の門（isComposing / keyCode 229）も付けていない。
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === 's') {
-                event.preventDefault();
-                save();
-              }
-            }}
-          />
-        </Tabs.Content>
-      </Tabs.Root>
-
-      <div className="flex items-center gap-2 px-2 py-2">
-        <Button
-          variant="primary"
-          size="sm"
-          loading={busy}
-          disabled={!dirty || value.trim() === ''}
-          onClick={() => save()}
-        >
-          保存
-        </Button>
-        {tab === 'edit' && keyboardHints && (
-          <span className="text-[11px] text-muted-foreground select-none">⌘/Ctrl + S で保存</span>
-        )}
-        {tab === 'edit' && <SubmitHint action="保存" />}
-        <Button size="sm" onClick={onRequestCancel}>
-          やめる
-        </Button>
-      </div>
-
-      {conflict !== undefined && (
-        <EditConflictBand
-          className="mx-2 mb-2"
-          heading="開いたあとに、裏でこの本文が変わった。"
-          retryLabel="いまの本文の上で、下書きを保存し直す"
-          discardLabel="下書きを捨てて、いまの本文にする"
-          busy={busy}
-          onRetry={() => save(adoptConflictVersion(conflict))}
-          onDiscard={() => {
-            adoptConflictVersion(conflict);
-            setDraft(undefined);
-          }}
-        >
-          <CodeBlock label="いまの本文" maxHeight="12rem">
-            {redactBody(conflict.body)}
-          </CodeBlock>
-        </EditConflictBand>
-      )}
-      <ErrorNote error={failure} className="mx-2 mb-2" />
-    </div>
-  );
-}
-
-interface RowNote {
-  commitment: Commitment;
-  draft?: string;
-  reason?: string;
-  editFailure?: unknown;
-  closeFailure?: unknown;
-  closedHere?: true;
-}
-type RowNotePatch = Partial<Omit<RowNote, 'commitment'>>;
-
-function isEmptyNote(note: RowNote): boolean {
-  return (
-    note.draft === undefined &&
-    note.reason === undefined &&
-    note.editFailure === undefined &&
-    note.closeFailure === undefined
-  );
-}
-
-function sameNote(a: RowNote, b: RowNote): boolean {
-  return (
-    a.commitment === b.commitment &&
-    a.draft === b.draft &&
-    a.reason === b.reason &&
-    a.editFailure === b.editFailure &&
-    a.closeFailure === b.closeFailure &&
-    a.closedHere === b.closedHere
-  );
-}
-
-function withoutKey<T>(record: Readonly<Record<string, T>>, key: string): Record<string, T> {
-  return Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 }
 
 // 書きかけが在るあいだだけ離れる前の確認に載せる: 使い手が書いたものが画面にしか無いため。失敗の本文だけなら読めば済むので載せない。
@@ -902,12 +409,6 @@ function OrphanNote({
   );
 }
 
-const SNIPPET_MAX = 20;
-
-function snippet(body: string): string {
-  return clipLine(body, SNIPPET_MAX);
-}
-
 function OpenRow({
   commitment,
   onTrack,
@@ -935,12 +436,11 @@ function OpenRow({
   const {
     editing,
     setEditing,
-    setDirty: setEditDirty,
     confirmingDiscard,
     setConfirmingDiscard,
     closeEditor,
     requestCloseEditor,
-  } = useDiscardGuard(() => {
+  } = useDiscardGuard(commitment.id, () => {
     restoreToggleFocus.current = true;
     track({ draft: undefined, editFailure: undefined });
   });
@@ -982,7 +482,6 @@ function OpenRow({
           commitment={commitment}
           onCancel={closeEditor}
           onRequestCancel={requestCloseEditor}
-          onDirtyChange={setEditDirty}
           onTrack={track}
           onSettling={settling}
         />
@@ -1005,129 +504,6 @@ function OpenRow({
       />
     </li>
   );
-}
-
-function CloseReasonForm({
-  commitment,
-  label,
-  onTrack,
-  onSettling,
-  planFocus,
-}: {
-  commitment: Commitment;
-  label: string;
-  onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
-  onSettling: (id: string, on: boolean) => void;
-  planFocus: () => () => void;
-}) {
-  const closeCommitment = useCloseCommitment();
-  // 外れたあとの後始末は片付けの途中だったときだけ動かす。応答が外れより先なら応答のほうで動かす。
-  const closing = useRef<(() => void) | null>(null);
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      closing.current?.();
-    };
-  }, []);
-  const reasonId = useId();
-  const reasonHintId = useId();
-  const [reason, setReason] = useState('');
-  const track = useCallback(
-    (patch: RowNotePatch) => onTrack(commitment, patch),
-    [onTrack, commitment],
-  );
-  // unmount では消さない: 行が外れたらページが断りとして残す。
-  useEffect(() => {
-    track({ reason: reason.trim() !== '' ? reason : undefined });
-  }, [reason, track]);
-  useReportDirty(`close-reason:${commitment.id}`, reason.trim() !== '');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-
-  async function submit() {
-    // Enter はボタン（loading で塞がる）を通らないので、送信中の門はここで持つ。
-    if (busy || reason.trim() === '') return;
-    setBusy(true);
-    setFailure(undefined);
-    track({ closeFailure: undefined });
-    // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
-    onSettling(commitment.id, true);
-    const restoreFocus = planFocus();
-    closing.current = restoreFocus;
-    try {
-      await closeCommitment(commitment.id, reason.trim());
-      track({ reason: undefined, closeFailure: undefined, closedHere: true });
-      // 取り直しが応答より先に行を外していたら、後始末は走り終えている。ここで送る。
-      if (!mounted.current) restoreFocus();
-    } catch (caught) {
-      closing.current = null;
-      setFailure(caught);
-      // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
-      track({ closeFailure: caught });
-    } finally {
-      setBusy(false);
-      onSettling(commitment.id, false);
-    }
-  }
-
-  return (
-    <>
-      <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
-        片付けた理由
-      </label>
-      <div className="mt-1 flex items-center gap-2">
-        <Input
-          id={reasonId}
-          aria-describedby={reasonHintId}
-          value={reason}
-          aria-label={`「${label}」を片付けた理由`}
-          placeholder="例: 修正を入れて確認した"
-          onChange={(event) => setReason(event.target.value)}
-          onSubmitShortcut={() => void submit()}
-        />
-        <Button
-          variant="primary"
-          size="sm"
-          className="shrink-0"
-          loading={busy}
-          aria-label={`「${label}」が片付いた`}
-          // 理由なしでは閉じられない: 「閉じた」だけが残ると、人間が後から否定できない。
-          disabled={reason.trim() === ''}
-          onClick={() => void submit()}
-        >
-          片付いた
-        </Button>
-      </div>
-      <FieldHint id={reasonHintId} className="mt-1.5">
-        何をもって片付いたかを書く。後から否定できるように残る。
-      </FieldHint>
-
-      <ErrorNote error={failure} className="mt-2" />
-    </>
-  );
-}
-
-// 返した関数は、フォーカスがまだ文書の先頭へ落ちたままのときだけ送る（使い手がほかへ移していたら動かさない）。
-function planFocusAfterRemoval(row: HTMLElement | null, targetSelector: string): () => void {
-  const neighbor = row?.nextElementSibling ?? row?.previousElementSibling ?? null;
-  return () => {
-    const active = document.activeElement;
-    if (active !== null && active !== document.body) return;
-    const target = neighbor?.isConnected
-      ? neighbor.querySelector<HTMLElement>(targetSelector)
-      : null;
-    if (target !== null && target !== undefined) {
-      target.focus();
-      return;
-    }
-    const header = document.querySelector<HTMLElement>('[data-open-list-header]');
-    if (header !== null) {
-      header.setAttribute('tabindex', '-1');
-      header.focus();
-    }
-  };
 }
 
 // 一覧は片付いた行の本文・閉じた理由を先頭に切って返す（#5089）。切られた行だけ「全文を見る」を出し、押したときに `GET /commitments/{id}` で全文を取る

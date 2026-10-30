@@ -345,7 +345,7 @@ describe('runner の生存判定', () => {
 
   it('⭐ 先に落ちて lost になった器を空けても、復帰したときに connected へ黙って戻らない（#4834）', async () => {
     const runner = new FakeRunner('runner-a');
-    const registry = createRunnerRegistry([], { selectWaitMs: 0 });
+    const registry = createRunnerRegistry();
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
 
     runner.reply = 'error';
@@ -360,14 +360,17 @@ describe('runner の生存判定', () => {
 
     expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
     expect(await registry.list()).toEqual([]);
-    await expect(registry.select({})).rejects.toThrow();
+    // 選ぶ猶予（既定 3 秒）は偽の時計で進める
+    const selecting = expect(registry.select({})).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await selecting;
 
     await registry.stop();
   });
 
   it('落ちた runner は新しい委譲の宛先から外れる（名簿には残る）', async () => {
     const runner = new FakeRunner('runner-a');
-    const registry = createRunnerRegistry([], { selectWaitMs: 0 });
+    const registry = createRunnerRegistry();
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
 
     expect((await registry.select({})).runnerId).toBe('runner-a');
@@ -375,7 +378,10 @@ describe('runner の生存判定', () => {
     runner.reply = 'error';
     await vi.advanceTimersByTimeAsync(30_000);
 
-    await expect(registry.select({})).rejects.toThrow(/http:\/\/runner:4518 は lost/);
+    // 選ぶ猶予（既定 3 秒）は偽の時計で進める
+    const selecting = expect(registry.select({})).rejects.toThrow(/http:\/\/runner:4518 は lost/);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await selecting;
     expect(await registry.list()).toEqual([]);
     expect(registry.entries()).toMatchObject([{ label: 'http://runner:4518', state: 'lost' }]);
 

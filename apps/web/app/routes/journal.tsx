@@ -236,7 +236,7 @@ function JournalBody({
                   <JournalEntryRow
                     key={entry.id}
                     atLabel={formatDateTime(entry.at)}
-                    // at / relativeLabel で渡さない: 部品の既定の Timestamp は JST 固定の tooltip と焦点を受ける <time> を持ち、Tab の停止点が増えるため
+                    // 時刻は文字で渡す: 焦点を受ける <time>（Timestamp）を行ごとに置くと、Tab の停止点が増えるため
                     time={formatRelative(entry.at)}
                     type={entry.type}
                     typeLabel={journalTypeLabel(entry.type)}

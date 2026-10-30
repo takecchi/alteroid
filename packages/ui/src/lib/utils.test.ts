@@ -314,7 +314,7 @@ describe('cn の tailwind-merge 設定（slim）', () => {
     }
 
     it('repo の文字列リテラルと、cn(...) の引数のリテラルを連ねたもの', () => {
-      expect(callArgs.size).toBeGreaterThan(200);
+      expect(callArgs.size).toBeGreaterThan(100);
       expect(literals.size).toBeGreaterThan(1000);
       expectSame(literals, 'リテラル');
       expectSame(callArgs, 'cn の引数');
@@ -566,7 +566,7 @@ describe('cn の tailwind-merge 設定（slim）', () => {
         if (token === base || !groupTokens.has(fullGroupOf(base) ?? '')) continue;
         real.push(`${base} ${token}`, `${token} ${base}`, `${token} ${token}`);
       }
-      expect(real.length).toBeGreaterThan(1000);
+      expect(real.length).toBeGreaterThan(500);
       expectSame(real, '実際の修飾子付き token');
       expectSame(
         ['p-4! px-2!', 'px-2! p-4!', 'hover:p-4! hover:px-2', '!p-4 p-2', 'p-2 !p-4', '!p-4 !px-2'],

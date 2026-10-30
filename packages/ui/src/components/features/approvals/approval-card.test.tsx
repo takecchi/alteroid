@@ -9,16 +9,15 @@ afterEach(cleanup);
 const base = {
   state: 'unanswered' as const,
   createdAt: '2026-09-29T20:06:00Z',
-  createdLabel: '42 分前',
   question: '進めてよいか',
 };
 
 describe('ApprovalCard: time', () => {
-  it('既定: Timestamp（相対の表示を <time dateTime> で）を出す', () => {
+  it('既定: Timestamp（<time dateTime>、表示は JST）を出す', () => {
     const { container } = render(<ApprovalCard {...base} />);
     const time = container.querySelector('time');
     expect(time?.getAttribute('datetime')).toBe('2026-09-29T20:06:00.000Z');
-    expect(time?.textContent).toBe('42 分前');
+    expect(time?.textContent).toBe('09/30 05:06');
   });
 
   it('time を渡すと、その位置に差し込み、Timestamp は出さない', () => {
@@ -38,7 +37,7 @@ describe('ApprovalCard: time', () => {
     expect(screen.getByText('(42 分前)')).toBeTruthy();
   });
 
-  it('time を渡すなら createdAt / createdLabel は要らない', () => {
+  it('time を渡すなら createdAt は要らない', () => {
     const { container } = render(<ApprovalCard state="unanswered" question="q" time="いま" />);
     expect(screen.getByText('いま')).toBeTruthy();
     expect(container.querySelector('time')).toBeNull();

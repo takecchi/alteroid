@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { userEvent, within } from 'storybook/test';
 
 import { Card } from '../../common';
 
@@ -30,9 +31,8 @@ const decision = {
 
 export const Decision: Story = {
   args: {
-    at: decision.at,
     atLabel: '09-30 05:45',
-    relativeLabel: '3 分前',
+    time: '3 分前',
     type: 'decision',
     tone: 'accent',
     summary: decision.summary,
@@ -40,10 +40,14 @@ export const Decision: Story = {
   },
 };
 
+// 行を開く操作（要旨の左のボタンを押す）で開いた状態を見せる
+async function openRow({ canvasElement }: { canvasElement: HTMLElement }) {
+  await userEvent.click(within(canvasElement).getByRole('button', { expanded: false }));
+}
+
 export const Open: Story = {
   args: {
     ...Decision.args,
-    defaultOpen: true,
     links: (
       <p className="text-xs">
         <a href="#" className="font-mono text-primary hover:underline">
@@ -52,6 +56,7 @@ export const Open: Story = {
       </p>
     ),
   } as Story['args'],
+  play: openRow,
 };
 
 export const List: Story = {
@@ -59,9 +64,8 @@ export const List: Story = {
   render: () => (
     <>
       <JournalEntryRow
-        at="2026-09-29T20:47:00Z"
         atLabel="09-30 05:47"
-        relativeLabel="1 分前"
+        time="1 分前"
         type="escalation"
         tone="warn"
         summary="確認したいことがある: 社外に出す資料に実測の費用を載せてよいか"
@@ -69,9 +73,8 @@ export const List: Story = {
       />
       <JournalEntryRow {...(Decision.args as Required<typeof Decision>['args'])} />
       <JournalEntryRow
-        at="2026-09-29T20:30:00Z"
         atLabel="09-30 05:30"
-        relativeLabel="18 分前"
+        time="18 分前"
         type="memory_update"
         tone="ok"
         summary="「社外の資料には費用の実測を載せない」を価値観へ足した"
@@ -85,8 +88,7 @@ export const List: Story = {
 export const PlainTimeWithoutRawBar: Story = {
   args: {
     ...Decision.args,
-    time: '3 分前',
     rawBar: false,
-    defaultOpen: true,
   },
+  play: openRow,
 };

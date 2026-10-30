@@ -5,17 +5,12 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { DAEMON_FORCED_EXIT_MS } from '@alteroid/core/cli-light';
+import { DAEMON_FORCED_EXIT_MS, type DaemonRuntimeInfo } from '@alteroid/core/cli-light';
 
 import { stateDir } from './paths.js';
 import { readSessionRefusal, type SessionRefusal } from './session-refusal.js';
 
-export interface DaemonRuntimeInfo {
-  pid: number;
-  port: number;
-  startedAt: string;
-  token: string;
-}
+export type { DaemonRuntimeInfo };
 
 // boolean にしない: 「確かめられなかった」が黙って「居ない」側へ倒れるため
 export type Presence = 'present' | 'absent' | 'unknown';

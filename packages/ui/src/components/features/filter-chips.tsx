@@ -17,7 +17,6 @@ export function FilterChips<V extends string>({
   onToggle,
   onClear,
   label,
-  clearLabel = '解除',
   className,
 }: {
   options: readonly FilterChipOption<V>[];
@@ -26,7 +25,6 @@ export function FilterChips<V extends string>({
   onToggle?: (value: V) => void;
   onClear?: () => void;
   label: string;
-  clearLabel?: string;
   className?: string;
 }) {
   const toggle = (value: V) => {
@@ -76,7 +74,7 @@ export function FilterChips<V extends string>({
           className="inline-flex min-h-7 items-center gap-1 rounded-md px-2 text-[11px] pointer-coarse:min-h-11 text-muted-foreground hover:text-foreground"
         >
           <X className="size-3" aria-hidden />
-          {clearLabel}
+          解除
         </button>
       )}
     </div>

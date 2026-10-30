@@ -126,7 +126,7 @@ describe('指名（select({ runnerId })）', () => {
   });
 
   it('まだ一度も開けていない器が残っているときは「無い」と断定しない', async () => {
-    const registry = createRunnerRegistry([], { retryBaseMs: 10_000, retryMaxMs: 10_000 });
+    const registry = createRunnerRegistry();
     void registry.register({
       label: 'まだ開いていない器',
       open: () => new Promise(() => undefined),

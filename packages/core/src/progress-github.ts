@@ -121,19 +121,5 @@ export function summarizeGithubObservations(
   };
 }
 
-/** `ci` が無いときは `success 0 / failure 0` と書かない: 0 件と読めてしまうから。 */
-export function describeGithubCi(ok: Pick<GithubObservationOk, 'ci' | 'ciUnavailable'>): string {
-  if (ok.ci !== undefined) {
-    const ci = ok.ci;
-    const counted = ci.success + ci.failure + ci.pending;
-    return (
-      `CI: ${String(ci.pulls)} 件の PR を確認 — success ${String(ci.success)} / failure ${String(ci.failure)} / pending ${String(ci.pending)}` +
-      (counted < ci.pulls ? `（チェックが無い等で未集計 ${String(ci.pulls - counted)} 件）` : '') +
-      `（数えたもの: ${ci.checks}）` +
-      (ci.truncated === true ? '（打ち切り。数は下限）' : '')
-    );
-  }
-  if (ok.ciUnavailable !== undefined)
-    return `CI: 取れなかった — ${ok.ciUnavailable}（0 件ではない）`;
-  return 'CI: 観測していない（0 件ではない）';
-}
+// CI の1行は軽い出口 `github-ci-format.ts` に置く（Web と同じ1本）。ここからも同じ名前で出す
+export { describeGithubCi } from './github-ci-format.js';

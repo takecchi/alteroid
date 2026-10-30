@@ -389,7 +389,7 @@ describe('表示の文言', () => {
     const notes = managerNotes(
       managerRow('a', {
         status: 'lost',
-        waiting: [{ requestId: 'r', summary: '許可して', kind: 'permission' }],
+        waiting: [{ requestId: 'r', summary: '許可して' }],
       }),
     );
     expect(notes[0]).toContain('返事待ち 1 件');
@@ -401,7 +401,7 @@ describe('表示の文言', () => {
       managerRow('a', {
         status: 'lost',
         runnerVanished: true,
-        waiting: [{ requestId: 'r', summary: '許可して', kind: 'permission' }],
+        waiting: [{ requestId: 'r', summary: '許可して' }],
       }),
     );
     expect(notes[0]).toContain('確かめる前に起こし直さない');
@@ -443,9 +443,7 @@ describe('切り詰めはサロゲートペアを割らない（#2592）', () =>
   it('一覧の依頼と、注記の返事待ちの要約', () => {
     const emoji = `a${'😀'.repeat(400)}`;
     expect(managerListLine(managerRow('a', { request: emoji }), Date.now())).not.toMatch(lone);
-    const notes = managerNotes(
-      managerRow('a', { waiting: [{ requestId: 'r', summary: emoji, kind: 'permission' }] }),
-    );
+    const notes = managerNotes(managerRow('a', { waiting: [{ requestId: 'r', summary: emoji }] }));
     expect(notes.join(' ')).not.toMatch(lone);
   });
 });

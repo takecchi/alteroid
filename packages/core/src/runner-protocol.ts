@@ -220,7 +220,8 @@ export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 /**
  * 既存の識別子を流用しない: `lease.fence` は同じ runner への resume では進まず、`instanceId` は同じプロセスの
  * resume で変わらない。どちらも古いセッションの畳み（`closed`）と新しいセッションの出来事を区別できない。
- * 欄が無い古い runner の出来事は、世代が古いとも新しいとも読まず従来どおり処理する。
+ * 出来事に世代の欄が無いとき、デーモンが追っている世代を持っていれば、食い違いと同じ古い世代（`stale`）として扱う
+ * （runner は出来事に必ず世代を載せる。#5764）。追っている世代が無い間は、世代を見ずに処理する。
  */
 const sessionGenerationSchema = z.string().optional();
 
@@ -403,9 +404,8 @@ export const runnerPluginFingerprintEntrySchema = z.object({
   name: z.string(),
   sha: z.string(),
   contentSha256: z.string(),
-  /** optional にする: 欄が無い古い runner の応答も読めるように。欄が無ければ daemon 側の比較で「差あり」になり送り直される。 */
-  enableHooks: z.boolean().optional(),
-  enableMcp: z.boolean().optional(),
+  enableHooks: z.boolean(),
+  enableMcp: z.boolean(),
 });
 
 export const runnerPluginsFingerprintSchema = z.object({
@@ -1943,13 +1943,6 @@ export interface RunnerRegistryOptions {
     before: string;
     after: string;
   }) => void;
-  /** 回数では諦めない。主にテスト用。 */
-  retryBaseMs?: number;
-  retryMaxMs?: number;
-  /** runner を開くのを待つ期限（既定 {@link REGISTRY_OPEN_DEADLINE_MS}）。主にテスト用。 */
-  openDeadlineMs?: number;
-  /** 環境変数の設定項目にしない: 数値をつまみとして外へ出すと、そこが実質の制限になる。主にテスト用。 */
-  selectWaitMs?: number;
   /**
    * `#place` が全台へ聞いた `resources()` の結果を配置の後にもう一度渡す。追加の往復は無い。
    * `runnerIdKnown` が true の器だけを渡す: `client.runnerId` は未聞でも既定値を持ち、名乗った器と取り違えるため。
@@ -2178,10 +2171,6 @@ class Registry implements RunnerRegistry {
       ) => void)
     | undefined;
   readonly #onPlacementDecision: ((decision: PlacementDecision) => void) | undefined;
-  readonly #retryBaseMs: number;
-  readonly #retryMaxMs: number;
-  readonly #openDeadlineMs: number;
-  readonly #selectWaitMs: number;
   /** 窓の外は読むたびに畳む（`#freshFailuresOf`）ので、別のタイマーは持たない。 */
   readonly #failures = new Map<string, number[]>();
   readonly #saturationSigns = new Map<string, { at: number; sign: PidsSaturationSign }[]>();
@@ -2199,10 +2188,6 @@ class Registry implements RunnerRegistry {
     this.#onSwap = options.onSwap;
     this.#onPlacementResources = options.onPlacementResources;
     this.#onPlacementDecision = options.onPlacementDecision;
-    this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
-    this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
-    this.#openDeadlineMs = options.openDeadlineMs ?? REGISTRY_OPEN_DEADLINE_MS;
-    this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
     this.#now = options.now ?? Date.now;
     this.#measureProbeLoop = options.measureProbeLoop ?? measureProbeLoopDefault;
     this.#measureThreadpoolWait = options.measureThreadpoolWait ?? (() => measureThreadpoolWait());
@@ -2221,7 +2206,7 @@ class Registry implements RunnerRegistry {
       client: runner,
       opening: null,
       timer: null,
-      delay: this.#retryBaseMs,
+      delay: REGISTRY_RETRY_BASE_MS,
       lastSeen: Date.now(),
       alive: true,
       revision: { status: 'unheard' },
@@ -2314,7 +2299,7 @@ class Registry implements RunnerRegistry {
       client: null,
       opening: null,
       timer: null,
-      delay: this.#retryBaseMs,
+      delay: REGISTRY_RETRY_BASE_MS,
       lastSeen: Date.now(),
       alive: true,
       revision: { status: 'unheard' },
@@ -2400,7 +2385,7 @@ class Registry implements RunnerRegistry {
   async select({ runnerId }: { cwd?: string; runnerId?: string } = {}): Promise<RunnerClient> {
     if (runnerId !== undefined) return this.#selectByName(runnerId);
 
-    const until = Date.now() + this.#selectWaitMs;
+    const until = Date.now() + SELECT_WAIT_MS;
     for (;;) {
       if (this.#stopped) throw new Error('名簿が停止している');
 
@@ -2605,7 +2590,7 @@ class Registry implements RunnerRegistry {
         entry.state = 'connected';
         entry.since = new Date().toISOString();
         delete entry.error;
-        entry.delay = this.#retryBaseMs;
+        entry.delay = REGISTRY_RETRY_BASE_MS;
         // 開けた瞬間が生存判定の起点: 置き忘れると、開いた直後の1台が「30秒黙っていた」ことにされる。
         entry.lastSeen = Date.now();
         entry.alive = true;
@@ -2649,7 +2634,7 @@ class Registry implements RunnerRegistry {
    * 期限の後に開けた接続は閉じて捨てる: 名簿はもう次の `#open` へ進んでおり、残すと誰も持たない接続が残るため。
    */
   #openWithinDeadline(entry: RegistryEntry): Promise<RunnerClient> {
-    const ms = this.#openDeadlineMs;
+    const ms = REGISTRY_OPEN_DEADLINE_MS;
     return new Promise<RunnerClient>((resolve, reject) => {
       let expired = false;
       const timer = setTimeout(() => {
@@ -2681,7 +2666,7 @@ class Registry implements RunnerRegistry {
   #scheduleOpen(entry: RegistryEntry): void {
     if (this.#stopped || entry.timer !== null) return;
     const delay = entry.delay;
-    entry.delay = Math.min(delay * 2, this.#retryMaxMs);
+    entry.delay = Math.min(delay * 2, REGISTRY_RETRY_MAX_MS);
     const timer = setTimeout(() => {
       entry.timer = null;
       if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;

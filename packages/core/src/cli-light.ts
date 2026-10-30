@@ -41,5 +41,6 @@ export {
 export type { BuildRevision } from './revision-format.js';
 export { reportRunnerRevision, resolveBuildRevision } from './revision-resolve.js';
 export { CREDENTIAL_NAME } from './credentials.js';
+export type { DaemonRuntimeInfo } from './daemon-runtime.js';
 export { DAEMON_FORCED_EXIT_MS, DAEMON_SHUTDOWN_GRACE_MS } from './shutdown-grace.js';
 export { MEMORY_SLUG_RULE, PRACTICE_SLUG_RULE, describeSlugViolation } from './slug-rule.js';

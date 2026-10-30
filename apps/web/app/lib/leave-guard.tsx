@@ -49,6 +49,9 @@ interface LeaveGuardApi {
 
 const LeaveGuardContext = createContext<LeaveGuardApi | undefined>(undefined);
 
+/** 報告の読み口: 書き手（`useReportDirty`）と別の文脈にする。読む側だけが、報告の増減のたびに描き直される。 */
+const DirtyIdsContext = createContext<ReadonlyMap<string, LeaveNotice | undefined>>(new Map());
+
 type ReportScopeDirty = (scopeId: string, dirty: boolean) => void;
 
 /** 認証の門へ書きかけを知らせる: `useBlocker` は移動しか止められず、門が画面ごと差し替える unmount には効かないため。 */
@@ -110,20 +113,22 @@ export function LeaveGuardScope({
 
   return (
     <LeaveGuardContext.Provider value={api}>
-      <ConfirmDialog
-        open={blocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && blocker.state === 'blocked') blocker.reset();
-        }}
-        title={notice.title}
-        description={notice.description}
-        confirmLabel={notice.confirmLabel}
-        destructive
-        onConfirm={() => {
-          if (blocker.state === 'blocked') blocker.proceed();
-        }}
-      />
-      {children}
+      <DirtyIdsContext.Provider value={dirtyIds}>
+        <ConfirmDialog
+          open={blocker.state === 'blocked'}
+          onOpenChange={(open) => {
+            if (!open && blocker.state === 'blocked') blocker.reset();
+          }}
+          title={notice.title}
+          description={notice.description}
+          confirmLabel={notice.confirmLabel}
+          destructive
+          onConfirm={() => {
+            if (blocker.state === 'blocked') blocker.proceed();
+          }}
+        />
+        {children}
+      </DirtyIdsContext.Provider>
     </LeaveGuardContext.Provider>
   );
 }
@@ -134,6 +139,11 @@ export function useReportDirty(id: string, dirty: boolean, notice?: LeaveNotice)
     report?.(id, dirty, notice);
   }, [id, dirty, notice, report]);
   useEffect(() => () => report?.(id, false), [id, report]);
+}
+
+/** `useReportDirty` へ報告された id が、いま書きかけとして見張られているか。やめる確認を挟むかの判断に使う（子の書きかけを別の経路で親へ渡さない）。 */
+export function useIsReportedDirty(id: string): boolean {
+  return useContext(DirtyIdsContext).has(id);
 }
 
 /** 報告の解除を待たず確認をやめる: 書きかけの報告は次の描画まで消えず、待つと自分の移動を自分で止めるため。 */

@@ -1,9 +1,13 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry, RunnerHttpError } from './runner-protocol.js';
+import {
+  createRunnerRegistry,
+  REGISTRY_RETRY_BASE_MS,
+  RunnerHttpError,
+} from './runner-protocol.js';
 import type { RunnerClient } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
@@ -40,6 +44,14 @@ function fakeSdk(sessions: { options: Options }[] = []): typeof sdkQuery {
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
 }
+
+/** 名簿の挑み直し・期限・選ぶ猶予は、偽の時計で既定の値のまま進める（実時間を待たない・値を差し替える口を使わない）。 */
+const SELECT_WAIT_MS = 3_000;
+const OPEN_DEADLINE_MS = 120_000;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('runner の名簿', () => {
   it('後から register した runner へ委譲できる', async () => {
@@ -119,8 +131,9 @@ describe('runner の名簿', () => {
   });
 
   it('上がってこない runner を背景で挑み直し、上がったら委譲の宛先になる', async () => {
+    vi.useFakeTimers();
     let attempts = 0;
-    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    const registry = createRunnerRegistry();
 
     await registry.register({
       label: 'http://runner:4518',
@@ -139,6 +152,16 @@ describe('runner の名簿', () => {
     expect(registry.entries()).toMatchObject([
       { label: 'http://runner:4518', state: 'unreachable' },
     ]);
+    expect(attempts).toBe(1);
+
+    // 梯子は既定の値から倍々: 1回目の失敗の後は BASE、2回目の失敗の後は BASE の2倍
+    await vi.advanceTimersByTimeAsync(REGISTRY_RETRY_BASE_MS - 1);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(attempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(REGISTRY_RETRY_BASE_MS * 2 - 1);
+    expect(attempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
 
     const runner = await registry.select({});
     expect(runner.runnerId).toBe('runner-slow');
@@ -150,11 +173,10 @@ describe('runner の名簿', () => {
   });
 
   it('挑み直しても直らない失敗は、挑み直さずにクローンへ知らせる', async () => {
+    vi.useFakeTimers();
     const failures: { label: string; error: string }[] = [];
     let attempts = 0;
     const registry = createRunnerRegistry([], {
-      retryBaseMs: 1,
-      retryMaxMs: 1,
       notify: (failure) => failures.push(failure),
     });
 
@@ -166,15 +188,15 @@ describe('runner の名簿', () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 梯子の頭打ちまで進めても、挑み直さない
+    await vi.advanceTimersByTimeAsync(REGISTRY_RETRY_BASE_MS * 60);
     expect(attempts).toBe(1);
     expect(failures).toHaveLength(1);
     expect(failures[0]?.label).toBe('http://runner:4518');
     expect(registry.entries()).toMatchObject([{ state: 'unusable' }]);
 
-    const started = Date.now();
+    // 時計を進めずに返る: 猶予（選ぶ待ち）を待つ形なら、ここで止まって試験が落ちる
     await expect(registry.select({})).rejects.toThrow(/どれも使えない/);
-    expect(Date.now() - started).toBeLessThan(500);
 
     await registry.stop();
   });
@@ -182,8 +204,6 @@ describe('runner の名簿', () => {
   it('クローンへの知らせは伏せ字を通す: URL の資格と params: 以降は載らない（issue #2559）', async () => {
     const failures: { label: string; error: string }[] = [];
     const registry = createRunnerRegistry([], {
-      retryBaseMs: 1,
-      retryMaxMs: 1,
       notify: (failure) => failures.push(failure),
     });
 
@@ -210,19 +230,30 @@ describe('runner の名簿', () => {
   });
 
   it('繋がっていないときは、猶予を過ぎたら状態を添えて失敗する', async () => {
-    const registry = createRunnerRegistry([], {
-      retryBaseMs: 10_000,
-      retryMaxMs: 10_000,
-      selectWaitMs: 50,
-    });
+    vi.useFakeTimers();
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner:4518',
       open: () => Promise.reject(new Error('fetch failed')),
     });
 
-    await expect(registry.select({})).rejects.toThrow(/http:\/\/runner:4518 は unreachable/);
-    await expect(registry.select({})).rejects.toThrow(/fetch failed/);
-    await expect(registry.select({})).rejects.not.toThrow(/1台も登録されていない/);
+    const first = registry.select({});
+    const firstRejected = expect(first).rejects.toThrow(/http:\/\/runner:4518 は unreachable/);
+    // 猶予の1ms 手前では、まだ待っている
+    let settled = false;
+    void first.catch(() => undefined).finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(SELECT_WAIT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await firstRejected;
+
+    const second = expect(registry.select({})).rejects.toThrow(/fetch failed/);
+    await vi.advanceTimersByTimeAsync(SELECT_WAIT_MS);
+    await second;
+
+    const third = expect(registry.select({})).rejects.not.toThrow(/1台も登録されていない/);
+    await vi.advanceTimersByTimeAsync(SELECT_WAIT_MS);
+    await third;
 
     await registry.stop();
   });
@@ -236,8 +267,9 @@ describe('runner の名簿', () => {
   });
 
   it('stop() で背景の挑み直しが畳まれる', async () => {
+    vi.useFakeTimers();
     let attempts = 0;
-    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    const registry = createRunnerRegistry();
     await registry.register({
       label: 'http://runner:4518',
       open: async () => {
@@ -245,10 +277,13 @@ describe('runner の名簿', () => {
         throw new Error('fetch failed');
       },
     });
+    // 挑み直しが生きていることを先に見る（止める前は進む）
+    await vi.advanceTimersByTimeAsync(REGISTRY_RETRY_BASE_MS);
+    expect(attempts).toBe(2);
 
     await registry.stop();
     const after = attempts;
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.advanceTimersByTimeAsync(REGISTRY_RETRY_BASE_MS * 60);
     expect(attempts).toBe(after);
   });
 
@@ -312,14 +347,11 @@ describe('runner の名簿', () => {
 
 describe('名簿が runner を開くのを期限までしか待たない（#4673）', () => {
   it('⭐ 開く呼び出しが返らなければ期限で打ち切って挑み直し、上がったら宛先になる。遅れて開けた接続は閉じる', async () => {
+    vi.useFakeTimers();
     let attempts = 0;
     let lateClosed = 0;
     let releaseFirst: (() => void) | undefined;
-    const registry = createRunnerRegistry([], {
-      retryBaseMs: 5,
-      retryMaxMs: 5,
-      openDeadlineMs: 30,
-    });
+    const registry = createRunnerRegistry();
     const runnerOf = (id: string): RunnerClient =>
       createLocalRunner({
         runnerId: id,
@@ -328,7 +360,7 @@ describe('名簿が runner を開くのを期限までしか待たない（#4673
         env: {},
       });
 
-    await registry.register({
+    const registering = registry.register({
       label: 'http://runner:4673',
       open: async () => {
         attempts += 1;
@@ -349,12 +381,22 @@ describe('名簿が runner を開くのを期限までしか待たない（#4673
       },
     });
 
+    // 期限の1ms 手前では、まだ開いている途中
+    await vi.advanceTimersByTimeAsync(OPEN_DEADLINE_MS - 1);
+    expect(registry.entries()).toMatchObject([{ state: 'connecting' }]);
+    await vi.advanceTimersByTimeAsync(1);
+    await registering;
+    expect(registry.entries()).toMatchObject([{ state: 'unreachable' }]);
+    expect(attempts).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(REGISTRY_RETRY_BASE_MS);
     const runner = await registry.select({});
     expect(runner.runnerId).toBe('runner-4673');
-    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(attempts).toBe(2);
 
     releaseFirst?.();
-    await vi.waitFor(() => expect(lateClosed).toBe(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lateClosed).toBe(1);
     expect(registry.entries()).toMatchObject([{ state: 'connected', runnerId: 'runner-4673' }]);
 
     await runner.close();

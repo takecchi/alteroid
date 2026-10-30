@@ -12,6 +12,7 @@ export type MarkdownEditorMode = 'edit' | 'preview' | 'split';
 
 const DEFAULT_MODES: readonly MarkdownEditorMode[] = ['edit', 'preview', 'split'];
 const SAVE_HINT = '⌘/Ctrl + S で保存';
+const MIN_HEIGHT = '60vh';
 
 // 既定のタブは中身で決める: 空のプレビューを既定で開くと真っ白な画面になるため
 // 書きかけ（`value`）は呼ぶ側が持つ: タブを行き来しても、取得し直しが走っても書きかけを消さないため
@@ -28,7 +29,6 @@ export function MarkdownEditor({
   saveHint = SAVE_HINT,
   placeholder = 'Markdown で書く',
   emptyPreview = 'まだ何も書いていない。「編集」で書く。',
-  minHeight = '60vh',
   label = '本文',
   className,
   remoteImages,
@@ -45,7 +45,6 @@ export function MarkdownEditor({
   saveHint?: ReactNode;
   placeholder?: string;
   emptyPreview?: ReactNode;
-  minHeight?: string;
   label?: string;
   className?: string;
   /** プレビューの `Markdown` へそのまま渡す（省略は今までどおり外部の画像も描く）。 */
@@ -76,7 +75,7 @@ export function MarkdownEditor({
       maxHeight="60vh"
       onSubmitShortcut={onSave}
       submitDisabled={saveDisabled || onSave === undefined}
-      style={{ minHeight }}
+      style={{ minHeight: MIN_HEIGHT }}
       value={value}
       placeholder={placeholder}
       spellCheck={false}
@@ -94,7 +93,7 @@ export function MarkdownEditor({
   const preview = (
     <div
       className="min-w-0 flex-1 overflow-y-auto rounded-md border border-dashed border-border p-4"
-      style={{ minHeight }}
+      style={{ minHeight: MIN_HEIGHT }}
     >
       {value.trim() === '' && emptyPreview !== null ? (
         <p className="text-sm text-muted-foreground">{emptyPreview}</p>

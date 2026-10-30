@@ -228,7 +228,7 @@ export default function Usage() {
   const rawTo = searchParams.get(TO_PARAM);
   const from = parseUsageDate(rawFrom);
   const to = parseUsageDate(rawTo);
-  const invalidFrom = rawFrom !== null && rawFrom !== '' && from === '' ? rawFrom : null;
+  const invalidFrom = rawFrom !== '' && from === '' ? rawFrom : null;
   const invalidTo = rawTo !== null && rawTo !== '' && to === '' ? rawTo : null;
   const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
   const rawLayer = searchParams.get(LAYER_PARAM);

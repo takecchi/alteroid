@@ -5,6 +5,7 @@ import { LoadError } from '~/components/load-error';
 import { describeAttachmentFailure } from '~/lib/error-text';
 import { isNotFound } from '~/lib/is-not-found';
 import { saveBlob } from '~/lib/save-blob';
+import { useAttachmentObjectUrl } from '~/lib/use-attachment-object-url';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import {
@@ -488,10 +489,9 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
 // 取った `blob:` URL は行が外れたとき（アンマウント・取り直しで id が変わったとき）に解放する
 function Thumbnail({ item }: { item: AttachmentItem }) {
   const image = isPreviewableImage(item.mediaType);
-  const api = useApi();
   const boxRef = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(typeof IntersectionObserver === 'undefined');
-  const [state, setState] = useState<{ url: string } | { error: true } | undefined>();
+  const state = useAttachmentObjectUrl(item.id, image && visible);
 
   useEffect(() => {
     if (!image || visible) return;
@@ -506,28 +506,6 @@ function Thumbnail({ item }: { item: AttachmentItem }) {
     observer.observe(box);
     return () => observer.disconnect();
   }, [image, visible]);
-
-  useEffect(() => {
-    if (!image || !visible) return;
-    const controller = new AbortController();
-    let created: string | undefined;
-    fetchAttachment(api, item.id, { signal: controller.signal }).then(
-      (blob) => {
-        // 片付けの後に届いた分は URL を作らない（作ると誰も解放しない）
-        if (controller.signal.aborted) return;
-        created = URL.createObjectURL(blob);
-        setState({ url: created });
-      },
-      () => {
-        if (!controller.signal.aborted) setState({ error: true });
-      },
-    );
-    return () => {
-      controller.abort();
-      if (created !== undefined) URL.revokeObjectURL(created);
-      setState(undefined);
-    };
-  }, [api, item.id, image, visible]);
 
   return (
     <span

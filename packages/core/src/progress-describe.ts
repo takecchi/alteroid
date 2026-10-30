@@ -144,7 +144,6 @@ export function describeProgress(view: ProgressView, fold: ProgressFold = FULL):
       `※ 数が欠けうる（読めなかった行 ${String(unreadable)} 件 / 刈り取られた片付き行 ${String(trimmedClosed)} 件）`,
     );
   }
-  // 欄が無い（古いデーモンの応答）ときは何も言わない: 「undefined 件」とも 0 件とも書かない。
   if (unreadableJobs !== 0) {
     lines.push(
       '',

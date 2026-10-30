@@ -400,14 +400,15 @@ describe('alteroid conversations list の未読の総数', () => {
     expect(text).not.toMatch(/未読のある会話 \d+ 件/);
   });
 
-  it('古いデーモン（404）でも一覧は出し、口が無いと1行で言う', async () => {
+  // 口は #2897（2026-10-05）からある: 404 を「古い版かもしれない」と読み替えず、ほかの失敗と同じく状態の番号で言う（#5843）
+  it('総数の口が 404 でも一覧は出し、HTTP 404 で取れなかったと1行で言う', async () => {
     const read = captureStdout();
     replies.push(emptyList, { status: 404, body: { error: 'not found' } });
     await conversationsListCommand();
     const text = read();
     expect(text).toContain('会話はまだありません');
-    expect(text).toContain('未読のある会話の総数は取れませんでした');
-    expect(text).toContain('古い版');
+    expect(text).toContain('未読のある会話の総数は取れませんでした（HTTP 404）');
+    expect(text).not.toContain('古い版');
   });
 
   it('通信が途切れて総数だけ失敗しても、一覧は出す', async () => {

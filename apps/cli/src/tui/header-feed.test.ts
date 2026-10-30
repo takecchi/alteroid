@@ -1,15 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeApi, said } from './fake-api.js';
-import { affectsHeader, HeaderFeed, retryDelay } from './header-feed.js';
-
-describe('retryDelay（指数バックオフ）', () => {
-  it('1 秒から倍々で、30 秒で頭打ち', () => {
-    expect([0, 1, 2, 3, 4, 5, 6, 10].map((n) => retryDelay(n))).toEqual([
-      1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000,
-    ]);
-  });
-});
+import { affectsHeader, HeaderFeed } from './header-feed.js';
 
 describe('affectsHeader', () => {
   it('件数に響かない量の多い種別だけを除く', () => {
@@ -48,7 +40,7 @@ describe('HeaderFeed', () => {
     const api = fakeApi();
     api.counts = { pendingApprovals: 0, unreadableApprovals: 0, runningManagers: 0 };
     api.journal.push({ events: ['open'] });
-    const feed = new HeaderFeed(api, { refetchDebounceMs: 100, retryBaseMs: 1_000_000 });
+    const feed = new HeaderFeed(api, { refetchDebounceMs: 100 });
     feed.start();
     await flush();
     api.counts = { pendingApprovals: 0, unreadableApprovals: 2, runningManagers: 0 };
@@ -66,7 +58,7 @@ describe('HeaderFeed', () => {
       return original();
     };
     api.journal.push({ events: ['open', 'escalation', 'exchange', 'tool_use'] });
-    const feed = new HeaderFeed(api, { refetchDebounceMs: 100, retryBaseMs: 1_000_000 });
+    const feed = new HeaderFeed(api, { refetchDebounceMs: 100 });
     feed.start();
     await flush();
     const afterOpen = calls;
@@ -90,7 +82,7 @@ describe('HeaderFeed', () => {
       return original();
     };
     api.journal.push({ events: ['open', 'turn_usage', 'inbox_flow'] });
-    const feed = new HeaderFeed(api, { refetchDebounceMs: 10, retryBaseMs: 1_000_000 });
+    const feed = new HeaderFeed(api, { refetchDebounceMs: 10 });
     feed.start();
     await flush(100);
     expect(calls).toBe(2);
@@ -117,7 +109,7 @@ describe('HeaderFeed', () => {
         return original();
       };
       api.journal.push({ events: ['open', ...events] as never });
-      const feed = new HeaderFeed(api, { refetchDebounceMs: 10, retryBaseMs: 1_000_000 });
+      const feed = new HeaderFeed(api, { refetchDebounceMs: 10 });
       feed.start();
       await flush(100);
       feed.stop();
@@ -143,7 +135,7 @@ describe('HeaderFeed', () => {
     it('取り直さなくても、各画面へは知らせる（記憶の画面が memory_update を受ける）', async () => {
       const api = fakeApi();
       api.journal.push({ events: ['open', 'memory_update', toolUse('clone')] });
-      const feed = new HeaderFeed(api, { refetchDebounceMs: 10, retryBaseMs: 1_000_000 });
+      const feed = new HeaderFeed(api, { refetchDebounceMs: 10 });
       const events: string[] = [];
       feed.onEvent((type) => events.push(type));
       feed.start();
@@ -157,7 +149,7 @@ describe('HeaderFeed', () => {
     const api = fakeApi();
     api.journal.push({ events: ['open', new Error('切れた')] });
     api.journal.push({ events: [new Error('まだ繋がらない')] });
-    const feed = new HeaderFeed(api, { retryBaseMs: 1_000 });
+    const feed = new HeaderFeed(api);
     feed.start();
     await flush();
     expect(feed.store.getSnapshot().live).toBe('offline');
@@ -173,6 +165,27 @@ describe('HeaderFeed', () => {
     await flush(1);
     expect(feed.store.getSnapshot().live).toBe('live');
     expect(feed.store.getSnapshot().counts?.pendingApprovals).toBe(5);
+    feed.stop();
+  });
+
+  it('張り直しの待ちは 1 秒から倍々で、30 秒で頭打ち（#5831）', async () => {
+    const api = fakeApi();
+    api.journal.push({ events: ['open', new Error('切れた')] });
+    for (let i = 0; i < 7; i += 1) api.journal.push({ events: [new Error('まだ繋がらない')] });
+    const feed = new HeaderFeed(api);
+    feed.start();
+    await flush();
+    // 最初の接続が使われ、残りが 7 本
+    expect(api.journal.length).toBe(7);
+
+    let remaining = 7;
+    for (const wait of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+      await flush(wait - 1);
+      expect(api.journal.length).toBe(remaining);
+      await flush(1);
+      remaining -= 1;
+      expect(api.journal.length).toBe(remaining);
+    }
     feed.stop();
   });
 
@@ -211,7 +224,7 @@ describe('HeaderFeed', () => {
   it('stop したら再接続も取り直しも止まる', async () => {
     const api = fakeApi();
     api.journal.push({ events: ['open', new Error('切れた')] });
-    const feed = new HeaderFeed(api, { retryBaseMs: 1_000 });
+    const feed = new HeaderFeed(api);
     feed.start();
     await flush();
     feed.stop();
@@ -235,7 +248,7 @@ describe('HeaderFeed.onEntry（日誌のタブが 1 本の SSE を共有する�
         'escalation',
       ],
     });
-    const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+    const feed = new HeaderFeed(api);
     const seen: string[] = [];
     const stop = feed.onEntry((entry) => seen.push(entry.id));
     const events: string[] = [];
@@ -256,7 +269,7 @@ describe('HeaderFeed.onEntry（日誌のタブが 1 本の SSE を共有する�
       opened += 1;
       return original(signal);
     };
-    const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+    const feed = new HeaderFeed(api);
     feed.onEntry(() => undefined);
     feed.onEntry(() => undefined);
     feed.start();

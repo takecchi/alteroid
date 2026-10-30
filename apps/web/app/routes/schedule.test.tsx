@@ -324,6 +324,38 @@ describe('「今すぐ回す」の表示', () => {
     expect(screen.getAllByText(/^起こした/)).toHaveLength(1);
   });
 
+  // 表示は行が持つ: 一覧から消えた行の「起こした」が、同じ名前で戻ったときに前のまま出ないため
+  it('行が一覧から消えたら、その行の「起こした」も残らない（同じ名前で戻っても出ない）', async () => {
+    const entries = [DEFAULT_ENTRY, OTHER_ENTRY];
+    stubSchedule(entries);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'daily_report を今すぐ回す' }));
+    await screen.findByText(/^起こした/);
+
+    // 一覧の取り直しは、別の行の「外す」で起こす（DELETE の後に取り直す）
+    async function refetchByRemovingOther(): Promise<void> {
+      const before = sent.length;
+      fireEvent.click(screen.getByRole('button', { name: 'other を外す' }));
+      fireEvent.click(
+        within(await screen.findByRole('alertdialog')).getByRole('button', { name: '外す' }),
+      );
+      await waitFor(() => expect(sent.length).toBe(before + 1));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    }
+
+    entries.splice(0, 1);
+    await refetchByRemovingOther();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'daily_report を今すぐ回す' })).toBeNull(),
+    );
+
+    entries.unshift(DEFAULT_ENTRY);
+    await refetchByRemovingOther();
+    await screen.findByRole('button', { name: 'daily_report を今すぐ回す' });
+    expect(screen.queryByText(/^起こした/)).toBeNull();
+  });
+
   it('失敗したときは「起こした」を出さない（失敗は ErrorNote が言う）', async () => {
     stubSchedule([DEFAULT_ENTRY]);
     const ok = globalThis.fetch;
