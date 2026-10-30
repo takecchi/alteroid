@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { describePermissionRuleBreadthText } from '@alteroid/core/cli-light';
+
 import type { ConfirmIo } from './confirm.js';
+import { redactBody } from './redact.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
 vi.mock('./target.js', async (importOriginal) => ({
@@ -225,9 +228,23 @@ describe('alteroid permission list', () => {
     await permissionListCommand();
 
     const text = read();
-    expect(text).toContain('前方一致・狭い（固定 3 語まで一致）');
-    expect(text).toContain('前方一致・広い（固定 1 語のみ');
-    expect(text).toContain('完全一致（最も狭い');
+    expect(text).toContain('広さ: 「gh pr merge」で始まるコマンドが通る（狭い）');
+    expect(text).toContain('広さ: 「gh」で始まるコマンドなら何でも通る（広い）');
+    expect(text).toContain('広さ: この文字列のコマンドだけが通る（最も狭い）');
+    expect(text).not.toMatch(/前方一致|固定 \d 語/);
+  });
+
+  it('規則の広さの文は、Web の許可の画面と同じ core の関数で作る（頭の語は伏せ字を通した規則から）', async () => {
+    const token = `ghp_${'a'.repeat(36)}`;
+    const rule = `Bash(deploy ${token}:*)`;
+    replies.push({ status: 200, body: { grants: [grant({ rule })] } });
+    const read = captureStdout();
+
+    await permissionListCommand();
+
+    const text = read();
+    expect(text).toContain(`広さ: ${describePermissionRuleBreadthText(rule, redactBody(rule))}`);
+    expect(text).not.toContain(token);
   });
 
   it('壊れた規則は「不正」と出す（黙って広いに倒さない）', async () => {

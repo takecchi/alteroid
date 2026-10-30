@@ -77,7 +77,7 @@ describe('/approvals のまとめ送信の案内 — 設問のある承認', () 
     stub([approval('a-3')]);
     renderPage();
 
-    await screen.findByText(/まとめて送る答えはまだ書かれていない/);
+    await screen.findByText(/答えを書いたカードはまだない/);
     expect(screen.queryByText(/設問のある承認/)).toBeNull();
   });
 });

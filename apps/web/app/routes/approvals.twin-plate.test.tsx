@@ -176,7 +176,7 @@ describe('エラーの位置と数', () => {
     const [first, second] = within(item).getAllByRole('alert');
     expect(first!.textContent).not.toContain('まとめて送った回答は通らなかった');
     expect(second!.textContent).toBe('まとめて送った回答は通らなかった: already answered');
-    const conversation = screen.getByText(/この確認は会話に紐づいていない/);
+    const conversation = screen.getByText(/この確認は会話から出たものではない/);
     expect(
       second!.compareDocumentPosition(conversation) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

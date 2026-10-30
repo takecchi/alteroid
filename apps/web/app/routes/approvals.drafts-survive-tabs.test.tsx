@@ -81,7 +81,7 @@ describe('承認待ちの下書き（issue #3295）', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '選択肢を開いて答える' }));
     fireEvent.click(screen.getByRole('radio', { name: /Fly\.io/ }));
-    expect(await screen.findByText('1 件に答えを書いた（送るとまとめて1回で届く）')).toBeTruthy();
+    expect(await screen.findByText('1 件に答えを書いた。まとめて送れる')).toBeTruthy();
 
     await act(() => router.navigate('/approvals/answered'));
     expect(await screen.findByText('回答済みのページ')).toBeTruthy();
@@ -90,7 +90,7 @@ describe('承認待ちの下書き（issue #3295）', () => {
     expect(((await screen.findByPlaceholderText(/答える/)) as HTMLTextAreaElement).value).toBe(
       '書きかけの答え',
     );
-    expect(screen.getByText('1 件に答えを書いた（送るとまとめて1回で届く）')).toBeTruthy();
+    expect(screen.getByText('1 件に答えを書いた。まとめて送れる')).toBeTruthy();
     expect(screen.getByRole('radio', { name: /Fly\.io/ }).getAttribute('aria-checked')).toBe(
       'true',
     );
@@ -157,7 +157,7 @@ describe('承認待ちの下書き（issue #3295）', () => {
     try {
       renderPages();
       fireEvent.change(await screen.findByPlaceholderText(/答える/), { target: { value: '書く' } });
-      expect(await screen.findByText('1 件に答えを書いた（送るとまとめて1回で届く）')).toBeTruthy();
+      expect(await screen.findByText('1 件に答えを書いた。まとめて送れる')).toBeTruthy();
     } finally {
       Storage.prototype.setItem = original;
     }
