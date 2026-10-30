@@ -367,6 +367,17 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
     expect(applyOlderPage(existing, existing, 1, 1000).outcome).toBe('retryLarger');
   });
 
+  it('古い側の頁は next だけで続きを決め、next が無い（undefined）なら件数から推定せず終わりとする (#5708)', () => {
+    const existing = [entry('a', '2026-08-20T00:02:00.000Z')];
+    // limit ちょうどで新規 0 件でも、件数からの retryLarger にしない
+    expect(applyOlderPage(existing, existing, 1, 1000, undefined).outcome).toBe('end');
+    // 件数が limit に満たなくても、limit 以上でも、結果は同じ
+    expect(applyInitialPage(page499, 499, undefined).outcome).toBe('end');
+    expect(applyInitialPage(page499, 500, undefined).outcome).toBe('end');
+    // 継続点が無ければ、末尾の at から until へ戻らない
+    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')])).toBeUndefined();
+  });
+
   it('olderPageQuery: 継続点が在れば afterId/afterAt で読む（一覧が空でも）。null なら撃たない', () => {
     expect(olderPageQuery([], cursor)).toEqual({ afterId: 'c', afterAt: cursor.at });
     expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')], cursor)).toEqual({
