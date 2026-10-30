@@ -35,6 +35,7 @@ import {
   useReportDirty,
 } from '~/lib/leave-guard';
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
+import { isNotFound } from '~/lib/is-not-found';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/practice-detail';
@@ -124,7 +125,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
     (draftTitle !== undefined && draftTitle !== loadedTitle) ||
     (draftContent !== undefined && draftContent !== loadedContent);
 
-  const notFound = error !== undefined && (error as { status?: number }).status === 404;
+  const notFound = isNotFound(error);
   const missing = notFound && data === undefined;
   const goneAfterRead = notFound && data !== undefined;
 

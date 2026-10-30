@@ -3,8 +3,9 @@ import { Link } from 'react-router';
 
 import { HOME_LINK_CLASS, LiveMapCard } from '@alteroid/ui';
 import { useTopology } from '@alteroid/swr';
-import { formatDateTime, topologySceneFromSnapshot } from '@alteroid/logic';
+import { topologySceneFromSnapshot } from '@alteroid/logic';
 
+import { formatEpochMs } from '~/lib/format-epoch-ms';
 import { useNowMs } from '~/lib/use-now';
 
 import { UnreadableJobNote } from './managers';
@@ -34,9 +35,7 @@ export function LiveMap() {
         scene={scene}
         connection={topology.status}
         unavailable={topology.unavailable}
-        staleAt={
-          receivedAt === undefined ? undefined : formatDateTime(new Date(receivedAt).toISOString())
-        }
+        staleAt={receivedAt === undefined ? undefined : formatEpochMs(receivedAt)}
         omittedNote={
           omitted > 0
             ? `ほか ${omitted} 本のマネージャーは地図に載せていない（全件はマネージャー一覧）`

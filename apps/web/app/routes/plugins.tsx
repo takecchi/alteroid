@@ -1,6 +1,7 @@
 // 外部由来の文字列（説明・パス・SKILL.md の冒頭）は素のテキストでだけ描く: HTML や Markdown として解釈すると、取り元が画面を書き換えられるため
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { isNotFound } from '~/lib/is-not-found';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -258,7 +259,7 @@ function AddPlugin({ initial }: { initial: PluginSourceForm }) {
       );
       setPreview(null);
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 404) {
+      if (isNotFound(caught)) {
         setExpired(true);
         setPreview(null);
       } else {

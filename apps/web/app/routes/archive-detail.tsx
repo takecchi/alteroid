@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 
 import { LoadError, RemovedBody } from '~/components/load-error';
+import { isNotFound } from '~/lib/is-not-found';
 
 import { Button, Card, CardHeader, Empty, Page, Spinner } from '@alteroid/ui';
-import { ApiError, useArchive, useArchiveBody } from '@alteroid/swr';
+import { useArchive, useArchiveBody } from '@alteroid/swr';
 import { formatBytes, formatDateTime, redactBody } from '@alteroid/logic';
 
 // 大きな本文を一度に DOM へ載せない: 全部を1つの <pre> に入れるとブラウザが固まるため
@@ -49,7 +50,7 @@ function Body({ id }: { id: string }) {
   const { data: list } = useArchive();
   const entry = list?.entries.find((candidate) => candidate.id === id);
 
-  const notFound = error instanceof ApiError && error.status === 404;
+  const notFound = isNotFound(error);
   const unavailable = data === undefined && error !== undefined;
 
   return (
