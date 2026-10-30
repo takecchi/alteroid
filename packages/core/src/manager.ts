@@ -1780,10 +1780,6 @@ export interface ManagerPoolOptions {
   outboxFetchTotalTimeoutMs?: number;
   /** 預けた退避を取りに行くやり直しの待ち（既定 {@link ARCHIVE_FETCH_RETRY_DELAYS_MS}）。試験が短くするための口。 */
   archiveFetchRetryDelaysMs?: readonly number[];
-  /** 生ログの写しを預けるやり直しの待ち（既定 {@link MIRROR_APPEND_RETRY_DELAYS_MS}）。試験が短くするための口。 */
-  mirrorAppendRetryDelaysMs?: readonly number[];
-  /** 大きいファイルを runner の別口へ押す1つの期限（ms。引数は大きさ）。既定 `outboxFetchDeadlineMs`。主にテスト用。 */
-  stageDeadlineMs?: (size: number) => number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -3517,8 +3513,6 @@ class Pool implements ManagerPool {
   readonly #archiveRefOutcomes = new Map<string, Promise<boolean>>();
   // 本文で（送り直しで）届いた退避の id。参照の取り寄せが「無い」で落ちても落とした扱いにしないため
   readonly #inlineArchiveIds = new Set<string>();
-  readonly #mirrorAppendRetryDelaysMs: readonly number[];
-  readonly #stageDeadlineMs: (size: number) => number;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -3594,12 +3588,8 @@ class Pool implements ManagerPool {
     outboxFetchFileTimeoutMs,
     outboxFetchTotalTimeoutMs,
     archiveFetchRetryDelaysMs,
-    mirrorAppendRetryDelaysMs,
-    stageDeadlineMs,
   }: ManagerPoolOptions) {
     this.#archiveFetchRetryDelaysMs = archiveFetchRetryDelaysMs ?? ARCHIVE_FETCH_RETRY_DELAYS_MS;
-    this.#mirrorAppendRetryDelaysMs = mirrorAppendRetryDelaysMs ?? MIRROR_APPEND_RETRY_DELAYS_MS;
-    this.#stageDeadlineMs = stageDeadlineMs ?? outboxFetchDeadlineMs;
     this.#attachmentLimits = attachmentLimits;
     this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
     this.#outboxFetchTotalTimeoutMs = outboxFetchTotalTimeoutMs;
@@ -5718,7 +5708,7 @@ class Pool implements ManagerPool {
       const stage = runner.stageAttachment?.bind(runner);
       if (stage === undefined) return `大きいファイル ${label} を押す口が無い`;
       // 期限は1つずつのファイルに掛ける。応答しない runner を最長1時間（runner 側の持ち時間）待たない
-      const deadlineMs = this.#stageDeadlineMs(item.size);
+      const deadlineMs = outboxFetchDeadlineMs(item.size);
       const signal = AbortSignal.timeout(deadlineMs);
       const timedOut = `大きいファイル ${label} を runner へ下ろせなかった: 時間の上限（${Math.round(deadlineMs / 100) / 10} 秒）を超えた`;
       let opened: Awaited<ReturnType<AttachmentStore['open']>>;
@@ -10152,7 +10142,7 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 生ログの写しを PG へ預ける。落ちたら `#mirrorAppendRetryDelaysMs` の間を置いてやり直す（#4657）。
+   * 生ログの写しを PG へ預ける。落ちたら `MIRROR_APPEND_RETRY_DELAYS_MS` の間を置いてやり直す（#4657）。
    * 順番は崩れない: 同じ会話の後ろの塊は、この預けが終わるのを `#mirrorTurns` で待っている。
    * やり直しで二重に積まれうるのは uuid の無い行だけ（`append` は1つのトランザクションで、uuid の有る行は衝突を無視する）。抜けるより害が小さい。
    * やり直し切れなかったら日誌にも残す: 標準エラーだけだと、resume した会話のどこが抜けたかを後から辿れないため。
@@ -10161,7 +10151,7 @@ class Pool implements ManagerPool {
     store: NonNullable<Stores['sessionStore']>,
     event: Extract<RunnerEvent, { type: 'mirror' }>,
   ): Promise<void> {
-    const delays = this.#mirrorAppendRetryDelaysMs;
+    const delays = MIRROR_APPEND_RETRY_DELAYS_MS;
     const detail =
       `managerId=${event.managerId} projectKey=${event.key.projectKey} ` +
       `sessionId=${event.key.sessionId} entries=${event.entries.length}`;
