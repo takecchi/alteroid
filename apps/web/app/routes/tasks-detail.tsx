@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
@@ -93,6 +93,9 @@ function TaskText({ task }: { task: Task }) {
   return <Markdown remoteImages={false}>{body}</Markdown>;
 }
 
+// 編集欄の書きかけの報告 id: 編集欄が報告し、やめる確認を挟むかの判断（`useDiscardGuard`）が同じ id を読む。
+const editDirtyId = (taskId: string) => `task-edit:${taskId}`;
+
 function TaskCard({
   task,
   openTasks,
@@ -106,12 +109,11 @@ function TaskCard({
   const {
     editing,
     setEditing,
-    setDirty,
     confirmingDiscard,
     setConfirmingDiscard,
     closeEditor,
     requestCloseEditor,
-  } = useDiscardGuard();
+  } = useDiscardGuard(editDirtyId(task.id));
   const closed = isTaskClosed(task);
   const position = openTasks.findIndex((entry) => entry.id === task.id);
   // 閉じるとページに居たまま行が閉じた側へ移るので、閉じた行には編集欄を出さない。
@@ -135,12 +137,7 @@ function TaskCard({
         </div>
 
         {showEditor ? (
-          <TaskEditor
-            task={task}
-            onDone={closeEditor}
-            onRequestCancel={requestCloseEditor}
-            onDirtyChange={setDirty}
-          />
+          <TaskEditor task={task} onDone={closeEditor} onRequestCancel={requestCloseEditor} />
         ) : (
           <TaskText task={task} />
         )}
@@ -186,12 +183,10 @@ function TaskEditor({
   task,
   onDone,
   onRequestCancel,
-  onDirtyChange,
 }: {
   task: Task;
   onDone: () => void;
   onRequestCancel: () => void;
-  onDirtyChange: (dirty: boolean) => void;
 }) {
   const editTask = useEditTask();
   const [titleDraft, setTitleDraft] = useState<string | undefined>(undefined);
@@ -208,11 +203,7 @@ function TaskEditor({
     (titleDraft !== undefined && titleDraft.trim() === '') ||
     (bodyDraft !== undefined && bodyDraft.trim() === '');
 
-  useReportDirty(`task-edit:${task.id}`, dirty);
-  useEffect(() => {
-    onDirtyChange(dirty);
-  }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  useReportDirty(editDirtyId(task.id), dirty);
 
   async function save(ifMatch: string = baseVersion.current) {
     // ⌘/Ctrl+S は dirty で止まるボタンを通らず直接来るので、門はここに置く。
