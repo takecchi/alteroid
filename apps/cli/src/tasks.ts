@@ -128,7 +128,7 @@ export function renderMigrationPlan(view: MigrationPlanView, title: string = PLA
   const lines = [
     title,
     `  移す（task にして台帳を閉じる）            ${String(summary.toTask)} 件`,
-    `  畳む（human 以外。台帳を閉じるだけ）        ${String(summary.retire)} 件`,
+    `  畳む（manager・external。台帳を閉じるだけ） ${String(summary.retire)} 件`,
     `  既に移した（task が在る。台帳を閉じるだけ）  ${String(summary.closeOnly)} 件`,
     `  移さない（閉じた行。台帳に残す）            ${String(summary.skipClosed)} 件`,
     `  読めない台帳の行（触らない）                ${String(view.unreadableCommitments.length)} 件`,
@@ -186,7 +186,7 @@ export function renderMigrationResult(view: MigrationResultView): string {
   const lines = [
     '台帳 → task の移行を実行した',
     `  移した（task にして台帳を閉じた）  ${String(execution.migrated)} 件${idList(execution.ids.migrated)}`,
-    `  畳んだ（human 以外。台帳を閉じた）  ${String(execution.retired)} 件${idList(execution.ids.retired)}`,
+    `  畳んだ（manager・external。台帳を閉じた）  ${String(execution.retired)} 件${idList(execution.ids.retired)}`,
     `  既に移した（台帳を閉じただけ）      ${String(execution.closeOnly)} 件${idList(execution.ids.closeOnly)}`,
     `  既に閉じていた（別の書き手が先に）  ${String(execution.alreadyClosed)} 件${idList(execution.ids.alreadyClosed)}`,
     `  失敗                                ${String(execution.failed.length)} 件`,
