@@ -71,6 +71,7 @@ import {
   applyAttachmentRequestTimeout,
   attachmentCopiesDir,
   writeStderrLine,
+  DAEMON_FORCED_EXIT_MS,
 } from '@alteroid/core';
 import { codexLoginEnvOf } from './codex-login-env.js';
 import { reportBootToolSearch, reportBootToolSearchObserved } from './boot-tool-search.js';
@@ -133,11 +134,8 @@ const DEFAULT_BIND = '127.0.0.1';
 const RUNNER_URLS_ENV = 'ALTEROID_RUNNER_URLS';
 const RUNNER_URL_ENV = 'ALTEROID_RUNNER_URL';
 
-// 環境変数で渡さず写しを持つ: 正本（`railway/daemon.json` の `drainingSeconds` と `compose.yaml` の `stop_grace_period`）は実行中のプロセスから読めないため。
-const SHUTDOWN_GRACE_MS = 60_000;
-
-// `SHUTDOWN_GRACE_MS` と同じ値にしない: 猶予が切れる時刻には器の SIGKILL が来るため、自分で `exit` する最後の口が負けて消える。
-const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
+// 猶予と forced exit は core の `DAEMON_SHUTDOWN_GRACE_MS` / `DAEMON_FORCED_EXIT_MS`（CLI も同じ値を引く。`packages/core/src/shutdown-grace.ts`）。
+const FORCED_EXIT_MS = DAEMON_FORCED_EXIT_MS;
 
 // forced exit（`FORCED_EXIT_MS`）の内側に収める: 待ったあとに台帳への書き込みの完了待ち・runner の口を閉じる・`storage.close()` が残るため。
 // 積み上げ（#4932）: runner の畳みの待ちの上限は自分の SIGTERM から50秒（`apps/runner/src/index.ts` の `PICKUP_WAIT_LIMIT_MS` の写し）+ 取り寄せの余裕2秒 = 52秒。

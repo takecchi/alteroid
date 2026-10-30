@@ -21,11 +21,11 @@ vi.mock('./paths.js', () => ({
 
 import { spawn } from 'node:child_process';
 import { readFile, rename, rm, stat } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+
+import { DAEMON_FORCED_EXIT_MS } from '@alteroid/core/cli-light';
 
 import {
   CLEANUP_WAIT_MS,
-  DAEMON_FORCED_EXIT_MS,
   ensureRunning,
   start,
   startWithRecovery,
@@ -276,22 +276,6 @@ describe('alteroid daemon stop', () => {
       expect(await stopDaemon(h.deps)).toBe('unresponsive');
       expect(probed).toEqual([]);
     });
-  });
-
-  it('CLI の写し（DAEMON_FORCED_EXIT_MS）が daemon 本体の FORCED_EXIT_MS とずれていない', async () => {
-    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
-    const source = readFileSync(
-      fileURLToPath(new URL('../../daemon/src/index.ts', import.meta.url)),
-      'utf8',
-    );
-    const grace = /const SHUTDOWN_GRACE_MS = ([\d_]+);/.exec(source)?.[1];
-    const margin = /const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - ([\d_]+);/.exec(source)?.[1];
-
-    expect(grace).toBeDefined();
-    expect(margin).toBeDefined();
-    expect(Number(grace?.replaceAll('_', '')) - Number(margin?.replaceAll('_', ''))).toBe(
-      DAEMON_FORCED_EXIT_MS,
-    );
   });
 });
 

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import { DAEMON_FORCED_EXIT_MS } from '@alteroid/core/cli-light';
+
 import { stateDir } from './paths.js';
 import { readSessionRefusal, type SessionRefusal } from './session-refusal.js';
 
@@ -31,9 +33,6 @@ export type StopOutcome =
   | 'unknown'
   // 待ち受けは閉じたが、プロセスがまだ後始末をしている
   | 'cleanup-pending';
-
-// daemon の `FORCED_EXIT_MS`（`apps/daemon/src/index.ts`）の写し: export されておらず、CLI から daemon を import すると本体ごと読み込むため（ずれは daemon.test.ts が見張る）
-export const DAEMON_FORCED_EXIT_MS = 55_000;
 
 // daemon の強制終了より長く待つ: 強制終了の直前まで後始末が続いても、終わるのを見届けてから返すため
 export const CLEANUP_WAIT_MS = DAEMON_FORCED_EXIT_MS + 10_000;
