@@ -10,8 +10,6 @@ import { collectRepoFiles } from './repo-scan-files.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
-
 // `journal-with-contract.ts` は窓を組み立ててよい場所に含める: `JournalStore` の `with` 契約を測る道具で、`readConversationWindow` を経由させると契約の他の分岐（`with` を渡さない・空配列）を直接呼べないため。
 // `journal-deleted-conversation-contract.ts` も同じ理由: 削除した会話を外す絞りがストアの `list` の各分岐（`with` 無し・`limit` だけ）で効くことを、ストアを直に呼んで測る道具である。
 // `journal-withdrawn-contract.ts` も同じ理由: 取り下げの印の行（`with: 'self'`。人間との往復の窓には入らない）が各ストアの `list` で書き戻せることを、ストアを直に呼んで測る道具である。
@@ -51,7 +49,7 @@ export function findHandBuiltConversationWindows(files: readonly string[]): Hand
   return hits;
 }
 
-const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
+const allFiles = collectRepoFiles(ROOT);
 
 describe('会話の走査窓は conversation.ts の readConversationWindow 1か所でだけ組み立てる（issue #418 再発防止）', () => {
   it('前提: 少なくとも1つのソースファイルを見つけている', () => {

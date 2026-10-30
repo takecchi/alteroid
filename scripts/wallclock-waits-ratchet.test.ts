@@ -18,7 +18,6 @@ import {
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BASELINE_REL = 'scripts/wallclock-waits-baseline.json';
 const SELF_REL = 'scripts/wallclock-waits-ratchet.test.ts';
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 
 type Counts = Record<string, number>;
 
@@ -89,9 +88,7 @@ describe('実物の repo: テストの中の実時間の待ちが基準値から
     const baseline = JSON.parse(readFileSync(path.join(ROOT, BASELINE_REL), 'utf8')) as Counts;
     const actual: Counts = {};
     // この歯自身は数えない: 数え方を測るために例の文字列を持つため。
-    const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(
-      (f) => isTestFile(f) && f !== SELF_REL,
-    );
+    const files = collectRepoFiles(ROOT).filter((f) => isTestFile(f) && f !== SELF_REL);
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       const n = countWallclockWaits(readFileSync(path.join(ROOT, file), 'utf8')) as number;

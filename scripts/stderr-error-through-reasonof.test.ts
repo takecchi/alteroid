@@ -11,7 +11,6 @@ import { collectRepoFiles } from './repo-scan-files.js';
 // `apps/cli` は走査しない: 利用者自身の端末へ出す文で、器のログやクローンの文脈へ届かないため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 const SCAN_ROOTS = ['apps/daemon/src/', 'apps/runner/src/', 'packages/core/src/'];
 const ERROR_NAMES = new Set(['e', 'err', 'error', 'cause', 'failure']);
 const ALLOWED_CUSTOM_CLASSES = new Set<string>([
@@ -1052,7 +1051,7 @@ describe('findBareErrorSinkWrites: 語の事前判定（#3006）', () => {
 
 describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を通す（#2512 / #2538 / #2565）', () => {
   it('stderr・announce・postToClone・tools.ts の text・deny の理由に、素の String(error) / error.message が無い（HTTP の応答は daemon / runner の app.ts、#2570）', () => {
-    const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(isScannedSource);
+    const files = collectRepoFiles(ROOT).filter(isScannedSource);
     expect(files.length).toBeGreaterThan(100);
     const offenders = files.flatMap((rel) =>
       findBareErrorSinkWrites(readFileSync(path.join(ROOT, rel), 'utf8'), rel).map(

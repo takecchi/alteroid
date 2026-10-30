@@ -133,7 +133,7 @@ export const BUDGET_HISTORY = [
 export const AGENTS_MD_MAX_BYTES = BUDGET_HISTORY[BUDGET_HISTORY.length - 1].bytes;
 
 /** `cat` が一度に返す上限（バイト）。`.claude/skills/tool-quirks/SKILL.md` の実測。 */
-export const CAT_WINDOW_BYTES = 30_000;
+const CAT_WINDOW_BYTES = 30_000;
 
 /** ファイル IO はしない（読むのは CLI 側）。 */
 export function judgeAgentsMdSize({ bytes, lines }) {

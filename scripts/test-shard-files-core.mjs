@@ -2,7 +2,7 @@
 // どのテスト名にも当たらない `-t` の値: テストの名前にこの文字列を使わない。
 export const NO_MATCH_TEST_NAME = '__alteroid_test_shard_files_matches_no_test__';
 
-export const USAGE =
+const USAGE =
   '使い方: pnpm test:shard-files <scope> <i>/<n>\n' +
   '  例: pnpm test:shard-files packages/storage-pg/src 3/3\n' +
   '  <scope> は repo の根からの相対パス（vitest の位置引数と同じ部分一致）。';

@@ -20,7 +20,7 @@ export function findDirectMkdtempCalls(files) {
   return hits;
 }
 
-export function formatMkdtempGuardMessage(violations) {
+function formatMkdtempGuardMessage(violations) {
   const lines = violations.map((h) => `  ${h.path}:${h.line}  ${h.matched}`);
   return [
     `no-direct-mkdtemp: 直接呼び出しが ${violations.length} 件見つかった:`,

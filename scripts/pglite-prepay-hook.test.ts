@@ -11,8 +11,6 @@ import { collectRepoFiles } from './repo-scan-files.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
-
 const TARGET = /^(?:apps|packages)\/[^/]+\/src\/.+\.test\.tsx?$/;
 
 function stripCommentsAndStrings(src: string): string {
@@ -212,7 +210,7 @@ describe('補助が前払いを持つ（packages/storage-pg/src/test-db.test-sup
 });
 
 describe('実際のテストファイルの走査', () => {
-  const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter((f) => TARGET.test(f));
+  const files = collectRepoFiles(ROOT).filter((f) => TARGET.test(f));
   const entries = files.map((file) => ({ file, src: readFileSync(path.join(ROOT, file), 'utf8') }));
   const verdicts = entries.map(({ file, src }) => ({
     file,
