@@ -1,5 +1,5 @@
 import type { CloneHost, ManagerSummary } from '@alteroid/core';
-import { createMemoryStores } from '@alteroid/core';
+import { createMemoryStores, DEFAULT_SSE_HEARTBEAT_MS } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
@@ -50,9 +50,6 @@ function setup(
     token: 'test-token',
     shutdown: () => undefined,
     ...(options.journal === false ? {} : { journalEvents: bus }),
-    topologyTickMs: 40,
-    topologyDebounceMs: 5,
-    sseHeartbeatMs: 20,
   });
   return { app, journal: bus.journal, workerTools };
 }
@@ -91,6 +88,10 @@ function openStream(response: Response) {
     close: () => reader.cancel(),
   };
 }
+
+// 本番の既定（app.ts の `/topology/stream`）。周期と、出来事の後の束ね待ち
+const TICK_MS = 2000;
+const DEBOUNCE_MS = 200;
 
 beforeEach(() => {
   // `Date` も偽にする: 結果の使い回し `maxAgeMs` が時計を読むため。
@@ -204,7 +205,7 @@ describe('GET /topology/stream', () => {
     expect(topologyResponseSchema.parse(stream.snapshots[0]).managers).toHaveLength(1);
 
     const before = listCalls;
-    await stream.advance(1600);
+    await stream.advance(DEFAULT_SSE_HEARTBEAT_MS);
     expect(listCalls).toBeGreaterThan(before);
     expect(stream.snapshots).toHaveLength(1);
     expect(stream.raw()).toContain(': hb');
@@ -218,7 +219,7 @@ describe('GET /topology/stream', () => {
     expect(stream.snapshots).toHaveLength(1);
 
     await journal.append({ type: 'exchange', with: 'human', role: 'inbound', text: 'やって' });
-    await stream.advance(20);
+    await stream.advance(DEBOUNCE_MS);
     expect(stream.snapshots).toHaveLength(2);
     expect(topologyResponseSchema.parse(stream.snapshots[0]).links).toEqual([]);
     expect(topologyResponseSchema.parse(stream.snapshots[1]).links.map((l) => l.key)).toEqual([
@@ -242,14 +243,14 @@ describe('GET /topology/stream', () => {
       toolUseId: 'tu-1',
       startedAt,
     });
-    await stream.advance(20);
+    await stream.advance(DEBOUNCE_MS);
     expect(stream.snapshots).toHaveLength(2);
     expect(
       topologyResponseSchema.parse(stream.snapshots[1]).managers[0]?.workers[0]?.runningTool,
     ).toEqual({ tool: 'Bash', startedAt });
 
     workerTools.emit({ type: 'tool_end', managerId: 'm1', toolUseId: 'tu-1' });
-    await stream.advance(20);
+    await stream.advance(DEBOUNCE_MS);
     expect(stream.snapshots).toHaveLength(3);
     expect(topologyResponseSchema.parse(stream.snapshots[2]).managers[0]?.workers).toEqual([]);
     await stream.close();
@@ -292,11 +293,9 @@ describe('GET /topology/stream', () => {
       stores,
       token: 'test-token',
       shutdown: () => undefined,
-      topologyTickMs: 30,
-      sseHeartbeatMs: 20,
     });
     const stream = openStream(await app.request('/topology/stream'));
-    await stream.advance(100);
+    await stream.advance(TICK_MS * 2 + 1);
     expect(listCalls).toBeGreaterThan(1);
     expect(stream.snapshots).toHaveLength(0);
     expect(stream.raw().match(/event: unavailable/g)).toHaveLength(1);
@@ -304,7 +303,7 @@ describe('GET /topology/stream', () => {
     expect(stream.raw()).not.toContain('boom');
 
     failing = false;
-    await stream.advance(40);
+    await stream.advance(TICK_MS);
     expect(stream.snapshots).toHaveLength(1);
     await stream.close();
   });
@@ -324,7 +323,7 @@ describe('GET /topology/stream', () => {
     });
     const a = openStream(await app.request('/topology/stream'));
     const b = openStream(await app.request('/topology/stream'));
-    await a.advance(20);
+    await a.advance(1);
     expect(a.snapshots).toHaveLength(1);
     expect(b.snapshots).toHaveLength(1);
 
@@ -337,7 +336,7 @@ describe('GET /topology/stream', () => {
         text: `発言${String(i)}`,
       });
     }
-    await a.advance(20);
+    await a.advance(DEBOUNCE_MS);
     expect(listCalls - before).toBe(1);
     expect(a.snapshots).toHaveLength(2);
     expect(b.snapshots).toHaveLength(2);

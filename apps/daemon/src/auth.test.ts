@@ -5,8 +5,9 @@ import {
   createAuthService,
   createCredentialService,
   createMemoryStores,
+  DEFAULT_SSE_HEARTBEAT_MS,
 } from '@alteroid/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 import {
@@ -97,10 +98,7 @@ function withLeakedAccountField(auth: Stores['auth']): Stores['auth'] {
   };
 }
 
-function buildApp(
-  plan: Partial<AuthPlan> = {},
-  options: { leakAccountField?: boolean; sseHeartbeatMs?: number } = {},
-) {
+function buildApp(plan: Partial<AuthPlan> = {}, options: { leakAccountField?: boolean } = {}) {
   stores = createMemoryStores();
   nextSubject = 'sub-1';
   if (options.leakAccountField === true) {
@@ -121,7 +119,6 @@ function buildApp(
     token: 'test-token',
     shutdown: () => undefined,
     journalEvents: { subscribe: () => () => undefined },
-    ...(options.sseHeartbeatMs === undefined ? {} : { sseHeartbeatMs: options.sseHeartbeatMs }),
     auth: {
       plan: resolved,
       service: createAuthService({
@@ -1090,7 +1087,13 @@ describe('許可済みのアカウントは /credentials /reset /mcp-servers /pr
 });
 
 describe('開いている SSE の資格の確かめ直し（issue #1820）', () => {
-  const HEARTBEAT_MS = 10;
+  // 偽の時計で心拍（`DEFAULT_SSE_HEARTBEAT_MS`）を進める。ストリームの読み書きは本物のまま（時計だけを偽にする）。
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   async function readUntilEnd(
     reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -1118,25 +1121,30 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     return { done: false, text };
   }
 
-  // 壁時計の窓を残す: 外すと、閉じない流れを永久に待つため。
-  async function readForWindow(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    windowMs: number,
-  ): Promise<{ done: boolean; text: string }> {
+  // 偽の時計を `windowMs` 進めるあいだ、流れを読み続ける。閉じたかどうかと読めた文字を、進めた後に返す。
+  function readWhileAdvancing(reader: ReadableStreamDefaultReader<Uint8Array>): {
+    state: () => { done: boolean; text: string };
+    advance: (windowMs: number) => Promise<void>;
+  } {
     const decoder = new TextDecoder();
     let text = '';
-    const deadline = Date.now() + windowMs;
-    for (;;) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return { done: false, text };
-      const result = await Promise.race([
-        reader.read(),
-        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), remaining)),
-      ]);
-      if (result === 'timeout') return { done: false, text };
-      if (result.done) return { done: true, text };
-      text += decoder.decode(result.value, { stream: true });
-    }
+    let done = false;
+    void (async () => {
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) {
+          done = true;
+          return;
+        }
+        text += decoder.decode(result.value, { stream: true });
+      }
+    })();
+    return {
+      state: () => ({ done, text }),
+      advance: async (windowMs) => {
+        await vi.advanceTimersByTimeAsync(windowMs);
+      },
+    };
   }
 
   async function grantedLogin(app: ReturnType<typeof createApp>) {
@@ -1158,7 +1166,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
   }
 
   it('journal: ログアウトした後の心拍で、流れが閉じる', async () => {
-    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp();
     const claimed = await grantedLogin(app);
     const auth = { authorization: `Bearer ${claimed.token}` };
     const reader = await openJournal(app, auth);
@@ -1169,11 +1177,12 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     });
     expect(logout.status).toBe(200);
 
+    await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
     expect((await readUntilEnd(reader)).done).toBe(true);
   });
 
   it('journal: アカウントの許可を取り消した後の心拍で、流れが閉じる', async () => {
-    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp();
     const claimed = await grantedLogin(app);
     const reader = await openJournal(app, { authorization: `Bearer ${claimed.token}` });
 
@@ -1183,11 +1192,12 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     });
     expect(revoked.status).toBe(200);
 
+    await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
     expect((await readUntilEnd(reader)).done).toBe(true);
   });
 
   it('chat: ログアウトした後の心拍で、理由を error イベントで伝えてから閉じる', async () => {
-    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp();
     const claimed = await grantedLogin(app);
     const auth = { authorization: `Bearer ${claimed.token}` };
     const response = await app.request('/chat', {
@@ -1201,6 +1211,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
 
     await app.request('/auth/logout', { ...post, headers: { ...post.headers, ...auth } });
 
+    await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
     const rest = await readUntilEnd(reader);
     expect(rest.done).toBe(true);
     expect(rest.text).toContain('event: error');
@@ -1209,7 +1220,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
   });
 
   it('chat/stream: ログアウトした後の心拍で、理由を error イベントで伝えてから閉じる（Issue #2652）', async () => {
-    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp();
     const claimed = await grantedLogin(app);
     const auth = { authorization: `Bearer ${claimed.token}` };
     const response = await app.request('/chat/conv-a/stream', { headers: auth });
@@ -1219,6 +1230,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
 
     await app.request('/auth/logout', { ...post, headers: { ...post.headers, ...auth } });
 
+    await vi.advanceTimersByTimeAsync(DEFAULT_SSE_HEARTBEAT_MS);
     const rest = await readUntilEnd(reader);
     expect(rest.done).toBe(true);
     expect(rest.text).toContain('event: error');
@@ -1227,22 +1239,24 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
   });
 
   it('対照: ログアウトしなければ、心拍が何度来ても流れは開いたまま', async () => {
-    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp();
     const claimed = await grantedLogin(app);
     const reader = await openJournal(app, { authorization: `Bearer ${claimed.token}` });
 
-    const result = await readForWindow(reader, 200);
-    expect(result.done).toBe(false);
-    expect(result.text).toContain(': hb');
+    const watch = readWhileAdvancing(reader);
+    await watch.advance(DEFAULT_SSE_HEARTBEAT_MS * 3);
+    expect(watch.state().done).toBe(false);
+    expect(watch.state().text).toContain(': hb');
     await reader.cancel();
   });
 
   it('operator の資格で張った流れは、確かめ直さない（いままでどおり開いたまま）', async () => {
-    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp();
     const reader = await openJournal(app, OPERATOR);
 
-    const result = await readForWindow(reader, 200);
-    expect(result.done).toBe(false);
+    const watch = readWhileAdvancing(reader);
+    await watch.advance(DEFAULT_SSE_HEARTBEAT_MS * 3);
+    expect(watch.state().done).toBe(false);
     await reader.cancel();
   });
 });

@@ -9,7 +9,7 @@ import {
   type PluginFetcher,
   type Stores,
 } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 
@@ -64,7 +64,6 @@ function harness(
     fetch?: PluginFetcher['fetch'];
     withFetcher?: boolean;
     distribution?: PluginDistributionService;
-    now?: () => number;
   } = {},
 ) {
   const stores = options.stores ?? createMemoryStores();
@@ -84,7 +83,6 @@ function harness(
     shutdown: () => undefined,
     ...(options.withFetcher === false ? {} : { pluginFetcher: fetcher }),
     ...(options.distribution === undefined ? {} : { pluginDistribution: options.distribution }),
-    ...(options.now === undefined ? {} : { pluginPreviewNow: options.now }),
   });
   const send = (method: string, path: string, body?: unknown) =>
     app.request(path, {
@@ -504,17 +502,23 @@ describe('POST /plugins（確定）', () => {
   });
 
   it('知らない・期限切れの previewId は 404。確定したものは再利用できない', async () => {
-    let now = 1_000_000;
-    const h = harness({ now: () => now });
-    expect((await h.send('POST', '/plugins', { previewId: 'x'.repeat(30) })).status).toBe(404);
+    // 本番と同じ経路（Date.now）で、時計だけを偽にして進める
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(1_000_000);
+      const h = harness();
+      expect((await h.send('POST', '/plugins', { previewId: 'x'.repeat(30) })).status).toBe(404);
 
-    const expired = await preview(h);
-    now += 60 * 60 * 1000;
-    expect((await h.send('POST', '/plugins', { previewId: expired.previewId })).status).toBe(404);
+      const expired = await preview(h);
+      vi.advanceTimersByTime(60 * 60 * 1000);
+      expect((await h.send('POST', '/plugins', { previewId: expired.previewId })).status).toBe(404);
 
-    const p = await preview(h);
-    expect((await h.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(200);
-    expect((await h.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(404);
+      const p = await preview(h);
+      expect((await h.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(200);
+      expect((await h.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(404);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('不正な scope・未知の欄は 400', async () => {
