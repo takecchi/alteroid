@@ -255,7 +255,7 @@ import { matchPermissionRule } from './permission-rule.js';
 import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
-import { UnreadableApprovalError, findOpenManagerDuplicate } from './store.js';
+import { UnreadableApprovalError } from './store.js';
 import type {
   CommitmentList,
   LostSessionGrave,
@@ -9986,18 +9986,6 @@ function recoveryOfQuotaStopRow(
     currentId = next;
     successorId = next;
   }
-}
-
-/**
- * 同じマネージャー × 同じ `body` の未了行が既にあるか。
- * マネージャー起因の行だけに絞る: 人間・外部まで畳むと、たまたま同文の別々の発言を1件に潰す。
- * 閉じたあとの同文は畳まない: 新しい未了として載せないと「二度と報告できなくなる」。
- */
-export function hasOpenManagerDuplicate(
-  entries: readonly Commitment[],
-  entry: Commitment,
-): boolean {
-  return findOpenManagerDuplicate(entries, entry) !== undefined;
 }
 
 /** 中身を持たない「見に行け」の合図か（読まれる前の重複には情報が無い）。 */

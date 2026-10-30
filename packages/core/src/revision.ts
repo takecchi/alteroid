@@ -9,7 +9,6 @@ export {
   describeBuildAge,
   describeBuildRevision,
   describeRevisionStatus,
-  revisionSourceLabel,
   type BuildRevision,
   type BuildTime,
   type RevisionSource,
