@@ -90,9 +90,9 @@ function topologyManagerOf(
   const showRunningTool = mayShowRunningTool(manager);
   const waiting = manager.waiting.slice(0, TOPOLOGY_WAITING_PER_MANAGER).map((item) => ({
     requestId: item.requestId,
-    ...(item.kind === undefined ? {} : { kind: item.kind }),
+    kind: item.kind,
     summary: clipLine(item.summary, TOPOLOGY_WAITING_SUMMARY_LIMIT),
-    ...(item.askedAt === undefined ? {} : { askedAt: item.askedAt }),
+    askedAt: item.askedAt,
   }));
   const waitingOmitted = manager.waiting.length - waiting.length;
   const workers = activity

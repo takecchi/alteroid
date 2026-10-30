@@ -29,6 +29,7 @@ describe('resume が戻れた印', () => {
         requestId: 'r',
         kind: 'permission',
         summary: '確認',
+        askedAt: '2026-10-30T00:00:00.000Z',
       }),
     ).toBe('ask');
     expect(

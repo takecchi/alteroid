@@ -1359,7 +1359,14 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
         status: 'running',
         toolUseStallAt: '2026-08-16T03:40:00.000Z',
         toolUseStallPending: [{ id: 'tu-1', name: 'Bash' }],
-        waiting: [{ requestId: 'req-1', summary: '許可しますか', kind: 'permission' }],
+        waiting: [
+          {
+            requestId: 'req-1',
+            summary: '許可しますか',
+            kind: 'permission',
+            askedAt: '2026-08-16T03:30:00.000Z',
+          },
+        ],
       });
 
       expect(await screen.findByText('許可しますか')).toBeTruthy();

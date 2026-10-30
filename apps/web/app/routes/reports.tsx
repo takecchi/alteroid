@@ -2,13 +2,13 @@ import { useId } from 'react';
 import { Link } from 'react-router';
 
 import { LoadError } from '~/components/load-error';
+import { OlderFooter } from '~/components/older-footer';
 import {
   markdownComponents,
   toReact,
   Page,
   ListDetail,
   ListDetailItems,
-  Button,
   Empty,
   Spinner,
   cn,
@@ -193,30 +193,15 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
           }
           listFooter={
             hasMore || olderError !== undefined ? (
-              <div className="flex flex-col gap-2 px-4 py-2">
-                <LoadError
-                  what="もっと古い日報"
-                  error={olderError}
-                  onRetry={loadOlder}
-                  retrying={isLoadingOlder}
-                />
-                {hasMore && (
-                  <>
-                    <p className="text-[11px] text-muted-foreground">
-                      いま読んでいるのは {reports.length}{' '}
-                      件ぶん。これより古い日報があるかもしれない。
-                    </p>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      loading={isLoadingOlder}
-                      onClick={loadOlder}
-                    >
-                      もっと古い日報を読む
-                    </Button>
-                  </>
-                )}
-              </div>
+              <OlderFooter
+                noun="日報"
+                unit="件"
+                loadedCount={reports.length}
+                hasMore={hasMore}
+                loading={isLoadingOlder}
+                error={olderError}
+                onLoadOlder={loadOlder}
+              />
             ) : undefined
           }
           emptyDetail={

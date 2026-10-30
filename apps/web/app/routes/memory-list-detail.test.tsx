@@ -56,10 +56,11 @@ function DetailRoute() {
 
 function renderAt(url: string) {
   stubFetch((u) => {
-    const one = /\/memory\/(alpha|beta)(\?|$)/.exec(u);
+    // 1件の口は名前を問わず1件の形で答え、無い名前は daemon と同じく 404: 一覧の形へ落とすと、無い名前の詳細が `data.document` の無い応答を読んで落ちる
+    const one = /\/memory\/([^/?]+)(\?|$)/.exec(u);
     if (one !== null) {
       const found = DOCS.find((d) => d.slug === one[1]);
-      return found === undefined ? undefined : json({ document: found });
+      return found === undefined ? json({ error: 'not found' }, 404) : json({ document: found });
     }
     if (u.includes('/memory')) {
       return json({ documents: DOCS.map((d) => ({ ...d, content: undefined })) });
@@ -133,6 +134,8 @@ describe('記憶の一覧＋詳細', () => {
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/memory/new-one'));
+    // 移った先は、無い名前を「書けば作られる」として開く（画面が落ちて ErrorBoundary に変わらない）
+    expect(await screen.findByText(/まだ無い記憶。書けば作られる/)).toBeTruthy();
   });
 
   it('一覧の行を押すと右の中身が切り替わる', async () => {

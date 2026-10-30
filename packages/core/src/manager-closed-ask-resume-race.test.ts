@@ -176,6 +176,7 @@ describe('終端の closed が、await を挟んで遅れて処理される ask 
         requestId: 'req-1',
         kind: 'question',
         summary: '確認したい',
+        askedAt: '2026-10-30T00:00:00.000Z',
       } as RunnerEvent);
       fake.closed('mgr-ask', closedStatus, '畳んだ');
       await settle();
@@ -205,6 +206,7 @@ describe('終端の closed が、await を挟んで遅れて処理される ask 
         requestId: 'req-late',
         kind: 'question',
         summary: '遅れた確認',
+        askedAt: '2026-10-30T00:00:00.000Z',
       } as RunnerEvent);
       await settle();
       expect(await jobStatusOf(stores, 'mgr-ask-after')).toBe(closedStatus);

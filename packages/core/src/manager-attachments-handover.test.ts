@@ -299,6 +299,7 @@ describe('manager_send の attachments（Issue #3111 段3）', () => {
       requestId: 'req-1',
       kind: 'permission',
       summary: 'rm -rf を実行してよいか',
+      askedAt: '2026-10-30T00:00:00.000Z',
     });
     const meta = await stores.attachments.put({
       name: 'a.txt',

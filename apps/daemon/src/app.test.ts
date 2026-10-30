@@ -4168,36 +4168,43 @@ describe('HTTP API', () => {
     });
   });
 
-  it('kind / askedAt を持たない waiting を抱えたマネージャーでも /managers と /managers/:id は 200 を返す', async () => {
+  it('waiting の kind / askedAt は /managers と /managers/:id へ値ごと出る', async () => {
     fake.managerList.push({
-      managerId: 'mgr-legacy',
+      managerId: 'mgr-waiting',
       status: 'waiting_human',
       live: true,
-      cwd: '/work/legacy',
-      request: '版のずれの窓に入った引き継ぎ',
+      cwd: '/work/waiting',
+      request: '返事待ちの委譲',
       startedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
-      waiting: [{ requestId: 'req-1', summary: 'Bash の実行許可' }],
+      waiting: [
+        {
+          requestId: 'req-1',
+          summary: 'Bash の実行許可',
+          kind: 'permission',
+          askedAt: '2026-01-01T00:00:30.000Z',
+        },
+      ],
     });
+    const expected = {
+      requestId: 'req-1',
+      summary: 'Bash の実行許可',
+      kind: 'permission',
+      askedAt: '2026-01-01T00:00:30.000Z',
+    };
 
     const list = await app.request('/managers');
     expect(list.status).toBe(200);
     const listBody = (await list.json()) as {
-      managers: { managerId: string; waiting: { requestId: string; summary: string }[] }[];
+      managers: { managerId: string; waiting: unknown[] }[];
     };
-    const listed = listBody.managers.find((m) => m.managerId === 'mgr-legacy');
-    expect(listed?.waiting).toHaveLength(1);
-    expect(listed?.waiting[0]?.requestId).toBe('req-1');
-    expect(listed?.waiting[0]?.summary).toBe('Bash の実行許可');
+    const listed = listBody.managers.find((m) => m.managerId === 'mgr-waiting');
+    expect(listed?.waiting).toEqual([expected]);
 
-    const detail = await app.request('/managers/mgr-legacy');
+    const detail = await app.request('/managers/mgr-waiting');
     expect(detail.status).toBe(200);
-    const detailBody = (await detail.json()) as {
-      manager: { waiting: { requestId: string; summary: string }[] };
-    };
-    expect(detailBody.manager.waiting).toHaveLength(1);
-    expect(detailBody.manager.waiting[0]?.requestId).toBe('req-1');
-    expect(detailBody.manager.waiting[0]?.summary).toBe('Bash の実行許可');
+    const detailBody = (await detail.json()) as { manager: { waiting: unknown[] } };
+    expect(detailBody.manager.waiting).toEqual([expected]);
   });
 
   // `describeRoute` の `resolver()` は spec を作るだけで応答を検査しない: 宣言どおりのものが出るのを見るだけでは parse を外しても通るので、宣言に無いフィールドを混ぜて出ないことを見る。

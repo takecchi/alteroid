@@ -5,6 +5,7 @@ import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { EditConflictBand } from '~/components/edit-conflict-band';
 import { LoadError } from '~/components/load-error';
 import {
+  EditedBadge,
   TaskCloseForm,
   TaskMoveControls,
   TaskOriginBadge,
@@ -18,7 +19,6 @@ import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
-  Badge,
   Button,
   Card,
   CardHeader,
@@ -129,9 +129,7 @@ function TaskCard({
               優先順 {position + 1} / {openTasks.length}
             </span>
           )}
-          {task.editedAt !== undefined && (
-            <Badge tone="neutral">編集済み（{formatDateTime(task.editedAt)}）</Badge>
-          )}
+          <EditedBadge editedAt={task.editedAt} />
           <span>{formatDateTime(task.createdAt)}</span>
           <span>({formatRelativeAtMinute(task.createdAt, now)})</span>
         </div>

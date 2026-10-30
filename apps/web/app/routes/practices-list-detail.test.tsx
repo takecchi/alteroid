@@ -55,10 +55,11 @@ function DetailRoute() {
 function renderAt(url: string) {
   stubFetch((u) => {
     if (/\/practices\/[^/?]+\/versions/.test(u)) return json({ versions: [] });
-    const one = /\/practices\/(alpha|beta)(\?|$)/.exec(u);
+    // 1件の口は名前を問わず1件の形で答え、無い名前は daemon と同じく 404: 一覧の形へ落とすと、無い名前の詳細が `data.practice` の無い応答を読んで落ちる
+    const one = /\/practices\/([^/?]+)(\?|$)/.exec(u);
     if (one !== null) {
       const found = ALL.find((d) => d.slug === one[1]);
-      return found === undefined ? undefined : json({ practice: found });
+      return found === undefined ? json({ error: 'not found' }, 404) : json({ practice: found });
     }
     if (u.includes('/practices')) {
       return json({ practices: ALL.map((d) => ({ ...d, content: undefined })) });
@@ -133,6 +134,8 @@ describe('やり方の一覧＋詳細', () => {
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/practices/new-one'));
+    // 移った先は、無い名前を「書けば作られる」として開く（画面が落ちて ErrorBoundary に変わらない）
+    expect(await screen.findByText(/まだ無いやり方。書けば作られる/)).toBeTruthy();
   });
 
   it('一覧の行を押すと右の中身が切り替わる', async () => {

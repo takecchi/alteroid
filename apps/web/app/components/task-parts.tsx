@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 
 import { Badge, Button, ErrorNote, FieldHint, Input, Select } from '@alteroid/ui';
 import { useCloseTask, useMoveTask, useReopenTask } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
 import type { Task, TaskPlacementInput } from '@alteroid/logic';
 
 import { ReopenForm } from '~/components/reopen-form';
@@ -40,6 +41,12 @@ export function TaskStatusBadge({ status }: { status: Task['status'] }) {
     return <Badge tone="neutral">{String(status)}</Badge>;
   }
   return <Badge tone={tones[status] ?? 'neutral'}>{label}</Badge>;
+}
+
+// editedAt の有無だけを見る: 書き換えを通すかはサーバが決めており、editedBy はラベルに使わない。
+export function EditedBadge({ editedAt }: { editedAt: string | undefined }) {
+  if (editedAt === undefined) return null;
+  return <Badge tone="neutral">編集済み（{formatDateTime(editedAt)}）</Badge>;
 }
 
 const ORIGIN_LABEL: Record<string, string | undefined> = {

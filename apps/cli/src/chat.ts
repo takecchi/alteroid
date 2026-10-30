@@ -3413,15 +3413,12 @@ export function renderManagerList(
   return lines.join('\n');
 }
 
-type ManagerWaitingItem = ManagerListItem['waiting'][number];
-
-// 絶対値をそのまま出す: 相対表現（「4時間前」）は作らない（AGENTS.md「時刻の扱い」）。無いときは `-` で埋めない: 意味の決まっていない値を作ることになる。
-function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
-  return askedAt === undefined ? '' : `  確認: ${askedAt}`;
+// 絶対値をそのまま出す: 相対表現（「4時間前」）は作らない（AGENTS.md「時刻の扱い」）。
+function describeAskedAt(askedAt: string): string {
+  return `  確認: ${askedAt}`;
 }
 
 // 表示と番号の対応を一緒に作って返す: 別々に作ると、ずれた瞬間に人間が見ていない確認へ答える。
-// `kind`/`askedAt` が欠けていても行は出す: 丸ごと落とすと、人間の返事を待っている最中に口が消える。
 export function renderWaitingList(managers: ManagerListItem[]): {
   text: string;
   entries: { managerId: string; requestId: string }[];

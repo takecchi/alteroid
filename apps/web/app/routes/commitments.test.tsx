@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
-import type { Commitment } from '@alteroid/logic';
+import { formatDateTime, type Commitment } from '@alteroid/logic';
 
 import Commitments, { readableExternalBody } from './commitments';
 
@@ -1063,6 +1063,9 @@ describe('本文の編集（未了の行すべて。origin では隠さない）
 
     await screen.findByText('直した後の本文');
     expect(screen.getByText(/編集済み/)).toBeTruthy();
+    expect(
+      screen.getByText(`編集済み（${formatDateTime('2026-08-26T00:00:00.000Z')}）`),
+    ).toBeTruthy();
   });
 
   it('editedAt が無い行には「編集済み」の印が出ない（一度も編集していない）', async () => {

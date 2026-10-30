@@ -55,16 +55,6 @@ function waitingItem(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem
   };
 }
 
-// `as unknown as` / `as any` を使わず、`Partial` から1段の `as` で緩める: 何を緩めたかを型名から読めるようにするため
-function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem {
-  const base: Partial<ManagerWaitingItem> = {
-    requestId: 'req-legacy',
-    summary: '版ずれの窓からの確認',
-    ...over,
-  };
-  return base as ManagerWaitingItem;
-}
-
 describe('renderManagerList', () => {
   it('provider の行を出さない（層は常に Claude。2026-10-07 の決定）', () => {
     expect(renderManagerList([manager()])).not.toContain('provider:');
@@ -280,16 +270,6 @@ describe('renderManagerList', () => {
 
     expect(text).toContain('2026-08-20T01:02:03.000Z');
     expect(text).not.toMatch(/時間前|分前|日前/);
-  });
-
-  it('kind も askedAt も無い待ちが混じっていても落ちず、種別不明として出す', () => {
-    const text = renderManagerList([manager({ waiting: [legacyWaiting()] })]);
-
-    expect(text).toContain('返事待ち');
-    expect(text).toContain('種別不明');
-    expect(text).not.toContain('実行許可');
-    expect(text).not.toContain('質問');
-    expect(text).not.toContain('確認:');
   });
 
   it('拒否がゼロなら何も足さない（0 件だったとは言わない）', () => {
@@ -1220,18 +1200,6 @@ describe('renderWaitingList', () => {
 
     expect(entries).toEqual([]);
     expect(text).toContain('返事待ちのマネージャーはいません');
-  });
-
-  it('kind も askedAt も無い待ちが混じっていても落ちず、種別不明として出す', () => {
-    const { text, entries } = renderWaitingList([
-      manager({ managerId: 'mgr-legacy', waiting: [legacyWaiting()] }),
-    ]);
-
-    expect(entries).toEqual([{ managerId: 'mgr-legacy', requestId: 'req-legacy' }]);
-    expect(text).toContain('[1]');
-    expect(text).toContain('種別不明');
-    expect(text).not.toContain('実行許可');
-    expect(text).not.toContain('確認:');
   });
 });
 
@@ -6129,24 +6097,6 @@ describe('chat の /waiting', () => {
     await runSlashCommand('/waiting', ...slashArgs(client, emptyListed()));
 
     expect(read()).toContain('返事待ちのマネージャーはいません');
-  });
-
-  it('kind も askedAt も無い待ちにも番号が振られ、/reply で答えられる', async () => {
-    const { calls, client } = stubClient({
-      managers: [manager({ managerId: 'mgr-legacy', waiting: [legacyWaiting()] })],
-    });
-    const listed = emptyListed();
-    captureStdout();
-
-    await runSlashCommand('/waiting', ...slashArgs(client, listed));
-    expect(listed.waiting).toEqual([{ managerId: 'mgr-legacy', requestId: 'req-legacy' }]);
-
-    await runSlashCommand('/reply 1 了解しました', ...slashArgs(client, listed));
-    const sent = calls.find((call) => call.route === 'POST /managers/:id/messages');
-    expect(sent?.args).toEqual({
-      param: { id: 'mgr-legacy' },
-      json: { text: '了解しました', requestId: 'req-legacy' },
-    });
   });
 
   it('待ちが1件以上あるヒントに、/allow /deny が [番号|requestId]（省略可）と、1本だけなら番号無しの案内を持つ', async () => {

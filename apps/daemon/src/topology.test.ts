@@ -184,6 +184,8 @@ describe('buildTopologySnapshot', () => {
       const waiting = Array.from({ length: TOPOLOGY_WAITING_PER_MANAGER + 3 }, (_, i) => ({
         requestId: `q${String(i)}`,
         summary: `質問\n${long}`,
+        kind: 'question' as const,
+        askedAt: iso(-1000),
       }));
       const [row] = buildTopologySnapshot(
         inputs({ managers: [manager('m1', { request: long, status: 'waiting_human', waiting })] }),

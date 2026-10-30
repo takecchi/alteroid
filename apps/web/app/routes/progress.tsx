@@ -1,6 +1,8 @@
+import { FilterNote } from '~/components/filter-note';
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { clipRawValue } from '~/lib/clip-raw-value';
+import { duplicateParamNotice } from '~/lib/duplicate-param-notice';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { useMemo, useState, type ReactNode } from 'react';
 
@@ -84,9 +86,7 @@ export default function ProgressPage() {
         />
       </div>
 
-      {hasDuplicateWindow && (
-        <p className="mb-4 text-xs text-warn">期間の指定が複数あるので、先頭の値を使っています</p>
-      )}
+      {hasDuplicateWindow && <FilterNote>{duplicateParamNotice('期間')}</FilterNote>}
 
       {invalidWindow !== null && (
         <p className="mb-4 text-xs text-warn">

@@ -210,7 +210,14 @@ async function askingSetup(leaseAgeMs: number, holderSeenAgoMs = 1_000) {
     status: 'waiting_human',
     cwd: '/work/project',
     request: '続きをやって',
-    waiting: [{ requestId: 'req-1', summary: '本番へ出してよいか', kind: 'question' }],
+    waiting: [
+      {
+        requestId: 'req-1',
+        summary: '本番へ出してよいか',
+        kind: 'question',
+        askedAt: '2026-10-30T00:00:00.000Z',
+      },
+    ],
     sessionId: 'sess-1',
   });
   x.emit({
