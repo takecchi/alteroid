@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createCodexChatgptAuthService } from './codex-chatgpt-auth-service.js';
 import type { CodexDeviceLogin, CodexDeviceLoginOutcome } from './codex-device-login.js';
 import { fingerprintOf } from './credentials.js';
-import { RunnerCodexAuthUnsupportedError, type RunnerClient } from './runner-protocol.js';
+import { RunnerHttpError, type RunnerClient } from './runner-protocol.js';
 import type { JournalEntryInput } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -14,10 +14,10 @@ const REFRESHED_B = '{"tokens":{"refresh_token":"rt-B-fake"}}';
 class FakeRunner {
   readonly pushes: ({ value: string; revision: string } | null)[] = [];
   writeBack: { value: string; baseRevision: string; fingerprint: string } | null = null;
-  unsupported = false;
+  failing = false;
   constructor(readonly runnerId: string) {}
   async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
-    if (this.unsupported) throw new RunnerCodexAuthUnsupportedError(this.runnerId);
+    if (this.failing) throw new RunnerHttpError('404 Not Found', 404);
     this.pushes.push(push);
   }
   async takeCodexAuthWriteBack(fingerprint: string) {
@@ -251,24 +251,15 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
     expect(await h.stores.codexAuth.get()).toBeNull();
   });
 
-  it('ログインしていなければ、名乗った runner へ「無い」を降ろすだけで、古い runner のことも日誌に書かない', async () => {
-    const h = setup(['old']);
-    const old = h.runners[0] as FakeRunner;
-    old.unsupported = true;
-    await h.service.syncRunner(old.client);
-    expect(h.journal).toEqual([]);
-    expect((await h.service.status()).loggedIn).toBe(false);
-  });
-
-  it('ログイン済みで古い runner（口が無い）へ降ろせないときは、1度だけ日誌に書く', async () => {
+  it('runner へ降ろせないときは、ふつうの失敗として降ろすたびに日誌に書く', async () => {
     const h = setup(['old']);
     await loggedIn(h);
     const old = h.runners[0] as FakeRunner;
-    old.unsupported = true;
+    old.failing = true;
     await h.service.syncRunner(old.client);
     await h.service.syncRunner(old.client);
     const notes = h.journal.filter((e) => JSON.stringify(e).includes('降ろせなかった'));
-    expect(notes).toHaveLength(1);
+    expect(notes).toHaveLength(2);
   });
 
   it('取り消すと canceled になり、正本は変わらない', async () => {

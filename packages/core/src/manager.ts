@@ -100,9 +100,6 @@ import {
   RUNNER_CAPABILITY_RESCUE_RESTORE,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   RunnerHttpError,
-  RunnerMcpServersUnsupportedError,
-  RunnerPermissionRulesUnsupportedError,
-  RunnerPluginsUnsupportedError,
 } from './runner-protocol.js';
 import {
   classifyAutoFoldUnpushedWorkProbe,
@@ -921,11 +918,9 @@ export interface RunnerPushHealth {
   profile?: RunnerPushOutcome;
   credentials?: RunnerPushOutcome;
   agentToken?: RunnerPushOutcome;
-  /** 口を持たない古い runner へは `failed` で記録するが、挑み直しには数えない（`RunnerMcpServersUnsupportedError` の doc）。 */
   mcpServers?: RunnerPushOutcome;
-  /** 口を持たない古い runner へは `failed` で記録するが、挑み直しには数えない（`RunnerPluginsUnsupportedError` の doc）。 */
   plugins?: RunnerPushOutcome;
-  /** 委譲先の許可規則（#4952）。口を持たない古い runner へは `failed` で記録するが、挑み直しには数えない（`RunnerPermissionRulesUnsupportedError` の doc）。 */
+  /** 委譲先の許可規則（#4952）。 */
   permissionRules?: RunnerPushOutcome;
 }
 
@@ -3186,12 +3181,8 @@ class Pool implements ManagerPool {
   readonly #credentials: CredentialService | undefined;
   readonly #mcpServers: McpServerService | undefined;
   readonly #codexAuth: CodexAuthRunnerSync | undefined;
-  /** **挑み直しの予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに `#pushMcpServers` がもう一度試す。 */
-  readonly #mcpServersUnsupported = new Set<string>();
   readonly #plugins: PluginDistributionService | undefined;
-  readonly #pluginsUnsupported = new Set<string>();
   readonly #permissionRules: DelegatedPermissionRuleService | undefined;
-  readonly #permissionRulesUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
   /** **器の時計を直に読まない**（時計を渡せないと「猶予の中では奪わない」を確かめる試験が書けない）。 */
   readonly #now: () => number;
@@ -8645,19 +8636,14 @@ class Pool implements ManagerPool {
   /**
    * 別の呼びにする: 片方が落ちても片方は降りるべき。
    * 日誌には値を書かない: 失敗の理由は runner の文言をそのまま運ぶが、`parseMcpServers` が値を載せない形で作っている。
-   * 古い runner（口を持たない）は挑み直しに数えない（`#mcpServersUnsupported`）。
    */
   async #pushMcpServers(runner: RunnerClient): Promise<void> {
     if (this.#stopped || this.#mcpServers === undefined) return;
     const runnerId = runner.runnerId;
     try {
       await this.#mcpServers.syncRunner(runner);
-      this.#mcpServersUnsupported.delete(runnerId);
       this.#notePushOutcome(runnerId, 'mcpServers', { status: 'ok', at: this.#nowIso() });
     } catch (error) {
-      const unsupported = error instanceof RunnerMcpServersUnsupportedError;
-      if (unsupported) this.#mcpServersUnsupported.add(runnerId);
-      else this.#mcpServersUnsupported.delete(runnerId);
       this.#notePushOutcome(runnerId, 'mcpServers', {
         status: 'failed',
         at: this.#nowIso(),
@@ -8673,19 +8659,14 @@ class Pool implements ManagerPool {
 
   /**
    * 日誌には files の中身を書かない（名前と runner の失敗理由だけ）。
-   * 古い runner（口を持たない）は挑み直しに数えない（`#pluginsUnsupported`）。
    */
   async #pushPlugins(runner: RunnerClient): Promise<void> {
     if (this.#stopped || this.#plugins === undefined) return;
     const runnerId = runner.runnerId;
     try {
       await this.#plugins.syncRunner(runner);
-      this.#pluginsUnsupported.delete(runnerId);
       this.#notePushOutcome(runnerId, 'plugins', { status: 'ok', at: this.#nowIso() });
     } catch (error) {
-      const unsupported = error instanceof RunnerPluginsUnsupportedError;
-      if (unsupported) this.#pluginsUnsupported.add(runnerId);
-      else this.#pluginsUnsupported.delete(runnerId);
       this.#notePushOutcome(runnerId, 'plugins', {
         status: 'failed',
         at: this.#nowIso(),
@@ -8702,19 +8683,14 @@ class Pool implements ManagerPool {
   /**
    * 委譲先の許可規則（#4952）。別の呼びにする: 片方が落ちても片方は降りるべき。
    * 日誌に規則の本文（command の全文）を書かない: 失敗の理由は runner の文言をそのまま運ぶが、`parseDelegatedPermissionRules` が値を載せない形で作っている。
-   * 古い runner（口を持たない）は挑み直しに数えない（`#permissionRulesUnsupported`）。
    */
   async #pushPermissionRules(runner: RunnerClient): Promise<void> {
     if (this.#stopped || this.#permissionRules === undefined) return;
     const runnerId = runner.runnerId;
     try {
       await this.#permissionRules.syncRunner(runner);
-      this.#permissionRulesUnsupported.delete(runnerId);
       this.#notePushOutcome(runnerId, 'permissionRules', { status: 'ok', at: this.#nowIso() });
     } catch (error) {
-      const unsupported = error instanceof RunnerPermissionRulesUnsupportedError;
-      if (unsupported) this.#permissionRulesUnsupported.add(runnerId);
-      else this.#permissionRulesUnsupported.delete(runnerId);
       this.#notePushOutcome(runnerId, 'permissionRules', {
         status: 'failed',
         at: this.#nowIso(),
@@ -12246,23 +12222,11 @@ class Pool implements ManagerPool {
   // 日誌の行はここでは書かない: 即時の配布の失敗を日誌へ残すのは呼び出し元（`app.ts` / `tools.ts`）で、ここでも書くと二重になる。
   #recordDirectPushResults(
     kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins' | 'agentToken' | 'permissionRules',
-    results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
+    results: readonly { runnerId: string; ok: boolean; error?: string }[],
   ): void {
     if (this.#stopped) return;
     const at = this.#nowIso();
     for (const result of results) {
-      if (kind === 'permissionRules') {
-        if (result.unsupported === true) this.#permissionRulesUnsupported.add(result.runnerId);
-        else this.#permissionRulesUnsupported.delete(result.runnerId);
-      }
-      if (kind === 'mcpServers') {
-        if (result.unsupported === true) this.#mcpServersUnsupported.add(result.runnerId);
-        else this.#mcpServersUnsupported.delete(result.runnerId);
-      }
-      if (kind === 'plugins') {
-        if (result.unsupported === true) this.#pluginsUnsupported.add(result.runnerId);
-        else this.#pluginsUnsupported.delete(result.runnerId);
-      }
       this.#notePushOutcome(
         result.runnerId,
         kind,
@@ -12276,16 +12240,9 @@ class Pool implements ManagerPool {
 
   #settlePushRetry(runnerId: string): void {
     const health = this.#pushHealth.get(runnerId);
-    // 口を持たない古い runner への MCP の登録は数えない: 挑み直しても同じ 404 が返るだけで、同じ失敗が日誌へ積まれ続ける。
     const stillFailing =
       health !== undefined &&
-      Object.entries(health).some(
-        ([kind, outcome]) =>
-          outcome?.status === 'failed' &&
-          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)) &&
-          !(kind === 'plugins' && this.#pluginsUnsupported.has(runnerId)) &&
-          !(kind === 'permissionRules' && this.#permissionRulesUnsupported.has(runnerId)),
-      );
+      Object.values(health).some((outcome) => outcome?.status === 'failed');
     if (!stillFailing) {
       this.#pushRetryDelays.delete(runnerId);
       return;
@@ -12326,18 +12283,9 @@ class Pool implements ManagerPool {
     if (health.profile?.status === 'failed') await this.#pushProfile(runner);
     if (health.credentials?.status === 'failed') await this.#pushCredentials(runner);
     if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
-    if (health.mcpServers?.status === 'failed' && !this.#mcpServersUnsupported.has(runnerId)) {
-      await this.#pushMcpServers(runner);
-    }
-    if (health.plugins?.status === 'failed' && !this.#pluginsUnsupported.has(runnerId)) {
-      await this.#pushPlugins(runner);
-    }
-    if (
-      health.permissionRules?.status === 'failed' &&
-      !this.#permissionRulesUnsupported.has(runnerId)
-    ) {
-      await this.#pushPermissionRules(runner);
-    }
+    if (health.mcpServers?.status === 'failed') await this.#pushMcpServers(runner);
+    if (health.plugins?.status === 'failed') await this.#pushPlugins(runner);
+    if (health.permissionRules?.status === 'failed') await this.#pushPermissionRules(runner);
     this.#settlePushRetry(runnerId);
   }
 

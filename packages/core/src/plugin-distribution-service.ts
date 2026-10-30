@@ -6,7 +6,6 @@ import {
   type PluginSummary,
 } from './plugins.js';
 import {
-  RunnerPluginsUnsupportedError,
   type RunnerClient,
   type RunnerPluginsFingerprint,
   type RunnerRegistry,
@@ -19,7 +18,7 @@ import type { Stores } from './store.js';
  */
 export interface PluginDistributionService {
   apply(): Promise<ApplyPluginsResult>;
-  /** 同じ版が載っていれば `null`。古い runner（口が 404）は `RunnerPluginsUnsupportedError` を投げる。 */
+  /** 同じ版が載っていれば `null`。 */
   syncRunner(runner: RunnerClient): Promise<{ plugins?: RunnerPluginsFingerprint } | null>;
   onPushed?(listener: (results: readonly PluginsRunnerResult[]) => void): () => void;
 }
@@ -33,8 +32,6 @@ export interface PluginsRunnerResult {
   runnerId: string;
   ok: boolean;
   plugins?: RunnerPluginsFingerprint;
-  /** 古い runner（口が無い）。一時障害と混ぜない。 */
-  unsupported?: true;
   error?: string;
 }
 
@@ -146,9 +143,6 @@ export function createPluginDistributionService(
             return {
               runnerId: runner.runnerId,
               ok: false,
-              ...(error instanceof RunnerPluginsUnsupportedError
-                ? { unsupported: true as const }
-                : {}),
               error: reasonOf(error),
             };
           }

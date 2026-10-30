@@ -5,7 +5,7 @@ import {
   createMemoryStores,
   createRunnerHost,
   createRunnerRegistry,
-  RunnerPermissionRulesUnsupportedError,
+  RunnerHttpError,
   type ManagerPool,
   type PermissionGrant,
   type RunnerClient,
@@ -154,7 +154,7 @@ describe('委譲先の許可規則を HTTP の runner へ降ろす（#4952）', 
     expect(JSON.stringify(placed)).not.toContain('gh pr view');
   });
 
-  it('古い runner（口が無い＝404）は「口なし」と記録され、委譲は止まらない', async () => {
+  it('口が 404 の runner は、ほかの HTTP の失敗と同じく失敗と記録され、委譲は止まらない', async () => {
     const stores = createMemoryStores();
     await stores.permissionGrants.put(grant('g-exact', 'Bash(gh pr view 1)'));
     const r = await rig({ stores, oldRunner: true });
@@ -163,10 +163,8 @@ describe('委譲先の許可規則を HTTP の runner へ降ろす（#4952）', 
 
     const outcome = r.pool.pushHealthOf('runner-primary')?.permissionRules;
     expect(outcome?.status).toBe('failed');
-    expect(outcome?.error).toContain('委譲先の許可規則を受け取る口を持たない');
-    await expect(r.client.setPermissionRules?.([])).rejects.toBeInstanceOf(
-      RunnerPermissionRulesUnsupportedError,
-    );
+    expect(outcome?.error).toContain('(404)');
+    await expect(r.client.setPermissionRules?.([])).rejects.toBeInstanceOf(RunnerHttpError);
     const journal = JSON.stringify(await stores.journal.list({}));
     expect(journal).toContain('委譲先の許可規則を降ろせなかった');
     expect(journal).not.toContain('gh pr view 1');

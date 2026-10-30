@@ -1322,8 +1322,6 @@ export const mcpServersUpdateResponseSchema = z.object({
       runnerId: z.string(),
       ok: z.boolean(),
       mcpServers: runnerMcpServersFingerprintSchema.optional(),
-      // 一時障害と区別する: 疑う先が「待てば直る」ではなく「runner の版」のため。
-      unsupported: z.literal(true).optional(),
       error: z.string().optional(),
     }),
   ),
@@ -1439,7 +1437,6 @@ const pluginRunnerResultSchema = z.object({
       updatedAt: z.string(),
     })
     .optional(),
-  unsupported: z.literal(true).optional(),
   error: z.string().optional(),
 });
 
