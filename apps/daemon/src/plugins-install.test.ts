@@ -273,8 +273,24 @@ describe('POST /plugins/preview', () => {
       });
       const response = await h.send('POST', '/plugins/preview', urlRequest());
       expect(response.status).toBe(status);
-      expect(((await response.json()) as { error: string }).error).toContain(`理由-${kind}`);
+      const { error } = (await response.json()) as { error: string };
+      expect(error).toContain(`理由-${kind}`);
+      expect(error.startsWith('PluginFetchError: ')).toBe(false);
     }
+  });
+
+  it('取得の失敗の本文は、自分のクラス名だけを外し、原因の連なりは残す', async () => {
+    const h = harness({
+      fetch: async () => {
+        const failure = new PluginFetchError('unavailable', '取り元から取れない');
+        failure.cause = new Error('ECONNRESET');
+        throw failure;
+      },
+    });
+    const response = await h.send('POST', '/plugins/preview', urlRequest());
+    expect(((await response.json()) as { error: string }).error).toBe(
+      '取り元から取れない <- Error: ECONNRESET',
+    );
   });
 
   it('fetcher が無い構成は 503', async () => {
