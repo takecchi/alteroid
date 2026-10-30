@@ -120,7 +120,7 @@ ${buildSelfKnowledge(self)}
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）。
 - \`commitment_list\` / \`commitment_open\` / \`commitment_close\` / \`commitment_close_many\` / \`commitment_reopen\` / \`commitment_edit\`: 引き受けたまま終わっていない仕事の台帳。**順序は持たない**（何を先にやるかはあなたが決める）。
 - \`task_list\` / \`task_add\` / \`task_move\` / \`task_set_status\` / \`task_keep\`: 順序と状態を持つ待ち行列（台帳とは別の器）。人間の依頼は自動で載り、返答のターンの終わりに自動で done になる（止めるのが \`task_keep\`）。
-- \`progress_read\` / \`github_observation_record\`: 作業の進捗を台帳と委譲の行から数え直して読む／GitHub を見て数えた件数を日誌へ記録する（デーモンは GitHub を見に行かない）。
+- \`progress_read\` / \`github_observation_record\`: 作業の進捗を task と委譲の行から数え直して読む／GitHub を見て数えた件数を日誌へ記録する（デーモンは GitHub を見に行かない）。
 - \`inbox_remove_many\`: 自分の側の都合で溜まった受信箱の合図を、絞り込んでまとめて畳む（人間起点の合図は選べない）。
 - \`profile_read\` / \`profile_write\` / \`profile_remove\`: 実行環境プロファイル（鍵・\`PATH\` など。使い方は上の「実行環境そのものを渡されたら」）。
 - \`practice_list\` / \`practice_read\` / \`practice_history\` / \`practice_write\` / \`practice_remove\`: 仕事のやり方（記憶とは別の器）。**実行される定義ではない** — 読んで従うかどうかは、そのときのあなたが毎回決める。
@@ -325,7 +325,7 @@ export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いま�
 - 「旧台帳に開いている N 件」と出ていたら、それは Task に同じ id が無い未了である。\`commitment_list\` で読み、順序は待ち行列の先頭とは別に、あなたが目的に照らして決める。
 - 走っている仕事の様子が気になるなら \`manager_list\` で見て、必要なら \`manager_send\` で追う。
 - 人間に確かめたいことができたら \`ask_human\` に積む（人間が居なくても、そこで止まるのはその件だけである）。
-- この tick は、動ける仕事（待ち行列の queued / needs_decision・旧台帳の未了）があるときと、1日1回の点検のときだけ届く。来ない間も、人間・報告・timer の合図は通常どおり届く。
+- この tick は、動ける仕事（待ち行列の queued / needs_decision）があるときと、1日1回の点検のときだけ届く。来ない間も、人間・報告・timer の合図は通常どおり届く。
 - **何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。
 - ただし、動いている委譲が無い器があるなら、なぜ空いているのかを先に確かめること。
 - いまの全体（situation）の本数・内訳で足りるなら \`manager_list\` / \`runner_list\` は引かない。内訳が要るときだけ引く。

@@ -104,7 +104,7 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
         <span className="font-medium">{formatDateTime(session.firstAt)} からの会話</span>
         <Badge>行数 {session.rows}</Badge>
         <span className="text-muted-foreground">
-          使用量合計 {formatBytes(session.storedBytes)}（最大1行{' '}
+          容量の合計 {formatBytes(session.storedBytes)}（最大1行{' '}
           {formatBytes(session.maxStoredBytes)}）
         </span>
       </div>
@@ -206,7 +206,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
           </Badge>
         )}
       </div>
-      <div className="mt-1 text-muted-foreground">使用量 {formatBytes(entry.storedBytes)}</div>
+      <div className="mt-1 text-muted-foreground">容量 {formatBytes(entry.storedBytes)}</div>
       {!removed && (
         <div className="mt-2">
           <Link to={detailPath} className="underline" aria-label={`${rowName}の本文を読む`}>
@@ -225,7 +225,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
           {entry.removedBytes !== undefined &&
-            `（消した本文は ${formatBytes(entry.removedBytes)}。使用量とは数え方が違うため、空いた容量とは一致しません）`}
+            `（消した本文は ${formatBytes(entry.removedBytes)}。容量とは数え方が違うため、空いた容量とは一致しません）`}
         </div>
       ) : (
         <>

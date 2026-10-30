@@ -40,6 +40,20 @@ describe('SectionTabs', () => {
     expect(links[0]?.getAttribute('aria-current')).toBeNull();
   });
 
+  it('PC 幅（md 以上）では折り返して全部のタブを見せ、狭い幅では横に動かせる', () => {
+    render(
+      <SectionTabs
+        label="設定のページ"
+        tabs={[{ to: '/a', label: 'A' }]}
+        renderLink={(tab, slot) => <a href={tab.to}>{slot.children}</a>}
+      />,
+    );
+    const list = screen.getByRole('list');
+    expect(list.className).toContain('overflow-x-auto');
+    expect(list.className).toContain('md:flex-wrap');
+    expect(list.className).toContain('md:overflow-visible');
+  });
+
   it('タブの高さは、タッチ（pointer: coarse）で 44px 級へ広がる寸法のクラスを持つ', () => {
     expect(TAB_TRIGGER_CLASS).toContain('py-1.5');
     expect(TAB_TRIGGER_CLASS).toContain('pointer-coarse:py-3');

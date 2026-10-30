@@ -140,12 +140,21 @@ describe('依頼の全文は header ではなく本文に置く', () => {
     const body = await screen.findByText(LONG, { normalizer: (text) => text });
     expect(body.textContent).toBe(LONG);
     expect(body.closest('header')).toBeNull();
-    expect(screen.getByText('依頼')).toBeTruthy();
+    expect(screen.getByText('依頼文')).toBeTruthy();
 
     const header = document.querySelector('header');
     expect(header).not.toBeNull();
     expect(header?.textContent ?? '').not.toContain('手順 40:');
-    expect(header?.textContent ?? '').toContain('依頼の全文は下');
+    expect(header?.textContent ?? '').toContain('依頼文の全文は下');
+  });
+
+  it('header の副題は「このマネージャー1体」と言い、行を指して「仕事」とは言わない（#5907）', async () => {
+    renderDetail({ ...BASE, request: LONG });
+
+    await screen.findByText(LONG, { normalizer: (text) => text });
+    const headerText = document.querySelector('header')?.textContent ?? '';
+    expect(headerText).toContain('このマネージャー1体の状態と、走行中に割り込む口');
+    expect(headerText).not.toContain('仕事');
   });
 });
 
@@ -200,7 +209,7 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(screen.getByText(/^Write/)).toBeTruthy();
     expect(screen.getByText(/^WebFetch/)).toBeTruthy();
     expect(screen.getByText(/確認へ上がらず止められた 7 件/)).toBeTruthy();
-    expect(screen.getByText(/この仕事が止まったかどうかは見ていない/)).toBeTruthy();
+    expect(screen.getByText(/このマネージャーが止まったかどうかは見ていない/)).toBeTruthy();
     expect(screen.getByText(/実行環境を作り直すと数え直しになる/)).toBeTruthy();
   });
 
@@ -236,7 +245,7 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
 
-    expect(screen.getByText(/この仕事が止まったかどうかは見ていない/)).toBeTruthy();
+    expect(screen.getByText(/このマネージャーが止まったかどうかは見ていない/)).toBeTruthy();
   });
 
   it('拒否が無いマネージャーには何も足さない（雑音にしない）', async () => {
@@ -460,7 +469,7 @@ describe('詳細でも、失敗は状態を置き換えずに状態へ添える'
     expect(screen.getByText('⚠ 直近のターンは失敗で終わった')).toBeTruthy();
     expect(screen.getByText('billing_error')).toBeTruthy();
     expect(screen.getByText('assistant_error')).toBeTruthy();
-    expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
+    expect(screen.getByText('このマネージャーは死んでいない')).toBeTruthy();
     expect(screen.getByText('何が起きたかの解釈まではしていない')).toBeTruthy();
   });
 
@@ -500,7 +509,7 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
 
     expect(await screen.findByText('停止済み')).toBeTruthy();
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
-    expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
+    expect(screen.queryByText('このマネージャーは死んでいない')).toBeNull();
     expect(screen.queryByText(/いま走っているターンの中身ではない/)).toBeNull();
   });
 
@@ -513,7 +522,7 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
 
     expect(await screen.findByText('rate_limit')).toBeTruthy();
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
-    expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
+    expect(screen.queryByText('このマネージャーは死んでいない')).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
     expect(
       screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
@@ -567,7 +576,7 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     });
 
     expect(await screen.findByText('待機中')).toBeTruthy();
-    expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
+    expect(screen.getByText('このマネージャーは死んでいない')).toBeTruthy();
     expect(screen.getByText(/セッションは生きているので/)).toBeTruthy();
     expect(
       screen.getByText(
@@ -867,6 +876,20 @@ describe('停止は status で出し分けない', () => {
     expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
   });
 
+  it('確認を Esc で閉じたら、焦点は押していた「停止する」へ戻る（body に落ちない）', async () => {
+    const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
+    const trigger = await screen.findByRole('button', { name: '停止する' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByRole('alertdialog');
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(sent).toHaveLength(0);
+  });
+
   it('押しただけでは止まらず、確認で「やめる」なら止めずに閉じ、「停止する」で初めて DELETE が飛ぶ', async () => {
     const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
     fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
@@ -979,20 +1002,20 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
   it('「失われた」と言い切らない（完遂後に畳まれた回も同じ形に見える）', async () => {
     renderDetail({ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING });
 
-    expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
+    expect(await screen.findByText(/このマネージャーが失われたという意味ではない/)).toBeTruthy();
     expect(
       screen.getByText(
         /完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える/,
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/同じ仕事が2本になる/)).toBeTruthy();
+    expect(screen.getByText(/同じ作業をするマネージャーが2体になる/)).toBeTruthy();
   });
 
   it('欄が無ければ何も描かない（雑音にしない）', async () => {
     renderDetail({ ...BASE, status: 'running', live: true });
 
     expect(await screen.findByText('実行中')).toBeTruthy();
-    expect(screen.queryByText(/この委譲のセッションを持っていなかった/)).toBeNull();
+    expect(screen.queryByText(/このマネージャーのセッションを持っていなかった/)).toBeNull();
     expect(screen.queryByText(/名乗っていない/)).toBeNull();
   });
 
@@ -1057,7 +1080,7 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
 
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    expect(screen.getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(screen.getByText(/このマネージャーのセッションを持っていなかった/)).toBeTruthy();
   });
 
   it('時刻は相対表示で、ISO をそのまま出さない', async () => {

@@ -28,7 +28,7 @@ export default function Inbox() {
     <Page
       tabs={<ScheduleTabs />}
       title="受信箱"
-      description="まだ処理し終えていない合図を、絞り込んでまとめて消す。まず試算でき、試算では1件も消さない"
+      description="まだ処理し終えていない合図を、絞り込んでまとめて消す。消した合図はクローンが処理しないまま無くなり、元に戻せない。まず試算でき、試算では1件も消さない"
     >
       <LeaveGuardScope>
         <div className="flex flex-col gap-4">
@@ -398,7 +398,8 @@ function InboxRemoveCard() {
           >
             試算する
           </Button>
-          {result !== null && result.dryRun && (
+          {/* 対象 0 件では出さない: 押すと何も消さずに「実行しました」と出て、消したように読めるため */}
+          {result !== null && result.dryRun && result.targeted > 0 && (
             <Button
               variant="danger"
               size="sm"
@@ -441,14 +442,16 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
         <Badge tone={result.dryRun ? 'warn' : 'ok'}>{result.dryRun ? '試算' : '実行済み'}</Badge>
       </div>
       <p className="mt-2">
-        未読 {result.totalPending} 件中 {result.matched} 件が絞り込みに一致（対象 {result.targeted}{' '}
-        件、上限で持ち越し {result.remaining} 件）
+        未処理 {result.totalPending} 件中 {result.matched} 件が絞り込みに一致（対象{' '}
+        {result.targeted} 件、上限で持ち越し {result.remaining} 件）
       </p>
       {result.dryRun ? (
-        <p className="mt-2 text-muted-foreground">
-          1件も消していません（試算）。この内容でよければ「実行する」を押してください。
-          試算より後に届いた合図は、絞り込みに当たっても消しません。
-        </p>
+        result.targeted > 0 && (
+          <p className="mt-2 text-muted-foreground">
+            1件も消していません（試算）。この内容でよければ「実行する」を押してください。
+            試算より後に届いた合図は、絞り込みに当たっても消しません。
+          </p>
+        )
       ) : (
         <p className="mt-2 text-muted-foreground">
           実行しました。消した id は日誌にも残っています。

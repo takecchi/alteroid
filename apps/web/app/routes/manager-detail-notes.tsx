@@ -57,8 +57,8 @@ export function LostNote({ status }: { status: ManagerStatus }) {
     <p className="border-t border-border px-4 py-3 text-xs text-destructive">
       前のセッションへ戻れなかった。
       <strong className="font-medium">戻れたかどうかしか見ていない</strong>
-      ので、この仕事が終わっていたかどうかは分からない。落ちる直前に PR を出して CI
-      を通し、マージまで届いていた仕事がこの札を貼られた実例がある。
+      ので、このマネージャーが終わっていたかどうかは分からない。落ちる直前に PR を出して CI
+      を通し、マージまで届いていたマネージャーがこの札を貼られた実例がある。
       <br />
       起こし直す前に、まず
       <strong className="font-medium">
@@ -97,7 +97,7 @@ function terminalFailureNote(status: ManagerStatus): ReactNode {
   if (terminal !== null) return terminal;
   return (
     <>
-      <strong className="font-medium">この仕事は死んでいない</strong>
+      <strong className="font-medium">このマネージャーは死んでいない</strong>
       。セッションは生きているので、原因が解ければ下の「話しかける」から続けられる（だから状態は
       <strong className="font-medium">失敗ではなく待機中</strong>
       のままである）。
@@ -167,7 +167,9 @@ export function DenialsCard({
       </ul>
       <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
         止められた事実は数えているが、
-        <strong className="font-medium">それでこの仕事が止まったかどうかは見ていない</strong>
+        <strong className="font-medium">
+          それでこのマネージャーが止まったかどうかは見ていない
+        </strong>
         （サーバに動きを見る手が無い）。全件は
         <Link to="/journal" className="text-primary hover:underline">
           日誌
@@ -225,7 +227,7 @@ function toolUseStallText(manager: ManagerSummary): string | null {
     '道具の応答待ちのまま、誰もその応答を待っていない（矛盾）。生ログの末尾の assistant 行が ' +
     '道具の呼び出しで終わっているのに、対応する結果が生ログに無く、かつこのサーバ側の返事待ち' +
     `も空である。未応答の道具: ${names}。${whenNote}。` +
-    'この状態そのものは何も止めていない——委譲は動き続けてよい。長時間の作業者委譲（Agent 等）の' +
+    'この状態そのものは何も止めていない——このマネージャーは動き続けてよい。長時間の作業者委譲（Agent 等）の' +
     '実行中でも同じ形になりうるので、この行だけで「壊れている」と決めつけないこと。' +
     '生ログの末尾は下の「セッションログ（生）」で読める。'
   );

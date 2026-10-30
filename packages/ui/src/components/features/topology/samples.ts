@@ -287,7 +287,7 @@ export const perRunnerScene: SystemTopologyProps = {
     {
       id: 'p4',
       label: 'mgr-0d2e',
-      task: '器の名前を名乗っていない委譲',
+      task: '器の名前を名乗っていないマネージャー',
       status: 'running',
       flow: 'idle',
       workers: [],

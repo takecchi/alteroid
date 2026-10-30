@@ -52,7 +52,7 @@ function baseBody(overrides: Record<string, unknown> = {}) {
         buckets: { under1h: 1, under24h: 4, under7d: 6, over7d: 1 },
       },
       byState: { untouched: 6, responded: 3, delegated: 2, notApplicable: 4, unjudgeable: 0 },
-      completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
+      completeness: { unreadable: 0, unreadableJobs: 0 },
     },
     inProgress: {
       running: 3,
@@ -65,10 +65,9 @@ function baseBody(overrides: Record<string, unknown> = {}) {
       },
     },
     throughput: {
-      commitmentsOpened: 4,
-      commitmentsClosed: 9,
+      tasksOpened: 4,
+      tasksClosed: 9,
       delegationsEnded: { count: 7, basis: 'updatedAt' },
-      mayBeUndercounted: false,
     },
     forecast: {
       state: 'estimated',
@@ -247,8 +246,7 @@ describe('/progress 画面 — 見込みの3状態と版のずれ', () => {
 
   it.each([
     ['closed_too_few', '期間内に完了した仕事が少なすぎて'],
-    ['ledger_younger_than_window', '記録が期間ぶんたまるまで待つか、短い期間に切り替えてください'],
-    ['history_incomplete', '古い完了済みの記録が整理されていて'],
+    ['tasks_younger_than_window', '記録が期間ぶんたまるまで待つか、短い期間に切り替えてください'],
   ])('unavailable（%s）: 時間を作らず、理由を文で出す', async (reason, text) => {
     stubProgress({
       body: forecastBody({ state: 'unavailable', reason, basis: basis({ closedInWindow: 1 }) }),
@@ -365,7 +363,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       body: baseBody({
         backlog: {
           ...baseBody().backlog,
-          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+          completeness: { unreadable: 2, unreadableJobs: 0 },
         },
       }),
     });
@@ -377,45 +375,13 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     ).toBeTruthy();
   });
 
-  it('対照: 刈られた完了済みの記録だけなら（unreadable が 0）、未完了の数に下限の注記を出さない（#3698）', async () => {
-    stubProgress({
-      body: baseBody({
-        backlog: {
-          ...baseBody().backlog,
-          completeness: { unreadable: 0, trimmedClosed: 5, unreadableJobs: 0 },
-        },
-      }),
-    });
+  it('対照: 読めない行が0件なら、未完了の数にも完了の速度にも「少なくともこれだけ」の注記を出さない（task は刈られない。#5910）', async () => {
+    stubProgress();
     renderPage();
 
     const backlog = within(await card('未完了の仕事'));
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
     expect(backlog.queryByText(/少なくともこれだけ/)).toBeNull();
-  });
-
-  it('throughput.mayBeUndercounted が真なら、完了の速度に「少なくともこれだけ」の注記を出す（#3698）', async () => {
-    stubProgress({
-      body: baseBody({
-        throughput: { ...baseBody().throughput, mayBeUndercounted: true },
-      }),
-    });
-    renderPage();
-
-    const throughput = within(await card('完了の速度'));
-    expect(
-      throughput.getByText(/この期間の件数は、古い記録が整理されたため実際より少ない可能性/),
-    ).toBeTruthy();
-    expect(throughput.getByText(/「少なくともこれだけ」と読んでください/)).toBeTruthy();
-    expect(within(await card('未完了の仕事')).queryByText(/数が実際より少ない可能性/)).toBeNull();
-  });
-
-  it('対照: mayBeUndercounted が偽なら、完了の速度に注記を出さない（#3698）', async () => {
-    stubProgress({
-      body: baseBody({
-        throughput: { ...baseBody().throughput, mayBeUndercounted: false },
-      }),
-    });
-    renderPage();
     expect(within(await card('完了の速度')).queryByText(/実際より少ない可能性/)).toBeNull();
   });
 
@@ -424,7 +390,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       body: baseBody({
         backlog: {
           ...baseBody().backlog,
-          completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 2 },
+          completeness: { unreadable: 0, unreadableJobs: 2 },
         },
       }),
     });
@@ -442,7 +408,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       body: baseBody({
         backlog: {
           ...baseBody().backlog,
-          completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 3 },
+          completeness: { unreadable: 0, unreadableJobs: 3 },
         },
       }),
     });
@@ -470,7 +436,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
           ...base.backlog,
           total: 0,
           age: { ...base.backlog.age, oldestAt: null, medianHours: null },
-          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+          completeness: { unreadable: 2, unreadableJobs: 0 },
         },
       }),
     });

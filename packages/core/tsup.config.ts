@@ -13,6 +13,7 @@ export default defineConfig({
     'src/permission-rule.ts',
     'src/permission-staleness.ts',
     'src/answered-via.ts',
+    'src/permission-grant-consent.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',
     'src/attachment-wording.ts',

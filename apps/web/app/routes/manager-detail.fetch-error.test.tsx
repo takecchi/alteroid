@@ -109,7 +109,7 @@ describe('詳細の取得に失敗したとき（issue #2321）', () => {
     expect(await screen.findByText(/このマネージャーは見つかりません/)).toBeTruthy();
     expect(screen.queryByText(/not found/i)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.queryByText(/依頼の全文は下/)).toBeNull();
+    expect(screen.queryByText(/依頼文の全文は下/)).toBeNull();
     const back = screen.getByRole('link', { name: 'マネージャー一覧へ戻る' });
     expect(back.getAttribute('href')).toBe('/managers');
   });

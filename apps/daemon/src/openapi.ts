@@ -323,6 +323,7 @@ export const conversationDeleteResponseSchema = z.object({
   hiddenCount: z.number().int(),
   attachmentsRemoved: z.number().int(),
   commitmentsRemoved: z.number().int(),
+  tasksRemoved: z.number().int(),
   queuedDropped: z.number().int(),
   approvalsLinked: z.number().int(),
   incomplete: z.array(z.string()),
@@ -1599,7 +1600,7 @@ const progressForecastBasisSchema = z.object({
   minClosedInWindow: progressCount,
 });
 
-// 率（%）は出さない: 分母が定まらないため。`github` はデーモンが GitHub を見に行った結果ではなく、観測した側の申告（`observedBy` を必ず付ける）で、記録が無ければ 0 件ではなく `not_observed`。
+// 進捗は台帳ではなく Task と委譲から数える（#5910）。率（%）は出さない: 分母が定まらないため。`github` はデーモンが GitHub を見に行った結果ではなく、観測した側の申告（`observedBy` を必ず付ける）で、記録が無ければ 0 件ではなく `not_observed`。
 export const progressResponseSchema = z.object({
   observedAt: progressIso,
   window: z.object({ hours: z.number(), from: progressIso, to: progressIso }),
@@ -1628,11 +1629,7 @@ export const progressResponseSchema = z.object({
       notApplicable: progressCount,
       unjudgeable: progressCount,
     }),
-    completeness: z.object({
-      unreadable: progressCount,
-      trimmedClosed: progressCount,
-      unreadableJobs: progressCount,
-    }),
+    completeness: z.object({ unreadable: progressCount, unreadableJobs: progressCount }),
   }),
   inProgress: z.object({
     running: progressCount,
@@ -1645,9 +1642,8 @@ export const progressResponseSchema = z.object({
     }),
   }),
   throughput: z.object({
-    commitmentsOpened: progressCount,
-    commitmentsClosed: progressCount,
-    mayBeUndercounted: z.boolean(),
+    tasksOpened: progressCount,
+    tasksClosed: progressCount,
     delegationsEnded: z.object({ count: progressCount, basis: z.literal('updatedAt') }),
   }),
   forecast: z.discriminatedUnion('state', [
@@ -1660,7 +1656,7 @@ export const progressResponseSchema = z.object({
     z.object({ state: z.literal('not_converging'), basis: progressForecastBasisSchema }),
     z.object({
       state: z.literal('unavailable'),
-      reason: z.enum(['closed_too_few', 'ledger_younger_than_window', 'history_incomplete']),
+      reason: z.enum(['closed_too_few', 'tasks_younger_than_window']),
       basis: progressForecastBasisSchema,
     }),
   ]),

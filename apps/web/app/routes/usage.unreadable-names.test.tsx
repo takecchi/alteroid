@@ -83,7 +83,9 @@ describe('/usage 画面 — 名前の一覧が読めないとき', () => {
     });
     renderUsage();
 
-    expect(await screen.findByText(/委譲の一覧を読めていないので、名前を出せない/)).toBeTruthy();
+    expect(
+      await screen.findByText(/マネージャーの一覧を読めていないので、名前を出せない/),
+    ).toBeTruthy();
     expect(screen.getByText(/認証トークンの一覧を読めていないので、名前を出せない/)).toBeTruthy();
 
     const managers = axisCard('マネージャー別');
@@ -105,7 +107,7 @@ describe('/usage 画面 — 名前の一覧が読めないとき', () => {
 
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
-    expect(within(managers).getAllByText(/^（一覧に無い委譲）/)).toHaveLength(2);
+    expect(within(managers).getAllByText(/^（一覧に無いマネージャー）/)).toHaveLength(2);
     expect(
       within(axisCard('認証トークン別')).getAllByText(/^（一覧に無い認証トークン）/),
     ).toHaveLength(2);
@@ -152,7 +154,7 @@ describe('/usage 絞り込みの選択欄 — URL の値が一覧に無いとき
     });
     renderUsage(SEARCH);
 
-    await screen.findByText(/委譲の一覧を読めていないので、名前を出せない/);
+    await screen.findByText(/マネージャーの一覧を読めていないので、名前を出せない/);
     expect(screen.getByRole('option', { name: 'mgr-aaaa' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'tok-aaaa' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: /一覧に無い/ })).toBeNull();
@@ -173,7 +175,7 @@ describe('/usage 絞り込みの選択欄 — URL の値が一覧に無いとき
     });
     renderUsage(SEARCH);
 
-    expect(await screen.findByRole('option', { name: '（一覧に無い委譲）' })).toBeTruthy();
+    expect(await screen.findByRole('option', { name: '（一覧に無いマネージャー）' })).toBeTruthy();
     expect(screen.getByRole('option', { name: '（一覧に無い認証トークン）' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: 'mgr-aaaa' })).toBeNull();
   });
@@ -186,8 +188,8 @@ describe('/usage 表示名が重なる行（issue #3739）', () => {
     renderUsage();
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = within(axisCard('マネージャー別'));
-    expect(await managers.findByText('（一覧に無い委譲）（mgr-aaaa）')).toBeTruthy();
-    expect(managers.getByText('（一覧に無い委譲）（mgr-bbbb）')).toBeTruthy();
+    expect(await managers.findByText('（一覧に無いマネージャー）（mgr-aaaa）')).toBeTruthy();
+    expect(managers.getByText('（一覧に無いマネージャー）（mgr-bbbb）')).toBeTruthy();
     const tokens = within(axisCard('認証トークン別'));
     expect(tokens.getByText('（一覧に無い認証トークン）（tok-aaaa）')).toBeTruthy();
     expect(tokens.getByText('（一覧に無い認証トークン）（tok-bbbb）')).toBeTruthy();
