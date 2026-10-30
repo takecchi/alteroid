@@ -30,7 +30,7 @@ interface Row {
 }
 
 // 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので、route(url, init) では method も本文も落ちるため
-function stubScreen(rows: Row[], restartRequired: string[] | undefined) {
+function stubScreen(rows: Row[], restartRequired: string[]) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : null;
     const url = request?.url ?? (typeof input === 'string' ? input : String(input));
@@ -42,7 +42,7 @@ function stubScreen(rows: Row[], restartRequired: string[] | undefined) {
       return json({
         credentials: rows,
         runners: [],
-        ...(restartRequired === undefined ? {} : { restartRequired }),
+        restartRequired,
       });
     }
     return json({ credentials: rows });
@@ -91,19 +91,12 @@ describe('/env-vars 画面 — デーモンの再起動で効く名前（#4830�
     expect(note?.className).toContain('text-warn');
   });
 
-  it('普通の名前（restartRequired が空・欄なし）では注記を出さない', async () => {
+  it('普通の名前（restartRequired が空）では注記を出さない', async () => {
     stubScreen([{ ...ROW, name: 'GH_TOKEN', restartRequired: undefined }], []);
     renderScreen();
     await putVar('GH_TOKEN', 'x');
     await screen.findAllByText('GH_TOKEN');
     expect(screen.queryByText(new RegExp(NOTE.slice(0, 8)))).toBeNull();
-    expect(screen.queryByRole('status')).toBeNull();
-
-    cleanup();
-    stubScreen([{ ...ROW, name: 'GH_TOKEN', restartRequired: undefined }], undefined);
-    renderScreen();
-    await putVar('GH_TOKEN', 'y');
-    await screen.findAllByText('GH_TOKEN');
     expect(screen.queryByRole('status')).toBeNull();
   });
 

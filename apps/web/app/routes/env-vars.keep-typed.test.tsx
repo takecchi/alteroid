@@ -29,7 +29,7 @@ function stubServer() {
     if (request.method === 'PUT') {
       puts.push(await request.json());
       return new Promise<Response>((resolve) => {
-        pending.push(() => resolve(json({ credentials: [], runners: [] })));
+        pending.push(() => resolve(json({ credentials: [], restartRequired: [], runners: [] })));
       });
     }
     return json({ credentials: [] });

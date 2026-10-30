@@ -165,7 +165,7 @@ function RunnerPushWarning({
   );
 }
 
-// 古いデーモンの応答には欄が無い: 無ければ出さない（#4830）
+// 再起動で効く名前が無ければ出さない（#4830）
 function RestartRequiredNote({
   update,
   className,
@@ -173,7 +173,7 @@ function RestartRequiredNote({
   update: EnvVarUpdateResult;
   className?: string;
 }) {
-  const names = update.restartRequired ?? [];
+  const names = update.restartRequired;
   if (names.length === 0) return null;
   return (
     <div
@@ -327,7 +327,7 @@ function EditEnvVarDialog({
       const update = await setEnvVar({ name: entry.name, value, scope });
       setSaved({ value, scope });
       // 一部の実行環境へ反映できていない・再起動まで効かない名前なら閉じない: 閉じると注記ごと消えて、すぐ効いたのと見分けが付かないため
-      if (failedRunnerPushes(update).length > 0 || (update.restartRequired ?? []).length > 0) {
+      if (failedRunnerPushes(update).length > 0 || update.restartRequired.length > 0) {
         setResult(update);
       } else onOpenChange(false);
     } catch (caught) {

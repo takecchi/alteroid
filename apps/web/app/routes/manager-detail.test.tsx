@@ -425,24 +425,26 @@ describe('待ちは kind で質問と実行許可を出し分ける（#334）', 
     }
   });
 
-  it('kind が届かない（版のずれ）ときは許可確認と同じ2ボタンへ倒れる', async () => {
+  it('知らない kind が届いたときは許可確認と同じ2ボタンへ倒れる', async () => {
     renderDetail({
       ...BASE,
       status: 'waiting_human',
       waiting: [
         {
           requestId: 'req-unknown',
-          summary: '種別が来なかった確認',
-          // as で割り込む: 型は kind を必須で持つので、古いデーモンの版ずれを模すにはこうするしかないため
-        } as ManagerSummary['waiting'][number],
+          summary: '知らない種別の確認',
+          askedAt: '2026-08-23T01:00:00.000Z',
+          // as で割り込む: 型は kind を 'permission' | 'question' で持つので、新しい版の値を模すにはこうするしかないため
+          kind: 'someday-new' as ManagerSummary['waiting'][number]['kind'],
+        },
       ],
     });
 
-    expect(await screen.findByText('種別が来なかった確認')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '「種別が来なかった確認」を許可' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '「種別が来なかった確認」を拒否' })).toBeTruthy();
+    expect(await screen.findByText('知らない種別の確認')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '「知らない種別の確認」を許可' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '「知らない種別の確認」を拒否' })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: '「種別が来なかった確認」を拒否' }).className,
+      screen.getByRole('button', { name: '「知らない種別の確認」を拒否' }).className,
     ).not.toContain('border-destructive/40');
     expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
   });

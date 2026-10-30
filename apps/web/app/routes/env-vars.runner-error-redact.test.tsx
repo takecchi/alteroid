@@ -34,6 +34,7 @@ describe('/env-vars 画面は、runner への反映の失敗の理由の本文�
       if (method === 'PUT') {
         return json({
           credentials: [],
+          restartRequired: [],
           runners: [{ runnerId: 'runner-2', ok: false, error: `push failed: GH_TOKEN=${TOKEN}` }],
         });
       }
