@@ -395,6 +395,8 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       command?: string;
       vault?: { name: string; value: string }[];
       childUser?: RunnerHostOptions['childUser'];
+      // この種類の出来事を emit するときに投げる（預かり peer の閉じを拒否させる。#5972）
+      emitThrowsOn?: RunnerEvent['type'];
     } = {},
   ) {
     const sdk = options.sdk ?? capturingQuery();
@@ -406,7 +408,11 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const host = createRunnerHost({
       runnerId: 'runner-test',
       workspacePath: '/work',
-      emit: (event) => events.push(event),
+      emit: (event) => {
+        events.push(event);
+        if (event.type === options.emitThrowsOn)
+          throw new Error(`emit が投げた（試験）: ${event.type}`);
+      },
       queryFn: sdk.fn,
       env: options.env ?? {},
       childUser: options.childUser ?? { uid: 1000, gid: 1000 },
@@ -559,6 +565,29 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     expect(closed[0]?.peers).toHaveLength(1);
     await s.client.close();
     await s.host.shutdown();
+  });
+
+  it('⭐ 預かり peer の閉じが拒否しても、受けられない拒否にならず、畳みは最後まで走って失敗を返す（#5972）', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const s = await setupPeerCall([], { emitThrowsOn: 'parked_peers_closed' });
+      await s.approve('allow');
+      await waitFor(() => s.decisions.length === 1);
+      await s.host.stop('mgr-1', { keepPeers: true });
+      // 預かりが残ったまま畳む: 畳みの中の閉じは待たない呼び方（`void`）で、拒否する
+      await expect(s.host.shutdown()).rejects.toThrow('emit が投げた（試験）');
+      // 受けられない拒否は、次のターンの終わりに `unhandledRejection` として届く
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      await s.client.close();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('⭐ 預けた peer を期限で閉じたら、閉じた peer と、途中で終わった背景ターンの止まりどころを parked_peers_closed で運ぶ（#4885）', async () => {
