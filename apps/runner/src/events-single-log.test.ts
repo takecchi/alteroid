@@ -236,4 +236,36 @@ describe('置き換え（#630 (C)）: 古い接続は何も持たず、書き終
     expect(outbox.pending).toBe(1);
     newer.detach();
   });
+
+  it('新しい接続が来たら、古い接続は畳まれる（古い応答が終わる）。止まっていた1件は新しい接続が同じ連番で書く', async () => {
+    const host = newHost();
+    const outbox = new Outbox();
+    const app = createRunnerApp({
+      host,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      sseHeartbeatMs: 60_000,
+    });
+    try {
+      const older = await app.request('/events', { headers: bearer() });
+      if (older.body === null) throw new Error('SSE の応答に本文が無い');
+      const olderReader = older.body.getReader();
+      expect(await readUntil(olderReader, 'event: hello', 1000)).toContain('event: hello');
+
+      const newer = await app.request('/events', { headers: bearer() });
+      if (newer.body === null) throw new Error('SSE の応答に本文が無い');
+      const newerReader = newer.body.getReader();
+
+      expect(await readUntilClosed(olderReader, 2000)).toBe('closed');
+
+      const event = sessionEvent('after-swap');
+      const seq = outbox.push(event);
+      const seen = await readUntil(newerReader, JSON.stringify(event), 1000);
+      expect(seen).toContain(JSON.stringify(event));
+      expect(seen).toContain(`id: ${String(seq)}`);
+      await newerReader.cancel();
+    } finally {
+      await host.shutdown();
+    }
+  });
 });
