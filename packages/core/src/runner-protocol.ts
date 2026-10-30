@@ -2063,9 +2063,12 @@ function measureProbeLoopDefault(): () => ProbeLoopObservation {
   });
 }
 
-/** 上限は能力の上限ではなく、器が長く戻らないときに秒間何度も叩かないための頭打ち（north_star 禁止2 が禁じるのは実行回数の制限）。 */
-const REGISTRY_RETRY_BASE_MS = 1_000;
-const REGISTRY_RETRY_MAX_MS = 30_000;
+/**
+ * 上限は能力の上限ではなく、器が長く戻らないときに秒間何度も叩かないための頭打ち（north_star 禁止2 が禁じるのは実行回数の制限）。
+ * daemon の出来事の流れの繋ぎ直し（`runner-client.ts`）も同じ値を読む: 写すと片方だけ直るため
+ */
+export const REGISTRY_RETRY_BASE_MS = 1_000;
+export const REGISTRY_RETRY_MAX_MS = 30_000;
 /**
  * runner を開く（`source.open()`）のを待つ期限（#4673）。HTTP の runner は `hello()` の見出しを `RUNNER_CALL_DEADLINE_MS`（60秒）まで待ち、
  * 本文の読みには期限が無い。その2倍で打ち切り、返らなかった回を「繋げなかった」として繋ぎ直しの梯子へ戻す。
@@ -2088,8 +2091,11 @@ const PLACEMENT_FAILURE_MEMORY_MS = 5 * 60_000;
  */
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
-/** 1回の取りこぼしで動かさない: 再デプロイ中の一瞬や詰まった1回の応答で宛先を失うと、生きている runner から仕事を取り上げる。 */
-const HEARTBEAT_LOST_MS = 30_000;
+/**
+ * 1回の取りこぼしで動かさない: 再デプロイ中の一瞬や詰まった1回の応答で宛先を失うと、生きている runner から仕事を取り上げる。
+ * daemon の「器を見失った」知らせを合流する窓（`runner-lost-notice.ts`）も同じ値を読む
+ */
+export const HEARTBEAT_LOST_MS = 30_000;
 
 /**
  * 出口（`entries()` / `onSwap` / `onLost`）ごとに同じ分岐を書かないための1本。`runnerIdKnown` を見ずに `entry.client.runnerId` を出すと、

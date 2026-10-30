@@ -1,15 +1,12 @@
-import { reasonOf, type Job } from '@alteroid/core';
+import { HEARTBEAT_LOST_MS, reasonOf, type Job } from '@alteroid/core';
 
 import { decideRunnerSwapNotice } from './runner-swap-notice.js';
 
 // 器が一斉に作り直されると `onLost` が1台ごとに来て、クローンの受信箱へ1台1通届く（実測: 約20秒で8通）。
 // クローンへの知らせだけをここで1通へ合流する。stderr の1行・移送・日誌は1台ずつその場で行い、ここへは通さない（遅らせると移送が遅れるため）。
 
-/**
- * `packages/core/src/runner-protocol.ts` の `HEARTBEAT_LOST_MS`（30秒）の写し。
- * core は export していない。窓を「器が名乗らなくなるまでの時間」に揃えるための値で、ずれたらこちらを直す。
- */
-export const RUNNER_LOST_COALESCE_MS = 30_000;
+/** 窓を「器が名乗らなくなるまでの時間」（core の `HEARTBEAT_LOST_MS`）に揃える。写さずに読む: ずれたら片方だけ直る形を作らないため */
+export const RUNNER_LOST_COALESCE_MS = HEARTBEAT_LOST_MS;
 
 export interface RunnerLostEntry {
   readonly label: string;

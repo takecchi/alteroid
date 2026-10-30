@@ -1198,6 +1198,9 @@ export {
   type UnpushedWorkResult,
   type UnpushedWorkTree,
   type WaitingKind,
+  HEARTBEAT_LOST_MS,
+  REGISTRY_RETRY_BASE_MS,
+  REGISTRY_RETRY_MAX_MS,
 } from './runner-protocol.js';
 /** `git` の起動は呼び出し側（`runner.ts`）が別 UID で行うので、ここは純粋な探索・判定ロジックだけを持つ。 */
 export {
