@@ -256,12 +256,44 @@ export function childUserOf(env: NodeJS.ProcessEnv): RunnerChildUser | undefined
 }
 
 // `Number(env ?? '')` で読まない: `Number('')` は 0 で、UID 未設定でも uid 0 へ chown しに行くため。
+// 不正な値は黙って chown を飛ばさず落とす: 持ち主が変わらないソケットにデーモンが繋げず、「置いた」と「効いている」が食い違ったまま残るため。
 export function socketOwnerOf(env: NodeJS.ProcessEnv): { uid: number; gid: number } | undefined {
   const rawUid = envValue(env, 'ALTEROID_RUNNER_SOCKET_UID');
   if (rawUid === undefined) return undefined;
-  const uid = Number(rawUid);
-  if (!Number.isInteger(uid)) return undefined;
-  return { uid, gid: Number(envValue(env, 'ALTEROID_RUNNER_SOCKET_GID') ?? uid) };
+  const uid = idOf('ALTEROID_RUNNER_SOCKET_UID', rawUid);
+  const rawGid = envValue(env, 'ALTEROID_RUNNER_SOCKET_GID');
+  return { uid, gid: rawGid === undefined ? uid : idOf('ALTEROID_RUNNER_SOCKET_GID', rawGid) };
+}
+
+const DEFAULT_RUNNER_PORT = 4518;
+
+// 空文字は「置いていない」と同じに読む: `Number('')` は 0 で、任意のポートに待ち受けてデーモンから届かなくなるため。
+// `0` も落とす: デーモンは決まったポートへ繋ぐので、任意のポートでは届かない。
+function runnerPortOf(env: NodeJS.ProcessEnv): number {
+  const raw = envValue(env, 'ALTEROID_RUNNER_PORT');
+  if (raw === undefined) return DEFAULT_RUNNER_PORT;
+  const port = Number(raw);
+  if (!/^[1-9]\d*$/.test(raw) || port > 65535) {
+    throw new Error(
+      `ALTEROID_RUNNER_PORT は 1〜65535 の整数でなければならない（受け取った値: ${JSON.stringify(raw)}）`,
+    );
+  }
+  return port;
+}
+
+type ListenPlan =
+  | { kind: 'socket'; path: string; owner: { uid: number; gid: number } | undefined }
+  | { kind: 'tcp'; port: number; hostname: string };
+
+// ソケットを使う構成では、TCP の変数（PORT・BIND）は読まない（今までどおり）。
+export function listenPlanOf(env: NodeJS.ProcessEnv): ListenPlan {
+  const path = envValue(env, 'ALTEROID_RUNNER_SOCKET');
+  if (path !== undefined) return { kind: 'socket', path, owner: socketOwnerOf(env) };
+  return {
+    kind: 'tcp',
+    port: runnerPortOf(env),
+    hostname: envValue(env, 'ALTEROID_RUNNER_BIND') ?? '127.0.0.1',
+  };
 }
 
 export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
@@ -336,7 +368,10 @@ function executableFile(path: string): boolean {
 
 export async function main(): Promise<void> {
   const runnerId = runnerIdOf(process.env);
-  const workspacePath = process.env.ALTEROID_WORKSPACE || process.cwd();
+  const workspacePath = envValue(process.env, 'ALTEROID_WORKSPACE') ?? process.cwd();
+
+  // 待ち受けの口は最初に読む: 不正な値で落ちるとき、器を組み立てたりソケットを作ったりした後にしないため。
+  const listenPlan = listenPlanOf(process.env);
 
   const tokenSha256 = tokenSha256Of(process.env);
   if (tokenSha256 === undefined) {
@@ -493,20 +528,18 @@ export async function main(): Promise<void> {
     process.exit(1);
   });
 
-  const socketPath = envValue(process.env, 'ALTEROID_RUNNER_SOCKET');
   let listeningOn: string;
 
-  if (socketPath !== undefined) {
+  if (listenPlan.kind === 'socket') {
+    const { path: socketPath, owner } = listenPlan;
     rmSync(socketPath, { force: true });
     mkdirSync(dirname(socketPath), { recursive: true });
     await new Promise<void>((resolve) => server.listen({ path: socketPath }, resolve));
-    const owner = socketOwnerOf(process.env);
     if (owner !== undefined) chownSync(socketPath, owner.uid, owner.gid);
     chmodSync(socketPath, 0o600);
     listeningOn = `unix:${socketPath}`;
   } else {
-    const port = Number(process.env.ALTEROID_RUNNER_PORT ?? '4518');
-    const hostname = process.env.ALTEROID_RUNNER_BIND || '127.0.0.1';
+    const { port, hostname } = listenPlan;
     await new Promise<void>((resolve) => server.listen({ port, host: hostname }, resolve));
     listeningOn = `http://${hostname}:${port}`;
     process.stdout.write(
@@ -525,7 +558,7 @@ export async function main(): Promise<void> {
       outbox,
       closeListener: () => {
         server.close();
-        if (socketPath !== undefined) rmSync(socketPath, { force: true });
+        if (listenPlan.kind === 'socket') rmSync(listenPlan.path, { force: true });
       },
     });
 
