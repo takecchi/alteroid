@@ -53,10 +53,10 @@ import {
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
 import {
-  describeObservedWorktreeBranch,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
+  formatUnpushedWorkObservationWorktrees,
   isEmptyCompleteUnpushedWorkObservation,
 } from '@alteroid/core/unpushed-work-observation-format';
 import { JOURNAL_MAX_LIMIT, readThroughUnreadable } from '@alteroid/logic';
@@ -3220,21 +3220,6 @@ function resetTimeSkewLine(
     `      認証トークンの世代ずれの判定: この一覧が知らない値 ` +
     `"${String(resetTimeSkewMatch)}"（デーモンの版が新しい可能性）。`
   );
-}
-
-// core の `formatUnpushedWorkObservationWorktrees`（`tools.ts`、export されていない）と同じ判断の複製。
-function formatUnpushedWorkObservationWorktrees(
-  worktrees: readonly {
-    relativePath: string;
-    branch: string | null;
-    branchCarriedFromAt?: string;
-  }[],
-): string {
-  return worktrees.length === 0
-    ? '見つかった作業ツリー0本'
-    : worktrees
-        .map((wt) => `${wt.relativePath}: branch=${describeObservedWorktreeBranch(wt)}`)
-        .join(' / ');
 }
 
 function unpushedWorkObservationIncompleteSuffix(
