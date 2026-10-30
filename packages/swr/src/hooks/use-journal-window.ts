@@ -25,7 +25,6 @@ interface JournalQueryParams {
   type?: string;
   q?: string;
   since?: string;
-  until?: string;
   afterId?: string;
   afterAt?: string;
   horizon?: 'true';

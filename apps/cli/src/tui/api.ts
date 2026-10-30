@@ -169,7 +169,6 @@ export interface JournalListQuery {
   types?: readonly string[];
   q?: string;
   since?: string;
-  until?: string;
   afterId?: string;
   afterAt?: string;
   horizon?: boolean;
@@ -608,7 +607,6 @@ export function createTuiApi(target: Target): TuiApi {
           ...(type === '' ? {} : { type }),
           ...(query.q === undefined || query.q === '' ? {} : { q: query.q }),
           ...(query.since === undefined ? {} : { since: query.since }),
-          ...(query.until === undefined ? {} : { until: query.until }),
           ...(query.afterId === undefined || query.afterAt === undefined
             ? {}
             : { afterId: query.afterId, afterAt: query.afterAt }),
