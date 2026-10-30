@@ -381,6 +381,48 @@ function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
   });
 }
 
+interface SafeParser<T> {
+  safeParse(value: unknown): { success: true; data: T } | { success: false };
+}
+
+// 欄が無い（undefined / null）なら undefined、在るのに形が読めなければ投げる（「無い」へ倒さない）
+function optionalHealthFieldOf<T>(
+  value: unknown,
+  key: string,
+  schema: SafeParser<T>,
+): T | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new Error(`runner の /health の ${key} の欄を読めなかった`);
+  return parsed.data;
+}
+
+// 応答の `ok` が true でなければ投げる
+function expectOk(body: { ok?: unknown }, label: string): void {
+  if (body.ok !== true) throw new Error(`runner の応答を読めなかった（${label}）`);
+}
+
+// 応答の欄を検証し、形が読めなければ投げる
+function parseReplyField<T>(value: unknown, schema: SafeParser<T>, label: string): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new Error(`runner の応答を読めなかった（${label}）`);
+  return parsed.data;
+}
+
+// `Readable` の本文つきで返す（出し箱・預かりの取り出し）
+function contentOf(response: Response, label: string): RunnerOutboxContent {
+  if (response.body === null) throw new Error(`runner の応答に本文が無い（${label}）`);
+  const size = Number(response.headers.get('content-length'));
+  return {
+    ...(Number.isSafeInteger(size) && size >= 0 ? { size } : {}),
+    body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
+  };
+}
+
+function managerFilePath(managerId: string, kind: string, fileId: string): string {
+  return `/managers/${encodeURIComponent(managerId)}/${kind}/${encodeURIComponent(fileId)}`;
+}
+
 // `String(failure)` を使わず `cause` を見る: `Error.prototype.toString()` は `cause` を落とし、`TypeError: terminated` の本当の理由（`SocketError` か `BodyTimeoutError` か）は `cause.code` でしか区別できないため
 // `reasonOf` を広げず専用の畳み方をここに置く: `reasonOf` は他の呼び出し元が依存する契約を持ち、ここで足したいのは undici の固定語彙（`cause.code`）で契約の中身が違うため
 function causeInfoOf(failure: unknown): { text: string; code: string } | undefined {
@@ -1029,10 +1071,7 @@ class HttpRunner implements RunnerClient {
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
     const body = await this.#readHealth();
     // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外したプロファイルと一致」と読み、外したはずのプロファイルが runner に残り続けるため
-    if (body.profile === undefined || body.profile === null) return undefined;
-    const parsed = runnerProfileFingerprintSchema.safeParse(body.profile);
-    if (!parsed.success) throw new Error('runner の /health の profile の欄を読めなかった');
-    return parsed.data;
+    return optionalHealthFieldOf(body.profile, 'profile', runnerProfileFingerprintSchema);
   }
 
   async setProfile(script: string): Promise<RunnerProfileResult> {
@@ -1044,40 +1083,30 @@ class HttpRunner implements RunnerClient {
   // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外した登録と一致」と読み、外したはずの登録が runner に残り続けるため
   async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
     const body = await this.#readHealth();
-    if (body.mcpServers === undefined || body.mcpServers === null) return undefined;
-    const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
-    if (!parsed.success) throw new Error('runner の /health の mcpServers の欄を読めなかった');
-    return parsed.data;
+    return optionalHealthFieldOf(body.mcpServers, 'mcpServers', runnerMcpServersFingerprintSchema);
   }
 
   // 応答の形が読めなかったときは投げる: 戻り値は指紋だけで、読めないことを表す場所が例外しかなく、「置けた」と読んで指紋を作らないため
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
     const response = await this.#call('POST', '/mcp-servers', { mcpServers: servers });
     const body = (await response.json()) as { ok?: unknown; mcpServers?: unknown };
-    if (body.ok !== true) throw new Error('runner の応答を読めなかった（MCP の登録）');
+    expectOk(body, 'MCP の登録');
     if (body.mcpServers === undefined) return undefined;
-    const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
-    if (!parsed.success) throw new Error('runner の応答を読めなかった（MCP の登録の指紋）');
-    return parsed.data;
+    return parseReplyField(body.mcpServers, runnerMcpServersFingerprintSchema, 'MCP の登録の指紋');
   }
 
   // 応答の形が読めなかったときは投げる: 「置けた」と読んで件数を日誌に書かないため
   async setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult> {
     const response = await this.#call('POST', '/permission-rules', { rules: [...rules] });
     const body = (await response.json()) as { ok?: unknown };
-    if (body.ok !== true) throw new Error('runner の応答を読めなかった（委譲先の許可規則）');
-    const parsed = runnerPermissionRulesResultSchema.safeParse(body);
-    if (!parsed.success) throw new Error('runner の応答を読めなかった（委譲先の許可規則の件数）');
-    return parsed.data;
+    expectOk(body, '委譲先の許可規則');
+    return parseReplyField(body, runnerPermissionRulesResultSchema, '委譲先の許可規則の件数');
   }
 
   // 欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒さない）: 外したはずの plugin が runner に残り続けるため
   async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
     const body = await this.#readHealth();
-    if (body.plugins === undefined || body.plugins === null) return undefined;
-    const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
-    if (!parsed.success) throw new Error('runner の /health の plugins の欄を読めなかった');
-    return parsed.data;
+    return optionalHealthFieldOf(body.plugins, 'plugins', runnerPluginsFingerprintSchema);
   }
 
   async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
@@ -1093,28 +1122,23 @@ class HttpRunner implements RunnerClient {
       pluginPushDeadlineMs(this.#deadlineMs, bodyBytes),
     );
     const body = (await response.json()) as { ok?: unknown; plugin?: unknown };
-    if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin）');
-    const parsed = runnerPluginFingerprintEntrySchema.safeParse(body.plugin);
-    if (!parsed.success) throw new Error('runner の応答を読めなかった（plugin の指紋）');
-    return parsed.data;
+    expectOk(body, 'plugin');
+    return parseReplyField(body.plugin, runnerPluginFingerprintEntrySchema, 'plugin の指紋');
   }
 
   async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
     const response = await this.#call('PUT', '/plugins', { names });
     const body = (await response.json()) as { ok?: unknown; plugins?: unknown };
-    if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin の一覧）');
+    expectOk(body, 'plugin の一覧');
     if (body.plugins === undefined) return undefined;
-    const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
-    if (!parsed.success) throw new Error('runner の応答を読めなかった（plugin の一覧の指紋）');
-    return parsed.data;
+    return parseReplyField(body.plugins, runnerPluginsFingerprintSchema, 'plugin の一覧の指紋');
   }
 
   // 値は例外の文にも載せない: 秘密のため
   async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
     const response = await this.#call('POST', '/codex-auth', { codexAuth: push });
     const body = (await response.json()) as { ok?: unknown };
-    if (body.ok !== true)
-      throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
+    expectOk(body, 'Codex の ChatGPT ログイン');
   }
 
   async takeCodexAuthWriteBack(
@@ -1122,11 +1146,9 @@ class HttpRunner implements RunnerClient {
   ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
     const response = await this.#call('POST', '/codex-auth/write-back', { fingerprint });
     const body = (await response.json()) as { ok?: unknown; writeBack?: unknown };
-    if (body.ok !== true) throw new Error('runner の応答を読めなかった（Codex の書き戻し）');
+    expectOk(body, 'Codex の書き戻し');
     if (body.writeBack === null || body.writeBack === undefined) return null;
-    const parsed = runnerCodexAuthWriteBackSchema.safeParse(body.writeBack);
-    if (!parsed.success) throw new Error('runner の応答を読めなかった（Codex の書き戻しの形）');
-    return parsed.data;
+    return parseReplyField(body.writeBack, runnerCodexAuthWriteBackSchema, 'Codex の書き戻しの形');
   }
 
   async transcript(managerId: string): Promise<string | null> {
@@ -1160,24 +1182,24 @@ class HttpRunner implements RunnerClient {
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerOutboxContent | undefined> {
-    let response: Response;
+    const response = await this.#getOrMissing(
+      managerFilePath(managerId, 'outbox', fileId),
+      options?.signal,
+    );
+    return response === undefined ? undefined : contentOf(response, '出し箱の取り出し');
+  }
+
+  // 404 だけを `undefined`（無い）にする（`openOutboxFile` / `openRescueFile` / `fetchArchive` で共通）
+  async #getOrMissing(
+    path: string,
+    signal: AbortSignal | undefined,
+  ): Promise<Response | undefined> {
     try {
-      response = await this.#call(
-        'GET',
-        `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
-        undefined,
-        options?.signal,
-      );
+      return await this.#call('GET', path, undefined, signal);
     } catch (error) {
       if (error instanceof RunnerHttpError && error.status === 404) return undefined;
       throw error;
     }
-    if (response.body === null) throw new Error('runner の応答に本文が無い（出し箱の取り出し）');
-    const size = Number(response.headers.get('content-length'));
-    return {
-      ...(Number.isSafeInteger(size) && size >= 0 ? { size } : {}),
-      body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
-    };
   }
 
   /**
@@ -1225,24 +1247,11 @@ class HttpRunner implements RunnerClient {
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerOutboxContent | undefined> {
-    let response: Response;
-    try {
-      response = await this.#call(
-        'GET',
-        `/managers/${encodeURIComponent(managerId)}/rescue-files/${encodeURIComponent(fileId)}`,
-        undefined,
-        options?.signal,
-      );
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) return undefined;
-      throw error;
-    }
-    if (response.body === null) throw new Error('runner の応答に本文が無い（預かりの取り出し）');
-    const size = Number(response.headers.get('content-length'));
-    return {
-      ...(Number.isSafeInteger(size) && size >= 0 ? { size } : {}),
-      body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
-    };
+    const response = await this.#getOrMissing(
+      managerFilePath(managerId, 'rescue-files', fileId),
+      options?.signal,
+    );
+    return response === undefined ? undefined : contentOf(response, '預かりの取り出し');
   }
 
   async deleteRescueFile(
@@ -1252,7 +1261,7 @@ class HttpRunner implements RunnerClient {
   ): Promise<void> {
     await this.#call(
       'DELETE',
-      `/managers/${encodeURIComponent(managerId)}/rescue-files/${encodeURIComponent(fileId)}`,
+      managerFilePath(managerId, 'rescue-files', fileId),
       undefined,
       options?.signal,
     );
@@ -1265,7 +1274,7 @@ class HttpRunner implements RunnerClient {
   ): Promise<void> {
     await this.#call(
       'DELETE',
-      `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
+      managerFilePath(managerId, 'outbox', fileId),
       undefined,
       options?.signal,
     );
@@ -1279,19 +1288,11 @@ class HttpRunner implements RunnerClient {
     archiveId: string,
     options?: { signal?: AbortSignal },
   ): Promise<string | undefined> {
-    let response: Response;
-    try {
-      response = await this.#call(
-        'GET',
-        `/managers/${encodeURIComponent(managerId)}/archive/${encodeURIComponent(archiveId)}`,
-        undefined,
-        options?.signal,
-      );
-    } catch (error) {
-      if (error instanceof RunnerHttpError && error.status === 404) return undefined;
-      throw error;
-    }
-    return readTextYielding(response, SSE_READ_YIELD_BYTES);
+    const response = await this.#getOrMissing(
+      managerFilePath(managerId, 'archive', archiveId),
+      options?.signal,
+    );
+    return response === undefined ? undefined : readTextYielding(response, SSE_READ_YIELD_BYTES);
   }
 
   async deleteArchive(
@@ -1301,7 +1302,7 @@ class HttpRunner implements RunnerClient {
   ): Promise<void> {
     await this.#call(
       'DELETE',
-      `/managers/${encodeURIComponent(managerId)}/archive/${encodeURIComponent(archiveId)}`,
+      managerFilePath(managerId, 'archive', archiveId),
       undefined,
       options?.signal,
     );
