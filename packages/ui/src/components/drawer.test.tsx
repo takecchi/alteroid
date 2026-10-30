@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Drawer } from './drawer';
 
@@ -90,6 +90,40 @@ it('Escape で閉じる', async () => {
 
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'メニュー' })).toBeNull());
   expect(screen.queryByRole('link', { name: '行き先A' })).toBeNull();
+});
+
+describe('閉じたら焦点は開いたボタンへ戻る（body に落とさない）', () => {
+  it('Escape で閉じたとき', async () => {
+    const opener = await openDrawer();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it('覆いを押して閉じたとき', async () => {
+    const opener = await openDrawer();
+    const overlay = document.querySelector('[data-slot="sheet-overlay"]');
+
+    fireEvent.pointerDown(overlay!);
+    fireEvent.click(overlay!);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it('開いたボタンが無くなっていても、落ちずに閉じる', async () => {
+    const opener = await openDrawer();
+    // DOM から外すと React の片付けが落ちるので、外れた要素の見え方だけを真似る
+    Object.defineProperty(opener, 'isConnected', { value: false });
+    const focus = vi.spyOn(opener, 'focus');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(focus).not.toHaveBeenCalled();
+  });
 });
 
 it('覆いを押すと閉じる', async () => {
