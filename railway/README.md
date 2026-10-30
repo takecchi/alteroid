@@ -537,7 +537,7 @@ railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service r
 
 **変数を置き直すだけでは走行中のマネージャーに届かない。** `railway variable set` は設定を書き換えるが、既に走っているプロセスの環境変数は書き換えられない。`--skip-deploys` を付ければなおさら何も起きない。そのまま「置いたのに 403 のまま」になり、人間は PAT の権限を疑い、マネージャーは正しく 403 を報告し続ける — **両方正しいまま、何時間も噛み合わない**（実際に起きた）。
 
-鍵は器（`/run/alteroid/credentials`）に置いてあり、`git` も `gh` も**呼ばれるたびに読み直す**。だから差し替えは daemon 経由で降ろす。器は作り直さないので、**走行中の仕事は死なない**。
+鍵は器（`/run/alteroid/credentials`）に置いてあり、`git` も `gh` も**呼ばれるたびに読み直す**。だから差し替えは daemon の `PUT /credentials`（`alteroid credential set`）で行う。器は作り直さないので、**走行中の仕事は死なない**。
 
 ```bash
 railway ssh --service app
@@ -546,16 +546,10 @@ railway ssh --service app
 curl -s http://127.0.0.1:$ALTEROID_PORT/runners | jq
 
 # 差し替える。走行中のマネージャーにも次の git / gh 呼び出しから届く
-printf %s 'github_pat_xxx' | jq -Rn '{credentials:[{name:"GH_TOKEN",value:input}]}' \
-  | curl -s -X POST http://127.0.0.1:$ALTEROID_PORT/runners/credentials \
-      -H 'content-type: application/json' -d @-
+printf %s 'github_pat_xxx' > /tmp/pat && alteroid credential set GH_TOKEN -f /tmp/pat && rm /tmp/pat
 ```
 
-**変数（Shared Variables）も一緒に直しておくこと。** 器が作り直されたとき（再デプロイ）に読まれるのは変数の方である。順序は「先に上の口で回して仕事を止めない → 落ち着いてから変数を直す」。
-
 ### 変数の代わりに正本へ置く（器を焼き直さない）
-
-**上の `POST /runners/credentials` は保管しない。** 走っている runner へ降ろすだけなので、器が作り直されれば消え、**そのとき読まれるのは Shared Variables の方**である。だから上の手順は「変数も一緒に直す」が対になっている。
 
 **`PUT /credentials` は正本へ置く。** 記憶ストア（`manager_credentials` の1名前1行）が正本になり、**runner が名乗り直すたびにデーモンが降ろし直す** ⟹ 器を作り直しても痩せない。⟹ **用途が増えるたびに Shared Variables を足す必要が無い。**
 
@@ -822,7 +816,7 @@ railway ssh --service Postgres 'psql -c "\dt"'        # 表が張り直ってい
 | runner の `/proc/1/environ` に素の合鍵が残っている               | 起動スクリプトを通っていない。`startCommand` が `alteroid-runner` か（`node apps/runner/dist/index.js` を直に叩くと畳みが起きない）。**運用の間違いではなく実装のバグ**として扱う                                                                                                                |
 | マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                                                                                                                          |
 | マネージャーの push が 403 になる                                | **まず指紋を突き合わせる**（下記）。合っていないなら鍵が届いていない側の問題で、PAT の権限を疑うのは順番が違う。合っていて 403 なら、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない                                                                              |
-| 鍵を差し替えたのにマネージャーが「権限が無い」と言い続ける       | **走行中のマネージャーに古い鍵が残っている。** `--skip-deploys` で置いた変数は走っているプロセスに入らない。`POST /runners/credentials` で回す（下記「鍵を回す」）                                                                                                                               |
+| 鍵を差し替えたのにマネージャーが「権限が無い」と言い続ける       | **走行中のマネージャーに古い鍵が残っている。** `--skip-deploys` で置いた変数は走っているプロセスに入らない。`alteroid credential set`（`PUT /credentials`）で回す（下記「鍵を回す」）                                                                                                            |
 
 ---
 

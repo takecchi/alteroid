@@ -182,8 +182,6 @@ import {
   describeUnreadableManagerRow,
   resetWorkspaceState,
   resolveBuildRevision,
-  RunnerHttpError,
-  runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
   SCHEDULE_EVERY_MINUTES_MAX_MESSAGE,
   scheduleSpecSchema,
@@ -393,7 +391,6 @@ import {
   reportsResponseSchema,
   resetRequestSchema,
   resetResponseSchema,
-  runnersCredentialsResponseSchema,
   runnersListResponseSchema,
   runnersVacateCommandSchema,
   runnersVacateResponseSchema,
@@ -1456,17 +1453,6 @@ async function removeUnreadableRowsWithJournal(params: {
 // `message` を含めない: ストアのエラー文には行の中身（トークンの値）が載りうる。
 function kindOfError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
-}
-
-// `message` も `reasonOf` も使わない: 鍵を運ぶ呼び出しなので、例外の文面（`RunnerHttpError` は応答本文をそのまま `message` に入れる）に送った値が載ると1行目の断片でも鍵が出る。出すのは識別子の形の `error.name`（でなければ `Error`）と `RunnerHttpError` の `status` だけ。
-function credentialDeliveryFailureOf(error: unknown): string {
-  const name =
-    error instanceof Error && /^[A-Za-z0-9_.]{1,64}$/u.test(error.name) ? error.name : 'Error';
-  const status =
-    error instanceof RunnerHttpError && Number.isInteger(error.status)
-      ? `、HTTP ${String(error.status)}`
-      : '';
-  return `${name}${status}`;
 }
 
 // 変換を core に置かない: `packages/core` は `apps/daemon` の `Principal` を知らない（層が逆）。`operator` の `auth` はそのまま運ぶ: `authenticate` で枝が確定しているので判定し直さない。
@@ -8940,125 +8926,6 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 鍵はここに保管しない（受け取って runner へ降ろすだけ）: 器に記憶の鍵と GitHub の書き込み権を並べない。器を作り直さない: 鍵の更新に再デプロイが要ると、走行中の仕事を鍵の都合で失う。
-    // 能力を広げる口なので日誌を先に書き、書けなければ1本も配らずに 500（`PUT /credentials` と同じ）。指紋は入力の値から直接計算できるので先の行にも含める。値（鍵そのもの）はどの行にも書かない。資格（`authenticate` だけ）を締めるかは方針の判断で、勝手に揃えると今通っている運用が黙って止まる。
-    .post(
-      '/runners/credentials',
-      describeRoute({
-        tags: ['runners'],
-        summary: 'マネージャーの道具の鍵を差し替える',
-        description:
-          '器を作り直さない。鍵はここに保管せず、受け取って全 runner へ降ろすだけである' +
-          '（デーモンの器に記憶の鍵と GitHub の書き込み権を並べない）。',
-        responses: {
-          200: {
-            description: '各 runner への配布結果。',
-            content: {
-              'application/json': { schema: resolver(runnersCredentialsResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '本文の形が不正（配布していない）。**送られてきた本文は返さない**——' +
-              'ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（下の' +
-              '`hook` の doc）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: 'runner が登録されていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      // 既定の 400 を使わない: `hook` を渡さないと `@hono/standard-validator` が本文そのものを `data` に載せて返し（`RESTRICTED_DATA_FIELDS` は cookie だけで `json` は素通し）、`name` の形式ミス1つでその回に送った全部の鍵の値が応答へ載る。返すのは `path` だけ。
-      jsonBody(runnerSetCredentialsCommandSchema, (where) => ({
-        error: '鍵の入力の形が不正（配布していない）' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const registry = deps.runners;
-        if (registry === undefined) {
-          return c.json({ error: 'runner が登録されていない' as const }, 503);
-        }
-        const { credentials } = c.req.valid('json');
-        const wanted = credentials
-          .map((entry) => `${entry.name}=${fingerprintOf(entry.value)}`)
-          .join(', ');
-
-        await deps.stores.journal.append({
-          type: 'decision',
-          decision: `runner へ環境変数（鍵）を配ろうとしている（${wanted}）`,
-          grounds:
-            `${describeActor(c.get('principal'))}（POST /runners/credentials）。` +
-            '値は書かない（鍵そのものである）。',
-        });
-
-        const distribute = async () => {
-          const runners = await registry.list();
-          return Promise.all(
-            runners.map(async (runner) => {
-              try {
-                return {
-                  runnerId: runner.runnerId,
-                  ok: true as const,
-                  credentials: await runner.setCredentials(credentials),
-                };
-              } catch (error) {
-                // 素の `String(error)` を載せない（`probe` と同じ理由）。
-                const kind = credentialDeliveryFailureOf(error);
-                return {
-                  runnerId: runner.runnerId,
-                  ok: false as const,
-                  kind,
-                  error: `鍵の配布に失敗した（${kind}）`,
-                };
-              }
-            }),
-          );
-        };
-
-        let results: Awaited<ReturnType<typeof distribute>>;
-        try {
-          results = await distribute();
-        } catch (error) {
-          // `registry.list()` 自体が投げた場合（個々の配布は上で捕まえている）: 打ち消しの行を足してから投げ直す。`base.onError` が返す 500 は変えない。
-          await appendJournalOrDrop(
-            deps.stores,
-            {
-              type: 'decision',
-              decision: `runner へ環境変数（鍵）を配れなかった（${wanted}）`,
-              grounds:
-                `${describeActor(c.get('principal'))}（POST /runners/credentials、配布が失敗）: ` +
-                `runner の一覧を取れなかった（${credentialDeliveryFailureOf(error)}）。` +
-                '値は書かない（鍵そのものである）。',
-            },
-            '環境変数（鍵）配布の打ち消しの日誌',
-            `names=${credentials.map((entry) => entry.name).join(',')}`,
-          );
-          throw error;
-        }
-
-        const delivered = results
-          .map((result) => `${result.runnerId}=${result.ok ? 'ok' : `失敗（${result.kind}）`}`)
-          .join(', ');
-        await appendJournalOrDrop(
-          deps.stores,
-          {
-            type: 'decision',
-            decision: `runner へ環境変数（鍵）を配った（${wanted}）`,
-            grounds:
-              `${describeActor(c.get('principal'))}（POST /runners/credentials）。` +
-              '値は書かない（鍵そのものである）。' +
-              `配布先: ${delivered.length === 0 ? '配る先なし' : delivered}` +
-              '。',
-          },
-          '環境変数（鍵）配布の日誌',
-          `names=${credentials.map((entry) => entry.name).join(',')}`,
-        );
-
-        return c.json(runnersCredentialsResponseSchema.parse({ results }));
-      },
-    )
-
     // `RunnerRegistry` ではなく `ManagerPool.vacate()` を呼ぶ: `RunnerRegistry#vacate` は同期・往復無しの名簿操作だけで、「確かめた停止」の握手と `relocateFrom` まで含めた HTTP から見える唯一の受け口がこちら。どの器を空けるかはクローンの判断で、スクリプトが黙って選ばない。
     .post(
       '/runners/vacate',
@@ -9884,7 +9751,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // `POST /runners/credentials` との違いは保管するかどうか: あちらは受け取って走っている runner へ降ろすだけ、ここは正本へ置くので器が入れ替わっても `hello` のときに降り直す。「置けるが読み出せない」は意図した非対称: ここの資格が漏れて起きるのは「今後の鍵が書き換わる」で、「いま在る鍵が流出する」ではない（`/profile` は応答本文に鍵が丸ごと載るので緩めていない）。
+    // 鍵の口はここだけ（正本へ置くので、器が入れ替わっても `hello` のときに降り直す。保管せず降ろすだけの口は無い）。「置けるが読み出せない」は意図した非対称: ここの資格が漏れて起きるのは「今後の鍵が書き換わる」で、「いま在る鍵が流出する」ではない（`/profile` は応答本文に鍵が丸ごと載るので緩めていない）。
     // 能力を広げる口なので日誌を先に書き、書けなければ差し替えずに 500: 差し替えの後に書くと、追記だけが落ちて 500 を返す一方で差し替えは効いたまま残る。差し替えが投げたら打ち消しの行を足す。検証と保存が同じ1呼び（`apply`）の中にあるので、検証で断られた回も同じ扱い（記録が多すぎる側に倒す）。
     .put(
       '/credentials',
@@ -9905,7 +9772,7 @@ export function createApp(deps: AppDeps) {
             description:
               '本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。' +
               '**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、' +
-              '既定の 400 の形は使えない（`POST /runners/credentials` の hook の doc）。',
+              '既定の 400 の形は使えない（下の `jsonBody` の hook の doc）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
@@ -9918,7 +9785,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      // 既定の 400 を使わない（`POST /runners/credentials` と同じ理由）: 形式ミス1つでその回に送った全部の鍵の値が応答へ載る。返すのは `path` だけ。
+      // 既定の 400 を使わない: `hook` を渡さないと `@hono/standard-validator` が本文そのものを `data` に載せて返し（`RESTRICTED_DATA_FIELDS` は cookie だけで `json` は素通し）、`name` の形式ミス1つでその回に送った全部の鍵の値が応答へ載る。返すのは `path` だけ。
       jsonBody(credentialsUpdateRequestSchema, (where) => ({
         error: '鍵の入力の形が不正（置いていない）' + (where === '' ? '' : `: ${where}`),
       })),
