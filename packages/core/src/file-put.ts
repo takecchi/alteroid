@@ -1,5 +1,5 @@
 import { realpath, open, stat } from 'node:fs/promises';
-import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 
 import {
   ATTACHMENT_UPLOADED_BY_CLONE,
@@ -11,51 +11,13 @@ import {
   type AttachmentStore,
 } from './attachment.js';
 import { reasonOf } from './dropped-record.js';
+import { FALLBACK_MEDIA_TYPE, guessMediaTypeFromPath } from './media-type-by-extension.js';
 import type { AttachmentRef } from './schema.js';
 
 /**
  * 検証は必ず置き場の `put`（`prepareAttachment`。3実装で同じ検査）を通す。ここで先に見るのは、
  * 読む前でなければ意味が無いもの（通常ファイルか・上限・資格の置き場）だけにする。
  */
-
-const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.pdf': 'application/pdf',
-  '.txt': 'text/plain',
-  '.log': 'text/plain',
-  '.md': 'text/markdown',
-  '.csv': 'text/csv',
-  '.tsv': 'text/tab-separated-values',
-  '.html': 'text/html',
-  '.htm': 'text/html',
-  '.xml': 'application/xml',
-  '.json': 'application/json',
-  '.yaml': 'application/yaml',
-  '.yml': 'application/yaml',
-  '.zip': 'application/zip',
-  '.gz': 'application/gzip',
-  '.tar': 'application/x-tar',
-  '.mp4': 'video/mp4',
-  '.mov': 'video/quicktime',
-  '.webm': 'video/webm',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-};
-
-export const FILE_PUT_FALLBACK_MEDIA_TYPE = 'application/octet-stream';
-
-/** 中身は見ない: 画像は置き場が magic で照合する。 */
-export function guessMediaTypeFromPath(path: string): string {
-  return MEDIA_TYPES_BY_EXTENSION[extname(path).toLowerCase()] ?? FILE_PUT_FALLBACK_MEDIA_TYPE;
-}
 
 export interface CredentialSources {
   readonly dir?: string;
@@ -168,8 +130,8 @@ export async function putLocalFile(
   if (isAttachmentImageMediaType(mediaType) && before.size > options.limits.maxImageBytes) {
     note =
       `画像の上限（${formatImageLimit(options.limits.maxImageBytes)}）を超えるので、画像ではなくファイル` +
-      `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
-    mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
+      `（${FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
+    mediaType = FALLBACK_MEDIA_TYPE;
   }
   const max = attachmentMaxBytes(options.limits, false);
   if (before.size > max) {
@@ -221,8 +183,8 @@ export async function putLocalFile(
       if (error instanceof AttachmentRejectedError && error.code === 'image_dimension_too_large') {
         note =
           `画像の寸法の上限を超えるので（${reasonOf(error)}）、画像ではなくファイル` +
-          `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
-        mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
+          `（${FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
+        mediaType = FALLBACK_MEDIA_TYPE;
         meta = await stores.attachments.putStream({ ...putInput, mediaType, body: bodyOf() });
       } else {
         throw error;

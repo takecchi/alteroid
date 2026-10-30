@@ -1,7 +1,11 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { attachmentDiskName, DEFAULT_ATTACHMENT_LIMITS } from '@alteroid/core';
+import {
+  attachmentDiskName,
+  DEFAULT_ATTACHMENT_LIMITS,
+  guessMediaTypeFromPath,
+} from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -13,7 +17,6 @@ import {
   describeAttachment,
   fetchAttachmentLimits,
   interpretAttachPath,
-  mediaTypeOfName,
   renderAttachmentUsage,
   uploadAttachment,
   uploadDraft,
@@ -224,20 +227,26 @@ describe('/attach から送るまで', () => {
     }
   });
 
-  it('MIME は拡張子の表から。分からなければ octet-stream', () => {
-    expect(mediaTypeOfName('a.PNG')).toBe('image/png');
-    expect(mediaTypeOfName('x.mp4')).toBe('video/mp4');
-    expect(mediaTypeOfName('noext')).toBe('application/octet-stream');
-    expect(mediaTypeOfName('a.weird')).toBe('application/octet-stream');
-  });
-
-  it('拡張子の表は core と同じ（Office・tsv・htm も型つき。#5800）', () => {
-    expect(mediaTypeOfName('r.docx')).toBe(
+  // 拡張子の表は core の1か所（#5800）: /attach の下書きも core の guessMediaTypeFromPath と同じ型を付ける
+  it('/attach の下書きの型は core の拡張子の表から。Office・tsv・htm・mkv も型つき、分からなければ octet-stream（#5800）', async () => {
+    const dir = await makeTempDir('alteroid-cli-attach-type-');
+    const draft = new AttachmentDraft();
+    const names = ['r.docx', 'r.tsv', 'r.htm', 'r.mkv', 'x.mp4', 'noext', 'a.weird'];
+    for (const name of names) {
+      const path = join(dir, name);
+      await writeFile(path, 'x');
+      expect((await draft.add(path)).ok).toBe(true);
+    }
+    expect(draft.list().map((f) => f.mediaType)).toEqual(names.map(guessMediaTypeFromPath));
+    expect(draft.list().map((f) => f.mediaType)).toEqual([
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    );
-    expect(mediaTypeOfName('r.tsv')).toBe('text/tab-separated-values');
-    expect(mediaTypeOfName('r.htm')).toBe('text/html');
-    expect(mediaTypeOfName('r.mkv')).toBe('video/x-matroska');
+      'text/tab-separated-values',
+      'text/html',
+      'video/x-matroska',
+      'video/mp4',
+      'application/octet-stream',
+      'application/octet-stream',
+    ]);
   });
 });
 

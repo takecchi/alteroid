@@ -1741,11 +1741,11 @@ export {
   type StageRunnerAttachmentOptions,
   type StagedAttachmentEntry,
 } from './runner-attachments.js';
+export { FALLBACK_MEDIA_TYPE, guessMediaTypeFromPath } from './media-type-by-extension.js';
 export {
   collectManagerOutbox,
   defaultRunnerOutboxRoot,
   defaultRunnerOutboxStagedRoot,
-  guessOutboxMediaType,
   isOutboxFileId,
   openStagedOutboxFile,
   prepareManagerOutbox,
