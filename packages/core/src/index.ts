@@ -253,6 +253,7 @@ export {
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
   deriveHumanTouchedAtFromJournal,
+  deriveMemoryBootBackfillFromJournal,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
