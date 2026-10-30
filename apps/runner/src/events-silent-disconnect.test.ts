@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { writeAll } from './outbox-subscribers.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -229,20 +230,17 @@ describe('runner の入れ替わり後の無音切断（#3036）', () => {
   });
 });
 
-describe('Outbox.recordSent / sentSince（#275）', () => {
+// #5692 段2: 控えは「書き終えた分」として列に残る。試験専用の口（recordSent）は無く、本番と同じ `subscribe` の `wrote` で書き終える（writeAll）。
+describe('Outbox の控え（書き終えた分）/ sentSince（#275）', () => {
   it('sentSince は lastEventId より新しい分だけを古い順に返す', () => {
     const outbox = new Outbox();
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
     const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
     const e3: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '3' };
-    const record = (event: RunnerEvent): number => {
-      const seq = outbox.push(event);
-      outbox.recordSent(event, seq, '2026-01-01T00:00:00.000Z');
-      return seq;
-    };
-    const s1 = record(e1);
-    const s2 = record(e2);
-    const s3 = record(e3);
+    const s1 = outbox.push(e1);
+    const s2 = outbox.push(e2);
+    const s3 = outbox.push(e3);
+    writeAll(outbox);
 
     expect(outbox.sentSince(s1).map((i) => i.seq)).toEqual([s2, s3]);
     expect(outbox.sentSince(s3)).toEqual([]);
@@ -253,11 +251,12 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     const outbox = new Outbox();
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
     const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
-    const at = '2026-01-01T00:00:00.000Z';
-    outbox.recordSent(e1, 1, at);
-    outbox.recordSent(e2, 2, at);
-    outbox.recordSent(e1, 1, at);
-    outbox.recordSent(e2, 2, at);
+    outbox.push(e1);
+    outbox.push(e2);
+    writeAll(outbox);
+    // 読み返して同じ連番をもう一度書き終えても、控えは増えない
+    writeAll(outbox, { lastEventId: 0 });
+    writeAll(outbox, { lastEventId: 0 });
     expect(outbox.sentSince(0).map((i) => i.seq)).toEqual([1, 2]);
   });
 
@@ -326,9 +325,8 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     const e1: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '1' };
     const e2: RunnerEvent = { type: 'session', managerId: 'a', sessionId: '2' };
     const s1 = outbox.push(e1);
-    outbox.recordSent(e1, s1, '2026-01-01T00:00:00.000Z');
     const s2 = outbox.push(e2);
-    outbox.recordSent(e2, s2, '2026-01-01T00:00:01.000Z');
+    writeAll(outbox);
 
     expect(outbox.sentSince(50).map((i) => i.seq)).toEqual([s1, s2]);
     expect(outbox.sentSince(s2 + 1).map((i) => i.seq)).toEqual([s1, s2]);
@@ -341,8 +339,9 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
     const limit = Outbox.SENT_HISTORY_LIMIT;
     for (let i = 1; i <= limit + 5; i++) {
       const event: RunnerEvent = { type: 'session', managerId: 'a', sessionId: String(i) };
-      outbox.recordSent(event, i, '2026-01-01T00:00:00.000Z');
+      outbox.push(event);
     }
+    writeAll(outbox);
     const all = outbox.sentSince(0);
     expect(all.length).toBe(limit);
     expect(all[0]?.seq).toBe(6);
@@ -351,21 +350,22 @@ describe('Outbox.recordSent / sentSince（#275）', () => {
 });
 
 describe('Outbox の送信済みの控えは字数でも締める（#4669）', () => {
-  const at = '2026-01-01T00:00:00.000Z';
   const mirrorOf = (i: number): RunnerEvent =>
     ({ type: 'session', managerId: 'a', sessionId: String(i) }) as RunnerEvent;
 
   it('⭐ 書き出した字数の合計が上限を超えたら、古い分から落とす（件数の上限より手前でも）', () => {
     const outbox = new Outbox();
-    for (let seq = 1; seq <= 20; seq += 1) outbox.recordSent(mirrorOf(seq), seq, at, 1_000_000);
+    for (let seq = 1; seq <= 20; seq += 1) outbox.push(mirrorOf(seq));
+    writeAll(outbox, { chars: () => 1_000_000 });
     const kept = outbox.sentSince(0).map((item) => item.seq);
     expect(kept).toEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
   });
 
   it('上限を1件で超える出来事でも、直近の1件は残す', () => {
     const outbox = new Outbox();
-    outbox.recordSent(mirrorOf(1), 1, at, 10);
-    outbox.recordSent(mirrorOf(2), 2, at, Outbox.SENT_HISTORY_MAX_CHARS + 1);
+    outbox.push(mirrorOf(1));
+    outbox.push(mirrorOf(2));
+    writeAll(outbox, { chars: (seq) => (seq === 1 ? 10 : Outbox.SENT_HISTORY_MAX_CHARS + 1) });
     expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([2]);
   });
 
@@ -376,18 +376,17 @@ describe('Outbox の送信済みの控えは字数でも締める（#4669）', (
       managerId: 'a',
       sessionId: 'x'.repeat(9_000_000),
     } as RunnerEvent;
-    outbox.recordSent(mirrorOf(1), 1, at);
-    outbox.recordSent(big, 2, at);
-    outbox.recordSent(big, 3, at);
+    outbox.push(mirrorOf(1));
+    outbox.push(big);
+    outbox.push(big);
+    writeAll(outbox);
     expect(outbox.sentSince(0).map((item) => item.seq)).toEqual([3]);
   });
 
   it('字数で落とした分より前を繋ぎ直しで求められたら、送り直せないことを標準エラーに残す。落としていない範囲では黙る', async () => {
     const outbox = new Outbox();
-    for (let seq = 1; seq <= 20; seq += 1) {
-      outbox.push(mirrorOf(seq));
-      outbox.recordSent(mirrorOf(seq), seq, at, 1_000_000);
-    }
+    for (let seq = 1; seq <= 20; seq += 1) outbox.push(mirrorOf(seq));
+    writeAll(outbox, { chars: () => 1_000_000 });
     const dropped = await captureStderr(() => {
       expect(outbox.sentSince(2).map((item) => item.seq)[0]).toBe(5);
     });

@@ -134,17 +134,11 @@ export interface OutboxPendingGroup {
   oldestAt: string;
 }
 
+// 畳む直前に、まだデーモンへ届けていない分（`pending` と同じ範囲）の内訳。購読の有無は区別しない: 出来事は列にしか無いため。
 export interface OutboxShutdownSnapshot {
-  queue: {
-    count: number;
-    oldestAt?: string;
-    groups: OutboxPendingGroup[];
-  };
-  // 'detached' の件数は 0 と書かない（#629）: 切れた側の件数は取れなかった時代の区別で、文言の形を保つために残している（#5692 段2 で畳む報告ごと見直す）。
-  subscriber:
-    | { status: 'never-subscribed' }
-    | { status: 'subscribed'; count?: number; oldestAt?: string }
-    | { status: 'detached' };
+  count: number;
+  oldestAt?: string;
+  groups: OutboxPendingGroup[];
 }
 
 /**
@@ -174,8 +168,6 @@ export class Outbox {
   // 連番の昇順の1本の列。連番が `#written` 以下は書いた分（控え）、より大きいのはまだ書いていない分。
   readonly #log: OutboxItem[] = [];
   #current: SubscriptionState | null = null;
-  // detach でも戻さない: `#current` とは別の軸（過去に購読されたか）で、「一度も無い」と「切れた」を分けるため。
-  #everSubscribed = false;
   readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
   // 書き終えた連番の最大。接続が変わっても持ち越す（次の接続は、ここより後ろから書き始める）。
@@ -222,7 +214,6 @@ export class Outbox {
     };
     const previous = this.#current;
     this.#current = state;
-    this.#everSubscribed = true;
     if (previous !== null) {
       previous.superseded = true;
       previous.onSuperseded?.();
@@ -243,39 +234,6 @@ export class Outbox {
         if (this.#current === state) this.#current = null;
       },
     };
-  }
-
-  /**
-   * **試験の口（本番の /events は `subscribe` を使う。本番の呼び元は無い）。**
-   * 溜まった分を同期で渡す購読で、畳みの待ちの試験が「脚が繋がっている」を作るために在る。渡した分は書き終えたことにする。
-   */
-  attach(listener: (event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void): () => void {
-    const deliver = (): void => {
-      for (let item = subscription.peek(); item !== undefined; item = subscription.peek()) {
-        listener(item.event, item.seq, item.queuedAt);
-        subscription.wrote(item);
-      }
-    };
-    const subscription = this.subscribe({ wake: deliver });
-    deliver();
-    return () => subscription.detach();
-  }
-
-  /**
-   * **試験の口（本番の /events は `subscribe` の `wrote` を使う。本番の呼び元は無い）。**
-   * 連番を指して書き終えたことにする（列に無い連番なら列へ挿入する）。控えの上限・`sentSince` の試験が、書き込みを通さずに控えを作るために在る。
-   * `chars` は書き出した本文（`JSON.stringify(event)`）の字数。省けばここで数える。
-   */
-  recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string, chars?: number): void {
-    const index = this.#lowerBound(seq);
-    let item = this.#log[index];
-    if (item === undefined || item.seq !== seq) {
-      item = { event, queuedAt, seq };
-      this.#log.splice(index, 0, item);
-      this.#nextSeq = Math.max(this.#nextSeq, seq + 1);
-    }
-    this.#markWritten(item, chars);
-    this.#trim();
   }
 
   // 書き終えた連番は二度数えない: 読み返して再送した分が控えに二重に入り、デーモンへ同じ出来事が2回届くため。
@@ -372,12 +330,11 @@ export class Outbox {
     return this.#current !== null;
   }
 
+  // まだデーモンへ届けていない分（`pending` と同じ範囲。購読中はその接続の cursor 以降、購読が無いときは書き終えた後ろ）の内訳。
   describeForShutdown(): OutboxShutdownSnapshot {
-    // 購読中は、まだ書いていない分と読み返しの分を購読側の欄（その接続の溜まり）に数え、`queue` は空にする（#629 の報告の形）。
-    // 購読が無いときは、書いていない分を `queue` に内訳つきで出す。
-    const unwritten = this.#current === null ? this.#log.slice(this.#sentCount) : [];
+    const pending = this.#log.slice(this.#lowerBound(this.#pendingFrom()));
     const groups = new Map<string, OutboxPendingGroup>();
-    for (const item of unwritten) {
+    for (const item of pending) {
       const managerId = 'managerId' in item.event ? item.event.managerId : undefined;
       const key = `${item.event.type} ${managerId ?? ''}`;
       const existing = groups.get(key);
@@ -393,96 +350,31 @@ export class Outbox {
         if (item.queuedAt < existing.oldestAt) existing.oldestAt = item.queuedAt;
       }
     }
-    const oldestPending = this.oldestPendingAt;
-    const subscriber: OutboxShutdownSnapshot['subscriber'] =
-      this.#current !== null
-        ? {
-            status: 'subscribed',
-            count: this.pending,
-            ...(oldestPending === undefined ? {} : { oldestAt: oldestPending }),
-          }
-        : this.#everSubscribed
-          ? { status: 'detached' }
-          : { status: 'never-subscribed' };
     return {
-      queue: {
-        count: unwritten.length,
-        ...(unwritten[0] === undefined ? {} : { oldestAt: unwritten[0].queuedAt }),
-        groups: [...groups.values()],
-      },
-      subscriber,
+      count: pending.length,
+      ...(pending[0] === undefined ? {} : { oldestAt: pending[0].queuedAt }),
+      groups: [...groups.values()],
     };
   }
 }
 
+// 何が失われるかを名指しする（#629）: Outbox はメモリだけで、直後の exit(0) で消える。0 件なら書かない。
 export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): string | null {
-  const subscriberKnownCount =
-    snapshot.subscriber.status === 'subscribed' ? (snapshot.subscriber.count ?? 0) : 0;
-  // 'detached' のとき `#queue` が0件でも黙らない: 切れた側の件数は取れず、0件と決めつけると静かに失敗するため。
-  const subscriberUnknown = snapshot.subscriber.status === 'detached';
-  const total = snapshot.queue.count + subscriberKnownCount;
-  if (total === 0 && !subscriberUnknown) return null;
-
-  const oldestCandidates = [
-    snapshot.queue.oldestAt,
-    snapshot.subscriber.status === 'subscribed' ? snapshot.subscriber.oldestAt : undefined,
-  ].filter((value): value is string => value !== undefined);
-  oldestCandidates.sort();
-  const oldest = oldestCandidates[0];
-
+  if (snapshot.count === 0) return null;
   const lines = [
-    total > 0
-      ? `alteroid-runner: 畳む直前の出来事が ${total} 件、このプロセスの終了と一緒に失われる` +
-        `${oldest === undefined ? '' : `（最古 ${oldest}）`}。Outbox はプロセス内メモリだけで、` +
-        'ディスクにも DB にも無い——この直後に process.exit(0) するので、これより後は無い。' +
-        `${
-          subscriberUnknown
-            ? ' 購読側が過去に抱えていた分は件数不明——それとは別に、さらに失われている可能性がある。'
-            : ''
-        }`
-      : 'alteroid-runner: 畳む直前、自分の待ち行列（#queue）に残っているものは無いが、' +
-        '過去に購読されていた接続がいま切れており、そちら側で何件失っていたかはここからは' +
-        '分からない（0件だったとは言い切れない）。',
+    `alteroid-runner: 畳む直前、まだデーモンへ届けていない出来事が ${snapshot.count} 件、このプロセスの終了と一緒に失われる` +
+      `${snapshot.oldestAt === undefined ? '' : `（最古 ${snapshot.oldestAt}）`}。Outbox はプロセス内メモリだけで、` +
+      'ディスクにも DB にも無い——この直後に process.exit(0) するので、これより後は無い。',
+    '  内訳:',
   ];
-
-  if (snapshot.queue.groups.length === 0) {
-    lines.push('  自分の待ち行列（#queue）: 0件。');
-  } else {
-    lines.push('  自分の待ち行列（#queue）の内訳:');
-    for (const group of snapshot.queue.groups) {
-      lines.push(
-        `    type=${group.type}` +
-          `${group.managerId === undefined ? '' : ` managerId=${group.managerId}`}` +
-          ` count=${group.count} oldest=${group.oldestAt}`,
-      );
-    }
+  for (const group of snapshot.groups) {
+    lines.push(
+      `    type=${group.type}` +
+        `${group.managerId === undefined ? '' : ` managerId=${group.managerId}`}` +
+        ` count=${group.count} oldest=${group.oldestAt}`,
+    );
   }
-
-  lines.push(describeSubscriberLine(snapshot.subscriber));
-
   return `${lines.join('\n')}\n`;
-}
-
-function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']): string {
-  switch (subscriber.status) {
-    case 'never-subscribed':
-      return '  購読側が抱えている分: 購読が一度も無いので該当なし。';
-    case 'detached':
-      return (
-        '  購読側が抱えている分: 過去に購読されていたが、いま切れている' +
-        '（件数は取れない——0件だったとは言い切れない）。'
-      );
-    case 'subscribed': {
-      const oldest = subscriber.oldestAt === undefined ? '' : `（最古 ${subscriber.oldestAt}。`;
-      const closing = subscriber.oldestAt === undefined ? '（' : '';
-      const count = subscriber.count ?? '不明';
-      return `  購読側が抱えている分: ${count} 件${oldest}${closing}内訳は取れない）。`;
-    }
-    default: {
-      const unreachable: never = subscriber;
-      return `  購読側が抱えている分: 判定できない（未知の状態 ${JSON.stringify(unreachable)}）。`;
-    }
-  }
 }
 
 // createRunnerApp の中で作らない: テストが app を作り直すたびに変わり、器の入れ替わりに見えるため。

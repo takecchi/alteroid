@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Outbox } from './app.js';
 import { shutdownHandingOver } from './index.js';
+import { connectedSubscriber } from './outbox-subscribers.test-support.js';
 import { gateDuringShutdown, isPickupRequest, waitForPickups } from './shutdown-pickups.js';
 
 describe('isPickupRequest（#4699）', () => {
@@ -116,7 +117,7 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
     const order: string[] = [];
     let pending = 0;
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
     const host = {
       shutdown: async () => {
         order.push('host.shutdown');
@@ -146,7 +147,7 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
   it('期限までに取られなければ、残りを1行書いて口を閉じる', async () => {
     const lines: string[] = [];
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
     let closed = false;
 
     await shutdownHandingOver({
@@ -172,7 +173,7 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
     const order: string[] = [];
     let pending = 1;
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
     const lines: string[] = [];
 
     await shutdownHandingOver({
@@ -203,7 +204,7 @@ describe('shutdownHandingOver: 口は預けた物が取られてから閉じる�
     let pending = 1;
     let inlined = 0;
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
 
     await shutdownHandingOver({
       host: {
@@ -263,7 +264,7 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
     let inlined = 0;
     let closed = false;
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
 
     const done = shutdownHandingOver({
       host: {
@@ -300,7 +301,7 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
     let closed = false;
     let finishShutdown: () => void = () => undefined;
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
 
     const done = shutdownHandingOver({
       host: {
@@ -329,7 +330,7 @@ describe('shutdownHandingOver: shutdown() と並行に送り直し、shutdown() 
     vi.useFakeTimers();
     let closed = false;
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
 
     const done = shutdownHandingOver({
       host: {

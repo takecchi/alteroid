@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { Outbox } from './app.js';
+import { connectedSubscriber } from './outbox-subscribers.test-support.js';
 
 function fakeSdk(): {
   fn: typeof sdkQuery;
@@ -93,7 +94,7 @@ describe('runner は畳み始めたら shutting_down を、畳みの出来事よ
     await host.shutdown();
 
     const seen: RunnerEvent[] = [];
-    outbox.attach((event) => seen.push(event));
+    connectedSubscriber(outbox, (event) => seen.push(event));
     const types = seen.map((event) => event.type);
 
     const at = types.indexOf('shutting_down');

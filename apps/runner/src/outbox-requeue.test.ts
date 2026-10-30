@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { connectedSubscriber } from './outbox-subscribers.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -52,7 +53,7 @@ describe('Outbox: queuedAt は積んだときのまま（渡し先が変わっ�
     clock = 'WRONG-NOW';
     const received: { event: RunnerEvent; seq: number; queuedAt: string }[] = [];
 
-    outbox.attach((ev, seq, queuedAt) => received.push({ event: ev, seq, queuedAt }));
+    connectedSubscriber(outbox, (ev, seq, queuedAt) => received.push({ event: ev, seq, queuedAt }));
 
     expect(received).toHaveLength(1);
     expect(received[0]?.queuedAt).toBe('OLD-2020-01-01T00:00:00.000Z');

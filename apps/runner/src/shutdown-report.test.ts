@@ -8,22 +8,34 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { createRunnerHost, type RunnerHost } from '@alteroid/core';
+import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { formatOutboxShutdownReport, Outbox, type OutboxShutdownSnapshot } from './app.js';
 import { drainAndReportOutbox, DRAIN_POLL_INTERVAL_MS, waitForOutboxDrain } from './index.js';
-import { stuckSubscriber } from './stuck-subscriber.test-support.js';
+import {
+  connectedSubscriber,
+  stuckSubscriber,
+  writeAll,
+} from './outbox-subscribers.test-support.js';
 
-describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', () => {
+// #5692 段2: 畳む報告は、まだデーモンへ届けていない分（`pending` と同じ範囲）を、購読の有無を分けずに内訳つきで1か所に出す。
+// 以前（#629）は「自分の待ち行列」と「購読側（一度も無い／いま／切れている）」の2か所に分けて書いていた。
+// 守る事故: #629（7時間半詰まって未送出 477 件のまま焼き直した。畳むとき何が失われるかを名指しする）。
+
+function session(id: string): RunnerEvent {
+  return { type: 'session', managerId: `mgr-${id}`, sessionId: `sess-${id}` };
+}
+
+describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#629）', () => {
   it('何も残っていなければ null（1行も書かない）', () => {
     const outbox = new Outbox();
     expect(formatOutboxShutdownReport(outbox.describeForShutdown())).toBeNull();
   });
 
-  it('#queue の内訳を種別・managerId ごとに数え、archive を含む場合は archive と managerId が文面に出る。「残っている」ではなく「失われる」と書く', () => {
+  it('届けていない分を種別・managerId ごとに数え、archive を含む場合は archive と managerId が文面に出る。「残っている」ではなく「失われる」と書く', () => {
     const outbox = new Outbox();
     outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログの控え' });
@@ -31,10 +43,9 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     outbox.push({ type: 'note', managerId: 'mgr-1', text: '何か起きた' });
 
     const snapshot = outbox.describeForShutdown();
-    expect(snapshot.queue.count).toBe(4);
-    expect(snapshot.subscriber).toEqual({ status: 'never-subscribed' });
+    expect(snapshot.count).toBe(4);
 
-    const archiveGroups = snapshot.queue.groups.filter((group) => group.type === 'archive');
+    const archiveGroups = snapshot.groups.filter((group) => group.type === 'archive');
     expect(archiveGroups).toHaveLength(2);
     expect(archiveGroups.map((group) => group.managerId).sort()).toEqual(['mgr-1', 'mgr-2']);
     expect(archiveGroups.every((group) => group.count === 1)).toBe(true);
@@ -56,153 +67,130 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '2件目' });
 
     const snapshot = outbox.describeForShutdown();
-    expect(snapshot.queue.groups).toHaveLength(1);
-    const [group] = snapshot.queue.groups;
+    expect(snapshot.groups).toHaveLength(1);
+    const [group] = snapshot.groups;
     expect(group).toMatchObject({
       type: 'archive',
       managerId: 'mgr-1',
       count: 2,
       oldestAt: '2026-01-01T00:00:00.000Z',
     });
+    expect(snapshot.oldestAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(formatOutboxShutdownReport(snapshot)).toContain('（最古 2026-01-01T00:00:00.000Z）');
   });
 
   it('hello イベントは managerId を持たないので、内訳の managerId が省かれる', () => {
     const outbox = new Outbox();
     outbox.push({ type: 'hello', runnerId: 'runner-x' });
     const snapshot = outbox.describeForShutdown();
-    expect(snapshot.queue.groups).toEqual([
+    expect(snapshot.groups).toEqual([
       { type: 'hello', count: 1, oldestAt: expect.any(String) as unknown as string },
     ]);
-    expect(snapshot.queue.groups[0]).not.toHaveProperty('managerId');
+    expect(snapshot.groups[0]).not.toHaveProperty('managerId');
   });
 
-  it('購読側（#probe）の内訳は取れない旨を文面に出す。「一度も無い」とは別の文面', () => {
-    const noSubscriber: OutboxShutdownSnapshot = {
-      queue: { count: 0, groups: [] },
-      subscriber: { status: 'never-subscribed' },
-    };
-    expect(formatOutboxShutdownReport(noSubscriber)).toBeNull();
+  it('0 件のスナップショットは null。件数があれば最古の時刻と内訳の行を出し、購読側の欄は持たない', () => {
+    const none: OutboxShutdownSnapshot = { count: 0, groups: [] };
+    expect(formatOutboxShutdownReport(none)).toBeNull();
 
-    const withSubscriber: OutboxShutdownSnapshot = {
-      queue: { count: 0, groups: [] },
-      subscriber: { status: 'subscribed', count: 2, oldestAt: '2026-01-01T00:00:00.000Z' },
+    const some: OutboxShutdownSnapshot = {
+      count: 2,
+      oldestAt: '2026-01-01T00:00:00.000Z',
+      groups: [
+        { type: 'note', managerId: 'mgr-1', count: 2, oldestAt: '2026-01-01T00:00:00.000Z' },
+      ],
     };
-    const report = formatOutboxShutdownReport(withSubscriber);
+    const report = formatOutboxShutdownReport(some);
     expect(report).not.toBeNull();
-    expect(report).toContain('購読側が抱えている分: 2 件');
-    expect(report).toContain('内訳は取れない');
-    expect(report).not.toContain('購読が一度も無い');
+    expect(report).toContain('出来事が 2 件、このプロセスの終了と一緒に失われる');
+    expect(report).toContain('（最古 2026-01-01T00:00:00.000Z）');
+    expect(report).toContain('type=note managerId=mgr-1 count=2 oldest=2026-01-01T00:00:00.000Z');
+    expect(report).not.toContain('購読側');
   });
 
-  describe('購読側の3状態（一度も無い／いま購読されている／切れている）を混同しない', () => {
-    it('一度も購読が無い: never-subscribed', () => {
-      const outbox = new Outbox();
-      expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'never-subscribed' });
-    });
-
-    it('いま購読されている（#probe あり）: subscribed に件数・最古時刻が乗る', () => {
+  describe('購読の有無で内訳が変わらない（以前は「購読側は件数不明・内訳は取れない」だった。#629）', () => {
+    it('読まなくなった購読が付いたままでも、届けていない分は内訳つきで名指しされる', () => {
       const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
       const stuck = stuckSubscriber(outbox);
-      for (let i = 0; i < 3; i += 1) {
-        outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: `sess-${String(i)}` });
-      }
-      expect(outbox.describeForShutdown().subscriber).toEqual({
-        status: 'subscribed',
-        count: 3,
-        oldestAt: '2026-01-01T00:00:00.000Z',
+      outbox.push(session('1'));
+      outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログの控え' });
+      outbox.push({ type: 'archive', managerId: 'mgr-1', body: '2件目' });
+
+      const snapshot = outbox.describeForShutdown();
+      expect(snapshot.count).toBe(3);
+      expect(snapshot.oldestAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(snapshot.groups.find((group) => group.type === 'archive')).toMatchObject({
+        managerId: 'mgr-1',
+        count: 2,
       });
+      const report = formatOutboxShutdownReport(snapshot);
+      expect(report).toContain('出来事が 3 件、このプロセスの終了と一緒に失われる');
+      expect(report).toContain('type=archive managerId=mgr-1 count=2');
+      expect(report).not.toContain('件数は取れない');
+      expect(report).not.toContain('内訳は取れない');
       stuck.detach();
     });
 
-    // #5692: 「probe の無い購読」という状態は無くなった（購読は常にその接続の溜まりを数えられる）。溜まりが無い購読は件数0で、oldestAt は付けない。
-    // 「件数が乗らない（0とは違う）」の代わりに、0 を明示して一度も無い・切れているとは別の状態であることを縛る。
-    it('いま購読されていて溜まりが無い: subscribed は件数0（oldestAt は付けない）。一度も無い・切れているとは別', () => {
-      const outbox = new Outbox();
-      const detach = outbox.attach(() => undefined);
-      expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'subscribed', count: 0 });
-      detach();
-    });
-
-    it('過去に購読されていたが、いま切れている: detached。件数は取れない（0 を書かない）', () => {
+    it('購読が外れたあとも、届けていない分は同じ内訳で名指しされる（「件数不明」と書かない）', () => {
       const outbox = new Outbox();
       const stuck = stuckSubscriber(outbox);
+      outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログの控え' });
       stuck.detach();
-      const snapshot = outbox.describeForShutdown();
-      expect(snapshot.subscriber).toEqual({ status: 'detached' });
-      expect(snapshot.subscriber).not.toHaveProperty('count');
-    });
-
-    it('文面: never-subscribed は「該当なし」、detached は「件数は取れない」、subscribed（#probe あり）は件数を出す——3つとも別の字面', () => {
-      const never = formatOutboxShutdownReport({
-        queue: {
-          count: 1,
-          groups: [{ type: 'note', managerId: 'mgr-1', count: 1, oldestAt: 'x' }],
-        },
-        subscriber: { status: 'never-subscribed' },
-      });
-      const detached = formatOutboxShutdownReport({
-        queue: {
-          count: 1,
-          groups: [{ type: 'note', managerId: 'mgr-1', count: 1, oldestAt: 'x' }],
-        },
-        subscriber: { status: 'detached' },
-      });
-      const subscribed = formatOutboxShutdownReport({
-        queue: {
-          count: 1,
-          groups: [{ type: 'note', managerId: 'mgr-1', count: 1, oldestAt: 'x' }],
-        },
-        subscriber: { status: 'subscribed', count: 2, oldestAt: 'y' },
-      });
-
-      expect(never).toContain('購読が一度も無いので該当なし');
-      expect(detached).toContain('過去に購読されていたが、いま切れている');
-      expect(detached).toContain('件数は取れない');
-      expect(subscribed).toContain('購読側が抱えている分: 2 件');
-
-      expect(new Set([never, detached, subscribed]).size).toBe(3);
-    });
-
-    it('#queue が0件でも、detached なら黙らずに「件数不明」と書く', () => {
-      const outbox = new Outbox();
-      const detach = outbox.attach(() => undefined);
-      detach();
-      expect(outbox.pending).toBe(0);
 
       const snapshot = outbox.describeForShutdown();
-      expect(snapshot.queue.count).toBe(0);
-      expect(snapshot.subscriber).toEqual({ status: 'detached' });
-
+      expect(snapshot.count).toBe(1);
       const report = formatOutboxShutdownReport(snapshot);
-      expect(report).not.toBeNull();
-      expect(report).toContain('残っているものは無いが');
-      expect(report).toContain('切れており');
-      expect(report).toContain('0件だったとは言い切れない');
+      expect(report).toContain('type=archive managerId=mgr-1');
+      expect(report).not.toContain('件数不明');
+      expect(report).not.toContain('件数は取れない');
+    });
+
+    it('購読していた接続が全部書き終えていれば、0 件なので何も書かない（切れていたことを理由に書かない）', () => {
+      const outbox = new Outbox();
+      const detach = connectedSubscriber(outbox, () => undefined);
+      outbox.push(session('1'));
+      outbox.push(session('2'));
+      detach();
+
+      expect(outbox.pending).toBe(0);
+      expect(formatOutboxShutdownReport(outbox.describeForShutdown())).toBeNull();
+    });
+
+    it('繋ぎ直しで読み返している最中の分も、届けていない分として数える（pending と同じ範囲）', () => {
+      const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
+      outbox.push(session('1'));
+      outbox.push(session('2'));
+      outbox.push(session('3'));
+      writeAll(outbox);
+      expect(outbox.describeForShutdown().count).toBe(0);
+
+      const subscription = outbox.subscribe({ lastEventId: 0, wake: () => undefined });
+      expect(outbox.pending).toBe(3);
+      expect(outbox.describeForShutdown().count).toBe(3);
+      const first = subscription.peek();
+      if (first === undefined) throw new Error('読み返す1件目が無い');
+      subscription.wrote(first);
+      expect(outbox.describeForShutdown().count).toBe(2);
+      subscription.detach();
+      // 外れたら、書き終えた連番の後ろだけ
+      expect(outbox.describeForShutdown().count).toBe(0);
     });
   });
 });
 
-describe('Outbox.subscribed（#634）', () => {
-  it('listener が付いていなければ false、attach すると true、detach で false に戻る', () => {
+describe('Outbox.subscribed（#629）', () => {
+  it('購読が付いていなければ false、subscribe すると true、detach で false に戻る', () => {
     const outbox = new Outbox();
     expect(outbox.subscribed).toBe(false);
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
     expect(outbox.subscribed).toBe(true);
     detach();
     expect(outbox.subscribed).toBe(false);
   });
-
-  it('detach 後も subscribed は false のまま——describeForShutdown 側の「一度は購読された」記憶とは別の軸', () => {
-    const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
-    detach();
-    expect(outbox.subscribed).toBe(false);
-    expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'detached' });
-  });
 });
 
-describe('waitForOutboxDrain（#634）', () => {
-  it('listener が付いていなければ、pending が残っていても即座に返る（1ミリ秒も待たない）', async () => {
+describe('waitForOutboxDrain（#629）', () => {
+  it('購読が付いていなければ、pending が残っていても即座に返る（1ミリ秒も待たない）', async () => {
     const outbox = new Outbox();
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: 'x' });
     expect(outbox.subscribed).toBe(false);
@@ -214,9 +202,9 @@ describe('waitForOutboxDrain（#634）', () => {
     expect(elapsed).toBeLessThan(DRAIN_POLL_INTERVAL_MS);
   });
 
-  it('listener が付いていても pending が既に0なら、タイムアウトを待たず即座に返る', async () => {
+  it('購読が付いていても pending が既に0なら、タイムアウトを待たず即座に返る', async () => {
     const outbox = new Outbox();
-    const detach = outbox.attach(() => undefined);
+    const detach = connectedSubscriber(outbox, () => undefined);
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: 'x' });
     expect(outbox.pending).toBe(0);
 
@@ -226,12 +214,10 @@ describe('waitForOutboxDrain（#634）', () => {
     detach();
   });
 
-  it('listener が付いていて pending が残っていれば待ち、外から0になったら即座に返る', async () => {
+  it('購読が付いていて pending が残っていれば待ち、外から0になったら即座に返る', async () => {
     const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
-    for (let i = 0; i < 3; i += 1) {
-      outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: `sess-${String(i)}` });
-    }
+    for (let i = 0; i < 3; i += 1) outbox.push(session(String(i)));
     expect(outbox.pending).toBe(3);
 
     const waitPromise = waitForOutboxDrain(outbox, 5_000);
@@ -244,26 +230,24 @@ describe('waitForOutboxDrain（#634）', () => {
     stuck.detach();
   });
 
-  it('listener は付いているが捌けないまま、タイムアウトで諦める（例外は投げない）', async () => {
+  it('購読は付いているが捌けないまま、タイムアウトで諦める（例外は投げない）', async () => {
     const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
-    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
-    const detach = stuck.detach;
+    outbox.push(session('1'));
     const start = Date.now();
     await waitForOutboxDrain(outbox, DRAIN_POLL_INTERVAL_MS * 3);
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(DRAIN_POLL_INTERVAL_MS * 2);
-    detach();
+    stuck.detach();
   });
 
-  it('待っている途中で listener が外れたら、タイムアウトを待たずに諦める', async () => {
+  it('待っている途中で購読が外れたら、タイムアウトを待たずに諦める', async () => {
     const outbox = new Outbox();
     const stuck = stuckSubscriber(outbox);
-    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
-    const detach = stuck.detach;
+    outbox.push(session('1'));
     const waitPromise = waitForOutboxDrain(outbox, 5_000);
     await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS * 2));
-    detach();
+    stuck.detach();
 
     const start = Date.now();
     await waitPromise;
@@ -271,8 +255,8 @@ describe('waitForOutboxDrain（#634）', () => {
   });
 });
 
-describe('drainAndReportOutbox（#634）', () => {
-  it('listener が無ければ待たずに、残っているものを注入した write へ書く', async () => {
+describe('drainAndReportOutbox（#629）', () => {
+  it('購読が無ければ待たずに、残っているものを注入した write へ書く', async () => {
     const outbox = new Outbox();
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログ' });
     outbox.push({ type: 'report', managerId: 'mgr-1', text: '報告', status: 'done' });
@@ -294,11 +278,10 @@ describe('drainAndReportOutbox（#634）', () => {
     expect(written).toHaveLength(0);
   });
 
-  it('listener が付いていれば waitMs の分だけ待ってから書く', async () => {
+  it('購読が付いていれば waitMs の分だけ待ってから、捌けなかった分を名指しして書く', async () => {
     const outbox = new Outbox(() => '2026-01-01T00:00:00.000Z');
     const stuck = stuckSubscriber(outbox);
-    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
-    const detach = stuck.detach;
+    outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログ' });
     const written: string[] = [];
     const start = Date.now();
     await drainAndReportOutbox(outbox, {
@@ -308,9 +291,10 @@ describe('drainAndReportOutbox（#634）', () => {
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThanOrEqual(DRAIN_POLL_INTERVAL_MS * 2);
     expect(written).toHaveLength(1);
-    expect(written[0]).toContain('購読側が抱えている分: 1 件');
-    expect(written[0]).toContain('内訳は取れない');
-    detach();
+    expect(written[0]).toContain('出来事が 1 件、このプロセスの終了と一緒に失われる');
+    expect(written[0]).toContain('type=archive managerId=mgr-1');
+    expect(written[0]).not.toContain('内訳は取れない');
+    stuck.detach();
   });
 });
 
@@ -368,8 +352,8 @@ afterEach(async () => {
   hosts = [];
 });
 
-describe('listener が付いていないまま畳む経路（Host#shutdown()）を通ると archive が箱に残る（#634）', () => {
-  it('listener を一度も attach していない Outbox へ、shutdown() 後に archive が積まれている', async () => {
+describe('購読が付いていないまま畳む経路（Host#shutdown()）を通ると archive が箱に残る（#629）', () => {
+  it('購読を一度も付けていない Outbox へ、shutdown() 後に archive が積まれている', async () => {
     const outbox = new Outbox();
     const { fn, sessions } = fakeSdk();
     const host = createRunnerHost({
@@ -397,7 +381,7 @@ describe('listener が付いていないまま畳む経路（Host#shutdown()）�
     await host.shutdown();
 
     const snapshot = outbox.describeForShutdown();
-    const archiveGroup = snapshot.queue.groups.find((group) => group.type === 'archive');
+    const archiveGroup = snapshot.groups.find((group) => group.type === 'archive');
     expect(archiveGroup).toBeDefined();
     expect(archiveGroup?.managerId).toBe('mgr-shutdown');
 
@@ -405,7 +389,7 @@ describe('listener が付いていないまま畳む経路（Host#shutdown()）�
     expect(report).toContain('type=archive managerId=mgr-shutdown');
   });
 
-  it('listener が付いていれば（脚が繋がっていれば）、shutdown() 後の drainAndReportOutbox は捌けるのを待って書かずに済ませられる', async () => {
+  it('購読が付いていれば（脚が繋がっていれば）、shutdown() 後の drainAndReportOutbox は捌けるのを待って書かずに済ませられる', async () => {
     const outbox = new Outbox();
     const { fn, sessions } = fakeSdk();
     const host = createRunnerHost({
@@ -429,7 +413,7 @@ describe('listener が付いていないまま畳む経路（Host#shutdown()）�
     });
 
     const delivered: unknown[] = [];
-    const detach = outbox.attach((event) => delivered.push(event));
+    const detach = connectedSubscriber(outbox, (event) => delivered.push(event));
 
     await host.shutdown();
     expect(outbox.subscribed).toBe(true);
