@@ -3999,7 +3999,7 @@ class Pool implements ManagerPool {
         /*
          * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
          * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
-         * `answered.decision` が無い回（変更前の runner）は `allow`/`deny` へ倒さず `[unknown]` で区別する。
+         * `answered.decision` が無い回（届いたのに `decision` を名乗らない応答。runner は届いた回に必ず付ける）は `allow`/`deny` へ倒さず `[unknown]` で区別する。
          * `'unreadable'` は `[unreadable]` のまま残し、`allow`/`deny`/`unknown` へ畳まない。
          */
         answer:

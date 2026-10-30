@@ -1003,9 +1003,9 @@ describe('資源による配置の材料', () => {
 });
 
 describe('許可確認の回答の応答から decision を読む', () => {
-  it('decision を報告しない古い runner の応答でも、届いたことは分かる（既定値へは倒さない）', async () => {
+  it('decision を名乗らない応答でも、届いたことは分かる（既定値へは倒さない）', async () => {
     const client = await createHttpRunner({
-      baseUrl: 'http://legacy.test',
+      baseUrl: 'http://runner.test',
       token: TOKEN,
       fetchFn: (async () => Response.json({ ok: true })) as typeof fetch,
     });
@@ -1265,7 +1265,7 @@ describe('hello() が拾う版', () => {
     expect(['known', 'unknown']).toContain(client.revision?.status);
   });
 
-  it('/health に revision フィールドが無い古い runner では、revision は undefined のまま（プレースホルダにしない）', async () => {
+  it('/health に revision が無い runner は、「訊けたが分からない」（unknown）として読む（#5718）', async () => {
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
       token: TOKEN,
@@ -1278,7 +1278,7 @@ describe('hello() が拾う版', () => {
     });
     cleanups.push(() => client.close());
 
-    expect(client.revision).toBeUndefined();
+    expect(client.revision).toEqual({ status: 'unknown' });
   });
 });
 

@@ -498,10 +498,8 @@ class HttpRunner implements RunnerClient {
       this.workspacePath = body.workspacePath;
       this.#workspacePathKnown = true;
     }
-    // `revision` が無ければ触らない: 無条件に呼ぶと、フィールド不在の古い runner まで `unknown` へ倒れ、「訊けたが分からない」と「報告する口が無い」が区別できなくなるため
-    if (body.revision !== undefined) {
-      this.revision = revisionReportOf(body.revision);
-    }
+    // 欄が無い回も `unknown`（訊けたが分からない）で採る: 名簿が `unheard` を使うのは「報告する口を持たない実装」（`LocalRunner` 等）だけで、HTTP で訊けた相手は `unheard` にしないため
+    this.revision = revisionReportOf(body.revision);
     if (typeof body.instanceId === 'string' && body.instanceId.length > 0) {
       this.instanceId = body.instanceId;
     }
@@ -882,13 +880,13 @@ class HttpRunner implements RunnerClient {
     const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
       body.sessionGeneration,
     );
-    // 欄が無い・形が崩れた回は `false` へ倒さず `undefined`（分からない）にする: 古い runner は短絡したかを名乗れないため
+    // 欄が無い・形が崩れた回は `false`（短絡していない）と読む: runner は短絡した回に `true`、起こし直した回に `false` を必ず返すので、`true` と読めなかった回は流しただけではない
     const reused = runnerSessionOpenResultSchema.shape.reusedLiveSession.safeParse(
       body.reusedLiveSession,
     );
     return {
       ...(cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {}),
-      ...(reused.success && reused.data !== undefined ? { reusedLiveSession: reused.data } : {}),
+      reusedLiveSession: reused.success && reused.data === true,
       ...(generation.success && generation.data !== undefined
         ? { sessionGeneration: generation.data }
         : {}),
@@ -919,7 +917,7 @@ class HttpRunner implements RunnerClient {
     const decision = runnerAnswerResultSchema.shape.decision.safeParse(body.decision);
     return {
       delivered: body.ok === true,
-      // 欠けた回を allow/deny の既定値へ倒さず欄そのものを省く: ローリング再デプロイの窓では、この変更前の runner が `decision` を持たない応答を返すため
+      // 欠けた回を allow/deny の既定値へ倒さず欄そのものを省く: runner は届いた回（`ok: true`）にだけ `decision` を付け、宛先が無い回（`ok: false`）には付けないため
       ...(decision.success && decision.data !== undefined ? { decision: decision.data } : {}),
     };
   }
