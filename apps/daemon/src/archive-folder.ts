@@ -13,6 +13,7 @@ import {
 } from '@alteroid/core';
 
 import { readEveryMinutes, type EveryMinutesConfig } from './env-every-minutes.js';
+import { startPeriodicRun } from './periodic-runner.js';
 
 export const ARCHIVE_FOLD_EVERY_ENV = 'ALTEROID_ARCHIVE_FOLD_EVERY';
 
@@ -211,22 +212,8 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
     MAX_ARCHIVE_FOLD_INTERVAL_MS,
   );
 
-  let inFlight: Promise<FoldArchiveOnceResult | null> | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
-
-  const stop = () => {
-    stopped = true;
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  options.signal?.addEventListener('abort', stop, { once: true });
-
-  const runOnce = (): Promise<FoldArchiveOnceResult | null> => {
-    if (inFlight !== null) return inFlight;
-    inFlight = foldArchiveOnce({
+  const foldOnce = (): Promise<FoldArchiveOnceResult | null> =>
+    foldArchiveOnce({
       stores: options.stores,
       managers: options.managers,
       ...(options.now === undefined ? {} : { now: options.now }),
@@ -247,25 +234,8 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
           `alteroidd: 退避済み生ログの自動畳み込みに失敗しました: ${reasonOf(error)}\n`,
         );
         return null;
-      })
-      .finally(() => {
-        inFlight = null;
       });
-    return inFlight;
-  };
 
-  const schedule = (delay: number) => {
-    if (stopped) return;
-    timer = setTimeout(() => {
-      void runOnce().then(() => schedule(interval));
-    }, delay);
-    timer.unref?.();
-  };
-
-  void runOnce().then(() => schedule(interval));
-
-  return {
-    refresh: runOnce,
-    stop,
-  };
+  // 重ねない・止める・次の予約は `startPeriodicRun` が持つ
+  return startPeriodicRun({ intervalMs: interval, signal: options.signal, run: foldOnce });
 }
