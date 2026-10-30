@@ -1,7 +1,7 @@
-import { tokenCooldownMsSchema } from '@alteroid/core/token-cooldown-ms';
+import { isTokenCooldownMs } from '@alteroid/core/token-cooldown-ms';
 
 // 休止の既定は、画面では「時」と「分」の2つの欄で入れ、daemon へはミリ秒（cooldownMs）で送る。
-// 範囲の規則（整数で、0 より大きい）は daemon が使う core の `tokenCooldownMsSchema` そのもの。ここへ数値を写さない
+// 範囲の規則（整数で、0 より大きい）は core の `isTokenCooldownMs`（daemon の zod と同じ判定を試験で突き合わせてある）。ここへ数値を写さない
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 
@@ -46,8 +46,7 @@ export function checkCooldownDraft(draft: CooldownDraft): CooldownCheck {
     };
   }
   const ms = hours * HOUR_MS + minutes * MINUTE_MS;
-  const parsed = tokenCooldownMsSchema.safeParse(ms);
-  if (parsed.success) return { ok: true, ms: parsed.data };
+  if (isTokenCooldownMs(ms)) return { ok: true, ms };
   // 整数で書いた時と分の合計が通らないのは、0 のとき（正でない）か、大きすぎて整数として扱えないとき
   return {
     ok: false,

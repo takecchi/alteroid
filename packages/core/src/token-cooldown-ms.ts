@@ -1,5 +1,7 @@
-import { z } from 'zod';
-
-// 休止の既定（ミリ秒）の形。デーモンの `PUT /tokens/policy`・保存する設定の読み取り・web の保存前の検査が同じものを使う
-// zod だけを import する小さな入口に切る: token-pool.ts は node:crypto を引くので、ブラウザの束へ入れられないため
-export const tokenCooldownMsSchema = z.number().int().positive();
+// 休止の既定（ミリ秒）の形: 整数で、0 より大きい。web の保存前の検査が使う入口。
+// zod も node: も import しない: ブラウザの束に zod（約 100 KB）を入れないため。
+// daemon の `PUT /tokens/policy` と保存する設定の zod スキーマ（`z.number().int().positive()`）は、
+// この関数と同じ判定になる（token-cooldown-ms.test.ts が同じ入力の表を両方に通して突き合わせる）。
+export function isTokenCooldownMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
