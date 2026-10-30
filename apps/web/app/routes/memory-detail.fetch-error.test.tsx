@@ -150,7 +150,10 @@ describe('読めた後の取り直しが 404 になったとき（issue #3092）
       window.dispatchEvent(new Event('focus'));
     });
 
-    expect(await screen.findByText(/別の手段で消された/)).toBeTruthy();
+    const gone = await screen.findByText(
+      'この記憶は、読んだ後に別の手段で消された（または見つからない）。下の内容は前に読めたときのもので、書きかけもそのまま残してある。保存するときは、消されたものを書き戻すかどうかを確認する。',
+    );
+    expect(gone.getAttribute('role')).toBe('alert');
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
     expect(screen.queryByRole('button', { name: '削除' })).toBeNull();
 
