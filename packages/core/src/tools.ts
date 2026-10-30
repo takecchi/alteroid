@@ -119,6 +119,7 @@ import { collapseErrorCause } from './error-cause.js';
 import { renderApprovalTrace, traceApproval } from './approval-trace.js';
 import { stripNulDeep } from './nul-guard.js';
 import { validatePermissionRequest } from './permission-rule.js';
+import { resolveEnumEnv } from './placed-env.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import {
@@ -2763,16 +2764,9 @@ export type MemoryGuardValue = (typeof MEMORY_GUARD_VALUES)[number];
 
 export const DEFAULT_MEMORY_GUARD: MemoryGuardValue = 'on';
 
+// 綴りを間違えた値は黙って既定へ倒さず落とす: 守っているつもりの持ち主が気づけなくなるため
 export function resolveMemoryGuard(env: NodeJS.ProcessEnv = process.env): MemoryGuardValue {
-  const given = env[MEMORY_GUARD_ENV]?.trim();
-  if (given === undefined || given.length === 0) return DEFAULT_MEMORY_GUARD;
-  if ((MEMORY_GUARD_VALUES as readonly string[]).includes(given)) {
-    return given as MemoryGuardValue;
-  }
-  // 綴りを間違えた値は黙って既定へ倒さず落とす: 守っているつもりの持ち主が気づけなくなるため
-  throw new Error(
-    `${MEMORY_GUARD_ENV} の値が不正: ${given}（使えるのは on / off。既定は ${DEFAULT_MEMORY_GUARD}）`,
-  );
+  return resolveEnumEnv(env, MEMORY_GUARD_ENV, MEMORY_GUARD_VALUES, DEFAULT_MEMORY_GUARD);
 }
 
 type MemoryGuardAction = '全文置換' | '削除' | 'frontmatter の更新' | '節の移動';
