@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 import { Button, ErrorNote, Input } from '@alteroid/ui';
 
-import type { DangerDialog as DangerDialogState } from '~/lib/use-danger-run';
+import type { DangerDialog as DangerDialogState } from '~/lib/use-danger-dialog';
 
 // 確認してから叩く操作の `<dialog>`。済むまでは「やめる」と実行のボタン、済んだら結果と「閉じる」だけを出す。
 // `dialog.confirmWord` があれば、その語を打つ欄を出す（押せる条件は `dialog.canConfirm`）。

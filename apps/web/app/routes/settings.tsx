@@ -9,7 +9,7 @@ import { Fragment, useState } from 'react';
 
 import { ConnectionCard } from '~/components/connection';
 import { DangerDialog } from '~/components/danger-dialog';
-import { useDangerDialog, useDangerRun } from '~/lib/use-danger-run';
+import { useDangerDialog } from '~/lib/use-danger-dialog';
 import {
   Page,
   Badge,
@@ -448,10 +448,11 @@ function Runners() {
 function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: boolean }) {
   const vacate = useVacateRunner();
   const [confirming, setConfirming] = useState(false);
-  const { busy, failure, done, run } = useDangerRun(() => vacate(runnerId));
+  const { busy, failure, run } = useAction();
+  const [done, setDone] = useState<{ skipped: string | null } | undefined>(undefined);
 
   if (done !== undefined) {
-    const skipped = done.handshakeSkipped?.message ?? null;
+    const { skipped } = done;
     return (
       <p className="mt-2 text-[11px] break-words text-muted-foreground">
         {skipped === null
@@ -473,7 +474,12 @@ function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: bool
             size="sm"
             disabled={busy}
             aria-label={`${runnerId} から仕事を移すのを確定する`}
-            onClick={() => void run()}
+            onClick={() =>
+              void run(async () => {
+                const result = await vacate(runnerId);
+                setDone({ skipped: result.handshakeSkipped?.message ?? null });
+              })
+            }
           >
             本当に移す
           </Button>
