@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
 import { jobStatusSchema, type JobStatus } from './schema.js';
 import type { ManagerSummary } from './manager.js';
 
@@ -61,23 +62,13 @@ function sameStatusFilter(a: readonly JobStatus[] | null, b: readonly JobStatus[
 export function encodeManagerCursor(
   cursor: Omit<ManagerCursor, 'q'> & { q?: string | null },
 ): string {
-  return Buffer.from(JSON.stringify({ ...cursor, q: cursor.q ?? null }), 'utf8').toString(
-    'base64url',
-  );
+  return encodeCursor({ ...cursor, q: cursor.q ?? null });
 }
 
-export type DecodeManagerCursorResult = { ok: true; cursor: ManagerCursor } | { ok: false };
+export type DecodeManagerCursorResult = DecodeCursorResult<ManagerCursor>;
 
 export function decodeManagerCursor(raw: string): DecodeManagerCursorResult {
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    return { ok: false };
-  }
-  const parsed = managerCursorSchema.safeParse(json);
-  if (!parsed.success) return { ok: false };
-  return { ok: true, cursor: parsed.data };
+  return decodeCursor(managerCursorSchema, raw);
 }
 
 // 壊れた cursor や `status` の食い違いを、黙って先頭からへ・どちらかへ倒さない。

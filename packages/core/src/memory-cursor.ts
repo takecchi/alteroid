@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
 import type { MemoryDocumentMeta } from './schema.js';
 
 /**
@@ -29,22 +30,14 @@ const memoryCursorSchema = z.object({ from: z.string().min(1) });
 export type MemoryCursor = z.infer<typeof memoryCursorSchema>;
 
 export function encodeMemoryCursor(cursor: MemoryCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  return encodeCursor(cursor);
 }
 
-export type DecodeMemoryCursorResult = { ok: true; cursor: MemoryCursor } | { ok: false };
+export type DecodeMemoryCursorResult = DecodeCursorResult<MemoryCursor>;
 
 // 錨の実在は検査しない: `resolveMemoryCursor` が位置の探索から比較の順で辿るので、ここで確かめる必要が無い。
 export function decodeMemoryCursor(raw: string): DecodeMemoryCursorResult {
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    return { ok: false };
-  }
-  const parsed = memoryCursorSchema.safeParse(json);
-  if (!parsed.success) return { ok: false };
-  return { ok: true, cursor: parsed.data };
+  return decodeCursor(memoryCursorSchema, raw);
 }
 
 // decode できなければ黙って先頭からへは倒さない（倒すと、呼び手は続きを読んだつもりで同じ行を繰り返し読む）。
