@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { CGROUP_ROOT } from '@alteroid/core';
+import { CGROUP_ROOT, readExecutionResources } from '@alteroid/core';
 
 // 生きているプロセスの素性は含めない: 他のマネージャーの仕事が覗ける形にしないため。`cmdline` / `cwd` / `environ` は読まず、`stat` と `uptime` と所有 UID だけを使う。
 interface TaskBreakdown {
@@ -573,7 +573,10 @@ async function observeReclaim(
     observation.ageBuckets = bucketAges(ages);
   }
 
-  const pids = await readPidsAtScan(deps.cgroupRoot, deps.procCgroupPath);
+  const { pids } = await readExecutionResources({
+    cgroupRoot: deps.cgroupRoot,
+    procCgroupPath: deps.procCgroupPath,
+  });
   if (pids !== undefined) observation.pidsAtScan = pids;
 
   return observation;
@@ -885,36 +888,6 @@ function bucketAges(ages: readonly number[]): Array<{ upToSec?: number; count: n
 // ここで `catch` しない: 消えた（`ENOENT`）と読めなかった（`EAGAIN` 等）の区別は呼び出し側が付けるため。
 async function readOwnerUid(root: string, pid: string): Promise<number | undefined> {
   return (await stat(join(root, pid))).uid;
-}
-
-async function readPidsAtScan(
-  cgroupRoot: string,
-  procCgroupPath: string,
-): Promise<{ current: number; max: number } | undefined> {
-  const dirs = await cgroupDirs(cgroupRoot, procCgroupPath);
-  const currentValue = Number(await readFirstText(dirs, 'pids.current'));
-  const maxValue = Number(await readFirstText(dirs, 'pids.max'));
-  if (!Number.isSafeInteger(maxValue) || maxValue <= 0) return undefined;
-  if (!Number.isFinite(currentValue) || currentValue < 0) return undefined;
-  return { current: currentValue, max: maxValue };
-}
-
-async function cgroupDirs(root: string, procCgroupPath: string): Promise<readonly string[]> {
-  const own = (await readText(procCgroupPath))
-    ?.split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.startsWith('0::'))
-    ?.slice('0::'.length);
-  if (own === undefined || own === '' || own === '/') return [root];
-  return [join(root, own), root];
-}
-
-async function readFirstText(dirs: readonly string[], name: string): Promise<string | undefined> {
-  for (const dir of dirs) {
-    const text = await readText(join(dir, name));
-    if (text !== undefined) return text;
-  }
-  return undefined;
 }
 
 async function readText(path: string): Promise<string | undefined> {
