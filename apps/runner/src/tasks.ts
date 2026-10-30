@@ -20,7 +20,7 @@ type ReclaimMode = 'observe' | 'reclaim';
 interface ReclaimObservation {
   mode: ReclaimMode;
   // 委譲の CLI の引き取り手（#4494）。`null` は探したが無かった。起動ログにしか出ないと、クローンから効いているかを確かめられないため。
-  subreaper?: { command: string | null };
+  subreaper: { command: string | null };
   candidates: number;
   candidateThreads: number;
   roots: number;
@@ -45,8 +45,8 @@ export interface ReclaimScanOptions {
   // `reclaim` は撃つ。`observe` は、委譲が0本のときの全員（`fireNoDelegations`）を撃たずに `observeOnly` へ数える。
   mode: ReclaimMode;
   view: ReclaimSessionView;
-  // 起動時に決まった委譲の引き取り手（`delegationSubreaperOf`）。`null` は探したが無かった。省略は「観測に載せない」。
-  delegationSubreaper?: string | null;
+  // 起動時に決まった委譲の引き取り手（`delegationSubreaperOf`）。`null` は探したが無かった。
+  delegationSubreaper: string | null;
 }
 
 export interface ReclaimSessionView {
@@ -538,9 +538,7 @@ async function observeReclaim(
 
   const observation: ReclaimObservation = {
     mode,
-    ...(reclaim.delegationSubreaper === undefined
-      ? {}
-      : { subreaper: { command: reclaim.delegationSubreaper } }),
+    subreaper: { command: reclaim.delegationSubreaper },
     candidates,
     candidateThreads,
     roots: roots.length,
