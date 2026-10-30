@@ -5,7 +5,7 @@ import {
   reasonOf,
   writeStderrLine,
 } from '@alteroid/core';
-import type { InboxEvent, JournalEntry, JournalStore, TimeOfDay } from '@alteroid/core';
+import type { InboxEvent, JournalEntryInput, JournalStore, TimeOfDay } from '@alteroid/core';
 
 export interface DailyReportCatchupOptions {
   journal: Pick<JournalStore, 'listPage' | 'append'>;
@@ -51,13 +51,13 @@ export function startDailyReportCatchup(options: DailyReportCatchupOptions): Dai
         `（日誌を読めなかった。理由: ${reason}）。${next}`;
       stderr(`alteroidd: ${text}\n`);
       try {
-        const entry: Omit<JournalEntry, 'at'> = {
+        const entry: JournalEntryInput = {
           type: 'exchange',
           with: 'self',
           role: 'outbound',
           text,
-        } as never;
-        await options.journal.append(entry as never);
+        };
+        await options.journal.append(entry);
       } catch (writeError) {
         stderr(`alteroidd: 上の失敗を日誌にも残せませんでした: ${reasonOf(writeError)}\n`);
       }

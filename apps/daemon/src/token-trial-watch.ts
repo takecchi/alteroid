@@ -61,7 +61,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
 
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let inFlight = false;
 
   const lastTriedAt = new Map<string, number>();
   const failureCount = new Map<string, number>();
@@ -164,7 +163,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     if (stopped) return;
     const at = now();
     confirmPendingSuccesses(at);
-    if (inFlight) return;
     const tokens = await options.stores.tokens.list();
     // 指名が読めないときは `null` を渡さずこの回の試しをやめる: `null` で「指名が無い」と偽装すると、壊れた指名のまま別のトークンを試しうるため。
     let active: ActiveAgentToken | null;
@@ -194,13 +192,10 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       intervalMsFor,
     });
     if (target === undefined || target.value === undefined) return;
-    inFlight = true;
     try {
       await runOneTrial(target);
     } catch (error) {
       writeStderrLine(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
-    } finally {
-      inFlight = false;
     }
   }
 
