@@ -52,6 +52,19 @@ describe('writeRuntimeInfo（daemon.json）のパーミッション（issue #187
     expect(after.mode & 0o077).toBe(0);
   });
 
+  it('daemon.json の形: pid・port・startedAt・token だけを書き、書いた値がそのまま読み戻せる（CLI の読み手が検証する欄と揃える）', async () => {
+    const info = {
+      pid: 3456,
+      port: 4520,
+      startedAt: '2026-09-27T00:00:00.000Z',
+      token: 'operator-secret-token-do-not-leak-4',
+    };
+    await writeRuntimeInfo(dir, info);
+
+    const parsed: unknown = JSON.parse(await readFile(runtimeFilePath(dir), 'utf8'));
+    expect(parsed).toStrictEqual(info);
+  });
+
   it('一時ファイル経由で書くので、書き終えた後に .tmp が残らない（緩いモードの窓を作らない実装であることの傍証）', async () => {
     await writeRuntimeInfo(dir, {
       pid: 9012,
