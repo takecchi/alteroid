@@ -36,7 +36,9 @@ import {
 } from '~/lib/leave-guard';
 import { ConflictNotice, DeleteConflictNotice } from '~/components/conflict-notice';
 import { GoneAfterReadNote } from '~/components/gone-after-read-note';
+import { InvalidSlugNote } from '~/components/invalid-slug-note';
 import { isNotFound } from '~/lib/is-not-found';
+import { isValidSlug } from '~/lib/slug';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/practice-detail';
@@ -51,7 +53,11 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
 export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   return (
     <LeaveGuardScope key={loaderData.slug}>
-      <PracticeDetailBody slug={loaderData.slug} />
+      {isValidSlug(loaderData.slug) ? (
+        <PracticeDetailBody slug={loaderData.slug} />
+      ) : (
+        <InvalidSlugNote kind="やり方" slug={loaderData.slug} />
+      )}
     </LeaveGuardScope>
   );
 }

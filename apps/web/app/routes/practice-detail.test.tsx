@@ -71,6 +71,23 @@ function docRoute(doc: Practice): Parameters<typeof stubFetch>[0] {
   };
 }
 
+describe('URL の名前が形に合わない（取得の前に web が断る）', () => {
+  it.each(['Bad Name', '-leading', 'UPPER', 'a'.repeat(129)])(
+    '「%s」は取得せず、名前が使えない形だと言う（スラッグとは言わない）',
+    async (slug) => {
+      const stub = renderDetail(slug, () => json({ error: 'やり方のスラッグが不正' }, 400));
+
+      expect(
+        await screen.findByText(/やり方の名前が使えない形。使えるのは半角の英小文字・数字と/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/スラッグ/)).toBeNull();
+      expect(
+        stub.entries.filter((entry) => (entry.request?.url ?? '').includes('/practices')),
+      ).toEqual([]);
+    },
+  );
+});
+
 describe('既定タブ', () => {
   it('やり方が在るときはプレビューが既定で、本文が Markdown として描かれる', async () => {
     renderDetail('daily-report', docRoute(PRACTICE));
