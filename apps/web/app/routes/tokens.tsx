@@ -5,6 +5,15 @@ import { settingsDocumentTitle } from '~/lib/nav';
 import { useEffect, useRef, useState } from 'react';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
+import {
+  checkCooldownDraft,
+  cooldownDraftOf,
+  describeCooldown,
+  EMPTY_COOLDOWN_DRAFT,
+  isEmptyCooldownDraft,
+  type CooldownCheck,
+  type CooldownDraft,
+} from '~/lib/cooldown-input';
 import { useAction } from '~/lib/use-action';
 import { useSearchParams } from 'react-router';
 
@@ -615,6 +624,47 @@ function TokenRow({
   );
 }
 
+// 休止の既定は時と分の2つの欄で入れる（送る中身はミリ秒のまま）。欄が空なら 0 として数える
+function CooldownFields({
+  legend,
+  labelPrefix,
+  fields,
+  onChange,
+}: {
+  legend: string;
+  labelPrefix: string;
+  fields: CooldownDraft;
+  onChange: (next: CooldownDraft) => void;
+}) {
+  return (
+    <fieldset className="flex flex-col gap-1">
+      <legend className="text-xs text-muted-foreground">{legend}</legend>
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          min={0}
+          step={1}
+          className="w-24"
+          aria-label={`${labelPrefix}（時間）`}
+          value={fields.hours}
+          onChange={(event) => onChange({ ...fields, hours: event.target.value })}
+        />
+        <span>時間</span>
+        <Input
+          type="number"
+          min={0}
+          step={1}
+          className="w-24"
+          aria-label={`${labelPrefix}（分）`}
+          value={fields.minutes}
+          onChange={(event) => onChange({ ...fields, minutes: event.target.value })}
+        />
+        <span>分</span>
+      </div>
+    </fieldset>
+  );
+}
+
 function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
   const setPolicy = useSetTokenPolicy();
 
@@ -622,20 +672,30 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
   const [rotateOnDraft, setRotateOnDraft] = useState<TokenRotationSettings['rotateOn'] | undefined>(
     undefined,
   );
-  const [cooldownMsDraft, setCooldownMsDraft] = useState<string | undefined>(undefined);
-  const { busy, failure, run } = useAction();
+  const [cooldownDraft, setCooldownDraft] = useState<CooldownDraft | undefined>(undefined);
+  const { busy, failure, setFailure, run } = useAction();
 
   const rotateOn = rotateOnDraft ?? settings.rotateOn;
-  const cooldownMsText = cooldownMsDraft ?? String(settings.cooldownMs);
-  const dirty = rotateOn !== settings.rotateOn || cooldownMsText !== String(settings.cooldownMs);
+  const cooldownFields = cooldownDraft ?? cooldownDraftOf(settings.cooldownMs);
+  // 触っていない欄は保存済みの値のまま（分に満たない端数も含めて）送る。触った欄だけ、時・分から作り直す
+  const cooldownCheck: CooldownCheck | undefined =
+    cooldownDraft === undefined ? undefined : checkCooldownDraft(cooldownDraft);
+  const cooldownChanged =
+    cooldownCheck !== undefined && !(cooldownCheck.ok && cooldownCheck.ms === settings.cooldownMs);
+  const dirty = rotateOn !== settings.rotateOn || cooldownChanged;
   useReportDirty('token-policy', dirty);
 
   async function save() {
+    // 送る前に形を見る: 形が合わないものは送らず、画面の語で直し方を言う。形に合うのにサーバが断ったときの文は、そのまま出る
+    if (cooldownCheck !== undefined && !cooldownCheck.ok) {
+      setFailure(cooldownCheck.message);
+      return;
+    }
+    const cooldownMs = cooldownCheck === undefined ? settings.cooldownMs : cooldownCheck.ms;
     await run(async () => {
-      // 「正の整数」等の判定を先回りして弾かない: 変な値でもそのまま送り、断られたらサーバの文言をそのまま見せるため
-      await setPolicy({ rotateOn, cooldownMs: Number(cooldownMsText) });
+      await setPolicy({ rotateOn, cooldownMs });
       setRotateOnDraft(undefined);
-      setCooldownMsDraft(undefined);
+      setCooldownDraft(undefined);
     });
   }
 
@@ -651,10 +711,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
             label: '休止の既定',
             value: (
               <>
-                {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
-                  maximumFractionDigits: 2,
-                })}
-                時間。
+                {describeCooldown(settings.cooldownMs)}。
                 <br />
                 <span className="text-xs text-muted-foreground">
                   利用枠の復活時刻が分からなかったときだけ使う目安。分かっているときは、行ごとの
@@ -685,14 +742,12 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
             ))}
           </Select>
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">休止の既定を変える（ミリ秒）</span>
-          <Input
-            type="number"
-            value={cooldownMsText}
-            onChange={(event) => setCooldownMsDraft(event.target.value)}
-          />
-        </label>
+        <CooldownFields
+          legend="休止の既定を変える"
+          labelPrefix="休止の既定を変える"
+          fields={cooldownFields}
+          onChange={setCooldownDraft}
+        />
 
         <TokenWriteError error={failure} />
 
@@ -722,17 +777,25 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
   const [rotateOnDraft, setRotateOnDraft] = useState<TokenRotationSettings['rotateOn'] | undefined>(
     undefined,
   );
-  const [cooldownMsText, setCooldownMsText] = useState('');
-  const { busy, failure, run } = useAction();
+  const [cooldownFields, setCooldownFields] = useState<CooldownDraft>(EMPTY_COOLDOWN_DRAFT);
+  const { busy, failure, setFailure, run } = useAction();
 
-  useReportDirty('token-policy', rotateOnDraft !== undefined || cooldownMsText !== '');
-  const canSubmit = rotateOnDraft !== undefined && cooldownMsText.trim().length > 0;
+  useReportDirty(
+    'token-policy',
+    rotateOnDraft !== undefined || !isEmptyCooldownDraft(cooldownFields),
+  );
+  const canSubmit = rotateOnDraft !== undefined && !isEmptyCooldownDraft(cooldownFields);
 
   async function save() {
     if (!canSubmit) return;
+    // 送る前に形を見る（SettingsCard と同じ）
+    const check = checkCooldownDraft(cooldownFields);
+    if (!check.ok) {
+      setFailure(check.message);
+      return;
+    }
     await run(async () => {
-      // 先回りして弾かない: サーバの 400 をそのまま見せるため
-      await setPolicy({ rotateOn: rotateOnDraft, cooldownMs: Number(cooldownMsText) });
+      await setPolicy({ rotateOn: rotateOnDraft, cooldownMs: check.ms });
     });
   }
 
@@ -769,14 +832,12 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
             ))}
           </Select>
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">休止の既定を選ぶ（ミリ秒）</span>
-          <Input
-            type="number"
-            value={cooldownMsText}
-            onChange={(event) => setCooldownMsText(event.target.value)}
-          />
-        </label>
+        <CooldownFields
+          legend="休止の既定を選ぶ"
+          labelPrefix="休止の既定を選ぶ"
+          fields={cooldownFields}
+          onChange={setCooldownFields}
+        />
 
         <TokenWriteError error={failure} />
 

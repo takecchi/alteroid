@@ -1020,6 +1020,7 @@ export {
   type TokenRotationPolicy,
   type TokenRotationSettings,
 } from './token-pool.js';
+export { tokenCooldownMsSchema } from './token-cooldown-ms.js';
 export {
   cooldownDeadlineFrom,
   cooldownUntilFrom,
