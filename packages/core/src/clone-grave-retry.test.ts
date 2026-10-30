@@ -95,17 +95,17 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
   it('起動時の拾い直しが429で落ちても、鍵が回る契機でもう一度走り、成功して印を下ろす', async () => {
     const stores = createMemoryStores();
     const archiveId = (await stores.archive.archive('sess-old', 'RETRY-MARKER-1 生ログ')).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
     const t = build({ stores });
 
     await waitFor(() => sideCallsWith(t.calls, 'RETRY-MARKER-1') === 1, '起動時の拾い直しが落ちる');
     await waitFor(async () => (await stores.journal.list({})).length > 0, '失敗が日誌へ残る');
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId }]);
 
     t.state.failing = false;
     t.clone.recycleSessionForToken();
     await waitFor(
-      async () => (await stores.sessions.getTranscriptGrave()) === null,
+      async () => (await stores.sessions.listTranscriptGraves()).length === 0,
       '鍵の契機で拾い直して印が下りる',
     );
     expect(sideCallsWith(t.calls, 'RETRY-MARKER-1')).toBe(2);
@@ -130,8 +130,7 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
     await writeFile(transcriptPath, 'PRECOMPACT-MARKER-2 compaction の前の会話', 'utf8');
     await firePreCompact(t.calls, transcriptPath);
 
-    const grave = await t.stores.sessions.getTranscriptGrave();
-    expect(grave).not.toBeNull();
+    expect(await t.stores.sessions.listTranscriptGraves()).toHaveLength(1);
     expect(
       (await decisions(t.stores)).some((d) => d.includes('PreCompact の蒸留を墓標へ回した')),
     ).toBe(true);
@@ -145,7 +144,7 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
     t.state.failing = false;
     t.clone.recycleSessionForToken();
     await waitFor(
-      async () => (await t.stores.sessions.getTranscriptGrave()) === null,
+      async () => (await t.stores.sessions.listTranscriptGraves()).length === 0,
       '墓標が拾われて下りる',
     );
     expect(sideCallsWith(t.calls, 'PRECOMPACT-MARKER-2')).toBe(2);
@@ -168,7 +167,7 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
     await writeFile(transcriptPath, 'OK-MARKER-3', 'utf8');
     await firePreCompact(t.calls, transcriptPath);
 
-    expect(await t.stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await t.stores.sessions.listTranscriptGraves()).toEqual([]);
     expect(sideCallsWith(t.calls, 'OK-MARKER-3')).toBe(1);
     await t.clone.stop();
   });
@@ -177,7 +176,7 @@ describe('クローン — 枠で落ちた蒸留を鍵の契機で拾い直す�
     const stores = createMemoryStores();
     const archiveA = (await stores.archive.archive('sess-old', 'GRAVE-A-MARKER-4 別のセッション'))
       .id;
-    await stores.sessions.setTranscriptGrave({ archiveId: archiveA });
+    await stores.sessions.addTranscriptGrave({ archiveId: archiveA });
     const t = build({ stores });
     const { events } = wireEvents(t.clone, 'conv-1');
     await waitFor(() => sideCallsWith(t.calls, 'GRAVE-A-MARKER-4') === 1, '起動時に A が落ちる');
@@ -247,7 +246,7 @@ describe('クローン — 墓標の列の拾い直し（#4898）', () => {
   it('枠で落ちた蒸留の観測の中から鍵の契機が来ても、同じ鍵なら2周目を回さない。鍵が変われば回す', async () => {
     const stores = createMemoryStores();
     const archiveId = (await stores.archive.archive('sess-old', 'LOOP-MARKER 生ログ')).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
     const keyRef = { id: 'key-A' };
     const holder: { clone?: ReturnType<typeof build>['clone'] } = {};
     let observed = 0;

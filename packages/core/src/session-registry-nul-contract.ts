@@ -26,11 +26,11 @@ export async function verifySessionRegistryNulContract(registry: SessionRegistry
   if ((await registry.getProjectKey()) !== 'proj-keep')
     fail('NULで断った後に projectKey が変わった');
 
-  await registry.setTranscriptGrave({ archiveId: 'arc-\u0000-1' });
-  const grave = await registry.getTranscriptGrave();
+  await registry.addTranscriptGrave({ archiveId: 'arc-\u0000-1' });
+  const grave = (await registry.listTranscriptGraves())[0];
   if (grave?.archiveId !== 'arc-\u0000-1') fail('墓標の archiveId が往復しない');
-  await registry.setLostSessionGrave({ projectKey: 'p-\u0000-1', sessionId: 's-\u0000-1' });
-  const lost = await registry.getLostSessionGrave();
+  await registry.addLostSessionGrave({ projectKey: 'p-\u0000-1', sessionId: 's-\u0000-1' });
+  const lost = (await registry.listLostSessionGraves())[0];
   if (lost?.projectKey !== 'p-\u0000-1' || lost.sessionId !== 's-\u0000-1') {
     fail('失われたセッションの墓標が往復しない');
   }

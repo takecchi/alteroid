@@ -86,7 +86,7 @@ async function waitForJournal(stores: Stores, needle: string): Promise<void> {
 describe('拾い上げが新しい印を消す（#1157 段2）', () => {
   it('⭐ 退避が見つからない分岐: 拾っている間に立った新しい印まで消える', async () => {
     const base = createMemoryStores();
-    await base.sessions.setTranscriptGrave({ archiveId: 'arc-old' });
+    await base.sessions.addTranscriptGrave({ archiveId: 'arc-old' });
 
     const stores: Stores = {
       ...base,
@@ -95,7 +95,7 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
         readTail: async (id: string, maxChars: number) => {
           const result = await base.archive.readTail(id, maxChars);
           if (id === 'arc-old') {
-            await base.sessions.setTranscriptGrave({ archiveId: 'arc-new' });
+            await base.sessions.addTranscriptGrave({ archiveId: 'arc-new' });
           }
           return result;
         },
@@ -108,16 +108,16 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     await waitForJournal(stores, '記憶へ移せていない区間の退避');
     await clone.stop();
 
-    expect(await base.sessions.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
+    expect(await base.sessions.listTranscriptGraves()).toEqual([{ archiveId: 'arc-new' }]);
   });
 
   it('⭐ 生ログが1件も無い分岐: 同じ形で新しい印が消える', async () => {
     const base = createMemoryStores();
-    await base.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
+    await base.sessions.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
 
     const tail = {
       readTail: async () => {
-        await base.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
+        await base.sessions.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
         return null;
       },
     };
@@ -132,15 +132,14 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     await waitForJournal(stores, '捨てたセッションの生ログが1件も無');
     await clone.stop();
 
-    expect(await base.sessions.getLostSessionGrave()).toEqual({
-      projectKey: 'proj',
-      sessionId: 'sess-new',
-    });
+    expect(await base.sessions.listLostSessionGraves()).toEqual([
+      { projectKey: 'proj', sessionId: 'sess-new' },
+    ]);
   });
 
   it('⛔ 陰性対照: 新しい印が立たなければ、退避が無い印はちゃんと下ろされる', async () => {
     const stores = createMemoryStores();
-    await stores.sessions.setTranscriptGrave({ archiveId: 'arc-old' });
+    await stores.sessions.addTranscriptGrave({ archiveId: 'arc-old' });
 
     const fake = fakeSdk();
     const clone = bootClone(stores, fake);
@@ -148,12 +147,12 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     await waitForJournal(stores, '記憶へ移せていない区間の退避');
     await clone.stop();
 
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
   });
 
   it('⛔ 陰性対照: 新しい印が立たなければ、生ログが無い印もちゃんと下ろされる', async () => {
     const base = createMemoryStores();
-    await base.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
+    await base.sessions.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
     const stores: Stores = {
       ...base,
       sessionTranscriptTail: {
@@ -167,15 +166,15 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     await waitForJournal(stores, '捨てたセッションの生ログが1件も無');
     await clone.stop();
 
-    expect(await base.sessions.getLostSessionGrave()).toBeNull();
+    expect(await base.sessions.listLostSessionGraves()).toEqual([]);
   });
 
-  it('⭐ 拾い上げは印を素の set(null) では下ろさない（判定と書き込みが1操作である）', async () => {
+  it('⭐ 拾い上げは印を id 指定の clear…If で下ろす（判定と書き込みが1操作である）', async () => {
     const base = createMemoryStores();
-    await base.sessions.setTranscriptGrave({ archiveId: 'arc-old' });
-    await base.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
+    await base.sessions.addTranscriptGrave({ archiveId: 'arc-old' });
+    await base.sessions.addLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
 
-    const nullWrites: string[] = [];
+    const cleared: string[] = [];
     const stores: Stores = {
       ...base,
       sessionTranscriptTail: {
@@ -183,13 +182,13 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
       } as unknown as Stores['sessionTranscriptTail'],
       sessions: {
         ...base.sessions,
-        setTranscriptGrave: async (g) => {
-          if (g === null) nullWrites.push('transcript');
-          return base.sessions.setTranscriptGrave(g);
+        clearTranscriptGraveIf: async (id) => {
+          cleared.push(`transcript:${id}`);
+          return base.sessions.clearTranscriptGraveIf(id);
         },
-        setLostSessionGrave: async (g) => {
-          if (g === null) nullWrites.push('lost');
-          return base.sessions.setLostSessionGrave(g);
+        clearLostSessionGraveIf: async (id) => {
+          cleared.push(`lost:${id}`);
+          return base.sessions.clearLostSessionGraveIf(id);
         },
       },
     };
@@ -201,8 +200,8 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     await waitForJournal(stores, '捨てたセッションの生ログが1件も無');
     await clone.stop();
 
-    expect(await base.sessions.getTranscriptGrave()).toBeNull();
-    expect(await base.sessions.getLostSessionGrave()).toBeNull();
-    expect(nullWrites).toEqual([]);
+    expect(await base.sessions.listTranscriptGraves()).toEqual([]);
+    expect(await base.sessions.listLostSessionGraves()).toEqual([]);
+    expect(cleared.toSorted()).toEqual(['lost:sess-old', 'transcript:arc-old']);
   });
 });

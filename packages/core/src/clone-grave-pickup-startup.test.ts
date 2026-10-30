@@ -21,7 +21,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
         'GRAVE-TRANSCRIPT-MARKER-3c9d 前の器が記憶へ移せなかった区間の生ログ',
       )
     ).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores);
     await waitFor(
@@ -39,7 +39,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
       '蒸留へ生ログが渡ること',
     );
     await waitFor(
-      async () => (await stores.sessions.getTranscriptGrave()) === null,
+      async () => (await stores.sessions.listTranscriptGraves()).length === 0,
       '印が下りること',
     );
 
@@ -48,7 +48,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
 
   it('退避が見つからないときは、印を下ろして日誌に残す', async () => {
     const stores = createMemoryStores();
-    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-gone-0001' });
+    await stores.sessions.addTranscriptGrave({ archiveId: 'sess-gone-0001' });
 
     const s = setup(undefined, stores);
     await waitFor(
@@ -58,7 +58,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
         ),
       '印を下ろした1行が残ること',
     );
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
     expect(
       (await selfTexts(stores)).some((text) =>
         text.includes('前の器が記憶へ移せなかった区間を拾い直す'),
@@ -72,7 +72,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
     const stores = createMemoryStores();
     const archiveId = (await stores.archive.archive('sess-removed', '畳めなかった生ログ\n')).id;
     await stores.archive.remove(archiveId);
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores);
     await waitFor(
@@ -80,7 +80,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
         (await selfTexts(stores)).some((text) => text.includes('退避の本文が消されている')),
       '印を下ろした1行が残ること',
     );
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
 
     const texts = await selfTexts(stores);
     expect(texts.some((text) => text.includes('退避が見つからないので、印を下ろした'))).toBe(false);
@@ -124,7 +124,7 @@ describe('クローン — 拾い直しは退避の全文をヒープへ載せ�
     const stores = createMemoryStores();
     const hugeBody = `${'H'.repeat(3_000_000)}\nHUGE-TAIL-MARKER-9f2c1a\n`;
     const archiveId = (await stores.archive.archive('sess-huge', hugeBody)).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const received: { chars: number | null; via: 'read' | 'readTail' | null } = {
       chars: null,
@@ -174,7 +174,7 @@ describe('クローン — 拾い直しは退避の全文をヒープへ載せ�
     const expected = expectedTailOf(fullBody, DISTILL_TAIL_CHARS_MIRROR);
 
     const archiveId = (await stores.archive.archive('sess-identical', fullBody)).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores);
     await waitFor(async () => {
@@ -213,7 +213,7 @@ describe('クローン — 拾い直しは退避の全文をヒープへ載せ�
     ).toBeGreaterThan(DISTILL_TAIL_CHARS_MIRROR);
 
     const archiveId = (await stores.archive.archive('sess-astral-boundary', fullBody)).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores);
     await waitFor(async () => {
@@ -271,10 +271,9 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
       'session id が消える',
     );
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
-    expect(await stores.sessions.getLostSessionGrave()).toEqual({
-      projectKey: '-workspace',
-      sessionId: 'stale-session-id',
-    });
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([
+      { projectKey: '-workspace', sessionId: 'stale-session-id' },
+    ]);
 
     await s.clone.stop();
   });
@@ -292,14 +291,14 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
       'session id が消える',
     );
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
-    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
 
     await s.clone.stop();
   });
 
   it('墓標が在れば、預けた生ログの末尾から拾って蒸留し、印を下ろす', async () => {
     const { stores, asked } = storesWithTail('LOST-SESSION-MARKER-8b41 前のセッションの末尾');
-    await stores.sessions.setLostSessionGrave({
+    await stores.sessions.addLostSessionGrave({
       projectKey: '-workspace',
       sessionId: 'sess-lost',
     });
@@ -320,7 +319,7 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
       '蒸留へ末尾が渡ること',
     );
     await waitFor(
-      async () => (await stores.sessions.getLostSessionGrave()) === null,
+      async () => (await stores.sessions.listLostSessionGraves()).length === 0,
       '印が下りること',
     );
 
@@ -333,7 +332,7 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
 
   it('預けた生ログが1件も無ければ、印を下ろして日誌に残す', async () => {
     const { stores } = storesWithTail(null);
-    await stores.sessions.setLostSessionGrave({
+    await stores.sessions.addLostSessionGrave({
       projectKey: '-workspace',
       sessionId: 'sess-empty',
     });
@@ -346,7 +345,7 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
         ),
       '印を下ろした1行が残ること',
     );
-    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
     expect(
       (await selfTexts(stores)).some((text) =>
         text.includes('捨てたセッションの区間を、預けた生ログから拾い直す'),
@@ -363,7 +362,7 @@ describe('クローン — 拾い直しの蒸留が失敗で終わったら、�
     const archiveId = (
       await stores.archive.archive('sess-old', 'GRAVE-FAILED-DISTILL-7a1e 前の器の生ログ')
     ).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores, { resultSubtype: 'error_during_execution' });
     await waitFor(async () => {
@@ -374,7 +373,7 @@ describe('クローン — 拾い直しの蒸留が失敗で終わったら、�
           entry.text.includes('前の器が記憶へ移せなかった区間の蒸留に失敗した'),
       );
     }, '蒸留の失敗が日誌に残ること');
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId }]);
 
     await s.clone.stop();
   });
@@ -424,7 +423,7 @@ describe('クローン — 同じ印の蒸留が失敗し続けても、日誌�
     const archiveId = (
       await stores.archive.archive('sess-old', 'GRAVE-QUIET-DISTILL-5c2f 前の器の生ログ')
     ).id;
-    await stores.sessions.setTranscriptGrave({ archiveId });
+    await stores.sessions.addTranscriptGrave({ archiveId });
 
     const attempts: number[] = [];
     for (let nth = 1; nth <= 5; nth += 1) {
@@ -445,13 +444,13 @@ describe('クローン — 同じ印の蒸留が失敗し続けても、日誌�
 
     // 黙るだけで、拾い直しは続け、印は下ろさない
     expect(attempts.every((n) => n > 0)).toBe(true);
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId }]);
   });
 
   it('別の印に替われば数え直し、その印の失敗は再び日誌に書かれる', async () => {
     const stores = createMemoryStores();
     const first = (await stores.archive.archive('sess-a', 'GRAVE-QUIET-A-1 生ログ')).id;
-    await stores.sessions.setTranscriptGrave({ archiveId: first });
+    await stores.sessions.addTranscriptGrave({ archiveId: first });
     for (let nth = 1; nth <= 4; nth += 1) {
       await startupWithFailingDistill(stores, first, nth, nth <= 3);
     }
@@ -459,7 +458,9 @@ describe('クローン — 同じ印の蒸留が失敗し続けても、日誌�
     expect(before).toBe(3);
 
     const second = (await stores.archive.archive('sess-b', 'GRAVE-QUIET-B-2 生ログ')).id;
-    await stores.sessions.setTranscriptGrave({ archiveId: second });
+    // 列に積むと前の印も残るので、「別の印に替わる」状況は前の印を下ろして作る
+    await stores.sessions.clearTranscriptGraveIf(first);
+    await stores.sessions.addTranscriptGrave({ archiveId: second });
     await startupWithFailingDistill(stores, second, 1, true);
 
     const texts = await selfTexts(stores);

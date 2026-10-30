@@ -458,7 +458,7 @@ describe('クローン — ターンの失敗の跡', () => {
       );
       expect(distillRow?.text).toContain('この区間はどこにも残っていない');
       expect(distillRow?.text).not.toContain('生ログの退避は済んでいる');
-      expect(await s.stores.sessions.getTranscriptGrave()).toBeNull();
+      expect(await s.stores.sessions.listTranscriptGraves()).toEqual([]);
 
       await s.clone.stop();
     });
@@ -483,11 +483,11 @@ describe('クローン — ターンの失敗の跡', () => {
         await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
 
         await waitFor(
-          async () => (await s.stores.sessions.getTranscriptGrave()) !== null,
+          async () => (await s.stores.sessions.listTranscriptGraves()).length > 0,
           '墓標が立つこと',
         );
         const entries = await s.stores.archive.list();
-        expect((await s.stores.sessions.getTranscriptGrave())?.archiveId).toBe(entries[0]?.id);
+        expect((await s.stores.sessions.listTranscriptGraves())[0]?.archiveId).toBe(entries[0]?.id);
       } finally {
         await s.clone.stop();
       }
@@ -513,7 +513,7 @@ describe('クローン — ターンの失敗の跡', () => {
         await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
         await waitFor(async () => (await s.stores.archive.list()).length > 0, '退避されること');
 
-        expect(await s.stores.sessions.getTranscriptGrave()).toBeNull();
+        expect(await s.stores.sessions.listTranscriptGraves()).toEqual([]);
       } finally {
         await s.clone.stop();
       }

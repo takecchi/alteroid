@@ -1958,40 +1958,28 @@ export interface SessionRegistry {
   getFoldState(): Promise<string | null>;
   setFoldState(state: string | null): Promise<void>;
   /**
-   * 墓標を読む。**高々1つしか持たない。**
-   * 代償: 2回続けて蒸留に失敗すると古い方が失われる。数える単位を増やす（列にする）と、拾い切れなかった墓標が積もる側の面倒が入れ替わりで増える。
-   */
-  getTranscriptGrave(): Promise<TranscriptGrave | null>;
-  setTranscriptGrave(grave: TranscriptGrave | null): Promise<void>;
-  /**
-   * いま立っているのが `archiveId` の墓標であるときにだけ下ろす。下ろしたら `true`、既に別の墓標へ入れ替わっていたら `false`。
+   * 列に `archiveId` の墓標があるときにだけ下ろす。下ろしたら `true`、既に無ければ `false`（ほかの墓標には触れない）。
    *
-   * `get` → 比較 → `set(null)` で代用しない: 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、拾っている間に新しい墓標が立ち（文脈窓で畳む回はいつでも起きる）、
-   * 素で `null` を書くとその新しい方を消して、その区間は二度と拾われない。
+   * `list` → 比較 → 列ごと書き戻す形で代用しない: 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、拾っている間に新しい墓標が立ち（文脈窓で畳む回はいつでも起きる）、
+   * 読んだ列を書き戻すとその新しい方を消して、その区間は二度と拾われない。
    * 呼び出し側で引き直して比べる形は窓を狭めるだけで閉じない: 読みと書きが別々の `await` なので、引き直しの後・書き込みが効く前に新しい墓標が landing しうる。
    * 判定と書き込みを1操作へ畳む（`CommitmentStore.open` と同じ形・同じ理由）。呼び出し側の壁（ロック）では代わりにならない: ストアのロックは1回の呼び出しの中にしか掛からず、この区間は2回の呼び出しに跨がる。
    */
   clearTranscriptGraveIf(archiveId: string): Promise<boolean>;
   /**
-   * 墓標を、**既にある墓標を消さずに**足す（#4884）。枠が空なら枠へ、同じ `archiveId` が既にあれば何もせず、それ以外は枠の後ろの列へ積む。
-   * 枠と列の合計が `MAX_PENDING_GRAVES` を超えたら古い方から落とし、落とした `archiveId` を返す（呼び出し側が日誌に ⚠ で残す）。
-   * `setTranscriptGrave`（枠を置き換える）の代わりに、クローンが墓標を立てる口はこちらを使う。
-   * `clearTranscriptGraveIf` は枠からも列からも下ろす。
+   * 墓標を、**既にある墓標を消さずに**足す（#4884）。同じ `archiveId` が既にあれば何もせず、それ以外は列の末尾へ積む。
+   * 列が `MAX_PENDING_GRAVES` を超えたら古い方から落とし、落とした `archiveId` を返す（呼び出し側が日誌に ⚠ で残す）。
+   * 墓標を置き換える口は持たない: 蒸留が続けて落ちると、置き換えでは古い区間が二度と記憶へ移らない（#5869 で1つだけ置く口を外した）。
    */
   addTranscriptGrave(grave: TranscriptGrave): Promise<{ dropped: string[] }>;
-  /** 枠、次に列の順（古い順）。拾い直しはこれを1本ずつ蒸留する。 */
+  /** 古い順。拾い直しはこれを1本ずつ蒸留する。 */
   listTranscriptGraves(): Promise<TranscriptGrave[]>;
   /** `addTranscriptGrave` の `LostSessionGrave` 版。落とした `sessionId` を返す。 */
   addLostSessionGrave(grave: LostSessionGrave): Promise<{ dropped: string[] }>;
   listLostSessionGraves(): Promise<LostSessionGrave[]>;
   /**
-   * resume 素材を捨てた回の墓標（`TranscriptGrave` とは別の欄）。
-   * 同じ欄にしない: 文脈窓で畳む回（退避は済んでいる）と、次の起動がセッションを開けなかった回（退避が無い）は別々に同時に立ちうる。
-   * 1つの欄に相乗りさせると後に立った方が前の方を消し、消えた側は誰も拾わない。どちらも「高々1つ」。
-   */
-  getLostSessionGrave(): Promise<LostSessionGrave | null>;
-  setLostSessionGrave(grave: LostSessionGrave | null): Promise<void>;
-  /** いま立っているのが `sessionId` の墓標であるときにだけ下ろす。理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じ。 */
+   * resume 素材を捨てた回の墓標の列は、`TranscriptGrave` の列とは別に持つ: 文脈窓で畳む回（退避は済んでいる）と、次の起動がセッションを開けなかった回（退避が無い）は別々に同時に立ちうり、拾い方が違う。
+   * 列に `sessionId` の墓標があるときにだけ下ろす。理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じ。 */
   clearLostSessionGraveIf(sessionId: string): Promise<boolean>;
   /**
    * 墓標ごとの「蒸留が続けて失敗した回数」（#4752）。`kind` ごとに、graveId → 回数を墓標の本体とは別の鍵に置く（#4898: 列に複数の墓標があっても互いの回数を消さない。保存値は `{ counts: { [graveId]: n } }`、古い形の `{ graveId, failures }` も読める）。
@@ -2014,7 +2002,7 @@ export interface SessionRegistry {
   setProjectKey(projectKey: string): Promise<void>;
 
   /**
-   * ここが持つ欄（クローンのセッション id・畳みの控え・2つの墓標とその順番待ちの列・墓標ごとの蒸留の失敗回数・生ログの scope）をすべて消す（ワークスペースのリセット専用）。
+   * ここが持つ欄（クローンのセッション id・畳みの控え・2つの墓標の列・墓標ごとの蒸留の失敗回数・生ログの scope）をすべて消す（ワークスペースのリセット専用）。
    * resume を諦める操作で、失うのは走っていたセッションへ戻る手段だけ（クローンの同一性は記憶に宿るので、次のターンから記憶を通じて再構成される。`architecture.md`「寿命モデル」）。
    * 消した欄の数（実際に値があって消したものだけ。失敗回数は種類ごとに1欄）を返す。
    */

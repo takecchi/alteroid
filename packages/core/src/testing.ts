@@ -174,7 +174,6 @@ import { preparePermissionGrantForPut } from './permission-grant-input.js';
 import {
   addGrave,
   forgetDistillFailureCounts,
-  listGraves,
   readDistillFailureCount,
   removeGrave,
   type DistillFailureCounts,
@@ -303,9 +302,7 @@ export function createMemoryStores(): Stores {
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
   let foldState: string | null = null;
-  let transcriptGrave: TranscriptGrave | null = null;
-  let lostSessionGrave: LostSessionGrave | null = null;
-  // 枠の後ろの順番待ち（#4884）
+  // 墓標の列（古い順。#4884）
   let transcriptGraveQueue: TranscriptGrave[] = [];
   let lostSessionGraveQueue: LostSessionGrave[] = [];
   // 墓標ごとの失敗回数（#4898）
@@ -1109,30 +1106,15 @@ export function createMemoryStores(): Stores {
       if (state !== null) assertNoNul('session.foldState', state);
       foldState = state;
     },
-    async getTranscriptGrave() {
-      return transcriptGrave;
-    },
-    async setTranscriptGrave(grave) {
-      transcriptGrave = grave;
-    },
     // 判定と書き込みの間に `await` を置かない: 同期なら割り込まれる窓が無く、挟むと窓が生まれる（`SessionRegistry.clearTranscriptGraveIf` の doc）。
     async clearTranscriptGraveIf(archiveId) {
-      const next = removeGrave(
-        { primary: transcriptGrave, queue: transcriptGraveQueue },
-        (g) => g.archiveId === archiveId,
-      );
-      transcriptGrave = next.primary;
+      const next = removeGrave(transcriptGraveQueue, (g) => g.archiveId === archiveId);
       transcriptGraveQueue = next.queue;
       if (next.removed) forgetFailures('transcript', [archiveId]);
       return next.removed;
     },
     async addTranscriptGrave(grave) {
-      const next = addGrave(
-        { primary: transcriptGrave, queue: transcriptGraveQueue },
-        grave,
-        (a, b) => a.archiveId === b.archiveId,
-      );
-      transcriptGrave = next.primary;
+      const next = addGrave(transcriptGraveQueue, grave, (a, b) => a.archiveId === b.archiveId);
       transcriptGraveQueue = next.queue;
       forgetFailures(
         'transcript',
@@ -1141,15 +1123,10 @@ export function createMemoryStores(): Stores {
       return { dropped: next.dropped.map((g) => g.archiveId) };
     },
     async listTranscriptGraves() {
-      return listGraves({ primary: transcriptGrave, queue: transcriptGraveQueue });
+      return [...transcriptGraveQueue];
     },
     async addLostSessionGrave(grave) {
-      const next = addGrave(
-        { primary: lostSessionGrave, queue: lostSessionGraveQueue },
-        grave,
-        (a, b) => a.sessionId === b.sessionId,
-      );
-      lostSessionGrave = next.primary;
+      const next = addGrave(lostSessionGraveQueue, grave, (a, b) => a.sessionId === b.sessionId);
       lostSessionGraveQueue = next.queue;
       forgetFailures(
         'lost_session',
@@ -1158,7 +1135,7 @@ export function createMemoryStores(): Stores {
       return { dropped: next.dropped.map((g) => g.sessionId) };
     },
     async listLostSessionGraves() {
-      return listGraves({ primary: lostSessionGrave, queue: lostSessionGraveQueue });
+      return [...lostSessionGraveQueue];
     },
     async graveDistillFailures(kind, graveId) {
       return readDistillFailureCount(distillFailureRecords[kind], graveId);
@@ -1168,18 +1145,8 @@ export function createMemoryStores(): Stores {
       distillFailureRecords[kind] = { ...distillFailureRecords[kind], [graveId]: failures };
       return failures;
     },
-    async getLostSessionGrave() {
-      return lostSessionGrave;
-    },
-    async setLostSessionGrave(grave) {
-      lostSessionGrave = grave;
-    },
     async clearLostSessionGraveIf(sessionId) {
-      const next = removeGrave(
-        { primary: lostSessionGrave, queue: lostSessionGraveQueue },
-        (g) => g.sessionId === sessionId,
-      );
-      lostSessionGrave = next.primary;
+      const next = removeGrave(lostSessionGraveQueue, (g) => g.sessionId === sessionId);
       lostSessionGraveQueue = next.queue;
       if (next.removed) forgetFailures('lost_session', [sessionId]);
       return next.removed;
@@ -1193,9 +1160,7 @@ export function createMemoryStores(): Stores {
     },
     async clear() {
       const removed =
-        [cloneSessionId, foldState, transcriptGrave, lostSessionGrave, projectKey].filter(
-          (value) => value !== null,
-        ).length +
+        [cloneSessionId, foldState, projectKey].filter((value) => value !== null).length +
         [transcriptGraveQueue.length, lostSessionGraveQueue.length].filter((n) => n > 0).length +
         Object.values(distillFailureRecords).filter((counts) => Object.keys(counts).length > 0)
           .length;
@@ -1203,8 +1168,6 @@ export function createMemoryStores(): Stores {
       distillFailureRecords.lost_session = {};
       cloneSessionId = null;
       foldState = null;
-      transcriptGrave = null;
-      lostSessionGrave = null;
       transcriptGraveQueue = [];
       lostSessionGraveQueue = [];
       projectKey = null;

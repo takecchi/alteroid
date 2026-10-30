@@ -8040,7 +8040,7 @@ class Clone implements CloneHost {
             : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）'),
       });
       // 墓標は退避の id で指す（#4884）: 退避は compaction の前の生ログの全体の写しで、拾い直しは既存の `#pickUpTranscriptGrave` が末尾から蒸留する。
-      // 区間を別に持たない: 墓標は1枠で、`archiveId` が「どの時点の生ログか」をそのまま表すため。成功した回は立てない（この `catch` の中だけ）
+      // 区間を別に持たない: 墓標は `archiveId` 1つで1区間を指し、`archiveId` が「どの時点の生ログか」をそのまま表すため。成功した回は立てない（この `catch` の中だけ）
       const id = archiveId;
       if (id !== null) {
         if (await this.#addTranscriptGrave(id)) {

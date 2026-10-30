@@ -3231,18 +3231,6 @@ describe('FsSessionRegistry', () => {
     await verifySessionRegistryGraveQueueContract(stores.sessions);
   });
 
-  it('古い形（1枠だけのファイル）で保存された墓標も、列の先頭として読める（#4884）', async () => {
-    await stores.sessions.clear();
-    await stores.sessions.setTranscriptGrave({ archiveId: 'arc-legacy' });
-    expect(await stores.sessions.listTranscriptGraves()).toEqual([{ archiveId: 'arc-legacy' }]);
-    await stores.sessions.addTranscriptGrave({ archiveId: 'arc-new' });
-    expect((await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId)).toEqual([
-      'arc-legacy',
-      'arc-new',
-    ]);
-    await stores.sessions.clear();
-  });
-
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
 
@@ -3254,40 +3242,47 @@ describe('FsSessionRegistry', () => {
   });
 
   it('墓標を覚えて忘れられる。そして resume 素材を捨てても消えない', async () => {
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
 
     await stores.sessions.setCloneSessionId('sess-1');
-    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.addTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
 
     await stores.sessions.setCloneSessionId(null);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
 
-    await stores.sessions.setTranscriptGrave(null);
-    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    await stores.sessions.clearTranscriptGraveIf('sess-1-2026.jsonl');
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([]);
   });
 
   it('2つの墓標は互いを消さない。そして resume 素材を捨てても両方残る', async () => {
     await stores.sessions.setCloneSessionId('sess-1');
-    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
-    await stores.sessions.setLostSessionGrave({
+    await stores.sessions.addTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.addLostSessionGrave({
       projectKey: '-workspace',
       sessionId: 'sess-old',
     });
 
     await stores.sessions.setCloneSessionId(null);
 
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
-    expect(await stores.sessions.getLostSessionGrave()).toEqual({
-      projectKey: '-workspace',
-      sessionId: 'sess-old',
-    });
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([
+      { projectKey: '-workspace', sessionId: 'sess-old' },
+    ]);
 
-    await stores.sessions.setLostSessionGrave(null);
-    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
-    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
-    await stores.sessions.setTranscriptGrave(null);
+    await stores.sessions.clearLostSessionGraveIf('sess-old');
+    expect(await stores.sessions.listLostSessionGraves()).toEqual([]);
+    expect(await stores.sessions.listTranscriptGraves()).toEqual([
+      { archiveId: 'sess-1-2026.jsonl' },
+    ]);
+    await stores.sessions.clearTranscriptGraveIf('sess-1-2026.jsonl');
   });
 
   it('生ログの scope を覚える。resume 素材を捨てても消えない', async () => {
