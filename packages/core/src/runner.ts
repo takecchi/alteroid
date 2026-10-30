@@ -642,11 +642,6 @@ export interface RunnerHost {
   // 未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。意味は出し箱と同じで、dir だけが別
   openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
   deleteRescueFile(managerId: string, fileId: string): Promise<boolean>;
-  /**
-   * いま繋がっているデーモンが、生ログの退避を参照で受け取れるか（SSE の接続で `archive-ref` を名乗ったか。#4485）。
-   * 接続のたびに書き直す: 新しい接続のデーモンが古い版なら、本文を載せる形に戻すため。
-   */
-  setDaemonAcceptsArchiveRef(accepts: boolean): void;
   /** 預けた退避の本文。無い・期限切れ・別の委譲の id なら `undefined`。 */
   readArchive(managerId: string, archiveId: string): string | undefined;
   /** デーモンが本文を取り終えた印（GET の応答を返し終えた時点）。畳みの待ちと送り直しの対象から外す（#4899）。 */
@@ -897,7 +892,6 @@ class Host implements RunnerHost {
       );
     },
   });
-  #daemonAcceptsArchiveRef = false;
   // 畳み始めに残っていた物と畳み始めてから出した物のうち、デーモンに HTTP で取りに来させる物（預けた生ログ・出し箱・未追跡の預かりの退避先ファイル。#4912）。取られる（消される）と外す（#4699）
   #shuttingDown = false;
   readonly #pickupsSinceShutdown = new Set<string>();
@@ -2046,10 +2040,6 @@ class Host implements RunnerHost {
     this.#pickupsSinceShutdown.delete(key);
   }
 
-  setDaemonAcceptsArchiveRef(accepts: boolean): void {
-    this.#daemonAcceptsArchiveRef = accepts;
-  }
-
   readArchive(managerId: string, archiveId: string): string | undefined {
     return this.#archiveStash.get(managerId, archiveId);
   }
@@ -2064,16 +2054,10 @@ class Host implements RunnerHost {
     this.#archiveStash.delete(managerId, archiveId);
   }
 
-  // 名乗りの有無に関わらず預けて参照を送る（#4485）: 2026-10-13T16:54Z、名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、
-  // デーモンのループが 3.8 秒塞がった（ヒープ 1722/1759MB）。本文を載せる道を残すと、名乗りが落ちた回にいつでも同じことが起きる。
-  // 古い（名乗らない）デーモンは参照だけの出来事を読めず落とすが、それは跡が残る失敗で、ループを塞いで全体を止めるよりよい。
-  // 名乗りを覚えていない回は stderr に残す: 名乗りがいつ落ちるのかを後から確かめられるように（本文・委譲の中身は書かない）
+  // いつも預けて参照を送る（#4485）: 2026-10-13T16:54Z、デーモンの名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、
+  // デーモンのループが 3.8 秒塞がった（ヒープ 1722/1759MB）。本文を載せる道を残すと、いつでも同じことが起きる。
+  // そのため名乗りで切り替えず、名乗り自体も消した（#5701）
   #stashArchive(managerId: string, body: string): { id: string; chars: number } | undefined {
-    if (!this.#daemonAcceptsArchiveRef) {
-      writeStderrLine(
-        `alteroid-runner: いま繋がっているデーモンが退避の参照を受けると名乗っていないが、本文は SSE に載せずに預けて参照を送る（managerId=${managerId} chars=${String(body.length)}）\n`,
-      );
-    }
     return this.#archiveStash.put(managerId, body);
   }
 
