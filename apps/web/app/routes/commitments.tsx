@@ -1,10 +1,12 @@
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
 import { EditConflictBand } from '~/components/edit-conflict-band';
+import { FilterNote } from '~/components/filter-note';
 import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { ReopenForm } from '~/components/reopen-form';
 import { EditedBadge } from '~/components/task-parts';
 import { clipRawValue } from '~/lib/clip-raw-value';
+import { duplicateParamNotice } from '~/lib/duplicate-param-notice';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useDiscardGuard } from '~/lib/use-discard-guard';
 import { useLatest } from '~/lib/use-latest';
@@ -146,11 +148,7 @@ function CommitmentsPage() {
           {`指定された値（${clipRawValue(invalidClosed)}）は読めないので、未了だけで表示しています`}
         </p>
       )}
-      {duplicateClosed && (
-        <p className="mb-4 text-xs text-warn">
-          「片付けたものも見る」の指定が複数あるので、先頭の値を使っています
-        </p>
-      )}
+      {duplicateClosed && <FilterNote>{duplicateParamNotice('「片付けたものも見る」')}</FilterNote>}
 
       <PushForm />
 

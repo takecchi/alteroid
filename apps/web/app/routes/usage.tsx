@@ -1,6 +1,8 @@
+import { FilterNote } from '~/components/filter-note';
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { clipRawValue } from '~/lib/clip-raw-value';
+import { duplicateParamNotices } from '~/lib/duplicate-param-notice';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { shiftedUsageDate } from '~/lib/usage-dates';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
@@ -99,20 +101,14 @@ const LAYER_PARAM = 'layer';
 const SITE_PARAM = 'site';
 const TOKEN_ID_PARAM = 'tokenId';
 
-/** `searchParams.get` は先頭の値しか返さない。重複を黙って採ると、人が書いた2つ目の指定が無視されたことに気付けない。 */
-function duplicateParamNotices(searchParams: URLSearchParams): string[] {
-  const labels: Array<[string, string]> = [
-    [FROM_PARAM, '開始日'],
-    [TO_PARAM, '終了日'],
-    [MANAGER_ID_PARAM, 'マネージャー'],
-    [LAYER_PARAM, '「誰が」'],
-    [SITE_PARAM, '「どこで」'],
-    [TOKEN_ID_PARAM, '認証トークン'],
-  ];
-  return labels
-    .filter(([param]) => searchParams.getAll(param).length > 1)
-    .map(([, label]) => `${label}の指定が複数あるので、先頭の値を使っています`);
-}
+const DUPLICATE_PARAM_LABELS: ReadonlyArray<readonly [string, string]> = [
+  [FROM_PARAM, '開始日'],
+  [TO_PARAM, '終了日'],
+  [MANAGER_ID_PARAM, 'マネージャー'],
+  [LAYER_PARAM, '「誰が」'],
+  [SITE_PARAM, '「どこで」'],
+  [TOKEN_ID_PARAM, '認証トークン'],
+];
 
 // 知らない値は API へ渡さず絞り込み無しにするが、黙って読み替えない（「すべて」の数字が指定した絞り込みの数字に見えるため）。捨てたことは呼び出し側が raw と戻り値を突き合わせて注記で言う。
 function parseUsageLayer(raw: string | null): UsageLayer | '' {
@@ -297,7 +293,7 @@ export default function Usage() {
   const showsOtherQuery = error !== undefined && data !== undefined && okQueryKey !== queryKey;
 
   // 黙って捨てない: 読めなかった生の値をそのまま画面に出す（人間が書いた URL の値であって秘密ではない）。
-  const filterNotices: string[] = duplicateParamNotices(searchParams);
+  const filterNotices: string[] = duplicateParamNotices(searchParams, DUPLICATE_PARAM_LABELS);
   if (invalidFrom !== null) {
     filterNotices.push(
       `開始日に指定された値（${invalidFrom}）は日付として読めないので、絞り込みに使っていません`,
@@ -414,9 +410,7 @@ export default function Usage() {
       </Card>
 
       {filterNotices.map((line) => (
-        <p key={line} className="mb-4 text-xs text-warn">
-          {line}
-        </p>
+        <FilterNote key={line}>{line}</FilterNote>
       ))}
 
       <LoadError
