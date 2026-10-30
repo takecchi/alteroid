@@ -14,6 +14,7 @@ import { reasonOf } from './dropped-record.js';
 import type { CodexAuthRunnerSync } from './manager.js';
 import { type RunnerClient, type RunnerEvent, type RunnerRegistry } from './runner-protocol.js';
 import type { JournalEntryInput } from './schema.js';
+import { createSerialQueue } from './serial-queue.js';
 
 // 値（auth.json の中身）を返す口をここに作らない。日誌に書くのはアカウント・プラン・指紋・runner の id・理由だけ。
 // 書き戻しは compareAndSwap(baseRevision, …) だけで置く: 取り合う runner のうち古い版からの値が新しい値を潰さないため。
@@ -62,13 +63,8 @@ export function createCodexChatgptAuthService(
     string,
     { view: CodexLoginView; handle: CodexDeviceLogin; done: Promise<void> }
   >();
-  let chain: Promise<unknown> = Promise.resolve();
-
-  function serial<T>(fn: () => Promise<T>): Promise<T> {
-    const run = chain.then(fn, fn);
-    chain = run.catch(() => undefined);
-    return run;
-  }
+  const queue = createSerialQueue();
+  const serial = queue.run;
 
   async function note(decision: string, grounds: string, routine = false): Promise<void> {
     try {
@@ -203,7 +199,7 @@ export function createCodexChatgptAuthService(
 
     async settled() {
       await Promise.all([...logins.values()].map((entry) => entry.done));
-      await chain;
+      await queue.idle();
     },
 
     async syncRunner(runner) {
