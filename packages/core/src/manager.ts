@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
+import { shouldEscalateDenial } from './denial-escalation.js';
 import { redactSecretsInText } from './denial-input-head.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
@@ -2529,13 +2530,6 @@ const REPORTED_FORGOTTEN_BUDGET = 2_000;
 
 /** 道具の名前の種類なので、実際にはまず届かない（届いたら、それ自体が異常である）。 */
 const DENIED_TOOL_LIMIT = 64;
-
-/**
- * 1 から始める。拒否の重要度は繰り返し回数と相関せず、一度きりで取り返しのつかない行為ほど繰り返されない
- * ので、3 から数えると件数が 1 で止まって永久に上がらない。
- * 刻み（3倍ごと）は動かさない: 「N 件で N 通」にすると受信箱が埋まりクローンの判断が雑音で鈍る。
- */
-const DENIED_ESCALATE_AT = 1;
 
 /**
  * **この合図そのものには答える先が無い。** 答えられるのは、runner が分類器の拒否から別に上げる「この1回だけ許可しますか」の確認
@@ -10877,6 +10871,7 @@ class Pool implements ManagerPool {
         (record.deniedLastRequestId ??= new Map()).set(key, event.toolUseId);
 
         // escalation は layer 別ではなく道具ごとの合計で判定する: 層ごとだと頻度が下がりすぎてクローンに1件も上がらず「止まっていることが見える」を裏切る。合計は拒否1件ごとにちょうど1ずつ増えるので、`shouldEscalateDenial` の exact-equality（`step === count`）にそのまま渡せる。
+        // 入力の中身ではなく道具の名前で束ねる: 1文字違う `Edit` を別物と数えると、同じファイルの編集が何度も拒否される形を取り逃す。
         const toolTotal = denied
           .entries()
           .reduce((sum, [k, v]) => (decodeDenialKey(k).tool === event.tool ? sum + v : sum), 0);
@@ -13753,15 +13748,6 @@ class Pool implements ManagerPool {
   }
 }
 
-// 上げ続けない: 止められ続けている1本が受信箱を埋めると他の判断材料が押し流される。黙りもしない: 続けば次の桁でもう一度出る。
-// 入口（1）と刻み（3倍）は別の判断: 入口を上げると一度きりの拒否が黙り、刻みを詰めると1件ずつ流す形に戻る。
-// 入力の中身ではなく道具の名前で束ねる: 1文字違う `Edit` を別物と数えると、同じファイルの編集が何度も拒否される形を取り逃す。
-function shouldEscalateDenial(count: number): boolean {
-  if (count < DENIED_ESCALATE_AT) return false;
-  let step = DENIED_ESCALATE_AT;
-  while (step < count) step *= 3;
-  return step === count;
-}
 
 // `claimableAt` の有無では言い方を変えない: 台帳の書き込み失敗（`persist-failed`）まで「人間が `ALTEROID_RUNNER_ID` を直すまで解けない」側に倒れる。
 function describeRefusalResolution(kind: LeaseRefusalKind): string {

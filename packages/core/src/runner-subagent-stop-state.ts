@@ -1,3 +1,5 @@
+import { shouldEscalateDenial } from './denial-escalation.js';
+
 export class RunnerSubagentStopState {
   /**
    * 値は作業者の `agent_id`。マネージャー自身が起こしたものは空文字 `''` にする:
@@ -115,7 +117,8 @@ export class RunnerSubagentStopState {
     const count = (this.#subagentLimitReachedNotes.get(agentId) ?? 0) + 1;
     this.#subagentLimitReachedNotes.set(agentId, count);
     pruneOldestEntries(this.#subagentLimitReachedNotes, SUBAGENT_WAKEUP_TRACKING_LIMIT);
-    return { count, shouldEscalate: shouldEscalateSubagentLimitReachedNote(count) };
+    // 担当の道具の拒否と同じ規則で間引く（`denial-escalation.ts`）
+    return { count, shouldEscalate: shouldEscalateDenial(count) };
   }
 }
 
@@ -137,12 +140,6 @@ export const SUBAGENT_BACKGROUND_WAIT_MS = 30 * 60_000;
 const SUBAGENT_WAKEUP_TRACKING_LIMIT = 500;
 
 /**
- * `manager.ts` の `DENIED_ESCALATE_AT` と同じ値で `1` に固定する。上げると、
- * 上限到達の1回目自体が受信箱へ届かなくなる。
- */
-const SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT = 1;
-
-/**
  * FIFO であって LRU ではない: `Map.set()` は既存の鍵の順を変えないので、
  * 何度書き込んでも古い鍵はそのまま先頭に留まり、先に捨てられる。
  */
@@ -152,16 +149,4 @@ function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
     if (oldest.done === true) break;
     map.delete(oldest.value);
   }
-}
-
-/**
- * `manager.ts` の `shouldEscalateDenial`（`grep -Fn -- 'function shouldEscalateDenial(count: number): boolean {' packages/core/src/manager.ts`）
- * と同じ規則の複製（そちらは export されていず import できない）。規則を変えるときは両方を揃える:
- * 片方だけ直すと `permission_denied` と `limit_reached` の間引きが黙ってずれる。
- */
-function shouldEscalateSubagentLimitReachedNote(count: number): boolean {
-  if (count < SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT) return false;
-  let step = SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT;
-  while (step < count) step *= 3;
-  return step === count;
 }
