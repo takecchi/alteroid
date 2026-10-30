@@ -290,8 +290,6 @@ interface Line {
   turnFailure?: 'failed' | 'held';
   turnFailureKind?: TurnFailureKind;
   replyGroup?: string;
-  // 返信の途中に人間の発言が届いて（`queued`）分けた行の印: デーモンはそこで返信を割って日誌へ書くので、割らない古いデーモンの本文と照合するときはこの境目に区切りを入れない
-  splitByHuman?: true;
   journalId?: string;
   attachments?: readonly MessageAttachment[];
   clientMessageId?: string;
@@ -486,7 +484,7 @@ export function pendingOwnLines(
       let next = start + 1;
       for (let end = members.length; end > start + 1; end -= 1) {
         const run = members.slice(start, end);
-        const joined = `clone\u0000${run.map((member, index) => (index === 0 || member.splitByHuman === true ? '' : REPLY_SEGMENT_JOINER) + member.text).join('')}`;
+        const joined = `clone\u0000${run.map((member) => member.text).join(REPLY_SEGMENT_JOINER)}`;
         // 見えている履歴を先に当て、無ければ畳まれた返答に当てる
         if ((remaining.get(joined) ?? 0) <= 0 && (folded.get(joined) ?? 0) <= 0) continue;
         take(joined, true);
@@ -1779,11 +1777,8 @@ export function ChatPane({
           : new Map(previous).set(replyGroup, { of: stream.id, kind, baseline }),
       );
     };
-    // 道具を挟まずに人間の発言で分けたときだけ立てる: 道具を挟んだ境目は、割らない古いデーモンでも区切りの空行が入る
-    let splitByHuman = false;
     const endReply = () => {
       replyKey = undefined;
-      splitByHuman = false;
     };
     const dropTransients = (previous: Line[]) =>
       previous.filter((line) => !(line.transient === true && line.of === stream.id));
@@ -1832,31 +1827,18 @@ export function ChatPane({
         unfinishedReplyRef.current.set(stream.id, unfinished);
       }
       setActiveReplyKeys((keys) => new Set(keys).add(key));
-      const split = splitByHuman;
-      splitByHuman = false;
       setLines((previous) => [
         ...dropTransients(previous),
-        {
-          key,
-          role: 'clone',
-          text: '',
-          of: stream.id,
-          replyGroup,
-          ...(split ? { splitByHuman: true as const } : {}),
-        },
+        { key, role: 'clone', text: '', of: stream.id, replyGroup },
       ]);
     };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
         // 返信の行をここで分ける:デーモンは人間の発言を記録するとき、それまでの返信を先に日誌へ書く。続きを同じ行へ足すと、その発言より上に出るうえ、日誌の本文とも合わない
-        case 'queued': {
-          // 続けて届いた2通目でも印を落とさない: 1通目で行は既に閉じている
-          const split = replyKey !== undefined || splitByHuman;
+        case 'queued':
           endReply();
-          splitByHuman = split;
           setTransient('順番を待っている…');
           break;
-        }
         case 'thinking':
           setTransient('考えている…');
           break;
