@@ -230,6 +230,15 @@ describe('/attach から送るまで', () => {
     expect(mediaTypeOfName('noext')).toBe('application/octet-stream');
     expect(mediaTypeOfName('a.weird')).toBe('application/octet-stream');
   });
+
+  it('拡張子の表は core と同じ（Office・tsv・htm も型つき。#5799）', () => {
+    expect(mediaTypeOfName('r.docx')).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(mediaTypeOfName('r.tsv')).toBe('text/tab-separated-values');
+    expect(mediaTypeOfName('r.htm')).toBe('text/html');
+    expect(mediaTypeOfName('r.mkv')).toBe('video/x-matroska');
+  });
 });
 
 describe('renderAttachmentUsage: 連携の鍵別', () => {
