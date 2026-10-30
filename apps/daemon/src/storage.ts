@@ -10,6 +10,7 @@ import {
   attachmentBodyMaxBytes,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryCreatedAtFromJournal,
+  placedEnvValue,
   readAttachmentBlobConfig,
   readAttachmentLimits,
   reasonOf,
@@ -53,11 +54,6 @@ export interface Storage {
   probe: () => Promise<void>;
 }
 
-function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
-  const value = env[key];
-  return value !== undefined && value.length > 0 ? value : undefined;
-}
-
 export interface StoragePlan {
   kind: 'fs' | 'pg';
   root: string | undefined;
@@ -68,15 +64,15 @@ export interface StoragePlan {
 
 // 接続と分ける: どの鍵を子プロセスから伏せるかが接続の成否と無関係に決まることを、DB 無しで確かめられるようにするため。
 export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
-  const root = envValue(env, 'ALTEROID_HOME');
-  const databaseUrl = envValue(env, DATABASE_URL_ENV);
+  const root = placedEnvValue(env, 'ALTEROID_HOME') ?? undefined;
+  const databaseUrl = placedEnvValue(env, DATABASE_URL_ENV);
   // 外部ストレージの資格も担い手の子プロセスへ配らない（設定されているときだけ。使わない構成でも秘密は伏せる）
   const blobSecrets =
-    envValue(env, ATTACHMENT_S3_BUCKET_ENV) === undefined
+    placedEnvValue(env, ATTACHMENT_S3_BUCKET_ENV) === null
       ? []
       : [ATTACHMENT_S3_ACCESS_KEY_ID_ENV, ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV];
 
-  if (databaseUrl === undefined) {
+  if (databaseUrl === null) {
     return {
       kind: 'fs',
       root,

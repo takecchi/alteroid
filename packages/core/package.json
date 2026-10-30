@@ -84,6 +84,10 @@
       "types": "./dist/denial-format.d.ts",
       "import": "./dist/denial-format.js"
     },
+    "./memory-freshness-format": {
+      "types": "./dist/memory-freshness-format.d.ts",
+      "import": "./dist/memory-freshness-format.js"
+    },
     "./journal-diagnostics-format": {
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"

@@ -18,6 +18,7 @@ import {
 } from '~/components/task-parts';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unreadableIdsNote } from '~/lib/unreadable-ids-note';
+import { useAction } from '~/lib/use-action';
 import { useReplaceSearchParams } from '~/lib/use-replace-search-params';
 import { unsentInput } from '~/lib/unsent-input';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
@@ -232,8 +233,7 @@ function PushForm({ openTasks }: { openTasks: readonly Task[] }) {
   const [body, setBody] = useState('');
   const [choice, setChoice] = useState<PlacementChoice>('default');
   const [anchorId, setAnchorId] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  const { busy, failure, run } = useAction();
   const [notice, setNotice] = useState<string | undefined>(undefined);
 
   useReportDirty(PUSH_FORM_DIRTY_ID, title !== '' || body !== '');
@@ -247,10 +247,8 @@ function PushForm({ openTasks }: { openTasks: readonly Task[] }) {
     if (busy || !canSubmit) return;
     const sentTitle = title;
     const sentBody = body;
-    setBusy(true);
-    setFailure(undefined);
-    setNotice(undefined);
-    try {
+    await run(async () => {
+      setNotice(undefined);
       await pushTask({
         title: sentTitle.trim(),
         body: sentBody.trim(),
@@ -259,11 +257,7 @@ function PushForm({ openTasks }: { openTasks: readonly Task[] }) {
       setTitle((current) => unsentInput(current, sentTitle));
       setBody((current) => unsentInput(current, sentBody));
       setNotice('積んだ。');
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (

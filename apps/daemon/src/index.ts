@@ -48,11 +48,11 @@ import {
   runTokenTrial,
   installUncaughtNet,
   placedClonePermissionMode,
+  placedEnvValue,
   placedManagerModels,
   reasonOf,
   redactErrorText,
   resolveCloneModel,
-  retiredLayerProviderNotices,
   staleObservedRecoveryForBlockedKey,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
@@ -172,8 +172,9 @@ function runnerSeeds(options: {
 }): RunnerSource[] {
   const urls = parseRunnerUrls(process.env);
   if (urls.length > 0) {
-    const token = process.env.ALTEROID_RUNNER_TOKEN;
-    if (token === undefined || token.length === 0) {
+    // runner と同じ読み方（前後の空白を落とす）で読む: 片側だけ落とすと、同じ値を置いても鍵が食い違って 401 になるため。
+    const token = placedEnvValue(process.env, 'ALTEROID_RUNNER_TOKEN');
+    if (token === null) {
       throw new Error(
         `${RUNNER_URLS_ENV} / ${RUNNER_URL_ENV} があるのに ALTEROID_RUNNER_TOKEN が無い` +
           '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
@@ -367,14 +368,6 @@ export function describeReopenedTokenNotice(
 // `console.warn` で倒さず例外にする: `entry.event` はこのプロセスが直前に組み立てた値で、別デプロイを跨いで読み直した値ではないため。
 function assertTokenRotationEventHandled(event: never): never {
   throw new Error(`alteroidd: 認証トークンの日誌で未知の event: ${String(event)}`);
-}
-
-// 黙って無視しない: 置いた人間は効いていると思ったままになるため。起動は止めない。
-export function reportRetiredLayerProviderEnv(
-  env: NodeJS.ProcessEnv,
-  write: (line: string) => void = writeStderrSync,
-): void {
-  for (const notice of retiredLayerProviderNotices(env, 'alteroidd')) write(`${notice}\n`);
 }
 
 export async function main(): Promise<void> {
@@ -595,8 +588,6 @@ export async function main(): Promise<void> {
         `実際にセッションへ渡すのは runner なので、効いているかは runner の起動ログで確かめてください\n`,
     );
   }
-
-  reportRetiredLayerProviderEnv(process.env);
 
   // プロファイルからは伏せる名前を置かせない: 開けると、保存の入口を通ったものがそのまま runner へ降り、下の層の境界を上書きできてしまうため。
   const profile = createProfileApplier({

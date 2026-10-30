@@ -7,7 +7,6 @@ import {
   describeReopenedTokenNotice,
   reopenedTokenOf,
   tokenRotationStream,
-  reportRetiredLayerProviderEnv,
 } from './index.js';
 import type { CloneWakeGate } from './index.js';
 
@@ -828,37 +827,11 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
   });
 });
 
-describe('reportRetiredLayerProviderEnv（もう読まない層の provider の変数。2026-10-07 の決定）', () => {
-  it('置かれていなければ何も書かない（既定の起動ログは変わらない）', () => {
-    const lines: string[] = [];
-    reportRetiredLayerProviderEnv({}, (line) => lines.push(line));
-    expect(lines).toEqual([]);
-  });
-
-  it('3つとも残っていれば、名前を出して1行ずつ（値は出さない。起動は止めない）', () => {
-    const lines: string[] = [];
-    reportRetiredLayerProviderEnv(
-      {
-        ALTEROID_CLONE_PROVIDER: 'value-not-to-print',
-        ALTEROID_MANAGER_PROVIDER: 'value-not-to-print',
-        ALTEROID_CLONE_PEERS: 'value-not-to-print',
-      },
-      (line) => lines.push(line),
-    );
-    expect(lines.map((line) => line.split(' ')[1])).toEqual([
-      'ALTEROID_CLONE_PROVIDER',
-      'ALTEROID_MANAGER_PROVIDER',
-      'ALTEROID_CLONE_PEERS',
-    ]);
-    for (const line of lines) {
-      expect(line.startsWith('alteroidd: ')).toBe(true);
-      expect(line).not.toContain('value-not-to-print');
-      expect(line.endsWith('\n')).toBe(true);
-    }
-  });
-
-  it('main は起動時にこれを呼ぶ（配線）', () => {
+// 退役から3週間を過ぎたので、起動時の「もう読まない」の知らせは外す（#5805）。変数は今までどおり読まない
+describe('退役した層の provider の変数（#5805）', () => {
+  it('起動は、退役した変数の知らせを出さない', () => {
     const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-    expect(source).toContain('reportRetiredLayerProviderEnv(process.env);');
+    expect(source).not.toContain('retiredLayerProviderNotices');
+    expect(source).not.toContain('reportRetiredLayerProviderEnv');
   });
 });

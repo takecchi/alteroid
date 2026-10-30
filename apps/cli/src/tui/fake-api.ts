@@ -483,10 +483,6 @@ export function fakeApi(): FakeApi {
         const since = query.since;
         rows = rows.filter((e) => e.at >= since);
       }
-      if (query.until !== undefined) {
-        const until = query.until;
-        rows = rows.filter((e) => e.at <= until);
-      }
       if (query.afterId !== undefined) {
         const afterId = query.afterId;
         rows = rows.slice(rows.findIndex((e) => e.id === afterId) + 1);
@@ -496,9 +492,7 @@ export function fakeApi(): FakeApi {
       return Promise.resolve({
         entries: raw.filter((e) => !api.journalUnreadable.has(e.id)),
         next: rows.length > query.limit && last !== undefined ? { id: last.id, at: last.at } : null,
-        ...(query.horizon === true || query.since !== undefined || query.until !== undefined
-          ? api.journalHorizon
-          : {}),
+        ...(query.horizon === true || query.since !== undefined ? api.journalHorizon : {}),
       });
     },
     listMemory() {

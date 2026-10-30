@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { captureStderr } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
@@ -17,7 +16,6 @@ import {
   listenPlanOf,
   RECLAIM_ENV_KEY,
   reclaimScanOf,
-  reportRetiredLayerProviderEnv,
   socketOwnerOf,
   tokenSha256Of,
 } from './index.js';
@@ -52,6 +50,13 @@ describe('tokenSha256Of', () => {
     expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: '', ALTEROID_RUNNER_TOKEN_SHA256: '' })).toBe(
       undefined,
     );
+  });
+
+  it('空白だけは未指定と同じ・前後の空白は落としてから畳む', () => {
+    expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: ' ', ALTEROID_RUNNER_TOKEN_SHA256: '\t' })).toBe(
+      undefined,
+    );
+    expect(tokenSha256Of({ ALTEROID_RUNNER_TOKEN: ` ${TOKEN}\n` })).toBe(TOKEN_SHA256);
   });
 });
 
@@ -226,7 +231,7 @@ describe('doneTreeReapAfterMsOf（終わって久しい done の担当の木を�
     expect(doneTreeReapAfterMsOf({ [key]: '90' })).toBe(90 * 60_000);
   });
 
-  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', ' 10', '1e3', '99999999999999999999'])(
+  it.each(['0', '-5', '1.5', '6h', 'Off', 'abc', '1 0', '1e3', '99999999999999999999'])(
     '正の整数でも off でもない値（%s）は黙って既定へ倒さず落とす',
     (value) => {
       expect(() => doneTreeReapAfterMsOf({ [key]: value })).toThrow(/知らない値/);
@@ -257,7 +262,7 @@ describe('socketOwnerOf', () => {
     ).toEqual({ uid: 1000, gid: 1000 });
   });
 
-  it.each(['abc', '1.5', '-1', ' 1000', '1e3', '99999999999999999999'])(
+  it.each(['abc', '1.5', '-1', '10 00', '1e3', '99999999999999999999'])(
     'UID が非負の整数でない値（%s）なら、黙って chown を飛ばさず落とす',
     (value) => {
       expect(() => socketOwnerOf({ ALTEROID_RUNNER_SOCKET_UID: value })).toThrow(
@@ -283,6 +288,26 @@ describe('listenPlanOf（待ち受けの口）', () => {
     });
   });
 
+  it('空白だけのポート・BIND は置いていないのと同じ（既定の 4518・127.0.0.1）', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '  ', ALTEROID_RUNNER_BIND: ' ' })).toEqual({
+      kind: 'tcp',
+      port: 4518,
+      hostname: '127.0.0.1',
+    });
+  });
+
+  it('前後の空白は落として読む（ポート・BIND・ソケット）', () => {
+    expect(listenPlanOf({ ALTEROID_RUNNER_PORT: ' 4600 ', ALTEROID_RUNNER_BIND: ' :: ' })).toEqual({
+      kind: 'tcp',
+      port: 4600,
+      hostname: '::',
+    });
+    expect(listenPlanOf({ ALTEROID_RUNNER_SOCKET: ' /run/x.sock ' })).toMatchObject({
+      kind: 'socket',
+      path: '/run/x.sock',
+    });
+  });
+
   it('1〜65535 の整数はそのまま使い、BIND は置かない・空文字なら 127.0.0.1', () => {
     expect(listenPlanOf({ ALTEROID_RUNNER_PORT: '1', ALTEROID_RUNNER_BIND: '' })).toMatchObject({
       port: 1,
@@ -293,7 +318,7 @@ describe('listenPlanOf（待ち受けの口）', () => {
     ).toMatchObject({ port: 65535, hostname: '::' });
   });
 
-  it.each(['0', '65536', '-1', 'abc', '4518.5', ' 4518', '1e3', '04518'])(
+  it.each(['0', '65536', '-1', 'abc', '4518.5', '45 18', '1e3', '04518'])(
     '1〜65535 の整数でないポート（%s）は落とす',
     (value) => {
       expect(() => listenPlanOf({ ALTEROID_RUNNER_PORT: value })).toThrow(
@@ -365,34 +390,11 @@ describe('childUserOf（#3807）', () => {
   });
 });
 
-describe('reportRetiredLayerProviderEnv（もう読まない層の provider の変数。2026-10-07 の決定）', () => {
-  it('置かれていなければ何も書かない', async () => {
-    const lines = await captureStderr(() =>
-      reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_MODEL: 'opus' }),
-    );
-    expect(lines).toEqual([]);
-  });
-
-  it('ALTEROID_MANAGER_PROVIDER が残っていれば、名前を出して1行（値は出さない。起動は止めない）', async () => {
-    const lines = await captureStderr(() =>
-      reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_PROVIDER: 'codex' }),
-    );
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^alteroid-runner: ALTEROID_MANAGER_PROVIDER はもう読みません/);
-    expect(lines[0]).toContain('CODEX_API_KEY');
-    expect(lines[0]?.endsWith('\n')).toBe(true);
-  });
-
-  it('ALTEROID_MANAGER_PEERS が残っていても1行出す（2026-10-08 に退役。peer は Codex の資格で開く。#4118）', async () => {
-    const lines = await captureStderr(() =>
-      reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_PEERS: 'codex' }),
-    );
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^alteroid-runner: ALTEROID_MANAGER_PEERS はもう読みません/);
-  });
-
-  it('runner の起動はこれを呼ぶ（配線）', () => {
+// 退役から3週間を過ぎたので、起動時の「もう読まない」の知らせは外す（#5805）。変数は今までどおり読まない
+describe('退役した層の provider の変数（#5805）', () => {
+  it('runner の起動は、退役した変数の知らせを出さない', () => {
     const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-    expect(source).toContain('reportRetiredLayerProviderEnv(process.env);');
+    expect(source).not.toContain('retiredLayerProviderNotices');
+    expect(source).not.toContain('reportRetiredLayerProviderEnv');
   });
 });

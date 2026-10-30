@@ -1,10 +1,7 @@
+import { placedEnvValue } from '@alteroid/core';
+
 // 止める綴りを1か所に置く: 綴りが割れると人間が覚えることが増えるため。
 export const OFF_SPELLINGS: ReadonlySet<string> = new Set(['off', 'none', 'false', '0']);
-
-/** 前後の空白を落とす。空白だけなら置かれていないのと同じに扱う。 */
-export function envValue(raw: string | undefined): string | undefined {
-  return raw !== undefined && raw.trim().length > 0 ? raw.trim() : undefined;
-}
 
 export interface EveryMinutesConfig {
   readonly everyMinutes: number | null;
@@ -21,8 +18,8 @@ export function readEveryMinutes(
   { defaultMinutes, minMinutes }: { defaultMinutes: number; minMinutes: number },
 ): EveryMinutesConfig {
   const notes: string[] = [];
-  const raw = envValue(env[key]);
-  if (raw === undefined) return { everyMinutes: defaultMinutes, notes };
+  const raw = placedEnvValue(env, key);
+  if (raw === null) return { everyMinutes: defaultMinutes, notes };
   if (OFF_SPELLINGS.has(raw.toLowerCase())) return { everyMinutes: null, notes };
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) {

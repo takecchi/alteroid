@@ -1,4 +1,4 @@
-// 何も import しない: CLI が `@alteroid/core/cli-light` から core 本体を評価せずに読むため。
+// 何も import しない: CLI が `@alteroid/core/cli-light` から、Web（`@alteroid/logic`）が `@alteroid/core/memory-freshness-format` から、core 本体を評価せずに読むため。
 // 書式を1か所に置く: core（クローンへ焼く目次）と CLI（人間の一覧）で写すと、片方だけ直り、人間とクローンが同じ記憶を見て違う判断をするため
 
 /** `schema.ts` の `MemoryDescriptionDrift` と同じ形（ここでは型を import しない）。 */
@@ -38,7 +38,7 @@ export function assertNeverMemoryDescriptionDrift(drift: never): never {
 }
 
 // `Math.max(seconds, 0)` を残す: CLI が受け取るのは HTTP 経由の JSON（信頼境界の外）で、型の保証だけを信じないため
-function formatMemoryStaleness(ms: number): string {
+export function formatMemoryStaleness(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${Math.max(seconds, 0)}秒`;
   const minutes = Math.floor(seconds / 60);
@@ -50,7 +50,7 @@ function formatMemoryStaleness(ms: number): string {
 }
 
 // `describedBytes === 0` のときは % を出さない: 0除算を「0%」に化けさせないため
-function formatMemoryDescriptionDrift(drift: {
+export function formatMemoryDescriptionDrift(drift: {
   describedBytes: number;
   currentBytes: number;
   deltaBytes: number;
@@ -63,7 +63,7 @@ function formatMemoryDescriptionDrift(drift: {
 }
 
 // `%` と `baselineAt` を出さない: 母数が measured と別の量になり、この文字列は毎ターンプロンプトへ焼かれるのでトークン肥大を避けるため
-function formatMemoryDescriptionDriftAtLeast(drift: {
+export function formatMemoryDescriptionDriftAtLeast(drift: {
   baselineBytes: number;
   currentBytes: number;
   deltaBytes: number;
@@ -74,7 +74,7 @@ function formatMemoryDescriptionDriftAtLeast(drift: {
 }
 
 // `at-least` と `unrecorded` を `measured` と同じ言葉にしない: 下限を確定値に見せず、記録が無いことを「0バイト変わった」に化けさせないため
-function describeMemoryDescriptionDrift(drift: MemoryDescriptionDriftView): string {
+export function describeMemoryDescriptionDrift(drift: MemoryDescriptionDriftView): string {
   switch (drift.kind) {
     case 'measured':
       return formatMemoryDescriptionDrift(drift);

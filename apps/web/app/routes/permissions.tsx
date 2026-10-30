@@ -1,5 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useAction } from '~/lib/use-action';
 import { describePermissionRuleBreadth } from '@alteroid/core/permission-rule';
 import {
   assessPermissionGrantStaleness,
@@ -178,23 +179,16 @@ function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
 // 押しても最初は叩かず確認を挟む: 取り消しはその場で戻せないため
 function RevokeControl({ grant }: { grant: PermissionGrant }) {
   const revokePermissionGrant = useRevokePermissionGrant();
-  const [busy, setBusy] = useState(false);
+  const { busy, failure, run: runAction } = useAction();
   const [confirming, setConfirming] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
   // ボタンの名前も伏せる: 読み上げにも rule がそのまま乗るため（PermissionRow と同じ）
   const shownRule = redactBody(grant.rule);
 
-  async function run() {
-    setBusy(true);
-    setFailure(undefined);
-    try {
+  function run() {
+    return runAction(async () => {
       await revokePermissionGrant(grant.id);
       setConfirming(false);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (

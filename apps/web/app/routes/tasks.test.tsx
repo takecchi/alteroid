@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { storeTestBaseUrl } from '~/test-support';
+import { holdRequests, storeTestBaseUrl } from '~/test-support';
 import { formatDateTime } from '@alteroid/logic';
 
 import { renderTasksAt, stubTasksServer, task } from './tasks-test-helpers';
@@ -207,6 +207,49 @@ describe('task を積む', () => {
     });
   });
 
+  it('断られたら理由が出て入力は残る。送り直すと理由は消え、通ると「積んだ。」が出て入力が空に戻る', async () => {
+    const server = stubTasksServer(THREE());
+    renderTasksAt('/tasks');
+    await screen.findByText('先にやる仕事');
+
+    fireEvent.change(screen.getByLabelText(/^タイトル/), { target: { value: '新しい仕事' } });
+    fireEvent.change(screen.getByLabelText('本文'), { target: { value: '新しい本文' } });
+    server.refuseNext(500, { error: '積めなかった' });
+    fireEvent.click(screen.getByRole('button', { name: '積む' }));
+
+    expect(await screen.findByText('積めなかった')).toBeTruthy();
+    expect(screen.queryByText('積んだ。')).toBeNull();
+    expect(screen.getByLabelText(/^タイトル/)).toHaveProperty('value', '新しい仕事');
+
+    fireEvent.click(screen.getByRole('button', { name: '積む' }));
+    await waitFor(() => expect(screen.queryByText('積めなかった')).toBeNull());
+    expect(await screen.findByText('積んだ。')).toBeTruthy();
+    expect(screen.getByLabelText(/^タイトル/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText('本文')).toHaveProperty('value', '');
+  });
+
+  it('送信中は「積む」が押せず、⌘/Ctrl+Enter を重ねても1回しか送らない（門は busy で持つ）', async () => {
+    const server = stubTasksServer(THREE());
+    renderTasksAt('/tasks');
+    await screen.findByText('先にやる仕事');
+
+    fireEvent.change(screen.getByLabelText(/^タイトル/), { target: { value: '新しい仕事' } });
+    fireEvent.change(screen.getByLabelText('本文'), { target: { value: '新しい本文' } });
+    const hold = holdRequests(({ method }) => method === 'POST');
+    fireEvent.keyDown(screen.getByLabelText('本文'), { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '積む' }).disabled).toBe(true);
+
+    fireEvent.keyDown(screen.getByLabelText('本文'), { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText(/^タイトル/), { key: 'Enter', ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: '積む' }));
+    expect(hold.held()).toBe(1);
+
+    hold.open();
+    expect(await screen.findByText('積んだ。')).toBeTruthy();
+    expect(server.writes().filter((write) => write.method === 'POST')).toHaveLength(1);
+  });
+
   it('タイトルか本文が空のあいだは積めない', async () => {
     stubTasksServer(THREE());
     renderTasksAt('/tasks');
@@ -307,6 +350,53 @@ describe('task を開き直す', () => {
         body: { reason: 'まだ終わっていなかった' },
       },
     ]);
+  });
+});
+
+describe('task を開き直す — 送信中・失敗の表示と二重送信の門', () => {
+  it('断られたら理由が出て入力は残る。送り直すと理由は消え、送信中は確定も「やめる」も押せず、⌘/Ctrl+Enter を重ねても1回しか送らない', async () => {
+    const server = stubTasksServer([
+      ...THREE(),
+      task({
+        id: 't-done',
+        title: '終わった仕事',
+        status: 'done',
+        closedAt: '2026-09-02T00:00:00.000Z',
+        closedReason: '終わったと思った',
+        closedBy: 'human',
+      }),
+    ]);
+    renderTasksAt('/tasks?closed=1');
+    await screen.findByText('終わった仕事');
+
+    fireEvent.click(screen.getByRole('button', { name: '「終わった仕事」を開き直す' }));
+    const reason = screen.getByLabelText('「終わった仕事」を開き直す理由');
+    fireEvent.change(reason, { target: { value: 'まだ終わっていなかった' } });
+    const confirm = () =>
+      screen.getByRole<HTMLButtonElement>('button', { name: '「終わった仕事」の開き直しを確定' });
+
+    server.refuseNext(500, { error: '開き直せなかった' });
+    fireEvent.click(confirm());
+    expect(await screen.findByText('開き直せなかった')).toBeTruthy();
+    expect(confirm().disabled).toBe(false);
+    expect(reason).toHaveProperty('value', 'まだ終わっていなかった');
+
+    const hold = holdRequests(({ method }) => method === 'POST');
+    fireEvent.keyDown(reason, { key: 'Enter', ctrlKey: true });
+    expect(screen.queryByText('開き直せなかった')).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(confirm().disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'やめる' }).disabled).toBe(true);
+
+    fireEvent.keyDown(reason, { key: 'Enter', ctrlKey: true });
+    fireEvent.click(confirm());
+    expect(hold.held()).toBe(1);
+
+    hold.open();
+    await waitFor(() => expect(openTitles()).toContain('終わった仕事'));
+    expect(server.writes().filter((write) => write.path === '/tasks/t-done/reopen')).toHaveLength(
+      2,
+    );
   });
 });
 

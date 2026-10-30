@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { lstat, open, readdir, rm, rmdir, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, extname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import {
@@ -21,6 +21,7 @@ import {
   readRunnerAttachmentStageLimit,
   type AttachmentLimits,
 } from './attachment.js';
+import { guessMediaTypeFromPath } from './media-type-by-extension.js';
 import { isSafeRunnerSegment, RUNNER_ATTACHMENT_STALE_MS } from './runner-attachments.js';
 import type { RunnerOutboxFile, RunnerOutboxRejectedFile } from './runner-protocol.js';
 
@@ -178,37 +179,6 @@ class OutboxRefusal extends Error {
   }
 }
 
-const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.log': 'text/plain',
-  '.csv': 'text/csv',
-  '.json': 'application/json',
-  '.html': 'text/html',
-  '.xml': 'application/xml',
-  '.yaml': 'application/yaml',
-  '.yml': 'application/yaml',
-  '.pdf': 'application/pdf',
-  '.zip': 'application/zip',
-  '.gz': 'application/gzip',
-  '.tar': 'application/x-tar',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-};
-
-// 中身は見ない: 画像かどうかの最終判定はデーモンの `prepareAttachment` に任せる
-export function guessOutboxMediaType(name: string): string {
-  return MEDIA_TYPES_BY_EXTENSION[extname(name).toLowerCase()] ?? 'application/octet-stream';
-}
-
 /** 画像は `maxFileBytes` までしか取り込まないので、それを超える退避済みのものは大きいファイルだけと決められる。 */
 async function stagedBytesOf(
   dir: string,
@@ -313,7 +283,7 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
     if (info.nlink > 1) throw new OutboxRefusal('ハードリンクは送れない', 'remove');
     if (info.size === 0) throw new OutboxRefusal('空のファイルは送れない', 'remove');
     // 画像かどうかは拡張子で決める: 中身は見ない（最終判定はデーモン）。画像は大きいファイルにしない
-    const image = isAttachmentImageMediaType(guessOutboxMediaType(name));
+    const image = isAttachmentImageMediaType(guessMediaTypeFromPath(name));
     const large = !image && info.size > context.maxFileBytes;
     const fileMax = image ? context.maxFileBytes : context.maxLargeFileBytes;
     if (info.size > fileMax) {
@@ -342,7 +312,7 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
     return {
       fileId: copied.fileId,
       name,
-      mediaType: guessOutboxMediaType(name),
+      mediaType: guessMediaTypeFromPath(name),
       size: info.size,
       sha256: copied.sha256,
     };

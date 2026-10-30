@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatDateTime } from '@alteroid/logic';
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Tokens from './tokens';
 
@@ -1023,6 +1023,49 @@ describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123�
     ).toBeTruthy();
     expect(screen.getByLabelText('休止の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
   });
+
+  it('送信中は「保存」が押せず、前の失敗は送り直した瞬間に消え、成功すれば下書きが空に戻る', async () => {
+    const { failNextUpdate } = stubPolicyScreen();
+    failNextUpdate(400, '設定の入力の形が不正: cooldownMs は正の整数である必要がある');
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('休止の既定を変える（ミリ秒）'), {
+      target: { value: '-1' },
+    });
+    const save = () => screen.getByRole<HTMLButtonElement>('button', { name: '保存' });
+    fireEvent.click(save());
+    expect(await screen.findByText(/cooldownMs は正の整数である必要がある/)).toBeTruthy();
+    expect(save().disabled).toBe(false);
+
+    const hold = holdRequests(({ method }) => method === 'PUT');
+    fireEvent.click(save());
+    expect(screen.queryByText(/cooldownMs は正の整数である必要がある/)).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(save().disabled).toBe(true);
+    hold.open();
+    expect(await screen.findByText(/cooldownMs は正の整数である必要がある/)).toBeTruthy();
+    expect(save().disabled).toBe(false);
+  });
+
+  it('保存が通ると、下書きが消えて保存済みの値の表示に戻る（送信中は押せない）', async () => {
+    stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('切り替える条件を変える'), { target: { value: 'off' } });
+    const hold = holdRequests(({ method }) => method === 'PUT');
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存' }).disabled).toBe(true);
+    hold.open();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '変更なし' })).toHaveProperty('disabled', true),
+    );
+    expect(screen.getByLabelText('切り替える条件を変える')).toHaveProperty('value', 'off');
+  });
 });
 
 function stubUnreadableScreen(
@@ -1175,6 +1218,31 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     ).toBeTruthy();
     expect(screen.getByLabelText('切り替える条件を選ぶ')).toHaveProperty('value', 'off');
   });
+
+  it('送信中は「保存」が押せず、前の失敗は送り直した瞬間に消える', async () => {
+    const { failNextUpdate } = stubUnreadableScreen({ reason: '理由' });
+    failNextUpdate(500, '読めない現在値は両方揃った patch でしか埋められない');
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), { target: { value: 'off' } });
+    fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（ミリ秒）'), {
+      target: { value: '3600000' },
+    });
+    const save = () => screen.getByRole<HTMLButtonElement>('button', { name: '保存' });
+    fireEvent.click(save());
+    expect(await screen.findByText(/読めない現在値は両方揃った/)).toBeTruthy();
+    expect(save().disabled).toBe(false);
+
+    const hold = holdRequests(({ method }) => method === 'PUT');
+    fireEvent.click(save());
+    expect(screen.queryByText(/読めない現在値は両方揃った/)).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(save().disabled).toBe(true);
+    hold.open();
+    expect(await screen.findByText(/読めない現在値は両方揃った/)).toBeTruthy();
+  });
 });
 
 describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () => {
@@ -1306,6 +1374,32 @@ describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886
       'value',
       'sk-ant-oat01-keep-me',
     );
+  });
+
+  it('追加: 送信中は「追加」が押せず、前の失敗は送り直した瞬間に消え、終わればまた出る', async () => {
+    stubFailingWrites({ error: JOURNAL_MESSAGE, code: 'journal_write_failed' });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）'), {
+      target: { value: 'new-token' },
+    });
+    fireEvent.change(screen.getByLabelText('値（claude setup-token の出力）'), {
+      target: { value: 'sk-ant-oat01-keep-me' },
+    });
+    const add = () => screen.getByRole<HTMLButtonElement>('button', { name: '追加' });
+    fireEvent.click(add());
+    expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
+    expect(add().disabled).toBe(false);
+
+    const hold = holdRequests(({ method }) => method === 'PUT');
+    fireEvent.click(add());
+    expect(screen.queryByText(JOURNAL_MESSAGE)).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(add().disabled).toBe(true);
+    hold.open();
+    expect(await screen.findByText(JOURNAL_MESSAGE)).toBeTruthy();
+    expect(add().disabled).toBe(false);
   });
 
   it('有効化・無効化: 行のそばに同じ文言と次にすることが出る', async () => {

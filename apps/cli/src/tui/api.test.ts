@@ -427,7 +427,7 @@ describe('日誌と記憶の口', () => {
       limit: 100,
       types: ['decision', 'escalation'],
       q: '語',
-      until: '2026-10-02T00:00:00.000Z',
+      since: '2026-10-02T00:00:00.000Z',
       horizon: true,
     });
     expect(result).toEqual({
@@ -441,7 +441,7 @@ describe('日誌と記憶の口', () => {
       limit: '100',
       type: 'decision,escalation',
       q: '語',
-      until: '2026-10-02T00:00:00.000Z',
+      since: '2026-10-02T00:00:00.000Z',
       horizon: 'true',
     });
     expect(sent[0]?.method).toBe('GET');

@@ -31,6 +31,25 @@ describe('planStorage', () => {
     expect(planStorage({ [DATABASE_URL_ENV]: '' }).kind).toBe('fs');
   });
 
+  it('空白だけの値も「未指定」として扱う（core の placedEnvValue と同じ）', () => {
+    const plan = planStorage({ [DATABASE_URL_ENV]: '  ', ALTEROID_HOME: '\t' });
+
+    expect(plan.kind).toBe('fs');
+    expect(plan.databaseUrl).toBeUndefined();
+    expect(plan.root).toBeUndefined();
+  });
+
+  it('前後の空白は落として読む', () => {
+    const plan = planStorage({
+      [DATABASE_URL_ENV]: ' postgres://alteroid:secret@db:5432/alteroid \n',
+      ALTEROID_HOME: ' /var/alteroid ',
+    });
+
+    expect(plan.kind).toBe('pg');
+    expect(plan.databaseUrl).toBe('postgres://alteroid:secret@db:5432/alteroid');
+    expect(plan.root).toBe('/var/alteroid');
+  });
+
   it('記憶ストアへ到達した鍵を、マネージャー子プロセスから伏せる（受け入れ基準3）', () => {
     const plan = planStorage({
       [DATABASE_URL_ENV]: 'postgres://alteroid:secret@db:5432/alteroid',

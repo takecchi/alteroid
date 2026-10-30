@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, TestDataRouter, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, TestDataRouter, storeTestBaseUrl } from '~/test-support';
 
 import Integrations from './integrations';
 
@@ -375,6 +375,41 @@ describe('/integrations 画面 — 失効', () => {
     const row = screen.getByText('CI').closest('li');
     expect(row).toBeTruthy();
     expect(within(row as HTMLElement).getByText('有効')).toBeTruthy();
+  });
+
+  it('送信中は「本当に失効する」も「やめる」も押せず、前の失敗は送り直した瞬間に消える。失敗では確認が残る', async () => {
+    stubKeys({ revoke: { status: 500, body: { error: '失効を保存できなかった' } } });
+    renderScreen();
+    await screen.findByText('CI');
+    fireEvent.click(screen.getByRole('button', { name: 'CI を失効する' }));
+    const confirm = () =>
+      screen.getByRole<HTMLButtonElement>('button', { name: 'CI を本当に失効する' });
+    fireEvent.click(confirm());
+    expect(await screen.findByText('失効を保存できなかった')).toBeTruthy();
+    expect(confirm().disabled).toBe(false);
+
+    const hold = holdRequests(({ url }) => url.endsWith('/revoke'));
+    fireEvent.click(confirm());
+    expect(screen.queryByText('失効を保存できなかった')).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(confirm().disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'やめる' }).disabled).toBe(true);
+
+    hold.open();
+    expect(await screen.findByText('失効を保存できなかった')).toBeTruthy();
+    expect(confirm().disabled).toBe(false);
+  });
+
+  it('通ると確認の枠が閉じる（一覧が取り直されるまでは「失効する」に戻る）', async () => {
+    stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+    fireEvent.click(screen.getByRole('button', { name: 'CI を失効する' }));
+    fireEvent.click(screen.getByRole('button', { name: 'CI を本当に失効する' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'CI を本当に失効する' })).toBeNull(),
+    );
+    expect(screen.getByRole('button', { name: 'CI を失効する' })).toBeTruthy();
   });
 });
 

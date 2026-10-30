@@ -26,6 +26,7 @@ export default defineConfig({
     'src/journal-diagnostics-format.ts',
     'src/approval-questions-format.ts',
     'src/denial-format.ts',
+    'src/memory-freshness-format.ts',
     // 副作用だけの小さな入口（`UV_THREADPOOL_SIZE` を置く）。デーモンと runner が最初の import にする。何も import しない: 先に評価させるため（#4890）
     'src/threadpool-size.ts',
   ],

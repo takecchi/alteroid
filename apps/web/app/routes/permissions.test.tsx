@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Permissions from './permissions';
 
@@ -219,6 +219,48 @@ describe('/permissions 画面 — 取り消し', () => {
     fireEvent.click(screen.getByText('取り消し済みも見る'));
 
     expect(screen.queryByText('取り消す')).toBeNull();
+  });
+});
+
+describe('/permissions 画面 — 取り消しの送信中・失敗・成功後の表示', () => {
+  let revokeFails = false;
+
+  function stubWithFailure() {
+    revokeFails = false;
+    return stubFetch((url) => {
+      if (/\/permission-grants\/[^/]+\/revoke$/.test(url)) {
+        return revokeFails ? json({ error: '取り消せなかった' }, 500) : json({ ok: true }, 200);
+      }
+      if (url.includes('/permission-grants')) return json({ grants: [grant()] }, 200);
+      return undefined;
+    });
+  }
+
+  const confirm = () =>
+    screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Bash(gh pr merge:*) を本当に取り消す',
+    });
+
+  it('失敗では確認の枠が残って理由が出る。送信中は押せず、成功すると確認の枠が閉じる', async () => {
+    stubWithFailure();
+    await renderPermissions();
+
+    fireEvent.click(screen.getByText('取り消す'));
+    revokeFails = true;
+    fireEvent.click(confirm());
+    expect(await screen.findByText('取り消せなかった')).toBeTruthy();
+    expect(confirm().disabled).toBe(false);
+
+    revokeFails = false;
+    const hold = holdRequests(({ url }) => /\/permission-grants\/grant-a\/revoke$/.test(url));
+    fireEvent.click(confirm());
+    expect(screen.queryByText('取り消せなかった')).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(confirm().disabled).toBe(true);
+    hold.open();
+    await waitFor(() => expect(screen.queryByText('本当に取り消す')).toBeNull());
+    expect(screen.getByText('取り消す')).toBeTruthy();
+    expect(screen.queryByText('取り消せなかった')).toBeNull();
   });
 });
 

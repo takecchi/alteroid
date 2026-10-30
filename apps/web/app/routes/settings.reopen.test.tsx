@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { holdRequests, json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Settings, { describeReopenResult } from './settings';
 
@@ -192,5 +192,28 @@ describe('クローンのセッションを開き直す（設定画面）', () =
     expect(screen.queryByText(/いまのターンが終わった境界で/)).toBeNull();
     expect(screen.queryByText(/いまはセッションが無かった/)).toBeNull();
     expect(screen.queryByText(/口を持っていない/)).toBeNull();
+  });
+
+  it('送信中は「本当に開き直す」が押せず、前の失敗は送り直した瞬間に消え、通ると結果に変わる', async () => {
+    let fails = true;
+    renderSettings(() => (fails ? json({ error: '許可が無い' }, 403) : json({ outcome: 'now' })));
+
+    fireEvent.click(await openDialog());
+    const confirm = () => screen.getByRole<HTMLButtonElement>('button', { name: '本当に開き直す' });
+    expect(await screen.findByText('許可が無い')).toBeTruthy();
+    expect(confirm().disabled).toBe(false);
+
+    fails = false;
+    const hold = holdRequests(({ url }) => url.endsWith(REOPEN_PATH));
+    fireEvent.click(confirm());
+    expect(screen.queryByText('許可が無い')).toBeNull();
+    await waitFor(() => expect(hold.held()).toBe(1));
+    expect(confirm().disabled).toBe(true);
+
+    hold.open();
+    expect(
+      await screen.findByText('いまはセッションが無かった。次の合図から新しいセッションで始まる。'),
+    ).toBeTruthy();
+    expect(screen.queryByText('許可が無い')).toBeNull();
   });
 });

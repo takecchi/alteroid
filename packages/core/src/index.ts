@@ -1314,6 +1314,7 @@ export {
   normalizeEventSource,
 } from './daemon-self-notice.js';
 export { resolveModelTier } from './model-tier.js';
+export { placedEnvValue } from './placed-env.js';
 export {
   ANTHROPIC_ROUTE_NONE_LINE,
   describeAnthropicRoute,
@@ -1326,11 +1327,6 @@ export {
 } from './anthropic-route-env.js';
 export type { AgentProviderId } from './agent-ports.js';
 export { DEFAULT_AGENT_PROVIDER_ID, agentProviderOf } from './agent-provider-selection.js';
-export {
-  MANAGER_PEERS_ENV_KEY,
-  RETIRED_LAYER_PROVIDER_ENV_KEYS,
-  retiredLayerProviderNotices,
-} from './retired-provider-env.js';
 export {
   CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
@@ -1741,11 +1737,11 @@ export {
   type StageRunnerAttachmentOptions,
   type StagedAttachmentEntry,
 } from './runner-attachments.js';
+export { FALLBACK_MEDIA_TYPE, guessMediaTypeFromPath } from './media-type-by-extension.js';
 export {
   collectManagerOutbox,
   defaultRunnerOutboxRoot,
   defaultRunnerOutboxStagedRoot,
-  guessOutboxMediaType,
   isOutboxFileId,
   openStagedOutboxFile,
   prepareManagerOutbox,

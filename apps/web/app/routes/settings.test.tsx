@@ -5,7 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { storeCredential, type Credential } from '@alteroid/logic';
 import type { ClonePluginLoadObservation, DaemonRevision, RunnerSummary } from '@alteroid/logic';
-import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
+import {
+  holdRequests,
+  json,
+  Providers,
+  stubFetch,
+  storeTestBaseUrl,
+  TEST_BASE_URL,
+} from '~/test-support';
 
 import Settings, { RESET_CONFIRM_GROUPS, RESET_SUMMARY_LABELS } from './settings';
 
@@ -846,6 +853,79 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
     }
     expect(covered.size).toBe(labelKeys.length);
   });
+});
+
+describe('サーバを止める・リセット — 送信中・失敗・成功後の表示', () => {
+  let failing: string | undefined;
+
+  function renderWithFailingWrites() {
+    failing = undefined;
+    stubFetch((url) => {
+      if (url.includes('/shutdown') || url.includes('/reset')) {
+        const path = url.includes('/shutdown') ? 'shutdown' : 'reset';
+        if (failing === path) return json({ error: `${path} できなかった` }, 500);
+        return path === 'reset' ? json({ ok: true, cleared: { memory: 3 } }) : json({});
+      }
+      if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+      if (url.includes('/auth/providers')) return json({ providers: [] });
+      if (url.includes('/me')) return json({ status: 'open' });
+      if (url.includes('/health')) return json({ ok: true });
+      return json({});
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+  }
+
+  const cases = [
+    {
+      name: 'サーバを止める',
+      path: 'shutdown',
+      open: 'alteroid のサーバを止める',
+      word: 'stop',
+      run: '止める',
+      done: /止めました/,
+    },
+    {
+      name: 'リセット',
+      path: 'reset',
+      open: 'リセットする',
+      word: 'reset',
+      run: '本当に削除する',
+      done: /リセットしました/,
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: 失敗は窓の中に出て押し直せる。送り直すと消え、送信中は押せず、通ると完了の表示になる`, async () => {
+      renderWithFailingWrites();
+      fireEvent.click(await screen.findByRole('button', { name: c.open }));
+      fireEvent.change(await screen.findByPlaceholderText(c.word), { target: { value: c.word } });
+      const run = () => screen.getByRole<HTMLButtonElement>('button', { name: c.run });
+
+      failing = c.path;
+      fireEvent.click(run());
+      expect(await screen.findByText(`${c.path} できなかった`)).toBeTruthy();
+      expect(run().disabled).toBe(false);
+      expect(screen.queryByText(c.done)).toBeNull();
+
+      failing = undefined;
+      const hold = holdRequests(({ url }) => url.includes(`/${c.path}`));
+      fireEvent.click(run());
+      expect(screen.queryByText(`${c.path} できなかった`)).toBeNull();
+      await waitFor(() => expect(hold.held()).toBe(1));
+      expect(run().disabled).toBe(true);
+
+      hold.open();
+      expect(await screen.findByText(c.done)).toBeTruthy();
+      expect(screen.queryByText(`${c.path} できなかった`)).toBeNull();
+    });
+  }
 });
 
 describe('runner を空ける（vacate）', () => {

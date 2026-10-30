@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { guessMediaTypeFromPath } from './media-type-by-extension.js';
 import {
   claimRunnerRootDirectorySync,
   collectManagerOutbox,
@@ -145,6 +146,23 @@ describe('collectManagerOutbox', () => {
     const { dir, collect } = await setup();
     await writeFile(join(dir, 'blob.bin2'), 'x');
     expect((await collect()).files[0]?.mediaType).toBe('application/octet-stream');
+  });
+
+  // 拡張子の表は core の1か所（#5800）: クローンの file_put と同じ型を付ける
+  it('Office・tsv・htm・mov も、クローンの file_put と同じ表から型つきで取り込む（#5800）', async () => {
+    const { dir, collect } = await setup();
+    // 1回の報告で取り込む個数には上限があるので、3つずつ2回に分けて集める
+    for (const names of [
+      ['r.docx', 'r.htm', 'r.mov'],
+      ['r.pptx', 'r.tsv', 'r.xlsx'],
+    ]) {
+      for (const name of names) await writeFile(join(dir, name), 'x');
+      const files = (await collect()).files;
+      expect(files.map((f) => [f.name, f.mediaType])).toEqual(
+        names.map((name) => [name, guessMediaTypeFromPath(name)]),
+      );
+      expect(files.some((f) => f.mediaType === 'application/octet-stream')).toBe(false);
+    }
   });
 
   it('出し箱の外のファイルを指す symlink は断り、中身を退避先へ写さず、リンク先を消さない', async () => {

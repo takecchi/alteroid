@@ -2,6 +2,7 @@
 // 読むのは subpath の側だけにする: revision.ts は焼き込んだ正典と zod を読むので初期チャンクへ入れられないため
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
+import { useAction } from '~/lib/use-action';
 import { useLogout } from '~/lib/use-logout';
 import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useState } from 'react';

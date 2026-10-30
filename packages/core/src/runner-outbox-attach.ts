@@ -15,11 +15,8 @@ import {
   readRunnerAttachmentStageLimit,
   type AttachmentLimits,
 } from './attachment.js';
-import {
-  assertOwnDirectorySync,
-  guessOutboxMediaType,
-  RunnerOutboxUnsafeError,
-} from './runner-outbox.js';
+import { guessMediaTypeFromPath } from './media-type-by-extension.js';
+import { assertOwnDirectorySync, RunnerOutboxUnsafeError } from './runner-outbox.js';
 import { isSafeRunnerSegment } from './runner-attachments.js';
 
 /**
@@ -230,7 +227,7 @@ async function attachOne(
       return refuse('ハードリンクは写せない（`cp` で別のファイルとして作り直す）');
     if (info.size === 0) return refuse('空のファイルは写せない');
     const name0 = basename(path);
-    const image = isAttachmentImageMediaType(guessOutboxMediaType(name0));
+    const image = isAttachmentImageMediaType(guessMediaTypeFromPath(name0));
     const large = !image && info.size > budget.maxFileBytes;
     const fileMax = image ? budget.maxFileBytes : budget.maxLargeFileBytes;
     if (info.size > fileMax) return refuse(`1つの上限（${String(fileMax)} バイト）を超える`);

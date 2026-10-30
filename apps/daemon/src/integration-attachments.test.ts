@@ -13,9 +13,13 @@ import {
   type CloneHost,
   type InboxEvent,
 } from '@alteroid/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const OPERATOR = { authorization: 'Bearer test-token' };
 const T0 = Date.parse('2026-06-01T00:00:00.000Z');
@@ -109,6 +113,10 @@ function setup(
       return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
     },
   }) as CloneHost;
+  // 本番と同じ経路（環境変数）で閾値を渡す: createApp はここで読む
+  if (options.noticeBytes !== undefined) {
+    vi.stubEnv('ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES', String(options.noticeBytes));
+  }
   const app = createApp({
     clone: host,
     stores,
@@ -116,9 +124,6 @@ function setup(
     shutdown: () => undefined,
     now: () => new Date(T0),
     ...(options.limits === undefined ? {} : { attachmentLimits: options.limits }),
-    ...(options.noticeBytes === undefined
-      ? {}
-      : { integrationAttachmentNoticeBytes: options.noticeBytes }),
     auth: {
       plan: {
         enabled: true,
@@ -467,7 +472,7 @@ describe('回数: アップロードも鍵の1回に数える（偽の時計）'
   });
 });
 
-describe('預かりの知らせの閾値は createApp に渡した値を使う（#4005）', () => {
+describe('預かりの知らせの閾値は環境変数 ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES の値を使う（#4005）', () => {
   it('閾値を添付2つ分より小さくすると、2つ目を上げたときにだけ知らせる（上げることは断らない）', async () => {
     const s = setup({ noticeBytes: PNG.length + 1 });
     const key = await issue(s);
