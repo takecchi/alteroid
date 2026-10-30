@@ -79,7 +79,13 @@ export function ListDetail({
             : 'w-64 shrink-0 border-r border-border md:w-72',
       )}
     >
-      <h2 className="shrink-0 border-b border-border px-3 py-3 text-sm font-semibold">
+      <h2
+        className={cn(
+          'shrink-0 border-b border-border px-3 py-3 text-sm font-semibold',
+          // Drawer の閉じるボタンが右上に居る: 見出しを重ねない
+          inDrawer && 'pr-14',
+        )}
+      >
         {listLabel}
       </h2>
       <nav aria-label={listLabel} className="min-h-0 flex-1 overflow-y-auto">

@@ -113,6 +113,15 @@ describe('閉じたら焦点は開いたボタンへ戻る（body に落とさ�
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
+  it('右上の「閉じる」ボタンで閉じたとき', async () => {
+    const opener = await openDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: '閉じる' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
   it('開いたボタンが無くなっていても、落ちずに閉じる', async () => {
     const opener = await openDrawer();
     // DOM から外すと React の片付けが落ちるので、外れた要素の見え方だけを真似る
@@ -124,6 +133,23 @@ describe('閉じたら焦点は開いたボタンへ戻る（body に落とさ�
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(focus).not.toHaveBeenCalled();
   });
+});
+
+it('「閉じる」ボタンが面の中に在る（既存の SheetContent の閉じるボタンと同じ部品）', async () => {
+  await openDrawer();
+
+  const dialog = screen.getByRole('dialog', { name: 'メニュー' });
+  const close = screen.getByRole('button', { name: '閉じる' });
+  expect(dialog.contains(close)).toBe(true);
+  expect(close.getAttribute('data-slot')).toBe('sheet-close');
+});
+
+it('「閉じる」ボタンは切り欠き（safe-top）の下に潜らない', async () => {
+  await openDrawer();
+
+  expect(screen.getByRole('button', { name: '閉じる' }).className).toContain(
+    'top-[calc(0.75rem+var(--safe-top))]',
+  );
 });
 
 it('覆いを押すと閉じる', async () => {

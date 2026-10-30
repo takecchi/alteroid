@@ -62,7 +62,13 @@ export function ConversationList({
         inDrawer ? 'min-h-0 flex-1' : 'w-64 shrink-0 border-r border-border',
       )}
     >
-      <div className="flex items-center justify-between border-b border-border px-3 py-3">
+      <div
+        className={cn(
+          'flex items-center justify-between border-b border-border px-3 py-3',
+          // Drawer の閉じるボタンが右上に居る: 「新しい会話」を左へ寄せて重ねない
+          inDrawer && 'pr-14',
+        )}
+      >
         <span className="text-sm font-semibold">会話</span>
         {renderLink(
           { id: undefined, label: '新しい会話' },
