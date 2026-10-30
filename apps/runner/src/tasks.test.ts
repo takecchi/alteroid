@@ -100,7 +100,35 @@ function placeUptime(procRoot: string, uptimeSeconds: number): void {
   writeFileSync(join(procRoot, 'uptime'), `${uptimeSeconds} ${uptimeSeconds * 0.9}\n`);
 }
 
+// 本番の既定（`tasks.ts` の走査のメモの寿命とクロック刻み）に合わせて、偽の `/proc` の値と時計を動かす。
+const TTL_MS = 1000;
+const TICKS_PER_SECOND = 100;
+const START_MS = 1_000_000;
+
+// 偽にするのは `Date` だけ: 走査の中の fs や setImmediate は本物のまま動かす。
+function useFakeClock(): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(START_MS);
+}
+
+// 走査のメモを失効させる。毎回走査させたい試験は、読みの間にこれを挟む。
+// ちょうど TTL ではなく 1ms 超えにする: 境目の判定（`<` か `<=` か）は専用の試験だけが測り、他の試験が境目に巻き込まれて赤くならないため。
+function expireScanMemo(): void {
+  vi.setSystemTime(Date.now() + TTL_MS + 1);
+}
+
+function readAfterTtl(reader: TaskBreakdownReader): ReturnType<TaskBreakdownReader['read']> {
+  expireScanMemo();
+  return reader.read();
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計する）', () => {
+  beforeEach(useFakeClock);
+
   it('生存プロセスとゾンビを分けて数える（threads は num_threads の合計）', async () => {
     placeProcess(root, 100, 'node', 'S', 5, 0);
     placeProcess(root, 200, 'esbuild', 'Z', 1, 0);
@@ -168,7 +196,7 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     placeProcess(root, 501, 'node', 'Z', 1, 140_000);
     placeUptime(root, 1500);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, clockTicksPerSecond: 100 });
+    const reader = new TaskBreakdownReader({ procRoot: root });
     const result = await reader.read();
 
     expect(result?.oldestZombieSeconds).toBe(500);
@@ -218,27 +246,42 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
   });
 
   it('TTL の内側では走査し直さず、TTL を超えたら走査し直す', async () => {
-    let now = 0;
     placeProcess(root, 900, 'node', 'S', 1, 0);
     placeUptime(root, 1000);
 
-    const reader = new TaskBreakdownReader({ procRoot: root, ttlMs: 1000, now: () => now });
+    const reader = new TaskBreakdownReader({ procRoot: root });
 
     const first = await reader.read();
     expect(first?.processes).toBe(1);
 
     placeProcess(root, 901, 'node', 'S', 1, 0);
-    now = 500;
+    vi.setSystemTime(START_MS + 500);
     const second = await reader.read();
     expect(second?.processes).toBe(1);
 
-    now = 1500;
+    vi.setSystemTime(START_MS + 1500);
     const third = await reader.read();
     expect(third?.processes).toBe(2);
+  });
+
+  it('TTL の境目（ちょうど TTL）では走査し直し、1ms 手前では走査し直さない', async () => {
+    placeProcess(root, 910, 'node', 'S', 1, 0);
+    placeUptime(root, 1000);
+    const reader = new TaskBreakdownReader({ procRoot: root });
+    expect((await reader.read())?.processes).toBe(1);
+
+    placeProcess(root, 911, 'node', 'S', 1, 0);
+    vi.setSystemTime(START_MS + TTL_MS - 1);
+    expect((await reader.read())?.processes).toBe(1);
+
+    vi.setSystemTime(START_MS + TTL_MS);
+    expect((await reader.read())?.processes).toBe(2);
   });
 });
 
 describe('走査は1本だけ走る（走査中の要求は相乗りする）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
 
   // 走査を途中で止めておくための口: 所有 UID の読みを、外から開けるまで返さない。
@@ -329,14 +372,13 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
   });
 
   it('走査が終わった後の、TTL を過ぎた read() は走査し直す（相乗りは走っている間だけ）', async () => {
-    let now = 0;
     placeProcess(root, 720, 'node', 'S', 1, 0);
     placeUptime(root, 1000);
-    const reader = new TaskBreakdownReader({ procRoot: root, ttlMs: 1000, now: () => now });
+    const reader = new TaskBreakdownReader({ procRoot: root });
 
     expect((await reader.read())?.processes).toBe(1);
     placeProcess(root, 721, 'node', 'S', 1, 0);
-    now = 1500;
+    vi.setSystemTime(START_MS + 1500);
     expect((await reader.read())?.processes).toBe(2);
   });
 
@@ -347,7 +389,6 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
     // 所有 UID の読みの失敗は走査の中で「読めなかった」に数えられて走査は通るので、走査そのものを落とすには委譲の pid の集合の読みを投げさせる。
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      ttlMs: 0,
       ownerUidOf: () => Promise.resolve(OWN_UID),
       reclaim: {
         delegationSubreaper: null,
@@ -370,6 +411,8 @@ describe('走査は1本だけ走る（走査中の要求は相乗りする）', 
 });
 
 describe('孤児プロセス木の観測（#315 段0。数えるだけで撃たない）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
 
   let cgroupRoot: string;
@@ -489,7 +532,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      clockTicksPerSecond: 100,
       reclaim: {
         childUid: OWN_UID,
         mode: 'observe',
@@ -623,7 +665,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
   describe('齢の分布（#1334。medianAgeSec / ageBuckets）', () => {
     it('偶数本の中央値は中間2つの平均を Math.floor し、ageBuckets の合計は candidates と一致する（裾も最後のバケツへ入る）', async () => {
       const uptime = 40_000;
-      const ticks = 100;
+      const ticks = TICKS_PER_SECOND;
       const ages = [10, 50, 100, 700, 5000, 30_000];
       ages.forEach((age, index) => {
         const starttime = (uptime - age) * ticks;
@@ -633,7 +675,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
       const reader = new TaskBreakdownReader({
         procRoot: root,
-        clockTicksPerSecond: ticks,
         reclaim: {
           childUid: OWN_UID,
           mode: 'observe',
@@ -658,7 +699,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     it('奇数本の中央値はソート後の中間の値そのもの', async () => {
       const uptime = 1000;
-      const ticks = 100;
+      const ticks = TICKS_PER_SECOND;
       const ages = [10, 50, 100];
       ages.forEach((age, index) => {
         const starttime = (uptime - age) * ticks;
@@ -668,7 +709,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
       const reader = new TaskBreakdownReader({
         procRoot: root,
-        clockTicksPerSecond: ticks,
         reclaim: {
           childUid: OWN_UID,
           mode: 'observe',
@@ -934,7 +974,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
   });
 
   it('lastRunAt は走査した時刻で、TTL のメモを返す間は動かない', async () => {
-    let now = 1_000;
     placeProcess(root, 130, 'pnpm', 'S', 1, 0, 1);
     placeUptime(root, 1000);
 
@@ -946,24 +985,24 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
         view: sessionView(),
         delegationSubreaper: null,
       },
-      ttlMs: 1000,
-      now: () => now,
     });
 
     const first = await reader.read();
-    expect(first?.reclaim?.lastRunAt).toBe(1_000);
+    expect(first?.reclaim?.lastRunAt).toBe(START_MS);
 
-    now = 1_500;
+    vi.setSystemTime(START_MS + 500);
     const second = await reader.read();
-    expect(second?.reclaim?.lastRunAt).toBe(1_000);
+    expect(second?.reclaim?.lastRunAt).toBe(START_MS);
 
-    now = 2_500;
+    vi.setSystemTime(START_MS + 1_500);
     const third = await reader.read();
-    expect(third?.reclaim?.lastRunAt).toBe(2_500);
+    expect(third?.reclaim?.lastRunAt).toBe(START_MS + 1_500);
   });
 });
 
 describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のときだけ、委譲が0本の孤児も撃つ）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
 
   function fakeKillFn(): {
@@ -1130,13 +1169,10 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     placeProcess(root, 250, 'pnpm', 'S', 2, 0, 1, 999);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
-    let now = 0;
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      ttlMs: 0,
-      now: () => now,
       reclaim: {
         delegationSubreaper: null,
         childUid: OWN_UID,
@@ -1153,12 +1189,12 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     expect(first?.reclaim?.signalled).toBe(1);
     expect(first?.reclaim?.killed).toBe(0);
 
-    now = 5_000;
+    vi.setSystemTime(START_MS + 5_000);
     const second = await reader.read();
     expect(second?.reclaim?.signalled).toBe(0);
     expect(second?.reclaim?.killed).toBe(0);
 
-    now = 10_500;
+    vi.setSystemTime(START_MS + 10_500);
     const third = await reader.read();
     expect(third?.reclaim?.signalled).toBe(0);
     expect(third?.reclaim?.killed).toBe(1);
@@ -1173,13 +1209,10 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     placeProcess(root, 260, 'pnpm', 'S', 6, 0, 1, 999);
     placeUptime(root, 1000);
     const { fn: killFn } = fakeKillFn();
-    let now = 0;
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      ttlMs: 0,
-      now: () => now,
       reclaim: {
         delegationSubreaper: null,
         childUid: OWN_UID,
@@ -1197,12 +1230,12 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     expect(first?.reclaim?.freedThreads).toBe(0);
 
     rmSync(join(root, '260'), { recursive: true, force: true });
-    now = 1_000;
+    expireScanMemo();
     const second = await reader.read();
     expect(second?.reclaim?.freedThreads).toBe(6);
     expect(second?.reclaim?.candidates).toBe(0);
 
-    now = 2_000;
+    expireScanMemo();
     const third = await reader.read();
     expect(third?.reclaim?.freedThreads).toBe(0);
   });
@@ -1211,13 +1244,10 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     placeProcess(root, 270, 'pnpm', 'S', 2, 0, 1, 999);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
-    let now = 0;
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      ttlMs: 0,
-      now: () => now,
       reclaim: {
         delegationSubreaper: null,
         childUid: OWN_UID,
@@ -1234,7 +1264,7 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     expect(first?.reclaim?.signalled).toBe(1);
 
     placeProcess(root, 270, 'pnpm', 'Z', 1, 0, 1, 999);
-    now = 10_500;
+    vi.setSystemTime(START_MS + 10_500);
     const second = await reader.read();
 
     expect(second?.reclaim?.killed).toBe(0);
@@ -1242,13 +1272,11 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
   });
 
   describe('pid が別のプロセスへ使い回されたとき（#1544。帳は pid と starttime の組で引く）', () => {
-    function reapingReader(now: () => number) {
+    function reapingReader() {
       const { fn: killFn, calls } = fakeKillFn();
       const reader = new TaskBreakdownReader({
         procRoot: root,
         killFn,
-        ttlMs: 0,
-        now,
         reclaim: {
           delegationSubreaper: null,
           childUid: OWN_UID,
@@ -1266,21 +1294,20 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     it('P の猶予を過ぎてから Q を見ても、Q は SIGTERM から始まり、いきなり SIGKILL されない', async () => {
       placeProcess(root, 500, 'old-process-P', 'S', 2, 100, 1, 999);
       placeUptime(root, 1000);
-      let now = 0;
-      const { reader, calls } = reapingReader(() => now);
+      const { reader, calls } = reapingReader();
 
       const first = await reader.read();
       expect(first?.reclaim?.signalled).toBe(1);
 
       placeProcess(root, 500, 'new-unrelated-process-Q', 'S', 3, 5000, 1, 999);
-      now = 10_500;
+      vi.setSystemTime(START_MS + 10_500);
       const second = await reader.read();
 
       expect(second?.reclaim?.signalled).toBe(1);
       expect(second?.reclaim?.killed).toBe(0);
       expect(second?.reclaim?.freedThreads).toBe(2);
 
-      now = 21_000;
+      vi.setSystemTime(START_MS + 21_000);
       const third = await reader.read();
       expect(third?.reclaim?.killed).toBe(1);
 
@@ -1294,13 +1321,12 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
     it('P の猶予の内側で Q に替わっても、Q は見過ごされずに SIGTERM を受ける', async () => {
       placeProcess(root, 500, 'old-process-P', 'S', 2, 100, 1, 999);
       placeUptime(root, 1000);
-      let now = 0;
-      const { reader, calls } = reapingReader(() => now);
+      const { reader, calls } = reapingReader();
 
       await reader.read();
 
       placeProcess(root, 500, 'new-unrelated-process-Q', 'S', 3, 5000, 1, 999);
-      now = 1_000;
+      expireScanMemo();
       const second = await reader.read();
 
       expect(second?.reclaim?.signalled).toBe(1);
@@ -1440,6 +1466,8 @@ describe('孤児プロセス木の回収（#1334 段1。mode が reclaim のと�
 });
 
 describe('撃たれなかった木の内訳（#2352。#2626 で observe も終端した委譲の木は撃つ）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
 
   function fakeKillFn(): {
@@ -1595,6 +1623,8 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
 });
 
 describe('既定の構え（observe）が終端した委譲の木を畳む（#2626）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
 
   function fakeKillFn(): {
@@ -1770,7 +1800,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       const reader = new TaskBreakdownReader({
         procRoot: root,
         killFn,
-        ttlMs: 0,
         reclaim: {
           delegationSubreaper: null,
           childUid: OWN_UID,
@@ -1789,6 +1818,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       live = [];
       terminated = [100];
       killParents();
+      expireScanMemo();
       const second = await reader.read();
       expect(calls).toEqual([{ pid: 102, signal: 'SIGTERM' }]);
       expect(second?.reclaim?.signalled).toBe(1);
@@ -1820,7 +1850,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       const reader = new TaskBreakdownReader({
         procRoot: root,
         killFn,
-        ttlMs: 0,
         reclaim: {
           delegationSubreaper: null,
           childUid: OWN_UID,
@@ -1836,6 +1865,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
 
       rmSync(join(root, '101'), { recursive: true });
       placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
+      expireScanMemo();
       await reader.read();
       expect(calls).toEqual([]);
 
@@ -1843,6 +1873,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       terminated = [100];
       rmSync(join(root, '100'), { recursive: true });
       placeProcess(root, 102, 'a', 'S', 1, 99, 1, 102);
+      expireScanMemo();
       await reader.read();
       expect(calls).toEqual([]);
     });
@@ -1852,12 +1883,9 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     placeProcess(root, 290, 'a', 'S', 1, 0, 1, 777);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
-    let nowMs = 1_000_000;
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn,
-      ttlMs: 0,
-      now: () => nowMs,
       reclaim: {
         childUid: OWN_UID,
         mode: 'observe',
@@ -1866,10 +1894,12 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       },
     });
     await reader.read();
-    nowMs += 9_999;
+    vi.setSystemTime(START_MS + 9_999);
     await reader.read();
     expect(calls).toEqual([{ pid: 290, signal: 'SIGTERM' }]);
-    nowMs += 1;
+    // 9.999 秒の回の走査が新しい（メモが効く）ので、10 秒ちょうどの回は掃除で走査させてから、メモの結果を読む
+    vi.setSystemTime(START_MS + 10_000);
+    await reader.sweepIfStale(0);
     const result = await reader.read();
     expect(calls).toEqual([
       { pid: 290, signal: 'SIGTERM' },
@@ -1888,6 +1918,8 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
 });
 
 describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委譲の木は撃たない（#1853）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
   const CHILD = { uid: OWN_UID, gid: OWN_UID };
 
@@ -1977,7 +2009,6 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
   function setup(): {
     calls: Array<{ pid: number; signal: NodeJS.Signals }>;
     reader: TaskBreakdownReader;
-    clock: { now: number };
     tick: (ms?: number) => Promise<void>;
     stop: () => void;
     cleared: () => number;
@@ -1985,10 +2016,8 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
     placeProcess(root, 240, 'a', 'S', 1, 0, 1, 777);
     placeUptime(root, 1000);
     const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-    const clock = { now: 1_000_000 };
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      now: () => clock.now,
       killFn: (pid, signal) => calls.push({ pid, signal }),
       reclaim: {
         delegationSubreaper: null,
@@ -2001,8 +2030,9 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
         }),
       },
     });
-    // 偽にするのは setInterval だけ: 走査の中の setImmediate や fs は本物のまま
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    // 偽にするのは Date と setInterval だけ: 走査の中の setImmediate や fs は本物のまま。タイマーを進めると Date も同じだけ進む
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(START_MS);
     let pending: Promise<void> = Promise.resolve();
     const stop = startReclaimSweep({
       sweepIfStale: (maxAgeMs) => {
@@ -2013,7 +2043,6 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
     return {
       calls,
       reader,
-      clock,
       stop,
       cleared: () => 1 - vi.getTimerCount(),
       tick: async (ms = SWEEP_MS) => {
@@ -2033,12 +2062,11 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
   });
 
   it('終端した委譲の孤児木へ、タイマーだけで SIGTERM が届き、猶予を過ぎた次の回で SIGKILL が届く', async () => {
-    const { calls, clock, tick } = setup();
+    const { calls, tick } = setup();
 
     await tick();
     expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
 
-    clock.now += SWEEP_MS;
     await tick();
     expect(calls).toEqual([
       { pid: 240, signal: 'SIGTERM' },
@@ -2047,16 +2075,17 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
   });
 
   it('直前に read() が走っていれば（cache が新しければ）走査しない。/proc も読み直さない', async () => {
-    const { calls, reader, clock } = setup();
+    const { calls, reader } = setup();
     await reader.read();
     expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
 
     placeProcess(root, 300, 'b', 'S', 1, 0, 1, 777);
-    clock.now += SWEEP_MS - 1;
+    // 時計だけを進める（タイマーは進めない）: 掃除のタイマーが走ると、この試験が測る「cache が新しければ走査しない」を通らない
+    vi.setSystemTime(START_MS + SWEEP_MS - 1);
     await reader.sweepIfStale(SWEEP_MS);
     expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
 
-    clock.now += 1;
+    vi.setSystemTime(START_MS + SWEEP_MS);
     await reader.sweepIfStale(SWEEP_MS);
     expect(calls.map((call) => `${call.pid}:${call.signal}`).sort()).toEqual([
       '240:SIGKILL',
@@ -2066,13 +2095,12 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
   });
 
   it('停止関数を呼んだ後は走査されない', async () => {
-    const { calls, clock, tick, stop, cleared } = setup();
+    const { calls, tick, stop, cleared } = setup();
     await tick();
     expect(calls).toHaveLength(1);
 
     stop();
     expect(cleared()).toBe(1);
-    clock.now += SWEEP_MS;
     await tick();
     expect(calls).toHaveLength(1);
   });
@@ -2103,6 +2131,8 @@ describe('デーモンが居ない間も回収する（#2352。/health を叩か
 });
 
 describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は変えない）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
   const LIVE = [555, 100];
   const TERMINATED = [777];
@@ -2207,7 +2237,6 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn: fakeKillFn().fn,
-      ttlMs: 0,
       reclaim: {
         delegationSubreaper: null,
         childUid: OWN_UID,
@@ -2227,6 +2256,7 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
     placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
     live = [];
     listed = [100];
+    expireScanMemo();
     const listedResult = await reader.read();
     expect(listedResult?.reclaim?.notFired?.held?.unrecognisedBy).toEqual({
       ownerLive: 0,
@@ -2236,6 +2266,7 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
 
     // 帳は毎回引き直される: 帰属先が名簿からも消えたら、同じ孤児は「不明」へ
     listed = [];
+    expireScanMemo();
     const unknownResult = await reader.read();
     expect(unknownResult?.reclaim?.notFired?.held?.unrecognisedBy).toEqual({
       ownerLive: 0,
@@ -2319,6 +2350,8 @@ describe('sid 未認識の内訳（#5157。数えるだけで、撃つ判定は�
 });
 
 describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5162。引き取られた枝は撃たない）', () => {
+  beforeEach(useFakeClock);
+
   const OWN_UID = process.getuid?.() ?? 0;
   const TINI = '/usr/bin/tini';
 
@@ -2380,7 +2413,6 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     const reader = new TaskBreakdownReader({
       procRoot: root,
       killFn: fn,
-      ttlMs: 0,
       reclaim: {
         childUid: OWN_UID,
         mode: options.reclaim === true ? 'reclaim' : 'observe',
@@ -2408,7 +2440,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
 
     phase = ABANDONED_LISTED;
     foldTini();
-    const result = await reader.read();
+    const result = await readAfterTtl(reader);
 
     expect(firedPids(calls)).toEqual([702, 703]);
     expect(result?.reclaim?.notFired?.held?.sidUnrecognised).toBe(3);
@@ -2427,7 +2459,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
 
     phase = { ...NONE, terminated: [TINI_PID] };
     foldTini();
-    await reader.read();
+    await readAfterTtl(reader);
 
     expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
   });
@@ -2439,11 +2471,11 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     await reader.read();
     phase = ABANDONED_LISTED;
     foldTini();
-    await reader.read();
+    await readAfterTtl(reader);
     expect(firedPids(calls)).toEqual([702, 703]);
 
     phase = { ...NONE, terminated: [TINI_PID] };
-    await reader.read();
+    await readAfterTtl(reader);
     expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
   });
 
@@ -2454,7 +2486,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     await reader.read();
     phase = ABANDONED_LISTED;
     foldTini();
-    await reader.read();
+    await readAfterTtl(reader);
     expect(firedPids(calls)).toEqual([702, 703, 710, 711, 715]);
   });
 
@@ -2468,7 +2500,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     foldTini();
     // 走査の間に生まれた: 同じ sid（終端した委譲）を持つが、台帳にも先祖にも載らない
     placeProcess(root, 722, 'bash', 'S', 1, 30, 1, TINI_PID);
-    const result = await reader.read();
+    const result = await readAfterTtl(reader);
 
     expect(firedPids(calls)).toEqual([702, 703]);
     expect(result?.reclaim?.notFired?.held?.unrecognisedBy?.ownerListed).toBe(4);
@@ -2483,7 +2515,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     phase = ABANDONED_LISTED;
     foldTini();
     placeProcess(root, 704, 'node', 'S', 1, 30, 703, TINI_PID);
-    await reader.read();
+    await readAfterTtl(reader);
 
     expect(firedPids(calls)).toEqual([702, 703, 704]);
   });
@@ -2496,7 +2528,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     await reader.read();
     phase = ABANDONED_LISTED;
     foldTini();
-    await reader.read();
+    await readAfterTtl(reader);
     expect(firedPids(calls)).not.toContain(710);
     expect(firedPids(calls)).not.toContain(715);
     expect(firedPids(calls)).toContain(702);
@@ -2513,13 +2545,13 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     rmSync(join(root, '702'), { recursive: true });
     placeProcess(root, 705, 'server', 'S', 1, 14, 700, TINI_PID);
     placeProcess(root, 703, 'sleep', 'S', 1, 13, 1, TINI_PID);
-    await reader.read();
+    await readAfterTtl(reader);
 
     phase = ABANDONED_LISTED;
     rmSync(join(root, '700'), { recursive: true });
     rmSync(join(root, '701'), { recursive: true });
     placeProcess(root, 705, 'server', 'S', 1, 14, 1, TINI_PID);
-    await reader.read();
+    await readAfterTtl(reader);
 
     expect(firedPids(calls)).not.toContain(705);
   });
@@ -2534,7 +2566,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     foldTini();
     // 702 が終わり、同じ pid を別のプロセスが取った（starttime が違う）
     placeProcess(root, 702, 'bash', 'S', 1, 99, 1, TINI_PID);
-    await reader.read();
+    await readAfterTtl(reader);
 
     expect(firedPids(calls)).not.toContain(702);
   });
@@ -2546,7 +2578,7 @@ describe('鍵の付け替えで畳んだ担当は CLI の枝だけを撃つ（#5
     await reader.read();
     phase = ABANDONED_LISTED;
     foldTini();
-    const result = await reader.read();
+    const result = await readAfterTtl(reader);
     expect(firedPids(calls)).toEqual([702, 703]);
     expect(result?.reclaim?.mode).toBe('reclaim');
   });

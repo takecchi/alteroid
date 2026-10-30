@@ -94,10 +94,6 @@ interface ReclaimNotFired {
 
 interface TaskBreakdownOptions {
   procRoot?: string;
-  clockTicksPerSecond?: number;
-  // `/proc` の全走査は O(pids) で、`/health` は頻繁に叩かれる: 毎回数え直すと heartbeat を遅くするためメモを持つ。
-  ttlMs?: number;
-  now?: () => number;
   reclaim?: ReclaimScanOptions;
   cgroupRoot?: string;
   procCgroupPath?: string;
@@ -105,8 +101,10 @@ interface TaskBreakdownOptions {
   killFn?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
-const DEFAULT_CLOCK_TICKS_PER_SECOND = 100;
-const DEFAULT_TTL_MS = 1000;
+// Linux の `USER_HZ`（`sysconf(_SC_CLK_TCK)`）は実質 100 で固定: `/proc/<pid>/stat` の `starttime` はこの刻みで書かれる。
+const CLOCK_TICKS_PER_SECOND = 100;
+// `/proc` の全走査は O(pids) で、`/health` は頻繁に叩かれる: 毎回数え直すと heartbeat を遅くするためメモを持つ。
+const SCAN_MEMO_TTL_MS = 1000;
 const DEFAULT_PROC_CGROUP_PATH = '/proc/self/cgroup';
 
 const ZOMBIE_COMMAND_LIMIT = 8;
@@ -124,9 +122,6 @@ const RECLAIM_AGE_BUCKET_BOUNDARIES_SEC = [60, 600, 3600, 21600] as const;
 
 export class TaskBreakdownReader {
   readonly #root: string;
-  readonly #clockTicksPerSecond: number;
-  readonly #ttlMs: number;
-  readonly #now: () => number;
   readonly #reclaim: ReclaimScanOptions | undefined;
   readonly #cgroupRoot: string;
   readonly #procCgroupPath: string;
@@ -143,9 +138,6 @@ export class TaskBreakdownReader {
 
   constructor(options: TaskBreakdownOptions = {}) {
     this.#root = options.procRoot ?? '/proc';
-    this.#clockTicksPerSecond = options.clockTicksPerSecond ?? DEFAULT_CLOCK_TICKS_PER_SECOND;
-    this.#ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.#now = options.now ?? Date.now;
     this.#reclaim = options.reclaim;
     this.#cgroupRoot = options.cgroupRoot ?? CGROUP_ROOT;
     this.#procCgroupPath = options.procCgroupPath ?? DEFAULT_PROC_CGROUP_PATH;
@@ -155,8 +147,8 @@ export class TaskBreakdownReader {
 
   // 同期 I/O（`readdirSync` 等）にしない: 走査は O(pids) で、pids が枯れた器では `/health` が長時間止まり「消えた器」に化け、reclaim の欠落で「0本」と「数えられなかった」を分ける区別も消えるため。
   async read(): Promise<TaskBreakdown | undefined> {
-    const now = this.#now();
-    if (this.#cache !== undefined && now - this.#cache.at < this.#ttlMs) {
+    const now = Date.now();
+    if (this.#cache !== undefined && now - this.#cache.at < SCAN_MEMO_TTL_MS) {
       return this.#cache.value;
     }
     return this.#scan(now);
@@ -164,7 +156,7 @@ export class TaskBreakdownReader {
 
   // `read()` に任せない: ttl が `maxAgeMs` より長いと、古いのに走査されず回収が止まるため。
   async sweepIfStale(maxAgeMs: number): Promise<void> {
-    const now = this.#now();
+    const now = Date.now();
     if (this.#cache !== undefined && now - this.#cache.at < maxAgeMs) return;
     await this.#scan(now);
   }
@@ -181,7 +173,7 @@ export class TaskBreakdownReader {
   }
 
   async #scanOnce(now: number): Promise<TaskBreakdown | undefined> {
-    const value = await scanTasks(this.#root, this.#clockTicksPerSecond, now, this.#reclaim, {
+    const value = await scanTasks(this.#root, CLOCK_TICKS_PER_SECOND, now, this.#reclaim, {
       cgroupRoot: this.#cgroupRoot,
       procCgroupPath: this.#procCgroupPath,
       ownerUidOf: this.#ownerUidOf,
