@@ -42,10 +42,12 @@ function SheetContent({
   children,
   side,
   showCloseButton = true,
+  closeButtonClassName,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side: 'bottom' | 'left';
   showCloseButton?: boolean;
+  closeButtonClassName?: string;
 }) {
   return (
     <SheetPortal>
@@ -62,7 +64,11 @@ function SheetContent({
         {children}
         {showCloseButton && (
           <SheetPrimitive.Close data-slot="sheet-close" asChild>
-            <Button variant="ghost" className="absolute top-3 right-3" size="icon-sm">
+            <Button
+              variant="ghost"
+              className={cn('absolute top-3 right-3', closeButtonClassName)}
+              size="icon-sm"
+            >
               <XIcon />
               <span className="sr-only">閉じる</span>
             </Button>
