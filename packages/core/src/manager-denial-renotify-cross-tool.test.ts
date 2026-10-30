@@ -152,6 +152,7 @@ async function runningManualSetup(managerId = 'mgr-denial-renotify-cross'): Prom
 
   const fake = manualRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

@@ -129,6 +129,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
       async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

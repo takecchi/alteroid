@@ -78,6 +78,7 @@ describe('止めた委譲に遅れて届く permission_denied', () => {
     await stores.jobs.putJob(job);
     const fake = setup();
     fake.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: '/work/project',

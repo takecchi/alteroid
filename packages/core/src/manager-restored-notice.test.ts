@@ -155,6 +155,7 @@ async function setup(
   }
   for (const id of aliveIds) {
     fake.alive.push({
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running',
       cwd: `/work/${id}`,

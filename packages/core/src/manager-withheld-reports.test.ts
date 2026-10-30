@@ -151,6 +151,7 @@ async function runningManualSetup(
 
   const fake = manualRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

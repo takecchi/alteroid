@@ -97,6 +97,7 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
       async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

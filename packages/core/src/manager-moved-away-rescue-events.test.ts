@@ -27,6 +27,7 @@ function fakeRunner(runnerId: string) {
   const sent: { managerId: string; text: string; attachments: RunnerAttachment[] }[] = [];
   const alive: RunnerManagerState[] = [
     {
+      liveBackgroundTasks: 0,
       managerId: 'mgr-s',
       status: 'running',
       cwd: '/work/project',

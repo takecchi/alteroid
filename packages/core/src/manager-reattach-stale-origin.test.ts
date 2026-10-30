@@ -97,6 +97,7 @@ describe('reattach のループが写しの job.runnerId で移送かどうか�
       async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

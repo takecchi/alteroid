@@ -52,6 +52,7 @@ class LeasedRunner implements RunnerClient {
 
   hold(managerId: string): void {
     this.sessions.set(managerId, {
+      liveBackgroundTasks: 0,
       managerId,
       status: 'running',
       cwd: this.workspacePath,

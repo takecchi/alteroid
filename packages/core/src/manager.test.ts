@@ -1683,6 +1683,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'lost',
       cwd: '/work/project',
@@ -1709,6 +1710,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'waiting_human',
       cwd: '/work/project',
@@ -1751,6 +1753,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'lost',
       cwd: '/work/project',
@@ -1779,6 +1782,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'lost',
       cwd: '/work/project',
@@ -1803,6 +1807,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'failed',
       cwd: '/work/project',
@@ -1831,6 +1836,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'failed',
       cwd: '/work/project',
@@ -1887,6 +1893,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'done',
       cwd: '/work/project',
@@ -1911,6 +1918,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'done',
       cwd: '/work/project',
@@ -1934,6 +1942,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'waiting_human',
       cwd: '/work/project',
@@ -1958,6 +1967,7 @@ describe('デーモン再起動後（M4）', () => {
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: runningJob.id,
       status: 'waiting_human',
       cwd: '/work/project',
@@ -2228,6 +2238,7 @@ function swappableRunner(runnerId = 'runner-primary') {
     async resume(command): Promise<{ cwd?: string }> {
       state.resumes.push(command);
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -3089,6 +3100,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     };
     fake.runner.start = async (command) => {
       fake.state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -3203,6 +3215,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: 'mgr-running',
       status: 'running',
       cwd: '/work/project',
@@ -4008,6 +4021,7 @@ describe('report の冪等化（#206）', () => {
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -4125,6 +4139,7 @@ describe('lastFoldedTurn は応答として終わった回では下ろす（Issu
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -4175,6 +4190,7 @@ describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）'
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -4249,6 +4265,7 @@ describe('#flushUnreported の印が manager_list / manager_report の見出し�
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -4369,6 +4386,7 @@ describe('止めた結果を確かめる', () => {
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -4404,6 +4422,7 @@ describe('止めた結果を確かめる', () => {
     // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'waiting_human',
       cwd: job.cwd,
@@ -4503,6 +4522,7 @@ describe('止めた結果を確かめる', () => {
     // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'waiting_human',
       cwd: job.cwd,
@@ -4532,6 +4552,7 @@ describe('止めた結果を確かめる', () => {
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'waiting_human',
       cwd: job.cwd,
@@ -4564,6 +4585,7 @@ describe('止めた結果を確かめる', () => {
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'waiting_human',
       cwd: job.cwd,
@@ -4619,6 +4641,7 @@ describe('止めた結果を確かめる', () => {
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -4684,6 +4707,7 @@ describe('止めた結果を確かめる', () => {
     // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'waiting_human',
       cwd: job.cwd,
@@ -4831,6 +4855,7 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -5462,6 +5487,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     await stores.jobs.putJob(job);
     const fake = swappableRunner('runner-primary');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,
@@ -6093,6 +6119,7 @@ describe('#records の寿命（終端で外れる）', () => {
       await stores.jobs.putJob(job(id));
       const fake = swappableRunner('runner-test');
       fake.state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: id,
         status: 'running',
         cwd: '/work/project',
@@ -6133,6 +6160,7 @@ describe('#records の寿命（終端で外れる）', () => {
     await stores.jobs.putJob(job(id));
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running',
       cwd: '/work/project',
@@ -6168,6 +6196,7 @@ describe('#records の寿命（終端で外れる）', () => {
       await stores.jobs.putJob(job(id));
       const fake = swappableRunner('runner-test');
       fake.state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: id,
         status: 'running',
         cwd: '/work/project',
@@ -6208,6 +6237,7 @@ describe('#records の寿命（終端で外れる）', () => {
     await stores.jobs.putJob(job(id));
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running',
       cwd: '/work/project',
@@ -6297,6 +6327,7 @@ describe('#records の寿命（終端で外れる）', () => {
     await stores.jobs.putJob(job(id, { status: 'waiting_human' }));
     const fake = swappableRunner('runner-test');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'waiting_human',
       cwd: '/work/project',
@@ -6342,6 +6373,7 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
 
   function alive(id: string) {
     return {
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running' as const,
       cwd: '/work/project',
@@ -6681,6 +6713,7 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
 
   function alive(id: string) {
     return {
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running' as const,
       cwd: '/work/project',
@@ -6779,6 +6812,7 @@ describe('notifyClone の立った note（#4685）', () => {
   }
   function alive(id: string): RunnerManagerState {
     return {
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running',
       cwd: '/work/project',
@@ -6854,6 +6888,7 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
 
   function alive(id: string) {
     return {
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running' as const,
       cwd: '/work/project',
@@ -7514,6 +7549,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     const id = 'mgr-idle';
     const fake = swappableRunner('runner-a');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: id,
       status: 'running',
       cwd: '/work/project',
@@ -9315,6 +9351,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     fake.runner.start = async (command) => {
       order.push(`start:${credential.value}`);
       fake.state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,
@@ -10000,6 +10037,7 @@ describe('runner にセッションが無い相手への manager_send（#563）'
     });
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: attachedJob.id,
       status: 'running',
       cwd: attachedJob.cwd,
@@ -10667,6 +10705,7 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     } as Job);
     const fake = swappableRunner('runner-primary');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: jobId,
       status: 'running',
       cwd: '/work/project',
@@ -10784,6 +10823,7 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     } as Job);
     const fake = swappableRunner('runner-primary');
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: jobId,
       status: 'running',
       cwd: '/work/project',
@@ -11384,6 +11424,7 @@ describe('manager_list / manager_report のモデルの行（#3921・#3947）', 
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     fake.state.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: job.cwd,

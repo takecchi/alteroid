@@ -91,6 +91,7 @@ describe('abort の await の間に、同じ委譲が別の runner へ引き取�
       async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

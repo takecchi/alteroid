@@ -35,6 +35,7 @@ function fakeRunner(runnerId = 'runner-primary') {
       state.startCalls.push(command);
       const result = state.startResults.shift() ?? {};
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: result.cwd ?? command.cwd,
@@ -47,6 +48,7 @@ function fakeRunner(runnerId = 'runner-primary') {
       state.resumeCalls.push(command);
       const result = state.resumeResults.shift() ?? {};
       state.alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: result.cwd ?? command.cwd,

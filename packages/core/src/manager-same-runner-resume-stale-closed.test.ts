@@ -99,6 +99,7 @@ describe('同じ runner への復帰の最中に届く closed', () => {
       async resume(command): Promise<{ cwd?: string; sessionGeneration?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

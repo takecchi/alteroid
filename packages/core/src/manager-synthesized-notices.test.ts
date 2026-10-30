@@ -147,6 +147,7 @@ async function runningManualSetup(
     };
     await stores.jobs.putJob(job);
     fake.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job.id,
       status: 'running',
       cwd: '/work/project',
@@ -460,6 +461,7 @@ describe('畳めない出来事が挟まると、先に積みが flush されて
     };
     await stores.jobs.putJob(job2);
     fake.alive.push({
+      liveBackgroundTasks: 0,
       managerId: job2.id,
       status: 'running',
       cwd: '/work/project',

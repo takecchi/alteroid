@@ -124,6 +124,7 @@ async function setup(managerId = 'mgr-flush'): Promise<Setup> {
 
   const fake = flushRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',

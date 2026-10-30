@@ -149,6 +149,7 @@ function fakeRunner(runnerId: string, workspacePath: string) {
     async start(command): Promise<{ cwd?: string }> {
       started.push(command);
       alive.push({
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

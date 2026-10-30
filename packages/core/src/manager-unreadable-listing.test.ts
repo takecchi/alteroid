@@ -98,6 +98,7 @@ function skewableRunner(runnerId: string): {
     async connect() {},
     async start(command): Promise<{ cwd?: string }> {
       sessions.set(command.managerId, {
+        liveBackgroundTasks: 0,
         managerId: command.managerId,
         status: 'running',
         cwd: command.cwd,

@@ -131,6 +131,7 @@ async function runningManualSetup(
 
   const fake = manualRunner();
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId: job.id,
     status: 'running',
     cwd: '/work/project',
@@ -207,6 +208,7 @@ describe('closed(failed) の二重配達（SSE 再送。#3187）', () => {
     });
     const fake = manualRunner();
     fake.alive.push({
+      liveBackgroundTasks: 0,
       managerId: 'mgr-n',
       status: 'running',
       cwd: '/work/project',

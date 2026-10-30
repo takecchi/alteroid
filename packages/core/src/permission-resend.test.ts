@@ -120,6 +120,7 @@ describe('解決済みの許可確認が再送されたとき', () => {
       },
       async start(command): Promise<{ cwd?: string }> {
         alive.push({
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

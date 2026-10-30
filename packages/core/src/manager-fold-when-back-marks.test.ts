@@ -102,6 +102,7 @@ async function setup(managerId: string): Promise<Setup> {
   };
   await stores.jobs.putJob(job);
   fake.alive.push({
+    liveBackgroundTasks: 0,
     managerId,
     status: 'running',
     cwd: '/work/project',

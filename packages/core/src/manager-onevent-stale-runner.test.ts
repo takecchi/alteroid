@@ -97,6 +97,7 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
+          liveBackgroundTasks: 0,
           managerId: command.managerId,
           status: 'running',
           cwd: command.cwd,

@@ -110,6 +110,7 @@ function fakeRunner(
         cwd: workspacePath,
         request: '続きをやって',
         waiting: [],
+        liveBackgroundTasks: 0,
       }));
     },
     async transcript() {

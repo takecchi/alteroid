@@ -62,6 +62,7 @@ class StickyRunner implements RunnerClient {
 
   hold(managerId: string, status: RunnerManagerState['status'] = 'running'): void {
     this.sessions.set(managerId, {
+      liveBackgroundTasks: 0,
       managerId,
       status,
       cwd: this.workspacePath,
