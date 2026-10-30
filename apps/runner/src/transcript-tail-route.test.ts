@@ -4,6 +4,7 @@ import { createRunnerHost, RUNNER_CAPABILITIES, type RunnerHost } from '@alteroi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 // 見回りが使う、生ログの末尾だけを返す口（#5160）。
 const TOKEN = 'daemon-only-token';
@@ -29,6 +30,7 @@ function setup() {
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
+    ...appDefaults(),
   });
   const call = (path: string) =>
     app.request(path, { method: 'GET', headers: { authorization: `Bearer ${TOKEN}` } });
@@ -95,6 +97,7 @@ describe('GET /managers/:id/transcript/tail?maxChars=N（#5160）', () => {
       outbox: new Outbox(),
       tokenSha256: TOKEN_SHA256,
       sseHeartbeatMs: 60_000,
+      ...appDefaults(),
     });
     const response = await app.request(`/managers/${MANAGER}/transcript/tail?maxChars=10`);
     expect(response.status).toBe(401);

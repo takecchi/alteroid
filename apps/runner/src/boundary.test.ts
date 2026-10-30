@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'the-daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -153,7 +154,7 @@ beforeEach(async () => {
     },
   });
 
-  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
   server = createAdaptorServer({ fetch: app.fetch });
   await new Promise<void>((resolve) => server.listen({ path: socketPath }, resolve));
   chmodSync(socketPath, 0o600);
@@ -247,7 +248,12 @@ describe('世代（fencing token）と自己失効', () => {
       queryFn: fake.fn,
       env: { PATH: process.env.PATH ?? '' },
     });
-    const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host: testHost,
+      outbox,
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
 
     const started = await app.request('/managers', {
       method: 'POST',
@@ -303,7 +309,12 @@ describe('世代（fencing token）と自己失効', () => {
         readCgroupEventCountersFn: async () => ({}),
         finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
       });
-      const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
+      const app = createRunnerApp({
+        host: testHost,
+        outbox,
+        tokenSha256: TOKEN_SHA256,
+        ...appDefaults(),
+      });
 
       await app.request('/managers', {
         method: 'POST',
@@ -341,7 +352,12 @@ describe('世代（fencing token）と自己失効', () => {
         readCgroupEventCountersFn: async () => ({}),
         finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
       });
-      const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
+      const app = createRunnerApp({
+        host: testHost,
+        outbox,
+        tokenSha256: TOKEN_SHA256,
+        ...appDefaults(),
+      });
 
       await app.request('/managers', {
         method: 'POST',

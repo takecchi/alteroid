@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -97,6 +98,7 @@ describe('runner の /events: 締め切りを過ぎた書き込みは接続を�
           tokenSha256: TOKEN_SHA256,
           sseHeartbeatMs: 60_000,
           sseWriteDeadlineMs: 20,
+          ...appDefaults(),
         });
 
         const response = await app.request('/events', { headers: bearer() });
@@ -140,6 +142,7 @@ describe('runner の /events: 締め切りを過ぎた書き込みは接続を�
           tokenSha256: TOKEN_SHA256,
           sseHeartbeatMs: 60_000,
           sseWriteDeadlineMs: 20,
+          ...appDefaults(),
         });
 
         const response = await app.request('/events', { headers: bearer() });
@@ -174,6 +177,7 @@ describe('runner の /events: 締め切りを過ぎた書き込みは接続を�
       tokenSha256: TOKEN_SHA256,
       sseHeartbeatMs: 60_000,
       sseWriteDeadlineMs: 2_000,
+      ...appDefaults(),
     });
 
     const response = await app.request('/events', { headers: bearer() });
@@ -202,6 +206,7 @@ describe('runner の /events: 締め切りを過ぎた書き込みは接続を�
       tokenSha256: TOKEN_SHA256,
       sseHeartbeatMs: 60_000,
       sseWriteDeadlineMs: 5,
+      ...appDefaults(),
     });
 
     const response = await app.request('/events', { headers: bearer() });

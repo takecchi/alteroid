@@ -5,6 +5,7 @@ import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 import { connectedSubscriber, writeAll } from './outbox-subscribers.test-support.js';
 
 // #5692（段1）: まだ書いていない分を、`Outbox` の連番つきの1本の列にした。接続が持つのは「次に書く連番」だけで、
@@ -105,6 +106,7 @@ describe('書き込みが締め切りを越えて畳まれたあとの繋ぎ直�
         tokenSha256: TOKEN_SHA256,
         sseHeartbeatMs: 60_000,
         sseWriteDeadlineMs: 20,
+        ...appDefaults(),
       });
       const first = await app.request('/events', { headers: bearer() });
       if (first.body === null) throw new Error('SSE の応答に本文が無い');
@@ -245,6 +247,7 @@ describe('置き換え（#630 (C)）: 古い接続は何も持たず、書き終
       outbox,
       tokenSha256: TOKEN_SHA256,
       sseHeartbeatMs: 60_000,
+      ...appDefaults(),
     });
     try {
       const older = await app.request('/events', { headers: bearer() });

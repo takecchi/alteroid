@@ -10,10 +10,11 @@ import {
   type RunnerAttachment,
   type RunnerHost,
 } from '@alteroid/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults, stubAttachmentLimitsEnv } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -64,6 +65,7 @@ function attachmentOf(id: string, name: string, bytes: Uint8Array): RunnerAttach
 
 let host: RunnerHost | undefined;
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await host?.shutdown();
   host = undefined;
 });
@@ -82,11 +84,12 @@ async function setup() {
     readCgroupEventCountersFn: async () => ({}),
     finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
   });
+  stubAttachmentLimitsEnv(LIMITS);
   const app = createRunnerApp({
     host,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    attachmentLimits: LIMITS,
+    ...appDefaults(),
   });
   const post = (path: string, body: unknown, token: string | null = TOKEN) =>
     app.request(path, {

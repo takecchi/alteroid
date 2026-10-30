@@ -5,6 +5,7 @@ import type { Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -86,7 +87,12 @@ describe('起動失敗が /health の managers を減らす（#712 の輪の後�
     const events: RunnerEvent[] = [];
     const sdk = heldSdk();
     const host = hostOf('runner-712', events, sdk.fn);
-    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
 
     expect((await readHealth(app)).managers).toBe(0);
 
@@ -107,7 +113,12 @@ describe('起動失敗が /health の managers を減らす（#712 の輪の後�
     const events: RunnerEvent[] = [];
     const sdk = heldSdk();
     const host = hostOf('runner-712-pair', events, sdk.fn);
-    const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
 
     await host.start({ managerId: 'mgr-712-a', request: '依頼A', cwd: '/workspace' });
     await host.start({ managerId: 'mgr-712-b', request: '依頼B', cwd: '/workspace' });

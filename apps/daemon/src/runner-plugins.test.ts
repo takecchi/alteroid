@@ -18,6 +18,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
+import { runnerAppDefaults } from './runner-app-defaults.test-support.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
@@ -105,7 +106,7 @@ async function rig(
     env: { PATH: '/usr/bin' },
     pluginsRoot: join(base, 'alteroid-plugins'),
   });
-  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...runnerAppDefaults() });
   const posted: Rig['posted'] = [];
 
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'the-daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -51,7 +52,12 @@ function makeApp(dir: string) {
     env: { PATH: process.env.PATH ?? '' },
     credentials,
   });
-  return createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
+  return createRunnerApp({
+    host,
+    outbox: new Outbox(),
+    tokenSha256: TOKEN_SHA256,
+    ...appDefaults(),
+  });
 }
 
 describe('POST /credentials の hook（#1790）', () => {

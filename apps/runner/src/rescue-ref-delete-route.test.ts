@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -31,17 +32,19 @@ describe('POST /rescue-refs/delete', () => {
   const ref = 'refs/alteroid-rescue/mgr-x/root-1234abcd';
 
   const post = (body: unknown, token: string | null = TOKEN) =>
-    createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 }).request(
-      '/rescue-refs/delete',
-      {
-        method: 'POST',
-        headers: {
-          ...(token === null ? {} : { authorization: `Bearer ${token}` }),
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
+    createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    }).request('/rescue-refs/delete', {
+      method: 'POST',
+      headers: {
+        ...(token === null ? {} : { authorization: `Bearer ${token}` }),
+        'content-type': 'application/json',
       },
-    );
+      body: JSON.stringify(body),
+    });
 
   beforeEach(async () => {
     host = createRunnerHost({

@@ -4,10 +4,11 @@ import { join } from 'node:path';
 
 import type { Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createRunnerHost, type AttachmentLimits, type RunnerHost } from '@alteroid/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
+import { appDefaults, stubAttachmentLimitsEnv } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -49,6 +50,7 @@ const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('he
 
 let host: RunnerHost | undefined;
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await host?.shutdown();
   host = undefined;
 });
@@ -68,11 +70,12 @@ async function setup(stageLimit = 1_000_000) {
     readCgroupEventCountersFn: async () => ({}),
     finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
   });
+  stubAttachmentLimitsEnv(LIMITS);
   const app = createRunnerApp({
     host,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    attachmentLimits: LIMITS,
+    ...appDefaults(),
   });
   const put = (
     id: string,
