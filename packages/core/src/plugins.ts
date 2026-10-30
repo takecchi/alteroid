@@ -3,6 +3,13 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { compareCodeUnits } from './code-unit-order.js';
+import {
+  httpsUrlSchema,
+  PLUGIN_LIMITS,
+  pluginNameSchema,
+  pluginSourceShaSchema,
+  relativePathSchema,
+} from './plugin-source-input.js';
 import { ENV_PROFILE_SCOPES } from './store.js';
 
 /**
@@ -14,16 +21,17 @@ import { ENV_PROFILE_SCOPES } from './store.js';
  * 拒む文言には値（path・URL など）を載せず、どの欄かだけを書く。
  */
 
-const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-
-export const pluginNameSchema = z
-  .string()
-  .regex(PLUGIN_NAME_PATTERN, '英数字・-・_ の1〜64文字で書くこと');
-
-// ブランチ名・タグ・短縮形は受けない: 固定にならないから。
-export const pluginSourceShaSchema = z
-  .string()
-  .regex(/^[0-9a-f]{40}$/, '小文字40桁の16進（commit SHA）で書くこと');
+// 取り元の指定の形（名前・SHA・URL・path・ref・上限）は plugin-source-input.ts（ブラウザの束にも入れられる小さな入口）。ここから再び出す: 既存の import 先を変えないため
+export {
+  PLUGIN_LIMITS,
+  pluginNameSchema,
+  pluginPreviewRequestSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
+  pluginSourceRefSchema,
+  pluginSourceShaSchema,
+  validatePluginFilePath,
+} from './plugin-source-input.js';
 
 export const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
 
@@ -34,67 +42,6 @@ export function resolveMarketplaceUrl(envValue: string | undefined): string {
   const trimmed = envValue?.trim();
   return trimmed === undefined || trimmed === '' ? OFFICIAL_MARKETPLACE_URL : trimmed;
 }
-
-export const PLUGIN_LIMITS = {
-  maxFiles: 4096,
-  maxFileBytes: 16 * 1024 * 1024,
-  maxTotalBytes: 64 * 1024 * 1024,
-  maxPathLength: 512,
-  maxSegmentBytes: 255,
-  maxUrlLength: 2048,
-} as const;
-
-// eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
-
-// 理由に path の中身は載せない。
-export function validatePluginFilePath(path: unknown): string | null {
-  if (typeof path !== 'string') return 'path が文字列でない';
-  if (path === '') return 'path が空';
-  if (path.length > PLUGIN_LIMITS.maxPathLength) return 'path が長すぎる';
-  if (path.includes('\u0000')) return 'path に NUL を含む';
-  if (CONTROL_CHARS.test(path)) return 'path に制御文字を含む';
-  if (path.includes('\\')) return 'path に \\ を含む';
-  if (path.startsWith('/')) return 'path が絶対パス';
-  if (/^[A-Za-z]:/.test(path)) return 'path がドライブ文字で始まる';
-  for (const segment of path.split('/')) {
-    if (segment === '') return 'path に空のセグメントがある';
-    if (segment === '.' || segment === '..') return 'path に . / .. のセグメントがある';
-    if (Buffer.byteLength(segment, 'utf8') > PLUGIN_LIMITS.maxSegmentBytes) {
-      return 'path のセグメントが長すぎる';
-    }
-  }
-  return null;
-}
-
-const relativePathSchema = z.string().superRefine((path, ctx) => {
-  const reason = validatePluginFilePath(path);
-  if (reason !== null) ctx.addIssue({ code: 'custom', message: reason });
-});
-
-// 資格つき・クエリ・フラグメントを受けない: トークンを日誌や DB に残さないため。
-const httpsUrlSchema = z.string().superRefine((value, ctx) => {
-  const reject = (message: string) => ctx.addIssue({ code: 'custom', message });
-  if (value.length > PLUGIN_LIMITS.maxUrlLength) return reject('URL が長すぎる');
-  // eslint-disable-next-line no-control-regex -- 空白・制御文字を弾くための検査
-  if (/[\u0000- \u007f]/.test(value)) return reject('URL に空白・制御文字を含む');
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return reject('URL として読めない');
-  }
-  if (url.protocol !== 'https:') return reject('https の URL だけ受ける');
-  if (url.username !== '' || url.password !== '') return reject('URL に資格を含められない');
-  if (url.hostname === '') return reject('URL にホスト名が無い');
-  // 空のクエリ・フラグメント（`?` `#` だけ）も `URL` は正規化で消すので、元の文字列で見る。
-  if (value.includes('?') || value.includes('#')) {
-    return reject('URL にクエリ・フラグメントを含められない');
-  }
-});
-
-export const pluginRepoUrlSchema = httpsUrlSchema;
-export const pluginRelativePathSchema = relativePathSchema;
 
 const versionSchema = z
   .string()
@@ -313,7 +260,7 @@ export function sortPluginSummaries(list: PluginSummary[]): PluginSummary[] {
 }
 
 export function isValidPluginName(name: string): boolean {
-  return PLUGIN_NAME_PATTERN.test(name);
+  return pluginNameSchema.safeParse(name).success;
 }
 
 // 別の行として置かせない: 大文字小文字を区別しないファイルシステム（macOS）で展開先が衝突するから。

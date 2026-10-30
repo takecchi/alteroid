@@ -561,6 +561,111 @@ describe('/plugins 画面 — 入力の検査', () => {
       ref: 'main',
     });
   });
+
+  // #5903: 形に合わない取り元は、送る前に、daemon と同じ core の規則で見て、どの欄がどう違うかを画面の語で言う
+  it.each([
+    [
+      'plugin 名に空白',
+      'marketplace',
+      'plugin 名',
+      'my plugin',
+      /^「plugin 名」が使えない形: 英数字・-・_ の1〜64文字で書くこと。公式 marketplace の plugin 名を、そのまま書く（何も送っていない）$/,
+    ],
+    ['plugin 名に .', 'marketplace', 'plugin 名', 'demo.v2', /^「plugin 名」が使えない形: /],
+    [
+      'plugin 名が65文字',
+      'marketplace',
+      'plugin 名',
+      'a'.repeat(65),
+      /^「plugin 名」が使えない形: /,
+    ],
+    [
+      'URL にクエリ',
+      'url',
+      'リポジトリの URL',
+      'https://example.com/o/r?x=1',
+      /^「リポジトリの URL」が使えない形: URL にクエリ・フラグメントを含められない。/,
+    ],
+    [
+      'URL に資格',
+      'url',
+      'リポジトリの URL',
+      'https://user:pw@example.com/o/r',
+      /^「リポジトリの URL」が使えない形: URL に資格を含められない。/,
+    ],
+    [
+      'path が絶対パス',
+      'url',
+      'path',
+      '/abs/dir',
+      /^「path」が使えない形: path が絶対パス。リポジトリの中のディレクトリを/,
+    ],
+    [
+      'path に ..',
+      'url',
+      'path',
+      'a/../b',
+      /^「path」が使えない形: path に \. \/ \.\. のセグメントがある。/,
+    ],
+    [
+      'ref が - で始まる',
+      'url',
+      'ref',
+      '-x',
+      /^「ref」が使えない形: 使えない文字を含む。ブランチ・タグの名前を/,
+    ],
+    ['ref に空白', 'url', 'ref', 'a b', /^「ref」が使えない形: 使えない文字を含む。/],
+  ])(
+    '形が合わない（%s）: 送らず、欄を挙げて画面の語で言う',
+    async (_name, kind, label, value, expected) => {
+      const calls = stubPlugins({ list: { status: 200, body: { plugins: [] } } });
+      renderScreen();
+      await screen.findByText('入っていない');
+
+      if (kind === 'url') chooseUrl('https://example.com/o/r');
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
+
+      const note = await screen.findByRole('alert', { name: '入力の誤り' });
+      expect(note.textContent).toMatch(expected);
+      expect(screen.queryByText(/plugin の取り元の指定が不正/)).toBeNull();
+      expect(calls.previews).toEqual([]);
+    },
+  );
+
+  it('形に合う plugin 名・URL（対照）は送る', async () => {
+    const calls = stubPlugins({ list: { status: 200, body: { plugins: [] } } });
+    renderScreen();
+    await screen.findByText('入っていない');
+
+    fireEvent.change(screen.getByLabelText('plugin 名'), { target: { value: 'demo_plugin-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
+    await waitFor(() => expect(calls.previews.length).toBe(1));
+    expect(calls.previews[0]).toEqual({ kind: 'marketplace', plugin: 'demo_plugin-2' });
+    expect(screen.queryByRole('alert', { name: '入力の誤り' })).toBeNull();
+
+    chooseUrl('https://example.com/o/r');
+    fireEvent.change(screen.getByLabelText('ref'), { target: { value: 'v1.2.3' } });
+    fireEvent.change(screen.getByLabelText('sha'), { target: { value: 'a'.repeat(40) } });
+    fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
+    await waitFor(() => expect(calls.previews.length).toBe(2));
+    expect(screen.queryByRole('alert', { name: '入力の誤り' })).toBeNull();
+  });
+
+  // 形に合う指定を daemon が断ったとき（規則のずれ）は、daemon の文をそのまま出す
+  it('形に合う指定を daemon が 400 で断ったら、その文をそのまま出す', async () => {
+    stubPlugins({
+      list: { status: 200, body: { plugins: [] } },
+      preview: { status: 400, body: { error: 'plugin が見つからない（サーバの文）' } },
+    });
+    renderScreen();
+    await screen.findByText('入っていない');
+
+    fireEvent.change(screen.getByLabelText('plugin 名'), { target: { value: 'nope' } });
+    fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
+
+    expect(await screen.findByText('plugin が見つからない（サーバの文）')).toBeTruthy();
+  });
 });
 
 describe('/plugins 画面 — クエリでの事前入力', () => {

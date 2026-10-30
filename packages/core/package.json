@@ -92,6 +92,10 @@
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"
     },
+    "./plugin-source-input": {
+      "types": "./dist/plugin-source-input.d.ts",
+      "import": "./dist/plugin-source-input.js"
+    },
     "./threadpool-size": {
       "types": "./dist/threadpool-size.d.ts",
       "import": "./dist/threadpool-size.js"
