@@ -783,7 +783,7 @@ describe('失敗の応答（error / detail）を画面に出す前に伏せる',
   });
 });
 
-describe('古いデーモン（旧形式の応答）', () => {
+describe('旧い形の応答（entries が無い）は読めない形としてエラーにする', () => {
   const OLD = {
     script: 'export OLD_SECRET=1\n',
     updatedAt: '2026-08-01T00:00:00Z',
@@ -791,110 +791,20 @@ describe('古いデーモン（旧形式の応答）', () => {
     bytes: 20,
   };
 
-  it('list: 落ちず、default 1行として見せ、サーバが古い旨を出す', async () => {
-    setReply('GET', '/profile', { status: 200, body: OLD });
-    const read = captureStdout();
-
-    await profileListCommand();
-
-    const text = read();
-    expect(text).toContain('default  all（共通）  20 バイト  更新 2026-08-01T00:00:00Z');
-    expect(text).toContain('サーバが古い');
-  });
-
-  it('show: 従来の script をそのまま出す（本文だけ）', async () => {
-    setReply('GET', '/profile', { status: 200, body: OLD });
-    const read = captureStdout();
-
-    await profileShowCommand();
-
-    expect(read()).toBe('export OLD_SECRET=1\n');
-  });
-
-  it('show: 置かれていなければ（script が空）標準出力に何も書かず「置かれていません」で落ちる', async () => {
-    setReply('GET', '/profile', { status: 200, body: { script: '' } });
-    const read = captureStdout();
-
-    await expect(profileShowCommand()).rejects.toThrow('プロファイルは置かれていません。');
-
-    expect(read()).toBe('');
-  });
-
-  it('status: 落ちず、旧形式の指紋を runner と突き合わせる', async () => {
-    setReply('GET', '/profile', { status: 200, body: OLD });
-    setReply('GET', '/runners', {
-      status: 200,
-      body: {
-        runners: [
-          {
-            label: 'x',
-            state: 'connected',
-            runnerId: 'runner-a',
-            profile: { sha256: 'old111', updatedAt: 'T' },
-          },
-        ],
-      },
-    });
-    const read = captureStdout();
-
-    await profileStatusCommand();
-
-    const text = read();
-    expect(text).toContain('default  all（共通）');
-    expect(text).toContain('サーバが古い');
-    expect(text).toContain('runner-a: sha256 old111 (T)（runner 用の合成と一致）');
-    expect(text).not.toContain('合成後）');
-  });
-
-  it('set default は従来の PUT /profile {script} へ倒す（古いデーモンでも通る）', async () => {
-    setReply('GET', '/profile', { status: 200, body: OLD });
-    setReply('PUT', '/profile', {
-      status: 200,
-      body: { updatedAt: 'T', sha256: 'new222', bytes: 5, clone: { ok: true }, runners: [] },
-    });
-    const dir = await makeTempDir('alteroid-profile-legacy-');
-    const path = join(dir, 'p.sh');
-    await writeFile(path, 'export NEW=1\n', 'utf8');
-    const read = captureStdout();
-
-    await profileSetCommand(undefined, { file: path, yes: true });
-
-    const put = sent.find((entry) => entry.method === 'PUT');
-    expect(new URL(put?.url ?? 'http://x/').pathname).toBe('/profile');
-    expect(JSON.parse(String(put?.body))).toEqual({ script: 'export NEW=1\n' });
-    const text = read();
-    expect(text).toContain('sha256 new222');
-    expect(text).toContain('サーバが古い');
-  });
-
-  it('default 以外の名前・default 以外の撒く先は、「サーバが古い」と分かる文言で落ちる（生の 404 にしない）', async () => {
+  it('list・show・status・set・rm のどれも、読み替えずにエラーにし、書き込みは打たない', async () => {
     setReply('GET', '/profile', { status: 200, body: OLD });
     captureStdout();
-    const dir = await makeTempDir('alteroid-profile-legacy-');
+    const dir = await makeTempDir('alteroid-profile-old-');
     const path = join(dir, 'p.sh');
     await writeFile(path, 'export A=1\n', 'utf8');
+    const message = 'プロファイルの応答が読めない形で届いた（entries が無い）';
 
-    await expect(profileSetCommand('rust', { file: path })).rejects.toThrow('サーバが古い');
-    await expect(profileSetCommand(undefined, { file: path, scope: 'runner' })).rejects.toThrow(
-      'サーバが古い',
-    );
-    await expect(profileRemoveCommand('rust', { yes: true })).rejects.toThrow('サーバが古い');
-    await expect(profileEditCommand('rust')).rejects.toThrow('サーバが古い');
+    await expect(profileListCommand()).rejects.toThrow(message);
+    await expect(profileShowCommand()).rejects.toThrow(message);
+    await expect(profileStatusCommand()).rejects.toThrow(message);
+    await expect(profileSetCommand(undefined, { file: path, yes: true })).rejects.toThrow(message);
+    await expect(profileRemoveCommand('default', { yes: true })).rejects.toThrow(message);
     expect(sent.some((entry) => entry.method === 'PUT' || entry.method === 'DELETE')).toBe(false);
-  });
-
-  it('rm default は空の PUT /profile へ倒す', async () => {
-    setReply('GET', '/profile', { status: 200, body: OLD });
-    setReply('PUT', '/profile', {
-      status: 200,
-      body: { updatedAt: 'T', clone: { ok: true }, runners: [] },
-    });
-    captureStdout();
-
-    await profileRemoveCommand('default', { yes: true });
-
-    const put = sent.find((entry) => entry.method === 'PUT');
-    expect(JSON.parse(String(put?.body))).toEqual({ script: '' });
   });
 });
 
@@ -995,24 +905,6 @@ describe('alteroid profile rm は、確認の前に在るかを確かめる（#3
     await expect(profileRemoveCommand('rust', {}, io)).rejects.toThrow();
 
     expect(requests()).toEqual(['GET /profile']);
-  });
-
-  it('古いデーモン（旧形式）は、行の有無を見ず、従来どおり 確認 → 空の PUT', async () => {
-    captureStdout();
-    setReply('GET', '/profile', {
-      status: 200,
-      body: { script: 'export OLD=1\n', updatedAt: '2026-08-01T00:00:00Z', sha256: 'o', bytes: 13 },
-    });
-    setReply('PUT', '/profile', {
-      status: 200,
-      body: { updatedAt: 'T', clone: { ok: true }, runners: [] },
-    });
-    const { io, asked } = fakeIo({ isTTY: true, answer: 'yes' });
-
-    await profileRemoveCommand('default', {}, io);
-
-    expect(asked).toHaveLength(1);
-    expect(requests()).toEqual(['GET /profile', 'PUT /profile']);
   });
 });
 

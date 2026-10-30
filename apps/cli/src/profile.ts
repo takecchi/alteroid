@@ -7,7 +7,6 @@ import { stdout } from './terminal-out.js';
 import { redactedExcerpt } from '@alteroid/core/redact';
 import {
   hasRunnerPushFailure,
-  LEGACY_PROFILE_NOTICE,
   normalizeProfile,
   type NormalizedProfile,
   type ProfileState,
@@ -91,29 +90,13 @@ function parseName(raw: string | undefined): string {
   return name;
 }
 
-/** 古いデーモンの形（`entries` 無し）も `default` 1行として読める形にする。新しい CLI から古いデーモンを叩く窓で落ちないため。 */
+/** `entries` の無い応答（旧い形）は normalizeProfile が投げる。読み替えない。 */
 async function fetchProfile(target: Target): Promise<ProfileView> {
   return normalizeProfile((await request(target, '/profile')) as ProfileState);
 }
 
-function noteLegacy(profile: ProfileView): void {
-  if (profile.legacy) stdout.write(`（${LEGACY_PROFILE_NOTICE}）\n`);
-}
-
-/** 生の 404 / 400 にせず「サーバが古い」と分かる文言で落とす。 */
-function assertLegacySupports(profile: ProfileView, name: string, scope?: ProfileScope): void {
-  if (!profile.legacy) return;
-  if (name !== 'default' || (scope !== undefined && scope !== 'all')) {
-    throw new Error(LEGACY_PROFILE_NOTICE);
-  }
-}
-
-/**
- * 書き込みの前提にする版（#4592）。読んだ行の版、読んだときに行が無ければ `null`（無いときだけ作る）。
- * 古いデーモン（`legacy`・版を返さない）には渡さない: 比べられないので、今までどおり後勝ちになる。
- */
+/** 書き込みの前提にする版（#4592）。読んだ行の版、読んだときに行が無ければ `null`（無いときだけ作る）。 */
 function readVersionOf(profile: ProfileView, name: string): string | null | undefined {
-  if (profile.legacy) return undefined;
   const row = profile.entries.find((entry) => entry.name === name);
   return row === undefined ? null : row.version;
 }
@@ -139,7 +122,6 @@ export async function profileListCommand(): Promise<void> {
     return;
   }
   for (const entry of profile.entries) stdout.write(`${describeEntry(entry)}\n`);
-  noteLegacy(profile);
   stdout.write('（名前のコード単位順につなげて効きます。本文は alteroid profile show <名前>）\n');
 }
 
@@ -179,17 +161,13 @@ export async function profileStatusCommand(): Promise<void> {
     for (const entry of profile.entries) {
       stdout.write(`  ${describeEntry(entry)} (sha256 ${entry.sha256})\n`);
     }
-    if (!profile.legacy)
-      stdout.write(
-        `クローン用（合成後）: ${profile.clone.sha256 === undefined ? '掛かる行なし' : `${String(profile.clone.bytes ?? 0)} バイト (sha256 ${profile.clone.sha256})`}\n`,
-      );
-    if (!profile.legacy)
-      stdout.write(
-        `runner 用（合成後）: ${profile.runner.sha256 === undefined ? '掛かる行なし' : `${String(profile.runner.bytes ?? 0)} バイト (sha256 ${profile.runner.sha256})`}\n`,
-      );
+    stdout.write(
+      `クローン用（合成後）: ${profile.clone.sha256 === undefined ? '掛かる行なし' : `${String(profile.clone.bytes ?? 0)} バイト (sha256 ${profile.clone.sha256})`}\n`,
+    );
+    stdout.write(
+      `runner 用（合成後）: ${profile.runner.sha256 === undefined ? '掛かる行なし' : `${String(profile.runner.bytes ?? 0)} バイト (sha256 ${profile.runner.sha256})`}\n`,
+    );
   }
-
-  noteLegacy(profile);
 
   // どの runner に何が届いているかを見せる: 見えないと「置いた」「効いていない」のすれ違いが起きて、鍵の権限の問題なのか配布の問題なのかを誰も切り分けられない。
   const { runners } = (await request(target, '/runners')) as {
@@ -200,8 +178,7 @@ export async function profileStatusCommand(): Promise<void> {
       profile?: { sha256: string; updatedAt: string };
     }[];
   };
-  // 旧形式では合成後の指紋が無い。古いデーモンは全文を runner へ降ろすので、本文の指紋と見る。
-  const expected = profile.legacy ? profile.sha256 : profile.runner.sha256;
+  const expected = profile.runner.sha256;
   for (const runner of runners) {
     // 繋がるまで runner_id は分からない。宛先（label）なら登録した時点で言える。
     const name = runner.runnerId ?? runner.label;
@@ -239,7 +216,6 @@ export async function profileSetCommand(
   // 確認を出す前・標準入力を読む前に断る: 読み切ってから落ちると、渡した本文が無駄になるため
   if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
-  assertLegacySupports(profile, name, scope);
   if (profile.entries.some((row) => row.name === name)) {
     await confirmIrreversible(
       `プロファイルの行 ${name} を置き換えます。前の本文は残りません（控えるなら alteroid profile show ${name}）。`,
@@ -252,7 +228,7 @@ export async function profileSetCommand(
       ? await readAllText(stdin)
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
-  await put(name, script, target, scope, profile.legacy, readVersionOf(profile, name));
+  await put(name, script, target, scope, readVersionOf(profile, name));
 }
 
 export async function profileEditCommand(
@@ -265,7 +241,6 @@ export async function profileEditCommand(
   // エディタを開く前に断る: 書き終えてから落ちると、書いた本文が無駄になるため
   if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
-  assertLegacySupports(profile, name, scope);
   const current = profile.entries.find((row) => row.name === name);
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-profile-'));
@@ -289,7 +264,7 @@ export async function profileEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    await put(name, edited, target, scope, profile.legacy, readVersionOf(profile, name));
+    await put(name, edited, target, scope, readVersionOf(profile, name));
   });
 }
 
@@ -302,9 +277,7 @@ export async function profileRemoveCommand(
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
-  assertLegacySupports(profile, name);
-  // 古いデーモン（`legacy`）は見ない: 行の一覧が旧形式の合成で、空の PUT へ倒す挙動のまま。
-  if (!profile.legacy && !profile.entries.some((row) => row.name === name)) {
+  if (!profile.entries.some((row) => row.name === name)) {
     throw new Error(`プロファイルに行 ${name} は無い`);
   }
   await confirmIrreversible(
@@ -313,13 +286,11 @@ export async function profileRemoveCommand(
     io,
   );
   const ifMatch = readVersionOf(profile, name);
-  const result = (await (profile.legacy
-    ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
-    : request(
-        target,
-        `/profile/${encodeURIComponent(name)}${typeof ifMatch === 'string' ? `?ifMatch=${encodeURIComponent(ifMatch)}` : ''}`,
-        { method: 'DELETE' },
-      ))) as UpdateView;
+  const result = (await request(
+    target,
+    `/profile/${encodeURIComponent(name)}${typeof ifMatch === 'string' ? `?ifMatch=${encodeURIComponent(ifMatch)}` : ''}`,
+    { method: 'DELETE' },
+  )) as UpdateView;
   stdout.write(
     hasRunnerPushFailure(result)
       ? `警告: プロファイルの行 ${name} は外しましたが、一部の runner へ反映できていません。\n`
@@ -374,23 +345,20 @@ async function put(
   script: string,
   known?: Target,
   scope?: ProfileScope,
-  legacy = false,
   ifMatch?: string | null,
 ): Promise<void> {
   if (script.trim().length === 0) {
     throw new Error(EMPTY_BODY_MESSAGE);
   }
   const target = known ?? (await resolveTarget());
-  const result = (await (legacy
-    ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script }) })
-    : request(target, `/profile/${encodeURIComponent(name)}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          script,
-          ...(scope === undefined ? {} : { scope }),
-          ...(ifMatch === undefined ? {} : { ifMatch }),
-        }),
-      }))) as UpdateView;
+  const result = (await request(target, `/profile/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      script,
+      ...(scope === undefined ? {} : { scope }),
+      ...(ifMatch === undefined ? {} : { ifMatch }),
+    }),
+  })) as UpdateView;
 
   const row = result.entries?.find((entry) => entry.name === name);
   const sha = row?.sha256 ?? (result as { sha256?: string }).sha256 ?? '?';
@@ -400,7 +368,6 @@ async function put(
       : `プロファイルの行 ${name} を更新しました (sha256 ${sha})\n`,
   );
   stdout.write(`  撒く先: ${describeScope(row?.scope ?? 'all')}\n`);
-  if (legacy) stdout.write(`（${LEGACY_PROFILE_NOTICE}）\n`);
   describeComposed(result);
 
   report('クローン', result.clone);

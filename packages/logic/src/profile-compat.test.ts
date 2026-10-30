@@ -6,7 +6,7 @@ import type { ProfileState } from './types.js';
 const asState = (value: unknown) => value as ProfileState;
 
 describe('normalizeProfile', () => {
-  it('新しい形はそのまま通す（legacy ではない）', () => {
+  it('新しい形はそのまま通す', () => {
     const raw = asState({
       entries: [
         { name: 'a', script: 'x\n', scope: 'runner', updatedAt: 'T', sha256: 's', bytes: 2 },
@@ -16,33 +16,20 @@ describe('normalizeProfile', () => {
       script: 'x\n',
     });
     const out = normalizeProfile(raw);
-    expect(out.legacy).toBe(false);
     expect(out.entries).toHaveLength(1);
     expect(out.runner).toEqual({ sha256: 'r' });
   });
 
-  it('entries 無しの旧形式は default 行（all）1つとして、本文・指紋・更新日時を1文字も落とさず読む', () => {
-    const out = normalizeProfile(
-      asState({ script: 'export A=1\n', updatedAt: 'T', sha256: 'old', bytes: 11 }),
-    );
-    expect(out.legacy).toBe(true);
-    expect(out.entries).toEqual([
-      {
-        name: 'default',
-        script: 'export A=1\n',
-        scope: 'all',
-        updatedAt: 'T',
-        sha256: 'old',
-        bytes: 11,
-      },
-    ]);
-    expect(out.script).toBe('export A=1\n');
+  it('clone・runner が欠けていれば空で補う', () => {
+    const out = normalizeProfile(asState({ entries: [] }));
     expect(out.clone).toEqual({});
+    expect(out.runner).toEqual({});
   });
 
-  it('旧形式で script が空・欠けても落ちず、行は0', () => {
-    expect(normalizeProfile(asState({ script: '' })).entries).toEqual([]);
-    expect(normalizeProfile(asState({})).entries).toEqual([]);
-    expect(normalizeProfile(asState({})).legacy).toBe(true);
+  it('entries の無い応答は、旧い形として読み替えずに投げる', () => {
+    const message = 'プロファイルの応答が読めない形で届いた（entries が無い）';
+    expect(() => normalizeProfile(asState({ script: 'export A=1\n' }))).toThrow(message);
+    expect(() => normalizeProfile(asState({ script: '' }))).toThrow(message);
+    expect(() => normalizeProfile(asState({}))).toThrow(message);
   });
 });
