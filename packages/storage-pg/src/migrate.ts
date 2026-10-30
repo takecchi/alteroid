@@ -74,7 +74,7 @@ export const STATEMENTS = [
      deliveries integer not null default 0
    )`,
   `create index if not exists inbox_events_at_idx on inbox_events (at)`,
-  // 入れた順は残っていないので、既存の行へは物理順ではなく `(at, id)` で振る（`commitments.seq` と同じ手順）。
+  // 入れた順は残っていないので、既存の行へは物理順ではなく `(at, id)` で振る（以前の台帳の `seq` と同じ手順）。
   `alter table inbox_events add column if not exists seq bigint`,
   `create sequence if not exists inbox_events_seq_seq`,
   `update inbox_events e set seq = n.rn
@@ -264,37 +264,10 @@ export const STATEMENTS = [
   `create unique index if not exists usage_turns_key_idx
      on usage_turns (date, manager_id, layer, site, token_id)`,
 
-  // id を主キーにする: 「select してから insert」に割ると同じ id の並行 open が両方すり抜け、片付いた仕事が開き直る。
-  `create table if not exists commitments (
-     id text primary key,
-     at timestamptz not null,
-     closed_at timestamptz,
-     commitment jsonb not null
-   )`,
-  // 部分索引: 閉じた行が積もっても「未了だけを古い順」の主経路が効き続ける。
-  `create index if not exists commitments_open_idx
-     on commitments (at) where closed_at is null`,
-  // 既存の行へは物理順ではなく `(at, id)` で振る: 入れた順は残っていない。
-  // 既定を最後に付ける: 先に付けると新しい行が 1 から振られて既存の行の前へ割り込む。`setval` で巻き戻さない。
-  `alter table commitments add column if not exists seq bigint`,
-  `create sequence if not exists commitments_seq_seq`,
-  `update commitments c set seq = n.rn
-     from (
-       select id,
-         row_number() over (order by at, id)
-           + coalesce((select max(seq) from commitments), 0) as rn
-       from commitments
-       where seq is null
-     ) n
-     where c.id = n.id and c.seq is null`,
-  `select setval('commitments_seq_seq', m.top, true)
-     from (select max(seq) as top from commitments) m,
-          (select last_value, is_called from commitments_seq_seq) s
-     where m.top is not null
-       and m.top >= case when s.is_called then s.last_value + 1 else s.last_value end`,
-  `alter table commitments alter column seq set default nextval('commitments_seq_seq')`,
+  // 台帳の表 `commitments` を作る文はここに無い（#5469 P7 の段4）: 落とす側は `dropRetiredCommitmentsTable`。
+  // ここへ戻すと、落とした表を起動のたびに作り直し、落とす処理が毎回それを数えることになる。
 
-  // 順序と状態を持つ待ち行列（#5469 P2）。台帳（commitments）とは別の表で、台帳から自動では移さない。
+  // 順序と状態を持つ待ち行列（#5469 P2）。台帳（commitments）とは別の表で、台帳から移した（#5908）。
   // rank は double precision（fractional rank）。隙間が尽きたときの振り直しは core の `placeTask` が決める。
   `create table if not exists tasks (
      id text primary key,
@@ -780,74 +753,84 @@ export async function ensureJournalTypeSeqIndex(
   }
 }
 
-export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
-
-// `STATEMENTS` に置かない: 既存の重複行が在ると作れず、起動のたびに通る配列でデーモンが上がらなくなる。
-// 鍵を `md5(body)` にする: 生の `body` は btree の索引行の上限（約2.7KB）を超えうる。
-const CREATE_OPEN_MANAGER_BODY_INDEX = `create unique index if not exists ${OPEN_MANAGER_BODY_INDEX}
-   on commitments ((commitment->>'source'), md5(commitment->>'body'))
-   where closed_at is null and commitment->>'origin' = 'manager'`;
-
-export interface OpenManagerBodyDuplicate {
-  readonly source: string;
-  readonly ids: readonly string[];
-}
-
 function rowsOf(result: unknown): unknown[] {
   return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
 }
 
-async function hasOpenManagerBodyIndex(db: Db): Promise<boolean> {
+// 数えて落とすまでを1つの文（= 1つのトランザクション）に入れる: 数えた後・落とす前に、入れ替え前の旧デーモンが未了の行を書き込むと、
+// JS で数えてから別の文で落とす形ではその行ごと失う。`access exclusive` を取ってから数えるので、数えた後に行は増えない。
+// `to_regclass` を文の中でも見る・`undefined_table` を握る: 並行に起動したもう1台が先に落としていても、こちらは何もせず通る。
+// `lock_timeout`（55P03）は握らない: `runMigrationStatement` が挑み直す。
+const DROP_RETIRED_COMMITMENTS_TABLE = `do $$
+begin
+  if to_regclass('public.commitments') is null then
+    return;
+  end if;
+  begin
+    lock table public.commitments in access exclusive mode;
+  exception when undefined_table then
+    return;
+  end;
+  if not exists (select 1 from public.commitments where closed_at is null) then
+    drop table public.commitments;
+    drop sequence if exists public.commitments_seq_seq;
+  end if;
+end
+$$`;
+
+async function commitmentsTableExists(db: Db): Promise<boolean> {
   const result = await db.execute(
-    sql`select 1 from pg_class where relname = ${OPEN_MANAGER_BODY_INDEX}`,
+    sql`select to_regclass('public.commitments') is not null as present`,
   );
-  return rowsOf(result).length > 0;
+  return (rowsOf(result)[0] as { present?: boolean } | undefined)?.present === true;
 }
 
-// `export` する: 運用側が索引を作りにいかずに「いま作れる状態か」を確かめられる口が要る。
-export async function findOpenManagerBodyDuplicates(db: Db): Promise<OpenManagerBodyDuplicate[]> {
-  const result = await db.execute(sql`
-    select
-      commitment->>'source' as source,
-      array_agg(id order by at asc, id asc) as ids
-    from commitments
-    where closed_at is null and commitment->>'origin' = 'manager'
-    group by commitment->>'source', md5(commitment->>'body')
-    having count(*) > 1
-    order by count(*) desc, min(at) asc
-  `);
-  return rowsOf(result).map((row) => {
-    const value = row as { source: string | null; ids: string[] };
-    return { source: value.source ?? '', ids: value.ids };
-  });
+async function countOpenCommitments(db: Db): Promise<number> {
+  const result = await db.execute(
+    sql`select count(*)::int as open_rows from public.commitments where closed_at is null`,
+  );
+  return Number((rowsOf(result)[0] as { open_rows?: number | string } | undefined)?.open_rows ?? 0);
 }
 
-// 重複を黙って畳まない: 器が未了の行を閉じると、クローンは閉じられたことに気づけない。
-// 落とさない: 投げると `migrate` が落ちてデーモンが上がらなくなる。索引を作らずに警告して進み
-// （`PgCommitmentStore.open` の `where not exists` は効いたまま）、人間が行を直す材料に件数と id を逐語で載せる。
-export async function ensureOpenManagerBodyIndex(
+/**
+ * 台帳のテーブル `commitments` を、未了の行が1件も無いときだけ落とす（#5469 P7 の段4）。起動のたびに通る。
+ * 落とすと閉じた行も戻せない: だから未了が1件でも在れば落とさず、件数を警告して起動を続ける（台帳→Task の移行（#5908）を打つ前にデプロイされても、データを失わない）。
+ * 投げない: 落とせなくても、残るのは使われない表だけなので、起動を止めない。次の起動でやり直す。
+ * 表が無ければ何もしない（2回目以降の起動。起動の費用は `to_regclass` の1回だけ）。
+ */
+export async function dropRetiredCommitmentsTable(
   db: Db,
   warn: (line: string) => void,
   options: MigrateOptions = {},
 ): Promise<void> {
-  // 索引が既に在るなら台帳を1行も走査しない: 起動のたびに通るので、毎回数えると起動の費用が台帳の齢に比例して増える。
-  if (await hasOpenManagerBodyIndex(db)) return;
-  const duplicates = await findOpenManagerBodyDuplicates(db);
-  if (duplicates.length === 0) {
-    // `STATEMENTS` と同じ道を通す（#4768）: 素のままだと、同時の初回で catalog の一意違反が出て起動が落ち、ロックの待ちにも上限が掛からないため
-    await runMigrationStatement(db, CREATE_OPEN_MANAGER_BODY_INDEX, warn, options);
-    return;
-  }
-  const rows = duplicates.reduce((total, group) => total + group.ids.length, 0);
-  warn(
-    `alteroid: 台帳に同一マネージャー×同一本文の未了が重複している` +
-      `（${duplicates.length} 組 / ${rows} 行）。` +
-      `${OPEN_MANAGER_BODY_INDEX} を作らずに起動する（#1041）。` +
-      `同時に開かれた2件目を DB が拒む段だけが無い状態になる。` +
-      `重複を人間が閉じるか直せば、次の起動で索引は作られる。\n`,
-  );
-  for (const group of duplicates) {
-    warn(`alteroid:   source=${group.source} ids=${group.ids.join(', ')}\n`);
+  try {
+    if (!(await commitmentsTableExists(db))) return;
+    const open = await countOpenCommitments(db);
+    if (open > 0) {
+      warn(
+        `alteroid: 台帳のテーブル commitments に未了の行が ${String(open)} 件残っているので、台帳のテーブルを落とさなかった（#5945）。` +
+          '#5908 の版の CLI で台帳→Task の移行を打ってから再起動すれば、次の起動で落とす。\n',
+      );
+      return;
+    }
+    await runMigrationStatement(db, DROP_RETIRED_COMMITMENTS_TABLE, warn, options);
+    if (await commitmentsTableExists(db)) {
+      warn(
+        'alteroid: 台帳のテーブル commitments を落とす間に未了の行が現れたので、落とさなかった（#5945）。' +
+          '#5908 の版の CLI で台帳→Task の移行を打ってから再起動すれば、次の起動で落とす。\n',
+      );
+      return;
+    }
+    warn(
+      'alteroid: 台帳のテーブル commitments と連番 commitments_seq_seq を落とした（未了の行は0件だった。#5945）\n',
+    );
+  } catch (error) {
+    // 数えた後に並行の1台が落とした（42P01）なら、目的は果たされている
+    if (pgErrorCode(error) === '42P01') return;
+    warn(
+      `alteroid: 台帳のテーブル commitments を落とせなかった（${collapseErrorCause(error)}）。` +
+        '起動は続け、次の起動でやり直す（#5945）\n',
+    );
   }
 }
 
@@ -897,7 +880,7 @@ export async function ensureAuthAccountsEmailLowerIndex(
   warn: (line: string) => void,
   options: MigrateOptions = {},
 ): Promise<void> {
-  // 作成も削除も `STATEMENTS` と同じ道を通す（#4768。理由は `ensureOpenManagerBodyIndex` と同じ）
+  // 作成も削除も `STATEMENTS` と同じ道を通す（#4768: 素のままだと、同時の初回で catalog の一意違反が出て起動が落ち、ロックの待ちにも上限が掛からないため）
   if (await hasAuthAccountsEmailLowerIndex(db)) {
     await runMigrationStatement(db, DROP_AUTH_ACCOUNTS_EMAIL_IDX, warn, options);
     return;
@@ -947,7 +930,7 @@ export async function migrate(
   for (const statement of STATEMENTS) {
     await runMigrationStatement(db, statement, warn, options);
   }
-  await ensureOpenManagerBodyIndex(db, warn, options);
+  await dropRetiredCommitmentsTable(db, warn, options);
   await ensureAuthAccountsEmailLowerIndex(db, warn, options);
 }
 
@@ -964,7 +947,8 @@ export function statementsFingerprint(statements: readonly string[] = STATEMENTS
  * 流さない: 何もしない `ALTER TABLE ... IF NOT EXISTS` でもテーブルの ACCESS EXCLUSIVE を取りに行き、
  * 先行の長い読みがあるとその間そのテーブルへの書き込みを全部止めるため（デプロイの入れ替えで旧デーモンが動いている間に起きる）。
  * 文の一覧が変わった版では、今までどおり頭から1回流し、全部通った後に指紋を書く: 途中で落ちれば書かないので、次の起動でやり直す。
- * 索引を確かめてから作る2つ（`ensure*`）は毎回呼ぶ: 先に有無を見ているので、ロックを取りに行かない。
+ * 索引を確かめてから作る `ensureAuthAccountsEmailLowerIndex` と、表の有無を見てから落とす `dropRetiredCommitmentsTable` は毎回呼ぶ: 先に有無を見ているので、ロックを取りに行かない。
+ * 台帳の表を落とす側を毎回呼ぶ理由: 未了の行が在って落とさなかった起動のあと、移行を打って再起動したときに、文の一覧は変わっていないので `migrate` が流れず、落とす機会が無くなるため。
  * 試験は `migrate()`（毎回すべて流す）を使い続ける: 文の一覧が変わる版では既存の DB へ頭から流すので、「2周目でも壊れない」は要り続けるため。
  */
 export async function migrateOnBoot(
@@ -973,7 +957,7 @@ export async function migrateOnBoot(
 ): Promise<void> {
   const fingerprint = statementsFingerprint();
   if ((await appliedStatementsFingerprint(db)) === fingerprint) {
-    await ensureOpenManagerBodyIndex(db, warn);
+    await dropRetiredCommitmentsTable(db, warn);
     await ensureAuthAccountsEmailLowerIndex(db, warn);
     return;
   }
