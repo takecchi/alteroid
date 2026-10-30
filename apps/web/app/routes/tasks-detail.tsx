@@ -41,7 +41,10 @@ export default function TaskDetail() {
   const { id } = useParams();
   return (
     <LeaveGuardScope staysOn={(next) => next === pathname}>
-      <Page title="task" description="待ち行列の1行を、全文で読む・直す・閉じる・並べ替える">
+      <Page
+        title="待ち行列の1行"
+        description="待ち行列の1行を、全文で読む・直す・閉じる・並べ替える"
+      >
         <div className="flex flex-col gap-4">
           <Link to="/tasks" className="text-sm underline">
             待ち行列の一覧へ戻る
@@ -56,7 +59,7 @@ export default function TaskDetail() {
 function NotFound() {
   return (
     <Card>
-      <Empty inset="card">その task はありません</Empty>
+      <Empty inset="card">その行はありません</Empty>
     </Card>
   );
 }
@@ -70,7 +73,12 @@ function Body({ id }: { id: string }) {
   if (notFound && data === undefined) return <NotFound />;
   return (
     <>
-      <LoadError what="task" error={error} onRetry={() => mutate()} retrying={isValidating} />
+      <LoadError
+        what="待ち行列の1行"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+      />
       {isLoading && data === undefined ? (
         <Spinner />
       ) : data === undefined ? null : (
@@ -164,7 +172,7 @@ function TaskCard({
             {!editing && (
               <div className="mt-3">
                 <Button size="sm" onClick={() => setEditing(true)}>
-                  title / 本文を編集
+                  タイトルと本文を編集
                 </Button>
               </div>
             )}
@@ -239,7 +247,7 @@ function TaskEditor({
   return (
     <div className="rounded-md border border-border px-2 py-2">
       <label className="block text-xs font-medium text-muted-foreground">
-        title
+        タイトル
         <Input
           className="mt-1"
           value={titleDraft ?? task.title}
@@ -280,7 +288,7 @@ function TaskEditor({
       {conflict !== undefined && (
         <EditConflictBand
           className="mt-2"
-          heading="開いたあとに、裏でこの task が変わった。"
+          heading="開いたあとに、裏でこの行が変わった。"
           retryLabel="いまの内容の上で、下書きを保存し直す"
           discardLabel="下書きを捨てて、いまの内容にする"
           busy={busy}

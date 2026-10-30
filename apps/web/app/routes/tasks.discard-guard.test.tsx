@@ -27,8 +27,8 @@ async function openEditor() {
   stubTasksServer([task({ id: 't-1', title: 'もとのタイトル', body: 'もとの本文' })]);
   const router = renderTasksAt('/tasks/t-1');
   await screen.findByText('もとの本文');
-  fireEvent.click(screen.getByRole('button', { name: 'title / 本文を編集' }));
-  const title = (await screen.findByLabelText('title')) as HTMLInputElement;
+  fireEvent.click(screen.getByRole('button', { name: 'タイトルと本文を編集' }));
+  const title = (await screen.findByLabelText('タイトル')) as HTMLInputElement;
   return { router, title };
 }
 
@@ -40,7 +40,7 @@ describe('task の編集をやめる確認', () => {
 
     fireEvent.click(cancel());
 
-    await waitFor(() => expect(screen.queryByLabelText('title')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('タイトル')).toBeNull());
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
@@ -50,16 +50,16 @@ describe('task の編集をやめる確認', () => {
 
     fireEvent.click(cancel());
     expect(await screen.findByText('編集をやめると、書きかけの内容は失われます。')).toBeTruthy();
-    expect(screen.getByLabelText('title')).toBe(title);
+    expect(screen.getByLabelText('タイトル')).toBe(title);
 
     fireEvent.click(screen.getByRole('button', { name: '破棄して閉じる' }));
-    await waitFor(() => expect(screen.queryByLabelText('title')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('タイトル')).toBeNull());
 
-    fireEvent.click(screen.getByRole('button', { name: 'title / 本文を編集' }));
-    const reopened = (await screen.findByLabelText('title')) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: 'タイトルと本文を編集' }));
+    const reopened = (await screen.findByLabelText('タイトル')) as HTMLInputElement;
     expect(reopened.value).toBe('もとのタイトル');
     fireEvent.click(cancel());
-    await waitFor(() => expect(screen.queryByLabelText('title')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('タイトル')).toBeNull());
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
@@ -70,7 +70,7 @@ describe('task の編集をやめる確認', () => {
 
     fireEvent.click(cancel());
 
-    await waitFor(() => expect(screen.queryByLabelText('title')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('タイトル')).toBeNull());
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });
@@ -90,7 +90,7 @@ describe('task の編集と、画面を離れる見張り', () => {
 
     fireEvent.click(cancel());
     fireEvent.click(await screen.findByRole('button', { name: '破棄して閉じる' }));
-    await waitFor(() => expect(screen.queryByLabelText('title')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('タイトル')).toBeNull());
 
     await router.navigate('/tasks');
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));

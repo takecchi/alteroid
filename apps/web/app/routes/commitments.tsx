@@ -669,7 +669,7 @@ function PushForm() {
           submitDisabled={body.trim() === '' || busy}
         />
         <FieldHint id={bodyHintId} className="-mt-1">
-          何を引き受けたかを全文で書く。クローンへ渡す一覧（commitment_list）は長い本文を先頭だけに切るが、台帳には全文が残る。
+          何を引き受けたかを全文で書く。クローンへ渡す一覧は長い本文を先頭だけに切るが、台帳には全文が残る。
         </FieldHint>
         <div className="flex items-center gap-2">
           <Button
