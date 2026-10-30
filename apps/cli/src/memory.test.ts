@@ -491,7 +491,7 @@ describe('alteroid memory list / show', () => {
   });
 });
 
-describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由で直す、#821）', () => {
+describe('freshnessMarker（CLI 側の印。core と同じ1本を使う、#821）', () => {
   it('stale の印は差の大きさで文字列が変わる（1時間差と30日差）', () => {
     const oneHour = freshnessMarker({
       kind: 'stale',

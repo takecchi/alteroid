@@ -2,7 +2,11 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
-import { MEMORY_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
+import {
+  MEMORY_SLUG_RULE,
+  describeSlugViolation,
+  memoryFreshnessMarker,
+} from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import type { DaemonClient } from './client.js';
@@ -79,7 +83,7 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   }
   // 一覧は伏せる・show は伏せない: 一覧は表示の口で、show は本文をそのまま取り出すデータの口（パイプやリダイレクト）のため
   for (const doc of documents) {
-    const marker = freshnessMarker(doc.descriptionFreshness);
+    const marker = memoryFreshnessMarker(doc.descriptionFreshness);
     const desc = doc.description === undefined ? '' : ` — ${marker}${redactBody(doc.description)}`;
     stdout.write(
       `  [${doc.kind}] ${doc.slug}  — ${redactBody(doc.title)}` +
@@ -89,73 +93,8 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   stdout.write('本文を読むには: alteroid memory show <slug>\n');
 }
 
-// `Math.max(seconds, 0)` を残す: 受け取るのは HTTP 経由の JSON（信頼境界の外）で、型の保証だけを信じないため
-function formatMemoryStaleness(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${Math.max(seconds, 0)}秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}時間`;
-  const days = Math.floor(hours / 24);
-  return `${days}日`;
-}
-
-function assertNeverMemoryDescriptionDrift(drift: never): never {
-  throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
-}
-
-function formatMemoryDescriptionDrift(drift: {
-  describedBytes: number;
-  currentBytes: number;
-  deltaBytes: number;
-}): string {
-  const sign = drift.deltaBytes < 0 ? '-' : '+';
-  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
-  if (drift.describedBytes === 0) return `本文は${sign}${magnitude}バイト変わった`;
-  const percent = Math.round((Math.abs(drift.deltaBytes) / drift.describedBytes) * 100);
-  return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
-}
-
-function formatMemoryDescriptionDriftAtLeast(drift: {
-  baselineBytes: number;
-  currentBytes: number;
-  deltaBytes: number;
-}): string {
-  const sign = drift.deltaBytes < 0 ? '-' : '+';
-  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
-  return `${sign}${magnitude}バイト以上変わった`;
-}
-
-function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
-  switch (drift.kind) {
-    case 'measured':
-      return formatMemoryDescriptionDrift(drift);
-    case 'at-least':
-      return formatMemoryDescriptionDriftAtLeast(drift);
-    case 'unrecorded':
-      return '本文の変化量は記録されていない';
-    default:
-      return assertNeverMemoryDescriptionDrift(drift);
-  }
-}
-
-// `stale` は期間に変化量も追記する: 時間差だけでは、いちばん手が入っている文書がいちばん新しく見えるため
-export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']): string {
-  switch (freshness.kind) {
-    case 'stale':
-      return (
-        `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い` +
-        `（${describeMemoryDescriptionDrift(freshness.drift)}）: `
-      );
-    case 'unknown':
-      return '要旨を書いた時刻が記録されていない: ';
-    case 'fresh':
-      return '要旨の後に本文は動いていない: ';
-    case 'absent':
-      return '';
-  }
-}
+// 書式は core と同じ1本（`memory-freshness-format.ts`）: 写すと、人間とクローンが同じ記憶を見て違う判断をするため
+export { memoryFreshnessMarker as freshnessMarker };
 
 export async function memoryShowCommand(slug: string): Promise<void> {
   const conn = await connect('read');

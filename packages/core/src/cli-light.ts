@@ -20,6 +20,7 @@ export {
 export { describePermissionRuleBreadth } from './permission-rule.js';
 export { describeRevisionStatus } from './revision-format.js';
 export { describeManagerPeers, type ManagerPeersView } from './manager-peers-format.js';
+export { memoryFreshnessMarker } from './memory-freshness-format.js';
 export {
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
