@@ -53,7 +53,7 @@ import {
   noteDroppedRecord,
   parseMcpServers,
   practiceVersion,
-  RunnerMcpServersUnsupportedError,
+  RunnerHttpError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
   RESET_CONFIRM_GROUPS,
@@ -13016,7 +13016,7 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
       env: {},
     });
     old.setMcpServers = async () => {
-      throw new RunnerMcpServersUnsupportedError('runner-old');
+      throw new RunnerHttpError('404 Not Found', 404);
     };
     const registry = createRunnerRegistry([fresh, old]);
     const withService = createApp({
@@ -13044,7 +13044,7 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
     const body = JSON.parse(text) as {
       names: string[];
       sha256?: string;
-      runners: { runnerId: string; ok: boolean; unsupported?: true; mcpServers?: unknown }[];
+      runners: { runnerId: string; ok: boolean; mcpServers?: unknown }[];
     };
     const want = mcpServersFingerprintOf(REGISTRATION);
     expect(body.names).toEqual(['github']);
@@ -13054,7 +13054,7 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
       ok: true,
       mcpServers: { sha256: want, names: ['github'] },
     });
-    expect(byId.get('runner-old')).toMatchObject({ ok: false, unsupported: true });
+    expect(byId.get('runner-old')).toMatchObject({ ok: false });
 
     expect((await fresh.mcpServers?.())?.sha256).toBe(want);
 
@@ -13064,7 +13064,7 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
     );
     const serialized = JSON.stringify(entry);
     expect(serialized).toContain('runner-new=ok');
-    expect(serialized).toContain('runner-old=口なし');
+    expect(serialized).toContain('runner-old=失敗');
     expect(serialized).not.toContain('SECRET');
     expect(serialized).not.toContain('gh-mcp');
   });

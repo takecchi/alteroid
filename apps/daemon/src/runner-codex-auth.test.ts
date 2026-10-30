@@ -193,14 +193,15 @@ describe('Codex の ChatGPT ログインを runner へ降ろし、書き戻す�
     expect((await r.stores.codexAuth.get())?.value).toBe(LOGIN_VALUE);
   });
 
-  it('古い runner（口が無い＝404）には降ろせないことを1度だけ日誌に残し、委譲は止まらない', async () => {
+  it('口が 404 の runner には、ふつうの失敗として降ろせなかったことを日誌に残し、委譲は止まらない', async () => {
     const r = await rig({ stores: await loggedInStores(), oldRunner: true });
     await r.pool.start({ request: '1本' });
     await r.pool.reattachRunner('runner-primary');
     const notes = (await r.stores.journal.list({})).filter((e) =>
       JSON.stringify(e).includes('降ろせなかった'),
     );
-    expect(notes).toHaveLength(1);
+    expect(notes.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(notes)).toContain('(404)');
     expect(JSON.stringify(notes)).not.toContain('rt-e2e-login-fake');
   });
 });

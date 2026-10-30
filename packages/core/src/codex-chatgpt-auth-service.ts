@@ -12,12 +12,7 @@ import type { CodexDeviceLogin, CodexDeviceLoginOutcome } from './codex-device-l
 import { fingerprintOf } from './credentials.js';
 import { reasonOf } from './dropped-record.js';
 import type { CodexAuthRunnerSync } from './manager.js';
-import {
-  RunnerCodexAuthUnsupportedError,
-  type RunnerClient,
-  type RunnerEvent,
-  type RunnerRegistry,
-} from './runner-protocol.js';
+import { type RunnerClient, type RunnerEvent, type RunnerRegistry } from './runner-protocol.js';
 import type { JournalEntryInput } from './schema.js';
 
 // 値（auth.json の中身）を返す口をここに作らない。日誌に書くのはアカウント・プラン・指紋・runner の id・理由だけ。
@@ -67,7 +62,6 @@ export function createCodexChatgptAuthService(
     string,
     { view: CodexLoginView; handle: CodexDeviceLogin; done: Promise<void> }
   >();
-  const unsupported = new Set<string>();
   let chain: Promise<unknown> = Promise.resolve();
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -102,15 +96,7 @@ export function createCodexChatgptAuthService(
     if (runner.setCodexAuth === undefined) return;
     try {
       await runner.setCodexAuth(pushOf(record));
-      unsupported.delete(runner.runnerId);
     } catch (error) {
-      if (error instanceof RunnerCodexAuthUnsupportedError) {
-        if (record === null || unsupported.has(runner.runnerId)) {
-          unsupported.add(runner.runnerId);
-          return;
-        }
-        unsupported.add(runner.runnerId);
-      }
       await note(
         `runner ${runner.runnerId} へ降ろせなかった`,
         `${reasonOf(error)}（この runner の peer の Codex は、CODEX_API_KEY が無ければ認証を持たずに走る）`,

@@ -8,7 +8,6 @@ import {
   type WriteMcpServersOptions,
 } from './mcp-servers.js';
 import {
-  RunnerMcpServersUnsupportedError,
   type RunnerClient,
   type RunnerMcpServersFingerprint,
   type RunnerRegistry,
@@ -22,7 +21,7 @@ export interface McpServerService {
   read(): Promise<StoredMcpServers | null>;
   /** 空の `{}` は「登録を外す」。形が不正・`ifMatch` の版違いなら器が投げ、保存も配布もしない。 */
   apply(servers: McpServers, options?: WriteMcpServersOptions): Promise<ApplyMcpServersResult>;
-  /** 古い runner（口が 404）は `RunnerMcpServersUnsupportedError` を投げる。口を持たない偽物へは `null`（押し込みを試みたことにしない）。 */
+  /** 口を持たない偽物へは `null`（押し込みを試みたことにしない）。 */
   syncRunner(runner: RunnerClient): Promise<{ mcpServers?: RunnerMcpServersFingerprint } | null>;
   // 任意の口: `apply()` の即時の配布は `ManagerPool` の押し込みの帳面と挑み直しを通らないので、`ManagerPool` が購読して同じ帳面に積む。
   onPushed?(listener: (results: readonly McpServersRunnerResult[]) => void): () => void;
@@ -37,8 +36,6 @@ export interface McpServersRunnerResult {
   runnerId: string;
   ok: boolean;
   mcpServers?: RunnerMcpServersFingerprint;
-  /** 一時障害と混ぜない: 疑う先が「待てば直る」ではなく「runner の版」だから。 */
-  unsupported?: true;
   error?: string;
 }
 
@@ -139,9 +136,6 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
             return {
               runnerId: runner.runnerId,
               ok: false,
-              ...(error instanceof RunnerMcpServersUnsupportedError
-                ? { unsupported: true as const }
-                : {}),
               error: reasonOf(error),
             };
           }

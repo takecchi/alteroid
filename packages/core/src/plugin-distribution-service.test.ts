@@ -10,11 +10,7 @@ import { createManagerPool, type ManagerPool } from './manager.js';
 import { createPluginDistributionService } from './plugin-distribution-service.js';
 import type { PluginInput } from './plugins.js';
 import { createLocalRunner } from './runner-local.js';
-import {
-  createRunnerRegistry,
-  RunnerPluginsUnsupportedError,
-  type RunnerClient,
-} from './runner-protocol.js';
+import { createRunnerRegistry, RunnerHttpError, type RunnerClient } from './runner-protocol.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
@@ -367,19 +363,6 @@ describe('plugin を配る（apply / syncRunner）', () => {
     expect(retained).toBe(0);
   });
 
-  it('古い runner（404）は unsupported として返し、一時障害と混ぜない', async () => {
-    await s.stores.plugins.put(pluginInput('p-all'));
-    s.runner.setPlugin = async () => {
-      throw new RunnerPluginsUnsupportedError('runner-test');
-    };
-    const result = await s.service.apply();
-    expect(result.runners[0]).toMatchObject({
-      runnerId: 'runner-test',
-      ok: false,
-      unsupported: true,
-    });
-  });
-
   it('口を持たない実装（setPlugin が無い）へは配ったとも失敗したとも言わない', async () => {
     await s.stores.plugins.put(pluginInput('p-all'));
     (s.runner as { setPlugin?: unknown }).setPlugin = undefined;
@@ -472,23 +455,22 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
     await s.pool.stop();
   });
 
-  it('古い runner（口が無い）は記録するが、挑み直しに数えない', async () => {
+  it('口が 404 の runner も、ほかの HTTP の失敗と同じく記録し、挑み直しに数える', async () => {
     const s = setup();
     await s.stores.plugins.put(pluginInput('p-all'));
     let attempts = 0;
     s.runner.setPlugin = async () => {
       attempts += 1;
-      throw new RunnerPluginsUnsupportedError('runner-test');
+      throw new RunnerHttpError('404 Not Found', 404);
     };
 
     await s.pool.start({ request: '走る' });
     const outcome = s.pool.pushHealthOf('runner-test')?.plugins;
     expect(outcome?.status).toBe('failed');
-    expect(outcome?.error).toContain('plugin を受け取る口を持たない');
     const afterConnect = attempts;
 
     await vi.advanceTimersByTimeAsync(180_000);
-    expect(attempts).toBe(afterConnect);
+    expect(attempts).toBeGreaterThan(afterConnect);
 
     s.runner.setPlugin = async (plugin) => ({
       name: plugin.name,
