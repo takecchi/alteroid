@@ -312,9 +312,34 @@ jobs:
       # 同じ事故の**入口**（`@alteroid/core` からの値 import）を塞ぐが、経路を
       # 固定した歯なので、別の依存から同じ形の混入が起きたら鳴らない。この検査は
       # 経路を問わず**生成物そのもの**を見るので、原因が何であっても捕まえる。
-      # 検査語の選び方・言えないことは `scripts/check-web-bundle-node-traces.mjs` の
-      # doc を見よ。
-      - run: pnpm check:web-bundle-node-traces
+      # 検査語の選び方・言えないことは `scripts/check-web-build-output.mjs` と
+      # `scripts/check-web-bundle-node-traces-core.mjs` の doc を見よ。
+      #
+      # **同じ step で、`apps/web` の生成物の CSS に、コメントの誤拾いで生まれた不正な宣言が
+      # 入っていないことも見る（もう1つの結果側の歯）。**
+      # Tailwind のスキャナはソースコードの「コメントの中」に書かれたクラス名も
+      # 拾う。省略記号などのプレースホルダを混ぜたコメント（`pr-[calc(...+
+      # var(--safe-right))]` など）を書くと、コンパイル後の CSS に
+      # `padding-right:calc(...+var(--safe-right))` という不正な宣言がそのまま
+      # 出る事故が実際に起きた（#317）。不正な宣言はブラウザが黙って捨てるので、
+      # 画面には何も起きない。検査語の選び方・言えないことは
+      # `scripts/check-web-css-comment-classnames-core.mjs` の doc を見よ。
+      # **この検査は #317 で入ったが、しばらく package.json にしかなく、`verify-core.mjs`
+      # の STEPS にも ci.yml にも呼ばれていなかった。在るのに効いていない道具は、
+      # 静かに失敗する（`AGENTS.md`「静かに失敗する道具」— #646 の
+      # `check:sdk-quotes` と同じ形の穴だった）。**
+      #
+      # **さらに同じ step で、CSS にフォントの base64 埋め込み（`data:font/`）が
+      # 無いことを見る（原因を直接塞ぐ歯）。**
+      # 埋め込まれた断片は `unicode-range` に関係なく CSS と一緒に最初に落ちてくる
+      # （PR #2357 の前は 46 個・約 200 KB）。CSS 全体のサイズ予算は、無関係な増減で
+      # 誤って落ちるので置かず、原因の `data:font/` だけを見る。落ちたら
+      # `apps/web/vite.config.ts` の `build.assetsInlineLimit` を疑う。
+      # 詳細は `scripts/check-web-css-no-inline-fonts-core.mjs` の doc を見よ。
+      #
+      # 3つの門は1本の入口（`scripts/check-web-build-output.mjs`）で回り、1つが落ちても
+      # 残りを走らせて、全部の結果を出してから落ちる。
+      - run: pnpm check:web-build-output
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
       # **`apps/web` の生成物のバイト数が閾値を超えていないことを見る（大きさ側の歯）。**
@@ -326,35 +351,6 @@ jobs:
       # （https://github.com/takecchi/alteroid/issues/335）が再発すれば必ず捕まえる。
       # 閾値の根拠・言えないことは `scripts/check-web-bundle-size.mjs` の doc を見よ。
       - run: pnpm check:web-bundle-size
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-
-      # **`apps/web` の生成物の CSS に、コメントの誤拾いで生まれた不正な宣言が
-      # 入っていないことを見る（もう1つの結果側の歯）。**
-      #
-      # Tailwind のスキャナはソースコードの「コメントの中」に書かれたクラス名も
-      # 拾う。省略記号などのプレースホルダを混ぜたコメント（`pr-[calc(...+
-      # var(--safe-right))]` など）を書くと、コンパイル後の CSS に
-      # `padding-right:calc(...+var(--safe-right))` という不正な宣言がそのまま
-      # 出る事故が実際に起きた（#317）。不正な宣言はブラウザが黙って捨てるので、
-      # 画面には何も起きない。検査語の選び方・言えないことは
-      # `scripts/check-web-css-comment-classnames-core.mjs` の doc を見よ。
-      #
-      # **この検査は #317 で入ったが、`check:web-css-comment-classnames` は
-      # package.json にしかなく、`scripts/verify.mjs`（実体は `verify-core.mjs`
-      # の STEPS）にも ci.yml にも呼ばれていなかった。在るのに効いていない道具は、
-      # 静かに失敗する（`AGENTS.md`「静かに失敗する道具」— #646 の
-      # `check:sdk-quotes` と同じ形の穴だった）。**
-      - run: pnpm check:web-css-comment-classnames
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-
-      # **`apps/web` の生成物の CSS に、フォントの base64 埋め込み（`data:font/`）が
-      # 無いことを見る（原因を直接塞ぐ歯）。**
-      # 埋め込まれた断片は `unicode-range` に関係なく CSS と一緒に最初に落ちてくる
-      # （PR #2357 の前は 46 個・約 200 KB）。CSS 全体のサイズ予算は、無関係な増減で
-      # 誤って落ちるので置かず、原因の `data:font/` だけを見る。落ちたら
-      # `apps/web/vite.config.ts` の `build.assetsInlineLimit` を疑う。
-      # 詳細は `scripts/check-web-css-no-inline-fonts-core.mjs` の doc を見よ。
-      - run: pnpm check:web-css-no-inline-fonts
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
 
       # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**

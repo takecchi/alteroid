@@ -236,10 +236,8 @@ const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
   'check:restart-before-check-advice': { routes: ['steps', 'pr'] },
   'check:sdk-quotes': { routes: ['steps', 'pr'] },
   'check:stale-token-restart-advice': { routes: ['steps', 'pr'] },
-  'check:web-bundle-node-traces': { routes: ['steps', 'pr'] },
+  'check:web-build-output': { routes: ['steps', 'pr'] },
   'check:web-bundle-size': { routes: ['steps', 'pr'] },
-  'check:web-css-comment-classnames': { routes: ['steps', 'pr'] },
-  'check:web-css-no-inline-fonts': { routes: ['steps', 'pr'] },
   'check:agents-md-size': {
     routes: ['pr'],
     why:
