@@ -4,7 +4,7 @@ import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/c
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createRunnerApp, Outbox } from './app.js';
+import { createRunnerApp, Outbox, SSE_WRITE_DEADLINE_MS } from './app.js';
 import { appDefaults } from './app-defaults.test-support.js';
 import { connectedSubscriber } from './outbox-subscribers.test-support.js';
 
@@ -86,29 +86,14 @@ function hangOnRealEvents(): { spy: ReturnType<typeof vi.spyOn>; calls: string[]
   return { spy, calls };
 }
 
-// `outbox.pending` の poll で待たない: 書きかけの1件も合算して締め切りの前後で `1` のままで、発火前に満たされるため。応答が閉じるまで読む。
-async function readUntilClosed(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  budgetMs: number,
-): Promise<'closed' | 'timeout'> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<'timeout'>((resolve) => {
-    timer = setTimeout(() => resolve('timeout'), budgetMs);
-    timer.unref?.();
-  });
-  try {
-    for (;;) {
-      const next = await Promise.race([reader.read(), expired]);
-      if (next === 'timeout') return 'timeout';
-      if (next.done) return 'closed';
-    }
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('/events の finally: 畳んで戻したときも元の queuedAt を保つ（(A)+(B) の結線）', () => {
   it('畳んで戻した後も oldestPendingAt は元の古い時刻を答える', async () => {
+    // 偽の時計で締め切り（`SSE_WRITE_DEADLINE_MS`）を進める。ストリームの読み書きは本物のまま（時計だけを偽にする）。
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const host = newHost();
     setClock('2020-01-01T00:00:00.000Z');
     const outbox = new Outbox();
@@ -120,22 +105,25 @@ describe('/events の finally: 畳んで戻したときも元の queuedAt を保
 
     const { spy } = hangOnRealEvents();
     try {
-      const app = createRunnerApp({
-        host,
-        outbox,
-        tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 20,
-        ...appDefaults(),
-      });
+      const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
 
       const response = await app.request('/events', { headers: bearer() });
       const body = response.body;
       if (body === null) throw new Error('SSE の応答に本文が無い');
       const reader = body.getReader();
 
-      const outcome = await readUntilClosed(reader, 2000);
-      expect(outcome).toBe('closed');
+      // `outbox.pending` の poll で待たない: 書きかけの1件も合算して締め切りの前後で `1` のままで、発火前に満たされるため。応答が閉じるまで読む。
+      let closed = false;
+      void (async () => {
+        for (;;) {
+          if ((await reader.read()).done) {
+            closed = true;
+            return;
+          }
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(SSE_WRITE_DEADLINE_MS);
+      expect(closed).toBe(true);
       expect(outbox.pending).toBe(1);
 
       expect(outbox.oldestPendingAt).toBe('2020-01-01T00:00:00.000Z');

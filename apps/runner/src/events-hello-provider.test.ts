@@ -37,7 +37,6 @@ async function helloFrame(
     host,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    sseHeartbeatMs: 60_000,
     ...appDefaults(),
     ...models,
   });

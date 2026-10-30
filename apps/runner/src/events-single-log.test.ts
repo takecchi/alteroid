@@ -4,7 +4,7 @@ import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/c
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createRunnerApp, Outbox } from './app.js';
+import { createRunnerApp, Outbox, SSE_WRITE_DEADLINE_MS } from './app.js';
 import { appDefaults } from './app-defaults.test-support.js';
 import { connectedSubscriber, writeAll } from './outbox-subscribers.test-support.js';
 
@@ -104,23 +104,29 @@ function hangFirstEventWrite(): { restore: () => void } {
 
 describe('書き込みが締め切りを越えて畳まれたあとの繋ぎ直し（#630 (B)・#4154 の二重配送。#5692 で連番を振り直さなくなった）', () => {
   it('デーモンが実は受け取っていた（Last-Event-ID がその連番）なら、同じ出来事を送り直さない。申告が無ければ、同じ連番で送る', async () => {
+    // 偽の時計で締め切り（`SSE_WRITE_DEADLINE_MS`）を進める。ストリームの読み書きは本物のまま（時計だけを偽にする）。
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const host = newHost();
     const outbox = new Outbox();
     const event = sessionEvent('timed-out');
     const seq = outbox.push(event);
     const hang = hangFirstEventWrite();
     try {
-      const app = createRunnerApp({
-        host,
-        outbox,
-        tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 20,
-        ...appDefaults(),
-      });
+      const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
       const first = await app.request('/events', { headers: bearer() });
       if (first.body === null) throw new Error('SSE の応答に本文が無い');
-      expect(await readUntilClosed(first.body.getReader(), 2000)).toBe('closed');
+      const firstReader = first.body.getReader();
+      let firstClosed = false;
+      void (async () => {
+        for (;;) {
+          if ((await firstReader.read()).done) {
+            firstClosed = true;
+            return;
+          }
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(SSE_WRITE_DEADLINE_MS);
+      expect(firstClosed).toBe(true);
       // 書き終えていない: 溜まりに残っている
       expect(outbox.pending).toBe(1);
 
@@ -130,22 +136,42 @@ describe('書き込みが締め切りを越えて畳まれたあとの繋ぎ直�
       });
       if (received.body === null) throw new Error('SSE の応答に本文が無い');
       const receivedReader = received.body.getReader();
-      const seen = await readUntil(receivedReader, JSON.stringify(event), 300);
+      const decoder = new TextDecoder();
+      let seen = '';
+      while (!seen.includes('event: hello')) {
+        const next = await receivedReader.read();
+        if (next.done) break;
+        seen += decoder.decode(next.value, { stream: true });
+      }
+      // hello のあと、心拍の間隔より短いあいだ待っても、出来事は送られてこない
+      let extra: string | undefined;
+      const pendingRead = receivedReader.read().then(({ value }) => {
+        extra = value === undefined ? '' : decoder.decode(value);
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(extra).toBeUndefined();
       expect(seen).not.toContain(JSON.stringify(event));
       expect(outbox.pending).toBe(0);
       await receivedReader.cancel();
+      await pendingRead;
       await expect.poll(() => outbox.subscribed, { timeout: 1000 }).toBe(false);
 
       // 届いていないなら（申告が無い）、同じ連番で書き直す
       const retry = await app.request('/events', { headers: bearer() });
       if (retry.body === null) throw new Error('SSE の応答に本文が無い');
       const retryReader = retry.body.getReader();
-      const redelivered = await readUntil(retryReader, JSON.stringify(event), 1000);
+      let redelivered = '';
+      while (!redelivered.includes(JSON.stringify(event))) {
+        const next = await retryReader.read();
+        if (next.done) break;
+        redelivered += decoder.decode(next.value, { stream: true });
+      }
       expect(redelivered).toContain(JSON.stringify(event));
       expect(redelivered).toContain(`id: ${String(seq)}`);
       await retryReader.cancel();
     } finally {
       hang.restore();
+      vi.useRealTimers();
       await host.shutdown();
     }
   });
@@ -256,7 +282,6 @@ describe('置き換え（#630 (C)）: 古い接続は何も持たず、書き終
       host,
       outbox,
       tokenSha256: TOKEN_SHA256,
-      sseHeartbeatMs: 60_000,
       ...appDefaults(),
     });
     try {

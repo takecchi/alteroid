@@ -30,7 +30,6 @@ function setup() {
     host,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    sseHeartbeatMs: 60_000,
     ...appDefaults(),
   });
   const call = (method: string, path: string, headers: Record<string, string> = {}) =>

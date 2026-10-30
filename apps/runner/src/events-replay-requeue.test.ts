@@ -4,7 +4,7 @@ import { createRunnerHost, type RunnerEvent, type RunnerHost } from '@alteroid/c
 import { SSEStreamingApi, type SSEMessage } from 'hono/streaming';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createRunnerApp, Outbox } from './app.js';
+import { createRunnerApp, Outbox, SSE_WRITE_DEADLINE_MS } from './app.js';
 import { appDefaults } from './app-defaults.test-support.js';
 
 const TOKEN = 'daemon-only-token';
@@ -43,6 +43,21 @@ async function readUntil(
     }
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+  return seen;
+}
+
+// 期限を張らない読み: 偽の時計の下では、期限の `setTimeout` も偽になるため（来ないときはテストのタイムアウトで落ちる）。
+async function readUntilSeen(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  needle: string,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let seen = '';
+  while (!seen.includes(needle)) {
+    const next = await reader.read();
+    if (next.done) break;
+    seen += decoder.decode(next.value, { stream: true });
   }
   return seen;
 }
@@ -87,19 +102,14 @@ describe('runner の /events: 控えから読み返した分を、書き切れ�
       return realWriteSSE.call(this, message);
     });
 
+    // 偽の時計で締め切り（`SSE_WRITE_DEADLINE_MS`）を進める。ストリームの読み書きは本物のまま（時計だけを偽にする）。
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     try {
-      const app = createRunnerApp({
-        host,
-        outbox,
-        tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 50,
-        ...appDefaults(),
-      });
+      const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256, ...appDefaults() });
 
       // 1本目: 2件とも書けて控えに載る（デーモンには届かなかった想定）。
       const reader1 = await openReader(app, bearer());
-      await readUntil(reader1, JSON.stringify(second), 1000);
+      await readUntilSeen(reader1, JSON.stringify(second));
       await reader1.cancel();
       // 2件とも書き終えた（cursor が2件目の先へ進み、書いていない分が無い）ことを、溜まりが0になることで見る
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
@@ -108,19 +118,30 @@ describe('runner の /events: 控えから読み返した分を、書き切れ�
       // 2本目: 0 から読み返し、2件目の書き込みが締め切りを超えて畳まれる。
       control.hangId = String(secondSeq);
       const reader2 = await openReader(app, bearer({ 'Last-Event-ID': '0' }));
-      await readUntil(reader2, null, 2000);
+      let closed2 = false;
+      void (async () => {
+        for (;;) {
+          if ((await reader2.read()).done) {
+            closed2 = true;
+            return;
+          }
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(SSE_WRITE_DEADLINE_MS);
+      expect(closed2).toBe(true);
       control.hangId = null;
       expect(outbox.pending).toBe(0);
 
       // 3本目: デーモンは1件目までを受け取っている。
       const reader3 = await openReader(app, bearer({ 'Last-Event-ID': String(secondSeq - 1) }));
       outbox.push(sentinel);
-      const seen = await readUntil(reader3, JSON.stringify(sentinel), 1000);
+      const seen = await readUntilSeen(reader3, JSON.stringify(sentinel));
       expect(seen).toContain(JSON.stringify(sentinel));
       expect(count(seen, JSON.stringify(second))).toBe(1);
       expect(seen).toContain(`id: ${String(secondSeq)}`);
       await reader3.cancel();
     } finally {
+      vi.useRealTimers();
       spy.mockRestore();
       await host.shutdown();
     }
@@ -157,8 +178,6 @@ describe('runner の /events: 控えから読み返した分を、書き切れ�
         host,
         outbox,
         tokenSha256: TOKEN_SHA256,
-        sseHeartbeatMs: 60_000,
-        sseWriteDeadlineMs: 60_000,
         ...appDefaults(),
       });
 

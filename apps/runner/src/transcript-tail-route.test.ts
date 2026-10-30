@@ -29,7 +29,6 @@ function setup() {
     host,
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
-    sseHeartbeatMs: 60_000,
     ...appDefaults(),
   });
   const call = (path: string) =>
@@ -96,7 +95,6 @@ describe('GET /managers/:id/transcript/tail?maxChars=N（#5160）', () => {
       host,
       outbox: new Outbox(),
       tokenSha256: TOKEN_SHA256,
-      sseHeartbeatMs: 60_000,
       ...appDefaults(),
     });
     const response = await app.request(`/managers/${MANAGER}/transcript/tail?maxChars=10`);
