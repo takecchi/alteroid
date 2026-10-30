@@ -42,7 +42,7 @@ describe('語で絞っているときの最下行（#2588）', () => {
   });
 
   it('語で絞っていても、ライブ切断と取りこぼし確認の停止が上の行に出て、断り書きが下の行に出る', () => {
-    const state = { ...base, q: 'foo', newerBlocked: true };
+    const state = { ...base, q: 'foo', newerFailed: true };
     const lines = bottomLines(state, 'offline');
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain('ライブ切断');

@@ -309,7 +309,7 @@ describe('古い側と取りこぼし', () => {
     fire('open');
     await waitFor(() => ids().length === 7);
     expect(ids()).toEqual(['e7', 'e6', 'e5', 'e4', 'e3', 'e2', 'e1']);
-    expect(state().newerBlocked).toBe(false);
+    expect(state().newerFailed).toBe(false);
   });
 
   // 新しい側も `next` だけで続きを決める（#5720）: 新規0件で応答が limit ちょうどでも、limit を上げて撃ち直さない

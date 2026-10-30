@@ -74,9 +74,6 @@ export function bottomLineText(state: JournalState, live: LiveStatus): string {
   if (state.newerFailed) {
     return `新着の取りこぼし確認に失敗した。切れていた間の記録が欠けている。r で読み直す${liveText}`;
   }
-  if (state.newerBlocked) {
-    return `新着の取りこぼし確認が、同じ時刻の記録の詰まりで止まった。r で読み直す${liveText}`;
-  }
   // 追従中と言わない: 再読込に失敗している間は新着を一覧へ入れていない（`ingest` は error で捨てる）ため
   if (state.status === 'error') {
     return `⚠ 読み込みに失敗していて、新着を一覧に入れていない。r で読み直す${liveText}`;
