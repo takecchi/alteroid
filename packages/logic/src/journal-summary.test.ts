@@ -528,3 +528,48 @@ describe('summarizeJournalEntry — 添付の控え（#4017）', () => {
     expect(summarizeJournalEntry(entry)).toBe('human ← やあ');
   });
 });
+
+describe('summarizeJournalEntry — github_observation の CI の1行（字面の固定。#5813）', () => {
+  type Ok = Extract<
+    Extract<JournalEntry, { type: 'github_observation' }>['result'],
+    { status: 'ok' }
+  >;
+  const observed = (extra: Partial<Ok>): JournalEntry => ({
+    type: 'github_observation',
+    id: 'gh-ci',
+    at: '2026-10-02T00:00:00.000Z',
+    repo: 'a/b',
+    query: 'is:open',
+    observedBy: 'clone',
+    result: { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra },
+  });
+  const rawHead = 'a/b: open Issue 3 件 / open PR 2 件（観測者 clone） / ';
+  const localizedHead =
+    'a/b: 開いている Issue 3 件 / 開いている PR 2 件（記録したのは: クローン） / ';
+  const cases: [string, Partial<Ok>, string, string][] = [
+    [
+      'ci あり・未集計あり',
+      { ci: { pulls: 5, success: 3, failure: 1, pending: 0, checks: '必須チェックだけ' } },
+      'CI: 5 件の PR を確認 — success 3 / failure 1 / pending 0（チェックが無い等で未集計 1 件）（数えたもの: 必須チェックだけ）',
+      'CI: 5 件の PR を確認 — 成功 3 / 失敗 1 / 実行中・待ち 0（チェックが無い等で未集計 1 件）（数えたもの: 必須チェックだけ）',
+    ],
+    [
+      'ci あり・打ち切り',
+      { ci: { pulls: 2, success: 2, failure: 0, pending: 0, checks: 'x', truncated: true } },
+      'CI: 2 件の PR を確認 — success 2 / failure 0 / pending 0（数えたもの: x）（打ち切り。数は下限）',
+      'CI: 2 件の PR を確認 — 成功 2 / 失敗 0 / 実行中・待ち 0（数えたもの: x）（打ち切り。数は下限）',
+    ],
+    [
+      'ciUnavailable',
+      { ciUnavailable: 'HTTP 403' },
+      'CI: 取れなかった — HTTP 403（0 件ではない）',
+      'CI: 取れなかった — HTTP 403（0 件ではない）',
+    ],
+    ['観測なし', {}, 'CI: 観測していない（0 件ではない）', 'CI: 観測していない（0 件ではない）'],
+  ];
+
+  it.each(cases)('%s: raw と localized の字面', (_label, extra, raw, localized) => {
+    expect(summarizeJournalEntry(observed(extra))).toBe(rawHead + raw);
+    expect(summarizeJournalEntry(observed(extra), 'localized')).toBe(localizedHead + localized);
+  });
+});
