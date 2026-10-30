@@ -458,6 +458,24 @@ describe('/plugins 画面 — 入れる（プレビュー → 確定）', () => 
     expect(await screen.findByText('同じ名前の plugin がある')).toBeTruthy();
   });
 
+  it('プレビューの失敗の文に付いたサーバ内部のクラス名（PluginFetchError:）は出さない', async () => {
+    stubPlugins({
+      list: { status: 200, body: { plugins: [] } },
+      preview: {
+        status: 400,
+        body: { error: 'PluginFetchError: marketplace の索引に、その名前の plugin が無い' },
+      },
+    });
+    renderScreen();
+    await screen.findByText('入っていない');
+
+    fireEvent.change(screen.getByLabelText('plugin 名'), { target: { value: 'nope' } });
+    fireEvent.click(screen.getByRole('button', { name: 'プレビュー' }));
+
+    expect(await screen.findByText('marketplace の索引に、その名前の plugin が無い')).toBeTruthy();
+    expect(screen.queryByText(/PluginFetchError/)).toBeNull();
+  });
+
   it('runner への配布に失敗があれば、保存は済んでいることを添える', async () => {
     stubPlugins({
       list: { status: 200, body: { plugins: [] } },
