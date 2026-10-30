@@ -311,11 +311,17 @@ describe('預けた退避を取りに行く呼び出しが落ちても、やり�
       stores,
       post: () => undefined,
       runners: createRunnerRegistry([fake.runner]),
-      archiveFetchRetryDelaysMs: [10, 10],
     });
     await pool.restore();
 
-    fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 13 } });
+    // やり直しの待ち（既定 1 秒・5 秒）は偽の時計で進める。
+    vi.useFakeTimers();
+    try {
+      fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 13 } });
+      await vi.advanceTimersByTimeAsync(1_000 + 5_000);
+    } finally {
+      vi.useRealTimers();
+    }
 
     await vi.waitFor(async () => expect(await archiveIdsOf(stores)).toHaveLength(1));
     const [archiveId] = await archiveIdsOf(stores);
@@ -343,11 +349,17 @@ describe('預けた退避を取りに行く呼び出しが落ちても、やり�
         stores,
         post: () => undefined,
         runners: createRunnerRegistry([fake.runner]),
-        archiveFetchRetryDelaysMs: [10],
       });
       await pool.restore();
 
-      fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 4 } });
+      // やり直しの待ち（既定 1・5・30・120 秒の4回）は偽の時計で進める。
+      vi.useFakeTimers();
+      try {
+        fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 4 } });
+        await vi.advanceTimersByTimeAsync(1_000 + 5_000 + 30_000 + 120_000);
+      } finally {
+        vi.useRealTimers();
+      }
 
       await vi.waitFor(() =>
         expect(
@@ -359,7 +371,7 @@ describe('預けた退避を取りに行く呼び出しが落ちても、やり�
           ),
         ).toBe(true),
       );
-      expect(attempts).toBe(2);
+      expect(attempts).toBe(5);
       expect(await archiveIdsOf(stores)).toEqual([]);
       expect(fake.deletes).toEqual([]);
     } finally {

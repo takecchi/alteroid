@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createRunnerRegistry,
@@ -73,8 +73,18 @@ const CPU = { cores: 8, source: 'cgroup' } as const;
 /** 歯の側でも手で書く（実装の定数を import すると両側で同時に動いて緑のまま通る）。 */
 const WINDOW_MS = 5 * 60_000;
 
-async function fleet(now: () => number, ...runners: FakeRunner[]) {
-  const registry = createRunnerRegistry([], { now });
+// 時計は `Date` だけを偽にする: `vi.useFakeTimers()` の全部入りだと、名乗りを聞きに行く `setInterval` と `withDeadline` の `setTimeout` まで止まる。
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(1_000_000);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+async function fleet(...runners: FakeRunner[]) {
+  const registry = createRunnerRegistry();
   for (const runner of runners) {
     await registry.register({ label: `http://${runner.runnerId}`, open: async () => runner });
   }
@@ -121,7 +131,6 @@ describe('飽和した器は自動配置から外れる', () => {
 
   it('現在値が上限に達した器は、飽和していない器が居れば選ばれない', async () => {
     const registry = await fleet(
-      () => 1_000_000,
       new FakeRunner('runner-saturated', {
         ...roomy,
         pids: { current: 1000, max: 1000 },
@@ -138,7 +147,6 @@ describe('飽和した器は自動配置から外れる', () => {
   it('対照: 飽和でなければ（999/1000）段は分かれず、点数の高い方が勝つ', async () => {
     const near = { ...roomy, pids: { current: 999, max: 1000 } } as const;
     const registry = await fleet(
-      () => 1_000_000,
       new FakeRunner('runner-near', { ...near, managers: 0 }),
       new FakeRunner('runner-other', { ...near, managers: 4 }),
     );
@@ -147,26 +155,23 @@ describe('飽和した器は自動配置から外れる', () => {
   });
 
   it('EAGAIN の印がある器は、現在値が下がっていても窓の間は選ばれず、窓が過ぎれば戻る', async () => {
-    let clock = 1_000_000;
     const registry = await fleet(
-      () => clock,
       new FakeRunner('runner-burned', { ...roomy, managers: 0 }),
       new FakeRunner('runner-healthy', { ...roomy, managers: 4 }),
     );
     registry.notePidsSaturationSign?.('runner-burned', 'eagain');
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
-    clock += WINDOW_MS - 1;
+    vi.setSystemTime(1_000_000 + WINDOW_MS - 1);
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
-    clock += 1;
+    vi.setSystemTime(1_000_000 + WINDOW_MS);
     expect((await registry.select({})).runnerId).toBe('runner-burned');
     await registry.stop();
   });
 
   it('fork 拒否の印も同じく外す', async () => {
     const registry = await fleet(
-      () => 1_000_000,
       new FakeRunner('runner-burned', { ...roomy, managers: 0 }),
       new FakeRunner('runner-healthy', { ...roomy, managers: 4 }),
     );
@@ -178,11 +183,7 @@ describe('飽和した器は自動配置から外れる', () => {
   it('資源を聞けなかった器でも、印があれば聞けた器より後ろに回る', async () => {
     const dead = new FakeRunner('runner-silent');
     dead.fails = true;
-    const registry = await fleet(
-      () => 1_000_000,
-      dead,
-      new FakeRunner('runner-healthy', { ...roomy, managers: 4 }),
-    );
+    const registry = await fleet(dead, new FakeRunner('runner-healthy', { ...roomy, managers: 4 }));
     registry.notePidsSaturationSign?.('runner-silent', 'eagain');
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
     await registry.stop();
@@ -192,7 +193,6 @@ describe('飽和した器は自動配置から外れる', () => {
     const silent = new FakeRunner('runner-silent');
     silent.fails = true;
     const registry = await fleet(
-      () => 1_000_000,
       new FakeRunner('runner-full', { ...roomy, pids: { current: 1000, max: 1000 }, managers: 0 }),
       silent,
     );
@@ -202,7 +202,6 @@ describe('飽和した器は自動配置から外れる', () => {
 
   it('全台が飽和していても断らず、その中の最良を返す（#712・禁止2）', async () => {
     const registry = await fleet(
-      () => 1_000_000,
       new FakeRunner('runner-a', { ...roomy, pids: { current: 1000, max: 1000 }, managers: 0 }),
       new FakeRunner('runner-b', { ...roomy, managers: 4 }),
     );
@@ -215,7 +214,6 @@ describe('飽和した器は自動配置から外れる', () => {
 
   it('飽和の印を1つも知らせない艦隊では、配置は以前と変わらない', async () => {
     const registry = await fleet(
-      () => 1_000_000,
       new FakeRunner('runner-a', { ...roomy, managers: 0 }),
       new FakeRunner('runner-b', { ...roomy, managers: 4 }),
     );
@@ -226,8 +224,7 @@ describe('飽和した器は自動配置から外れる', () => {
 
 describe('pidsSaturationOf（名簿が覚えている材料）', () => {
   it('何も無ければ undefined。印を知らせると材料つきで返り、窓で忘れる', async () => {
-    let clock = 1_000_000;
-    const registry = await fleet(() => clock, new FakeRunner('runner-a', {}));
+    const registry = await fleet(new FakeRunner('runner-a', {}));
     expect(registry.pidsSaturationOf?.('runner-a')).toBeUndefined();
 
     registry.notePidsSaturationSign?.('runner-a', 'eagain');
@@ -235,13 +232,13 @@ describe('pidsSaturationOf（名簿が覚えている材料）', () => {
     expect(registry.pidsSaturationOf?.('runner-a')?.basis).toEqual([{ kind: 'eagain', count: 2 }]);
     expect(registry.pidsSaturationOf?.('runner-other')).toBeUndefined();
 
-    clock += WINDOW_MS;
+    vi.setSystemTime(1_000_000 + WINDOW_MS);
     expect(registry.pidsSaturationOf?.('runner-a')).toBeUndefined();
     await registry.stop();
   });
 
   it('渡した現在値が上限に達していれば at-limit を足す', async () => {
-    const registry = await fleet(() => 1_000_000, new FakeRunner('runner-a', {}));
+    const registry = await fleet(new FakeRunner('runner-a', {}));
     expect(registry.pidsSaturationOf?.('runner-a', { current: 1000, max: 1000 })?.basis).toEqual([
       { kind: 'at-limit', current: 1000, max: 1000 },
     ]);
@@ -262,7 +259,7 @@ describe('pidsSaturationOf（名簿が覚えている材料）', () => {
       pids: { current: 10, max: 1000 },
       managers: 0,
     });
-    const registry = await fleet(() => 1_000_000, a, b);
+    const registry = await fleet(a, b);
     await registry.select({});
     expect(registry.pidsSaturationOf?.('runner-a')?.basis).toEqual([
       { kind: 'at-limit', current: 1000, max: 1000 },

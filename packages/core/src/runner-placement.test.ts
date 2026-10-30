@@ -580,7 +580,6 @@ describe('起動失敗が、その器の点数を上げない（#712）', () => 
   });
 });
 
-// 時計は注入する: `vi.useFakeTimers()` は名乗りを聞きに行く `setInterval` と `withDeadline` の `setTimeout` まで巻き込む。
 describe('失敗の記憶が消える条件（#712）', () => {
   const MEMORY = {
     limitBytes: 8_000_000_000,
@@ -592,8 +591,18 @@ describe('失敗の記憶が消える条件（#712）', () => {
   // `PLACEMENT_FAILURE_MEMORY_MS` を import しない: 値を動かす変更が両側で動いて緑のまま通る。
   const MEMORY_MS = 5 * 60_000;
 
-  async function fleetWithClock(now: () => number) {
-    const registry = createRunnerRegistry([], { now });
+  // `Date` だけを偽にする: 全部入りだと名乗りを聞きに行く `setInterval` まで止まる。
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function fleetWithClock() {
+    const registry = createRunnerRegistry();
     for (const runner of [
       new FakeRunner('runner-burned', { memory: MEMORY, cpu: CPU, pids: PIDS, managers: 0 }),
       new FakeRunner('runner-healthy', { memory: MEMORY, cpu: CPU, pids: PIDS, managers: 2 }),
@@ -604,32 +613,30 @@ describe('失敗の記憶が消える条件（#712）', () => {
   }
 
   it('窓の内側では覚えていて、窓の外では忘れる（境目は「ちょうど」で忘れる側）', async () => {
-    let clock = 1_000_000;
-    const registry = await fleetWithClock(() => clock);
+    const registry = await fleetWithClock();
 
     registry.noteManagerFailed('runner-burned');
     registry.noteManagerFailed('runner-burned');
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
-    clock += MEMORY_MS - 1;
+    vi.setSystemTime(1_000_000 + MEMORY_MS - 1);
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
-    clock += 1;
+    vi.setSystemTime(1_000_000 + MEMORY_MS);
     expect((await registry.select({})).runnerId).toBe('runner-burned');
 
     await registry.stop();
   });
 
   it('落ち続けるあいだは窓が更新される（連続して落ちる形は取りこぼさない）', async () => {
-    let clock = 1_000_000;
-    const registry = await fleetWithClock(() => clock);
+    const registry = await fleetWithClock();
 
     registry.noteManagerFailed('runner-burned');
     registry.noteManagerFailed('runner-burned');
-    clock += MEMORY_MS - 1;
+    vi.setSystemTime(1_000_000 + MEMORY_MS - 1);
     registry.noteManagerFailed('runner-burned');
     registry.noteManagerFailed('runner-burned');
-    clock += 2;
+    vi.setSystemTime(1_000_000 + MEMORY_MS + 1);
 
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
