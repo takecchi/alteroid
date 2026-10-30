@@ -24,10 +24,6 @@ const SOURCE_LABEL: Record<RevisionSource, string> = {
   platform: 'Railway が実行時に注入',
 };
 
-export function revisionSourceLabel(source: RevisionSource): string {
-  return SOURCE_LABEL[source];
-}
-
 // 短縮とフル sha を両方出す: 短縮だけだと `gh api .../compare` へ貼れず、フルだけだと目で突き合わせられない。
 function describeKnownRevision(commit: string, short: string, source: RevisionSource): string {
   return `${short}（${SOURCE_LABEL[source]}、フル ${commit}）`;

@@ -8,7 +8,6 @@ import {
   createClone,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
-  hasOpenManagerDuplicate,
   isDaemonSelfNotice,
 } from './clone.js';
 import { verifyCommitmentEditBeforeContract } from './commitment-edit-before-contract.js';
@@ -26,7 +25,7 @@ import { buildCloneSystemPrompt } from './prompt.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { ChatStreamEvent, Commitment, InboxEvent, Task } from './schema.js';
-import type { Stores } from './store.js';
+import { findOpenManagerDuplicate, type Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { createCloneTools } from './tools.js';
 
@@ -565,7 +564,9 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(commitmentFor({ type: 'distill', id: 'e5', at, reason: 'conversation_end' })).toBeNull();
   });
 
-  describe('hasOpenManagerDuplicate（Issue #954 提案3）', () => {
+  describe('findOpenManagerDuplicate（Issue #954 提案3）', () => {
+    const hasOpenManagerDuplicate = (entries: readonly Commitment[], entry: Commitment) =>
+      findOpenManagerDuplicate(entries, entry) !== undefined;
     const at = '2026-09-14T16:30:00.000Z';
     const candidate: Commitment = {
       id: 'evt-new',
