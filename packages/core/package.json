@@ -56,6 +56,10 @@
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"
     },
+    "./mcp-servers-schema": {
+      "types": "./dist/mcp-servers-schema.d.ts",
+      "import": "./dist/mcp-servers-schema.js"
+    },
     "./manager-activity": {
       "types": "./dist/manager-activity.d.ts",
       "import": "./dist/manager-activity.js"
@@ -91,10 +95,6 @@
     "./journal-diagnostics-format": {
       "types": "./dist/journal-diagnostics-format.d.ts",
       "import": "./dist/journal-diagnostics-format.js"
-    },
-    "./mcp-servers-schema": {
-      "types": "./dist/mcp-servers-schema.d.ts",
-      "import": "./dist/mcp-servers-schema.js"
     },
     "./threadpool-size": {
       "types": "./dist/threadpool-size.d.ts",
