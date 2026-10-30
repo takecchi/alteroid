@@ -972,9 +972,9 @@ describe('資源による配置の材料', () => {
 });
 
 describe('許可確認の回答の応答から decision を読む', () => {
-  it('decision を報告しない古い runner の応答でも、届いたことは分かる（既定値へは倒さない）', async () => {
+  it('decision を名乗らない応答でも、届いたことは分かる（既定値へは倒さない）', async () => {
     const client = await createHttpRunner({
-      baseUrl: 'http://legacy.test',
+      baseUrl: 'http://runner.test',
       token: TOKEN,
       fetchFn: (async () => Response.json({ ok: true })) as typeof fetch,
     });
@@ -1212,22 +1212,6 @@ describe('hello() が拾う版', () => {
     // `known` 固定にしない: `CANON_REVISION` の焼き込み状態に依存するので `status` の型だけを見る。
     expect(client.revision).toBeDefined();
     expect(['known', 'unknown']).toContain(client.revision?.status);
-  });
-
-  it('/health に revision フィールドが無い古い runner では、revision は undefined のまま（プレースホルダにしない）', async () => {
-    const client = await createHttpRunner({
-      baseUrl: 'http://runner.test',
-      token: TOKEN,
-      fetchFn: (async () =>
-        Response.json({
-          ok: true,
-          runnerId: 'runner-old',
-          workspacePath: '/workspace',
-        })) as typeof fetch,
-    });
-    cleanups.push(() => client.close());
-
-    expect(client.revision).toBeUndefined();
   });
 
   it('/health に revision が無い runner は、「訊けたが分からない」（unknown）として読む（#5718）', async () => {

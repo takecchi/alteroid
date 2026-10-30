@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createHttpRunner } from './runner-client.js';
 
-// 欄を持たない古い runner の応答は `false` へ倒さず `undefined`（分からない）のまま運ぶ: 版が混ざる窓で、流しただけではないと言い切れないため。
+// 欄が無い・`true` と読めない応答は `false`（短絡していない）と同じに読む（#5718）: runner は resume の応答に `true`/`false` を必ず付けるので、欄が無いことを古い runner の印にしない。
 
 const COMMAND = {
   managerId: 'mgr-1',
@@ -45,12 +45,6 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
     });
   });
 
-  it('欄なし（古い runner）: undefined のまま。false へ倒さない', async () => {
-    const result = await resumeWith({ ok: true, cwd: '/workspace' });
-    expect(result).toEqual({ cwd: '/workspace' });
-    expect(result).not.toHaveProperty('reusedLiveSession');
-  });
-
   it('欄なしは false と同じに読む（欄が無いことを古い runner の印にしない。#5718）', async () => {
     expect(await resumeWith({ ok: true, cwd: '/workspace' })).toEqual({
       cwd: '/workspace',
@@ -65,12 +59,6 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
     });
   });
 
-  it('形が崩れた欄は「分からない」として捨てる（他欄を巻き込まない）', async () => {
-    expect(await resumeWith({ ok: true, cwd: '/workspace', reusedLiveSession: 'yes' })).toEqual({
-      cwd: '/workspace',
-    });
-  });
-
   it('古い daemon の zod（欄を知らない形）は、欄付きの応答を落とさず読める', () => {
     const legacy = runnerSessionOpenResultSchema.pick({ ok: true, cwd: true });
     expect(legacy.safeParse({ ok: true, cwd: '/w', reusedLiveSession: true }).success).toBe(true);
@@ -80,10 +68,13 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
 describe('HttpRunner の sessionGeneration（#3170）', () => {
   it('resume: 欄ありは運び、欄なし・形崩れは省く', async () => {
     expect(await resumeWith({ ok: true, sessionGeneration: 'gen-1' })).toEqual({
+      reusedLiveSession: false,
       sessionGeneration: 'gen-1',
     });
-    expect(await resumeWith({ ok: true })).toEqual({});
-    expect(await resumeWith({ ok: true, sessionGeneration: 7 })).toEqual({});
+    expect(await resumeWith({ ok: true })).toEqual({ reusedLiveSession: false });
+    expect(await resumeWith({ ok: true, sessionGeneration: 7 })).toEqual({
+      reusedLiveSession: false,
+    });
   });
 
   it('start: 欄ありは運び、欄なし・形崩れは省く（cwd は従来どおり）', async () => {
