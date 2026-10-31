@@ -3403,6 +3403,12 @@ class Pool implements ManagerPool {
    * `#autoFoldOne` の「競合の再確認」は判定から `abort()` までの間しか見ておらず、並行する2実行は塞げない。
    */
   readonly #autoFoldInFlight = new Set<string>();
+  /**
+   * 担当ごとの「新しい入力を生きたセッションへ渡しに行った回数」。`#send` が渡す直前に進め、自動の畳み（`abort()` の `by === 'auto-fold'`）が
+   * 止める直前に控えと見比べる。時刻にしない: 同じ時刻に2回入っても、回数なら違いが消えない。
+   * 外す契機は `#retire()`（#6019: 終えた担当の欄を残さない）。
+   */
+  readonly #inputMarks = new Map<string, number>();
   #restoring: Promise<void> | null = null;
   /**
    * **落とさずに待たせる。** 「走っているから今回は要らない」と捨てると、捨てた回に
@@ -4130,6 +4136,8 @@ class Pool implements ManagerPool {
     // `true` のまま嘘になる。404 を例外のまま `send()` から貫通させると、どの `outcome` にもならず人間は 500 を受け取る。
     let attached = record.attached;
     let reentered = false;
+    // 渡しに行く前に印を進める（預かりの届け直し `#deliverHeld` もここを通る）: 自動の畳みが、渡した一言ごと担当を止めないため。
+    this.#inputMarks.set(managerId, (this.#inputMarks.get(managerId) ?? 0) + 1);
     if (attached) {
       const missing = await this.#sendDetectingMissingSession(
         runner,
@@ -8279,7 +8287,10 @@ class Pool implements ManagerPool {
     }
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
-    record.stopConfirmedAt = this.#nowIso();
+    const lastReportAtAtStart = record.job.lastReportAt;
+    const inputMarkAtStart = this.#inputMarks.get(managerId);
+    // 自動の畳みだけ、印を停止前の確認の往復のあとへ遅らせる: 先に立てると、その往復の間に届いた `send()` が末尾の `stopConfirmedAt` の確かめに当たり、依頼は生きたセッションへ渡っているのに `session_missing` を返して担当ごと畳む。遅らせた間の入りは下の読み直し（`#inputMarks`）が拾う。人間・クローンの明示の停止は従来どおり先に立てる（意思が先）。
+    if (by !== 'auto-fold') record.stopConfirmedAt = this.#nowIso();
     // await の前の宛先を覚えておく: await の後にこれと食い違えば、委譲は別の runner へ移っている。
     const runnerIdBeforeConfirm = record.job.runnerId;
 
@@ -8288,6 +8299,27 @@ class Pool implements ManagerPool {
       signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
       source: 'stop',
     }).catch(() => undefined);
+
+    // 自動の畳みだけ、止める直前にもう一度「手が空いたまま」かを読み直す: 候補の判定からここまでに未pushの確認（最大5秒×2）と日誌の書き込みの往復を挟み、その間に届いた依頼（`send()` / 預かりの届け直し）が `status` を `running` へ、新しい報告が `lastReportAt` を動かす。止めると依頼を受けた担当を畳み、送り直しで二重になる。人間・クローンの明示の停止は読み直さない（意思が先）。
+    if (
+      by === 'auto-fold' &&
+      (record.job.status !== 'done' ||
+        record.job.lastReportAt !== lastReportAtAtStart ||
+        this.#inputMarks.get(managerId) !== inputMarkAtStart)
+    ) {
+      const detail =
+        `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
+        `（status=${record.job.status}）ので取りやめた。止めていない。`;
+      await this.#journal({
+        type: 'decision',
+        decision: `[auto-fold] ${managerId} の自動の畳みを取りやめた（直前に依頼が入った）: ${detail}`,
+        grounds:
+          'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
+      });
+      return { outcome: 'not_stopped', detail };
+    }
+    // 読み直しと同じ同期の区間で立てる（間に `await` を挟まない）: 以後の `send()` は従来どおりこの印で断られる。
+    if (by === 'auto-fold') record.stopConfirmedAt = this.#nowIso();
 
     // `runner.stop()` が投げても abort() ごと reject させない: 日誌もクローンへの通知も状態の更新も残らず 500 になり、「止めた事実は日誌に残る」約束がいちばん要る場面で消える。権威は `sessionGone` の探りに置く（stop の RPC が返らなくても止まっていることがある）。
     let { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
@@ -13356,6 +13388,7 @@ class Pool implements ManagerPool {
     this.#lastStaleDecline.delete(managerId);
     this.#lastHeldStuckNotice.delete(managerId);
     this.#autoFoldSkipJournalWritten.delete(managerId);
+    this.#inputMarks.delete(managerId);
     // busy の取り直しの数えはここで消す: `#reattach` のループは数えを消さずに `continue` で抜けるので、残すと後の busy で上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮める。
     this.#reattachBusyRetries.delete(managerId);
     this.#turnEndProbedAt.delete(managerId);
