@@ -137,6 +137,34 @@ function toolResponseChars(response: unknown): number | undefined {
   return total;
 }
 
+// フックの呼び出しを入口と出口の phase の印で挟む。`phaseEvent` が undefined なら印なしで `run` だけ。`run` の例外は握らず、出口の印は例外でも残す
+async function withHookPhase<R>(
+  phaseEvent: string | undefined,
+  input: unknown,
+  run: () => Promise<R> | R,
+): Promise<R> {
+  if (phaseEvent !== undefined) noteHookPhase(phaseEvent, input);
+  try {
+    return await run();
+  } finally {
+    if (phaseEvent !== undefined) notePhase(`sdk-hook-done:${phaseEvent}`);
+  }
+}
+
+// 未知の kind が渡ったときの倒れ先: 投げずに `noteBackgroundFailure` で跡だけ残し、安全側（`{ continue: true }`）を返す
+function continueOnUnknownKind(
+  what: string,
+  kindName: string,
+  unreachable: never,
+): { continue: true } {
+  noteBackgroundFailure(
+    what,
+    '',
+    new Error(`未知の ${kindName}.kind が渡った: ${JSON.stringify(unreachable)}`),
+  );
+  return { continue: true };
+}
+
 // 観測フックの共通の形: 中立の記録へ写して渡し、常に `{ continue: true }` を返す。投げた例外は握らない。
 // `await` を保つ: PreCompact は compaction がこのフックの返り値を待つので、退避・蒸留の完了を待ってから返す意味を変えないため
 // `phaseEvent` を渡すと、呼び出しの前後に phase の印を残す（道具の監査だけ）。`signal` は PreCompact の記録だけが使う
@@ -146,12 +174,7 @@ function wrapObservationHook<T>(
   phaseEvent?: string,
 ): HookCallback {
   return async (input, _toolUseId, options) => {
-    if (phaseEvent !== undefined) noteHookPhase(phaseEvent, input);
-    try {
-      await hook(toRecord(input, options?.signal));
-    } finally {
-      if (phaseEvent !== undefined) notePhase(`sdk-hook-done:${phaseEvent}`);
-    }
+    await withHookPhase(phaseEvent, input, () => hook(toRecord(input, options?.signal)));
     return { continue: true };
   };
 }
@@ -227,13 +250,9 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
 // `default` 節で投げない: このフックは SDK のツール実行の経路に載っており、例外を投げるとそのターン全体が壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
   return async (input) => {
-    noteHookPhase('PreToolUse', input);
-    let decision: Awaited<ReturnType<AgentPreToolHook>>;
-    try {
-      decision = await hook(toAgentPreToolRecord(input));
-    } finally {
-      notePhase('sdk-hook-done:PreToolUse');
-    }
+    const decision = await withHookPhase('PreToolUse', input, () =>
+      hook(toAgentPreToolRecord(input)),
+    );
     switch (decision.kind) {
       case 'continue':
         // 書き換えは `permissionDecision` を付けずに返す: 確認の流れをそのままにして入力だけを変えるため
@@ -247,23 +266,12 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
           },
         };
       case 'allow':
-        return {
-          continue: true,
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'allow',
-            permissionDecisionReason: decision.reason,
-            ...(decision.rewrite !== undefined
-              ? { updatedInput: decision.rewrite.input, additionalContext: decision.rewrite.note }
-              : {}),
-          },
-        };
       case 'ask':
         return {
           continue: true,
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
-            permissionDecision: 'ask',
+            permissionDecision: decision.kind,
             permissionDecisionReason: decision.reason,
             ...(decision.rewrite !== undefined
               ? { updatedInput: decision.rewrite.input, additionalContext: decision.rewrite.note }
@@ -279,15 +287,12 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
             permissionDecisionReason: decision.reason,
           },
         };
-      default: {
-        const unreachable: never = decision;
-        noteBackgroundFailure(
+      default:
+        return continueOnUnknownKind(
           'PreToolUse の中立な判断の包み直し',
-          '',
-          new Error(`未知の AgentPreToolDecision.kind が渡った: ${JSON.stringify(unreachable)}`),
+          'AgentPreToolDecision',
+          decision,
         );
-        return { continue: true };
-      }
     }
   };
 }
@@ -321,17 +326,12 @@ function wrapPermissionDeniedHook(hook: AgentPermissionDeniedHook): HookCallback
         };
       case 'no-retry':
         return { continue: true };
-      default: {
-        const unreachable: never = decision;
-        noteBackgroundFailure(
+      default:
+        return continueOnUnknownKind(
           'PermissionDenied の中立な判断の包み直し',
-          '',
-          new Error(
-            `未知の AgentPermissionDeniedDecision.kind が渡った: ${JSON.stringify(unreachable)}`,
-          ),
+          'AgentPermissionDeniedDecision',
+          decision,
         );
-        return { continue: true };
-      }
     }
   };
 }
@@ -360,13 +360,7 @@ function wrapContextHook<T>(
   toRecord: (input: unknown) => T,
 ): HookCallback {
   return async (input) => {
-    noteHookPhase(hookEventName, input);
-    let outcome: Awaited<ReturnType<AgentContextHook<T>>>;
-    try {
-      outcome = await hook(toRecord(input));
-    } finally {
-      notePhase(`sdk-hook-done:${hookEventName}`);
-    }
+    const outcome = await withHookPhase(hookEventName, input, () => hook(toRecord(input)));
     switch (outcome.kind) {
       case 'continue':
         return { continue: true };
@@ -375,15 +369,12 @@ function wrapContextHook<T>(
           continue: true,
           hookSpecificOutput: { hookEventName, additionalContext: outcome.text },
         };
-      default: {
-        const unreachable: never = outcome;
-        noteBackgroundFailure(
+      default:
+        return continueOnUnknownKind(
           `${hookEventName} の中立な文脈の包み直し`,
-          '',
-          new Error(`未知の AgentContextOutcome.kind が渡った: ${JSON.stringify(unreachable)}`),
+          'AgentContextOutcome',
+          outcome,
         );
-        return { continue: true };
-      }
     }
   };
 }
