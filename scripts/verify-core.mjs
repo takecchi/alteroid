@@ -225,23 +225,14 @@ export const STEPS = [
       'まだ成り立つかを確かめること（scripts/check-sdk-quotes-core.mjs の doc）',
   },
   {
-    name: 'stale-token-restart-advice',
+    name: 'advice-single-source',
     cmd: 'pnpm',
-    args: ['check:stale-token-restart-advice'],
+    args: ['check:advice-single-source'],
     hint:
-      '「世代ずれなら起こし直せ」の助言が、生成元の外に書かれている。字面の生成元は' +
-      'packages/core/src/usage-limits.ts の STALE_TOKEN_RESTART_ADVICE 1箇所である' +
-      '（scripts/check-stale-token-restart-advice-core.mjs の doc、#1175）',
-  },
-  {
-    name: 'restart-before-check-advice',
-    cmd: 'pnpm',
-    args: ['check:restart-before-check-advice'],
-    hint:
-      '「manager_start で起こし直す前に確かめろ」の助言が、生成元の外に書かれている。' +
-      '字面の生成元は packages/core/src/usage-limits.ts の RESTART_BEFORE_CHECK_ADVICE / ' +
-      'RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN 1箇所である' +
-      '（scripts/check-restart-before-check-advice-core.mjs の doc、#1287）',
+      '起こし直しの助言（世代ずれなら起こし直せ / 確かめる前に起こし直すな）が、生成元の外に書かれている。' +
+      '字面の生成元は packages/core/src/usage-limits.ts の STALE_TOKEN_RESTART_ADVICE / ' +
+      'RESTART_BEFORE_CHECK_ADVICE / RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN である' +
+      '（scripts/check-advice-single-source-core.mjs の doc、#1175・#1287）',
   },
   {
     name: 'no-env-passthrough',

@@ -216,9 +216,8 @@ const ONLY_ON_PR_BECAUSE_NEEDS_PR =
 
 const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
   'check:no-env-passthrough': { routes: ['steps', 'pr'] },
-  'check:restart-before-check-advice': { routes: ['steps', 'pr'] },
+  'check:advice-single-source': { routes: ['steps', 'pr'] },
   'check:sdk-quotes': { routes: ['steps', 'pr'] },
-  'check:stale-token-restart-advice': { routes: ['steps', 'pr'] },
   'check:web-build-output': { routes: ['steps', 'pr'] },
   'check:web-bundle-size': { routes: ['steps', 'pr'] },
   'check:agents-md-size': { routes: ['steps', 'pr'] },

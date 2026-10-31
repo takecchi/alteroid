@@ -315,7 +315,7 @@ pnpm verify         # 検証一式を正しい順序で通す。通し直しは�
 
 中身は build → `check:web-build-output` → `check:web-bundle-size` →
 `apps/daemon/openapi.json` の一致 →
-`check:sdk-quotes` → `check:stale-token-restart-advice` → `check:restart-before-check-advice` →
+`check:sdk-quotes` → `check:advice-single-source` →
 `typecheck` → `lint` → `format:check` → `test` の順で、**build が先です**。個別に打つこともできます。
 
 - **`pnpm test` が「テスト0本のまま exit 1」になったら、落ちたのではなく走っていません。**
