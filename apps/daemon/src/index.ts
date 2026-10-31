@@ -319,7 +319,7 @@ export function worthDeliveringNow(blocked: boolean, releasePending: boolean): b
 export const TOKEN_POOL_REOPENED_SOURCE = DAEMON_TOKEN_POOL_REOPENED_SOURCE;
 
 // 時間の窓や件数の上限で畳まず、最後に配った合図の身元を状態として持つ: 恣意的な定数は本物の合図を黙って失わせるため。
-// `restore()` / `resumeStoppedByUsage()` はこの門に通さない: マネージャーはクローンと独立に枠で止まりうるため。
+// `restore()` / `resumeStoppedByUsage()` はこの門にも、クローンのセッションの作り直し待ち（`pendingTokenWake`）にも通さない: マネージャーはクローンと独立に枠で止まりうるため。
 export interface CloneWakeGate {
   decide(
     reopened: ReopenedToken,
@@ -888,7 +888,7 @@ export async function main(): Promise<void> {
         : 'now';
 
     // `parked` では起こさない: 撒いた鍵は `cooldownUntil` まで通らず、起こしても同じところで止まって保持していた合図を1件無駄に焼くため。
-    // マネージャーの `restore()` はクローンの門と無関係に呼ぶ: マネージャーはクローンと独立に枠で止まりうるため。
+    // マネージャーの `restore()` はクローンの門にも、クローンのセッションの作り直しにも待たせない（下で `recycled` より先に呼ぶ）: マネージャーはクローンと独立に枠で止まりうるため。
     // `reopenedTokenOf` より前に呼ぶ: 鍵が通らなくなったことを観測した後の「また通るようになった」は新しい知らせとして配る必要があるため。
     if (outcome.kind === 'parked' || outcome.kind === 'exhausted') {
       cloneWakeGate.observeUnusable();
@@ -896,6 +896,7 @@ export async function main(): Promise<void> {
 
     const reopened = reopenedTokenOf(outcome);
     if (reopened !== undefined) {
+      // クローンへの知らせだけを持つ（マネージャーの起こし直しは含めない。下で先に呼ぶ）。
       // 合図は新しい鍵で受け取れるようになってから入れる: 走行中のターンは古い鍵のままで、そこへ入れると合図がそのターンに消費されるため。
       const wake = () => {
         // 判定は `staleObservedRecoveryForBlockedKey` と同じ関数を呼び、コピーしない: 片方だけ直したときに黙ってずれるため。
@@ -942,24 +943,25 @@ export async function main(): Promise<void> {
             identity: deliveredIdentity(reopened),
           });
         }
-        // クローンの門に巻き込まず常に呼ぶ: マネージャーはクローンと独立に枠で止まりうるため。
-        // 待たない: 引き取りは runner への問い合わせで落ちうる・遅いため、回した結果の記録を縛らない。
-        // `restore()` → `resumeStoppedByUsage()` の順を逆にも並行にもしない: 同じ委譲へ一言が2つ入る窓ができるため。
-        void clone.managers
-          .restore()
-          .then(() => clone.managers.resumeStoppedByUsage())
-          .then((nudged) => {
-            if (nudged.length === 0) return;
-            process.stdout.write(
-              `alteroidd: 認証トークンが戻ったので、枠で止まっていた委譲へ続きを促しました: ${nudged.join(', ')}\n`,
-            );
-          })
-          .catch((error: unknown) => {
-            writeStderrLine(
-              `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`,
-            );
-          });
       };
+      // マネージャーの起こし直しは、クローンのセッションの作り直し（`recycled`）を待たずに先に呼ぶ: マネージャーはクローンのセッションと独立に枠で止まりうるため、
+      // クローンが長いターンの最中・受信箱が詰まっている間も後ろに並ばせない。待たせるのはクローンへの知らせ（上の `wake`）だけ。
+      // 待たない: 引き取りは runner への問い合わせで落ちうる・遅いため、回した結果の記録を縛らない。
+      // `restore()` → `resumeStoppedByUsage()` の順を逆にも並行にもしない: 同じ委譲へ一言が2つ入る窓ができるため。
+      void clone.managers
+        .restore()
+        .then(() => clone.managers.resumeStoppedByUsage())
+        .then((nudged) => {
+          if (nudged.length === 0) return;
+          process.stdout.write(
+            `alteroidd: 認証トークンが戻ったので、枠で止まっていた委譲へ続きを促しました: ${nudged.join(', ')}\n`,
+          );
+        })
+        .catch((error: unknown) => {
+          writeStderrLine(
+            `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`,
+          );
+        });
       if (recycled === 'now') wake();
       else pendingTokenWake = wake;
     }
