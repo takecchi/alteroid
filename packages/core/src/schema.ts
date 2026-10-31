@@ -1552,6 +1552,8 @@ export const pendingApprovalSchema = z.object({
   // `undefined` は拾い直しの対象にしない: 遡って配り直すと、とっくに人間の目から消えた古い回答が今さら届くため
   answerDelivery: z.enum(['pending', 'delivered']).optional(),
   conversationId: z.string().optional(),
+  // 問いを出したターンが答えていた task の id。回答のターンの返答が自動 done で閉じてよいのはこの task だけ（#5469 P5）。`undefined` は「分からない」と読み、何も閉じない
+  taskIds: z.array(z.string()).optional(),
   // 行は消さない: Task の閉じ方と同じく、理由ごと読み戻せるようにするため
   withdrawnAt: isoDateTime.optional(),
   withdrawnReason: z.string().optional(),

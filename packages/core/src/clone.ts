@@ -1063,6 +1063,10 @@ class Clone implements CloneHost {
     delegated: Set<string>;
     /** このターンが入力として読んだ人間の発言の id（task の id と同じ）。 */
     readSignalIds: ReadonlySet<string>;
+    /** 回答のターンが答えた承認の `taskIds`。 */
+    answeredTaskIds: ReadonlySet<string>;
+    /** このターンの `task_say` が書いた先の task の id。 */
+    said: Set<string>;
     /** このターンで問い（ask_human・request_permission）を出した会話。 */
     asked: Set<string>;
   } = {
@@ -1070,6 +1074,8 @@ class Clone implements CloneHost {
     replied: new Map(),
     delegated: new Set(),
     readSignalIds: new Set(),
+    answeredTaskIds: new Set(),
+    said: new Set(),
     asked: new Set(),
   };
   readonly #managers: ManagerPool;
@@ -5422,7 +5428,17 @@ class Clone implements CloneHost {
         );
         // `#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ: 会話 id を持つ承認への回答だけ人間の会話へ載せるため
         // `event.approvalId` も運ぶ: 返答が「どの承認への返答か」を、会話 id や時刻の近さでなく id で持てるようにするため
-        await this.#runTurn(this.#conversationOf(event), answerPrompt, 'normal', event.approvalId);
+        // 答えた承認の `taskIds` も運ぶ: 回答の返答が閉じてよい task を、その問いを出したターンが答えていた task に絞るため（読めない行・古い行は空で、何も閉じない）
+        await this.#runTurn(
+          this.#conversationOf(event),
+          answerPrompt,
+          'normal',
+          event.approvalId,
+          [],
+          null,
+          [],
+          approval?.taskIds ?? [],
+        );
         return;
       }
 
@@ -5696,6 +5712,8 @@ class Clone implements CloneHost {
     originConversationId: string | null = null,
     /** このターンの入力として読む人間の発言の id（自動 done が、読んだ発言の task だけを閉じるため）。 */
     readSignalIds: readonly string[] = [],
+    /** 回答のターンが答えた承認の `taskIds`（自動 done が、回答の返答で閉じる task を絞るため）。 */
+    answeredTaskIds: readonly string[] = [],
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
@@ -5708,6 +5726,8 @@ class Clone implements CloneHost {
       replied: new Map(),
       delegated: new Set(),
       readSignalIds: new Set(readSignalIds),
+      answeredTaskIds: new Set(answeredTaskIds),
+      said: new Set(),
       asked: new Set(),
     };
 
@@ -6815,6 +6835,14 @@ class Clone implements CloneHost {
       },
       noteQuestionAsked: (conversationId) => {
         if (conversationId !== undefined) this.#turnReplies.asked.add(conversationId);
+      },
+      // 読んだ発言に加えて、回答のターンが答えた承認の task も運ぶ: 回答のターンの中で続けて問うても、元の task が答えを受けるまで閉じずに残るため
+      currentTaskIds: () => [
+        ...this.#turnReplies.readSignalIds,
+        ...this.#turnReplies.answeredTaskIds,
+      ],
+      noteTaskSaid: (taskId) => {
+        this.#turnReplies.said.add(taskId);
       },
       postToConversation: (conversationId, text, attachments) => {
         // 日誌へ書けた `task_say` だけがここへ来る（書けなければ呼ばれない）。自動 done の「返答」に数える
@@ -8501,6 +8529,8 @@ class Clone implements CloneHost {
           replied,
           readSignalIds: this.#turnReplies.readSignalIds,
           unreadSignalIds,
+          answeredTaskIds: this.#turnReplies.answeredTaskIds,
+          saidTaskIds: this.#turnReplies.said,
           askedConversationIds,
           delegatedTaskIds: this.#turnReplies.delegated,
           activeJobTaskIds,

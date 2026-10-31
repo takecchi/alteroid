@@ -73,6 +73,13 @@ export interface TurnReplyTrace {
    */
   readonly unreadSignalIds: ReadonlySet<string>;
   /**
+   * 回答（human_answer）のターンが答えた承認の `taskIds`（問いを出したターンが答えていた task の id）。回答のターンの返答が閉じるのは、この id の task だけ。
+   * 承認が `taskIds` を持たない（古い行・読めない行・人間の発言を読んでいないターンが出した問い）なら空で、何も閉じない。
+   */
+  readonly answeredTaskIds: ReadonlySet<string>;
+  /** このターンの `task_say` が書いた先の task の id。`task_say` の返答が閉じるのは、この id の task だけ（同じ起点の会話の別の task は閉じない）。 */
+  readonly saidTaskIds: ReadonlySet<string>;
+  /**
    * 問い（`ask_human`・`request_permission`）を出して答えが無い会話 id（このターンで出したもの ∪ 閉じる直前に承認待ちの台帳から引いた、前のターンの未回答の問い）。
    * その会話の task は、人間の答え待ちなので閉じない。答えが付いた問いは台帳から外れるので、答えを受けたターンの返答では閉じる。
    */
@@ -93,12 +100,17 @@ export function hasDelegationForTask(task: Task, trace: TurnReplyTrace): boolean
   return trace.delegatedTaskIds.has(task.id) || trace.activeJobTaskIds.has(task.id);
 }
 
-/** 返答の経路ごとの「この task は、この返答が宛てた発言のものか」。 */
+/**
+ * 返答の経路ごとの「この task は、この返答が宛てた相手のものか」。宛先が分からなければ閉じない（閉じ損ねは次の返答で拾える。誤って閉じた task は拾えない）。
+ * 失敗で落ちた発言の task は受信箱から消えて queued で残るので、「受信箱に残っていない」だけでは、その task も同じ会話の別の返答で巻き添えに閉じてしまう。
+ */
 function isAddressedByReply(task: Task, via: TurnReplyVia, trace: TurnReplyTrace): boolean {
   // 人間の発言で起きたターン: 読んだ発言の task だけ
   if (via === 'turn_reply' && trace.readSignalIds.size > 0) return trace.readSignalIds.has(task.id);
-  // 回答のターンの返答・task_say: 受信箱にまだ残っている合図の task は、まだ読んでいないので除く
-  return !trace.unreadSignalIds.has(task.id);
+  // 回答のターンの返答: 答えた承認が持つ task だけ。task_say: 書いた先の task だけ。
+  // どちらも、受信箱にまだ残っている合図の task は、まだ読んでいないので除く
+  const addressed = via === 'turn_reply' ? trace.answeredTaskIds : trace.saidTaskIds;
+  return addressed.has(task.id) && !trace.unreadSignalIds.has(task.id);
 }
 
 /**

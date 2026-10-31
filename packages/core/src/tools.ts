@@ -529,6 +529,15 @@ export interface ToolContext {
    * 前のターンで出した未回答の問いは、器が閉じる直前に承認待ちの台帳（pendingOnly）から引くので、ここで控えるのは「このターンで出した問い」だけ（台帳に書けない回の保険を兼ねる）。
    */
   noteQuestionAsked?: (conversationId: string | undefined) => void;
+  /**
+   * いまのターンが答えている相手の task の id（読んだ人間の発言の id、回答のターンでは答えた承認が持つ task の id）。
+   * `ask_human` / `request_permission` が承認待ちの行（`taskIds`）に写し、その承認への回答のターンの返答が閉じてよい task を絞るのに使う（#5469 P5）。無い器は何も写さない。
+   */
+  currentTaskIds?: () => readonly string[];
+  /**
+   * `task_say` が書いた先の task の id。そのターンの返答が宛てた task を、起点の会話全体でなく書いた先に絞るため控える（#5469 P5）。無い器は何もしない。
+   */
+  noteTaskSaid?: (taskId: string) => void;
   // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
   postToConversation?: (
     conversationId: string,
@@ -2998,6 +3007,12 @@ async function jobTaskIdOf(stores: Stores, managerId: string): Promise<string | 
   }
 }
 
+/** 承認待ちの行へ写す、問いを出したターンが答えていた task の id（空なら欄ごと付けない）。 */
+function approvalTaskIdsEntry(context: ToolContext): { taskIds?: string[] } {
+  const ids = context.currentTaskIds?.() ?? [];
+  return ids.length === 0 ? {} : { taskIds: [...ids] };
+}
+
 /** 委譲の起点の会話（`Job.conversationId`）。読めない・見つからないときも `undefined`。 */
 // 読めないときに断らない: 起点は承認を会話へ結ぶための手がかりで、無くても従来どおり会話の無い承認として積めるため
 async function jobConversationOf(
@@ -4706,6 +4721,7 @@ export function createCloneTools(context: ToolContext) {
           ...(managerId === undefined ? {} : { jobId: managerId }),
           ...(requestId === undefined ? {} : { requestId }),
           ...(conversationId === undefined ? {} : { conversationId }),
+          ...approvalTaskIdsEntry(context),
         };
         try {
           await stores.jobs.putApproval(approval);
@@ -4784,6 +4800,7 @@ export function createCloneTools(context: ToolContext) {
           context: reason,
           permissionRequest: { rule, allows: [...allows], denies: [...denies] },
           ...(conversationId === undefined ? {} : { conversationId }),
+          ...approvalTaskIdsEntry(context),
         };
         try {
           await stores.jobs.putApproval(approval);
@@ -9108,6 +9125,7 @@ export function createCloneTools(context: ToolContext) {
           );
           throw error;
         }
+        context.noteTaskSaid?.(taskId);
         if (attached.refs.length === 0) context.postToConversation?.(target, body);
         else context.postToConversation?.(target, body, attached.refs);
         const withNote =
