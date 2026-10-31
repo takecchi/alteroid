@@ -35,10 +35,29 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
     fail('鍵列の NUL を落とした行として積まれていない', aggregate.rows);
   }
 
+  // 同じ累積をもう一度積む: 基準が NUL を落とした鍵で引けていれば増分は空（引けなければ全量が積まれる）
   for (const managerId of ['mgr-nul', 'mgr-\u0000nul']) {
-    const baseline = await usage.baseline('manager', managerId);
-    if (baseline === null || baseline.managerId !== 'mgr-nul' || baseline.sessionId !== 'ses-x') {
-      fail(`基準が NUL を落とした鍵で引けない（${JSON.stringify(managerId)}）`, baseline);
+    const again = await usage.record({
+      layer: 'manager',
+      site: 'session',
+      managerId,
+      date: '2026-10-05',
+      at: '2026-10-05T00:00:00.000Z',
+      snapshot: {
+        sessionId: 'ses-x',
+        models: { model: { ...ZERO_USAGE, inputTokens: 3, costUsd: 0.5 } },
+      },
+      accumulation: 'cumulative',
+      tokenId: 'tok-id',
+    });
+    const baseline = again.baseline;
+    if (
+      Object.keys(again.delta).length !== 0 ||
+      baseline === null ||
+      baseline.managerId !== 'mgr-nul' ||
+      baseline.sessionId !== 'ses-x'
+    ) {
+      fail(`基準が NUL を落とした鍵で引けない（${JSON.stringify(managerId)}）`, again);
     }
   }
   if (!(await usage.recordedManagerIds()).has('mgr-nul')) {

@@ -1,6 +1,5 @@
 import {
   USAGE_ESTIMATE_NOTICE,
-  stripNul,
   stripNulFromUnmeteredRecord,
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
@@ -442,17 +441,6 @@ export class PgUsageStore implements UsageStore {
       beforeTurns: isBeforeUsageStart(turnsSince, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     };
-  }
-
-  async baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null> {
-    managerId = stripNul(managerId);
-    const rows = await this.#db
-      .select()
-      .from(usageBaseline)
-      .where(and(eq(usageBaseline.layer, layer), eq(usageBaseline.managerId, managerId)))
-      .limit(1);
-    const row = rows[0];
-    return row === undefined ? null : this.#toBaseline(row);
   }
 
   async recordedManagerIds(): Promise<Set<string>> {

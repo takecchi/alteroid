@@ -1747,9 +1747,6 @@ export function createMemoryStores(): Stores {
         updatedAt: at,
       });
     },
-    async baseline(layer, managerId) {
-      return usageBaselines.get(usageBaselineKey(layer, stripNul(managerId))) ?? null;
-    },
     // 引数を持たず全期間から作る（`store.ts` の `UsageStore.recordedManagerIds` の doc）: 絞り込みを受けると、範囲外の委譲を「記録が無い」と数える事故をこの器だけ検出できない。
     async recordedManagerIds() {
       return new Set([...usageRows.values()].map((row) => row.managerId));

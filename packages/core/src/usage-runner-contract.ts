@@ -54,13 +54,10 @@ export async function verifyUsageRunnerContract(usage: UsageStore): Promise<void
   if (more.delta['opus']?.costUsd !== 2)
     fail('古い runner の増えた分（2）が増分でない', more.delta);
   await expectTotal(13, '古い runner の増えた分');
-  const baseline = await usage.baseline('manager', managerId);
-  if (baseline?.models['opus']?.costUsd !== 1) fail('古い runner が基準の高さを動かした', baseline);
-  if (baseline.byRunner?.['runner-a']?.['opus']?.costUsd !== 12) {
-    fail('runner ごとの控えが更新されていない', baseline.byRunner);
-  }
+  // 基準の高さ（1）が動いていないことは、あとの「runner を名乗らない record」の増分（2 - 1）が合計 14 になることで測る。
+  // runner-a の控えが 12 に更新されたことは、11 が「減った」と断られることで測る（控えが 10 のままなら 1 が積まれる）。
 
-  const decreased = await record(4, { id: 'runner-a', superseded: true });
+  const decreased = await record(11, { id: 'runner-a', superseded: true });
   if (decreased.skipped?.reason !== 'decreased' || Object.keys(decreased.delta).length !== 0) {
     fail('減った累積を積んだ／理由が返らない', decreased);
   }
@@ -73,17 +70,20 @@ export async function verifyUsageRunnerContract(usage: UsageStore): Promise<void
   await expectTotal(13, '控えの無い runner');
 
   await record(2, undefined);
-  const kept = await usage.baseline('manager', managerId);
-  if (kept?.byRunner?.['runner-a']?.['opus']?.costUsd !== 4) {
-    fail('runner を名乗らない record が控えを消した', kept?.byRunner);
-  }
   await expectTotal(14, 'runner を名乗らない record');
+  const kept = await record(12, { id: 'runner-a', superseded: true });
+  if (kept.skipped !== undefined || kept.delta['opus']?.costUsd !== 1) {
+    fail('runner を名乗らない record が控えを消した（11 との差 1 が積まれない）', kept);
+  }
+  await expectTotal(15, '控えを残した古い runner の増えた分');
 
   const orphan = await record(5, { id: 'runner-a', superseded: true }, 'mgr-runner-contract-none');
   if (orphan.skipped?.reason !== 'unknown-runner')
     fail('基準の無い manager の理由が返らない', orphan);
-  if ((await usage.baseline('manager', 'mgr-runner-contract-none')) !== null) {
-    fail('古い runner の累積が基準の行を作った');
-  }
   await expectTotal(0, '基準の無い manager', 'mgr-runner-contract-none');
+  // 基準の行が作られていたら、最初の通常の record が全量（5）ではなく差で積まれてしまう
+  const first = await record(5, undefined, 'mgr-runner-contract-none');
+  if (first.delta['opus']?.costUsd !== 5) {
+    fail('古い runner の累積が基準の行を作った', first);
+  }
 }

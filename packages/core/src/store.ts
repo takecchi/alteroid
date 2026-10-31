@@ -61,7 +61,6 @@ import type {
 import type {
   UsageAccumulation,
   UsageAggregate,
-  UsageBaseline,
   UsageFold,
   UsageRecordRunner,
   UsageLayer,
@@ -1605,12 +1604,6 @@ export interface UsageStore {
    * ここが null のまま `since` だけ載っていると、読む側は「トークンの内訳が空」を「1本のトークンで全部使った」と読みうる。
    */
   aggregate(query: UsageQuery): Promise<UsageAggregate>;
-
-  /**
-   * 累積を持つ主体1つの現在の基準（前回読んだ累積）。無ければ null。
-   * 鍵は「層 × actor」: actor の id だけで引くと、層をまたいで同じ id が来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になる。
-   */
-  baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null>;
 
   /**
    * 台帳（`usage_daily`）に1行でも行が在る managerId の集合（台帳が取りこぼした委譲を見つけるため）。
