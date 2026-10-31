@@ -33,8 +33,7 @@ import {
   DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
-  withNoModelFallbackEnv,
-  withNoSessionTitleEnv,
+  withCliSessionEnv,
 } from './claude-provider.js';
 import { TOKEN_SAVING_COMPACTION_ENV } from './token-saving-switches.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -2232,29 +2231,34 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
 
   it('題名づけ: 空文字・空白だけは「置いていない」と読み、渡された env オブジェクトは書き換えない', () => {
     const env: NodeJS.ProcessEnv = { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: ' ' };
-    expect(withNoSessionTitleEnv(env)).toEqual({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1' });
+    expect(withCliSessionEnv(env)).toEqual({
+      CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+    });
     expect(env).toEqual({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: ' ' });
   });
 
   it('アカウントのモデルカタログは止めない（新しい版を先に配る経路でもあるため）', () => {
-    expect(Object.hasOwn(withNoModelFallbackEnv({}), 'CLAUDE_CODE_MODEL_CATALOG')).toBe(false);
+    expect(Object.hasOwn(withCliSessionEnv({}), 'CLAUDE_CODE_MODEL_CATALOG')).toBe(false);
   });
 
   it('人間が値を置いていれば上書きしない', () => {
-    expect(withNoModelFallbackEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '0' })).toEqual({
+    expect(withCliSessionEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '0' })).toEqual({
       CLAUDE_CODE_NO_MODEL_FALLBACK: '0',
+      CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
     });
   });
 
   it('空文字・空白だけは「置いていない」と読む（器が `${VAR:-}` で空を渡しても止まる）', () => {
-    expect(withNoModelFallbackEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '  ' })).toEqual({
+    expect(withCliSessionEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '  ' })).toEqual({
       CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+      CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
     });
   });
 
   it('渡された env オブジェクトそのものは書き換えない', () => {
     const env: NodeJS.ProcessEnv = { PATH: '/bin' };
-    withNoModelFallbackEnv(env);
+    withCliSessionEnv(env);
     expect(env).toEqual({ PATH: '/bin' });
   });
 
