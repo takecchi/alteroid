@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { captureStderr } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -33,9 +34,13 @@ describe('fs の persona.remove: 実体を消したあとの索引の失敗', ()
     await rm(indexPath(), { force: true });
     await mkdir(indexPath());
 
-    await expect(stores.persona.remove('values')).resolves.toBeUndefined();
+    const lines = await captureStderr(async () => {
+      await expect(stores.persona.remove('values')).resolves.toBeUndefined();
+    });
 
     expect(await exists(docPath())).toBe(false);
+    // 握り潰さず跡は残す
+    expect(lines.join('')).toContain('記憶の削除後の索引の更新を記録できませんでした（slug=values）');
   });
 
   it('rm 自体が失敗したとき（実体がディレクトリ）は、今までどおり投げる', async () => {
