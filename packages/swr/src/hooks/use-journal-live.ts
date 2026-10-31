@@ -138,6 +138,8 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
         void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
         // 一覧だけでなく本文も落とす: 開いた会話の画面が一度読んだ履歴のまま止まるため
         void mutate((key) => isKeyOfType(key, 'conversation'));
+        // 人間の発言は受理のとき同じ id の task を積む（日誌には「積んだ」行を書かない）ので、会話の動きに合わせて task も読み直す
+        void mutate((key) => isKeyOfType(key, 'tasks'));
       }
       break;
     case 'external_event':

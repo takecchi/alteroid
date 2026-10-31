@@ -236,6 +236,8 @@ describe('autoCloseRepliedTasks: 閉じて日誌に残す', () => {
     expect(decisions[0]?.decision).toContain('conv-1');
     expect(`${decisions[0]?.decision}${decisions[0]?.grounds}`).not.toContain('BODY-SECRET');
     expect(decisions[0]?.grounds).toContain('そのターン自身の返答');
+    // Web が SSE で task の一覧を取り直す手がかり
+    expect(decisions[0]?.target).toEqual({ kind: 'task', id: 'a' });
   });
 
   it('返答の経路（task_say）を日誌に書き分ける', async () => {

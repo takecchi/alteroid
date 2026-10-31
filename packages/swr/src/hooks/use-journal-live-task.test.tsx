@@ -109,6 +109,26 @@ describe('task の足し・閉じの取り直し（SSE）', () => {
     expect(fetches(stub, '/tasks/t-1')).toBe(1);
   });
 
+  it('人間の発言の exchange でも task の一覧を取り直す（受理のとき task が積まれる）', async () => {
+    const stub = renderProbe([
+      {
+        event: 'exchange',
+        data: {
+          type: 'exchange',
+          id: 'e1',
+          at: '2026-11-01T00:00:00.000Z',
+          with: 'human',
+          role: 'inbound',
+          text: '依頼',
+          conversationId: 'conv-1',
+        },
+      },
+    ]);
+    await vi.waitFor(() => {
+      expect(fetches(stub, '/tasks')).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   it('target の無い（古い）decision では取り直さず、壊れもしない', async () => {
     const stub = renderProbe([decision('d1')]);
     await screen.findByText('loaded');

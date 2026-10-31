@@ -407,6 +407,13 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     expect(lines).toHaveLength(2);
     expect(lines.some((line) => line.includes('queued から waiting'))).toBe(true);
     expect(lines.some((line) => line.includes('waiting から needs_decision'))).toBe(true);
+    // Web が SSE で task の一覧を取り直す手がかり
+    const taskDecisions = (await s.stores.journal.list({ types: ['decision'] })).filter(
+      (entry) => entry.type === 'decision' && entry.decision.includes('task t-1'),
+    );
+    for (const entry of taskDecisions) {
+      expect(entry.type === 'decision' && entry.target).toEqual({ kind: 'task', id: 't-1' });
+    }
 
     s.fake.push(report(started.managerId));
     await settle();

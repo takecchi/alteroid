@@ -1917,7 +1917,16 @@ class Clone implements CloneHost {
           by: 'human',
           at: new Date().toISOString(),
         });
-        if (result.kind === 'changed') closed += 1;
+        if (result.kind === 'changed') {
+          closed += 1;
+          // 取り下げの `exchange` は task の一覧を取り直す手がかりにならない。宛先付きの decision を1行足す
+          await this.#journal({
+            type: 'decision',
+            target: { kind: 'task', id },
+            decision: `task を取り下げで閉じた（${id}: ${result.before.title}）: 配られる前に人間が発言を取り下げた`,
+            grounds: '人間が順番待ちの発言を取り下げたため、同じ id の task を cancelled にした',
+          });
+        }
       } catch (error) {
         noteDroppedRecord('取り下げた発言の Task の閉じ', id, error);
       }
