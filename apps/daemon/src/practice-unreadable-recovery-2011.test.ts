@@ -166,6 +166,27 @@ describe.each([
       expect(joined).not.toContain(BAD_CONTENT);
     });
 
+    // 読めない行は版が比べられないので、route の事前の 409 は素通りし、store の排他の中の判定（`current: null`）が 409 にする。
+    // 事前の 409 なら日誌に何も積まない: 先の行と打ち消しの行が積まれていることで、事前の判定を通ったと分かる。
+    it('PUT /practices/:slug の ifMatch は読めない行では事前の 409 を通り、store の排他が 409 にする', async () => {
+      const put = await app.request(`/practices/${BAD_SLUG}`, {
+        ...json({ kind: '調査', title: '直した題', content: '直した本文', ifMatch: 'stale' }),
+        method: 'PUT',
+      });
+      expect(put.status).toBe(409);
+      expect(await put.json()).toMatchObject({ current: null });
+      const entries = await stores.journal.list({ types: ['decision'] });
+      expect(entries.map((entry) => JSON.stringify(entry)).join('')).toContain('効いていない');
+    });
+
+    it('DELETE /practices/:slug の ifMatch は読めない行では事前の 409 を通り、store の排他が 409 にする', async () => {
+      const del = await app.request(`/practices/${BAD_SLUG}?ifMatch=stale`, { method: 'DELETE' });
+      expect(del.status).toBe(409);
+      expect(await del.json()).toMatchObject({ current: null });
+      const entries = await stores.journal.list({ types: ['decision'] });
+      expect(entries.map((entry) => JSON.stringify(entry)).join('')).toContain('効いていない');
+    });
+
     it('DELETE /practices/:slug は本当に無い slug なら今までどおり 404', async () => {
       const del = await app.request('/practices/never-existed', { method: 'DELETE' });
       expect(del.status).toBe(404);
