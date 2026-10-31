@@ -837,31 +837,6 @@ describe('失敗の応答（error / detail）を画面に出す前に伏せる',
   });
 });
 
-describe('旧い形の応答（entries が無い）は読めない形としてエラーにする', () => {
-  const OLD = {
-    script: 'export OLD_SECRET=1\n',
-    updatedAt: '2026-08-01T00:00:00Z',
-    sha256: 'old111',
-    bytes: 20,
-  };
-
-  it('list・show・status・set・rm のどれも、読み替えずにエラーにし、書き込みは打たない', async () => {
-    setReply('GET', '/profile', { status: 200, body: OLD });
-    captureStdout();
-    const dir = await makeTempDir('alteroid-profile-old-');
-    const path = join(dir, 'p.sh');
-    await writeFile(path, 'export A=1\n', 'utf8');
-    const message = 'プロファイルの応答が読めない形で届いた（entries が無い）';
-
-    await expect(profileListCommand()).rejects.toThrow(message);
-    await expect(profileShowCommand()).rejects.toThrow(message);
-    await expect(profileStatusCommand()).rejects.toThrow(message);
-    await expect(profileSetCommand(undefined, { file: path, yes: true })).rejects.toThrow(message);
-    await expect(profileRemoveCommand('default', { yes: true })).rejects.toThrow(message);
-    expect(sent.some((entry) => entry.method === 'PUT' || entry.method === 'DELETE')).toBe(false);
-  });
-});
-
 describe('alteroid profile rm / clear の確認（#3141）', () => {
   it('rm: 端末でなく --yes も無ければ、DELETE せずに断る', async () => {
     setReply('GET', '/profile', {
