@@ -200,7 +200,8 @@ function toStatus(value: unknown): (typeof STATUSES)[number] | undefined {
     : undefined;
 }
 
-function toEpochMs(value: unknown): number | undefined {
+// 既にミリ秒の桁なら素通しする: 将来 SDK がミリ秒へ変えても壊れないよう。秒でこの桁に届くのは西暦 5138 年なので衝突しない
+export function secondsToEpochMs(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
   return value > 1e11 ? Math.floor(value) : Math.floor(value * 1000);
 }
@@ -217,9 +218,9 @@ export function toRateLimitFacts(value: unknown): RateLimitFacts | undefined {
       raw.utilization >= 0
         ? raw.utilization
         : undefined,
-    resetsAt: toEpochMs(raw.resetsAt),
+    resetsAt: secondsToEpochMs(raw.resetsAt),
     overageStatus: toStatus(raw.overageStatus),
-    overageResetsAt: toEpochMs(raw.overageResetsAt),
+    overageResetsAt: secondsToEpochMs(raw.overageResetsAt),
     overageDisabledReason:
       typeof raw.overageDisabledReason === 'string' ? raw.overageDisabledReason : undefined,
     usingOverage:

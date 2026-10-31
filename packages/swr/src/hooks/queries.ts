@@ -42,6 +42,35 @@ export function isKeyOfType(key: unknown, type: string): boolean {
   return typeof key === 'object' && key !== null && (key as { type?: unknown }).type === type;
 }
 
+export function isConversationKeyOf(key: unknown, conversationId: string): boolean {
+  return isKeyOfType(key, 'conversation') && (key as { id?: unknown }).id === conversationId;
+}
+
+// 件数で溢れない上限: 1画面で人が消す会話は多くない。溢れたら古い順に忘れる（忘れた id は、墓標で一度読み直されるだけで済む）
+const OWN_DELETED_LIMIT = 50;
+
+const ownDeletedConversations = new Set<string>();
+
+// 消す API を呼ぶ前に入れる: 墓標の SSE が DELETE の応答より先に届いても、自分が消した会話と分かるため
+export function rememberOwnDeletedConversation(conversationId: string): void {
+  ownDeletedConversations.delete(conversationId);
+  ownDeletedConversations.add(conversationId);
+  if (ownDeletedConversations.size > OWN_DELETED_LIMIT) {
+    const oldest = ownDeletedConversations.values().next().value;
+    if (oldest !== undefined) ownDeletedConversations.delete(oldest);
+  }
+}
+
+// 消すのに失敗したら外す: 消えていない会話の読み直しまで省かないため
+export function forgetOwnDeletedConversation(conversationId: string): void {
+  ownDeletedConversations.delete(conversationId);
+}
+
+// 省くのは自分が消した画面だけ: 別の画面・別のブラウザで開いている人には、墓標の読み直しの 404 が「消された」の知らせになる
+export function isOwnDeletedConversation(conversationId: string): boolean {
+  return ownDeletedConversations.has(conversationId);
+}
+
 export const KEY = {
   health: { type: 'health' } as const,
   status: { type: 'status' } as const,

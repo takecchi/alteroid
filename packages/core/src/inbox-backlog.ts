@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { assertNever } from './assert-never.js';
 import { isDaemonSelfNotice } from './daemon-self-notice.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type { InboxEvent, UnreadableInboxEvent } from './schema.js';
@@ -71,10 +72,8 @@ export function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
     case 'timer':
     case 'self_initiative':
       return undefined;
-    default: {
-      const exhaustive: never = event;
-      throw new Error(`未知の受信箱イベント種別（source）: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return assertNever('未知の受信箱イベント種別（source）', event);
   }
 }
 
@@ -109,10 +108,8 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
       return [event.type, event.reason, event.cause ?? 'schedule'].join(DEDUPE_SEPARATOR);
     case 'distill':
       return [event.type, event.reason].join(DEDUPE_SEPARATOR);
-    default: {
-      const exhaustive: never = event;
-      throw new Error(`未知の受信箱イベント種別（dedupeKey）: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return assertNever('未知の受信箱イベント種別（dedupeKey）', event);
   }
 }
 

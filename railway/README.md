@@ -748,10 +748,10 @@ railway api 'query { deployment(id: "<外したデプロイのID>") { status met
 
 範囲は2つあり、**違うのは「ログインをやり直すか」だけである。**
 
-| 範囲       | やり方                                                | 代償                                                                                                    |
-| ---------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 全部       | `drop schema public cascade; create schema public;`   | `auth_accounts` も消えるので、**Web UI から再ログイン → `alteroid access grant <id>` のやり直しが要る** |
-| 認証を残す | `auth_*` 以外を `truncate … restart identity cascade` | 無し（発行済みトークンも許可もそのまま効く）                                                            |
+| 範囲       | やり方                                                     | 代償                                                                                                    |
+| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 全部       | `drop schema public cascade; create schema public;`        | `auth_accounts` も消えるので、**Web UI から再ログイン → `alteroid access grant <id>` のやり直しが要る** |
+| 認証を残す | 下の「残す表」以外を `truncate … restart identity cascade` | 無し（発行済みトークンも許可もそのまま効く）                                                            |
 
 **`Postgres` の Service は止めない。** 落とすのは中身であって器ではない（volume も消さない）。
 
@@ -763,24 +763,38 @@ for s in runner runner-2 runner-3; do railway down -s "$s" -y; done
 # 2. 誰も繋いでいないことを見てから落とす（認証を残す側）
 railway ssh --service Postgres 'psql \
   -c "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid();" \
-  -c "truncate table approvals, archive, daemon_state, env_profile, env_profile_entries, inbox_events, jobs, journal, memory, schedule_phases, schedules, session_entries, sessions, tasks, usage_baseline, usage_daily, usage_ledger restart identity cascade;"'
+  -c "truncate table approvals, archive, attachments, conversation_outbound_latest, conversation_read, conversation_read_baseline, daemon_state, env_profile, env_profile_entries, event_receipts, inbox_events, jobs, journal, memory, practice_versions, practices, schedule_phases, schedules, session_entries, sessions, tasks, usage_baseline, usage_daily, usage_ledger, usage_turns, usage_unmetered restart identity cascade;"'
 
 # 3. 戻す（runner が先）
 for s in runner runner-2 runner-3; do railway redeploy -s "$s" --from-source -y; done
 railway redeploy -s app --from-source -y
 ```
 
-**⚠️ 2 の表の名前を書き並べる形は、テーブルが増えた回だけ静かに漏れる。** 漏れても `truncate` は成功するので、**残った表は「消したつもり」のまま残る。** 全部消してよいなら `drop schema public cascade` を使うこと（数え上げが要らない）。認証だけ残すなら、消す前に**残らないはずの表を引いて突き合わせる**:
+**残す表**（「認証を残す」の範囲。2 の `truncate` に**載せない**。`migrate.ts` の表は、この一覧か `truncate` の一覧のどちらかに必ず載る — `scripts/railway-truncate-tables.test.ts` が突き合わせる）:
+
+- `auth_*` — ログインのアカウント・身元・アクセストークン・ログインの要求（`auth_accounts` ほか4表）。消すと再ログインが要る
+- `agent_tokens`・`agent_token_settings`・`agent_token_active` — 認証トークンのプール（#393）。消すと器が Claude に繋がらなくなる
+- `manager_credentials` — マネージャーへ渡す環境（名前→値。#825）。`POST /reset` も触らない
+- `codex_chatgpt_auth` — Codex の ChatGPT ログイン（#3982）。消すとデバイスコードのやり直し
+- `integration_keys` — 外のサービスに渡した連携の鍵（sha256 だけを持つ。#3126）。消すと渡した鍵が全部効かなくなる
+- `mcp_servers` — MCP サーバの登録（#1484。人間が書いたもの。`POST /reset` も触らない）
+- `plugins`・`plugin_files` — オーナーが入れた plugin（#3835。取り元と sha を固定して入れたもの）
+- `permission_grants` — 人間が承認した許可（#1491。記憶や日誌のリセットで黙って失われるべきでないとして、`POST /reset` も触らない）
+
+迷う表は残す側に倒してある。残した表の中身を消したいときは、`drop schema public cascade`（全部）か、その表だけを名前で `truncate` する。
+
+**⚠️ 2 の表の名前を書き並べる形は、テーブルが増えた回だけ静かに漏れる。** 漏れても `truncate` は成功するので、**残った表は「消したつもり」のまま残る。** 全部消してよいなら `drop schema public cascade` を使うこと（数え上げが要らない）。認証だけ残すなら、消す前に**`truncate` の一覧にも「残す表」にも無い表が無いか**を引いて突き合わせる（上の「残す表」を除いたものが、2 の一覧と一致すること）:
 
 ```bash
 railway ssh --service Postgres 'psql -c "select tablename from pg_tables where schemaname = current_schema() and tablename not like '"'"'auth_%'"'"' order by tablename;"'
 ```
 
-**消えるもののうち忘れやすいのは3つ。** どれも `memory`（記憶）とは別の軸である。
+**消えるもののうち忘れやすいのは4つ。** どれも `memory`（記憶）とは別の軸である。
 
 - **`daemon_state.clone_session_id`** — クローンが続けているセッションの id。消すとクローンは**新しいセッションから始まる**（会話の続きが切れる。記憶を残しても切れる）
-- **`tasks`** — 引き受けたまま終わっていない仕事の待ち行列。消すと**やり残しを誰も思い出さない**
 - **`env_profile_entries`**（と旧形式の `env_profile`）— 実行環境プロファイル（`.zprofile` 相当。名前付きの行。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile list` で行を数え、`alteroid profile show <名前>` で本文を控える。**`truncate` で `daemon_state` も消えるので、旧 `env_profile` に行が残っていると、次の起動で `default` 行として蘇る**（旧表も一緒に消すこと）
+- **`tasks`** — 引き受けた仕事の待ち行列（順序と状態を持つ。#5470）。消すと**やり残しを誰も思い出さない**（並べた順序と状態ごとなくなる）
+- **`practices`**（と版の履歴 `practice_versions`）— 仕事のやり方（#1282・#1420）。クローンが書くが、**人間が読んで書き換えるもの**でもある。`POST /reset` は消す側（「仕事のやり方」）なのでそれに揃えた。消す前に `alteroid practice list` で slug を数え、`alteroid practice show <slug>` で本文を控える（版の履歴は `alteroid practice history <slug>`）
 
 そして器を止める操作そのものの代償も残る — **走行中のマネージャーは畳まれ、`/workspace` の未 push の変更は消える**（「先に読む」3）。
 
@@ -792,7 +806,7 @@ railway ssh --service app 'alteroid access list'      # 許可が残っている
 railway ssh --service Postgres 'psql -c "\dt"'        # 表が張り直っているか
 ```
 
-**`\dt` が20表を返すことは「デーモンが上がった」ことの観測でもある**（張るのは起動時の `migrate` だけなので）。逆に、表が無いまま app が `SUCCESS` なら、上がったのはコンテナであってデーモンではない。
+**`\dt` が `migrate.ts` の表（「残す表」と `truncate` の一覧の和）を全部返すことは「デーモンが上がった」ことの観測でもある**（張るのは起動時の `migrate` だけなので）。逆に、表が無いまま app が `SUCCESS` なら、上がったのはコンテナであってデーモンではない。
 
 ---
 

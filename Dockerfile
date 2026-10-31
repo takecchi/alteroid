@@ -15,8 +15,8 @@
 # 器に入る版と、alteroid が型を生成した版がずれた瞬間に黙って壊れる。
 # 上げるときは npm の `latest` dist-tag の安定版（alpha でないもの）を採る:
 #   npm view @openai/codex dist-tags.latest
-# 0.163.0 は Renovate の catalog の更新（#5194）に合わせた。
-ARG CODEX_VERSION=0.163.0
+# 0.165.0 は Renovate の catalog の更新（#5958）に合わせた。
+ARG CODEX_VERSION=0.165.0
 
 # base は digest で固定する（Issue #3321）。タグだけだと Docker Hub 側の入れ替わりで
 # image ジョブのキャッシュが外れる時刻を上流に任せることになる。digest は Renovate の PR で

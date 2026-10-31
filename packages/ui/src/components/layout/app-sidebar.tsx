@@ -50,7 +50,8 @@ export function AppSidebar({
           : 'w-56 shrink-0 border-r border-border pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]',
       )}
     >
-      <div className="px-4 pt-4 pb-3">
+      {/* `inDrawer` では右を空ける: Drawer の閉じるボタンが右上に居るため */}
+      <div className={cn('px-4 pt-4 pb-3', inDrawer && 'pr-14')}>
         <BrandMark />
         <LiveIndicator status={status} connection={connection} className="pl-7" />
       </div>

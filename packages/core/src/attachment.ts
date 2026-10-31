@@ -318,20 +318,39 @@ export function readIntegrationAttachmentNoticeBytes(env: NodeJS.ProcessEnv = pr
   bytes: number;
   notes: string[];
 } {
-  const raw = env[ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV]?.trim();
-  if (raw === undefined || raw.length === 0) {
-    return { bytes: ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT, notes: [] };
-  }
+  const notes: string[] = [];
+  const bytes = readPositiveIntEnv(
+    env,
+    ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV,
+    ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT,
+    notes,
+  );
+  return { bytes, notes };
+}
+
+/**
+ * 環境変数を正の整数として読む。未設定・空なら既定。読めない・`max` を超えるときは既定へ倒し、理由を `notes` へ1行足す
+ * （起動は止めない）
+ */
+function readPositiveIntEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  notes: string[],
+  max?: number,
+): number {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw.length === 0) return fallback;
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    return {
-      bytes: ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT,
-      notes: [
-        `${ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV}="${raw}" は正の整数として読めないので既定 ${ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT} を使う`,
-      ],
-    };
+    notes.push(`${name}="${raw}" は正の整数として読めないので既定 ${fallback} を使う`);
+    return fallback;
   }
-  return { bytes: parsed, notes: [] };
+  if (max !== undefined && parsed > max) {
+    notes.push(`${name}="${raw}" は上限 ${max} を超えているので既定 ${fallback} を使う`);
+    return fallback;
+  }
+  return parsed;
 }
 
 export interface AttachmentLimits {
@@ -472,20 +491,8 @@ export interface AttachmentLimitsConfig {
 
 export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): AttachmentLimitsConfig {
   const notes: string[] = [];
-  const read = (name: string, fallback: number, max?: number): number => {
-    const raw = env[name]?.trim();
-    if (raw === undefined || raw.length === 0) return fallback;
-    const parsed = Number(raw);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-      notes.push(`${name}="${raw}" は正の整数として読めないので既定 ${fallback} を使う`);
-      return fallback;
-    }
-    if (max !== undefined && parsed > max) {
-      notes.push(`${name}="${raw}" は上限 ${max} を超えているので既定 ${fallback} を使う`);
-      return fallback;
-    }
-    return parsed;
-  };
+  const read = (name: string, fallback: number, max?: number): number =>
+    readPositiveIntEnv(env, name, fallback, notes, max);
   return {
     limits: {
       maxImageBytes: read(ATTACHMENT_MAX_IMAGE_BYTES_ENV, ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT),
@@ -520,12 +527,13 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
 // `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` を直接読む。新しい環境変数は作らない
 // デーモン（`readAttachmentLimits`）と同じ天井（S3 の1オブジェクトの最大）で既定へ倒す: 揃えないと、超える値を置いた器で runner だけがその値を受け、デーモンは既定へ戻ってずれるため
 export function readRunnerAttachmentStageLimit(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV]?.trim();
-  if (raw === undefined || raw.length === 0) return ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT;
-  const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= S3_MAX_OBJECT_BYTES
-    ? parsed
-    : ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT;
+  return readPositiveIntEnv(
+    env,
+    ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV,
+    ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT,
+    [],
+    S3_MAX_OBJECT_BYTES,
+  );
 }
 
 // Node の既定（`requestTimeout` 300 秒）のままだと、2 GiB を 50 Mbps で上げる（約6分）だけで途中で切られる。

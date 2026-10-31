@@ -1,12 +1,12 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { WITHHELD_ENV_KEYS } from '@alteroid/core';
+import { WITHHELD_ENV_KEYS, type Stores } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { DATABASE_URL_ENV, openStorage, planStorage } from './storage.js';
+import { DATABASE_URL_ENV, openStorage, planStorage, runBootBackfills } from './storage.js';
 
 describe('planStorage', () => {
   it('既定はローカル（fs）', () => {
@@ -321,5 +321,73 @@ describe('openStorage', () => {
 
       await second.close();
     });
+  });
+});
+
+describe('runBootBackfills（#5963）', () => {
+  beforeEach(() => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function fakeStores(options: { markHumanTouched?: () => Promise<void>; listPage?: () => void }) {
+    const entry = {
+      type: 'memory_update',
+      id: 'id-1',
+      at: '2026-01-01T00:00:00.000Z',
+      slug: 'habits',
+      cause: 'human',
+      action: 'write',
+      summary: 'テスト用',
+    };
+    const marked: string[] = [];
+    const created: string[] = [];
+    const stores = {
+      journal: {
+        listPage: async () => {
+          options.listPage?.();
+          return { entries: [entry], next: null };
+        },
+      },
+      persona: {
+        markHumanTouched:
+          options.markHumanTouched ??
+          (async (slug: string) => {
+            marked.push(slug);
+          }),
+        markCreatedAt: async (slug: string) => {
+          created.push(slug);
+          return true;
+        },
+        list: async () => [],
+      },
+    } as unknown as Stores;
+    return { stores, marked, created };
+  }
+
+  it('日誌を1周だけ読み、人間の印と作った時刻の両方を書き戻す', async () => {
+    let reads = 0;
+    const { stores, marked, created } = fakeStores({ listPage: () => (reads += 1) });
+
+    await runBootBackfills(stores);
+
+    expect(reads).toBe(1);
+    expect(marked).toEqual(['habits']);
+    expect(created).toEqual(['habits']);
+  });
+
+  it('人間の印の書き戻しが落ちても、作った時刻の補いは続ける', async () => {
+    const { stores, created } = fakeStores({
+      markHumanTouched: async () => {
+        throw new Error('書けない');
+      },
+    });
+
+    await runBootBackfills(stores);
+
+    expect(created).toEqual(['habits']);
   });
 });

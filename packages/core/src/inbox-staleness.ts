@@ -1,4 +1,5 @@
-import { DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import { assertNever } from './assert-never.js';
+import { DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './daemon-self-notice.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { InboxEvent } from './schema.js';
 
@@ -17,10 +18,8 @@ export function restoredInboxEventVerdict(event: InboxEvent): RestoredInboxEvent
     case 'self_initiative':
     case 'distill':
       return 'live';
-    default: {
-      const exhaustive: never = event;
-      throw new Error(`未知の受信箱イベント種別（staleness）: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return assertNever('未知の受信箱イベント種別（staleness）', event);
   }
 }
 

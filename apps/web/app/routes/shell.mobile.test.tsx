@@ -128,6 +128,25 @@ describe('狭い画面（375px）', () => {
   });
 });
 
+describe('狭い画面のメニューの「閉じる」ボタン', () => {
+  it('メニューの中に「閉じる」があり、押すと閉じて、焦点は「メニューを開く」へ戻る', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell();
+
+    renderShell();
+    await screen.findByText('ダッシュボードの中身');
+    const hamburger = screen.getByRole('button', { name: 'メニューを開く' });
+
+    hamburger.focus();
+    fireEvent.click(hamburger);
+    const dialog = await screen.findByRole('dialog', { name: 'メニュー' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '閉じる' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'メニュー' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(hamburger));
+  });
+});
+
 describe('狭い画面のドロワー', () => {
   it('広い画面と同じまとまり（見出し）と行き先が、ドロワーの中にも出る。現在地も同じ規則で示す', async () => {
     setViewportWidth(NARROW_WIDTH);

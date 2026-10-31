@@ -1904,6 +1904,32 @@ interface StaleHoldStuck {
   backgroundCommands: string[];
 }
 
+// 読めない時刻と無い時刻は数えない: 全部無ければ `undefined`（待ちの数え始めが分からない）
+function earliestMs(times: readonly (string | undefined)[]): number | undefined {
+  return times
+    .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+    .filter((at) => !Number.isNaN(at))
+    .reduce<number | undefined>(
+      (min, at) => (min === undefined ? at : Math.min(min, at)),
+      undefined,
+    );
+}
+
+/**
+ * `Pool#send` の届け方。`mode === 'held-delivery'` は預かった伝言の届け直し（`#deliverHeld`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
+ * `mode === 'usage-rotation'` は鍵の回転・枠の起こし直し（`#nudgeForUsageRotation`）だけが使う: 預かりに回さず（断られたら届かなかったと返し、周回の掃きが間隔を置いて挑み直す）、
+ * 抱えている古い鍵が ready でなければ背景処理が残っていても畳む（#4850）。
+ */
+interface SendDelivery {
+  mode: 'caller' | 'held-delivery' | 'usage-rotation';
+  // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
+  onFoldNoticeDelivered?: (backgroundTasks: number) => void;
+  // 見回り（`deliverHeldMessages`）からの届け直しだけ真（#4982）: 前と同じ判定で断るだけなら新しい判断ではないので、decision を書き直さない
+  pollRetry?: boolean;
+  // 待ちの上限（`HELD_FORCE_FOLD_AFTER_MS`）を過ぎた見回りの回に、畳まずに断った材料を呼び手へ返す（#5041）
+  onStuck?: (stuck: StaleHoldStuck) => void;
+}
+
 function composeHeldStuckNotice(
   managerId: string,
   count: number,
@@ -3841,7 +3867,7 @@ class Pool implements ManagerPool {
     message: string,
     options: ManagerSendOptions = {},
   ): Promise<ManagerSendResult> {
-    const result = await this.#send(managerId, message, options, 'caller');
+    const result = await this.#send(managerId, message, options, { mode: 'caller' });
     // 送ることは止めず、送った側へ注意だけを足す（#4877）: 前任を手で起こすのはクローンの選択でありうるが、黙って起こすと後継と二重に走るため。内部の送り（鍵の回転・預かりの届け直し）は `#send` を直に呼ぶので足さない
     const successor = this.#records.get(managerId)?.job.supersededBy;
     if (
@@ -3859,23 +3885,14 @@ class Pool implements ManagerPool {
     };
   }
 
-  /**
-   * `mode === 'held-delivery'` は預かった伝言の届け直し（`#deliverHeld`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
-   * `mode === 'usage-rotation'` は鍵の回転・枠の起こし直し（`#nudgeForUsageRotation`）だけが使う: 預かりに回さず（断られたら届かなかったと返し、周回の掃きが間隔を置いて挑み直す）、
-   * 抱えている古い鍵が ready でなければ背景処理が残っていても畳む（#4850）。
-   */
+  /** 届け方（`mode` ほか）は `SendDelivery`。 */
   async #send(
     managerId: string,
     message: string,
     options: ManagerSendOptions,
-    mode: 'caller' | 'held-delivery' | 'usage-rotation',
-    // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
-    onFoldNoticeDelivered?: (backgroundTasks: number) => void,
-    // 見回り（`deliverHeldMessages`）からの届け直しだけ真（#4982）: 前と同じ判定で断るだけなら新しい判断ではないので、decision を書き直さない
-    pollRetry = false,
-    // 待ちの上限（`HELD_FORCE_FOLD_AFTER_MS`）を過ぎた見回りの回に、畳まずに断った材料を呼び手へ返す（#5041）
-    onStuck?: (stuck: StaleHoldStuck) => void,
+    delivery: SendDelivery,
   ): Promise<ManagerSendResult> {
+    const { mode, onFoldNoticeDelivered, pollRetry = false, onStuck } = delivery;
     await this.#ensureConnected();
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
@@ -3979,7 +3996,7 @@ class Pool implements ManagerPool {
         question: pending.summary,
         approvalId: pending.requestId,
         managerId,
-        answeredAt: new Date().toISOString(),
+        answeredAt: new Date(this.#now()).toISOString(),
         /*
          * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
          * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
@@ -4027,13 +4044,7 @@ class Pool implements ManagerPool {
       // 畳むのは今どおり `#foldStaleTokenSession` が「鍵が現役と食い違い、その鍵が ready でない」と判定した回だけ
       // （ready なら旧セッションへ届ける）。人が走らせる長い仕事を、鍵が使える間に奪わない。
       const awaitingSince = this.#awaitingBackgroundOf(managerId)?.since;
-      const waitStartedAt = [oldestHeldAt, awaitingSince]
-        .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
-        .filter((at) => !Number.isNaN(at))
-        .reduce<number | undefined>(
-          (min, at) => (min === undefined ? at : Math.min(min, at)),
-          undefined,
-        );
+      const waitStartedAt = earliestMs([oldestHeldAt, awaitingSince]);
       const waitedLongEnough =
         mode === 'held-delivery' &&
         oldestHeldAt !== undefined &&
@@ -4043,17 +4054,11 @@ class Pool implements ManagerPool {
       // どちらも分からなければ待たない（#4850 の今まで）: 数え始めの無い待ちは、上限が来ないまま古い鍵で居座るため
       const rotationWaitStartedAt =
         mode === 'usage-rotation'
-          ? [
+          ? earliestMs([
               // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
               this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
               awaitingSince,
-            ]
-              .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
-              .filter((at) => !Number.isNaN(at))
-              .reduce<number | undefined>(
-                (min, at) => (min === undefined ? at : Math.min(min, at)),
-                undefined,
-              )
+            ])
           : undefined;
       const rotationFoldDueAt =
         rotationWaitStartedAt === undefined
@@ -4785,13 +4790,15 @@ class Pool implements ManagerPool {
         managerId,
         composeHeldDelivery(batch),
         {},
-        'held-delivery',
-        (backgroundTasks) => {
-          foldedBackgroundTasks = backgroundTasks;
-        },
-        trigger === 'poll',
-        (material) => {
-          stuck = material;
+        {
+          mode: 'held-delivery',
+          onFoldNoticeDelivered: (backgroundTasks) => {
+            foldedBackgroundTasks = backgroundTasks;
+          },
+          pollRetry: trigger === 'poll',
+          onStuck: (material) => {
+            stuck = material;
+          },
         },
       );
       if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
@@ -6793,7 +6800,7 @@ class Pool implements ManagerPool {
         requesterId,
         text,
         attachments === undefined || attachments.length === 0 ? {} : { attachments },
-        'caller',
+        { mode: 'caller' },
       );
     let target = requester;
     if (targetId !== requesterId) {
@@ -7424,9 +7431,11 @@ class Pool implements ManagerPool {
           ? usageRotationNudge()
           : workerLimitNudge(options.workerLimit.generation),
         {},
-        'usage-rotation',
-        (backgroundTasks) => {
-          foldedBackgroundTasks = backgroundTasks;
+        {
+          mode: 'usage-rotation',
+          onFoldNoticeDelivered: (backgroundTasks) => {
+            foldedBackgroundTasks = backgroundTasks;
+          },
         },
       );
       if (result.outcome === 'delivered' || result.outcome === 'answered') {
@@ -8413,7 +8422,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'manager_message',
         id: randomUUID(),
-        at: new Date().toISOString(),
+        at: new Date(this.#now()).toISOString(),
         managerId,
         kind: 'report',
         text: messageText,
@@ -10479,7 +10488,7 @@ class Pool implements ManagerPool {
           // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
           record.job.lastFoldedTurn = {
             text: reportFullTextOf(event),
-            at: new Date().toISOString(),
+            at: new Date(this.#now()).toISOString(),
           };
           await this.#persist(record);
           return;
@@ -10534,7 +10543,7 @@ class Pool implements ManagerPool {
           record.job.lastFailure = {
             code: event.failure.code,
             via: event.failure.via,
-            at: new Date().toISOString(),
+            at: new Date(this.#now()).toISOString(),
           };
           // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
           // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
@@ -10548,7 +10557,10 @@ class Pool implements ManagerPool {
         if (event.unreported === undefined) {
           delete record.job.lastUnreported;
         } else {
-          record.job.lastUnreported = { ...event.unreported, at: new Date().toISOString() };
+          record.job.lastUnreported = {
+            ...event.unreported,
+            at: new Date(this.#now()).toISOString(),
+          };
         }
         await this.#persist(record);
         await this.#journal({
@@ -10720,7 +10732,7 @@ class Pool implements ManagerPool {
             question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
             approvalId: event.requestId,
             managerId: event.managerId,
-            withdrawnAt: new Date().toISOString(),
+            withdrawnAt: new Date(this.#now()).toISOString(),
             withdrawnReason:
               `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
               `理由: ${event.withdrawn.reason}`,
@@ -10957,7 +10969,7 @@ class Pool implements ManagerPool {
 
         // ここで自分の番を待つ: 上の `await` の間に後から届いた usage が先に `record` へ着くと、小さい累積が後から届いて「数え直し」と読まれ過大に数える。
         await usageTicket?.turn();
-        const at = new Date();
+        const at = new Date(this.#now());
         // 1回だけ引いて使い回す: 2回引くと、間に回し手が `#tokenIdentities` を書き換えたとき「有無の判定」と「使う値」が別の世代を見る。
         const tokenIdentity = this.#tokenIdentities.get(event.managerId);
         let fold;
@@ -11071,7 +11083,7 @@ class Pool implements ManagerPool {
 
       case 'peer_usage': {
         // トークンの身元（`#tokenIdentities`）は付けない: マネージャー本体のセッションの鍵で、peer が使った鍵とは限らない（取れない軸は埋めない）。
-        const at = new Date();
+        const at = new Date(this.#now());
         try {
           if (event.unmetered === true) {
             // 0 を積まず「取れなかった」として数える。
@@ -11672,12 +11684,18 @@ class Pool implements ManagerPool {
         // 先に前の回の値を下ろす: 欄が無い回に下ろさないと、続けて `failed` で閉じたとき1回目の値が今回の落ち方として残る。`status` では絞らない。
         delete record.job.lastSystemError;
         if (event.status === 'failed' && event.systemError !== undefined) {
-          record.job.lastSystemError = { ...event.systemError, at: new Date().toISOString() };
+          record.job.lastSystemError = {
+            ...event.systemError,
+            at: new Date(this.#now()).toISOString(),
+          };
         }
         // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
         delete record.job.lastCgroupEvents;
         if (event.status === 'failed' && event.cgroupEvents !== undefined) {
-          record.job.lastCgroupEvents = { ...event.cgroupEvents, at: new Date().toISOString() };
+          record.job.lastCgroupEvents = {
+            ...event.cgroupEvents,
+            at: new Date(this.#now()).toISOString(),
+          };
         }
         // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
         // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
@@ -12639,7 +12657,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date().toISOString(),
+      at: new Date(this.#now()).toISOString(),
       managerId: job.id,
       kind: 'report',
       text: [
@@ -12968,7 +12986,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date().toISOString(),
+      at: new Date(this.#now()).toISOString(),
       managerId,
       kind,
       text: outgoing,
