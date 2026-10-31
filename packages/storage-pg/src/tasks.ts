@@ -1,6 +1,7 @@
 import {
   addTaskRow,
   editTaskRow,
+  extractRowField,
   hasNul,
   listTaskRows,
   moveTaskRow,
@@ -45,13 +46,6 @@ interface RawRow {
   task: unknown;
 }
 
-// `id` / `createdAt` 以外を覗かない（`FsTaskStore` と同じ理由）
-function stringFieldOf(value: unknown, key: 'id' | 'createdAt'): string | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const field = (value as Record<string, unknown>)[key];
-  return typeof field === 'string' ? field : undefined;
-}
-
 interface Loaded {
   rows: TaskRow[];
   unreadable: (UnreadableTask & { id: string })[];
@@ -67,7 +61,8 @@ function split(raw: readonly RawRow[]): Loaded {
       rows.push({ rank: row.rank, task: parsed.data });
       continue;
     }
-    const createdAt = stringFieldOf(row.task, 'createdAt');
+    // `createdAt` 以外を覗かない（`FsTaskStore` と同じ理由）
+    const createdAt = extractRowField(row.task, 'createdAt');
     unreadable.push({
       id: row.id,
       createdAt:
