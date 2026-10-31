@@ -2485,6 +2485,34 @@ function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'un
   return 'unknown';
 }
 
+/** SDK の背景処理の1行（`unknown`）から、文字列の欄だけを読む。文字列でない欄は `undefined`（読み手が既定を決める）。 */
+interface BackgroundTaskRow {
+  id?: string;
+  type?: string;
+  status?: string;
+  description?: string;
+  command?: string;
+}
+
+function taskRow(task: unknown): BackgroundTaskRow {
+  const t = task as Record<keyof BackgroundTaskRow, unknown>;
+  const str = (value: unknown): string | undefined =>
+    typeof value === 'string' ? value : undefined;
+  return {
+    id: str(t.id),
+    type: str(t.type),
+    status: str(t.status),
+    description: str(t.description),
+    command: str(t.command),
+  };
+}
+
+// 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
+function truncateWithNote(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  return text.slice(0, codePointBoundary(text, limit)) + `…（上限 ${limit} 文字で切った）`;
+}
+
 /** 鍵の付け替えで畳む間に預かる peer の窓口の結び（#4734）。受け口はいつも `session`（いまの担当のセッション）へ回る。 */
 interface PeerBinding {
   session: RunnerSession;
@@ -2784,41 +2812,32 @@ class RunnerSession {
     limit: RESOLVED_MEMORY_LIMIT,
     // 忘れたことを黙らない: 忘れた id の再送はもう一度クローンへ出るので、記録が無いと「なぜ二度届いたのか」を辿れないため
     onForget: (ids) =>
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `解決済みの確認の記憶が上限（${RESOLVED_MEMORY_LIMIT}件）に達したので、` +
+      this.#note(
+        `解決済みの確認の記憶が上限（${RESOLVED_MEMORY_LIMIT}件）に達したので、` +
           `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
           'この id の確認が SDK から再送されると、新しい確認としてもう一度回る。',
-      }),
+      ),
   });
   // `true` だけを置かない: 入力を持たない `via: 'live'` が先に鍵を立てると、入力を持つ `via: 'result'` を区別できず捨てるため
   readonly #denied = createRecentMap<DeniedRecord>({
     limit: DENIED_MEMORY_LIMIT,
     // 忘れたことを黙らない: 忘れた id が `result` に再度載ると、同じ拒否が新しい拒否として上がるため
     onForget: (ids) =>
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `上へ降ろした拒否の記憶が上限（${DENIED_MEMORY_LIMIT}件）に達したので、` +
+      this.#note(
+        `上へ降ろした拒否の記憶が上限（${DENIED_MEMORY_LIMIT}件）に達したので、` +
           `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
           'この tool_use_id が result に残っていれば、同じ拒否がもう一度上がる。',
-      }),
+      ),
   });
   // 生の入力を保持しない: 伏せ字済み・160字以内の文字列だけを控える
   readonly #preToolInputHeads = createRecentMap<string>({
     limit: PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT,
     onForget: (ids) =>
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `PreToolUse で控えた入力の先頭の記憶が上限（${PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT}件）に` +
+      this.#note(
+        `PreToolUse で控えた入力の先頭の記憶が上限（${PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT}件）に` +
           `達したので、古い ${ids.length} 件（tool_use_id のみ。本文は書かない）を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の拒否が後から届いても、inputHead は付かない。`,
-      }),
+      ),
   });
   // 生の入力を保持しない: 復元できないダイジェストだけを鍵にするため
   readonly #oneShotAllows = createRecentMap<{
@@ -2828,14 +2847,11 @@ class RunnerSession {
   }>({
     limit: ONE_SHOT_ALLOW_MEMORY_LIMIT,
     onForget: (ids) =>
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器の拒否への1回だけの許可の記憶が上限（${ONE_SHOT_ALLOW_MEMORY_LIMIT}件）に` +
+      this.#note(
+        `分類器の拒否への1回だけの許可の記憶が上限（${ONE_SHOT_ALLOW_MEMORY_LIMIT}件）に` +
           `達したので、古い ${ids.length} 件（鍵のみ。中身は書かない）を忘れた: ${ids.join(', ')}。` +
           `使われないまま忘れたので実害は無い（issue #1105 P1）。`,
-      }),
+      ),
   });
   // `key` と `at` を持つ: allow を返した撃ち直しがまた拒否されたとき、同じ呼び出しへの確認を重ねて上げないために照合する（#4904）
   readonly #oneShotAllowedToolUses = createRecentMap<{
@@ -2846,15 +2862,12 @@ class RunnerSession {
   }>({
     limit: ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) =>
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `1回だけの許可で allow を返した呼び出しの記憶が上限` +
+      this.#note(
+        `1回だけの許可で allow を返した呼び出しの記憶が上限` +
           `（${ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を` +
           `忘れた: ${ids.join(', ')}。この tool_use_id への拒否が後から届いても、` +
           `「許可を追い越した」とは検出できない（issue #1105 P1）。`,
-      }),
+      ),
   });
   // allow を返した撃ち直しが分類器にまた拒否された呼び出しの鍵（生の入力は持たない）: 同じ呼び出しの確認の連鎖を止めるため（#4904）
   readonly #allowedButDenied = createRecentMap<{ readonly expiresAt: number }>({
@@ -3145,17 +3158,13 @@ class RunnerSession {
     try {
       const entries = parseTranscriptEntries(await readFile(path, 'utf8'));
       if (entries !== undefined) return entries;
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `鍵の回転で開き直す前に、resume の一時ディレクトリの生ログ（${path}）を読み切れなかった（空か、読めない行が在る）。材料なしで開き直す。`,
-      });
+      this.#note(
+        `鍵の回転で開き直す前に、resume の一時ディレクトリの生ログ（${path}）を読み切れなかった（空か、読めない行が在る）。材料なしで開き直す。`,
+      );
     } catch (error) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `鍵の回転で開き直す前に、resume の一時ディレクトリの生ログ（${path}）を読めなかった。材料なしで開き直す: ${reasonOf(error)}`,
-      });
+      this.#note(
+        `鍵の回転で開き直す前に、resume の一時ディレクトリの生ログ（${path}）を読めなかった。材料なしで開き直す: ${reasonOf(error)}`,
+      );
     }
     return undefined;
   }
@@ -3266,6 +3275,11 @@ class RunnerSession {
     this.#onClosed(abandonTree ? { abandonTree: true } : undefined);
   }
 
+  // この担当の note を出す。追加の欄（notifyClone・stall・workerLimit など）を持つ note は `#emit` を直に呼ぶ
+  #note(text: string): void {
+    this.#emit({ type: 'note', managerId: this.#id, text });
+  }
+
   // 退避から漏れた作業ツリーがあることを note で知らせる（#4681）。打ち切られた分は退避されず、知らせないと人間もクローンも気づけないため
   #noteRescueListIncomplete(incomplete: RescueListIncomplete | undefined): void {
     const text = this.#rescueListNotice.next(incomplete);
@@ -3299,14 +3313,11 @@ class RunnerSession {
       (root) => !isSameOrInside(root, this.#cwd) && !isUnderManagerScratchDir(root),
     );
     if (outside.length === 0) return;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `決まり（担当の作業場か /tmp/mgr-<委譲 id の頭>）の外で git を打った作業ツリーが残っている。` +
+    this.#note(
+      `決まり（担当の作業場か /tmp/mgr-<委譲 id の頭>）の外で git を打った作業ツリーが残っている。` +
         `未 push の観測と退避 ref はこれも見たが、runner の片付けは消さない（共有の作業場を取り違えて消さないため）。` +
         `要らなければ人間か担当が消すこと: ${outside.join(', ')}`,
-    });
+    );
   }
 
   // `stop()` ではなく `#finish()` を通す: 自己失効はランナー自身の判断で、デーモンが知る手段が `closed` イベントしかないため
@@ -3349,11 +3360,7 @@ class RunnerSession {
     try {
       childEntry = peer.childEntry ?? resolveCloneToolRelayChildEntry(import.meta.url);
     } catch (error) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `MCP peer を出せなかった（中継の子が見つからない）: ${reasonOf(error)}`,
-      });
+      this.#note(`MCP peer を出せなかった（中継の子が見つからない）: ${reasonOf(error)}`);
       return undefined;
     }
     const broker = (this.#peerBroker ??= this.#createPeerBroker(allowed, peer));
@@ -3376,11 +3383,9 @@ class RunnerSession {
     try {
       childEntry = tools.childEntry ?? resolveCloneToolRelayChildEntry(import.meta.url);
     } catch (error) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `MCP ${MANAGER_TOOLS_MCP_SERVER_NAME} を出せなかった（中継の子が見つからない）: ${reasonOf(error)}`,
-      });
+      this.#note(
+        `MCP ${MANAGER_TOOLS_MCP_SERVER_NAME} を出せなかった（中継の子が見つからない）: ${reasonOf(error)}`,
+      );
       return undefined;
     }
     const token = tools.host.register(
@@ -3425,7 +3430,7 @@ class RunnerSession {
       mainKey: () => binding.session.#mainLogKey,
       mirror: (key, entries) =>
         binding.session.#emit({ type: 'mirror', managerId: binding.session.#id, key, entries }),
-      note: (text) => binding.session.#emit({ type: 'note', managerId: binding.session.#id, text }),
+      note: (text) => binding.session.#note(text),
       // rollout の読みは子の uid の子プロセスで行う（#5259）。env は呼ぶたびに引く（`#childEnv()` は変わりうる）
       ...(this.#childUser === undefined
         ? {}
@@ -3512,8 +3517,7 @@ class RunnerSession {
               binding.session.#queryFn === undefined ? {} : { queryFn: binding.session.#queryFn },
             ),
       reportsUsage: (provider) => peer.reportsUsage(provider),
-      onNote: (text) =>
-        binding.session.#emit({ type: 'note', managerId: binding.session.#id, text }),
+      onNote: (text) => binding.session.#note(text),
       // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす
       onBackgroundStop: (result) => {
         if (binding.collectStop !== undefined) binding.collectStop(result);
@@ -3597,11 +3601,9 @@ class RunnerSession {
         chownSync(dir, this.#childUser.uid, this.#childUser.gid);
       }
     } catch (error) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `peer の作業場 ${dir} を作れなかったので、マネージャーの cwd のままにした: ${reasonOf(error)}`,
-      });
+      this.#note(
+        `peer の作業場 ${dir} を作れなかったので、マネージャーの cwd のままにした: ${reasonOf(error)}`,
+      );
       return {
         systemPromptAppend: withReportLanguageParagraph(
           PEER_SYSTEM_PROMPT_APPEND,
@@ -3654,13 +3656,10 @@ class RunnerSession {
     const message = error instanceof Error ? error.message : String(error);
     if (this.#reportLanguageMisconfigNoted === message) return;
     this.#reportLanguageMisconfigNoted = message;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `報告の言語を掛けていない: ${message}。直すまで、英語の文の知らせも、` +
+    this.#note(
+      `報告の言語を掛けていない: ${message}。直すまで、英語の文の知らせも、` +
         '担当・作業者のプロンプトへの言語の指示も掛けない（指示は直した後に開くセッションから入る）。#4965 #4977',
-    });
+    );
   }
 
   // `tool_use` にしない: 旧 daemon が未知の欄を落とすため
@@ -3672,11 +3671,9 @@ class RunnerSession {
             TOOL_USE_FAILURE_ERROR_EXCERPT,
           )
         : '(不明)';
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=${peerActorOf(this.#id, provider)}・error=${error}`,
-    });
+    this.#note(
+      `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=${peerActorOf(this.#id, provider)}・error=${error}`,
+    );
   }
 
   #buildSpec(resume?: string, forPeer = false): AgentManagerSessionSpec {
@@ -3750,7 +3747,7 @@ class RunnerSession {
         ? {}
         : { spawnProcess: (options) => this.#spawnDelegationProcess(options) }),
       onPermission: (request) => this.#onPermission(request),
-      onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
+      onNote: (text) => this.#note(text),
       onPreToolUse: (record) => this.#onPreToolUse(record),
       onPermissionDenied: (record) => this.#onPermissionDenied(record),
       onPostToolUse: (record) => this.#onPostToolUse(record),
@@ -3813,11 +3810,9 @@ class RunnerSession {
             this.#noteSubagentPlacement(configDir, placed);
             return null;
           } catch (error) {
-            this.#emit({
-              type: 'note',
-              managerId: this.#id,
-              text: `resume の材料を子の設定ディレクトリ（${configDir}）へ置けなかったので、SDK の一時ディレクトリから resume する: ${reasonOf(error)}`,
-            });
+            this.#note(
+              `resume の材料を子の設定ディレクトリ（${configDir}）へ置けなかったので、SDK の一時ディレクトリから resume する: ${reasonOf(error)}`,
+            );
           }
         }
         return seed;
@@ -3832,18 +3827,14 @@ class RunnerSession {
   ): void {
     const { rejected } = placed.subagents;
     if (rejected.length > 0) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `resume の作業者の記録 ${String(rejected.length)} 件を、subpath が安全でないので置かなかった: ${rejected.join(', ')}`,
-      });
+      this.#note(
+        `resume の作業者の記録 ${String(rejected.length)} 件を、subpath が安全でないので置かなかった: ${rejected.join(', ')}`,
+      );
     }
     if (placed.subagentFailure !== undefined) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `resume の作業者の記録を子の設定ディレクトリ（${configDir}）へ置けなかった（その作業者への SendMessage は記録が無く失敗する）: ${placed.subagentFailure}`,
-      });
+      this.#note(
+        `resume の作業者の記録を子の設定ディレクトリ（${configDir}）へ置けなかった（その作業者への SendMessage は記録が無く失敗する）: ${placed.subagentFailure}`,
+      );
     }
   }
 
@@ -3923,7 +3914,7 @@ class RunnerSession {
     } catch (error) {
       remove();
       const text = `委譲の CLI の MCP 設定を argv の外（0600 のファイル）へ置けなかったので、起動しない: ${reasonOf(error)}`;
-      this.#emit({ type: 'note', managerId: this.#id, text });
+      this.#note(text);
       throw new Error(text, { cause: error });
     }
   }
@@ -3969,13 +3960,10 @@ class RunnerSession {
           { ...process.env, ...childEnv },
           this.#vaultValues(),
         );
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text:
-            `委譲の CLI（pid ${String(child.pid ?? '?')}）が ${how} で終わった。` +
+        this.#note(
+          `委譲の CLI（pid ${String(child.pid ?? '?')}）が ${how} で終わった。` +
             (shown.length === 0 ? 'stderr には何も出ていなかった。' : `stderr の末尾: ${shown}`),
-        });
+        );
       };
       if ((stderr as { readableEnded?: boolean }).readableEnded === true) {
         report();
@@ -3995,11 +3983,9 @@ class RunnerSession {
     try {
       this.#handOverResumeConfigDirFn(dir, childUser.uid, childUser.gid);
     } catch (error) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `resume の材料の置き場（${dir}）を子へ渡せなかった。生ログからの引き継ぎで続ける: ${reasonOf(error)}`,
-      });
+      this.#note(
+        `resume の材料の置き場（${dir}）を子へ渡せなかった。生ログからの引き継ぎで続ける: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -4048,11 +4034,9 @@ class RunnerSession {
       chmodSync(dir, 0o700);
       this.#claudeTmpDir = dir;
     } catch (error) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `委譲の CLI の一時フォルダ ${dir} を用意できなかったので、既定（/tmp/claude-<uid>）のまま起こす: ${reasonOf(error)}`,
-      });
+      this.#note(
+        `委譲の CLI の一時フォルダ ${dir} を用意できなかったので、既定（/tmp/claude-<uid>）のまま起こす: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -4065,11 +4049,9 @@ class RunnerSession {
       });
     } catch (error) {
       // 黙って落とさない: 出し箱が無いと成果物を添えられず、理由が出力に残らないと原因が辿れない
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `出し箱を用意できなかったので ${RUNNER_OUTBOX_ENV} を渡さない: ${reasonOf(error)}`,
-      });
+      this.#note(
+        `出し箱を用意できなかったので ${RUNNER_OUTBOX_ENV} を渡さない: ${reasonOf(error)}`,
+      );
       return undefined;
     }
   }
@@ -4133,11 +4115,7 @@ class RunnerSession {
       };
     } catch (error) {
       const reason = reasonOf(error);
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `出し箱を取り込めなかった: ${reason}`,
-      });
+      this.#note(`出し箱を取り込めなかった: ${reason}`);
       return {
         rejectedFiles: outboxCollectFailureRefusals(
           this.#outboxRoot,
@@ -4762,15 +4740,12 @@ class RunnerSession {
         throw new Error('rollout の置き場（relPath・ファイル名）が安全でないか、戻せる行が無い');
       }
       this.#peerSeeds.delete(peerId);
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `peer [${peerId}] の記録を ${home}/sessions へ${result.placed.length > 0 ? '置いた' : '置かなかった（既に在る）'}` +
+      this.#note(
+        `peer [${peerId}] の記録を ${home}/sessions へ${result.placed.length > 0 ? '置いた' : '置かなかった（既に在る）'}` +
           (result.droppedLines > 0
             ? `（ordinal の無い行 ${String(result.droppedLines)} 行は捨てた）`
             : ''),
-      });
+      );
     })();
     this.#peerPlacements.set(peerId, placing);
     // 失敗した約束は残さない（broker 側は失敗した id を起こせる一覧から外す）
@@ -4795,11 +4770,9 @@ class RunnerSession {
         : result.ok
           ? 'ターンが終わった'
           : 'ターンが失敗した・セッションが終わった';
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: `背景の peer（${result.provider}）[${result.sessionId}] が${where}。マネージャーへ知らせる（#4123）`,
-    });
+    this.#note(
+      `背景の peer（${result.provider}）[${result.sessionId}] が${where}。マネージャーへ知らせる（#4123）`,
+    );
     this.#peerNotices.push(describePeerTurnResult(result));
     this.#deliverPeerNotices();
   }
@@ -4824,11 +4797,7 @@ class RunnerSession {
     if (this.#sdkSession.stopped || this.#sdkSession.status !== 'done') return;
     const body = this.#drainFinishedBackgroundTaskOutputs();
     if (body === null) return;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: '打ち切った作業者の背景処理の完了で、止まっていたマネージャーを起こした（#1554）',
-    });
+    this.#note('打ち切った作業者の背景処理の完了で、止まっていたマネージャーを起こした（#1554）');
     this.push(
       'alteroid が自動で送った知らせである（#1554）。作業者は打ち切られていて、' +
         `自分では再開しない。\n\n${body}`,
@@ -4859,18 +4828,15 @@ class RunnerSession {
         this.#allowedButDenied.set(funneled.key, {
           expiresAt: funneled.at + ONE_SHOT_ALLOW_TTL_MS,
         });
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text:
-            `1回だけの許可（issue #1105 P1、${funneled.actor}・${funneled.tool}）で allow を` +
+        this.#note(
+          `1回だけの許可（issue #1105 P1、${funneled.actor}・${funneled.tool}）で allow を` +
             `返した呼び出しが、それでも拒否された（合図の出所: ${via}）。分類器がこの allow を` +
             `分類器へ回した（リモートの機能フラグ）か、deny 規則が上書きしたかのどちらか` +
             `（あるいは両方）で、alteroid 側からは切り分けられない。この許可はいまは効いて` +
             `いない可能性がある。分類器が迂回・敵対の型で止めた呼び出しは、クローンの allow や` +
             `担当の伝言を人間の確認と見なさないため、同じ入力の撃ち直しは通らないことがある。` +
             `同じ呼び出しへの確認は重ねて上げない（#4904）。`,
-        });
+        );
       }
     }
 
@@ -4888,13 +4854,10 @@ class RunnerSession {
       this.#denied.set(toolUseId, { input: true });
       const shape = denialInputShape(input);
       if (shape !== undefined) {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text:
-            `先に降ろした ${tool} の拒否について、ターン終わりの記録（via: result）に` +
+        this.#note(
+          `先に降ろした ${tool} の拒否について、ターン終わりの記録（via: result）に` +
             `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${shape}`,
-        });
+        );
       }
       return;
     }
@@ -5257,49 +5220,37 @@ class RunnerSession {
     const streakActor = record.agentId ?? 'manager';
     if (this.#denialStreaks.noteDenial(streakActor, record.reason)) {
       const view = this.#denialStreaks.view(streakActor);
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器の拒否が ${actor} で続けて ${String(view?.consecutive ?? 0)} 回になった（累計 ${String(view?.total ?? 0)} 回。runner の数え）。` +
+      this.#note(
+        `分類器の拒否が ${actor} で続けて ${String(view?.consecutive ?? 0)} 回になった（累計 ${String(view?.total ?? 0)} 回。runner の数え）。` +
           'CLI はこの後、分類器が止めた操作を確認へ回すので、ふだんは通る操作の確認も上がりうる。' +
           `${streakActor === 'manager' ? '担当' : 'この作業者'}には、次に道具が通ったとき、その事情と取れる道（クローンに確かめてもらう・新しい作業者へ渡す・区切りで報告して後継を起こしてもらう）を添える。` +
           `最初に引っかかった理由: ${view?.firstReason ?? '(取れなかった)'}`,
-      });
+      );
     }
 
     // `tool_input` を載せない（理由は先頭だけ）
     const reasonHead = Array.from((record.reason ?? '').replace(/\s+/g, ' ').trim());
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `分類器の拒否のフックが届いた（${actor}・${toolName ?? '道具名なし'}・` +
+    this.#note(
+      `分類器の拒否のフックが届いた（${actor}・${toolName ?? '道具名なし'}・` +
         `tool_use_id=${record.toolUseId ?? '無し'}）。理由の先頭: ` +
         `${reasonHead.length === 0 ? '(無し)' : reasonHead.slice(0, 80).join('')}` +
         `${reasonHead.length > 80 ? '…' : ''}（issue #1766）`,
-    });
+    );
 
     if (toolName === undefined) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器の拒否（${actor}）が道具名を持たない合図で届いたので、クローンへは確認を上げず、` +
+      this.#note(
+        `分類器の拒否（${actor}）が道具名を持たない合図で届いたので、クローンへは確認を上げず、` +
           `1回だけの許可も出さない（issue #1105 P1）。`,
-      });
+      );
       return { kind: 'no-retry' };
     }
 
     const matchInput = matchInputOf(record.toolInput);
     if (matchInput === undefined) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器が ${actor} の ${toolName} 呼び出しを拒否したが、入力を1回だけの許可の鍵へ畳め` +
+      this.#note(
+        `分類器が ${actor} の ${toolName} 呼び出しを拒否したが、入力を1回だけの許可の鍵へ畳め` +
           `なかったため、クローンへは確認を上げず1回だけの許可も出さない（issue #1105 P1）。`,
-      });
+      );
       return { kind: 'no-retry' };
     }
 
@@ -5319,14 +5270,11 @@ class RunnerSession {
       .some(([, use]) => use.key === permitKey && use.at + ONE_SHOT_ALLOW_TTL_MS > nowMs);
     const deniedAgain = this.#allowedButDenied.get(permitKey);
     if (pendingRetry || (deniedAgain !== undefined && deniedAgain.expiresAt > nowMs)) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器が ${actor} の ${toolName} 呼び出しを、allow を返した撃ち直しのあとでも再び止めた。` +
+      this.#note(
+        `分類器が ${actor} の ${toolName} 呼び出しを、allow を返した撃ち直しのあとでも再び止めた。` +
           `同じ呼び出しの確認は重ねて上げない（allow しても通らなかった。人間が止められた中身を見て` +
           `誤検知だと確かめるまで、同じ入力は通らないことがある。#4904）。`,
-      });
+      );
       return { kind: 'no-retry' };
     }
 
@@ -5381,14 +5329,11 @@ class RunnerSession {
     const outcome = await result;
 
     if (timedOut) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器の拒否（${actor}・${toolName}）への1回だけの許可の確認が、フックの持ち時間切れで` +
+      this.#note(
+        `分類器の拒否（${actor}・${toolName}）への1回だけの許可の確認が、フックの持ち時間切れで` +
           `終わった。安全側で retry は返さない。答えが遅れて届いても、この確認は既に解決済みなので` +
           `反映しない（issue #1105 P1）。`,
-      });
+      );
       return { kind: 'no-retry' };
     }
 
@@ -5398,11 +5343,9 @@ class RunnerSession {
     }
 
     if (outcome.behavior === 'deny') {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text: `クローンが分類器の拒否（${actor}・${toolName}）への1回だけの許可を出さなかった: ${outcome.message}`,
-      });
+      this.#note(
+        `クローンが分類器の拒否（${actor}・${toolName}）への1回だけの許可を出さなかった: ${outcome.message}`,
+      );
       return { kind: 'no-retry' };
     }
 
@@ -5420,11 +5363,8 @@ class RunnerSession {
       inputHead,
     });
     const ttlMinutes = Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000);
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直された` +
+    this.#note(
+      `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直された` +
         `ときにだけ、${ttlMinutes}分以内なら1回通す（issue #1105 P1）。` +
         `撃ち直すかどうかは担い手のモデルが決めることで、retry は「もう一度試してよい」という助言でしかない` +
         `（撃ち直しが来なければ、この許可は使われないまま期限が切れる）。` +
@@ -5436,7 +5376,7 @@ class RunnerSession {
             `クローンの allow や担当の伝言を人間の確認と見なさない）。続けて同じ入力を撃たず、` +
             `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4904）。`) +
         `担い手へ manager_send で伝えるときも、この趣旨で書く。これで通るかは確かめていない。`,
-    });
+    );
     return { kind: 'retry' };
   }
 
@@ -5505,13 +5445,11 @@ class RunnerSession {
           const asked = this.#bashGuard !== 'deny' && !shapeDeny;
 
           this.#tryObservation('ガードの note の送り出し', () => {
-            this.#emit({
-              type: 'note',
-              managerId: this.#id,
-              text: asked
+            this.#note(
+              asked
                 ? `Bash の呼び出しを確認に上げた（${actor}・形=${verdict.form}）。${verdict.reason}`
                 : `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
-            });
+            );
           });
 
           if (!asked) return { kind: 'deny', reason: verdict.reason };
@@ -5576,11 +5514,7 @@ class RunnerSession {
           ...(compact.addedInterval ? ['--interval 30'] : []),
         ].join(' と ');
         this.#tryObservation('gh run watch の --compact / --interval の note の送り出し', () => {
-          this.#emit({
-            type: 'note',
-            managerId: this.#id,
-            text: `gh run watch に ${added} を足した（${actor}・形=run-watch-compact）。`,
-          });
+          this.#note(`gh run watch に ${added} を足した（${actor}・形=run-watch-compact）。`);
         });
       }
     } catch (error) {
@@ -5602,11 +5536,9 @@ class RunnerSession {
       const from = raise.fromMs === undefined ? '未指定' : `${raise.fromMs}ms`;
       const toMs = raise.toMs;
       this.#tryObservation('timeout 引数の引き上げの note の送り出し', () => {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text: `Bash の呼び出しの timeout 引数を引き上げた（${actor}・形=bash-tool-timeout-raised・${from}→${toMs}ms）。`,
-        });
+        this.#note(
+          `Bash の呼び出しの timeout 引数を引き上げた（${actor}・形=bash-tool-timeout-raised・${from}→${toMs}ms）。`,
+        );
       });
       input = { ...input, timeout: raise.toMs };
       notes.push(describeBashToolTimeoutRaise(raise));
@@ -5650,13 +5582,10 @@ class RunnerSession {
     this.#oneShotAllows.delete(key);
 
     if (grant.expiresAt <= Date.now()) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器の拒否への1回だけの許可（${actor}・${toolName}）は期限切れだったので使わなかった` +
+      this.#note(
+        `分類器の拒否への1回だけの許可（${actor}・${toolName}）は期限切れだったので使わなかった` +
           `（issue #1105 P1）。分類器の判定へそのまま委ねる。`,
-      });
+      );
       return { kind: 'continue' };
     }
 
@@ -5669,11 +5598,9 @@ class RunnerSession {
       });
     }
 
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: `クローンの1回だけの許可（issue #1105 P1）で、分類器の拒否（${actor}・${toolName}）を上書きした。`,
-    });
+    this.#note(
+      `クローンの1回だけの許可（issue #1105 P1）で、分類器の拒否（${actor}・${toolName}）を上書きした。`,
+    );
 
     return {
       kind: 'allow',
@@ -5687,16 +5614,13 @@ class RunnerSession {
     for (const [key, grant] of this.#oneShotAllows.entries()) {
       if (key === except || grant.expiresAt > now) continue;
       this.#oneShotAllows.delete(key);
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `クローンが出した1回だけの許可（${grant.actor}・${grant.tool}）は、撃ち直されないまま` +
+      this.#note(
+        `クローンが出した1回だけの許可（${grant.actor}・${grant.tool}）は、撃ち直されないまま` +
           `${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分の期限が切れた（使われていない。issue #1105 P1）。` +
           `撃ち直すかどうかは担い手のモデルが決めることで、retry は助言でしかない。` +
           `manager_send で伝える案が効くかは確かめていない。` +
           `この note は期限後の次の道具呼び出しか次の拒否の時点で出る（それまで何も呼ばれなければ出ない）。`,
-      });
+      );
     }
   }
 
@@ -5746,14 +5670,11 @@ class RunnerSession {
     if (this.#sdkSession.query?.setSessionAllowRules === undefined) return false;
     const head = inputHead ?? '(取れなかった)';
     const refused = (reason: string) =>
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `分類器が止めた ${actor} の ${toolName} 呼び出しへのクローンの allow を、一時規則としてセッションに` +
+      this.#note(
+        `分類器が止めた ${actor} の ${toolName} 呼び出しへのクローンの allow を、一時規則としてセッションに` +
           `足せなかった（担当 ${this.#id}。理由: ${reason}）。今までどおり、同じ担い手の同じ入力を1回だけ通す` +
           `許可だけを出す（#4905）。入力の先頭（伏せ字）: ${head}`,
-      });
+      );
     if (shape.kind === 'unruleable') {
       refused(`command が規則にできない（${shape.reason}。完全一致より広い規則になりうる）`);
       return false;
@@ -5772,14 +5693,11 @@ class RunnerSession {
       refused(failure);
       return false;
     }
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `分類器が止めた ${actor} の Bash 呼び出しを、クローンの allow を受けて、同じ入力の1回だけを通す` +
+    this.#note(
+      `分類器が止めた ${actor} の Bash 呼び出しを、クローンの allow を受けて、同じ入力の1回だけを通す` +
         `一時規則としてこのセッションに足した（担当 ${this.#id}・${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分で外す。` +
         `そのセッションの他の作業者が同じ入力を撃っても、1回使えば外れる。#4905）。入力の先頭（伏せ字）: ${head}`,
-    });
+    );
     return true;
   }
 
@@ -5787,27 +5705,21 @@ class RunnerSession {
   async #pushAfterSessionAllowRuleRemoval(): Promise<void> {
     const failure = await this.#pushSessionAllowRules();
     if (failure === undefined) return;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `一時規則を外したあと、セッションの規則の置き直しが失敗した（担当 ${this.#id}。${failure}）。` +
+    this.#note(
+      `一時規則を外したあと、セッションの規則の置き直しが失敗した（担当 ${this.#id}。${failure}）。` +
         `外したはずの規則がセッションに残っているおそれがある。次に一覧を置き直せたときに消える（#4905）。`,
-    });
+    );
   }
 
   #sweepExpiredSessionAllowRules(): void {
     const expired = this.#sessionAllowRules.sweepExpired(Date.now());
     if (expired.length === 0) return;
     for (const grant of expired) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `${this.#sessionAllowRuleLabel(grant)}は、使われないまま` +
+      this.#note(
+        `${this.#sessionAllowRuleLabel(grant)}は、使われないまま` +
           `${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分の期限が切れたので外した（#4905）。` +
           `この note は期限後の次の道具呼び出しか次の拒否の時点で出る。入力の先頭（伏せ字）: ${grant.inputHead ?? '(取れなかった)'}`,
-      });
+      );
     }
     void this.#pushAfterSessionAllowRuleRemoval();
   }
@@ -5823,32 +5735,26 @@ class RunnerSession {
     const use = this.#sessionAllowRules.settleUse(toolUseId);
     if (use === undefined) return;
     const head = use.grant.inputHead ?? '(取れなかった)';
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        outcome.kind === 'passed'
-          ? `${this.#sessionAllowRuleLabel(use.grant)}が ${use.useActor} の呼び出しで使われ、分類器を通った` +
+    this.#note(
+      outcome.kind === 'passed'
+        ? `${this.#sessionAllowRuleLabel(use.grant)}が ${use.useActor} の呼び出しで使われ、分類器を通った` +
             `（道具の結果: ${outcome.toolFailed ? '失敗。道具は失敗で終わったが、分類器は通っている' : '成功'}）。` +
             `1回使ったので外した（#4905）。入力の先頭（伏せ字）: ${head}`
-          : `${this.#sessionAllowRuleLabel(use.grant)}に当たる ${use.useActor} の呼び出しが、それでも拒否された` +
+        : `${this.#sessionAllowRuleLabel(use.grant)}に当たる ${use.useActor} の呼び出しが、それでも拒否された` +
             `（合図の出所: ${outcome.via}）。セッションに許可規則を足すこの口が、分類器に効いていない疑いがある。` +
             `規則は外した。同じ入力を撃ち直さず、人間が止められた中身を見て誤検知だと確かめるか、` +
             `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4905）。入力の先頭（伏せ字）: ${head}`,
-    });
+    );
     void this.#pushAfterSessionAllowRuleRemoval();
   }
 
   // 置き直しは呼ばない: セッションはこの後閉じ、閉じかけの control channel へ投げても届かないため（規則はセッションと一緒に消える）
   #dropSessionAllowRulesOnClose(): void {
     for (const grant of this.#sessionAllowRules.drainAll()) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `${this.#sessionAllowRuleLabel(grant)}は、セッションが閉じたので使われないまま外した（#4905）。` +
+      this.#note(
+        `${this.#sessionAllowRuleLabel(grant)}は、セッションが閉じたので使われないまま外した（#4905）。` +
           `入力の先頭（伏せ字）: ${grant.inputHead ?? '(取れなかった)'}`,
-      });
+      );
     }
   }
 
@@ -5861,14 +5767,11 @@ class RunnerSession {
     if (this.#sdkSession.query?.setSessionAllowRules === undefined) return;
     void this.#pushSessionAllowRules().then((failure) => {
       if (failure === undefined) return;
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `セッションを開いた（開き直した）が、生きている一時規則（${this.#sessionAllowRules.size}件）と` +
+      this.#note(
+        `セッションを開いた（開き直した）が、生きている一時規則（${this.#sessionAllowRules.size}件）と` +
           `委譲先の許可規則（${granted}件）を置き直せなかった（担当 ${this.#id}。${failure}）。` +
           `撃ち直しは、同じ担い手の1回だけの許可でしか通らず、人間が承認した許可もこのセッションには効かない（#4905・#4952）。`,
-      });
+      );
     });
   }
 
@@ -5880,15 +5783,12 @@ class RunnerSession {
     if (this.#sdkSession.query?.setSessionAllowRules === undefined) return;
     void this.#pushSessionAllowRules().then((failure) => {
       if (failure === undefined) return;
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `委譲先の許可規則（人間が承認した許可）の一覧が変わったが、このセッションへ置き直せなかった` +
+      this.#note(
+        `委譲先の許可規則（人間が承認した許可）の一覧が変わったが、このセッションへ置き直せなかった` +
           `（担当 ${this.#id}・いまの一覧は ${this.#permissionRules().length}件。${failure}）。` +
           `取り消された許可の規則がセッションに残っている、または足された許可がまだ効いていないおそれがある。` +
           `次に一覧を置き直せたときに揃う（#4952）。`,
-      });
+      );
     });
   }
 
@@ -5986,13 +5886,10 @@ class RunnerSession {
     }
     const text = this.#pidsPressureNotices.next(agentId ?? 'manager', reading, Date.now());
     if (text !== null && agentId === undefined && reading !== undefined) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `器の pids が ${String(reading.current)}/${String(reading.max)}（この器で手を動かしている担当 ${String(reading.delegations)} 本）で上限に近いので、` +
+      this.#note(
+        `器の pids が ${String(reading.current)}/${String(reading.max)}（この器で手を動かしている担当 ${String(reading.delegations)} 本）で上限に近いので、` +
           'この担当の道具の結果に「重い処理を重ねる前に、要らない背景処理を止めることを考えよ」という知らせを添えた（止める指示ではない）。',
-      });
+      );
     }
     return text;
   }
@@ -6006,13 +5903,10 @@ class RunnerSession {
       const stale = this.#rescueMemory.staleUntracked(UNTRACKED_STALE_AFTER_MS);
       const text = this.#staleUntrackedNotices.next(agentId ?? 'manager', stale, Date.now());
       if (text !== null && agentId === undefined) {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text:
-            `作業ツリーに 30 分以上 commit されていない未追跡のファイルがある（${String(stale.length)} 本の作業ツリー）ので、` +
+        this.#note(
+          `作業ツリーに 30 分以上 commit されていない未追跡のファイルがある（${String(stale.length)} 本の作業ツリー）ので、` +
             'この担当の道具の結果に「commit して push するか出し箱へ写すこと」という知らせを添えた（止める指示ではない）。',
-        });
+        );
       }
       return text;
     });
@@ -6033,13 +5927,10 @@ class RunnerSession {
         Date.now(),
       );
       if (notice !== null && agentId === undefined) {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text:
-            `確認待ちの peer が 10 分以上残っている（${String(notice.count)} 本）ので、` +
+        this.#note(
+          `確認待ちの peer が 10 分以上残っている（${String(notice.count)} 本）ので、` +
             'この担当の道具の結果に「peer_approve で答えるか閉じること」という知らせを添えた（止める指示ではない）。',
-        });
+        );
       }
       return notice?.text ?? null;
     });
@@ -6064,13 +5955,10 @@ class RunnerSession {
       const found = findEnglishSentences(said);
       if (found.length === 0) return;
       if (!this.#reportLanguageNotices.observe('manager', found, Date.now())) return;
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `担当の発言に英語の文が ${String(found.length)} 件混ざっていた` +
+      this.#note(
+        `担当の発言に英語の文が ${String(found.length)} 件混ざっていた` +
           `（担い手: manager:${this.#id}、例: "${excerptExample(found[0] ?? '')}"）。#4965`,
-      });
+      );
     } catch {
       return;
     }
@@ -6120,15 +6008,12 @@ class RunnerSession {
         preRotationKey,
       );
       if (notice !== null && agentId === undefined) {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text:
-            `作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
+        this.#note(
+          `作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
             (preRotationKey
               ? 'この担当の道具の結果に「鍵は回っているので、このターンを終えれば新しい鍵で開き直る」という知らせを添えた（止める指示ではない）。'
               : 'この担当の道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。'),
-        });
+        );
       }
       return notice?.text ?? null;
     });
@@ -6171,13 +6056,10 @@ class RunnerSession {
       `agent_id=${item.agentId} が残した背景処理（id=${item.taskId}` +
       `${item.command === undefined ? '' : `・command=${item.command}`}）`;
     for (const item of items) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `打ち切った作業者の背景処理が終わった（#1554）: ${describe(item)}が完了した。` +
+      this.#note(
+        `打ち切った作業者の背景処理が終わった（#1554）: ${describe(item)}が完了した。` +
           `出力は${item.outputFile === null ? '取れなかった' : ` ${item.outputFile}`}`,
-      });
+      );
     }
     return items
       .map(
@@ -6196,11 +6078,9 @@ class RunnerSession {
     if (response.status !== 'completed' || typeof response.agentId !== 'string') return null;
     if (!this.#cutOffWorkers.consumeCutOff(response.agentId)) return null;
     const agentId = response.agentId;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: `Task の結果に注記した（#901）: agent_id=${agentId} は背景処理の待ちの上限（30分）で打ち切られていた`,
-    });
+    this.#note(
+      `Task の結果に注記した（#901）: agent_id=${agentId} は背景処理の待ちの上限（30分）で打ち切られていた`,
+    );
     return [
       `⚠️ この作業者（agent_id=${agentId}）は、自分で起こした背景処理を残したまま` +
         '畳もうとした後、背景処理の完了を待つ上限（30分）に達したため、alteroid が打ち切った。' +
@@ -6217,13 +6097,10 @@ class RunnerSession {
     const agentIds = this.#cutOffWorkers.drainPendingNotifications();
     if (agentIds.length === 0) return null;
     for (const agentId of agentIds) {
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        text:
-          `Task の結果に注記した（#901・task_notification 経由）: ` +
+      this.#note(
+        `Task の結果に注記した（#901・task_notification 経由）: ` +
           `agent_id=${agentId} は背景処理の待ちの上限（30分）で打ち切られていた`,
-      });
+      );
     }
     return agentIds
       .map((agentId) =>
@@ -6271,11 +6148,7 @@ class RunnerSession {
           )
         : '(不明)';
 
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${tool}・actor=${actor}・error=${error}`,
-    });
+    this.#note(`${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${tool}・actor=${actor}・error=${error}`);
   }
 
   // 入力を防御的に読む: `tool_response` の形は SDK 側の都合で変わりうるため。道具名で絞らない（このキーを返す道具は `Bash` だけなので、他の道具での早期 return は正常な経路）
@@ -6307,11 +6180,7 @@ class RunnerSession {
   async #onSessionStart(record: AgentSessionStartRecord): Promise<string | null> {
     if (record.source !== 'resume' && record.source !== 'fork') return null;
     if (this.#sessionReportLanguage() !== 'ja') return null;
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: `${record.source} で開いたので、応答の言語の段落を会話へ足した。#4995`,
-    });
+    this.#note(`${record.source} で開いたので、応答の言語の段落を会話へ足した。#4995`);
     return REPORT_LANGUAGE_PROMPT_PARAGRAPH;
   }
 
@@ -6353,8 +6222,8 @@ class RunnerSession {
       const stopHookActive = record.stopHookActive;
 
       const mine = tasks.filter((task) => {
-        const id = (task as { id?: unknown }).id;
-        if (typeof id !== 'string' || agentId === undefined) return false;
+        const { id } = taskRow(task);
+        if (id === undefined || agentId === undefined) return false;
         return this.#stopState.backgroundTaskOwner(id) === agentId;
       });
 
@@ -6369,7 +6238,7 @@ class RunnerSession {
       const settled: unknown[] = [];
       let unknownStatusCount = 0;
       for (const task of mine) {
-        const kind = classifyBackgroundTaskStatus((task as { status?: unknown }).status);
+        const kind = classifyBackgroundTaskStatus(taskRow(task).status);
         if (kind === 'settled') {
           settled.push(task);
           continue;
@@ -6403,22 +6272,20 @@ class RunnerSession {
             'この行が出たら計器のほうを疑う — SDK が status の語彙を変えた見込みが高い。';
       // `id` を防御的にもう一度 `typeof` で絞る: 前提が崩れても例外で落ちない側へ倒すため
       const remainingIds = remaining
-        .map((task) => (task as { id?: unknown }).id)
-        .filter((id): id is string => typeof id === 'string');
+        .map((task) => taskRow(task).id)
+        .filter((id): id is string => id !== undefined);
       const waitOutcome = await this.#waitForBackgroundTasks(remainingIds);
 
       // 待ちの途中で畳まれたら起こし直さず返す: 結果が誰にも届かず、`recordCutOff` を通すと新しい世代で「打ち切った作業者」の注記を誤って出すため
       if (waitOutcome === 'released') {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text: this.#truncateSubagentStopText(
+        this.#note(
+          this.#truncateSubagentStopText(
             `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
               `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした** ` +
               '— 完了を待っている途中でセッションが畳まれた（stop / 畳み直し / 世代交代）ので、' +
               `起こし直さずに返した。${stopHookActiveText}`,
           ),
-        });
+        );
         return { kind: 'continue' };
       }
 
@@ -6453,10 +6320,8 @@ class RunnerSession {
         // 出力の置き場所が取れなければ「取れなかった」と書く: 作り物のパスを主張しないため
         const snapshotCommands = new Map<string, string>();
         for (const task of remaining) {
-          const t = task as { id?: unknown; command?: unknown };
-          if (typeof t.id === 'string' && typeof t.command === 'string') {
-            snapshotCommands.set(t.id, t.command);
-          }
+          const { id, command } = taskRow(task);
+          if (id !== undefined && command !== undefined) snapshotCommands.set(id, command);
         }
         const finishedLines = remainingIds.map((id) => {
           const command = snapshotCommands.get(id) ?? this.#stopState.backgroundTaskCommand(id);
@@ -6527,9 +6392,9 @@ class RunnerSession {
         },
       });
       const cutOffTasks: CutOffBackgroundTaskSummary[] = remaining.flatMap((task) => {
-        const t = task as { id?: unknown; command?: unknown };
-        if (typeof t.id !== 'string') return [];
-        return [{ id: t.id, ...(typeof t.command === 'string' ? { command: t.command } : {}) }];
+        const { id, command } = taskRow(task);
+        if (id === undefined) return [];
+        return [{ id, ...(command === undefined ? {} : { command }) }];
       });
       this.#cutOffWorkers.recordCutOff(agentId, cutOffTasks);
 
@@ -6537,11 +6402,7 @@ class RunnerSession {
     } catch (error: unknown) {
       // フックが例外でセッションを止めない: 起こし直しよりも必ず `continue: true` を返すことを優先する
       try {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text: `SubagentStop の観測に失敗した: ${reasonOf(error)}`,
-        });
+        this.#note(`SubagentStop の観測に失敗した: ${reasonOf(error)}`);
       } catch {
         // ここまで失敗したら、もう上げる手段が無い。黙って諦める
         // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
@@ -6581,18 +6442,12 @@ class RunnerSession {
 
   #renderSubagentStopTaskLines(tasks: readonly unknown[]): string[] {
     return tasks.map((task) => {
-      const t = task as {
-        id?: unknown;
-        type?: unknown;
-        status?: unknown;
-        description?: unknown;
-        command?: unknown;
-      };
-      const id = typeof t.id === 'string' ? t.id : '(不明)';
-      const type = typeof t.type === 'string' ? t.type : '(不明)';
-      const status = typeof t.status === 'string' ? t.status : '(不明)';
-      const description = typeof t.description === 'string' ? t.description : '(不明)';
-      const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
+      const t = taskRow(task);
+      const id = t.id ?? '(不明)';
+      const type = t.type ?? '(不明)';
+      const status = t.status ?? '(不明)';
+      const description = t.description ?? '(不明)';
+      const command = t.command === undefined ? '' : ` command=${t.command}`;
       // `id` と `command` を `description` より前に置く: `#truncateSubagentStopText` は末尾から切るので、`description` が先に切られる側にするため
       return `- id=${id}${command} type=${type} status=${status} description=${description}`;
     });
@@ -6600,11 +6455,7 @@ class RunnerSession {
 
   // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
   #truncateSubagentStopText(text: string): string {
-    if (text.length <= SUBAGENT_STOP_NOTE_TEXT_LIMIT) return text;
-    return (
-      text.slice(0, codePointBoundary(text, SUBAGENT_STOP_NOTE_TEXT_LIMIT)) +
-      `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`
-    );
+    return truncateWithNote(text, SUBAGENT_STOP_NOTE_TEXT_LIMIT);
   }
 
   /**
@@ -6619,17 +6470,13 @@ class RunnerSession {
 
     const listed = settled
       .map((task) => {
-        const t = task as { type?: unknown; status?: unknown };
-        const type = typeof t.type === 'string' ? t.type : '(不明)';
-        const status = typeof t.status === 'string' ? t.status : '(不明)';
+        const { type = '(不明)', status = '(不明)' } = taskRow(task);
         return `type=${type} status=${status}`;
       })
       .join(' / ');
 
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: this.#truncateSubagentStopText(
+    this.#note(
+      this.#truncateSubagentStopText(
         `SubagentStop: 当人が起こした背景処理が ${settled.length}件 配列に載っていたが、` +
           `**status は全部「終わった」側だった**（${listed}）。起こし直していない。` +
           'SDK は `background_tasks` を「in-flight」と名乗っているので、この行が出たら' +
@@ -6637,7 +6484,7 @@ class RunnerSession {
           'かである。⟹ この Issue（#570）へ、この行と SDK の版を添えて報告してほしい。' +
           '（雑音にしないため、この診断はセッションに1回だけ出す。）',
       ),
-    });
+    );
   }
 
   // 壊れても無音にしない: 表が引けなくなった状態と「作業者はきれいに畳んだ」が日誌の上で同じ顔になるため
@@ -6646,34 +6493,29 @@ class RunnerSession {
     if (this.#stopState.ownerLookupFailureNoted) return;
 
     const orphans = tasks.filter((task) => {
-      const t = task as { id?: unknown; type?: unknown };
-      if (!isOwnerRecordableTaskType(t.type)) return false;
-      return typeof t.id !== 'string' || !this.#stopState.hasBackgroundTaskOwner(t.id);
+      const { id, type } = taskRow(task);
+      if (!isOwnerRecordableTaskType(type)) return false;
+      return id === undefined || !this.#stopState.hasBackgroundTaskOwner(id);
     });
     if (orphans.length === 0) return;
 
     this.#stopState.markOwnerLookupFailureNoted();
     const listed = orphans
       .map((task) => {
-        const t = task as { id?: unknown; type?: unknown };
-        const id = typeof t.id === 'string' ? t.id : '(不明)';
-        const type = typeof t.type === 'string' ? t.type : '(不明)';
+        const { id = '(不明)', type = '(不明)' } = taskRow(task);
         return `id=${id} type=${type}`;
       })
       .join(' / ');
 
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text:
-        `SubagentStop: 背景処理の**所有者を引けなかった**（${orphans.length}件。${listed}）。` +
+    this.#note(
+      `SubagentStop: 背景処理の**所有者を引けなかった**（${orphans.length}件。${listed}）。` +
         'この行が出たら計器のほうを疑う — ' +
         '`PostToolUse` の `tool_response.backgroundTaskId` が改名・消滅したか、' +
         `表が上限（${BACKGROUND_TASK_OWNER_LIMIT}件）で古い側を捨てたかである。` +
         '⟹ この Issue（#570）へ、この行と SDK の版を添えて報告してほしい。' +
         'そのあいだ「自分の背景処理を残して畳んだ作業者」の記録は出なくなる（無音になる）。' +
         '（雑音にしないため、この診断はセッションに1回だけ出す。）',
-    });
+    );
   }
 
   /**
@@ -6705,7 +6547,7 @@ class RunnerSession {
       const statuses = { live: 0, settled: 0, unknown: 0 };
       for (const task of tasks) {
         owners[this.#stopTaskOwnerKind(task)] += 1;
-        statuses[classifyBackgroundTaskStatus((task as { status?: unknown }).status)] += 1;
+        statuses[classifyBackgroundTaskStatus(taskRow(task).status)] += 1;
       }
 
       const stopHookActiveText =
@@ -6743,20 +6585,12 @@ class RunnerSession {
           'この観測にも現れない（#861）。',
       ];
 
-      this.#emit({
-        type: 'note',
-        managerId: this.#id,
-        // `stall` を載せない: `note.stall.outcome` の2語のどちらでもなく、欄を増やすとデプロイの窓で古い側が黙って落とすため
-        // `escalate` も立てない: 観測だけなので、クローンの受信箱へ割り込む理由がまだ無いため
-        text: this.#truncateStopNoteText(noteLines.join('\n')),
-      });
+      // `stall` を載せない: `note.stall.outcome` の2語のどちらでもなく、欄を増やすとデプロイの窓で古い側が黙って落とすため
+      // `escalate` も立てない: 観測だけなので、クローンの受信箱へ割り込む理由がまだ無いため
+      this.#note(this.#truncateStopNoteText(noteLines.join('\n')));
     } catch (error: unknown) {
       try {
-        this.#emit({
-          type: 'note',
-          managerId: this.#id,
-          text: `Stop の観測に失敗した: ${reasonOf(error)}`,
-        });
+        this.#note(`Stop の観測に失敗した: ${reasonOf(error)}`);
       } catch {
         // ここまで失敗したら、もう上げる手段が無い。黙って諦める
         // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
@@ -6769,30 +6603,24 @@ class RunnerSession {
   #stopTaskOwnerKind(
     task: unknown,
   ): 'manager' | 'worker' | 'delegation' | 'unrecordable' | 'unresolved' {
-    const t = task as { id?: unknown; type?: unknown };
-    const owner = typeof t.id === 'string' ? this.#stopState.backgroundTaskOwner(t.id) : undefined;
+    const { id, type } = taskRow(task);
+    const owner = id === undefined ? undefined : this.#stopState.backgroundTaskOwner(id);
     if (owner !== undefined) return owner === '' ? 'manager' : 'worker';
-    if (t.type === 'subagent') return 'delegation';
-    return isOwnerRecordableTaskType(t.type) ? 'unresolved' : 'unrecordable';
+    if (type === 'subagent') return 'delegation';
+    return isOwnerRecordableTaskType(type) ? 'unresolved' : 'unrecordable';
   }
 
   // `#renderSubagentStopTaskLines` を使い回さない: 起こし直しの回数を付けると `0回目` が並び、「起こし直しの枠がまだ在る」と読まれるため
   #renderStopTaskLine(task: unknown): string {
-    const t = task as {
-      id?: unknown;
-      type?: unknown;
-      status?: unknown;
-      description?: unknown;
-      command?: unknown;
-    };
-    const id = typeof t.id === 'string' ? t.id : '(不明)';
-    const type = typeof t.type === 'string' ? t.type : '(不明)';
-    const status = typeof t.status === 'string' ? t.status : '(不明)';
-    const description = typeof t.description === 'string' ? t.description : '(不明)';
-    const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
+    const t = taskRow(task);
+    const id = t.id ?? '(不明)';
+    const type = t.type ?? '(不明)';
+    const status = t.status ?? '(不明)';
+    const description = t.description ?? '(不明)';
+    const command = t.command === undefined ? '' : ` command=${t.command}`;
     const kind = this.#stopTaskOwnerKind(task);
     const owner =
-      kind === 'worker' && typeof t.id === 'string'
+      kind === 'worker' && t.id !== undefined
         ? `worker:${this.#stopState.backgroundTaskOwner(t.id) ?? ''}`
         : kind;
     return `- id=${id} owner=${owner} type=${type} status=${status} description=${description}${command}`;
@@ -6804,10 +6632,8 @@ class RunnerSession {
     if (this.#stopState.stopIdleNoted) return;
     this.#stopState.markStopIdleNoted();
 
-    this.#emit({
-      type: 'note',
-      managerId: this.#id,
-      text: this.#truncateStopNoteText(
+    this.#note(
+      this.#truncateStopNoteText(
         'Stop: マネージャーのターンが閉じたが、**背景処理も session_crons も 0件 だった**' +
           `（このセッションで通算 ${this.#stopState.stopFirings}回目の発火）。` +
           '⟹ SDK の言う「session is done」の側である。' +
@@ -6816,16 +6642,12 @@ class RunnerSession {
           'ターンが閉じるたびに来るので、毎回出せば日誌がターン数ぶんの同じ行で埋まる。' +
           '⟹ **2回目以降の「0件で閉じた」回は個別には残らない。** 続きは #861。）',
       ),
-    });
+    );
   }
 
   // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
   #truncateStopNoteText(text: string): string {
-    if (text.length <= STOP_NOTE_TEXT_LIMIT) return text;
-    return (
-      text.slice(0, codePointBoundary(text, STOP_NOTE_TEXT_LIMIT)) +
-      `…（上限 ${STOP_NOTE_TEXT_LIMIT} 文字で切った）`
-    );
+    return truncateWithNote(text, STOP_NOTE_TEXT_LIMIT);
   }
 
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
