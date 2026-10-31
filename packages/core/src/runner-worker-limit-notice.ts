@@ -10,7 +10,7 @@
 export const WORKER_LIMIT_NOTICE_INTERVAL_MS = 10 * 60_000;
 
 /** 配る前の知らせを抱える上限。 */
-export const WORKER_LIMIT_PENDING_MAX = 8;
+const WORKER_LIMIT_PENDING_MAX = 8;
 
 /** 同じ作業者を重ねて数えない期間。 */
 export const WORKER_LIMIT_DEDUPE_MS = 60 * 60_000;

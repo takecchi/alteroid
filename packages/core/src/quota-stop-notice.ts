@@ -108,11 +108,6 @@ export function partialBeforeFailureOf(failedReport: string): string | undefined
   return partial.length === 0 ? undefined : partial;
 }
 
-/** 本文に「失敗する前に出ていた本文」が付いているか。付いていれば担当の進み具合が書かれているので、器は自動では閉じない。 */
-export function carriesPartialBeforeFailure(text: string): boolean {
-  return text.includes(FAILED_REPORT_PARTIAL_MARKER);
-}
-
 /** `failedReportText` の見出し行の次から、最初の空行か注記（`（…`）の手前までを SDK の本文として返す。 */
 export function failedReportBodyOf(failedReport: string): string | undefined {
   const newline = failedReport.indexOf('\n');

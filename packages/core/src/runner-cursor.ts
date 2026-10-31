@@ -9,20 +9,20 @@ import type { RunnerOverview } from './manager.js';
  */
 const runnerCursorSchema = z.object({ label: z.string().min(1) });
 
-export type RunnerCursor = z.infer<typeof runnerCursorSchema>;
+type RunnerCursor = z.infer<typeof runnerCursorSchema>;
 
 export function encodeRunnerCursor(cursor: RunnerCursor): string {
   return encodeCursor(cursor);
 }
 
-export type DecodeRunnerCursorResult = DecodeCursorResult<RunnerCursor>;
+type DecodeRunnerCursorResult = DecodeCursorResult<RunnerCursor>;
 
 /** 実在検査はしない: 「壊れた cursor」と「消えた器」を同じ文言に潰さないため。 */
 export function decodeRunnerCursor(raw: string): DecodeRunnerCursorResult {
   return decodeCursor(runnerCursorSchema, raw);
 }
 
-export type ResolvedRunnerCursor =
+type ResolvedRunnerCursor =
   { kind: 'ok'; view: RunnerOverview[]; restarted: boolean } | { kind: 'malformed' };
 
 /**
