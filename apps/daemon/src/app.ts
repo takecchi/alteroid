@@ -1324,6 +1324,25 @@ async function readTask(
   }
 }
 
+// 1行を読む。`unreadable` の例外（在るが読めない行）だけ値で返し、ほかは投げ直す（`readTask` の汎用版。状態番号は呼び側が決める）
+async function readOrUnreadable<T>(
+  read: () => Promise<T>,
+  unreadable: new (...args: never[]) => Error,
+): Promise<{ kind: 'read'; value: T } | { kind: 'unreadable'; message: string }> {
+  try {
+    return { kind: 'read', value: await read() };
+  } catch (error) {
+    if (!(error instanceof unreadable)) throw error;
+    return { kind: 'unreadable', message: error.message };
+  }
+}
+
+const readApproval = (stores: Pick<Stores, 'jobs'>, id: string) =>
+  readOrUnreadable(() => stores.jobs.getApproval(id), UnreadableApprovalError);
+
+const readJournalEntry = (stores: Pick<Stores, 'journal'>, id: string) =>
+  readOrUnreadable(() => stores.journal.get(id), UnreadableJournalEntryError);
+
 // 読めない行を書き直さずに 409 で断る本文（task の書き込み4口。`verb` は「〜いない」の前の動詞のて形: 閉じて・開き直して・動かして・直して）。
 function unreadableTaskBody(reason: string, verb: string): { error: string } {
   return { error: `${reason}。読めない形のまま書き直さないので、${verb}いない。` };
@@ -2937,16 +2956,11 @@ export function createApp(deps: AppDeps) {
               );
             }
             // 対象は `journal.get` で直接引く: `scan`/窓には縛られない。
-            let target: JournalEntry | null;
-            try {
-              target = await stores.journal.get(supersedes);
-            } catch (error) {
-              // 在るが読めない行を「見つからない」（400）と言わない: 他の `Unreadable*Error` と同じ 409。
-              if (error instanceof UnreadableJournalEntryError) {
-                return failEdit({ error: error.message }, 409);
-              }
-              throw error;
-            }
+            const targetRead = await readJournalEntry(stores, supersedes);
+            // 在るが読めない行を「見つからない」（400）と言わない: 他の `Unreadable*Error` と同じ 409。
+            if (targetRead.kind === 'unreadable')
+              return failEdit({ error: targetRead.message }, 409);
+            const target = targetRead.value;
             if (
               target === null ||
               target.type !== 'exchange' ||
@@ -3575,16 +3589,10 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { through } = c.req.valid('json');
-        let target: JournalEntry | null;
-        try {
-          target = await stores.journal.get(through);
-        } catch (error) {
-          // 在るが読めない行を「見つからない」（404）と言わない。
-          if (error instanceof UnreadableJournalEntryError) {
-            return c.json({ error: error.message }, 409);
-          }
-          throw error;
-        }
+        const targetRead = await readJournalEntry(stores, through);
+        // 在るが読めない行を「見つからない」（404）と言わない。
+        if (targetRead.kind === 'unreadable') return c.json({ error: targetRead.message }, 409);
+        const target = targetRead.value;
         if (target === null || target.type !== 'exchange' || target.with !== 'human') {
           return c.json({ error: `発言 ${through} は見つからない` as const }, 404);
         }
@@ -4669,14 +4677,9 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        let entry: Awaited<ReturnType<typeof stores.journal.get>>;
-        try {
-          entry = await stores.journal.get(c.req.param('id'));
-        } catch (error) {
-          if (error instanceof UnreadableJournalEntryError)
-            return c.json({ error: error.message }, 409);
-          throw error;
-        }
+        const read = await readJournalEntry(stores, c.req.param('id'));
+        if (read.kind === 'unreadable') return c.json({ error: read.message }, 409);
+        const entry = read.value;
         if (entry === null) return c.json({ error: 'not found' as const }, 404);
         return c.json(journalEntrySchema.parse(entry));
       },
@@ -5027,14 +5030,9 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
-        try {
-          approval = await stores.jobs.getApproval(c.req.param('id'));
-        } catch (error) {
-          if (error instanceof UnreadableApprovalError)
-            return c.json({ error: error.message }, 409);
-          throw error;
-        }
+        const read = await readApproval(stores, c.req.param('id'));
+        if (read.kind === 'unreadable') return c.json({ error: read.message }, 409);
+        const approval = read.value;
         if (approval === null) return c.json({ error: 'not found' as const }, 404);
         return c.json(
           approvalByIdResponseSchema.parse({
@@ -5066,15 +5064,13 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        let trace: Awaited<ReturnType<typeof traceApproval>>;
-        try {
-          trace = await traceApproval(stores, c.req.param('id'));
-        } catch (error) {
-          // 在るが読めない行を「無い」（404）と言わない。
-          if (error instanceof UnreadableApprovalError)
-            return c.json({ error: error.message }, 409);
-          throw error;
-        }
+        const read = await readOrUnreadable(
+          () => traceApproval(stores, c.req.param('id')),
+          UnreadableApprovalError,
+        );
+        // 在るが読めない行を「無い」（404）と言わない。
+        if (read.kind === 'unreadable') return c.json({ error: read.message }, 409);
+        const trace = read.value;
         if (trace === null) return c.json({ error: 'not found' as const }, 404);
         return c.json(approvalTraceResponseSchema.parse(trace));
       },
@@ -5109,12 +5105,8 @@ export function createApp(deps: AppDeps) {
         // 形の不正は1件も答える前に全体を 400 にする: `selections` が `questions` と突き合わないのは要求の誤りで、件ごとの成否とは違い、残りだけ進めると書いたつもりの件が黙って落ちる。まだ回答待ちの件にだけ突き合わせる（他は下で件ごとの理由として返す）。
         for (const item of answers) {
           if (item.selections === undefined) continue;
-          let pending: Awaited<ReturnType<typeof stores.jobs.getApproval>> = null;
-          try {
-            pending = await stores.jobs.getApproval(item.id);
-          } catch (error) {
-            if (!(error instanceof UnreadableApprovalError)) throw error;
-          }
+          const pendingRead = await readApproval(stores, item.id);
+          const pending = pendingRead.kind === 'read' ? pendingRead.value : null;
           if (
             pending === null ||
             pending.answeredAt !== undefined ||
@@ -5132,15 +5124,13 @@ export function createApp(deps: AppDeps) {
           }
         }
         for (const { id, answer, selections } of answers) {
-          let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
-          try {
-            approval = await stores.jobs.getApproval(id);
-          } catch (error) {
-            // この1件だけ「在るが読めない」と返し、残りは進める（`not found` と言わない）。
-            if (!(error instanceof UnreadableApprovalError)) throw error;
-            results.push({ id, ok: false, error: error.message });
+          const read = await readApproval(stores, id);
+          // この1件だけ「在るが読めない」と返し、残りは進める（`not found` と言わない）。
+          if (read.kind === 'unreadable') {
+            results.push({ id, ok: false, error: read.message });
             continue;
           }
+          const approval = read.value;
           if (!approval) {
             results.push({ id, ok: false, error: 'not found' });
             continue;
@@ -5217,15 +5207,10 @@ export function createApp(deps: AppDeps) {
       jsonBody(answerBody, invalidWith('answer の形が不正')),
       async (c) => {
         const id = c.req.param('id');
-        let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
-        try {
-          approval = await stores.jobs.getApproval(id);
-        } catch (error) {
-          // 在るが読めない行を「無い」（404）と言わない。
-          if (error instanceof UnreadableApprovalError)
-            return c.json({ error: error.message }, 409);
-          throw error;
-        }
+        const read = await readApproval(stores, id);
+        // 在るが読めない行を「無い」（404）と言わない。
+        if (read.kind === 'unreadable') return c.json({ error: read.message }, 409);
+        const approval = read.value;
         if (!approval) return c.json({ error: 'not found' as const }, 404);
         // 二度答えると既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。
         if (approval.answeredAt !== undefined) {
