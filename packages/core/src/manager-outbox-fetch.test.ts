@@ -45,13 +45,13 @@ function fakeRunner(
   const opened: string[] = [];
   const deleted: string[] = [];
   const runner = {
-    async openOutboxFile(_managerId: string, fileId: string) {
+    async openPickupFile(_kind: string, _managerId: string, fileId: string) {
       opened.push(fileId);
       const content = contents[fileId];
       if (content === undefined) return undefined;
       return typeof content === 'function' ? content() : content;
     },
-    async deleteOutboxFile(_managerId: string, fileId: string) {
+    async deletePickupFile(_kind: string, _managerId: string, fileId: string) {
       deleted.push(fileId);
       if (options.deleteFails === true) throw new Error('DELETE が落ちた');
     },
@@ -133,7 +133,7 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
   it('預かりの退避先に無かった（404）ときも、入れ替えの材料を理由に添える', async () => {
     const bytes = textBytes('消えた預かり');
     const runner = {
-      async openRescueFile() {
+      async openPickupFile() {
         return undefined;
       },
     } as unknown as RunnerClient;

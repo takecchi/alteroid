@@ -13,6 +13,7 @@ import type {
   RunnerManagerState,
   RunnerMcpServersFingerprint,
   RunnerOutboxContent,
+  RunnerPickupFileKind,
   RunnerPlacementResources,
   RunnerPlugin,
   RunnerPluginFingerprintEntry,
@@ -418,6 +419,12 @@ function contentOf(response: Response, label: string): RunnerOutboxContent {
     body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
   };
 }
+
+// 経路の名前は古い runner と混ざっても 404 にならないよう、種類ごとに据え置く
+const PICKUP_WIRE: Record<RunnerPickupFileKind, { segment: string; label: string }> = {
+  outbox: { segment: 'outbox', label: '出し箱の取り出し' },
+  rescue: { segment: 'rescue-files', label: '預かりの取り出し' },
+};
 
 function managerFilePath(managerId: string, kind: string, fileId: string): string {
   return `/managers/${encodeURIComponent(managerId)}/${kind}/${encodeURIComponent(fileId)}`;
@@ -1177,19 +1184,22 @@ class HttpRunner implements RunnerClient {
   }
 
   // 404 だけを `undefined`（無い）にする: 接続断・期限切れ・ほかの非2xx も `undefined` にすると、「取れなかった」と「無い」が混ざるため
-  async openOutboxFile(
+  // 出し箱（`/outbox/`）と未追跡のファイルの預かり（`/rescue-files/`。#4863）は、パスと文だけが別
+  async openPickupFile(
+    kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerOutboxContent | undefined> {
+    const wire = PICKUP_WIRE[kind];
     const response = await this.#getOrMissing(
-      managerFilePath(managerId, 'outbox', fileId),
+      managerFilePath(managerId, wire.segment, fileId),
       options?.signal,
     );
-    return response === undefined ? undefined : contentOf(response, '出し箱の取り出し');
+    return response === undefined ? undefined : contentOf(response, wire.label);
   }
 
-  // 404 だけを `undefined`（無い）にする（`openOutboxFile` / `openRescueFile` / `fetchArchive` で共通）
+  // 404 だけを `undefined`（無い）にする（`openPickupFile` / `fetchArchive` で共通）
   async #getOrMissing(
     path: string,
     signal: AbortSignal | undefined,
@@ -1241,46 +1251,21 @@ class HttpRunner implements RunnerClient {
     await response.text().catch(() => '');
   }
 
-  // 未追跡のファイルの預かりの退避先（#4863）。`openOutboxFile` と同じ作りで、パスだけが別
-  async openRescueFile(
-    managerId: string,
-    fileId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<RunnerOutboxContent | undefined> {
-    const response = await this.#getOrMissing(
-      managerFilePath(managerId, 'rescue-files', fileId),
-      options?.signal,
-    );
-    return response === undefined ? undefined : contentOf(response, '預かりの取り出し');
-  }
-
-  async deleteRescueFile(
+  async deletePickupFile(
+    kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<void> {
     await this.#call(
       'DELETE',
-      managerFilePath(managerId, 'rescue-files', fileId),
+      managerFilePath(managerId, PICKUP_WIRE[kind].segment, fileId),
       undefined,
       options?.signal,
     );
   }
 
-  async deleteOutboxFile(
-    managerId: string,
-    fileId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<void> {
-    await this.#call(
-      'DELETE',
-      managerFilePath(managerId, 'outbox', fileId),
-      undefined,
-      options?.signal,
-    );
-  }
-
-  // 404 だけを `undefined`（無い）にする: 取れなかった（接続断・期限切れ・非2xx）と「無い」を混ぜないため（`openOutboxFile` と同じ）
+  // 404 だけを `undefined`（無い）にする: 取れなかった（接続断・期限切れ・非2xx）と「無い」を混ぜないため（`openPickupFile` と同じ）
   // 本文は JSON の1行として受けない: 解析とエスケープ戻しの間ループが塞がるため（#4485）
   // `response.text()` も使わない: 全部を受けてから一度に文字へ戻すので、100MB 級の退避で 1 秒近くループを塞ぐため（#4485）
   async fetchArchive(

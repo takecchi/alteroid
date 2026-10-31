@@ -15,6 +15,7 @@ import type {
   RunnerMcpServersFingerprint,
   RunnerPermissionRulesResult,
   RunnerOutboxContent,
+  RunnerPickupFileKind,
   RunnerPlacementResources,
   RunnerPluginFingerprintEntry,
   RunnerPluginsFingerprint,
@@ -222,28 +223,21 @@ class LocalRunner implements RunnerClient {
     );
   }
 
-  async openOutboxFile(
+  async openPickupFile(
+    kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
   ): Promise<RunnerOutboxContent | undefined> {
-    const file = await this.#host.openOutboxFile(managerId, fileId);
+    const file = await this.#host.openPickupFile(kind, managerId, fileId);
     return file === undefined ? undefined : { size: file.size, body: file.stream };
   }
 
-  async deleteOutboxFile(managerId: string, fileId: string): Promise<void> {
-    await this.#host.deleteOutboxFile(managerId, fileId);
-  }
-
-  async openRescueFile(
+  async deletePickupFile(
+    kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
-  ): Promise<RunnerOutboxContent | undefined> {
-    const file = await this.#host.openRescueFile(managerId, fileId);
-    return file === undefined ? undefined : { size: file.size, body: file.stream };
-  }
-
-  async deleteRescueFile(managerId: string, fileId: string): Promise<void> {
-    await this.#host.deleteRescueFile(managerId, fileId);
+  ): Promise<void> {
+    await this.#host.deletePickupFile(kind, managerId, fileId);
   }
 
   async unpushedWork(

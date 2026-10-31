@@ -94,7 +94,8 @@ function fakeRunner(runnerId: string) {
     async close() {
       /* 使わない */
     },
-    async openRescueFile(
+    async openPickupFile(
+      _kind: string,
       _managerId: string,
       fileId: string,
     ): Promise<RunnerOutboxContent | undefined> {
@@ -107,7 +108,7 @@ function fakeRunner(runnerId: string) {
         })(),
       };
     },
-    async deleteRescueFile(_managerId: string, fileId: string) {
+    async deletePickupFile(_kind: string, _managerId: string, fileId: string) {
       deleted.push(fileId);
     },
   } as unknown as RunnerClient;

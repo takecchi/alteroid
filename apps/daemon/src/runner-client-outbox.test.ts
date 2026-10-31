@@ -42,7 +42,7 @@ describe('HttpRunner#openOutboxFile / deleteOutboxFile', () => {
     );
     const runner = await client;
 
-    const content = await runner.openOutboxFile?.('mgr 1', FILE_ID);
+    const content = await runner.openPickupFile?.('outbox', 'mgr 1', FILE_ID);
 
     expect(calls).toEqual([{ method: 'GET', path: `/managers/mgr%201/outbox/${FILE_ID}` }]);
     expect(content?.size).toBe(Buffer.byteLength('成果物'));
@@ -51,19 +51,19 @@ describe('HttpRunner#openOutboxFile / deleteOutboxFile', () => {
 
   it('404 は「無い」（undefined）で、500 や接続断は「取れなかった」として投げる', async () => {
     const missing = await clientWith(() => new Response('{}', { status: 404 })).client;
-    expect(await missing.openOutboxFile?.('m', FILE_ID)).toBeUndefined();
+    expect(await missing.openPickupFile?.('outbox', 'm', FILE_ID)).toBeUndefined();
 
     const broken = await clientWith(() => new Response('boom', { status: 500 })).client;
-    await expect(broken.openOutboxFile?.('m', FILE_ID)).rejects.toThrow('500');
+    await expect(broken.openPickupFile?.('outbox', 'm', FILE_ID)).rejects.toThrow('500');
   });
 
   it('DELETE /managers/:id/outbox/:fileId を叩く。失敗は投げる（握るのは呼び手）', async () => {
     const ok = clientWith(() => new Response(null, { status: 204 }));
-    await (await ok.client).deleteOutboxFile?.('m', FILE_ID);
+    await (await ok.client).deletePickupFile?.('outbox', 'm', FILE_ID);
     expect(ok.calls).toEqual([{ method: 'DELETE', path: `/managers/m/outbox/${FILE_ID}` }]);
 
     const bad = await clientWith(() => new Response('{}', { status: 400 })).client;
-    await expect(bad.deleteOutboxFile?.('m', FILE_ID)).rejects.toThrow('400');
+    await expect(bad.deletePickupFile?.('outbox', 'm', FILE_ID)).rejects.toThrow('400');
   });
 
   it('runner が申告より多く送り続けても、取り出しは途中で打ち切り、runner の繋ぎも畳む', async () => {

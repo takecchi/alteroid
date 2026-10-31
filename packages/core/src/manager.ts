@@ -6685,9 +6685,9 @@ class Pool implements ManagerPool {
     const named =
       runner !== null && this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_RESCUE_FILES);
     const removeStaged = async (fileId: string): Promise<void> => {
-      if (runner === null || runner.deleteRescueFile === undefined) return;
+      if (runner === null || runner.deletePickupFile === undefined) return;
       await runner
-        .deleteRescueFile(managerId, fileId, { signal: AbortSignal.timeout(5000) })
+        .deletePickupFile('rescue', managerId, fileId, { signal: AbortSignal.timeout(5000) })
         .catch(() => undefined);
     };
     const limits = this.#attachmentLimits ?? readAttachmentLimits().limits;
@@ -10125,11 +10125,9 @@ class Pool implements ManagerPool {
     if (runner === null) return;
     await Promise.allSettled(
       targets.map(async ({ fileId, kind }) => {
-        const remove =
-          kind === 'outbox'
-            ? runner.deleteOutboxFile?.bind(runner)
-            : runner.deleteRescueFile?.bind(runner);
-        await remove?.(managerId, fileId, { signal: AbortSignal.timeout(5000) });
+        await runner.deletePickupFile?.(kind, managerId, fileId, {
+          signal: AbortSignal.timeout(5000),
+        });
       }),
     );
   }
@@ -11731,10 +11729,10 @@ class Pool implements ManagerPool {
         // #4924: 移った後の古い器からは取り込まない。退避先は、捨てる回も消させる（器の退避先と待ちの集合に積み残さない）
         if (this.#movedAwayFrom(record, fromRunnerId)) {
           const runner = await this.#runnerOrNull(fromRunnerId);
-          if (runner !== null && runner.deleteRescueFile !== undefined) {
+          if (runner !== null && runner.deletePickupFile !== undefined) {
             for (const file of event.files) {
               await runner
-                .deleteRescueFile(event.managerId, file.fileId, {
+                .deletePickupFile('rescue', event.managerId, file.fileId, {
                   signal: AbortSignal.timeout(5000),
                 })
                 .catch(() => undefined);

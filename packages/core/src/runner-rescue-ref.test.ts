@@ -353,7 +353,7 @@ describe('畳む前に emit した未追跡の預かりを、畳みの待ちに�
     await host.shutdown();
     expect(host.pendingPickups()).toBe(fileIds.length);
 
-    for (const fileId of fileIds) await host.deleteRescueFile('mgr-4912rescue', fileId);
+    for (const fileId of fileIds) await host.deletePickupFile('rescue', 'mgr-4912rescue', fileId);
     expect(host.pendingPickups()).toBe(0);
   });
 });

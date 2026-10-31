@@ -1489,6 +1489,9 @@ export interface RunnerStagedAttachmentMeta {
   readonly sha256: string;
 }
 
+/** デーモンが取りに来る退避先の種類（出し箱 / 未追跡のファイルの預かり）。 */
+export type RunnerPickupFileKind = 'outbox' | 'rescue';
+
 /** `size` は runner の自己申告（応答の `content-length`）で、信じきらない。 */
 export interface RunnerOutboxContent {
   /** 無ければ自己申告が無い（読み手は `body` を数えて上限で打ち切る）。 */
@@ -1610,28 +1613,18 @@ export interface RunnerClient {
    * 無ければ `undefined`（404・退避先が消えた）。取れなかった（接続断・期限切れ・非2xx）ときは投げる。
    * 読む側が大きさを数えて途中で打ち切る。口を持たない実装は、呼び出し側が「取り出しの口を名乗っていない」として扱い、取れたことにしない。
    */
-  openOutboxFile?(
+  openPickupFile?(
+    kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerOutboxContent | undefined>;
-  /** 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。 */
-  deleteOutboxFile?(
-    managerId: string,
-    fileId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<void>;
   /**
-   * `rescue_files` の退避先（出し箱とは別の dir・別の掃除。#4863）。意味は {@link openOutboxFile} と同じ。
-   * `rescue-files` を名乗らない器には呼ばない。
+   * 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。
+   * `rescue` は `rescue_files` の退避先（出し箱とは別の dir・別の掃除。#4863）。`rescue-files` を名乗らない器には `rescue` を呼ばない。
    */
-  openRescueFile?(
-    managerId: string,
-    fileId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<RunnerOutboxContent | undefined>;
-  /** 冪等。{@link deleteOutboxFile} と同じ。 */
-  deleteRescueFile?(
+  deletePickupFile?(
+    kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },

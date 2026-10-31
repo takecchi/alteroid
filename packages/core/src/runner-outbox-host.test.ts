@@ -96,7 +96,7 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     const fileId = report.files?.[0]?.fileId ?? '';
     expect(await readdir(outboxDir)).toEqual([]);
 
-    const opened = await host.openOutboxFile('mgr-abc123', fileId);
+    const opened = await host.openPickupFile('outbox', 'mgr-abc123', fileId);
     const chunks: Buffer[] = [];
     for await (const chunk of opened!.stream) chunks.push(chunk as Buffer);
     expect(Buffer.concat(chunks).toString()).toBe('成果物');
@@ -104,12 +104,12 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
 
     await host.stop('mgr-abc123');
     await expect(stat(outboxDir)).rejects.toThrow();
-    const after = await host.openOutboxFile('mgr-abc123', fileId);
+    const after = await host.openPickupFile('outbox', 'mgr-abc123', fileId);
     const afterChunks: Buffer[] = [];
     for await (const chunk of after!.stream) afterChunks.push(chunk as Buffer);
     expect(Buffer.concat(afterChunks).toString()).toBe('成果物');
-    expect(await host.deleteOutboxFile('mgr-abc123', fileId)).toBe(true);
-    expect(await host.openOutboxFile('mgr-abc123', fileId)).toBeUndefined();
+    expect(await host.deletePickupFile('outbox', 'mgr-abc123', fileId)).toBe(true);
+    expect(await host.openPickupFile('outbox', 'mgr-abc123', fileId)).toBeUndefined();
   });
 
   it('子を降ろす構成では、畳みで出し箱の中身を runner の権限で再帰削除せず、子の権限の削除関数へ渡す', async () => {
@@ -210,7 +210,11 @@ describe('Host: 報告の前に畳まれた担当の出し箱（#4675）', () =>
     expect(report.text).toContain('出し箱に置かれていた成果物を添える');
     expect(report.files?.map((file) => file.name)).toEqual(['half-done.md']);
     await expect(stat(outboxDir)).rejects.toThrow();
-    const opened = await host.openOutboxFile('mgr-close1', report.files?.[0]?.fileId ?? '');
+    const opened = await host.openPickupFile(
+      'outbox',
+      'mgr-close1',
+      report.files?.[0]?.fileId ?? '',
+    );
     const chunks: Buffer[] = [];
     for await (const chunk of opened!.stream) chunks.push(chunk as Buffer);
     expect(Buffer.concat(chunks).toString()).toBe('途中の成果物');
@@ -287,7 +291,7 @@ describe('Host: 畳み（shutdown）で預けた物の数（#4699）', () => {
     expect(report.files).toHaveLength(1);
     expect(host.pendingPickups()).toBe(1 + archives.length);
 
-    await host.deleteOutboxFile('mgr-pick1', report.files?.[0]?.fileId ?? '');
+    await host.deletePickupFile('outbox', 'mgr-pick1', report.files?.[0]?.fileId ?? '');
     for (const id of archives) host.deleteArchive('mgr-pick1', id);
     expect(host.pendingPickups()).toBe(0);
   });
@@ -352,13 +356,13 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
     // 前の残り（出し箱の mgr-old・預かりの mgr-old）は数えない
     expect(host.pendingPickups()).toBe(1);
 
-    await host.deleteOutboxFile('mgr-early', fileId);
+    await host.deletePickupFile('outbox', 'mgr-early', fileId);
     expect(host.pendingPickups()).toBe(0);
   });
 
   it('⭐ 畳み始める前に取られた出し箱のファイルは、待ちに入らない', async () => {
     const { host, fileId } = await hostWithEmittedReport();
-    await host.deleteOutboxFile('mgr-early', fileId);
+    await host.deletePickupFile('outbox', 'mgr-early', fileId);
 
     await host.shutdown();
 
@@ -386,7 +390,7 @@ describe('Host: 畳み始める前に退避先へ置いた物も待ちに入る�
     const { host, fileId } = await hostWithEmittedReport();
     await host.shutdown();
 
-    const outbox = await host.openOutboxFile('mgr-early', fileId);
+    const outbox = await host.openPickupFile('outbox', 'mgr-early', fileId);
     // 読み始めただけでは外さない
     expect(host.pendingPickups()).toBe(1);
     for await (const chunk of outbox!.stream) void chunk;

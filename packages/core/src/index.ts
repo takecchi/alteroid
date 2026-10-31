@@ -561,6 +561,7 @@ export {
   type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerOutboxContent,
+  type RunnerPickupFileKind,
   type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerExecutionResources,

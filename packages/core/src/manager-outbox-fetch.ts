@@ -17,6 +17,7 @@ import { reasonOf } from './dropped-record.js';
 import type {
   RunnerClient,
   RunnerOutboxFile,
+  RunnerPickupFileKind,
   RunnerOutboxRejectedFile,
 } from './runner-protocol.js';
 import type { AttachmentRef } from './schema.js';
@@ -97,14 +98,14 @@ export async function fetchManagerOutbox(
   if (input.files.length === 0) return { attachments, rejected };
 
   const { runner } = input;
-  const open = runner.openOutboxFile?.bind(runner);
+  const open = runner.openPickupFile?.bind(runner);
   // 取りに行かないと決めたものも、退避先を消させる（#4925）: 消さないと runner の畳みが、取られない出し箱を上限まで待つ。失敗は握る
-  const remove = runner.deleteOutboxFile?.bind(runner);
+  const remove = runner.deletePickupFile?.bind(runner);
   const removeAll = async (files: readonly RunnerOutboxFile[]): Promise<void> => {
     if (remove === undefined || files.length === 0) return;
     await Promise.allSettled(
       files.map((file) =>
-        remove(input.managerId, file.fileId, {
+        remove('outbox', input.managerId, file.fileId, {
           signal: AbortSignal.timeout(OUTBOX_DELETE_TIMEOUT_MS),
         }),
       ),
@@ -163,6 +164,7 @@ export async function fetchManagerOutbox(
     const signal = AbortSignal.any([totalSignal, AbortSignal.timeout(fileTimeoutMs)]);
     const outcome = await fetchOne({
       open,
+      kind: 'outbox',
       managerId: input.managerId,
       file,
       name,
@@ -199,7 +201,8 @@ type FetchOneOutcome =
   { ok: true; ref: AttachmentRef } | { ok: false; reason: string; neverFetch?: true };
 
 async function fetchOne(input: {
-  open: NonNullable<RunnerClient['openOutboxFile']>;
+  open: NonNullable<RunnerClient['openPickupFile']>;
+  kind: RunnerPickupFileKind;
   managerId: string;
   file: RunnerOutboxFile;
   name: string;
@@ -227,7 +230,7 @@ async function fetchOne(input: {
   const image = isAttachmentImageMediaType(file.mediaType.split(';')[0]!.trim().toLowerCase());
   let bytes: Uint8Array | undefined;
   try {
-    const opening = input.open(input.managerId, file.fileId, { signal });
+    const opening = input.open(input.kind, input.managerId, file.fileId, { signal });
     const content = await raceAbort(opening, signal);
     if (content === 'aborted') {
       void opening.then(
@@ -525,11 +528,12 @@ const RESCUE_FETCH_FALLBACK_MEDIA_TYPE = 'application/octet-stream';
 export async function fetchRescueFile(
   input: FetchRescueFileInput,
 ): Promise<FetchRescueFileOutcome> {
-  const open = input.runner.openRescueFile?.bind(input.runner);
+  const open = input.runner.openPickupFile?.bind(input.runner);
   if (open === undefined) return { ok: false, reason: 'runner が取り出しの口を持っていない' };
   const timeoutMs = input.timeoutMs ?? outboxFetchDeadlineMs(input.file.size);
   const outcome = await fetchOne({
     open,
+    kind: 'rescue',
     managerId: input.managerId,
     file: {
       fileId: input.file.fileId,
