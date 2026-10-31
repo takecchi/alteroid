@@ -466,6 +466,16 @@ describe('CodexAppServerClient', () => {
       expect(first && 'line' in first ? first.line.length : 0).toBeLessThan(300);
     });
 
+    it('切り口に絵文字がかかっても、異常の知らせの行に孤立したサロゲートが残らない（#5973）', async () => {
+      const { server, errors } = setup();
+      server.sendRaw(`${'x'.repeat(199)}😀${'x'.repeat(50)}\n`);
+      await tick();
+      const first = errors[0];
+      const line = first && 'line' in first ? first.line : '';
+      expect(line).toBe(`${'x'.repeat(199)}…`);
+      expect(line).not.toMatch(/\p{Surrogate}/u);
+    });
+
     it('知らない id の response は知らせるだけで、保留中の request には触れない', async () => {
       const { server, client, errors } = setup();
       const p = client.request('model/list', {});

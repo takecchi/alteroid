@@ -11,6 +11,8 @@ import {
   type JournalStore,
 } from '@alteroid/core';
 
+import { startPeriodicRun, type PeriodicRun } from './periodic-runner.js';
+
 // runner の掃き（scratch の周期に乗る）と同じ値にする: 資格入りの残骸が /tmp に残る時間を、runner 側と同じ桁に揃えるため。
 // 元は core の `DEFAULT_SCRATCH_SWEEP_INTERVAL_MS`（10 分）。別の値を置くと片方だけ残る時間が延びる
 export const CLONE_MCP_CONFIG_SWEEP_EVERY_MS = DEFAULT_SCRATCH_SWEEP_INTERVAL_MS;
@@ -26,11 +28,8 @@ export interface CloneMcpConfigSweeperOptions {
   readonly writeLine?: (line: string) => void;
 }
 
-export interface CloneMcpConfigSweeper {
-  /** 1回掃く。掃きの失敗では投げない */
-  runOnce(): Promise<void>;
-  stop(): void;
-}
+/** `refresh` は1回掃く（掃きの失敗では投げない）。走っている間は、その回を返す */
+export type CloneMcpConfigSweeper = PeriodicRun<void>;
 
 // 失敗の同一性の鍵: 同じ失敗を毎周期書かないため（runner の掃きの `#mcpConfigSweepFailedNotified` と同じ作法）
 const failureKey = (name: string, reason: string): string => `${name}\u0000${reason}`;
@@ -43,8 +42,6 @@ export function startCloneMcpConfigSweeping(
   const now = options.now ?? Date.now;
   const writeLine = options.writeLine ?? writeStderrLine;
   const intervalMs = options.intervalMs ?? CLONE_MCP_CONFIG_SWEEP_EVERY_MS;
-  let stopped = false;
-  let inFlight: Promise<void> | null = null;
   let notified = new Set<string>();
 
   const sweepOnce = async (): Promise<void> => {
@@ -55,7 +52,6 @@ export function startCloneMcpConfigSweeping(
         now: now(),
         ownPid: options.ownPid ?? process.pid,
       });
-      if (stopped) return;
       const keys = [
         ...failed.map((f) => failureKey(f.name, f.reason)),
         ...(scanError === undefined ? [] : [`${SCAN_KEY_PREFIX}${scanError}`]),
@@ -102,24 +98,6 @@ export function startCloneMcpConfigSweeping(
     }
   };
 
-  const runOnce = (): Promise<void> => {
-    if (stopped) return Promise.resolve();
-    // 重ねない: 前の掃きが長引いても同じ残骸を二重に消しに行かない
-    inFlight ??= sweepOnce().finally(() => {
-      inFlight = null;
-    });
-    return inFlight;
-  };
-
-  void runOnce();
-  const timer = setInterval(() => void runOnce(), intervalMs);
-  timer.unref();
-
-  return {
-    runOnce,
-    stop: () => {
-      stopped = true;
-      clearInterval(timer);
-    },
-  };
+  // 重ねない・止める・次の予約は `startPeriodicRun` が持つ: 前の掃きが長引いても同じ残骸を二重に消しに行かない
+  return startPeriodicRun({ intervalMs, run: sweepOnce });
 }

@@ -168,14 +168,13 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   const waitingForKey = (state: AccountUsageState): boolean =>
     state.state === 'unavailable' &&
     state.cause === 'not_logged_in' &&
-    lastMeasuredBy === undefined &&
-    options.identity !== undefined;
+    lastMeasuredBy === undefined;
 
   const schedule = (delay: number, forKey: boolean, startedAt: number) => {
     if (stopped) return;
     const step = forKey ? Math.min(delay, interval) : delay;
     timer = setTimeout(() => {
-      if (forKey && options.identity?.() === undefined && Date.now() - startedAt < delay) {
+      if (forKey && options.identity() === undefined && Date.now() - startedAt < delay) {
         schedule(delay, true, startedAt);
         return;
       }
@@ -191,7 +190,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   return {
     state: () => {
       // 回した後に降りた鍵の `ok` を返さない: 次の probe を待つ間も、現役の鍵で測れていない事実は「まだ分からない」と言うため。
-      if (current.state === 'ok' && !sameKey(currentKey, options.identity?.())) {
+      if (current.state === 'ok' && !sameKey(currentKey, options.identity())) {
         return { state: 'unknown' };
       }
       return current;

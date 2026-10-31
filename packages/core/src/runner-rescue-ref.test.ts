@@ -203,6 +203,53 @@ describe('30 分以上残っている未追跡のファイルの知らせ（#486
   });
 });
 
+describe('退避の引数の組み立てが同期に投げても、次の回は走る（#5971）', () => {
+  it('⭐ 鍵の袋の読みが同期に投げた回は失敗で終わり、その後の周期の回で退避される（走行中の印が残らない）', async () => {
+    const events: RunnerEvent[] = [];
+    const store = createCredentialStore({
+      dir: path.join(root, 'cred-5971'),
+      seed: { GH_TOKEN: 'test-token-value-for-rescue' },
+    });
+    let throwing = false;
+    let thrown = 0;
+    const credentials = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'values') {
+          return () => {
+            if (throwing) {
+              thrown += 1;
+              throw new Error('鍵の袋が読めない（試験）');
+            }
+            return target.values();
+          };
+        }
+        const member = Reflect.get(target, prop) as unknown;
+        return typeof member === 'function' ? member.bind(target) : member;
+      },
+    });
+    const host = createRunnerHost({
+      runnerId: 'runner-5971',
+      workspacePath: repo,
+      emit: (event) => events.push(event),
+      queryFn: fakeSdk(),
+      env: { ...GIT_ENV },
+      credentials,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: repo, worktrees: [] }),
+      rescueIntervalMs: 40,
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-5971sync', request: '依頼', cwd: repo });
+
+    throwing = true;
+    await vi.waitFor(() => expect(thrown).toBeGreaterThan(0), { timeout: 5000 });
+    throwing = false;
+    await writeFile(path.join(repo, 'a.txt'), 'edited after the throwing round\n');
+
+    await vi.waitFor(() => expect(rescueEvents(events)).toHaveLength(1), { timeout: 4000 });
+  });
+});
+
 describe('担当を畳むときにも退避 ref を撃つ（#4677）', () => {
   it('⭐ デーモンの指示で止めた担当は、周期が長くても、止めた時点の変更を退避する', async () => {
     const { host, events } = setup(3_600_000);

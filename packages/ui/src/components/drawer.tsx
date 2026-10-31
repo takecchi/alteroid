@@ -37,8 +37,9 @@ export function Drawer({
           opener.current = null;
           if (target?.isConnected === true && target !== document.body) target.focus();
         }}
-        // 閉じるボタンは出さない: 右上に既に「新しい会話」のボタンが居て、置く場所が無いため
-        showCloseButton={false}
+        // 閉じるボタンの top に safe-top を足す: 面は pt で safe-top を空けるが、絶対配置の top は面の縁から測るため、足さないと切り欠きの下に潜る
+        // 右上に居る中身（「新しい会話」など）は `inDrawer` の側で右を空けて避ける
+        closeButtonClassName="top-[calc(0.75rem+var(--safe-top))]"
         // `w-` に `data-[side=left]:` を付ける: sheet の幅指定が同じ修飾子付きで、揃えないと tailwind-merge が衝突と見なせず sheet の 3/4 が勝つため
         className="data-[side=left]:w-[17rem] max-w-[85%] gap-0 border-r border-border bg-card text-base shadow-xl pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]"
       >

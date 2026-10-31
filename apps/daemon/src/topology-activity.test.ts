@@ -239,6 +239,32 @@ describe('createTopologyActivityTracker', () => {
     ]);
   });
 
+  it('上限を超えたら、外部の呼び元も最後の活動が古いものから落とす', () => {
+    const tracker = createTopologyActivityTracker(2);
+    for (const [keyId, at] of [
+      ['k1', '2026-10-04T10:00:01.000Z'],
+      ['k3', '2026-10-04T10:00:03.000Z'],
+      ['k2', '2026-10-04T10:00:02.000Z'],
+    ] as const) {
+      tracker.recordExternal({ keyId, name: keyId, source: 'webhook', at });
+    }
+    expect(tracker.externals().map((row) => row.keyId)).toEqual(['k3', 'k2']);
+  });
+
+  it('上限を超えたら、担い手も最後の道具の時刻が古いものから落とす', () => {
+    const tracker = createTopologyActivityTracker(2);
+    for (const [agentType, at] of [
+      ['w1', '2026-10-04T10:00:01.000Z'],
+      ['w3', '2026-10-04T10:00:03.000Z'],
+      ['w2', '2026-10-04T10:00:02.000Z'],
+    ] as const) {
+      tracker.record(
+        entry('tool_use', { actor: `worker:m1:${agentType}`, tool: 'Edit', input: {}, at }),
+      );
+    }
+    expect(tracker.workersOf('m1').map((row) => row.agentType)).toEqual(['w2', 'w3']);
+  });
+
   it('attach は購読口へ繋ぎ、解除すると取り込まなくなる', () => {
     const listeners = new Set<(entry: JournalEntry) => void>();
     const tracker = createTopologyActivityTracker();

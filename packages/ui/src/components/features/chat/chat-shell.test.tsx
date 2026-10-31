@@ -67,6 +67,15 @@ describe('ConversationList: 枠・空・但し書き', () => {
     expect(container.querySelector('aside')?.className).toContain('min-h-0');
   });
 
+  it('inDrawer では見出しの帯の右を空ける（Drawer の閉じるボタンと「新しい会話」を重ねない）', () => {
+    const { container, rerender } = render(
+      <ConversationList items={items} activeId="a" renderLink={renderLink} />,
+    );
+    expect(container.querySelector('aside > div')?.className).not.toContain('pr-14');
+    rerender(<ConversationList items={items} activeId="a" renderLink={renderLink} inDrawer />);
+    expect(container.querySelector('aside > div')?.className).toContain('pr-14');
+  });
+
   it('0件・未取得は「まだ会話がない。」、notes は1件ずつ <p>', () => {
     const { rerender } = render(
       <ConversationList items={[]} activeId={undefined} renderLink={renderLink} />,

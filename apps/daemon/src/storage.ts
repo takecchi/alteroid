@@ -8,8 +8,7 @@ import {
   ATTACHMENT_S3_BUCKET_ENV,
   ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV,
   attachmentBodyMaxBytes,
-  deriveHumanTouchedAtFromJournal,
-  deriveMemoryCreatedAtFromJournal,
+  deriveMemoryBootBackfillFromJournal,
   placedEnvValue,
   readAttachmentBlobConfig,
   readAttachmentLimits,
@@ -91,10 +90,27 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
   };
 }
 
-// 判定基準の実装を持たず `deriveHumanTouchedAtFromJournal` を呼ぶだけにする: 基準が散ると、片方だけ直して残りが古い基準のままになるため。
-async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
+// 判定基準の実装を持たず core の `deriveMemoryBootBackfillFromJournal` を呼ぶだけにする: 基準が散ると、片方だけ直して残りが古い基準のままになるため。
+// 日誌は1周だけ読む（人間の印と作った時刻の2つを同じ走査で組む）。書き戻しは2つの try に分けたまま: 片方が落ちても、もう片方は従来どおり起動を止めず続けるため。
+export async function runBootBackfills(stores: Stores): Promise<void> {
+  let derived: Awaited<ReturnType<typeof deriveMemoryBootBackfillFromJournal>> | undefined;
+  let scanError: unknown;
   try {
-    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(stores.journal);
+    derived = await deriveMemoryBootBackfillFromJournal(stores.journal);
+  } catch (error) {
+    scanError = error;
+  }
+  await backfillMemoryHumanTouch(stores, derived?.humanTouchedAt, scanError);
+  await backfillMemoryCreatedAt(stores, derived?.createdAt, scanError);
+}
+
+async function backfillMemoryHumanTouch(
+  stores: Stores,
+  humanTouchedAt: Map<string, string> | undefined,
+  scanError: unknown,
+): Promise<void> {
+  try {
+    if (humanTouchedAt === undefined) throw scanError;
     for (const [slug, at] of humanTouchedAt) {
       await stores.persona.markHumanTouched(slug, at);
     }
@@ -107,9 +123,13 @@ async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
 
 // `created_at` を埋める以外のことをしない・削除しない: 記憶の絶対条件のため。
 // 根拠が無い文書には `markCreatedAt` を呼ばず `unknown` のままにする: `mtime` にも `birthtime` にも触れない。
-async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
+async function backfillMemoryCreatedAt(
+  stores: Stores,
+  createdAt: Map<string, string> | undefined,
+  scanError: unknown,
+): Promise<void> {
   try {
-    const createdAt = await deriveMemoryCreatedAtFromJournal(stores.journal);
+    if (createdAt === undefined) throw scanError;
     let filled = 0;
     for (const [slug, at] of createdAt) {
       if (await stores.persona.markCreatedAt(slug, at)) filled += 1;
@@ -178,8 +198,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     const stores = createFsStores(plan.root, { limits: attachmentLimits });
     // 重い読み（backfill の journal 走査）より前に置く。fs 構成では表の実寸を測れないので `null` を渡す。
     await reportBootFootprint(stores, null);
-    await backfillMemoryHumanTouch(stores);
-    await backfillMemoryCreatedAt(stores);
+    await runBootBackfills(stores);
     await ensureConversationReadBaseline(stores);
     return {
       stores,
@@ -228,8 +247,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   // backfill（journal を走査する）より前に置く: 重い読みの全部より前が要件のため。
   const footprint = await measureStorageFootprint(pg.db);
   await reportBootFootprint(pg, footprint);
-  await backfillMemoryHumanTouch(pg);
-  await backfillMemoryCreatedAt(pg);
+  await runBootBackfills(pg);
   await ensureConversationReadBaseline(pg);
 
   return {

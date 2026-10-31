@@ -84,6 +84,19 @@ describe('describeWorkerLimitKeyMatch', () => {
     expect(line).toContain('現役ではない（現役は 鍵「鍵C」（order 4・id cccccccc））');
   });
 
+  it('鍵の名前の切り口に絵文字がかかっても、孤立したサロゲートが残らない（#5973）', () => {
+    const emojiKey = { ...KEY_B, label: `${'x'.repeat(39)}😀${'x'.repeat(10)}` };
+    const line = describeWorkerLimitKeyMatch({
+      raw: RAW,
+      at: NOW,
+      pool: [emojiKey],
+      activeTokenId: emojiKey.id,
+      windows,
+    });
+    expect(line).toContain(`鍵「${'x'.repeat(39)}…」（order 3・id bbbbbbbb）`);
+    expect(line).not.toMatch(/\p{Surrogate}/u);
+  });
+
   it('一致した鍵が現役なら「現役と同じ鍵である」', () => {
     const line = describeWorkerLimitKeyMatch({
       raw: RAW,
