@@ -79,11 +79,7 @@ export {
   type DeferredIndexOutcome,
 } from './deferred-indexes.js';
 export {
-  ensureJournalConversationSeqIndex,
-  ensureJournalHumanExchangeSeqIndex,
-  ensureJournalHumanRepliesIndex,
-  ensureJournalTypeSeqIndex,
-  ensureJournalWithdrawalsIndex,
+  ensureDeferredIndex,
   JOURNAL_CONVERSATION_SEQ_INDEX,
   JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX,
   JOURNAL_HUMAN_REPLIES_INDEX,
@@ -219,7 +215,7 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   // 流し済みの文は流し直さない（#4731。`migrateOnBoot`）: 何もしない ALTER でもテーブルを止めるため
   await withPgQueryTimeout(PG_LONG_QUERY_TIMEOUT_MS, () => migrateOnBoot(db));
 
-  // 起き上がった後に、書き込みを止めない索引を裏で作る（#5089。`ensureJournalHumanRepliesIndex`）。
+  // 起き上がった後に、書き込みを止めない索引を裏で作る（#5089。`ensureDeferredIndex`）。
   // プールとは別の接続で作る: プールで作ると、停止の `pool.end()` が作り終わり（GB 級の日誌では分単位）を待つため。
   // 停止のときはこの接続を閉じる。作りかけは無効な索引として残り、次の起動で作り直す
   const indexClient = new Client({ connectionString: config.url });

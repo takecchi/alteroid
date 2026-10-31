@@ -137,9 +137,9 @@ import {
   noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
   noteInboxEventRefused,
-  noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
+import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js';
 import type {
   AnswerApprovalVia,
   ClonePluginLoadObservation,
@@ -603,29 +603,19 @@ export const MERGED_BATCH_SIZE_LIMIT_ENV_KEY = 'ALTEROID_MERGED_BATCH_SIZE_LIMIT
 const MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT = 'まとめ読みの束の上限件数の設定';
 
 export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY];
-  if (raw === undefined) return MERGED_BATCH_SIZE_LIMIT;
-  const trimmed = raw.trim();
-  if (trimmed === '') return MERGED_BATCH_SIZE_LIMIT;
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    noteUnreadableRecord(
+  return readNumberEnv(env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY], {
+    fallback: MERGED_BATCH_SIZE_LIMIT,
+    positive: true,
+    floor: true,
+    onProblem: unreadableEnvRecordNote(
+      MERGED_BATCH_SIZE_LIMIT_ENV_KEY,
       MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT,
-      `${MERGED_BATCH_SIZE_LIMIT_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`数値として読めない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`),
-    );
-    return MERGED_BATCH_SIZE_LIMIT;
-  }
-  if (parsed <= 0) {
-    noteUnreadableRecord(
-      MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT,
-      `${MERGED_BATCH_SIZE_LIMIT_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`0 以下は上限にならない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`),
-    );
-    return MERGED_BATCH_SIZE_LIMIT;
-  }
-  return Math.floor(parsed);
+      {
+        'not-number': `数値として読めない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`,
+        'non-positive': `0 以下は上限にならない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`,
+      },
+    ),
+  });
 }
 
 // 外部の合図の窓（と、合成した報告の窓）の既定 2.5 秒: 外部の合図のバーストが1束に収まる桁で、人間以外の合図にだけ掛かる遅延として許せる上限のため。報告の窓は別（`REPORT_SETTLE_MS`）
@@ -640,31 +630,16 @@ const INBOX_SETTLE_MS_UNREADABLE_WHAT = '暇なときの束ね待ちの設定';
 
 // 0 は無効（従来どおり、届いた合図が即ターンになる）
 export function resolveInboxSettleMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[INBOX_SETTLE_MS_ENV_KEY];
-  if (raw === undefined) return INBOX_SETTLE_MS;
-  const trimmed = raw.trim();
-  if (trimmed === '') return INBOX_SETTLE_MS;
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    noteUnreadableRecord(
-      INBOX_SETTLE_MS_UNREADABLE_WHAT,
-      `${INBOX_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`数値として読めない。既定の ${String(INBOX_SETTLE_MS)}ms で走る`),
-    );
-    return INBOX_SETTLE_MS;
-  }
-  if (parsed < 0 || parsed > INBOX_SETTLE_MS_MAX) {
-    noteUnreadableRecord(
-      INBOX_SETTLE_MS_UNREADABLE_WHAT,
-      `${INBOX_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(
-        `0〜${String(INBOX_SETTLE_MS_MAX)}ms の外は待ちにならない。既定の ${String(INBOX_SETTLE_MS)}ms で走る`,
-      ),
-    );
-    return INBOX_SETTLE_MS;
-  }
-  return Math.floor(parsed);
+  return readNumberEnv(env[INBOX_SETTLE_MS_ENV_KEY], {
+    fallback: INBOX_SETTLE_MS,
+    min: 0,
+    max: INBOX_SETTLE_MS_MAX,
+    floor: true,
+    onProblem: unreadableEnvRecordNote(INBOX_SETTLE_MS_ENV_KEY, INBOX_SETTLE_MS_UNREADABLE_WHAT, {
+      'not-number': `数値として読めない。既定の ${String(INBOX_SETTLE_MS)}ms で走る`,
+      'out-of-range': `0〜${String(INBOX_SETTLE_MS_MAX)}ms の外は待ちにならない。既定の ${String(INBOX_SETTLE_MS)}ms で走る`,
+    }),
+  });
 }
 
 // 報告だけ外部の合図より長く待つ（#5400）: 報告は 44 秒間隔で届く連鎖が多く、2.5 秒では束ならない（batchSize=1 が 8 割強）。
@@ -681,31 +656,16 @@ const REPORT_SETTLE_MS_UNREADABLE_WHAT = '暇なときの報告の束ね待ち�
 
 // 0 は無効（報告も、届いた時点で即ターンになる。外部の合図の待ちは `resolveInboxSettleMs` が別に持つ）
 export function resolveReportSettleMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[REPORT_SETTLE_MS_ENV_KEY];
-  if (raw === undefined) return REPORT_SETTLE_MS;
-  const trimmed = raw.trim();
-  if (trimmed === '') return REPORT_SETTLE_MS;
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    noteUnreadableRecord(
-      REPORT_SETTLE_MS_UNREADABLE_WHAT,
-      `${REPORT_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`数値として読めない。既定の ${String(REPORT_SETTLE_MS)}ms で走る`),
-    );
-    return REPORT_SETTLE_MS;
-  }
-  if (parsed < 0 || parsed > REPORT_SETTLE_MS_MAX) {
-    noteUnreadableRecord(
-      REPORT_SETTLE_MS_UNREADABLE_WHAT,
-      `${REPORT_SETTLE_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(
-        `0〜${String(REPORT_SETTLE_MS_MAX)}ms の外は待ちにならない。既定の ${String(REPORT_SETTLE_MS)}ms で走る`,
-      ),
-    );
-    return REPORT_SETTLE_MS;
-  }
-  return Math.floor(parsed);
+  return readNumberEnv(env[REPORT_SETTLE_MS_ENV_KEY], {
+    fallback: REPORT_SETTLE_MS,
+    min: 0,
+    max: REPORT_SETTLE_MS_MAX,
+    floor: true,
+    onProblem: unreadableEnvRecordNote(REPORT_SETTLE_MS_ENV_KEY, REPORT_SETTLE_MS_UNREADABLE_WHAT, {
+      'not-number': `数値として読めない。既定の ${String(REPORT_SETTLE_MS)}ms で走る`,
+      'out-of-range': `0〜${String(REPORT_SETTLE_MS_MAX)}ms の外は待ちにならない。既定の ${String(REPORT_SETTLE_MS)}ms で走る`,
+    }),
+  });
 }
 
 // 待つのはマネージャーの報告と外部の合図だけ: 人間・許可確認・質問・timer・蒸留・自発・token-pool の「鍵が戻った」は待たせない

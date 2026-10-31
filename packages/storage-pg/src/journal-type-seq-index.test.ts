@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb } from './index.js';
-import { ensureJournalTypeSeqIndex, JOURNAL_TYPE_SEQ_INDEX } from './migrate.js';
+import { ensureDeferredIndex, JOURNAL_TYPE_SEQ_INDEX } from './migrate.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
+
+const ensureJournalTypeSeqIndex = (target: Db, warn: (line: string) => void): Promise<void> =>
+  ensureDeferredIndex(target, JOURNAL_TYPE_SEQ_INDEX, warn);
 
 // 種別と `seq` の索引（#5264。`GET /reports`・`GET /progress` が薄い種別を読むのに日誌の大半を辿っていた件）
 
