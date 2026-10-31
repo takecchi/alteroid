@@ -147,6 +147,26 @@ describe('クローン — interruptTurn の対象指定（#3956）', () => {
     await t.clone.stop();
   });
 
+  it('順番待ちの発言を取り下げたら、その発言の Task も閉じる（先客の Task は開いたまま）', async () => {
+    const t = build();
+    t.clone.post(said('先客', A.conversationId, A.clientMessageId));
+    await waitFor(() => t.inputs.length === 1, '先客のターンが始まる');
+    t.clone.post(said('自分の発言', B.conversationId, B.clientMessageId));
+    await waitFor(async () => (await pendingIds(t.stores)).length === 2, '2件が器に載る');
+    await waitFor(async () => (await t.stores.tasks.list()).entries.length === 2, '2件の Task');
+
+    await expect(t.clone.interruptTurn!(B)).resolves.toBe('withdrawn');
+
+    const { entries } = await t.stores.tasks.list();
+    const withdrawn = entries.find((task) => task.id === 'evt-自分の発言');
+    expect(withdrawn).toMatchObject({ status: 'cancelled', closedBy: 'human' });
+    expect(withdrawn?.closedReason).toContain('取り下げ');
+    expect(entries.find((task) => task.id === 'evt-先客')?.status).toBe('queued');
+
+    t.openAll();
+    await t.clone.stop();
+  });
+
   it('別の起点のターンが走っていて、対象がどこにも居なければ止めない（not_target）', async () => {
     const t = build();
     t.clone.post(said('先客', A.conversationId, A.clientMessageId));
