@@ -936,6 +936,18 @@ interface PushSpec {
   readonly thrown: (runnerId: string, reason: string) => string;
 }
 
+/** 結果を読まない種類（呼んで待つだけ。断りは投げて知らせる）の `sync`。`undefined` はその口を配線していない種類。 */
+function viaSync(
+  service: { syncRunner(runner: RunnerClient): Promise<unknown> } | undefined,
+): PushSpec['sync'] {
+  return service === undefined
+    ? undefined
+    : async (runner) => {
+        await service.syncRunner(runner);
+        return undefined;
+      };
+}
+
 interface PushRefusal {
   /** 帳面（`RunnerPushOutcome.error`）へ書く理由。 */
   readonly error: string;
@@ -3641,18 +3653,17 @@ class Pool implements ManagerPool {
     this.#plugins = plugins;
     this.#permissionRules = permissionRules;
     this.#codexAuth = codexAuth;
-    for (const unsubscribe of [
-      permissionRules?.onPushed?.((results) =>
-        this.#recordDirectPushResults('permissionRules', results),
-      ),
-      profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
-      mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
-      credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
-      plugins?.onPushed?.((results) => this.#recordDirectPushResults('plugins', results)),
-      agentTokenPushes?.onPushed?.((results) =>
-        this.#recordDirectPushResults('agentToken', results),
-      ),
-    ]) {
+    for (const [kind, source] of [
+      ['permissionRules', permissionRules],
+      ['profile', profile],
+      ['mcpServers', mcpServers],
+      ['credentials', credentials],
+      ['plugins', plugins],
+      ['agentToken', agentTokenPushes],
+    ] as const) {
+      const unsubscribe = source?.onPushed?.((results) =>
+        this.#recordDirectPushResults(kind, results),
+      );
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
     this.#now = now ?? (() => Date.now());
@@ -8250,23 +8261,7 @@ class Pool implements ManagerPool {
         }
         if (isFencedRunnerError(error)) {
           // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さず、必ず知らせる。
-          await this.#journal({
-            type: 'decision',
-            decision: `[${job.id}] 起動時の引き取りを止めた（runner がより新しい世代を持っている＝別の誰かが握っている）`,
-            grounds: reasonOf(error),
-          });
-          this.#post({
-            type: 'manager_message',
-            id: randomUUID(),
-            at: this.#nowIso(),
-            managerId: job.id,
-            kind: 'report',
-            text:
-              `${job.id} の起動時の引き取りが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
-              `終わったとは限らないので、**新しく起こし直さないでください** — ` +
-              `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${reasonOf(error)}`,
-            ...this.#statusAtDelivery(job.id),
-          });
+          await this.#refuseFenced(job.id, error, '起動時の引き取りを止めた', '起動時の引き取り');
         } else if (isRetryableRunnerError(error)) {
           // 一時的なこけ方は黙って引き下がらない: 次の契機が永久に来ないことがあるので梯子へ載せる。
           this.#scheduleReattach(runner.runnerId);
@@ -8454,16 +8449,7 @@ class Pool implements ManagerPool {
     // クローン発の停止は受信箱へ配らない: `manager_stop` の戻り値で同じターンに同期的に受け取る内容の真部分集合で新しい事実が無く、`manager_message` は束ねられないので、停止1本ごとにクローンのターン（システムプロンプトの読み直し）を1回焼く。日誌には条件を問わず残る。
     // 人間発は配る: クローンには戻り値が無く、他に知る手段が無い。
     if (by !== 'clone') {
-      this.#post({
-        type: 'manager_message',
-        id: randomUUID(),
-        at: this.#nowIso(),
-        managerId,
-        kind: 'report',
-        text: messageText,
-        ...(markup === undefined ? {} : { markup }),
-        ...this.#statusAtDelivery(managerId),
-      });
+      this.#postReport(managerId, messageText, markup === undefined ? {} : { markup });
     }
 
     return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
@@ -8585,13 +8571,7 @@ class Pool implements ManagerPool {
           kind: 'credentials',
           // runner が自分で取りに行く形にしない: 取りに行けるなら runner に記憶ストアの鍵があることになる（AGENTS.md「runner に記憶ストアの鍵を足さないこと」）。
           // プロファイルと別の呼びにする: 1つにまとめると、プロファイルの評価が落ちた器へは無関係な鍵まで降りない。
-          sync:
-            credentials === undefined
-              ? undefined
-              : async (runner) => {
-                  await credentials.syncRunner(runner);
-                  return undefined;
-                },
+          sync: viaSync(credentials),
           thrown: (runnerId, reason) =>
             `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reason}`,
         },
@@ -8623,38 +8603,20 @@ class Pool implements ManagerPool {
         },
         {
           kind: 'mcpServers',
-          sync:
-            mcpServers === undefined
-              ? undefined
-              : async (runner) => {
-                  await mcpServers.syncRunner(runner);
-                  return undefined;
-                },
+          sync: viaSync(mcpServers),
           thrown: (runnerId, reason) =>
             `${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reason}`,
         },
         {
           kind: 'plugins',
-          sync:
-            plugins === undefined
-              ? undefined
-              : async (runner) => {
-                  await plugins.syncRunner(runner);
-                  return undefined;
-                },
+          sync: viaSync(plugins),
           thrown: (runnerId, reason) =>
             `${runnerId} へ plugin を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの plugin を持たずに走る）: ${reason}`,
         },
         {
           kind: 'permissionRules',
           // 委譲先の許可規則（#4952）。
-          sync:
-            permissionRules === undefined
-              ? undefined
-              : async (runner) => {
-                  await permissionRules.syncRunner(runner);
-                  return undefined;
-                },
+          sync: viaSync(permissionRules),
           thrown: (runnerId, reason) =>
             `${runnerId} へ委譲先の許可規則を降ろせなかった（この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載っていない。前に降りた一覧が残っていればそれが効いている）: ${reason}`,
         },
@@ -8662,13 +8624,7 @@ class Pool implements ManagerPool {
       // 失敗しても委譲は止めない。ただし黙って古いトークンで走らせない: 跡を残す。
       agentToken: {
         kind: 'agentToken',
-        sync:
-          syncRunnerToken === undefined
-            ? undefined
-            : async (runner) => {
-                await syncRunnerToken(runner);
-                return undefined;
-              },
+        sync: viaSync(syncRunnerToken && { syncRunner: syncRunnerToken }),
         thrown: (runnerId, reason) =>
           `${runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reason}`,
       },
@@ -9085,23 +9041,7 @@ class Pool implements ManagerPool {
           // 一時的にこけたときは自分で予約する: `hello` は SSE が繋がったときにしか来ず、ストリームが安定していれば永久に来ないので、台帳が `running` のまま誰も走っていない仕事が残る。
           if (isFencedRunnerError(error)) {
             // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さない（同じ世代で投げ直しても同じ答え）が、台帳の書き込み失敗か別のデーモンの存在を人間が知る必要があるので必ず知らせる。
-            await this.#journal({
-              type: 'decision',
-              decision: `[${job.id}] 取り直しを止めた（runner がより新しい世代を持っている＝別の誰かが握っている）`,
-              grounds: reasonOf(error),
-            });
-            this.#post({
-              type: 'manager_message',
-              id: randomUUID(),
-              at: this.#nowIso(),
-              managerId: job.id,
-              kind: 'report',
-              text:
-                `${job.id} の取り直しが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
-                `終わったとは限らないので、**新しく起こし直さないでください** — ` +
-                `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${reasonOf(error)}`,
-              ...this.#statusAtDelivery(job.id),
-            });
+            await this.#refuseFenced(job.id, error, '取り直しを止めた', '取り直し');
           } else if (isRetryableRunnerError(error)) retry = true;
           else if (
             relocating &&
@@ -9650,17 +9590,11 @@ class Pool implements ManagerPool {
       'outbound',
       `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] ${describeAmbiguousSighting(runnerId, duplicates)}`,
     );
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: this.#nowIso(),
+    this.#postReport(
       managerId,
-      kind: 'report',
-      text:
-        `${describeAmbiguousSighting(runnerId, duplicates)} ` +
+      `${describeAmbiguousSighting(runnerId, duplicates)} ` +
         '**新しく起こし直さないこと** — 起こし直すと同じ仕事が2本になりえます。',
-      ...this.#statusAtDelivery(managerId),
-    });
+    );
   }
 
   /**
@@ -9676,15 +9610,10 @@ class Pool implements ManagerPool {
       'outbound',
       `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。`,
     );
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: this.#nowIso(),
+    this.#postReport(
       managerId,
-      kind: 'report',
-      text: `runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。以後は自動で引き取ります。`,
-      ...this.#statusAtDelivery(managerId),
-    });
+      `runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。以後は自動で引き取ります。`,
+    );
   }
 
   /**
@@ -11447,13 +11376,7 @@ class Pool implements ManagerPool {
         }
         // 移った後に古い runner から遅れて届いた resume_failed で巻き戻さない。ただし「不一致」だけで「移った」と言わない: `job.runnerId` に既定値 `'runner-primary'` が焼かれたままだと、同じ runner からでも不一致になり、本当に終わった事実を捨ててしまう（`#resume` だけが書き直す）。
         // 捨てるのは `job.runnerId` が `#registeredRunnerIds()`（名簿にいま居る id）に含まれ、かつ `fromRunnerId` と食い違うときだけ。未記録の古いジョブと名簿が `null`（判定材料なし）のときは従来どおり適用する（安全側）。
-        const registeredRunnerIdsForResumeFailed = this.#registeredRunnerIds();
-        if (
-          record.job.runnerId !== undefined &&
-          record.job.runnerId !== fromRunnerId &&
-          registeredRunnerIdsForResumeFailed !== null &&
-          registeredRunnerIdsForResumeFailed.has(record.job.runnerId)
-        ) {
+        if (this.#movedAwayFrom(record, fromRunnerId)) {
           await this.#journalExchange(
             'inbound',
             `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
@@ -11542,13 +11465,7 @@ class Pool implements ManagerPool {
           this.#deferEvent(event, fromRunnerId);
           return;
         }
-        const registeredRunnerIdsForClosed = this.#registeredRunnerIds();
-        if (
-          record.job.runnerId !== undefined &&
-          record.job.runnerId !== fromRunnerId &&
-          registeredRunnerIdsForClosed !== null &&
-          registeredRunnerIdsForClosed.has(record.job.runnerId)
-        ) {
+        if (this.#movedAwayFrom(record, fromRunnerId)) {
           await this.#journalExchange(
             'inbound',
             `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
@@ -12595,13 +12512,9 @@ class Pool implements ManagerPool {
     } else {
       open.entries.set(job.id, entry);
     }
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: this.#nowIso(),
-      managerId: job.id,
-      kind: 'report',
-      text: [
+    this.#postReport(
+      job.id,
+      [
         how === 'attached'
           ? `${head}。この委譲は runner の中で走り続けている。`
           : confirmed
@@ -12627,13 +12540,10 @@ class Pool implements ManagerPool {
       ]
         .filter((line) => line !== '')
         .join('\n'),
-      ...this.#statusAtDelivery(job.id),
       // デーモン再起動の引き取り直し（`attached`）だけに付ける: 担当の状態が変わった印（移送・器の作り直し・resume）は畳まない。
       // 日誌には上で全文を書いてあり、畳むかはクローンが配る時点の担当の状態で決める（live かつ running のときだけ）。
-      ...(how === 'attached' && cause === 'daemon'
-        ? { foldWhenBack: { attached: true as const } }
-        : {}),
-    });
+      how === 'attached' && cause === 'daemon' ? { foldWhenBack: { attached: true as const } } : {},
+    );
   }
 
   #beginResumeConfirmation(managerId: string, runnerId: string): void {
@@ -12816,6 +12726,39 @@ class Pool implements ManagerPool {
   #statusAtDelivery(managerId: string): { statusAtDelivery: JobStatus } | Record<string, never> {
     const status = this.#records.get(managerId)?.job.status;
     return status === undefined ? {} : { statusAtDelivery: status };
+  }
+
+  /** クローンへ `report` を1通出す。`extra` は `markup`・`foldWhenBack` のような、その知らせだけの追加の欄。 */
+  #postReport(
+    managerId: string,
+    text: string,
+    extra: { markup?: TextMarkup; foldWhenBack?: FoldWhenBack } = {},
+  ): void {
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: this.#nowIso(),
+      managerId,
+      kind: 'report',
+      text,
+      ...extra,
+      ...this.#statusAtDelivery(managerId),
+    });
+  }
+
+  /** 世代で拒まれた（409）ときの知らせ（日誌 `decision` と、クローンへの報告）。`what` は「起動時の引き取り」「取り直し」。 */
+  async #refuseFenced(jobId: string, error: unknown, stopped: string, what: string): Promise<void> {
+    await this.#journal({
+      type: 'decision',
+      decision: `[${jobId}] ${stopped}（runner がより新しい世代を持っている＝別の誰かが握っている）`,
+      grounds: reasonOf(error),
+    });
+    this.#postReport(
+      jobId,
+      `${jobId} の${what}が世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
+        `終わったとは限らないので、**新しく起こし直さないでください** — ` +
+        `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${reasonOf(error)}`,
+    );
   }
 
   // 順序は並べ替えない（`docs/architecture.md`）: 畳めない出来事が来たら、先に合成した知らせの積みを全部配り切ってから本題を配る。

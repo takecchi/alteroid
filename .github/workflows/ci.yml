@@ -249,7 +249,7 @@ jobs:
       - run: pnpm check:sdk-quotes
         if: ${{ !cancelled() }}
 
-      # **世代ずれの起こし直しの助言の生成元を1つに保つ歯（Issue #1175）。**
+      # **起こし直しの助言（世代ずれ #1175 / 確かめる前に起こし直すな #1287）の生成元を1つに保つ歯（Issue #6015 で2本を1本に）。**
       # `scripts/verify-core.mjs` の STEPS にも在るが、**STEPS だけでは PR の CI で
       # 一度も走らない** —— この job は `pnpm verify` を呼ばず、門を1本ずつ並べる形
       # だからである。`scripts/check-scripts-wired.test.ts` は「STEPS か workflow の
@@ -258,21 +258,11 @@ jobs:
       # がまさに同じ穴で（#646。実装から配線まで期間が空いた）、そのときの断りが
       # このすぐ上に逐語で残っている。
       #
-      # ⚠ `scripts/check-stale-token-restart-advice.test.ts` は純関数を合成入力で
+      # ⚠ `scripts/check-advice-single-source.test.ts` は純関数を合成入力で
       # 測るだけで、`pnpm test` 経由では実物の repo に当たらない。**実物へ当たる
       # 経路はこの1行だけである**（この節の `check:*` はどれも同じ形。試験は判定の
       # 関数だけを測り、実物の repo への当ては build より前のこの job が持つ）。
-      - run: pnpm check:stale-token-restart-advice
-        if: ${{ !cancelled() }}
-
-      # **逆向きの助言（「確かめる前に manager_start で起こし直すな」）の生成元を
-      # 1つに保つ歯（Issue #1287）。** 直上の `check:stale-token-restart-advice`
-      # （#1175）とまったく同じ理由・同じ配線の形——`scripts/verify-core.mjs` の
-      # STEPS だけでは PR の CI で一度も走らない（この job は `pnpm verify` を
-      # 呼ばず、門を1本ずつ並べる形だからである）。**実物へ当たる経路はこの1行
-      # だけである**（`scripts/check-restart-before-check-advice.test.ts` は純
-      # 関数を合成入力で測るだけで、実物の repo には当たらない）。
-      - run: pnpm check:restart-before-check-advice
+      - run: pnpm check:advice-single-source
         if: ${{ !cancelled() }}
 
       # **#1854 系の直し（子プロセスへ親の env を丸ごと渡さない）が、直す前の形へ

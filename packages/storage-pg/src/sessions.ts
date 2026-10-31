@@ -106,7 +106,7 @@ const DISTILL_FAILURES_KEYS = {
   lost_session: 'clone_lost_session_distill_failures',
 } as const;
 
-// 墓標ごとの回数（#4898）。古い形（1件だけの `{ graveId, failures }`）も読む。値の形を変えるだけなので migrate は要らない
+// 墓標ごとの回数（#4898）。値の形を変えるだけなので migrate は要らない
 function parseDistillFailures(raw: string, key: string): DistillFailureCounts | null {
   return parseStoredJson(raw, `墓標の蒸留失敗回数（${key}）`, parseDistillFailureCounts);
 }
