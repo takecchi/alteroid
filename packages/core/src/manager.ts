@@ -1813,16 +1813,6 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
 }
 
-/**
- * 試験専用: 委譲の鍵で引くプロセス内の Map/Set の大きさ。畳んだ担当の分が溜まっていないかを、私有の欄を覗かずに数える（#6019）。
- * 本番の経路は呼ばない。`createManagerPool` が返したもの以外を渡すと投げる。
- */
-export function managerKeyedStateSizes(pool: ManagerPool): Record<string, number> {
-  if (!(pool instanceof Pool))
-    throw new Error('managerKeyedStateSizes: createManagerPool の返り値ではない');
-  return pool.managerKeyedStateSizes();
-}
-
 interface ResumeConfirmation {
   state: ResumeConfirmationState;
   /** resume を出した先。印はこの器から届いたものだけ数える（移送の前の器から遅れて届いた出来事で確定しないため）。 */
