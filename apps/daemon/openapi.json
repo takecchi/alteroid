@@ -14427,6 +14427,12 @@
                           "conversationId": {
                             "type": "string"
                           },
+                          "taskIds": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
                           "withdrawnAt": {
                             "type": "string",
                             "format": "date-time",
@@ -14804,6 +14810,12 @@
                         "conversationId": {
                           "type": "string"
                         },
+                        "taskIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
                         "withdrawnAt": {
                           "type": "string",
                           "format": "date-time",
@@ -15057,6 +15069,12 @@
                         },
                         "conversationId": {
                           "type": "string"
+                        },
+                        "taskIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         },
                         "withdrawnAt": {
                           "type": "string",
