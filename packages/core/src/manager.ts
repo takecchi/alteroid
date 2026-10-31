@@ -19,6 +19,7 @@ import {
 } from './dropped-record.js';
 import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js';
 import { excerptLine, fillListingBudget, renderListing } from './excerpt.js';
+import { formatDurationMinutes } from './format-elapsed.js';
 import {
   QUOTA_SESSION_WINDOW_KEY,
   QUOTA_STOP_MANAGER_IDS_KEY,
@@ -2783,7 +2784,6 @@ export function withheldReportOverdue(lastAt: string, now: number, flushMs: numb
  * **見るのは `firstAt` の1つだけ**: `flushedAt` を経過を測る材料にすると、経過時間の出所が2つになり、どちらを信じるかという問いが生まれる。
  * **`firstAt` が読めない・未来を指している（経過が負）ときは、経過を捏造しない**: 0分のような「それらしい値」を作らず、
  * 読めないことそのものを出力へ書く（取れない軸に0の行を作らない）。
- * `manager-activity.ts` の `formatMinutesAgo` は private で呼べず、日をまたぐ丸めも要らないので別に持つ。
  */
 export function describeBackgroundWaitElapsed(firstAt: string, now: number): string {
   const parsed = Date.parse(firstAt);
@@ -2797,12 +2797,7 @@ export function describeBackgroundWaitElapsed(firstAt: string, now: number): str
       '経過時間は不明）。'
     );
   }
-  const totalMinutes = Math.floor(elapsedMs / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const durationText =
-    hours < 1 ? `${String(minutes)}分` : `${String(hours)}時間${String(minutes)}分`;
-  return `この委譲は${durationText}、背景処理待ちのまま（最初 ${firstAt}）。`;
+  return `この委譲は${formatDurationMinutes(elapsedMs)}、背景処理待ちのまま（最初 ${firstAt}）。`;
 }
 
 /**
@@ -13944,14 +13939,6 @@ function vanishedRunnerBacklog(
   return backlog;
 }
 
-// `describeBackgroundWaitElapsed` を使わない: あちらは private で、日をまたぐ丸め方までは要らない。
-function formatVanishedRunnerElapsed(elapsedMs: number): string {
-  const totalMinutes = Math.floor(elapsedMs / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours < 1 ? `${String(minutes)}分` : `${String(hours)}時間${String(minutes)}分`;
-}
-
 // `[計器]`（`EXCHANGE_KIND_GAUGE_PREFIX`）を含めない: `exchange-kind-coverage.test.ts` の静的検査は呼び出し元の `text:` の式に接頭辞定数が直接在ることを見るので、関数の中に隠すと見えなくなる。
 // 経過が読めない・負のときは経過を捏造せず省く（取れない軸に0の行を作らない）。
 function describeVanishedRunnerBacklogLine(
@@ -13964,7 +13951,7 @@ function describeVanishedRunnerBacklogLine(
   const elapsedText =
     elapsedMs === undefined || elapsedMs < 0
       ? ''
-      : `（最古の委譲は${formatVanishedRunnerElapsed(elapsedMs)}経過）`;
+      : `（最古の委譲は${formatDurationMinutes(elapsedMs)}経過）`;
   return (
     `[${runnerId}] 名簿から entry ごと消えている器の上に、` +
     `running のまま残っている委譲が ${String(backlog.count)} 本ある${elapsedText}。`
