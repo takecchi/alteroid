@@ -1,5 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
+import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 import { formatEpochMs, formatEpochMsRelative } from '~/lib/format-epoch-ms';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useEffect, useRef, useState } from 'react';
@@ -275,7 +276,7 @@ function PoolCard({
       )}
       {gone !== undefined && <TokenWriteError error={gone} className="m-4" />}
       <ActiveNote active={active} never={activeNever} unreadable={activeUnreadable} />
-      {rowsUnreadable !== undefined && <UnreadableRowsNote unreadable={rowsUnreadable} />}
+      {rowsUnreadable !== undefined && <UnreadableTokenRows unreadable={rowsUnreadable} />}
       {sorted.length === 0 ? (
         rowsUnreadable !== undefined ? (
           // 読めない行が在るとき「まだ1件も無い」「正常」と言わない: 読めた行が無いとしか言えないため
@@ -343,79 +344,22 @@ function ActiveNote({
 }
 
 // 一覧を書き換える操作は読めない行を捨てずに持ち越す: PUT /tokens は全文置換だが読めない行は残し、消すのは id を指す消すボタンだけのため
-function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }) {
+function UnreadableTokenRows({ unreadable }: { unreadable: TokensRowsUnreadable }) {
   const removeUnreadable = useRemoveUnreadableTokens();
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [failure, setFailure] = useState<unknown>(undefined);
-
-  async function remove(id: string) {
-    setBusyId(id);
-    setFailure(undefined);
-    try {
-      await removeUnreadable([id]);
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   return (
-    <WarnNote block className="m-4">
-      <p>
-        読めないトークンの行が {unreadable.count} 件ある（消えたのではなく、読めない形で
-        入っている）。この一覧には載っていない。
-      </p>
-      <ul className="mt-1 list-disc pl-5">
-        {unreadable.rows.map((row, index) => (
-          <li key={`${row.id ?? ''}:${index}`}>
-            {row.id === undefined && row.label === undefined ? (
-              '（id もラベルも取れない）'
-            ) : (
-              <>
-                {row.id !== undefined && <code className="font-mono break-all">{row.id}</code>}
-                {row.id !== undefined && row.label !== undefined && ' / '}
-                {row.label !== undefined && <span>{row.label}</span>}
-              </>
-            )}
-            {' — '}
-            {row.reason}
-            {row.id !== undefined && (
-              <>
-                {' '}
-                <Button
-                  variant="danger"
-                  size="sm"
-                  aria-label={`${row.id} の行を消す`}
-                  loading={busyId === row.id}
-                  onClick={() => setConfirmingId(row.id as string)}
-                >
-                  この行を消す
-                </Button>
-                {/* 押した瞬間には実行せず確認を挟む: 消した行は戻せないため */}
-                <ConfirmDialog
-                  open={confirmingId === row.id}
-                  onOpenChange={(open) => {
-                    if (!open) setConfirmingId(null);
-                  }}
-                  title={`読めないトークンの行「${row.id}」を消しますか`}
-                  description="この行は消え、元に戻せません。中身はこの画面では読めないので、消したあとに同じものを入れ直すには元の値が要ります。"
-                  confirmLabel="消す"
-                  destructive
-                  onConfirm={() => void remove(row.id as string)}
-                />
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-      <p className="mt-1">
-        一覧を書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
-        消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
-      </p>
-      <TokenWriteError error={failure} />
-    </WarnNote>
+    <UnreadableRowsNote
+      noun="トークン"
+      unreadable={unreadable}
+      removeUnreadable={removeUnreadable}
+      description="この行は消え、元に戻せません。中身はこの画面では読めないので、消したあとに同じものを入れ直すには元の値が要ります。"
+      footer={
+        <p className="mt-1">
+          一覧を書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
+          消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
+        </p>
+      }
+      renderFailure={(failure) => <TokenWriteError error={failure} />}
+    />
   );
 }
 
