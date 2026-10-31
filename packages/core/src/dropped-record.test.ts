@@ -979,6 +979,12 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
         '2値のみで自由文を運ばないが、この関数は参照しない——`answeredAt`/`answer`' +
         'と同じ理由（回答が付いた後段の欄）。',
     },
+    taskIds: {
+      emit: 'never',
+      why:
+        '問いを出したターンが答えていた task の id（自動 done の宛先）。id は受信箱の合図の id で、' +
+        '器の外から来た文字列が混じりうるため出さない。この関数は参照しない。',
+    },
   } satisfies Record<keyof PendingApproval, FieldPlan>;
 
   const SECRET = 'ghp_555555555555555555555555555555555555';
@@ -1000,6 +1006,7 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
     permissionRequest: { rule: SECRET, allows: [SECRET], denies: [SECRET] },
     answeredVia: { kind: 'account', accountId: SECRET },
     answerDelivery: 'delivered',
+    taskIds: [SECRET],
   };
 
   it('名簿のキー集合は pendingApprovalSchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {

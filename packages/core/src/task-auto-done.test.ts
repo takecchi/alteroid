@@ -29,6 +29,26 @@ function task(id: string, overrides: Partial<Task> = {}): Task {
   };
 }
 
+// 回答の返答・task_say が宛てた task を指定しない試験では、この試験が使う task id は全部宛先に入れる（宛先の絞りは専用の試験で `answered` / `said` を明示して見る）
+const ADDRESSED_BY_DEFAULT = [
+  'a',
+  'b',
+  'q',
+  'w',
+  'n',
+  'k',
+  'other',
+  'none',
+  'late',
+  'exact',
+  'asker',
+  'read',
+  'unread',
+  'done-reading',
+  'still-in-inbox',
+  'later',
+];
+
 function trace(
   replied: Record<string, TurnReplyVia> = { 'conv-1': 'turn_reply' },
   delegated: string[] = [],
@@ -37,6 +57,8 @@ function trace(
     unread?: string[];
     asked?: string[];
     active?: string[];
+    answered?: string[];
+    said?: string[];
   } = {},
 ): TurnReplyTrace {
   return {
@@ -44,6 +66,8 @@ function trace(
     replied: new Map(Object.entries(replied)),
     readSignalIds: new Set(extra.read ?? []),
     unreadSignalIds: new Set(extra.unread ?? []),
+    answeredTaskIds: new Set(extra.answered ?? ADDRESSED_BY_DEFAULT),
+    saidTaskIds: new Set(extra.said ?? ADDRESSED_BY_DEFAULT),
     askedConversationIds: new Set(extra.asked ?? []),
     delegatedTaskIds: new Set(delegated),
     activeJobTaskIds: new Set(extra.active ?? []),
@@ -153,6 +177,40 @@ describe('selectTasksToAutoClose: 何を閉じ、何を閉じないか', () => {
         trace({ 'conv-1': 'turn_reply' }, [], { unread: ['later'] }),
       ).map((t) => t.id),
     ).toEqual(['asker']);
+  });
+
+  it('回答のターンの返答: 答えた承認の taskIds の task だけ閉じる。宛先が空（古い行・分からない）なら何も閉じない', () => {
+    const tasks = [task('asker'), task('failed-earlier')];
+    expect(
+      selectTasksToAutoClose(
+        tasks,
+        trace({ 'conv-1': 'turn_reply' }, [], { answered: ['asker'] }),
+      ).map((t) => t.id),
+    ).toEqual(['asker']);
+    expect(
+      selectTasksToAutoClose(tasks, trace({ 'conv-1': 'turn_reply' }, [], { answered: [] })),
+    ).toEqual([]);
+  });
+
+  it('task_say: 書いた先の task だけ閉じる。同じ起点の会話の別の task・何も書いていない経路は閉じない', () => {
+    const tasks = [task('said'), task('sibling')];
+    expect(
+      selectTasksToAutoClose(tasks, trace({ 'conv-1': 'task_say' }, [], { said: ['said'] })).map(
+        (t) => t.id,
+      ),
+    ).toEqual(['said']);
+    expect(
+      selectTasksToAutoClose(tasks, trace({ 'conv-1': 'task_say' }, [], { said: [] })),
+    ).toEqual([]);
+  });
+
+  it('宛先に入っていても、受信箱にまだ残っている合図の task は閉じない', () => {
+    expect(
+      selectTasksToAutoClose(
+        [task('a')],
+        trace({ 'conv-1': 'task_say' }, [], { said: ['a'], unread: ['a'] }),
+      ),
+    ).toEqual([]);
   });
 });
 
