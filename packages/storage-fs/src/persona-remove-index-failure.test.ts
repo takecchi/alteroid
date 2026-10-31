@@ -40,7 +40,9 @@ describe('fs の persona.remove: 実体を消したあとの索引の失敗', ()
 
     expect(await exists(docPath())).toBe(false);
     // 握り潰さず跡は残す
-    expect(lines.join('')).toContain('記憶の削除後の索引の更新を記録できませんでした（slug=values）');
+    expect(lines.join('')).toContain(
+      '記憶の削除後の索引の更新を記録できませんでした（slug=values）',
+    );
   });
 
   it('rm 自体が失敗したとき（実体がディレクトリ）は、今までどおり投げる', async () => {
