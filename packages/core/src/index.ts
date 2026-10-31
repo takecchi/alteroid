@@ -224,7 +224,7 @@ export { verifyTaskStoreContract } from './task-store-contract.js';
 export { verifyTaskRemoveForConversationContract } from './task-remove-for-conversation-contract.js';
 export { TASK_TITLE_MAX, describeTaskPlacement } from './task-tools.js';
 export { scheduleReplaceEntry } from './schedule-replace.js';
-export { removeScheduleJournalFirst } from './schedule-remove.js';
+export { dropUnreadTimersOfKind, removeScheduleJournalFirst } from './schedule-remove.js';
 export {
   removeArchiveChunkJournalFirst,
   removeArchiveJournalFirst,

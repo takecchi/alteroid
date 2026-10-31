@@ -156,6 +156,35 @@ describe('DELETE /schedule/:kind は日誌を先に書く（#5234）', () => {
     expect(await decisions(stores)).toEqual([]);
     expect(await stores.schedules.get(KIND)).not.toBeNull();
   });
+
+  it('外した依頼の未読の timer は受信箱から消え、配達も止まる。別の kind の未読は残る', async () => {
+    const at = '2026-10-02T00:00:00.000Z';
+    await stores.inbox.put({ type: 'timer', id: 'gone', at, kind: KIND }, at);
+    await stores.inbox.put({ type: 'timer', id: 'kept', at, kind: 'other' }, at);
+    const dropped: string[] = [];
+    const clone = {
+      ...stubClone(),
+      dropQueuedInboxEvents: (ids: readonly string[]) => {
+        dropped.push(...ids);
+        return Promise.resolve(ids.length);
+      },
+    } as unknown as CloneHost;
+
+    const response = await createApp({
+      clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    }).request(`/schedule/${KIND}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(dropped).toEqual(['gone']);
+    const left = await stores.inbox.peekPending();
+    expect(left.entries.map(({ event }) => event.id)).toEqual(['kept']);
+  });
 });
 
 async function app404(stores: Stores): Promise<Response> {
