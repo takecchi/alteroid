@@ -132,7 +132,8 @@ describe('resume で戻せなかった作業者の日誌の文', () => {
     expect(await decisionsOf(storeOf({}, { failList: true }))).toEqual([
       // journal.list は新しい順
       {
-        decision: '[mgr-1] resume で、peer の生ログの一覧を読めなかったので、peer の記録は戻さずに起こす',
+        decision:
+          '[mgr-1] resume で、peer の生ログの一覧を読めなかったので、peer の記録は戻さずに起こす',
         grounds: 'listSubkeys の失敗: Error: 一覧が落ちた（テストの偽物）',
       },
       {
