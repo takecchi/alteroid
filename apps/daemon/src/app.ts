@@ -45,8 +45,10 @@ import {
   type MemoryDocument,
   MemoryConflictError,
   memoryVersion,
+  memoryVersionMatches,
   PracticeConflictError,
   practiceVersion,
+  practiceVersionMatches,
   ScheduleConflictError,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
@@ -1300,6 +1302,20 @@ function undoneByHumanEntry(operation: string, subject: string, why: string): Jo
     decision: `直前の${operation}の行は効いていない（変えていない）。理由: ${why}`,
     grounds: `${subject}。日誌を先に書いたが、状態を変える操作が実行されなかったため打ち消す`,
   };
+}
+
+// 日誌を先に書いた人間の操作が効かなかったとき、`why` を理由に打ち消しの行を積む関数（積めなければ跡だけ残す）。
+function humanRetractor(
+  stores: Pick<Stores, 'journal'>,
+  spec: { operation: string; subject: string; what: string; detail: string },
+): (why: string) => Promise<JournalEntry | undefined> {
+  return (why) =>
+    appendJournalOrDrop(
+      stores,
+      undoneByHumanEntry(spec.operation, spec.subject, why),
+      spec.what,
+      spec.detail,
+    );
 }
 
 // task の1行を読む。読めない行は例外にせず値で返す（無い 404 と読めない 409 を書き分けるため）
@@ -3951,12 +3967,8 @@ export function createApp(deps: AppDeps) {
         const { content, ifMatch } = c.req.valid('json');
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す: ふつうの衝突のたびに `write` と `write_failed` の2行を日誌へ積まないため。
         // ここを抜けた後に割り込まれた回は、下の `persona.write` の排他が 409 にし、打ち消しの行で対応を保つ。
-        if (ifMatch !== undefined) {
-          const matches =
-            ifMatch === null
-              ? before === null
-              : before !== null && memoryVersion(before.content) === ifMatch;
-          if (!matches) return c.json(memoryConflictBody(before, 'write'), 409);
+        if (!memoryVersionMatches(before, ifMatch)) {
+          return c.json(memoryConflictBody(before, 'write'), 409);
         }
         // 日誌を先に書き、書けなければ本文を書かずに 500（#4774）: 本文の後に書いて `appendJournalOrDrop` で握ると、本文は変わったのに裏付けの `cause:'human'` の行が無く、`markHumanTouched` も呼べない「印の付かない人間の保存」が生まれる（クローンが次の蒸留で黙って上書きできてしまう）。
         let entry;
@@ -4065,7 +4077,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い。ふつうの衝突のたびに2行を積まない）。
-        if (memoryVersion(existing.content) !== ifMatch) {
+        if (!memoryVersionMatches(existing, ifMatch)) {
           return c.json(memoryConflictBody(existing, 'remove'), 409);
         }
         // 日誌を先に書き、書けなければ消さずに 500（#5243）: 消した後に書いて `appendJournalOrDrop` で握ると、人間がクローンの記憶を消したのにクローンへ名指しされず、学びにもならない。
@@ -4087,17 +4099,15 @@ export function createApp(deps: AppDeps) {
           await stores.persona.remove(slug, { ifMatch });
         } catch (error) {
           // 先の行を打ち消す: 消していない。
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              '記憶を消す',
-              `記憶 ${slug} の削除`,
-              error instanceof MemoryConflictError
-                ? '消す直前に記憶が書き換えられていた（見た版と違う）'
-                : '記憶の削除が失敗した',
-            ),
-            '記憶削除の打ち消しの日誌',
-            `slug=${slug}`,
+          await humanRetractor(stores, {
+            operation: '記憶を消す',
+            subject: `記憶 ${slug} の削除`,
+            what: '記憶削除の打ち消しの日誌',
+            detail: `slug=${slug}`,
+          })(
+            error instanceof MemoryConflictError
+              ? '消す直前に記憶が書き換えられていた（見た版と違う）'
+              : '記憶の削除が失敗した',
           );
           if (error instanceof MemoryConflictError) {
             return c.json(memoryConflictBody(error.current, 'remove'), 409);
@@ -4233,13 +4243,7 @@ export function createApp(deps: AppDeps) {
         // 既に在る行（読めない形の行を含む）の書き直しだけが、日誌を先に書く対象（#5243）。新しく置く回は取り消しでも書き換えでもないので、今までどおり書いた後に残す。
         const rewriting = before !== null || beforeWasUnreadable;
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（書かないので書く跡が無い）。読めない行は版が比べられないので、store の排他の中の判定に任せる。
-        if (
-          ifMatch !== undefined &&
-          !beforeWasUnreadable &&
-          !(ifMatch === null
-            ? before === null
-            : before !== null && practiceVersion(before) === ifMatch)
-        ) {
+        if (!beforeWasUnreadable && !practiceVersionMatches(before, ifMatch)) {
           return c.json(practiceConflictBody(before, 'write'), 409);
         }
         const entryAfter: JournalEntryInput = {
@@ -4284,17 +4288,15 @@ export function createApp(deps: AppDeps) {
           practice = await stores.practices.write({ slug, kind, title, content }, { ifMatch });
         } catch (error) {
           if (rewriting) {
-            await appendJournalOrDrop(
-              stores,
-              undoneByHumanEntry(
-                'やり方を書き直す',
-                `やり方 ${slug} の書き直し`,
-                error instanceof PracticeConflictError
-                  ? '書き直す直前にやり方が変わっていた（見た版と違う）'
-                  : 'やり方の書き込みが失敗した',
-              ),
-              'やり方書き直しの打ち消しの日誌',
-              `slug=${slug}`,
+            await humanRetractor(stores, {
+              operation: 'やり方を書き直す',
+              subject: `やり方 ${slug} の書き直し`,
+              what: 'やり方書き直しの打ち消しの日誌',
+              detail: `slug=${slug}`,
+            })(
+              error instanceof PracticeConflictError
+                ? '書き直す直前にやり方が変わっていた（見た版と違う）'
+                : 'やり方の書き込みが失敗した',
             );
           }
           // 黙って上書きしない: 書いていない。
@@ -4371,7 +4373,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い）。
-        if (existing !== null && ifMatch !== undefined && practiceVersion(existing) !== ifMatch) {
+        if (existing !== null && !practiceVersionMatches(existing, ifMatch)) {
           return c.json(practiceConflictBody(existing, 'remove'), 409);
         }
         // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
@@ -4409,17 +4411,15 @@ export function createApp(deps: AppDeps) {
         try {
           await stores.practices.remove(slug, ifMatch === undefined ? undefined : { ifMatch });
         } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              'やり方を消す',
-              `やり方 ${slug} の削除`,
-              error instanceof PracticeConflictError
-                ? '消す直前にやり方が変わっていた（見た版と違う）'
-                : 'やり方の削除が失敗した',
-            ),
-            'やり方削除の打ち消しの日誌',
-            `slug=${slug}`,
+          await humanRetractor(stores, {
+            operation: 'やり方を消す',
+            subject: `やり方 ${slug} の削除`,
+            what: 'やり方削除の打ち消しの日誌',
+            detail: `slug=${slug}`,
+          })(
+            error instanceof PracticeConflictError
+              ? '消す直前にやり方が変わっていた（見た版と違う）'
+              : 'やり方の削除が失敗した',
           );
           // 黙って消さない。
           if (error instanceof PracticeConflictError) {
@@ -6319,13 +6319,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { status, reason } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を閉じる', `${id} を閉じる操作`, why),
-            'task を閉じる日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: 'task を閉じる',
+          subject: `${id} を閉じる操作`,
+          what: 'task を閉じる日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '閉じて'), 409);
@@ -6419,13 +6418,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('閉じた task を開き直す', `${id} を開き直す操作`, why),
-            '閉じた task を開き直す日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: '閉じた task を開き直す',
+          subject: `${id} を開き直す操作`,
+          what: '閉じた task を開き直す日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '開き直して'), 409);
@@ -6509,13 +6507,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { placement } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を並べ替える', `${id} を動かす操作`, why),
-            'task を並べ替える日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: 'task を並べ替える',
+          subject: `${id} を動かす操作`,
+          what: 'task を並べ替える日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '動かして'), 409);
@@ -6624,13 +6621,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { title, body, ifMatch } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を直す', `${id} の編集`, why),
-            'task の編集の日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: 'task を直す',
+          subject: `${id} の編集`,
+          what: 'task の編集の日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '直して'), 409);
