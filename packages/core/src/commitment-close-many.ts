@@ -4,7 +4,7 @@ import {
   isOffsetQualifiedTimeBoundary,
 } from './journal-time.js';
 import { commitmentOriginSchema } from './schema.js';
-import type { Commitment, CommitmentClosedBy, CommitmentOrigin } from './schema.js';
+import type { CommitmentClosedBy, CommitmentOrigin } from './schema.js';
 import type { CommitmentStore } from './store.js';
 import {
   describeArrayLengthViolation,
@@ -14,8 +14,8 @@ import {
   describeStringLengthViolation,
 } from './tool-arg-checks.js';
 
-// 道具 `commitment_close_many`（クローン）と `POST /commitments/close-many`（人間）が共有する。絞り込みの検証・当て方・塊ごとの閉じ方を2箇所に書くと、「下見した結果と閉じる集合が食い違わない」ことの保証が2つの実装の一致に落ちるため、1つの実装に置く。
-// 日誌を書く順序は共有しない: 道具は「閉じてから書く」、HTTP は「先に書き、書けなければ閉じない」（`POST /commitments/:id/close`）で、呼び手の流儀が違うため。差し込み口（`CloseManyChunkHooks`）で呼び手に渡す。
+// クローンの Task の一括（`task_set_status_many`）が使う、絞り込みの検証（`describeCloseManyViolation`）と塊ごとの閉じ方（`closeManyInChunks`）。台帳の一括（クローンの道具 `commitment_close_many` と人間の `POST /commitments/close-many`）は外れたが、Task の側の実装はここを使う。
+// 日誌を書く順序は共有しない: 呼び手の流儀に合わせて差し込み口（`CloseManyChunkHooks`）で渡す。
 
 export const CLOSE_MANY_LIMIT_DEFAULT = 500;
 // store 側に同じ上限を置いて二重にしない: どちらが効いたのか呼び出し側から読めなくなるため
@@ -42,7 +42,11 @@ export interface CloseManyInput extends CloseManyFilterInput {
  * 入力の検証。断るなら人間（と AI）が読む断り文を返し、通すなら `null`。
  * 検査の順序と文言は道具が持っていたものそのまま: 先に当たった違反だけを返す。
  */
-export function describeCloseManyViolation(input: CloseManyInput): string | null {
+export function describeCloseManyViolation(
+  input: CloseManyInput,
+  // 全部の起点を並べた呼びを断る文に出す「空にできてしまう」対象の名前（`task_set_status_many` なら Task の待ち行列）
+  subject: string,
+): string | null {
   const { origin, source, q, until, reason, limit } = input;
   const limitError = describeIntRangeViolation('limit', limit, {
     min: 1,
@@ -67,7 +71,7 @@ export function describeCloseManyViolation(input: CloseManyInput): string | null
   if (commitmentOriginSchema.options.every((known) => origin.includes(known))) {
     return (
       'origin に在る起点を全部（human / manager / external / self）並べた呼びは断る——' +
-      'それは絞り込みが無いのと同じで、1回で台帳を空にできてしまう。' +
+      `それは絞り込みが無いのと同じで、1回で${subject}を空にできてしまう。` +
       '閉じたい起点だけを名指しすること（例 origin: ["external"]）。**1件も閉じていない。**'
     );
   }
@@ -90,85 +94,6 @@ export function describeCloseManyFilter(filter: CloseManyFilterInput): string {
     ...(q === undefined ? [] : [`q="${q}"`]),
     ...(until === undefined ? [] : [`until=${until}`]),
   ].join(' / ');
-}
-
-export interface CloseManySelection {
-  /** 未了の全行（読めた分）。0件の理由を段で言うために段ごとの行を持つ */
-  openEntries: readonly Commitment[];
-  afterOrigin: readonly Commitment[];
-  afterSource: readonly Commitment[];
-  afterQ: readonly Commitment[];
-  /** 絞り込みの全段を通った行（古い側から） */
-  matched: readonly Commitment[];
-  /** この呼びで閉じる行（`matched` の古い側から `limit` 件） */
-  targets: readonly Commitment[];
-  /** `limit` に収まらず対象にしなかった件数 */
-  rest: number;
-  effectiveLimit: number;
-  unreadableCount: number;
-  trimmedClosed: number;
-}
-
-/**
- * 台帳の未了を絞り込んで、閉じる対象を決める（閉じない）。
- * 絞りは `commitment_list` と同じ側・同じ当て方で当てる: 下見した結果と閉じる集合が食い違わないことが、一括で閉じてよいと判断できる唯一の根拠のため。
- * 入力は `describeCloseManyViolation` を通った後のものを渡すこと（ここでは検証しない）。
- */
-export async function selectCloseManyTargets(
-  commitments: Pick<CommitmentStore, 'list'>,
-  input: CloseManyInput,
-): Promise<CloseManySelection> {
-  const { origin, source, q, until, limit } = input;
-  const { entries: openEntries, unreadable, trimmedClosed } = await commitments.list();
-  const afterOrigin = openEntries.filter((entry) => origin.includes(entry.origin));
-  const afterSource =
-    source === undefined
-      ? afterOrigin
-      : afterOrigin.filter((entry) => entry.source !== undefined && source.includes(entry.source));
-  const needle = q?.toLowerCase();
-  const afterQ =
-    needle === undefined
-      ? afterSource
-      : afterSource.filter(
-          (entry) =>
-            entry.body.toLowerCase().includes(needle) ||
-            (entry.source !== undefined && entry.source.toLowerCase().includes(needle)),
-        );
-  const untilMs = until === undefined ? undefined : Date.parse(until);
-  const matched =
-    untilMs === undefined ? afterQ : afterQ.filter((entry) => Date.parse(entry.at) <= untilMs);
-  const effectiveLimit = limit ?? CLOSE_MANY_LIMIT_DEFAULT;
-  const targets = matched.slice(0, effectiveLimit);
-  return {
-    openEntries,
-    afterOrigin,
-    afterSource,
-    afterQ,
-    matched,
-    targets,
-    rest: matched.length - targets.length,
-    effectiveLimit,
-    unreadableCount: unreadable.length,
-    trimmedClosed,
-  };
-}
-
-/**
- * 閉じた直後に、片付き履歴の保持上限で刈られた行を数える（fs の置き場。1回で上限を超えて閉じると、閉じたばかりの行も刈る）。
- * 言わないと、閉じたと言った行が `commitment_list id=` で「台帳に無い」になる。刈った件数が増えた回だけ読み直す（保持上限の無い置き場では読まない）。
- */
-export async function countTrimmedJustClosed(
-  commitments: Pick<CommitmentStore, 'list'>,
-  closedIds: readonly string[],
-  trimmedBefore: number,
-): Promise<number> {
-  const trimmedAfter =
-    closedIds.length === 0 ? trimmedBefore : (await commitments.list()).trimmedClosed;
-  if (trimmedAfter <= trimmedBefore) return 0;
-  const remaining = new Set(
-    (await commitments.list({ includeClosed: true })).entries.map((entry) => entry.id),
-  );
-  return closedIds.filter((id) => !remaining.has(id)).length;
 }
 
 export interface CloseManyChunk {

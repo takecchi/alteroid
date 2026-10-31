@@ -52,14 +52,15 @@ describe('inbox_remove_many の before を断る文言（ほかの消す口と�
   );
 });
 
-describe('commitment_close_many の until を断る文言（ほかの消す口と揃える）', () => {
+describe('task_set_status_many の until を断る文言（ほかの消す口と揃える）', () => {
   it.each([['あした'], ['2026-02-31T00:00:00Z'], ['2026-10-06T09:00']])(
     '読めない・時差の無い until「%s」の断りは、受け付ける形の例と実在しない日付の断りを言う',
     async (until) => {
       const h = harness();
-      const reply = await h.call('commitment_close_many', {
+      const reply = await h.call('task_set_status_many', {
         origin: ['external'],
         until,
+        status: 'done',
         reason: '古い約束の整理',
         dryRun: true,
       });

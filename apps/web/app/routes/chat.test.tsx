@@ -7,8 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   findShownConversation,
   gate,
+  DEFAULT_VIEWPORT_WIDTH,
   json,
   Providers,
+  setViewportWidth,
   sse,
   stubFetch,
   storeTestBaseUrl,
@@ -155,6 +157,29 @@ describe('新しい会話', () => {
     // <ul> が出るのを待つ: 一覧が空のあいだは list ごと描かれず、先に掴もうとすると存在しないため
     await waitFor(() => conversationList());
     expect(within(conversationList()).getByText('やあ')).toBeTruthy();
+  });
+});
+
+describe('狭い画面の会話一覧の「閉じる」ボタン', () => {
+  afterEach(() => setViewportWidth(DEFAULT_VIEWPORT_WIDTH));
+
+  it('一覧の中に「閉じる」があり、押すと閉じて、焦点は「会話一覧を開く」へ戻る', async () => {
+    setViewportWidth(375);
+    stubFetch((url) => {
+      if (url.includes('/conversations')) return json({ conversations: [] });
+      return undefined;
+    });
+
+    renderChat('/chat');
+    const opener = await screen.findByRole('button', { name: '会話一覧を開く' });
+
+    opener.focus();
+    fireEvent.click(opener);
+    const dialog = await screen.findByRole('dialog', { name: '会話一覧' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '閉じる' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '会話一覧' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 });
 

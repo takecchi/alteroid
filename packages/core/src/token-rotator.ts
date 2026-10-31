@@ -31,6 +31,7 @@ import {
   type Stores,
   type TokenPoolStore,
 } from './store.js';
+import { createSerialQueue } from './serial-queue.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 import { fingerprintOf } from './credentials.js';
 
@@ -375,16 +376,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       .map((entry) => entry.facts);
   }
 
-  let tail: Promise<unknown> = Promise.resolve();
   // 並列に回さない: 同じ文言が2本同時に届くとプールを一気に食うため
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   // 呼び出し元から一覧を受け取らない: 周の先頭で読んだ一覧を書き戻すと、直前に完了した PUT /tokens を踏み消すため
   async function coolDown(

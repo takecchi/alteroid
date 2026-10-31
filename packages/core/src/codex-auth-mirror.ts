@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { chown, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { createSerialQueue } from './serial-queue.js';
+
 export type CodexAuthPush = { value: string; revision: string } | null;
 
 export type CodexAuthNotice =
@@ -80,7 +82,7 @@ export class CodexAuthMirror {
   #placed: { value: string; revision: string; fingerprint: string } | null = null;
   #known: string | null = null;
   #pending: CodexAuthWriteBack | null = null;
-  #chain: Promise<void> = Promise.resolve();
+  readonly #serial = createSerialQueue().run;
 
   constructor(options: CodexAuthMirrorOptions) {
     this.#codexHome = options.codexHome;
@@ -100,15 +102,6 @@ export class CodexAuthMirror {
       revision: this.#placed?.revision ?? null,
       fingerprint: this.#placed?.fingerprint ?? null,
     };
-  }
-
-  #serial<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.#chain.then(fn, fn);
-    this.#chain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
   }
 
   set(push: CodexAuthPush): Promise<void> {

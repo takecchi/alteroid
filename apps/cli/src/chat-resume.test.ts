@@ -387,19 +387,13 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
   it('同じ形は、番号|id を先頭に取る他のコマンドも断る（/stop・/approval など）', async () => {
     const calls = stub({ streams: {} });
     const out = captureStdout();
-    for (const line of [
-      '/stop limit=5',
-      '/approval x=1',
-      '/commitment a=b',
-      '/done k=v 理由',
-      '/commit-reopen k=v 理由',
-    ]) {
+    for (const line of ['/stop limit=5', '/approval x=1', '/commitment a=b']) {
       await runSlashCommand(
         line,
         ...slashArgs(createClient(target.baseUrl, target.headers), listedWith([])),
       );
     }
-    expect(out().match(/使い方の誤り: /g)).toHaveLength(5);
+    expect(out().match(/使い方の誤り: /g)).toHaveLength(3);
     expect(calls).toEqual([]);
   });
 

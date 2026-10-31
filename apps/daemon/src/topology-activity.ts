@@ -148,28 +148,30 @@ function dispatchedInBackground(input: unknown): boolean {
   );
 }
 
+// 空でない文字列の欄だけを取る。それ以外（欄が無い・文字列でない・空）は undefined
+function stringField(input: unknown, key: string): string | undefined {
+  if (typeof input !== 'object' || input === null || !(key in input)) return undefined;
+  const value = (input as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 function peerProviderOf(input: unknown): string {
-  if (typeof input === 'object' && input !== null && 'provider' in input) {
-    const value = (input as { provider?: unknown }).provider;
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return 'codex';
+  return stringField(input, 'provider') ?? 'codex';
 }
 
 function peerModelOf(input: unknown): string | undefined {
-  if (typeof input === 'object' && input !== null && 'model' in input) {
-    const value = (input as { model?: unknown }).model;
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
+  return stringField(input, 'model');
 }
 
 function dispatchedAgentType(input: unknown): string {
-  if (typeof input === 'object' && input !== null && 'subagent_type' in input) {
-    const value = (input as { subagent_type?: unknown }).subagent_type;
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return WORKER_AGENT_NAME;
+  return stringField(input, 'subagent_type') ?? WORKER_AGENT_NAME;
+}
+
+// 上限を超えた分だけ、`stampOf` の小さい（古い）ものから消す
+function evictOldest<K, V>(map: Map<K, V>, cap: number, stampOf: (value: V) => number): void {
+  if (map.size <= cap) return;
+  const ordered = [...map.entries()].sort((a, b) => stampOf(a[1]) - stampOf(b[1]));
+  for (const [key] of ordered.slice(0, map.size - cap)) map.delete(key);
 }
 
 // 写せないものは空を返す: 黙って別の線へ倒さないため。
@@ -398,30 +400,16 @@ export function createTopologyActivityTracker(
   };
 
   function pruneRunning(): void {
-    if (running.size <= cap) return;
-    const ordered = [...running.entries()].sort(
-      (a, b) => Date.parse(a[1].startedAt) - Date.parse(b[1].startedAt),
-    );
-    for (const [id] of ordered.slice(0, running.size - cap)) running.delete(id);
+    evictOldest(running, cap, (row) => Date.parse(row.startedAt));
   }
 
   function prune(): void {
-    if (links.size > cap) {
-      const ordered = [...links.values()].sort((a, b) => newest(a) - newest(b));
-      for (const victim of ordered.slice(0, links.size - cap)) links.delete(victim.key);
-    }
-    if (externals.size > cap) {
-      const ordered = [...externals.values()].sort((a, b) => externalStamp(a) - externalStamp(b));
-      for (const victim of ordered.slice(0, externals.size - cap)) externals.delete(victim.keyId);
-    }
-    if (workers.size > cap) {
-      const stamp = (row: WorkerActivity): number => {
-        const value = Date.parse(row.lastToolAt ?? '');
-        return Number.isNaN(value) ? 0 : value;
-      };
-      const ordered = [...workers.entries()].sort((a, b) => stamp(a[1]) - stamp(b[1]));
-      for (const [key] of ordered.slice(0, workers.size - cap)) workers.delete(key);
-    }
+    evictOldest(links, cap, newest);
+    evictOldest(externals, cap, externalStamp);
+    evictOldest(workers, cap, (row) => {
+      const value = Date.parse(row.lastToolAt ?? '');
+      return Number.isNaN(value) ? 0 : value;
+    });
   }
 
   const tracker: TopologyActivityTracker = {

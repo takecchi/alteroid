@@ -24,7 +24,6 @@ import type {
   Exchange,
   GrantResult,
   InboxEvent,
-  Commitment,
   Task,
   TaskPlacement,
   JobStatus,
@@ -109,7 +108,6 @@ import {
   commitmentActiveDelegationIds,
   commitmentPosition,
   commitmentRespondedAt,
-  commitmentSchema,
   commitmentUpdatedAt,
   describeUnreadableCommitment,
   describeUnreadableScheduleEdit,
@@ -144,9 +142,6 @@ import {
   practiceSlugSchema,
   fingerprintOf,
   noteDroppedRecord,
-  describeClosedRecord,
-  reopenCommitmentJournalFirst,
-  editCommitmentBodyJournalFirst,
   removeScheduleJournalFirst,
   scheduleReplaceEntry,
   reasonOf,
@@ -168,12 +163,6 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
   chunkIdsByChars,
-  CLOSE_MANY_IDS_SHOWN,
-  closeManyInChunks,
-  countTrimmedJustClosed,
-  describeCloseManyFilter,
-  describeCloseManyViolation,
-  selectCloseManyTargets,
   REMOVE_MANY_JOURNAL_ID_CHARS,
   REMOVE_MANY_LIMIT_DEFAULT,
   REMOVE_MANY_LIMIT_MAX,
@@ -217,7 +206,6 @@ import {
   type ApprovalPagingKey,
   type IntegrationKeyRecord,
   type ArchiveRemoveManyFilter,
-  type CloseManyChunk,
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
@@ -300,11 +288,7 @@ import {
   attachmentListResponseSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
-  commitmentConflictResponseSchema,
   commitmentDetailResponseSchema,
-  commitmentCloseManyRequestSchema,
-  commitmentCloseManyResponseSchema,
-  commitmentCloseManyStoppedResponseSchema,
   commitmentListResponseSchema,
   taskListResponseSchema,
   taskDetailResponseSchema,
@@ -314,7 +298,6 @@ import {
   taskMigrateRequestSchema,
   taskMigrationResultResponseSchema,
   progressResponseSchema,
-  commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
   conversationReadRequestSchema,
   conversationReadResponseSchema,
@@ -730,26 +713,6 @@ const scheduleBody = z.object({
   ifMatch: z.string().nullable().optional(),
 });
 
-const commitmentBody = z.object({
-  // 空白だけの本文も断る（close の reason と同じ判定。#4816）: 何も言っていない行が台帳と進捗の未了に残り続けるため
-  body: nonBlankString,
-  // NUL だけの source は、ストアが NUL を落として空の source で残すので断る。
-  source: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0)
-    .optional(),
-});
-
-// 理由は空を許さない: 否定する材料の無い閉じ方を受け付けると、人間が後から否定できるという最終承認の実体が崩れる（north_star）。
-const commitmentCloseBody = z.object({ reason: nonBlankString });
-const commitmentReopenBody = z.object({ reason: nonBlankString });
-
-const commitmentEditBody = z.object({
-  body: nonBlankString,
-  ifMatch: z.string().optional(),
-});
-
 // `z.coerce.boolean()` を使わない: `?includeClosed=false` が true になり、一覧が片付いたもので埋まる。
 // `GET /commitments` は既定では上限を持たない: `limit` / `cursor` を明示したときだけ窓が掛かる opt-in で、明示しない既定の呼びは応答が1バイトも変わらない。並べ替え・絞り込みは足さない（判断がクローンから器へ移る）。`limit` に `max` も付けない: この HTTP の口は人間がブラウザで扱う前提で既定は全件。
 const commitmentsQuery = z.object({
@@ -763,7 +726,7 @@ const tasksQuery = z.object({
   includeClosed: z.enum(['true', 'false']).default('false'),
 });
 
-// task の書く口の本文（#5469 P7c-1）。`POST /commitments` 系と同じ判定（空白だけ・NUL だけは断る）。
+// task の書く口の本文（#5469 P7c-1）。空白だけ・NUL だけは断る。
 // title は道具 `task_add` と同じ一行（改行なし・TASK_TITLE_MAX 字まで）。
 const taskTitleField = nonBlankString
   .refine((value) => stripNul(value).length <= TASK_TITLE_MAX)
@@ -777,7 +740,7 @@ const taskPlacementBody = z.discriminatedUnion('kind', [
 const taskAddBody = z.object({
   title: taskTitleField,
   body: nonBlankString,
-  // 起点の会話（台帳の `POST /commitments` の `source` と同じ扱い）。無ければ付けない: 嘘の出どころを埋めない。
+  // 起点の会話。無ければ付けない: 嘘の出どころを埋めない。
   source: z
     .string()
     .min(1)
@@ -1138,23 +1101,11 @@ function managerListItem(managers: ManagerPool, summary: ManagerSummary) {
   };
 }
 
-/** `POST /commitments/close-many` の試算が返す抜粋の件数と、本文を切る長さ（UTF-16 の単位）。対象の id は別に先頭 `CLOSE_MANY_IDS_SHOWN` 件まで返す */
-const COMMITMENT_CLOSE_MANY_SAMPLES = 5;
-const COMMITMENT_CLOSE_MANY_SAMPLE_HEAD = 120;
-
-// 塊の先の日誌が書けなかったことだけを、`closeManyInChunks` から抜ける他の例外（台帳の書き込みの失敗）と見分けるための印。型で拾う（`AnswerJournalWriteError` と同じ）。
-class CloseManyJournalError extends Error {
-  constructor() {
-    super('一括して片付ける前の日誌が書けなかった');
-    this.name = 'CloseManyJournalError';
-  }
-}
-
 /** 一覧（`GET /commitments`）で片付いた行の本文・閉じた理由を切る長さ（UTF-16 の単位。#5089） */
 export const COMMITMENT_LIST_TEXT_HEAD = 200;
 
 // 台帳の一覧の1行（#5089）。片付いた行だけ、本文と閉じた理由を先頭に切る（全文は `GET /commitments/{id}`）。
-// 未了の行は切らない: Web は一覧の本文を編集欄の初期値・編集後の版の取り込み・積んだ行が届いたかの照合に使い、編集できるのは未了の行だけのため。
+// 未了の行は切らない: 人間が読んで手を打つ対象は未了の行で、全文が要る。
 // 片付いた行は数が多く（台帳の大半）、一覧の大きさのほとんどを占める
 function commitmentListItem<T extends { closedAt?: string; body: string; closedReason?: string }>(
   entry: T,
@@ -5688,7 +5639,7 @@ export function createApp(deps: AppDeps) {
         tags: ['permission-grants'],
         summary: '許可を取り消す',
         description:
-          '行は消さず `revokedAt` を立てる（`approval_withdraw` / `commitment_close` と同じ' +
+          '行は消さず `revokedAt` を立てる（`approval_withdraw` と同じ' +
           '「終端は別の状態であって削除ではない」思想）。**取り消しは次の Bash 呼び出しから' +
           '効く**——`#onPreToolUse` は呼び出しのたびにストアを引き直し、キャッシュしない。' +
           '既に取り消し済みでも 200（`revokedAt` は上書きしない）。運ぶ情報は無い（`{}` を送る）。',
@@ -6692,7 +6643,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 資格は `authenticate` だけで `requireOperator` にしない: あちらは実行環境そのものを差し替える資格（`/profile`）で、台帳の読み書きはそこまでの資格ではない。持ち主だけにすると、許可を通ったアカウントから台帳だけが見えなくなる。
+    // 資格は `authenticate` だけで `requireOperator` にしない: あちらは実行環境そのものを差し替える資格（`/profile`）で、台帳の読みはそこまでの資格ではない。持ち主だけにすると、許可を通ったアカウントから台帳だけが見えなくなる。
     // 「やることの一覧」ではない: 器が持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない。並べ替えや絞り込みの引数をここへ足さない（判断がクローンから器へ移る）。窓（`limit`/`cursor`）は固定された並びの上に頁を切るだけなので、この禁止と衝突しない。
     .get(
       '/commitments',
@@ -6700,7 +6651,7 @@ export function createApp(deps: AppDeps) {
         tags: ['commitments'],
         summary: '引き受けたまま終わっていない仕事の一覧',
         description:
-          'クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、' +
+          'クローンの `commitment_list` と同じものを人間の側から読む。**台帳へ書く口はクローンにも人間にも無く、これは読むだけの旧台帳**（新しい仕事は task の口で積む）。既定は**未了だけ**で、' +
           '古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を' +
           '付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。' +
           '**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。' +
@@ -6933,7 +6884,7 @@ export function createApp(deps: AppDeps) {
           '**`fingerprint` は `GET /tasks/migration-plan` が返した計画の指紋で必須。** 実行時に計画を組み直し、指紋が違えば（台帳・task・会話が dry-run のあとに動いた）何も書かずに 409 で断る。' +
           'task の id は元の台帳の行の id と同じ。起点の会話は、`source` が実在する会話 id ならそれを、承認の id ならその承認の会話 id を付け、' +
           'どちらとも引けなければ付けずに移す（`execution.originConversation.unresolvedIds`）。日誌が書けなければ台帳は閉じない。' +
-          '1行の失敗は `execution.failed`（id・段階・例外の型名だけ）に数えて次へ進む。**閉じた台帳の行を戻す口は `POST /commitments/{id}/reopen` の1件ずつだけ。**',
+          '1行の失敗は `execution.failed`（id・段階・例外の型名だけ）に数えて次へ進む。**閉じた台帳の行を開き直す口はもう無い**（台帳へ書く口は人間の側にもクローンの側にも無く、台帳は読むだけ）。',
         responses: {
           200: {
             description:
@@ -6982,7 +6933,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 人間が task を書く口（#5469 P7c-1）。台帳（`/commitments`）の同じ働きの口と、認証・エラー・日誌の作法を揃える（台帳の撤去 P7d・P7e の前に、人間ができることを Task にも持たせる）。
+    // 人間が task を書く口（#5469 P7c-1）。台帳の書く口は撤去済みで、人間が仕事を積む・直す・閉じる口は task だけが持つ。
     // `GET /tasks/migration-plan` の後に置く: `:id` が固定のパスを食わないように。
     .get(
       '/tasks/:id',
@@ -7014,7 +6965,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 積むだけでクローンのターンは起こさない（`POST /commitments` と同じ）。積む・編集は台帳の側にも humanAction が無いので、task の側でも付けない（architecture.md の humanAction の対象）。
+    // 積むだけでクローンのターンは起こさない: 起点を増やすと同じことを2つの経路で起こせる状態になる。積む・編集には humanAction を付けない（architecture.md の humanAction の対象）。
     .post(
       '/tasks',
       describeRoute({
@@ -7024,7 +6975,7 @@ export function createApp(deps: AppDeps) {
           'クローンの `task_add` と同じものを人間の手から。**積むだけで、クローンのターンは起こさない**（いま考えさせたいなら `POST /chat` か `POST /events`）。' +
           '`origin` は `human` で固定、id と時刻はここで振る。`placement` を省くと既定の置き場所（開いている human 起点の最後の直後）で、' +
           '指すなら `{ kind: front | back | before | after, anchorId? }`（before / after は開いている task の id が要る）。' +
-          '`source` を渡すと起点の会話の id として `source` と `originConversationId` の両方に入る（台帳の `POST /commitments` の `source` と同じ扱い。無ければ付けない）。',
+          '`source` を渡すと起点の会話の id として `source` と `originConversationId` の両方に入る（無ければ付けない）。',
         responses: {
           200: {
             description: '積んだ。返る id が閉じる・動かすときの宛先になる。',
@@ -7043,7 +6994,7 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const { title, body, source, placement } = c.req.valid('json');
         const now = new Date().toISOString();
-        // `origin` は本文から取らない（`POST /commitments` と同じ理由）
+        // `origin` は本文から取らない: 人間に選ばせると `self` を名乗れてしまい、「人間との約束か自分で思い立ったことか」をクローンが区別する手立てが消える。
         const entry: Task = {
           id: randomUUID(),
           createdAt: now,
@@ -7080,7 +7031,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 日誌を先に書き、書けなければ閉じずに 500（`/commitments/:id/close` と同じ）。先の行に humanAction を付けない: 印は効いた後の行だけが持つ。閉じられなかった操作を、クローンに「人間がした」と学ばせないため。
+    // 日誌を先に書き、書けなければ閉じずに 500。先の行に humanAction を付けない: 印は効いた後の行だけが持つ。閉じられなかった操作を、クローンに「人間がした」と学ばせないため。
     // 先に読んで、既に断ると分かる回（無い・読めない・既に閉じている）は日誌を書かずに返す。読んだ後に割り込まれた回は `setStatus` の結果（`unchanged` / `rejected` / `not-found`）で判定し、先の行を打ち消す。
     .post(
       '/tasks/:id/close',
@@ -7339,7 +7290,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 並べ替えは情報を消さないが、「人間が先頭へ動かした」をクローンが次のターンで知る必要がある（task_move の印）ので、日誌は台帳の close と同じ順（先に書き、動かせなければ打ち消す）。
+    // 並べ替えは情報を消さないが、「人間が先頭へ動かした」をクローンが次のターンで知る必要がある（task_move の印）ので、日誌は task の close と同じ順（先に書き、動かせなければ打ち消す）。
     .post(
       '/tasks/:id/move',
       describeRoute({
@@ -7473,7 +7424,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 編集できるのは `origin` が `human` かつ未了の行の `title` / `body` だけ（`PATCH /commitments/:id` と同じ線）: クローンやマネージャーが立てた行を人間が静かに書き換えると、クローンが過去の自分を追えなくなる。
+    // 編集できるのは `origin` が `human` かつ未了の行の `title` / `body` だけ: クローンやマネージャーが立てた行を人間が静かに書き換えると、クローンが過去の自分を追えなくなる。
     // 編集の前の本文は行に残らないので、日誌へ逐語で残す。日誌を先に書き、書けなければ書き直さず 500。台帳の編集と同じく humanAction は付けない。
     .patch(
       '/tasks/:id',
@@ -7671,704 +7622,6 @@ export function createApp(deps: AppDeps) {
             },
           }),
         );
-      },
-    )
-
-    // 積むだけでクローンのターンは起こさない: 起点を増やすと同じことを2つの経路で起こせる状態になる。
-    .post(
-      '/commitments',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けた仕事として台帳へ積む',
-        description:
-          'クローンの `commitment_open` と同じものを人間の手から。**積むだけで、' +
-          'クローンのターンは起こさない**（いま考えさせたいなら `POST /chat` か ' +
-          '`POST /events`）。`origin` は `human` で固定され、id はここで振る。',
-        responses: {
-          200: {
-            description: '積んだ。返る id が閉じるときの宛先になる。',
-            content: { 'application/json': { schema: resolver(commitmentOpenedResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`body` は空にできない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(commitmentBody, (where) => ({
-        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const { body, source } = c.req.valid('json');
-        // `origin` は本文から取らない: 人間に選ばせると `self` を名乗れてしまい、「人間との約束か自分で思い立ったことか」をクローンが区別する手立てが消える。
-        const entry = {
-          id: randomUUID(),
-          at: new Date().toISOString(),
-          origin: 'human' as const,
-          ...(source === undefined ? {} : { source }),
-          body,
-        };
-        await stores.commitments.open(entry);
-        // chat の外から積んだものは日誌に残さなければどこにも跡が無い（この口には対応する発言が無い）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: `人間が引き受けた仕事を台帳へ積んだ（${entry.id}）: ${body}`,
-            grounds: '人間が直接 API から積んだ',
-          },
-          '引き受けた仕事を積んだ日誌',
-          `id=${entry.id}`,
-        );
-        return c.json(commitmentOpenedResponseSchema.parse({ ok: true, id: entry.id }));
-      },
-    )
-
-    // `/commitments/:id/close` より前に登録する: 経路の本数が違う（2本と3本）ので今は取り違えないが、`:id` が `close-many` を名乗る形（`/commitments/close-many/...`）の口が将来増えても、一括の口が先に当たるようにしておく。
-    // 検証・絞り込み・塊ごとの閉じ方はクローンの道具 `commitment_close_many` と同じ関数（`commitment-close-many.ts`）。違うのは日誌の順序だけ: 道具は「閉じてから書く」、ここは `/commitments/:id/close` と同じ「先に書き、書けなければ閉じない」（#5243）。
-    .post(
-      '/commitments/close-many',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けた仕事を、絞り込みを渡してまとめて片付いたことにする',
-        description:
-          'クローンの道具 `commitment_close_many` と同じ絞り込み・同じ検証で、人間の手からまとめて閉じる。' +
-          '**既定は試算で、`dryRun` を省略すると true（1件も閉じない）。** 実際に閉じるには `dryRun: false` を明示する。' +
-          '**閉じた行を戻す口は `POST /commitments/{id}/reopen` の1件ずつしか無く、まとめて開き直す口は無い**ので、' +
-          '先に試算で件数と対象を確かめること。' +
-          '`origin` は必須で、在る起点（`human` / `manager` / `external` / `self`）を全部並べた呼びは断る' +
-          '（「全部閉じる」を1回で撃てる形は作らない）。`source` は出所の完全一致の配列、`q` は本文か出所への部分一致、' +
-          '`until` は時差（`Z` / `+09:00`）が必須でその瞬間ちょうどの行を含む。`reason` は空白だけを断る。' +
-          '`limit` は 1 以上 2000 以下（省略すると 500）で、**古い側から**閉じる。残りは同じ絞り込みでもう一度呼べば続けられる。' +
-          '閉じるのは未了の行だけで、`closedBy` は `human`。行は消えない（`closedAt` / `closedReason` が付くだけ。' +
-          '⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、1回で上限を超えて閉じると閉じたばかりの行も消える。' +
-          '`trimmedJustClosed` がその件数）。' +
-          '**日誌は塊ごと（id 列を文字数の予算で割る）に、先の行を書いてから閉じる。** 書けなかったらその塊は閉じずにそこで止め' +
-          '（後ろの塊も閉じない）、500 でそれまでに閉じた分を返す。閉じられなかった塊・閉じる操作が投げた塊には、先の行を打ち消す行を足す。' +
-          '閉じた塊の日誌には、クローンが次のターンの頭で名指しできるよう、塊ごとに1行の人間の操作の印（`commitment_close`。' +
-          '対象は塊の先頭の id で、件数は日誌の文に入る）を付ける。応答の `ids` は試算では対象・実行では閉じた id の先頭だけ' +
-          `（${String(CLOSE_MANY_IDS_SHOWN)} 件まで。残りは \`idsOmitted\`）で、実行したときの全 id は日誌に残る。`,
-        responses: {
-          200: {
-            description: '試算、または実際に閉じた結果。`dryRun` が試算かどうかを言う。',
-            content: {
-              'application/json': { schema: resolver(commitmentCloseManyResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '本文が JSON として不正、または絞り込み・入力が断られた（`origin` が空・在る起点を全部並べている・' +
-              '`source` の要素が空・`q` が空・`until` に時差が無い・`reason` が空白だけ・`limit` が範囲外・NUL だけの値）。' +
-              '文言はクローンの道具と同じ。**1件も閉じていない。**',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '塊の先の日誌が書けなかったので、その塊とそれ以降を閉じずに止めた（`code` は `journal_write_failed`）。' +
-              '止める前の塊は閉じている——`closed` / `closedIds` がどこまでかを言う。',
-            content: {
-              'application/json': { schema: resolver(commitmentCloseManyStoppedResponseSchema) },
-            },
-          },
-        },
-      }),
-      jsonBody(commitmentCloseManyRequestSchema, (where) => ({
-        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const input = c.req.valid('json');
-        const violation = describeCloseManyViolation(input);
-        if (violation !== null) return c.json({ error: violation }, 400);
-
-        const selection = await selectCloseManyTargets(stores.commitments, input);
-        const { openEntries, afterOrigin, afterSource, afterQ, matched, targets } = selection;
-        const funnel = {
-          open: openEntries.length,
-          origin: afterOrigin.length,
-          ...(input.source === undefined ? {} : { source: afterSource.length }),
-          ...(input.q === undefined ? {} : { q: afterQ.length }),
-          ...(input.until === undefined ? {} : { until: matched.length }),
-        };
-        const shownTargets = targets.slice(0, CLOSE_MANY_IDS_SHOWN);
-
-        if (input.dryRun !== false) {
-          return c.json(
-            commitmentCloseManyResponseSchema.parse({
-              ok: true,
-              dryRun: true,
-              funnel,
-              matched: matched.length,
-              targeted: targets.length,
-              closed: 0,
-              chunks: 0,
-              remaining: selection.rest,
-              ids: shownTargets.map((entry) => entry.id),
-              idsOmitted: targets.length - shownTargets.length,
-              oldestAt: targets[0]?.at,
-              newestAt: targets[targets.length - 1]?.at,
-              samples: shownTargets.slice(0, COMMITMENT_CLOSE_MANY_SAMPLES).map((entry) => ({
-                id: entry.id,
-                at: entry.at,
-                origin: entry.origin,
-                ...(entry.source === undefined ? {} : { source: entry.source }),
-                bodyExcerpt: textHead(entry.body, COMMITMENT_CLOSE_MANY_SAMPLE_HEAD) ?? entry.body,
-              })),
-              raced: 0,
-              trimmedJustClosed: 0,
-              unreadable: selection.unreadableCount,
-            }),
-          );
-        }
-
-        const { reason } = input;
-        const filterText = describeCloseManyFilter(input);
-        const principal = c.get('principal');
-        const closedSoFar: string[] = [];
-        let journaledChunks = 0;
-        // 閉じられなかった id の打ち消しの行: 先の行は「閉じる id」を全部並べているので、実際に閉じた id との差を言う。印（humanAction）を持たないので、クローンに「人間がした」と学ばせない。
-        const undoUnclosed = (chunk: CloseManyChunk, unclosed: readonly string[], why: string) =>
-          appendJournalOrDrop(
-            stores,
-            unclosed.length === chunk.ids.length
-              ? undoneByHumanEntry(
-                  '引き受けた仕事を絞り込みで一括して片付ける',
-                  `${String(chunk.number)}/${String(chunk.total)} 塊目の ${String(unclosed.length)} 件を閉じる操作`,
-                  why,
-                )
-              : {
-                  type: 'decision',
-                  decision:
-                    `直前の一括の片付けの行（${String(chunk.number)}/${String(chunk.total)} 塊目）のうち、` +
-                    `${String(unclosed.length)} 件は効いていない（閉じていない）。理由: ${why}\n` +
-                    `閉じていない id: ${unclosed.join(' ')}`,
-                  grounds:
-                    '日誌を先に書いたが、一部の行は状態を変える操作が実行されなかったため打ち消す',
-                },
-            '引き受けた仕事を絞り込みで一括して片付ける日誌の打ち消し',
-            `chunk=${String(chunk.number)}/${String(chunk.total)} count=${String(unclosed.length)}`,
-          );
-        try {
-          await closeManyInChunks(
-            stores.commitments,
-            targets.map((entry) => entry.id),
-            { reason, by: 'human', at: new Date().toISOString() },
-            {
-              // 先の行に humanAction を付けない: 印は効いた後の行（下）だけが持つ。閉じられなかった操作を、クローンに「人間がした」と学ばせないため。
-              before: async (chunk) => {
-                try {
-                  await stores.journal.append({
-                    type: 'decision',
-                    decision:
-                      `人間が引き受けた仕事を絞り込みで一括して片付ける` +
-                      `（${String(chunk.number)}/${String(chunk.total)} 塊目、この塊は ${String(chunk.ids.length)} 件）: ${reason}\n` +
-                      `絞り込み: ${filterText}\n` +
-                      `閉じる id: ${chunk.ids.join(' ')}`,
-                    grounds: '人間が直接 API から閉じようとしている',
-                  });
-                } catch (error) {
-                  noteDroppedRecord(
-                    '引き受けた仕事を一括して片付ける日誌（この塊は閉じていない）',
-                    `chunk=${String(chunk.number)}/${String(chunk.total)} count=${String(chunk.ids.length)}`,
-                    kindOfError(error),
-                  );
-                  throw new CloseManyJournalError();
-                }
-              },
-              closeFailed: async (chunk) => {
-                await undoUnclosed(chunk, chunk.ids, '台帳の閉じる操作が失敗した');
-              },
-              after: async (chunk, closed) => {
-                closedSoFar.push(...closed);
-                const closedSet = new Set(closed);
-                const unclosed = chunk.ids.filter((id) => !closedSet.has(id));
-                if (unclosed.length > 0) {
-                  await undoUnclosed(
-                    chunk,
-                    unclosed,
-                    '閉じる直前に行が無くなっていた・既に閉じられていた・閉じる書き込みが通らなかった',
-                  );
-                }
-                const first = closed[0];
-                // 1件も閉じられなかった塊は、効いた後の行を書かない（打ち消しだけが残る）
-                if (first === undefined) return;
-                journaledChunks += 1;
-                // 件数は文の先頭の近くに置く: 次のターンの頭の名指しは decision の先頭 160 字だけを抜粋する（`HUMAN_ACTION_DECISION_EXCERPT`）。印は塊ごとに1行で、対象は塊の先頭の id（件数は文が言う）
-                // 片付けること自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-                await appendJournalOrDrop(
-                  stores,
-                  {
-                    type: 'decision',
-                    decision:
-                      `人間が引き受けた仕事を絞り込みで一括して片付けた` +
-                      `（${String(chunk.number)}/${String(chunk.total)} 塊目、この塊は ${String(closed.length)} 件）: ${reason}\n` +
-                      `絞り込み: ${filterText}\n` +
-                      `閉じた id: ${closed.join(' ')}`,
-                    grounds: '人間が直接 API から閉じた',
-                    ...humanActionOf(principal, 'commitment_close', first),
-                  },
-                  '引き受けた仕事を一括して片付けた日誌',
-                  `chunk=${String(chunk.number)}/${String(chunk.total)} count=${String(closed.length)}`,
-                );
-              },
-            },
-          );
-        } catch (error) {
-          if (!(error instanceof CloseManyJournalError)) throw error;
-          return c.json(
-            commitmentCloseManyStoppedResponseSchema.parse({
-              ...journalWriteFailedBody(),
-              closed: closedSoFar.length,
-              closedIds: closedSoFar,
-            }),
-            500,
-          );
-        }
-
-        const shownClosed = closedSoFar.slice(0, CLOSE_MANY_IDS_SHOWN);
-        return c.json(
-          commitmentCloseManyResponseSchema.parse({
-            ok: true,
-            dryRun: false,
-            funnel,
-            matched: matched.length,
-            targeted: targets.length,
-            closed: closedSoFar.length,
-            chunks: journaledChunks,
-            remaining: selection.rest,
-            ids: shownClosed,
-            idsOmitted: closedSoFar.length - shownClosed.length,
-            oldestAt: targets[0]?.at,
-            newestAt: targets[targets.length - 1]?.at,
-            raced: targets.length - closedSoFar.length,
-            trimmedJustClosed: await countTrimmedJustClosed(
-              stores.commitments,
-              closedSoFar,
-              selection.trimmedClosed,
-            ),
-            unreadable: selection.unreadableCount,
-          }),
-        );
-      },
-    )
-
-    // 先に読んだ結果で閉じる・閉じないを決めない: 「読む → 未了と分かる → 閉じる」に割ると、同じ id への同時の2つの close が両方書きにいき、後から来た理由で上書きされる。判定は台帳の1操作（`close`）に任せる。読むのは、既に断ると分かる回で日誌を積まないことと、404 と 409 を書き分けるためだけである。読めない約束も閉じられるよう、読めない行に対しても直接 `close()` を試す。
-    // 日誌を先に書いてから閉じる（#5243）: 書けなければ閉じずに 500。`close` が `false` を返したら先の行を打ち消す行を足す。
-    .post(
-      '/commitments/:id/close',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けた仕事を片付いたことにする',
-        description:
-          'クローンの `commitment_close` と同じものを人間の手から。**契約は「行は消さない」** — ' +
-          '消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、' +
-          '人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を' +
-          '物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された' +
-          '累計件数は `GET /commitments` の `trimmedClosed` で見える。**台帳の行が読めない' +
-          '形で入っていても閉じられる**（issue #2148。中身は読めないままなので、閉じた後も' +
-          '本文の書き直しはできない）。',
-        responses: {
-          200: {
-            description: '閉じた。以後は `includeClosed=true` でだけ見える。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`reason` は空にできない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は台帳に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入って' +
-              'いる行は、いつ・どう片付けたかが分からないことがある）。または、未了のまま在るのに' +
-              '閉じる書き込みが通らなかった（本文でそう言う。一覧で確かめてから閉じ直す）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '閉じる前の日誌が書けなかった（**閉じていない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(commitmentCloseBody, (where) => ({
-        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const id = c.req.param('id');
-        const { reason } = c.req.valid('json');
-        // `close` が閉じなかった（または読んだ時点で閉じられない）回の応答。読んだ行の状態で 404 と 409 を書き分ける。
-        const respondNotClosed = (existing: Commitment | null) => {
-          if (existing === null) return c.json({ error: 'not found' as const }, 404);
-          // 未了のまま残っている回を「片付いている」に潰さない（#5072）: 閉じていない行を閉じたと読ませるため
-          if (existing.closedAt === undefined) {
-            return c.json(
-              {
-                error:
-                  `${id} は閉じられなかった（台帳には未了のまま在るが、閉じる書き込みが通らなかった）。` +
-                  '一覧で確かめてから、もう一度閉じること',
-              },
-              409,
-            );
-          }
-          return c.json(
-            {
-              error:
-                `${id} は既に ${existing.closedAt} に片付いている` +
-                `（${existing.closedReason ?? '理由の記録なし'}）`,
-            },
-            409,
-          );
-        };
-        // 読めない行が既に閉じられているときは `get` が投げる: `close()` が中身を読めるようにしたわけではなく、`get()` の契約は変えていない。
-        const respondUnreadableClosed = () =>
-          c.json(
-            {
-              error: `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）`,
-            },
-            409,
-          );
-        // 読んだ版で既に断ると分かる回（無い・既に閉じている）は、日誌を書かずに返す（閉じないので書く跡が無い）。読めない行は閉じられるか分からないので、先へ進む。
-        let before: Commitment | null;
-        let beforeUnreadable = false;
-        try {
-          before = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          before = null;
-          beforeUnreadable = true;
-        }
-        if (!beforeUnreadable && (before === null || before.closedAt !== undefined)) {
-          return respondNotClosed(before);
-        }
-        // 日誌を先に書き、書けなければ閉じずに 500（#5243）: 閉じた後に書いて `appendJournalOrDrop` で握ると、人間が取り消したのにクローンへ名指しされず、学びにもならない。
-        // 先の行に humanAction を付けない: 印は効いた後の行（下）だけが持つ。閉じられなかった操作を、クローンに「人間がした」と学ばせないため。
-        // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
-        const entryBefore: JournalEntryInput = {
-          type: 'decision',
-          decision: `人間が引き受けた仕事を片付ける（${id}）: ${reason}`,
-          grounds: '人間が直接 API から閉じようとしている',
-        };
-        const entryAfter: JournalEntryInput = {
-          type: 'decision',
-          decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
-          grounds: '人間が直接 API から閉じた',
-          ...humanActionOf(c.get('principal'), 'commitment_close', id),
-        };
-        try {
-          await stores.journal.append(entryBefore);
-        } catch (error) {
-          noteDroppedRecord(
-            '引き受けた仕事を片付ける日誌（閉じていない）',
-            `id=${id}`,
-            kindOfError(error),
-          );
-          return c.json(journalWriteFailedBody(), 500);
-        }
-        let closed: boolean;
-        try {
-          closed = await stores.commitments.close(id, new Date().toISOString(), reason, 'human');
-        } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              '引き受けた仕事を片付ける',
-              `${id} を閉じる操作`,
-              '台帳の閉じる操作が失敗した',
-            ),
-            '引き受けた仕事を片付ける日誌の打ち消し',
-            `id=${id}`,
-          );
-          throw error;
-        }
-        if (!closed) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              '引き受けた仕事を片付ける',
-              `${id} を閉じる操作`,
-              '閉じる直前に行が無くなっていた・既に閉じられていた・閉じる書き込みが通らなかった',
-            ),
-            '引き受けた仕事を片付ける日誌の打ち消し',
-            `id=${id}`,
-          );
-          let existing;
-          try {
-            existing = await stores.commitments.get(id);
-          } catch (error) {
-            if (!(error instanceof UnreadableCommitmentError)) throw error;
-            return respondUnreadableClosed();
-          }
-          return respondNotClosed(existing);
-        }
-        // 片付けること自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        await appendJournalOrDrop(stores, entryAfter, '引き受けた仕事を片付けた日誌', `id=${id}`);
-        return c.json(okResponseSchema.parse({ ok: true }));
-      },
-    )
-
-    // 日誌を先に書いてから行から外す（`reopenCommitmentJournalFirst`）: 開き直すと閉じた時刻・主体・理由が行から消えるので、日誌が落ちたまま外すと「誰がいつ何と言って閉じたか」が二度と読めない。書けなければ開き直さず 500。
-    // 先に読んだ後に割り込まれた回（まだ閉じていない・重複）は、台帳の1操作（`reopen`）の結果で判定し、先に書いた行を打ち消す。`open` を開き直しに使わない: `open` は冪等のままで、受信箱の配り直しで閉じた行が蘇らないことの要。
-    .post(
-      '/commitments/:id/reopen',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '片付いた仕事を未了へ開き直す',
-        description:
-          'クローンの `commitment_reopen` と同じものを人間の手から。閉じた行を名指しして、未了へ戻す。' +
-          '受け取った時刻・起点・本文はそのままで、`closedAt` / `closedReason` / `closedBy` と' +
-          '`autoCloseWhenBack` が外れ、代わりに消えない印 `autoCloseDeclined: true` が付く' +
-          '（器が自動で閉じた行を否定したのに、担当が戻った合図で器がまた閉じるのを防ぐため）。`reason` は必須で、開き直す前の閉じた時刻・主体・理由とともに' +
-          '日誌（`decision`）へ残る。日誌を先に書き、書けなければ開き直さずに 500 を返す。' +
-          '**同じ id の `open` は冪等のままで、閉じた行を蘇らせない** — ' +
-          '開き直せるのはこの口と `commitment_reopen` だけ。',
-        responses: {
-          200: {
-            description: '開き直した。未了の一覧に戻る。',
-            content: { 'application/json': { schema: resolver(commitmentSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`reason` は空にできない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は台帳に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              'まだ閉じていない（何もしない）。同じ担当・同じ本文の未了の行が既に在る（本文にその id を入れて返す。開き直していない）。' +
-              '行が読めない形で入っている（書き直さない）。または開き直した後に行が読めなくなった（開き直しは効いている）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかった（**開き直していない**。行は閉じたまま）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(commitmentReopenBody, (where) => ({
-        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const id = c.req.param('id');
-        const { reason } = c.req.valid('json');
-        const principal = c.get('principal');
-        // 先の行に humanAction を付けない（#5272）: 印は効いた後の行（下）だけが持つ。重複・割り込みで開き直せなかった操作を、クローンに「人間がした」と学ばせないため（close の口と同じ）。
-        const result = await reopenCommitmentJournalFirst(stores, id, (before) => ({
-          type: 'decision',
-          decision: `人間が閉じた仕事を開き直す（${id}）: ${reason}`,
-          grounds:
-            '人間が直接 API から開き直そうとしている。開き直す前の記録: ' +
-            describeClosedRecord(before),
-        }));
-        if (result.kind === 'journal-failed') {
-          noteDroppedRecord(
-            '閉じた仕事を開き直した日誌（開き直していない）',
-            `id=${id}`,
-            kindOfError(result.error),
-          );
-          return c.json(journalWriteFailedBody(), 500);
-        }
-        if (result.kind === 'unreadable') {
-          return c.json(
-            {
-              error: `${reasonOf(result.error)}。読めない形のまま書き直さないので、開き直していない。`,
-            },
-            409,
-          );
-        }
-        if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
-        if (result.kind === 'not-closed') {
-          return c.json({ error: `${id} は閉じていない（未了のまま在る）。何もしていない` }, 409);
-        }
-        if (result.kind === 'duplicate-open') {
-          return c.json(
-            {
-              error: `同じ担当・同じ本文の未了の行 ${result.openId} が既に在るので、${id} は開き直していない`,
-            },
-            409,
-          );
-        }
-        // 開き直すこと自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`。close の口と同じ）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: `人間が閉じた仕事を開き直した（${id}）: ${reason}`,
-            grounds: '人間が直接 API から開き直した',
-            ...humanActionOf(principal, 'commitment_reopen', id),
-          },
-          '閉じた仕事を開き直した日誌',
-          `id=${id}`,
-        );
-        let entry;
-        try {
-          entry = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          // 開き直しは効いているので 500 にせず、そう言う（返す行が読めなくなっただけ）
-          return c.json(
-            { error: `${id} は開き直したが、その後に読めない形になっている: ${reasonOf(error)}` },
-            409,
-          );
-        }
-        if (entry === null) return c.json({ error: 'not found' as const }, 404);
-        return c.json(commitmentSchema.parse(entry));
-      },
-    )
-
-    // 編集できるのは `origin` が `human` かつ未了の行の `body` だけ: 台帳は「クローンが何を引き受けたか」の記録で、それが静かに書き換わるとクローンが過去の自分を追えなくなる。`origin` / `source` / `at` / `closed*` は直さない。クローンは `commitment_edit` で自分の行を直せ、`manager` の行は誰も直せない。
-    // 先に `get` で `origin` を確かめてから `editBody` を呼ぶ: `origin` は不変なので競合せず、競合しうる「まだ閉じていない」だけを `editBody` の1操作へ畳む。原文は日誌へ逐語で残す（前後の本文を両方書くことで「静かに」を消している）。台帳の行は編集後の本文しか持たないので、日誌を先に書き、書けなければ書き直さず 500（`editCommitmentBodyJournalFirst`）。読めない行は書き直さず 409 で止める: 本文が読める形へ戻る保証が無い。
-    .patch(
-      '/commitments/:id',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けた仕事の本文を後から直す',
-        description:
-          '編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。' +
-          'クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。' +
-          '`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。' +
-          '編集の前後の本文は日誌（`decision`）へ逐語で残る。日誌を先に書き、書けなければ書き直さずに 500 を返す。' +
-          '任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、' +
-          '版が違うときは書かずに 409。省略は従来どおり後勝ち。',
-        responses: {
-          200: {
-            description: '直した。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`body` は空にできない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description:
-              'origin が human ではない——クローンやマネージャーが立てた行は人間からは直せない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は台帳に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '次の4つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
-              '読めない形で入っている（close で閉じることはできるが、書き直せない。書き直す直前に読めない形になった回も含む）。' +
-              '(3) `ifMatch` が' +
-              'いまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または' +
-              '消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。' +
-              '(3) だけが `current` の鍵を持つ。(4) 未了のまま在るのに書き直しが通らなかった（本文でそう言う）。' +
-              '書き直す直前に行が無くなっていた回は、409 ではなく 404 を返す。',
-            content: {
-              'application/json': {
-                schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
-              },
-            },
-          },
-          500: {
-            description: '日誌が書けなかった（**書き直していない**。行の本文は元のまま）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(commitmentEditBody, (where) => ({
-        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const id = c.req.param('id');
-        const { body, ifMatch } = c.req.valid('json');
-
-        let existing;
-        try {
-          existing = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          return c.json({ error: describeUnreadableCommitment(error) }, 409);
-        }
-        if (existing === null) return c.json({ error: 'not found' as const }, 404);
-        if (existing.origin !== 'human') {
-          // 断る理由だけでなく代わりの出口も同じ文字列へ入れる: 画面はこの本文をそのまま出し断りの文面を持たないので、出口を画面側に書くとここの線が動いた日に画面が静かに嘘になる。出口が在るのは `self` の行だけ（無い出口を案内しない）。
-          const wayOut =
-            existing.origin === 'self'
-              ? '（この行はクローンが自分で載せたもの。' +
-                'チャットでクローンに頼めば直せる——クローンには commitment_edit が在る）'
-              : '';
-          return c.json(
-            {
-              error:
-                `${id} は origin:'${existing.origin}' で、クローンやマネージャーが立てた行は` +
-                '人間からは直せない' +
-                wayOut,
-            },
-            403,
-          );
-        }
-
-        // 台帳の行は編集後の本文だけを持つので、編集前の本文は日誌にしか残らない: 日誌を先に書き、書けなければ書き直さず 500（`editCommitmentBodyJournalFirst`）。
-        // 日誌の行は先に作る（作る側の例外を「日誌に書けなかった」と取り違えない）。
-        const entry: JournalEntryInput = {
-          type: 'decision',
-          decision:
-            `人間が引き受けた仕事の本文を直した（${id}）: ` +
-            `編集前「${existing.body}」→ 編集後「${body}」`,
-          grounds: '人間が直接 API から編集した',
-        };
-        const result = await editCommitmentBodyJournalFirst(
-          stores,
-          existing,
-          body,
-          'human',
-          entry,
-          ifMatch === undefined ? undefined : { ifMatch },
-        );
-        if (result.kind === 'journal-failed') {
-          noteDroppedRecord(
-            '引き受けた仕事の本文編集の日誌（書き直していない）',
-            `id=${id}`,
-            kindOfError(result.error),
-          );
-          return c.json(journalWriteFailedBody(), 500);
-        }
-        if (result.kind === 'conflict') {
-          return c.json(
-            {
-              error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）' as const,
-              current: result.error.current,
-            },
-            409,
-          );
-        }
-        if (result.kind === 'not-edited') {
-          // 読み直した行の形どおりに返す（#5072）。状態コードは、この口の入口が同じ状態に返すものにそろえる（無い → 404、読めない → 409）
-          let after;
-          try {
-            after = await stores.commitments.get(id);
-          } catch (error) {
-            if (!(error instanceof UnreadableCommitmentError)) throw error;
-            return c.json({ error: describeUnreadableCommitment(error) }, 409);
-          }
-          if (after === null) return c.json({ error: 'not found' as const }, 404);
-          if (after.closedAt === undefined) {
-            return c.json(
-              {
-                error:
-                  `${id} は直せなかった（台帳には未了のまま在るが、書き直しが通らなかった）。` +
-                  '一覧で確かめてから、もう一度直すこと',
-              },
-              409,
-            );
-          }
-          return c.json(
-            {
-              error:
-                `${id} は既に ${after.closedAt} に片付いている` +
-                `（${after.closedReason ?? '理由の記録なし'}）`,
-            },
-            409,
-          );
-        }
-        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 

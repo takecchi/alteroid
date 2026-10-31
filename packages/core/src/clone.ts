@@ -90,7 +90,6 @@ import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
 import { excerpt, excerptLine, renderListingFromEnd } from './excerpt.js';
 import { distillTailOf } from './distill-transcript-tail.js';
-import { closeCommitmentJournalFirst } from './commitment-auto-close.js';
 import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import {
@@ -199,7 +198,6 @@ import {
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import {
-  backOnCurrentToken,
   describeQuotaRecovery,
   foldableQuotaStopTargetsOf,
   quotaFoldNoticeOf,
@@ -207,7 +205,6 @@ import {
   recoveredNoticeFoldOf,
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
-import { isBareQuotaStopReportText } from './quota-stop-notice.js';
 import { autoCloseRepliedTasks, opensHumanTask, taskFromHumanIntake } from './task-auto-done.js';
 import type { TurnReplyVia } from './task-auto-done.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
@@ -257,13 +254,7 @@ import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { UnreadableApprovalError } from './store.js';
-import type {
-  CommitmentList,
-  LostSessionGrave,
-  PendingInboxEvent,
-  Stores,
-  TranscriptGrave,
-} from './store.js';
+import type { LostSessionGrave, PendingInboxEvent, Stores, TranscriptGrave } from './store.js';
 import { MAX_PENDING_GRAVES } from './grave-queue.js';
 import {
   cloneToolCarriesSecrets,
@@ -1007,10 +998,6 @@ type TurnOutcome =
       heldForUsage: boolean;
     };
 
-// `open()` の戻り値（boolean）を捨てて例外の有無だけで振り分けない: 既に在って何もしなかった回まで 'opened' と記録され、配り直しのたびに仕事が開き直るため
-// この値だけで「載せ損なった」と断定しない: `#commit` 時点のスナップショットで、その後に台帳の行が閉じられても古びるため
-export type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed' | 'unrecorded';
-
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
 }
@@ -1143,16 +1130,6 @@ class Clone implements CloneHost {
     readSignalIds: new Set(),
     asked: new Set(),
   };
-  // 枠の知らせ（`quotaStop`）で台帳に開いた行のうち、担当が戻ったら器が閉じる候補（#5015）。キーは合図の id
-  // 候補そのものは永続化せず、台帳の行の印（`autoCloseWhenBack`）から起動のあと最初の掃除で組み直す（#5164。`#restoreQuotaStopLedgerRows`）。
-  // 印の無い古い行は、`origin` が manager で本文が枠の知らせの定型だけ（`isBareQuotaStopReportText`）のものに限って戻す。
-  // 台帳が読めなければ何も戻さない（残る側へ倒す。閉じ漏れは雑音で、誤って閉じるのは喪失のため）
-  readonly #quotaStopLedgerRows = new Map<
-    string,
-    { readonly eventId: string; readonly managerId: string; readonly at: string }
-  >();
-  /** 台帳から候補を組み直し終えたか。読めなかった回は偽のまま、次の掃除でやり直す。 */
-  #quotaStopRowsRestored = false;
   readonly #managers: ManagerPool;
   // 本セッションと蒸留のサイドクエリで同じものを使う: 片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になるため
   readonly #model: string;
@@ -2388,10 +2365,6 @@ class Clone implements CloneHost {
       // まとめ読みより前に1件ずつ見る: 束にしてから見ると、戻っていない担当の知らせ1件のために、戻った担当の知らせまで一緒に届くため（#4499）
       // 枠の短絡より後ろに置く: クローン自身が枠で止まっている間は保持し、解除されて配る時点の状態で判定するため
       const quotaFold = await this.#quotaFoldNoticeFor(event);
-      // 枠の知らせの行の掃除（#5015）: 畳む合図は自分の行も閉じ、ターンを回す合図は自分の行を残す。落ちても受信箱のループは止めない
-      await this.#closeRecoveredQuotaStopRows(event, quotaFold !== null).catch((error: unknown) => {
-        noteDroppedRecord('枠の知らせの行の掃除', inboxEventShape(event), error);
-      });
       if (quotaFold !== null) {
         await this.#foldRecoveredQuotaNotice(event, quotaFold);
         await this.#settleInboxEvent(event, false);
@@ -2404,9 +2377,6 @@ class Clone implements CloneHost {
       const recoveredFold = await this.#recoveredNoticeFoldFor(event);
       if (recoveredFold !== null) {
         await this.#foldRecoveredNotice(event, recoveredFold);
-        await this.#closeRecoveredNoticeRow(event).catch((error: unknown) => {
-          noteDroppedRecord('畳んだ知らせの行の自動クローズ', inboxEventShape(event), error);
-        });
         await this.#settleInboxEvent(event, false);
         this.#inFlight = null;
         continue;
@@ -2927,8 +2897,6 @@ class Clone implements CloneHost {
   // 2箇所の呼び出しを1本にまとめる: 別々に書くと、台帳の控えを外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きるため
   // `defer` が真なら `#forget` を呼ばず器にも未読のまま残す: 枠は時間で解決する失敗で、消すと開いたときに合図が無く仕事が失われるため
   async #settleInboxEvent(event: InboxEvent, defer: boolean): Promise<void> {
-    // 台帳の行は消さない: 消すのは「もう順序を待つ相手が居ない」という印だけで、閉じられていない未了は残すため
-    this.#delivery.deleteCommitted(event.id);
     // 追記の控えはここで捨てる: `#handle` の中で消すと、例外で終わった経路のぶんが残り続けるため
     this.#delivery.deleteRecorded(event.id);
 
@@ -3478,64 +3446,15 @@ class Clone implements CloneHost {
     this.#emit(event.conversationId, { type: 'queued' });
   }
 
-  // 合図の id をそのまま未了の id にする: 配り直しでも同じ id になり、`CommitmentStore.open` の冪等性が「二度開かない・閉じたものを開き直さない」になるため
-  // 開くのは人間の合図（human_message・human_answer）だけ（#5469 P5）: マネージャーの報告・外部の出来事・timer・self_initiative は受信箱と日誌には届くが、台帳にも Task にも積まない。
-  // 報告や外部の出来事まで積むと、読み手が閉じ忘れた行が積み上がり、枠の知らせ・デーモンの知らせが台帳を埋めて読めなくなっていたため
-  // 人間の発言（human_message）は、台帳の行と同じ id で Task も積む（`#openHumanTask`）。移行期（台帳が P7 で廃止されるまで）は両方に載る。回答（human_answer）は台帳だけで Task にしない
-  // 読んでから書く形へ戻さない: 重複判定は `CommitmentStore.open` の中で行う。アプリ層の排他はプロセスを跨げず、同じストアを指す2つのデーモンが両方「重複なし」と読んで台帳が2行に割れるため
-  // 失敗しても post を落とさない
-  // 種別は `decision` にしない: 器が受信箱の合図から機械的に開いた行を混ぜると、クローンが自分で決めて引き受けた判断という面の意味が変わるため
-  // 記録を名乗りより先に済ませる（この `.then()` チェーンの中で行う）: `#commitmentNoticeFor` がこの鎖を `await` してから再読するので、追記を待たずに `'opened'` を先に確定させるとその保証が消えるため
-  // `#journal` を経由せず直接 append する: 通常の `#journal` だと失敗が stderr に沈んで「記録が無い」と「名乗っていない」を区別できず、日誌の失敗から日誌へ書き直す循環も作るため。失敗したら `'unrecorded'` を返す
+  // 人間の発言だけ、合図の id と同じ id の Task を開く（#5469 P5・#5923）。台帳（`CommitmentStore`）へは書かない
+  // 回答（human_answer）・マネージャーの報告・外部の出来事・timer・self_initiative は、受信箱と日誌には届くが何も開かない
+  // 開く側の失敗は post を落とさない。日誌へは「開いた」行を書かない（`#openHumanTask`）
   #commit(event: InboxEvent): void {
-    const entry = commitmentFor(event);
-    if (entry === null) return;
-    // Task は人間の発言だけ。回答（human_answer）は台帳に載っても Task を作らない（問いを出した側の task が回答を受けたターンの返答で閉じる）
-    if (opensHumanTask(event)) this.#openHumanTask(event, entry);
-    this.#delivery.setCommitted(
-      event.id,
-      this.#stores.commitments.open(entry).then(
-        async (result): Promise<CommitOutcome> => {
-          if (!result.opened) return result.folded ? 'folded' : 'existed';
-          try {
-            await this.#stores.journal.append({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_DECISION_PREFIX}受信箱の合図から、引き受けた仕事として台帳に開いた（id: ${event.id}）。` +
-                `合図: ${inboxEventShape(event)}`,
-            });
-          } catch (error) {
-            // ここから `#journal` を呼び直さない: 日誌の失敗から日誌へ書き直す循環になるため
-            noteDroppedRecord(
-              '機械が名乗った id の記帳（#commit 成功時）',
-              inboxEventShape(event),
-              error,
-            );
-            return 'unrecorded';
-          }
-          return 'opened';
-        },
-        (error: unknown): Promise<CommitOutcome> => {
-          noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
-          // stderr の跡はクローンが読めないので、日誌へも1件残す
-          return this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_FAILURE_PREFIX}未了の記帳に失敗した（id: ${event.id}）。台帳に載っていない可能性が` +
-              'あるので、必要なら `commitment_open` で載せ直すこと' +
-              `（理由: ${reasonOf(error)}）。`,
-          }).then((): CommitOutcome => 'failed');
-        },
-      ),
-    );
+    if (opensHumanTask(event)) this.#openHumanTask(event, commitmentFor(event)!);
   }
 
-  // 人間の依頼を Task としても積む（#5469 P5）。id は台帳の行（＝受信箱の合図）と同じで、`TaskStore.add` の existed が配り直し・P7a の移行との二重を防ぐ。
-  // 台帳の記帳（`CommitOutcome`）には混ぜず、失敗しても post を落とさない。進行中の追加は `#taskOpens` で控え、返答のターンの終わりが待つ
+  // 人間の依頼を Task として積む（#5469 P5）。id は受信箱の合図と同じで、`TaskStore.add` の existed が配り直し・P7a の移行との二重を防ぐ。
+  // 失敗しても post を落とさない。進行中の追加は `#taskOpens` で控え、返答のターンの終わりが待つ
   // 日誌へは「積んだ」行を書かない: 合図そのものが `#record` で日誌に在り、Task の id がその合図の id と同じなので辿れるため。失敗だけは stderr と日誌に残す
   #openHumanTask(event: HumanMessage, entry: Commitment): void {
     const opening = this.#stores.tasks
@@ -3561,135 +3480,15 @@ class Clone implements CloneHost {
     this.#taskOpens.add(opening);
   }
 
-  // 開いている行のうち、印（`autoCloseWhenBack`）のあるもの、または印の無い古い行で本文が定型だけのものを、閉じる候補へ戻す（#5164）
-  // 台帳が読めなければ何も戻さず、次の掃除でやり直す。読めない行（`unreadable`）は戻さない
-  // `commitmentFor` と対にする: 古い行の本文は `[report] <text>` の形で入っているので、接頭辞を剥がして `isBareQuotaStopReportText` に通す
-  async #restoreQuotaStopLedgerRows(): Promise<void> {
-    if (this.#quotaStopRowsRestored) return;
-    let entries: readonly Commitment[];
-    try {
-      entries = (await this.#stores.commitments.list()).entries;
-    } catch {
-      return;
-    }
-    this.#quotaStopRowsRestored = true;
-    for (const entry of entries) {
-      if (entry.closedAt !== undefined || entry.origin !== 'manager') continue;
-      // 開き直された行は、印の無い古い行の道も含めて候補にしない（#5271）
-      if (entry.autoCloseDeclined === true) continue;
-      if (this.#quotaStopLedgerRows.has(entry.id)) continue;
-      const managerId =
-        entry.autoCloseWhenBack !== undefined
-          ? entry.autoCloseWhenBack.managerId
-          : entry.source !== undefined && isLegacyBareQuotaStopBody(entry.body)
-            ? entry.source
-            : undefined;
-      if (managerId === undefined) continue;
-      this.#quotaStopLedgerRows.set(entry.id, { eventId: entry.id, managerId, at: entry.at });
-    }
-  }
-
-  // 枠の知らせの行を、担当が戻ったら器が閉じる（#5015）。受信箱の合図を1件処理する前に1回走らせる
-  // 一覧を引けなければ何も閉じない（確かめられないまま閉じるより、残す側へ倒す）。`list()` は同期的に投げうるので `try` で囲う
-  // `includeOwn` が偽なら、いま処理する合図自身の行は閉じない: ターンで読ませる合図の行を、読ませる前に台帳から消さないため（畳む合図は自分の行も対象）
-  async #closeRecoveredQuotaStopRows(event: InboxEvent, includeOwn: boolean): Promise<void> {
-    const excludeId = includeOwn ? undefined : event.id;
-    // 自分の行の記帳（`#commit`）を待つ: 待たないと、まだ Map に載っていない行が掃除から漏れ、次の合図まで閉じない
-    if (includeOwn && event.type === 'manager_message' && event.quotaStop === true) {
-      try {
-        await this.#delivery.getCommitted(event.id);
-      } catch {
-        // 記帳の失敗は `#commit` 側が日誌へ残している。ここでは待つだけ
-      }
-    }
-    await this.#restoreQuotaStopLedgerRows();
-    if (this.#quotaStopLedgerRows.size === 0) return;
-    let managers: readonly QuotaRecoverySummary[];
-    try {
-      managers = await this.#managers.list();
-    } catch {
-      return;
-    }
-    for (const row of [...this.#quotaStopLedgerRows.values()]) {
-      if (row.eventId === excludeId) continue;
-      const recovery = recoveryOfQuotaStopRow(managers, row);
-      if (recovery === undefined) continue;
-      const reason =
-        `器が自動で閉じた: 枠に当たって止まった知らせだが、名指す担当 ${row.managerId}` +
-        `${recovery.successorId === undefined ? '' : ` の後継 ${recovery.successorId}`} はいまの世代の鍵で戻っている` +
-        '（running、または done で知らせより後のターンが成功）。人間・クローンが否定するなら開き直すこと' +
-        '（POST /commitments/:id/reopen・commitment_reopen）';
-      try {
-        // 日誌を先に書いてから閉じる（#5235）。書けなければ閉じず、候補にも残して次の機会に再試行する
-        const result = await closeCommitmentJournalFirst(this.#stores, row.eventId, {
-          reason,
-          entry: {
-            type: 'decision',
-            decision:
-              `枠の知らせの行を器が自動で閉じる（${row.eventId}）: ` +
-              (recovery.successorId === undefined
-                ? `担当 ${row.managerId} が戻っている`
-                : `担当 ${row.managerId} は後継 ${recovery.successorId} へ替わり、その後継が戻っている`),
-            grounds:
-              `担当 ${recovery.successorId ?? row.managerId} が quota-recovery-notice の backOnCurrentToken と同じ基準（いまの世代の鍵で live・枠の印なし、` +
-              `running、または done で知らせ ${row.at} より後のターンが成功）で戻っていた。` +
-              '器が閉じるので closedBy は daemon（人間・クローンはこれを読んで後から否定する。否定するなら POST /commitments/:id/reopen・commitment_reopen で開き直す）',
-          },
-        });
-        // 閉じた行も、無い・既に閉じていた行も、開き直された行（`declined`）も候補から外す。読めない行・日誌に書けず閉じなかった行は残す（次の機会に再試行）
-        if (result.kind === 'unreadable') continue;
-        if (result.kind === 'journal-failed') {
-          noteDroppedRecord(
-            '枠の知らせの行の自動クローズ（日誌に書けないので閉じていない）',
-            `quotaStop manager_message ${row.eventId}`,
-            result.error,
-          );
-          continue;
-        }
-        this.#quotaStopLedgerRows.delete(row.eventId);
-      } catch (error) {
-        noteDroppedRecord(
-          '枠の知らせの行の自動クローズ',
-          `quotaStop manager_message ${row.eventId}`,
-          error,
-        );
-      }
-    }
-  }
-
   // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
-  // 読めなくてもターンは進めるが、黙って消さない: 空文字を返すと「台帳が読めなかった回」と「異常が1件も無かった回」が同じ無言になるため。読めなかったこと自体を名乗り、再読を要しない `unrecorded` の断りは生き残らせる
   // 見出しは「いつ数えた値か」を名乗る: この節は会話履歴へ連結されてターンの数だけ並び、時刻が無いと古い節と新しい節が見分けられないため
+  // 台帳は書かないので、いま届いた合図が台帳に載ったかどうかは言わない。旧台帳に残る未了の件数だけを、読める間は添える（`#legacyLedgerNotice`。台帳を読む側は段3で外す）
   async #commitmentNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
 
     // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消え、未了を渡すと畳んでいる最中に新しい仕事を始めさせるだけのため
     if (event.type === 'distill') return '';
-
-    // まとめて読む分は全部待つ: 1件でも飛ばすと一覧に間に合わず、閉じ方（id）を渡せない未了が黙って混じるため
-    const outcomes = new Map<string, CommitOutcome>();
-    for (const pending of events) {
-      const outcome = await this.#delivery.getCommitted(pending.id);
-      if (outcome !== undefined) outcomes.set(pending.id, outcome);
-    }
-
-    // 読めない行は `unreadable` として別に断る: 件数だけを見て握り潰さないため
-    // `includeClosed: true` で読む（件数・最古・文言は未了だけを選び直す）: `missing` 判定のためで、台帳を2回読み直すと「いつ数えた値か」（`at`）が2つに割れるため
-    // `unrecorded` の断りは `missing` とは別に集める: 別の軸で、同じ id が両方に出ても片方がもう片方を隠す理由は無いため。台帳の再読より前に組む: 再読を要さず、再読の失敗で消える理由が無いため
-    const unrecorded = events.filter((pending) => outcomes.get(pending.id) === 'unrecorded');
-    const unrecordedIdList = excerptLine(
-      unrecorded.map((pending) => `\`${pending.id}\``).join(', '),
-      CLONE_ID_LIST_EXCERPT,
-    );
-    const unrecordedLines =
-      unrecorded.length === 0
-        ? []
-        : [
-            `**⚠️ この ${unrecorded.length} 件は台帳には開けたが、機械が名乗った記録を` +
-              `日誌に残せなかった（id: ${unrecordedIdList}）。** 後から「機械がこの id を` +
-              '名乗ったか」を突き合わせられない。',
-          ];
 
     // Task の追加が済むのを待ってから待ち行列を読む: 待たないと、いま届いた発言の Task がまだ無い件数を名乗るため
     await Promise.all([...this.#taskOpens]);
@@ -3699,158 +3498,24 @@ class Clone implements CloneHost {
     );
     const failedTaskIds = new Set(failedTaskEvents.map((pending) => pending.id));
     const placedTaskEvents = taskEvents.filter((pending) => !failedTaskIds.has(pending.id));
-    const placedTaskIds = new Set(placedTaskEvents.map((pending) => pending.id));
     const taskQueue = await this.#taskQueueNotice(event, placedTaskEvents, failedTaskEvents);
 
-    let list: CommitmentList;
-    try {
-      list = await this.#stores.commitments.list({ includeClosed: true });
-    } catch (error) {
-      noteDroppedRecord('未了の読み出し', inboxEventShape(event), error);
-      // 件数は名乗らない: 0 件と書けば「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
-      return [
-        `[system] **台帳を読めなかった（${readAtLabel(Date.now())} に試みた材料。` +
-          `理由: ${reasonOf(error)}）。** ⟹ **引き受けたまま終わっていない仕事が何件` +
-          'あるかも、いま届いた分が台帳に載ったかどうかも、この回は判定できていない' +
-          '——0 件だったのでも、異常が無かったのでもない。** 読み直す手は ' +
-          '`commitment_list` である（同じ理由で失敗するなら、失敗として返る）。',
-        ...unrecordedLines,
-        ...taskQueue.head,
-        ...taskQueue.placed,
-        ...taskQueue.failed,
-        '',
-        '---',
-        '',
-      ].join('\n');
-    }
-    const open = list.entries.filter((entry) => entry.closedAt === undefined);
-
-    // まとめた件数ぶん渡す: 1件しか渡さないと、残りは id を渡されないまま未了として溜まるため
-    // Task に積んだ発言は除く: その行の閉じ方は「返答で自動 done」であって `commitment_close` ではない
-    const ids = new Set(events.map((pending) => pending.id));
-    const mine = open.filter((entry) => ids.has(entry.id) && !placedTaskIds.has(entry.id));
-    const idList = excerptLine(
-      mine.map((entry) => `\`${entry.id}\``).join(', '),
-      CLONE_ID_LIST_EXCERPT,
-    );
-    // `'folded'` と `'existed'` は「載っていない」から除く: 台帳には触っていない・もう手当て済みで、除かないと正常なターンにも毎回嘘の警告が出るため
-    // 「見当たらない」は `mine`（未了だけ）でなく `list.entries`（閉じた行を含む全行）で判定する: `outcome` は `#commit` 時点のスナップショットで、他のターンで先に閉じられると `'opened'` のまま古びり、`mine` だと閉じた行が視野から消えて「載っていない」に誤って落ちるため
-    // `list.unreadable` の id も足す: 行は実在するのに読めないだけで、「載せ直しが要る」と誤って断らないため（id が取れない分は従来どおり）
-    const ledgerIds = new Set([
-      ...list.entries.map((entry) => entry.id),
-      ...list.unreadable.flatMap((entry) => (entry.id === undefined ? [] : [entry.id])),
-    ]);
-    const missing = events.filter((pending) => {
-      const outcome = outcomes.get(pending.id);
-      return (
-        outcome !== undefined &&
-        outcome !== 'folded' &&
-        outcome !== 'existed' &&
-        !ledgerIds.has(pending.id)
-      );
-    });
-    // 断定できるときだけ「載せ直しが要る」と断定する: fs 実装は片付いた行を 500 件超で物理削除し、載せ直すと片付いた仕事をクローンが作り直すため。`event.at` が残存する片付き行の `closedAt` 最小値より新しくなければ trim と本物の欠落を区別できず、第3の状態へ回す（`trimmedClosed` が足される前の削除は救えない）
-    // 時刻の比較は `localeCompare`: `trimClosed` 自身のソートと同じ前提のため
-    let oldestRemainingClosedAt: string | undefined;
-    for (const entry of list.entries) {
-      if (entry.closedAt === undefined) continue;
-      if (
-        oldestRemainingClosedAt === undefined ||
-        entry.closedAt.localeCompare(oldestRemainingClosedAt) < 0
-      ) {
-        oldestRemainingClosedAt = entry.closedAt;
-      }
-    }
-    const explainableByTrim = (pending: InboxEvent): boolean =>
-      list.trimmedClosed > 0 &&
-      (oldestRemainingClosedAt === undefined ||
-        pending.at.localeCompare(oldestRemainingClosedAt) <= 0);
-    const missingConfirmed = missing.filter((pending) => !explainableByTrim(pending));
-    const missingUnexplained = missing.filter((pending) => explainableByTrim(pending));
-    const missingIdList = excerptLine(
-      missingConfirmed.map((pending) => `\`${pending.id}\``).join(', '),
-      CLONE_ID_LIST_EXCERPT,
-    );
-    const missingUnexplainedIdList = excerptLine(
-      missingUnexplained.map((pending) => `\`${pending.id}\``).join(', '),
-      CLONE_ID_LIST_EXCERPT,
-    );
-    // 骨組みの文は、同じ会話の2回目から参照にする（#5297）。待ち行列の件数と先頭・この一件の id は毎回出す: 数と id は毎ターンの判断に使うため。控えは #4937 の `fixed()`（全文へ戻す条件も、入力を SDK へ入れた後に確定する約束も同じ）
-    // Task に積まなかった合図（回答）だけが台帳の閉じ方を要る: Task に積んだ分は返答で器が done にする
-    const closeSkeleton =
-      '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
-      '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。';
-    // 閉じ方の参照と末尾の参照が両方とも参照になる回は、2つの参照を末尾の1行にまとめる（指し先は同じ: `commitment_close` と `commitment_list`）。どちらかが全文の回は従来どおり別々に出す
-    const bundled = mine.length > 1;
-    const closeRef = bundled
-      ? '（閉じ方は会話の上と同じ: まとめて答えても id ごとに `commitment_close`）'
-      : '（閉じ方は会話の上と同じ: `commitment_close`）';
-    const closeText =
-      mine.length === 0
-        ? undefined
-        : bundled
-          ? this.#digestDelta.fixed(
-              'commitment-notice-close-bundle',
-              `**まとめて1つの応答で答えても、閉じるのは id ごとである。**${closeSkeleton}`,
-              closeRef,
-            )
-          : this.#digestDelta.fixed('commitment-notice-close', closeSkeleton, closeRef);
     // 固定の1文は同じ会話で1回だけ全文（#4937）
     const tailText = this.#digestDelta.fixed(
       'commitment-notice-tail',
       '全文は `task_list`。並べ替えは `task_move`。',
       '（`task_list`・`task_move` は会話の上と同じ）',
     );
-    const lines = [
+    return [
       ...taskQueue.head,
       ...taskQueue.placed,
-      ...(mine.length === 0
-        ? []
-        : [
-            (bundled
-              ? `いま届いたこの ${mine.length} 件は台帳の行として開いた（id: ${idList}）。`
-              : `いま届いたこの一件は台帳の行として開いた（id: ${idList}）。`) + (closeText ?? ''),
-          ]),
       ...taskQueue.failed,
-      // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
-      ...(missingConfirmed.length === 0
-        ? []
-        : [
-            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missingConfirmed.length} 件は` +
-              `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
-              'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
-          ]),
-      // trim で説明できてしまう `missing` では「開き直せ」とも「`commitment_list` で確かめよ」とも言わない: 前者は片付いた仕事を作り直させ、後者は trim で消えていれば載らず確かめる手段にならないため
-      ...(missingUnexplained.length === 0
-        ? []
-        : [
-            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missingUnexplained.length} 件は` +
-              `台帳に見当たらない（id: ${missingUnexplainedIdList}）。この台帳は片付いた古い行を` +
-              `物理削除しており（累計 ${list.trimmedClosed} 件）、この id が届いた時刻は、いま残って` +
-              'いる片付いた行の中でいちばん古いもの' +
-              (oldestRemainingClosedAt === undefined
-                ? 'が無い（片付いた行が1件も残っていない）'
-                : `（${oldestRemainingClosedAt} に閉じたもの）`) +
-              'より前である。** **すでに片付いて捨てられた後なのか、そもそも台帳に書けなかったのかを、' +
-              'この情報だけでは区別できない。**',
-          ]),
-      // `unrecorded` は `missing` とは別の軸で、同じ id が両方に出ることがある: この断りが無いと記録の欠落が黙って消え、「機械がこの id を名乗ったか」を突き合わせる材料が無くなるため
-      ...unrecordedLines,
-      // 読めない行が在ることもここで断る: `open.length` は `entries` だけの件数で、無いと読めない行が完全に見えなくなるため
-      ...(list.unreadable.length === 0
-        ? []
-        : [
-            // 「詳細が見られる」とは書かない: `commitment_list id=<id>` の全文モードは読めない行で `get(id)` が throw し、返るのは「読めない」という事実だけのため
-            `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
-              '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
-          ]),
       ...(await this.#legacyLedgerNotice(event)),
       tailText,
       '',
       '---',
       '',
-    ];
-    return lines.join('\n');
+    ].join('\n');
   }
 
   // 断り書きの待ち行列の側（#5469 P6c）。件数と先頭の描き方は digest と同じ `describeTaskQueueHead`、旧台帳だけの行の数え方も digest と同じ `countLegacyOnlyOpen`（写さない）
@@ -4354,44 +4019,6 @@ class Clone implements CloneHost {
     return recoveredNoticeFoldOf(event, managers, Date.now());
   }
 
-  // 畳んだ知らせ自身の台帳の行を器が閉じる（#5048）。`#closeRecoveredQuotaStopRows` と同じく closedBy は daemon（人間・クローンが後から否定できる）
-  async #closeRecoveredNoticeRow(event: InboxEvent): Promise<void> {
-    if (event.type !== 'manager_message') return;
-    const attached = event.foldWhenBack?.attached === true;
-    // 記帳（`#commit`）を待つ: 待たないと、まだ書かれていない行を閉じ損ねて、未了のまま残るため
-    try {
-      await this.#delivery.getCommitted(event.id);
-    } catch {
-      // 記帳の失敗は `#commit` 側が日誌へ残している。ここでは待つだけ
-    }
-    // 日誌を先に書いてから閉じる（#5235）。書けなければ閉じず、行は未了のまま残す
-    const result = await closeCommitmentJournalFirst(this.#stores, event.id, {
-      reason:
-        (attached
-          ? `器が自動で閉じた: デーモン再起動で引き取り直した担当 ${event.managerId} は live で running（枠停止の印なし）`
-          : `器が自動で閉じた: 名指す担当 ${event.managerId} はいまの世代の鍵で戻っている` +
-            '（running、または done で知らせより後のターンが成功）') +
-        '。人間・クローンが否定するなら開き直すこと' +
-        '（POST /commitments/:id/reopen・commitment_reopen）',
-      entry: {
-        type: 'decision',
-        decision: `担当が戻っていた知らせの行を器が自動で閉じる（${event.id}）: 担当 ${event.managerId}`,
-        grounds: attached
-          ? `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の attached の基準（live・枠停止の印なし・running）を満たした。` +
-            '器が閉じるので closedBy は daemon'
-          : `担当 ${event.managerId} が quota-recovery-notice の recoveredNoticeFoldOf の基準（backOnCurrentToken と、` +
-            '作業者の落ちなら積んだ時点と違う世代へ移ったこと）で戻っていた。器が閉じるので closedBy は daemon',
-      },
-    });
-    if (result.kind === 'journal-failed') {
-      noteDroppedRecord(
-        '畳んだ知らせの行の自動クローズ（日誌に書けないので閉じていない）',
-        inboxEventShape(event),
-        result.error,
-      );
-    }
-  }
-
   // 担当ごとに数える: 起点の違う合図の束には別々の担当の件が混ざるため。担当が1人の束は今までどおり1回だけ数える
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {
     // `at` は畳まずそのまま渡す: ここで `Date.parse` すると、読めなかった回の基準が `-Infinity` になり、この委譲の報告が全部「後続」に見えるため
@@ -4420,7 +4047,7 @@ class Clone implements CloneHost {
 
   // 書き込みの完了を待ってから消す: 待たないと短いターンでは消し込みが書き込みを追い越し、消したはずの合図が後から書かれて起動のたびに永久に配り直されるため
   // `inbox.remove` が確定するまでメモリ上の印は消さない: 先に消すと「ストアにはまだ残っているのに `#unread` には無い」矛盾を自分で作るため
-  // `commitment_close` と1本の DB トランザクションで束ねない: ターンの残りのあいだトランザクションを開いたままにし、長時間ロック・接続の占有を作るため
+  // 受信箱の消し込みを task の状態変更と1本の DB トランザクションで束ねない: ターンの残りのあいだトランザクションを開いたままにし、長時間ロック・接続の占有を作るため
   async #forget(event: InboxEvent): Promise<void> {
     const written = this.#delivery.getUnread(event.id);
     if (written === undefined) return;
@@ -9920,8 +9547,8 @@ function retrievalHintFor(event: InboxEvent): string {
 }
 
 /**
- * 合図から、台帳へ開く未了を作る。開くのは人間の合図（human_message・human_answer）だけで、残りは `null`（#5469 P5。理由は `Clone#commit` の doc）。
- * 同じ合図から Task も積む（`taskFromHumanIntake`）ので、`null` かどうかは Task を積むかどうかも決める。
+ * 人間の発言から、同じ id の Task の元になる行の形（`taskFromHumanIntake` が `taskFromCommitment` へ渡す）を作る。台帳へは書かない（#5923）。
+ * 残りの合図は `null`: Task を積むかどうかもこれが決める。
  * 本文は全文を入れる: `body` を要約にすると頼まれた内容が二度と取れない（切るのは表示側）。
  * 表示側（`commitments.tsx`）は、台帳に残っている古い manager の行の本文 `[kind] text` の形式を再パースしている。この関数はもうその形の行を作らないが、読む側は消さない。
  */
@@ -9935,55 +9562,15 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         source: event.conversationId,
         body: `${event.text}${attachmentNote(event.attachments)}`,
       };
-    // 未了として開く: 答えを受け取っただけでは進まず、止まっているマネージャーへ `manager_send` で返して初めて再開する。
+    // 回答は何も開かない: 答えを受け取っただけでは進まないのは、止まっているマネージャーの Job と問いを出した側の task が持つ（#5923）
+    // 人間の発言以外は開かない（#5469 P5）。マネージャーの報告・外部の出来事は受信箱と日誌には届くが、Task にも自動では積まない。必要ならクローンが `task_add` で自分で積む
     case 'human_answer':
-      return {
-        ...base,
-        origin: 'human',
-        source: event.approvalId,
-        body: `承認待ち ${event.approvalId} への回答: ${event.answer}`,
-      };
-    // 人間の合図以外は開かない（#5469 P5）。マネージャーの報告・外部の出来事は受信箱と日誌には届くが、台帳にも Task にも自動では積まない
-    // （報告の読み手が台帳の行を閉じ忘れて積み上がる、デーモンの知らせが台帳を埋める、を入口で断つ）。必要ならクローンが `task_add` / `commitment_open` で自分で積む
     case 'manager_message':
     case 'external':
     case 'timer':
     case 'self_initiative':
     case 'distill':
       return null;
-  }
-}
-
-const COMMITMENT_REPORT_PREFIX = '[report] ';
-
-/** 印の付く前に開いた行の本文が、枠の知らせの定型だけか（`commitmentFor` の接頭辞 `[report] ` の形に限る）。 */
-function isLegacyBareQuotaStopBody(body: string): boolean {
-  return (
-    body.startsWith(COMMITMENT_REPORT_PREFIX) &&
-    isBareQuotaStopReportText(body.slice(COMMITMENT_REPORT_PREFIX.length))
-  );
-}
-
-/**
- * 枠の知らせの行の担当が戻っているか。名指す担当が戻っていなければ、`supersededBy` で後継をたどり、
- * 後継のどれかが戻っていれば戻ったとみなす（#5164。担当が failed・lost・stopped で畳まれ、後継が引き継いだ回）。
- * 後継の居ない担当は `supersededBy` が無いので、ここで止まる（今までどおり閉じない）。輪になっていたら止める。
- */
-function recoveryOfQuotaStopRow(
-  managers: readonly QuotaRecoverySummary[],
-  row: { readonly managerId: string; readonly at: string },
-): { successorId?: string } | undefined {
-  const seen = new Set<string>();
-  let currentId = row.managerId;
-  let successorId: string | undefined;
-  for (;;) {
-    seen.add(currentId);
-    const found = managers.find((manager) => manager.managerId === currentId);
-    if (backOnCurrentToken(found, row.at)) return successorId === undefined ? {} : { successorId };
-    const next = found?.supersededBy;
-    if (next === undefined || seen.has(next)) return undefined;
-    currentId = next;
-    successorId = next;
   }
 }
 

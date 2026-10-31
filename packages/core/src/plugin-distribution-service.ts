@@ -10,6 +10,7 @@ import {
   type RunnerPluginsFingerprint,
   type RunnerRegistry,
 } from './runner-protocol.js';
+import { createSerialQueue } from './serial-queue.js';
 import type { Stores } from './store.js';
 
 /**
@@ -47,15 +48,7 @@ export function createPluginDistributionService(
   const { stores, runners } = options;
   const pushListeners = new Set<(results: readonly PluginsRunnerResult[]) => void>();
 
-  let tail: Promise<unknown> = Promise.resolve();
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   async function wanted(): Promise<PluginSummary[]> {
     return (await stores.plugins.list()).filter((summary) => isPluginScopeForRunner(summary.scope));

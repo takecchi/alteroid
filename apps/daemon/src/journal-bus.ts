@@ -5,7 +5,10 @@ import {
   type JournalStore,
 } from '@alteroid/core';
 
-/** 墓標の後も残してよい行か: 墓標が隠した id でも、消した会話の発言でもない。 */
+/**
+ * 墓標の後も残してよい行か: 墓標が隠した id でも、消した会話の発言でもない。
+ * 受け口は溜めた行をこれで見直す（`queue.retain(survivesDeletion(entry))`）: 追記の時点の見直し（下の `visible`）は、溜めている間に積まれた墓標を知らないため。
+ */
 export function survivesDeletion(
   tombstone: Extract<JournalEntry, { type: 'conversation_deleted' }>,
 ): (entry: JournalEntry) => boolean {
@@ -13,17 +16,6 @@ export function survivesDeletion(
   return (entry) =>
     !hidden.has(entry.id) &&
     !(entry.type === 'exchange' && entry.conversationId === tombstone.deletedConversationId);
-}
-
-/** 受け口がこれを呼ぶ: 追記の時点の見直し（下の `visible`）は、溜めている間に積まれた墓標を知らないため。 */
-export function pruneQueuedForDeletion<T = JournalEntry>(
-  queue: T[],
-  tombstone: Extract<JournalEntry, { type: 'conversation_deleted' }>,
-  entryOf: (item: T) => JournalEntry = (item) => item as unknown as JournalEntry,
-): void {
-  const survives = survivesDeletion(tombstone);
-  const kept = queue.filter((item) => survives(entryOf(item)));
-  queue.splice(0, queue.length, ...kept);
 }
 
 // 何を流すかを選り分ける表を持たせない: 見えない層を作らないための層で、そこで選別を始めると意味が消えるため。

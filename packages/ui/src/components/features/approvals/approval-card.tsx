@@ -210,7 +210,7 @@ export function ApprovalCard({
               allowRecordsPermission === 'records' ? '送り、許可（Bash）の一覧に載る' : '送る'
             }。${
               allowRecordsPermission === 'not-recorded-operator'
-                ? '持ち主の鍵で答えた許可は、許可（Bash）の一覧に載らない（アカウントで入って答えると載る）。'
+                ? '実行環境の持ち主の鍵で入って答えた許可は、許可（Bash）の一覧に載らない（アカウントで入って答えると載る）。'
                 : ''
             }「却下」は「${APPROVAL_QUICK_ANSWERS.deny}」と送る。`}
           </p>

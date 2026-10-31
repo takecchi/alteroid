@@ -1,6 +1,6 @@
 import { Inbox } from './inbox.js';
 import { CloneRedeliveryState } from './clone-redelivery-state.js';
-import type { CommitOutcome, Listener } from './clone.js';
+import type { Listener } from './clone.js';
 import type { InboxEvent } from './schema.js';
 
 type PendingTokenPoolNotice = { id: string; at: string; key: string; folded: number };
@@ -190,19 +190,5 @@ export class CloneDelivery {
 
   deleteRecorded(id: string): void {
     this.#recorded.delete(id);
-  }
-
-  readonly #committed = new Map<string, Promise<CommitOutcome>>();
-
-  getCommitted(id: string): Promise<CommitOutcome> | undefined {
-    return this.#committed.get(id);
-  }
-
-  setCommitted(id: string, outcome: Promise<CommitOutcome>): void {
-    this.#committed.set(id, outcome);
-  }
-
-  deleteCommitted(id: string): void {
-    this.#committed.delete(id);
   }
 }

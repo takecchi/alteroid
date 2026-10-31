@@ -234,11 +234,7 @@ function isoToEpochMs(value: unknown): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-// 既にミリ秒の桁なら素通しする: 将来 SDK がミリ秒へ変えても壊れないよう。秒でこの桁に届くのは西暦 5138 年なので衝突しない
-export function secondsToEpochMs(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
-  return value > 1e11 ? Math.floor(value) : Math.floor(value * 1000);
-}
+export { secondsToEpochMs } from './usage-limits.js';
 
 function toExtraUsage(value: unknown): ExtraUsage | undefined {
   if (typeof value !== 'object' || value === null) return undefined;

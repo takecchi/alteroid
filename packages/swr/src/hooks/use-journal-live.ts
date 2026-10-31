@@ -4,7 +4,7 @@ import { useSWRConfig } from 'swr';
 import { useApiContext } from '../api';
 import { sseRetryDelay, type JournalEntry } from '@alteroid/logic';
 
-import { isKeyOfType, KEY } from './queries';
+import { isConversationKeyOf, isKeyOfType, isOwnDeletedConversation, KEY } from './queries';
 
 const RECENT_LIMIT = 200;
 
@@ -94,16 +94,6 @@ function refetchMounted(mutate: ReturnType<typeof useSWRConfig>['mutate']): void
   });
 }
 
-// `@alteroid/core` の `CLONE_TOOL_NAMES` の写し: core の実行時コードを画面のバンドルへ持ち込まないため。
-// `commitment_list` は含めない: クローンが一覧を読むたびに画面が取り直すことになる
-const LEDGER_WRITE_TOOLS: ReadonlySet<string> = new Set([
-  'commitment_open',
-  'commitment_close',
-  'commitment_close_many',
-  'commitment_reopen',
-  'commitment_edit',
-]);
-
 function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
   void mutate((key) => isKeyOfType(key, 'journal'));
 
@@ -122,10 +112,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       void mutate(KEY.report(entry.date));
       break;
     case 'tool_use':
-      // 台帳の分岐は `isCloneActor` の関門より前に置く: 台帳を動かすのは主にクローン自身で、関門の後だと落とせない
-      if (LEDGER_WRITE_TOOLS.has(entry.tool)) {
-        void mutate((key) => isKeyOfType(key, 'commitments'));
-      }
+      // クローンには台帳を書く道具がもう無い（#5923）ので、tool_use では台帳を取り直さない
       // クローン自身の `tool_use` では `managers` を落とさない: マネージャーが動いていないのに、クローンの作業中ずっと再取得を続けることになる
       if (!isCloneActor(entry.actor)) {
         void mutate((key) => isKeyOfType(key, 'managers'));
@@ -182,7 +169,20 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる:一覧・未読数・開いている本文・台帳を読み直す
       void mutate((key) => isKeyOfType(key, 'conversations'));
       void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
-      void mutate((key) => isKeyOfType(key, 'conversation'));
+      // 自分が消した会話の本文だけは読み直さず捨てる: 消した画面が開いたままだと、読み直しが 404 になるため（#5935）。
+      // 別の画面・別のブラウザで開いている会話は読み直す: その 404 が「消された」の知らせになる
+      if (isOwnDeletedConversation(entry.deletedConversationId)) {
+        void mutate((key) => isConversationKeyOf(key, entry.deletedConversationId), undefined, {
+          revalidate: false,
+        });
+        void mutate(
+          (key) =>
+            isKeyOfType(key, 'conversation') &&
+            !isConversationKeyOf(key, entry.deletedConversationId),
+        );
+      } else {
+        void mutate((key) => isKeyOfType(key, 'conversation'));
+      }
       void mutate((key) => isKeyOfType(key, 'commitments'));
       break;
     default: {

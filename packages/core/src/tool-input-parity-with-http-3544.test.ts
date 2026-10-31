@@ -34,26 +34,40 @@ function harness() {
 
 const AT = '2026-10-07T00:00:00.000Z';
 
-describe('commitment_close の reason は HTTP と同じく空白だけを断る（#3544）', () => {
+const seedTask = {
+  id: 't1',
+  createdAt: AT,
+  updatedAt: AT,
+  status: 'queued' as const,
+  origin: 'self' as const,
+  title: 'タイトル',
+  body: '本文',
+};
+
+describe('task_set_status の reason は HTTP と同じく空白だけを断る（#3544。commitment_close の置き換え）', () => {
   it.each([' ', '   ', '\t\n', '　', ' \u0000 ', '', '\u0000'])(
     'reason %j は断り、閉じない',
     async (reason) => {
       const h = harness();
-      await h.stores.commitments.open({ id: 'c1', at: AT, origin: 'self', body: '本文' });
-      const out = await h.call('commitment_close', { id: 'c1', reason });
+      await h.stores.tasks.add(seedTask);
+      const out = await h.call('task_set_status', { taskId: 't1', status: 'done', reason });
       expect(out).toContain('reason は使えない');
-      expect((await h.stores.commitments.get('c1'))?.closedAt).toBeUndefined();
+      expect((await h.stores.tasks.get('t1'))?.closedAt).toBeUndefined();
       const rows = await h.stores.journal.list({ types: ['decision'] });
-      expect(rows.some((row) => JSON.stringify(row).includes('自分で片付けた'))).toBe(false);
+      expect(rows.some((row) => JSON.stringify(row).includes('task の状態を変えた'))).toBe(false);
     },
   );
 
   it('実のある reason は従来どおり閉じられ、値は trim されない', async () => {
     const h = harness();
-    await h.stores.commitments.open({ id: 'c1', at: AT, origin: 'self', body: '本文' });
-    const out = await h.call('commitment_close', { id: 'c1', reason: ' 済んだ ' });
+    await h.stores.tasks.add(seedTask);
+    const out = await h.call('task_set_status', {
+      taskId: 't1',
+      status: 'done',
+      reason: ' 済んだ ',
+    });
     expect(out).not.toContain('reason は使えない');
-    const row = await h.stores.commitments.get('c1');
+    const row = await h.stores.tasks.get('t1');
     expect(row?.closedAt).toBeDefined();
     expect(row?.closedReason).toBe(' 済んだ ');
   });

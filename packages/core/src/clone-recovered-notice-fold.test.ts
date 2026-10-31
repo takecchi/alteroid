@@ -74,8 +74,8 @@ function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
   };
 }
 
-// #5469 P5: manager_message は台帳に開かなくなった。畳んだ知らせ自身の行を器が閉じる側（#5048/#5235）は、アップグレード前の版が開いた行
-// （同じ id の知らせが未読として残り、配り直されて畳まれる形）に対して残してある。その行を直接置いて、閉じる側の歯を同じ形で測り続ける
+// #5923: クローンは台帳へ書かない。以前の版は、畳んだ知らせ自身の行を器が閉じていた（#5048/#5235）。アップグレード前に開いた行を直接置いて、
+// 畳んでも台帳の行には触らない（閉じも開きもしない）ことを測る
 async function seedLegacyRow(stores: Stores, id: string, managerId: string = MANAGER_ID) {
   await stores.commitments.open({
     id,
@@ -142,7 +142,7 @@ async function expectDelivered(s: ReturnType<typeof boot>, body: string): Promis
 }
 
 describe('担当が戻っていれば畳んでよい印の付いた知らせを、ターンを起こさず畳む（#5048）', () => {
-  it('⭐ 起こし直し・セッションの落ちの束（世代の条件なし）: 担当が running・世代一致なら畳み、台帳の行も daemon が閉じる', async () => {
+  it('⭐ 起こし直し・セッションの落ちの束（世代の条件なし）: 担当が running・世代一致なら畳み、台帳の行には触らない', async () => {
     const stores = createMemoryStores();
     await seedLegacyRow(stores, 'evt-rewoken');
     const s = boot(
@@ -152,68 +152,12 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
 
     s.clone.post(notice('evt-rewoken', '新しい鍵で起こし直した REWOKEN-BODY', {}));
     await expectFolded(s, 'evt-rewoken', 'REWOKEN-BODY');
-    await waitFor(
-      async () => (await s.stores.commitments.get('evt-rewoken'))?.closedBy === 'daemon',
-      '台帳の行が daemon で閉じる',
-    );
-
-    await s.clone.stop();
-  });
-
-  it('⭐ 台帳の行を閉じる瞬間には、器が閉じる日誌の行が既に在る（#5235。日誌が先）', async () => {
-    const stores = createMemoryStores();
-    await seedLegacyRow(stores, 'evt-order');
-    const s = boot(
-      stubPool(() => Promise.resolve([summary()])),
-      stores,
-    );
-    const decisionsAtClose: string[] = [];
-    const realClose = s.stores.commitments.close.bind(s.stores.commitments);
-    s.stores.commitments.close = async (id, at, reason, by) => {
-      decisionsAtClose.push(JSON.stringify(await s.stores.journal.list({ types: ['decision'] })));
-      return realClose(id, at, reason, by);
-    };
-
-    s.clone.post(notice('evt-order', '新しい鍵で起こし直した ORDER-BODY', {}));
-    await waitFor(
-      async () => (await s.stores.commitments.get('evt-order'))?.closedBy === 'daemon',
-      '台帳の行が daemon で閉じる',
-    );
-    expect(decisionsAtClose).toHaveLength(1);
-    expect(decisionsAtClose[0]).toContain('evt-order');
-
-    await s.clone.stop();
-  });
-
-  it('⭐ 日誌に器が閉じる行を書けないときは、台帳の行を閉じない（#5235。未了のまま残る）', async () => {
-    const stores = createMemoryStores();
-    await seedLegacyRow(stores, 'evt-nojournal');
-    const s = boot(
-      stubPool(() => Promise.resolve([summary()])),
-      stores,
-    );
-    const realAppend = s.stores.journal.append.bind(s.stores.journal);
-    let refused = 0;
-    s.stores.journal.append = (entry) => {
-      if (entry.type === 'decision' && entry.decision.includes('自動で閉じる')) {
-        refused += 1;
-        return Promise.reject(new Error('journal down'));
-      }
-      return realAppend(entry);
-    };
-    let closeCalls = 0;
-    const realClose = s.stores.commitments.close.bind(s.stores.commitments);
-    s.stores.commitments.close = (...args) => {
-      closeCalls += 1;
-      return realClose(...args);
-    };
-
-    s.clone.post(notice('evt-nojournal', '新しい鍵で起こし直した NOJOURNAL-BODY', {}));
-    await expectFolded(s, 'evt-nojournal', 'NOJOURNAL-BODY');
-    // 日誌の行を書こうとして断られた後でも、閉じる処理は呼ばれず、行は開いたまま
-    await waitFor(() => refused > 0, '日誌の行が断られる');
-    expect(closeCalls).toBe(0);
-    expect((await s.stores.commitments.get('evt-nojournal'))?.closedAt).toBeUndefined();
+    expect((await s.stores.commitments.get('evt-rewoken'))?.closedAt).toBeUndefined();
+    expect(
+      (await s.stores.journal.list({ types: ['decision'] })).some((row) =>
+        JSON.stringify(row).includes('自動で閉じる'),
+      ),
+    ).toBe(false);
 
     await s.clone.stop();
   });
@@ -258,7 +202,7 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
     await s.clone.stop();
   });
 
-  it('⭐ 鍵の入れ替えで背景処理を畳んだ起こし直しの知らせ（usage_rewoken_folded）: 戻っていれば畳み、本文（結果は届かない旨）は日誌に残り、台帳の行も daemon が閉じる', async () => {
+  it('⭐ 鍵の入れ替えで背景処理を畳んだ起こし直しの知らせ（usage_rewoken_folded）: 戻っていれば畳み、本文（結果は届かない旨）は日誌に残り、台帳の行には触らない', async () => {
     const stores = createMemoryStores();
     await seedLegacyRow(stores, 'evt-folded');
     const s = boot(
@@ -269,10 +213,7 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
 
     s.clone.post(notice('evt-folded', body, {}));
     await expectFolded(s, 'evt-folded', body);
-    await waitFor(
-      async () => (await s.stores.commitments.get('evt-folded'))?.closedBy === 'daemon',
-      '台帳の行が daemon で閉じる',
-    );
+    expect((await s.stores.commitments.get('evt-folded'))?.closedAt).toBeUndefined();
     // ターンは1回も回らない
     expect(s.calls).toHaveLength(0);
 
@@ -310,7 +251,7 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
     // 引き取り直しは鍵の世代を記録しない: 世代が欠けていても、世代が食い違っていても畳む（基準は live・枠停止の印なし・running）
     const attached = { attached: true as const };
 
-    it('⭐ running かつ live の N 本はターン0で畳み、本文は日誌・台帳の行は daemon で閉じる', async () => {
+    it('⭐ running かつ live の N 本はターン0で畳み、本文は日誌・台帳の行には触らない', async () => {
       const ids = ['mgr-1', 'mgr-2', 'mgr-3'];
       const stores = createMemoryStores();
       for (const id of ids) await seedLegacyRow(stores, `evt-${id}`, id);
@@ -337,10 +278,7 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
         expect(
           (await exchangeTexts(s.stores)).some((text) => text.includes(`ATTACHED-${id}`)),
         ).toBe(true);
-        await waitFor(
-          async () => (await s.stores.commitments.get(`evt-${id}`))?.closedBy === 'daemon',
-          '台帳の行が daemon で閉じる',
-        );
+        expect((await s.stores.commitments.get(`evt-${id}`))?.closedAt).toBeUndefined();
       }
       // ターン0: モデルへは1文字も渡らない
       expect(allInputs(s.calls)).toEqual([]);

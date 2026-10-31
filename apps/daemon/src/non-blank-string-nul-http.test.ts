@@ -51,29 +51,37 @@ describe('NUL だけの理由・ラベルを HTTP の入口が断る（nonBlankS
     expect(text).not.toContain('fake-secret');
   }
 
-  async function openCommitment(): Promise<void> {
-    await stores.commitments.open({
-      id: 'c1',
-      at: '2026-10-06T00:00:00.000Z',
+  async function addTask(): Promise<void> {
+    await stores.tasks.add({
+      id: 't1',
+      createdAt: '2026-10-06T00:00:00.000Z',
+      updatedAt: '2026-10-06T00:00:00.000Z',
+      status: 'queued',
       origin: 'self',
+      title: '題',
       body: '本文',
     });
   }
 
-  it.each(NUL_ONLY)('POST /commitments/:id/close の reason %j は 400 で、閉じない', async (r) => {
-    await openCommitment();
-    const res = await app.request('/commitments/c1/close', send('POST', { reason: r }));
+  // 台帳の `POST /commitments/:id/close` は外れた（段2b）。同じ判定を task の閉じる口が持つ。
+  it.each(NUL_ONLY)('POST /tasks/:id/close の reason %j は 400 で、閉じない', async (r) => {
+    await addTask();
+    const res = await app.request('/tasks/t1/close', send('POST', { status: 'done', reason: r }));
     expect(res.status).toBe(400);
     expectNoEcho(await res.text());
-    const row = await stores.commitments.get('c1');
+    const row = (await stores.tasks.list({ includeClosed: true })).entries[0];
+    expect(row?.status).toBe('queued');
     expect(row?.closedReason).toBeUndefined();
   });
 
-  it('POST /commitments/:id/close の reason は NUL が混じっても中身が残れば通る', async () => {
-    await openCommitment();
-    const res = await app.request('/commitments/c1/close', send('POST', { reason: 'a\u0000b' }));
+  it('POST /tasks/:id/close の reason は NUL が混じっても中身が残れば通る', async () => {
+    await addTask();
+    const res = await app.request(
+      '/tasks/t1/close',
+      send('POST', { status: 'done', reason: 'a\u0000b' }),
+    );
     expect(res.status).toBe(200);
-    expect((await stores.commitments.get('c1'))?.closedReason).toBe('ab');
+    expect((await stores.tasks.list({ includeClosed: true })).entries[0]?.closedReason).toBe('ab');
   });
 
   it.each(NUL_ONLY)('PUT /tokens の label %j は 400 で、保存しない', async (label) => {

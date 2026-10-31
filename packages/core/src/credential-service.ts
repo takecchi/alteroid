@@ -15,6 +15,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerRegistry,
 } from './runner-protocol.js';
+import { createSerialQueue } from './serial-queue.js';
 import type { StoredCredential, Stores } from './store.js';
 
 export interface CredentialService {
@@ -220,15 +221,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     .catch(() => undefined);
 
   // 直列にする: 同時に2つ更新が入ると、層ごとに違う値が残るため
-  let tail: Promise<unknown> = Promise.resolve();
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   const pushListeners = new Set<(results: ApplyCredentialsResult['runners']) => void>();
   // `apply` が runner から外した名前（#4781）。プロセスの中だけで覚える: デーモンを作り直すと消える（永続させるかは別の判断）

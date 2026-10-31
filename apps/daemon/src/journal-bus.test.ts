@@ -1,7 +1,7 @@
 import { createMemoryStores, type JournalEntry } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { createJournalBus, pruneQueuedForDeletion, survivesDeletion } from './journal-bus.js';
+import { createJournalBus, survivesDeletion } from './journal-bus.js';
 import { SseSendQueue } from './sse-send-queue.js';
 
 describe('溜めた行から、墓標が外す行を捨てる（#4379）', () => {
@@ -32,10 +32,13 @@ describe('溜めた行から、墓標が外す行を捨てる（#4379）', () =>
     });
     if (tombstone.type !== 'conversation_deleted') throw new Error('墓標の形でない');
 
-    const queue = [secret, copy, kept, other];
-    pruneQueuedForDeletion(queue, tombstone);
+    const queue = new SseSendQueue<JournalEntry>();
+    for (const entry of [secret, copy, kept, other]) queue.push(entry);
+    queue.retain(survivesDeletion(tombstone));
 
-    expect(queue.map((entry) => entry.id)).toEqual([kept.id, other.id]);
+    const remaining: string[] = [];
+    for (let item = queue.shift(); item; item = queue.shift()) remaining.push(item.value.id);
+    expect(remaining).toEqual([kept.id, other.id]);
   });
 });
 

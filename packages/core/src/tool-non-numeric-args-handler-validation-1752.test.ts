@@ -154,72 +154,54 @@ const cases: Case[] = [
     hint: formatStringLengthJa({ min: 1 }),
   },
   {
-    label: 'commitment_open.body（文字列 .min(1)。issue 本文の再現テスト対象）',
-    tool: 'commitment_open',
-    base: {},
-    field: 'body',
-    invalid: '',
-    valid: 'やる',
-    hint: formatStringLengthJa({ min: 1 }),
-  },
-  {
-    label: 'commitment_close.reason（文字列 .min(1)）',
-    tool: 'commitment_close',
-    base: { id: 'c-1' },
+    label: 'task_set_status.reason（文字列 .min(1)）',
+    tool: 'task_set_status',
+    base: { taskId: 't-1', status: 'done' },
     field: 'reason',
     invalid: '',
     valid: 'done',
     hint: formatStringLengthJa({ min: 1 }),
   },
   {
-    label: 'commitment_edit.body（文字列 .min(1)）',
-    tool: 'commitment_edit',
-    base: { id: 'c-1' },
-    field: 'body',
-    invalid: '',
-    valid: '直した',
-    hint: formatStringLengthJa({ min: 1 }),
-  },
-  {
-    label: 'commitment_close_many.origin（配列(enum) .min(1)）',
-    tool: 'commitment_close_many',
-    base: { reason: 'x' },
+    label: 'task_set_status_many.origin（配列(enum) .min(1)）',
+    tool: 'task_set_status_many',
+    base: { status: 'done', reason: 'x' },
     field: 'origin',
     invalid: [],
     valid: ['self'],
     hint: formatArrayLengthJa({ min: 1 }),
   },
   {
-    label: 'commitment_close_many.source（配列 .min(1)。要素は別に測る）',
-    tool: 'commitment_close_many',
-    base: { origin: ['self'], reason: 'x' },
+    label: 'task_set_status_many.source（配列 .min(1)。要素は別に測る）',
+    tool: 'task_set_status_many',
+    base: { origin: ['self'], status: 'done', reason: 'x' },
     field: 'source',
     invalid: [],
     valid: ['token-pool'],
     hint: formatArrayLengthJa({ min: 1 }),
   },
   {
-    label: 'commitment_close_many.q（文字列 .min(1)）',
-    tool: 'commitment_close_many',
-    base: { origin: ['self'], reason: 'x' },
+    label: 'task_set_status_many.q（文字列 .min(1)）',
+    tool: 'task_set_status_many',
+    base: { origin: ['self'], status: 'done', reason: 'x' },
     field: 'q',
     invalid: '',
     valid: 'y',
     hint: formatStringLengthJa({ min: 1 }),
   },
   {
-    label: 'commitment_close_many.until（文字列 .min(1)）',
-    tool: 'commitment_close_many',
-    base: { origin: ['self'], reason: 'x' },
+    label: 'task_set_status_many.until（文字列 .min(1)）',
+    tool: 'task_set_status_many',
+    base: { origin: ['self'], status: 'done', reason: 'x' },
     field: 'until',
     invalid: '',
     valid: '2026-09-15T00:00:00.000Z',
     hint: formatStringLengthJa({ min: 1 }),
   },
   {
-    label: 'commitment_close_many.reason（文字列 .min(1)）',
-    tool: 'commitment_close_many',
-    base: { origin: ['self'] },
+    label: 'task_set_status_many.reason（文字列 .min(1)）',
+    tool: 'task_set_status_many',
+    base: { origin: ['self'], status: 'done' },
     field: 'reason',
     invalid: '',
     valid: 'y',
@@ -312,7 +294,7 @@ const cases: Case[] = [
   },
 ];
 
-describe('道具の非数値引数（22件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1752）', () => {
+describe('道具の非数値引数（20件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1752）', () => {
   it.each(cases)('$label', async ({ tool, base, field, invalid, valid, seed }) => {
     const stores = createMemoryStores();
     await seed?.(stores);
@@ -339,9 +321,9 @@ interface ElementCase {
 
 const elementCases: ElementCase[] = [
   {
-    label: 'commitment_close_many.source（要素の空文字）',
-    tool: 'commitment_close_many',
-    base: { origin: ['self'], reason: 'x' },
+    label: 'task_set_status_many.source（要素の空文字）',
+    tool: 'task_set_status_many',
+    base: { origin: ['self'], status: 'done', reason: 'x' },
     field: 'source',
   },
   {
@@ -376,7 +358,7 @@ describe('配列の要素が空文字であってはならない制約（issue #
 });
 
 describe('道具の JSON Schema の説明文に、検査と同じ文言が入っている（issue #1752 レビュー指摘と同型）', () => {
-  it('22件の欄それぞれで、.describe() の文言に共有の hint がそのまま含まれる', async () => {
+  it('20件の欄それぞれで、.describe() の文言に共有の hint がそのまま含まれる', async () => {
     const rpc = await connect(createMemoryStores());
     const response = await rpc.call('tools/list', {});
     const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
@@ -393,6 +375,6 @@ describe('道具の JSON Schema の説明文に、検査と同じ文言が入っ
       expect(description, `${key}: JSON Schema にこの欄が無い`).toBeTruthy();
       expect(description, `${key}: 説明文「${description}」に制約の文言が無い`).toContain(hint);
     }
-    expect(seen.size).toBe(22);
+    expect(seen.size).toBe(20);
   });
 });

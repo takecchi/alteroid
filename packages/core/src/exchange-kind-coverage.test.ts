@@ -248,7 +248,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'clone.ts': {
     '#apply': 'decision,gauge',
     '#buildSessionSpec': 'decision',
-    '#commit': 'decision,failure',
     '#completeScheduledRun': 'failure',
     '#dailyReport': 'decision,failure',
     '#dropPendingCollapse': 'thinning',

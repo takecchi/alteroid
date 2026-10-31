@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 
 import type { AgentChildProcess } from './agent-session.js';
+import { clipWithEllipsis } from './excerpt.js';
 import {
   CODEX_RPC_ERROR_CODES,
   type CodexClientInfo,
@@ -84,7 +85,7 @@ interface Pending {
 const LOG_LINE_LIMIT = 200;
 
 function clip(line: string): string {
-  return line.length > LOG_LINE_LIMIT ? `${line.slice(0, LOG_LINE_LIMIT)}…` : line;
+  return clipWithEllipsis(line, LOG_LINE_LIMIT);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

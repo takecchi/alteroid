@@ -1,6 +1,6 @@
 import type { AgentEvent } from './agent-events.js';
 import type { CodexRateLimitSnapshot, CodexRateLimitWindow } from './codex-protocol.js';
-import { toRateLimitFacts } from './usage-limits.js';
+import { secondsToEpochMs, toRateLimitFacts } from './usage-limits.js';
 
 function windowEvent(
   limitId: string,
@@ -45,18 +45,18 @@ export function foldCodexRateLimits(
         ? 'spend_control_reached'
         : undefined;
   if (reachedType !== undefined && reachedType !== previouslyReached) {
-    const resetsAt = [snapshot.primary, snapshot.secondary]
-      .filter((w): w is CodexRateLimitWindow => w != null && (w.usedPercent ?? 0) >= 100)
-      .map((w) => w.resetsAt)
-      .find((r): r is number => typeof r === 'number' && r > 0);
+    const resetsAt = secondsToEpochMs(
+      [snapshot.primary, snapshot.secondary]
+        .filter((w): w is CodexRateLimitWindow => w != null && (w.usedPercent ?? 0) >= 100)
+        .map((w) => w.resetsAt)
+        .find((r): r is number => typeof r === 'number' && r > 0),
+    );
     events.push({
       type: 'usage_notice',
       notice: {
         kind: 'reached',
         text: `Codex の利用枠に達した（${reachedType}、枠 ${limitId}）`,
-        ...(resetsAt === undefined
-          ? {}
-          : { resetsAt: resetsAt > 1e11 ? resetsAt : resetsAt * 1000 }),
+        ...(resetsAt === undefined ? {} : { resetsAt }),
       },
     });
   }

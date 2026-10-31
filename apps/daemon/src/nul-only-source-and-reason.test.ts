@@ -28,7 +28,8 @@ const send = (method: string, body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-describe('約束の source が NUL だけなら空として残さない（HTTP の入口）', () => {
+// 台帳の `POST /commitments` は外れた（段2b）。同じ判定を人間が仕事を積む口（`POST /tasks`）が持つ。
+describe('仕事の source が NUL だけなら空として残さない（HTTP の入口）', () => {
   let stores: Stores;
   let app: ReturnType<typeof createApp>;
 
@@ -42,20 +43,26 @@ describe('約束の source が NUL だけなら空として残さない（HTTP �
     });
   });
 
-  it('POST /commitments の source が NUL だけなら 400 で、行を作らない', async () => {
-    const empty = await app.request('/commitments', send('POST', { body: '本文', source: '' }));
-    const nul = await app.request('/commitments', send('POST', { body: '本文', source: '\u0000' }));
+  it('POST /tasks の source が NUL だけなら 400 で、行を作らない', async () => {
+    const empty = await app.request(
+      '/tasks',
+      send('POST', { title: '題', body: '本文', source: '' }),
+    );
+    const nul = await app.request(
+      '/tasks',
+      send('POST', { title: '題', body: '本文', source: '\u0000' }),
+    );
     expect(empty.status).toBe(400);
     expect(nul.status, `空文字は 400 なのに NUL だけは ${nul.status}`).toBe(400);
-    expect((await stores.commitments.list()).entries).toEqual([]);
+    expect((await stores.tasks.list()).entries).toEqual([]);
   });
 
-  it('POST /commitments の source が実のある文字列なら積む', async () => {
+  it('POST /tasks の source が実のある文字列なら積む', async () => {
     const res = await app.request(
-      '/commitments',
-      send('POST', { body: '本文', source: 'issue-1' }),
+      '/tasks',
+      send('POST', { title: '題', body: '本文', source: 'issue-1' }),
     );
     expect(res.status).toBe(200);
-    expect((await stores.commitments.list()).entries.map((e) => e.source)).toEqual(['issue-1']);
+    expect((await stores.tasks.list()).entries.map((e) => e.source)).toEqual(['issue-1']);
   });
 });
