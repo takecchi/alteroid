@@ -130,6 +130,7 @@ import {
   practiceSlugSchema,
   fingerprintOf,
   noteDroppedRecord,
+  dropUnreadTimersOfKind,
   removeScheduleJournalFirst,
   scheduleReplaceEntry,
   reasonOf,
@@ -6090,6 +6091,12 @@ export function createApp(deps: AppDeps) {
         }
         if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
         const removed = result.removed;
+        // 取り消した依頼の未読の起動は走らせない: 残すと依頼の無い kind として本文なしのターンが走る
+        await dropUnreadTimersOfKind(
+          stores,
+          { dropQueuedInboxEvents: (ids) => clone.dropQueuedInboxEvents(ids) },
+          kind,
+        );
         // 外せた回だけ印つきの行を足す（先の行と中身が重なるのは、印のある行を効いた回だけに置くため）。外すこと自体は効いているので、落ちても 500 を返さない（`appendJournalOrDrop`）。
         await appendJournalOrDrop(
           stores,

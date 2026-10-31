@@ -154,7 +154,7 @@ import {
   InvalidProgressWindowError,
   readProgress,
 } from './progress-read.js';
-import { removeScheduleJournalFirst } from './schedule-remove.js';
+import { dropUnreadTimersOfKind, removeScheduleJournalFirst } from './schedule-remove.js';
 import {
   removeArchiveChunkJournalFirst,
   removeArchiveJournalFirst,
@@ -5591,6 +5591,14 @@ export function createCloneTools(context: ToolContext) {
         }
         // 外せなかった（先に読んだ後で消えていた）: 打ち消しの行は helper が足してある
         if (result.kind !== 'removed') return text(`継続中の依頼 ${kind} は無い。`);
+        // 口が渡されない器は消さない: 配達だけが続く半端な状態を作らない（本番の `ToolContext` は2箇所とも渡している）
+        if (context.dropQueuedInboxEvents !== undefined) {
+          await dropUnreadTimersOfKind(
+            stores,
+            { dropQueuedInboxEvents: context.dropQueuedInboxEvents },
+            kind,
+          );
+        }
         // 外した行の控えも捨てる: 同じ kind が後で別の本文で作り直されても、古い版を「前回と同じ」と畳まないため
         context.forgetStandingRow?.(kind);
         return text(`${kind} を外した。`);

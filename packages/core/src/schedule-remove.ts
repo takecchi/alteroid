@@ -1,4 +1,6 @@
 import { noteDroppedRecord } from './dropped-record.js';
+import type { InboxDeliveryStopper } from './inbox-backlog.js';
+import { removeInboxEventsAndStopDelivery } from './inbox-backlog.js';
 import type { JournalEntryInput, ScheduledRequest } from './schema.js';
 import type { Stores } from './store.js';
 import { ScheduleConflictError, UnreadableScheduleError } from './store.js';
@@ -97,6 +99,30 @@ export async function removeScheduleJournalFirst(
     );
   }
   return { kind: 'removed', removed };
+}
+
+/**
+ * 外した依頼の kind の未読の timer を受信箱から消し、配達も止める。
+ *
+ * 消さないと、受信箱の行が依頼の無い kind として届き、本文なしの素のターンで走る（取り消した仕事が走る）。
+ * 「依頼が無い」を断る側で見分けない: 手で仕込んだ依頼の無い kind の起動は判断させる作りで、外した依頼と見分ける印がどこにも残らないため。
+ * 外すこと自体は済んでいるので、消せなくても例外は上げず跡だけ残す。
+ */
+export async function dropUnreadTimersOfKind(
+  stores: Pick<Stores, 'inbox'>,
+  delivery: InboxDeliveryStopper,
+  kind: string,
+): Promise<void> {
+  try {
+    const peek = await stores.inbox.peekPending();
+    const ids = peek.entries.flatMap(({ event }) =>
+      event.type === 'timer' && event.kind === kind ? [event.id] : [],
+    );
+    if (ids.length === 0) return;
+    await removeInboxEventsAndStopDelivery(stores.inbox, delivery, ids);
+  } catch (error) {
+    noteDroppedRecord('取り消した定期の依頼の未読の起動の消し込み', `kind=${kind}`, error);
+  }
 }
 
 function sameTarget(a: ScheduleRemoveTarget, b: ScheduleRemoveTarget): boolean {
