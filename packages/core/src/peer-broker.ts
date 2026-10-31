@@ -18,6 +18,7 @@ import type { AgentProviderId } from './agent-ports.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { noteEnvValueNotUsed } from './env-value-not-used.js';
 import { excerptLine } from './excerpt.js';
+import { InputQueue } from './input-queue.js';
 import type { PeerWorkdirScanner } from './peer-workdir-scan.js';
 import { strictTool as tool } from './strict-tool-input.js';
 import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } from './usage.js';
@@ -304,42 +305,6 @@ function generatedFilesOf(record: AgentToolAuditRecord, cwd: string | undefined)
   return [];
 }
 
-class InputQueue implements AsyncIterable<AgentUserInput> {
-  readonly #items: AgentUserInput[] = [];
-  #waiter: (() => void) | undefined;
-  #closed = false;
-
-  push(text: string): void {
-    this.#items.push({ text });
-    this.#wake();
-  }
-
-  close(): void {
-    this.#closed = true;
-    this.#wake();
-  }
-
-  #wake(): void {
-    const waiter = this.#waiter;
-    this.#waiter = undefined;
-    waiter?.();
-  }
-
-  async *[Symbol.asyncIterator](): AsyncGenerator<AgentUserInput> {
-    for (;;) {
-      const next = this.#items.shift();
-      if (next !== undefined) {
-        yield next;
-        continue;
-      }
-      if (this.#closed) return;
-      await new Promise<void>((resolve) => {
-        this.#waiter = resolve;
-      });
-    }
-  }
-}
-
 interface PendingEntry {
   readonly approvalId: string;
   readonly request: AgentPermissionRequest;
@@ -368,7 +333,7 @@ class PeerSession {
   lastUsedMs = 0;
   /** 相手のセッションが終わったときに1回だけ呼ぶ（#4764）。 */
   onEnded: ((reason: string) => void) | undefined;
-  readonly #input = new InputQueue();
+  readonly #input = new InputQueue<AgentUserInput>(true);
   readonly #session: AgentManagerSession;
   readonly #deps: PeerBrokerDeps;
   #turnActive = false;
@@ -487,7 +452,8 @@ class PeerSession {
       startedAt: startedAt.toISOString(),
     };
     this.#announceRunning();
-    this.#input.push(text);
+    this.#input.enqueue({ text });
+    this.#input.wake();
     return this.#nextStop(signal);
   }
 

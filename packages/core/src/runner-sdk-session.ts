@@ -1,4 +1,5 @@
 import type { AgentManagerSession, AgentUserInput } from './agent-session.js';
+import { InputQueue } from './input-queue.js';
 import { RunnerBackgroundWaiters } from './runner-background-waiters.js';
 import { type RunnerLease } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
@@ -173,31 +174,26 @@ export class RunnerSdkSession {
     return ended;
   }
 
-  readonly #input: AgentUserInput[] = [];
-  readonly #inputWaiters = new Set<() => void>();
+  readonly #input = new InputQueue<AgentUserInput>();
 
   enqueueInput(message: AgentUserInput): void {
-    this.#input.push(message);
+    this.#input.enqueue(message);
   }
 
   dequeueInput(): AgentUserInput | undefined {
-    return this.#input.shift();
+    return this.#input.dequeue();
   }
 
   drainInput(): AgentUserInput[] {
-    return this.#input.splice(0);
+    return this.#input.drain();
   }
 
   waitForInput(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.#inputWaiters.add(resolve);
-    });
+    return this.#input.wait();
   }
 
   wakeInput(): void {
-    const waiters = [...this.#inputWaiters];
-    this.#inputWaiters.clear();
-    for (const waiter of waiters) waiter();
+    this.#input.wake();
   }
 
   /**

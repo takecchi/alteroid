@@ -4,7 +4,7 @@ import type { AgentUserInput } from './agent-session.js';
 
 type SdkContent = SDKUserMessage['message']['content'];
 
-export function toSdkContent(next: AgentUserInput): SdkContent {
+function toSdkContent(next: AgentUserInput): SdkContent {
   const images = next.images ?? [];
   if (images.length === 0) return next.text;
   return [
@@ -14,4 +14,16 @@ export function toSdkContent(next: AgentUserInput): SdkContent {
       source: { type: 'base64' as const, media_type: image.mediaType, data: image.data },
     })),
   ];
+}
+
+export async function* toSdkInput(
+  input: AsyncIterable<AgentUserInput>,
+): AsyncGenerator<SDKUserMessage> {
+  for await (const next of input) {
+    yield {
+      type: 'user',
+      message: { role: 'user', content: toSdkContent(next) },
+      parent_tool_use_id: null,
+    };
+  }
 }

@@ -1,10 +1,5 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  McpServerConfig,
-  Query,
-  SDKUserMessage,
-  SessionStore,
-} from '@anthropic-ai/claude-agent-sdk';
+import type { McpServerConfig, Query, SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AgentEvent } from './agent-events.js';
 import type {
@@ -14,14 +9,13 @@ import type {
   AgentCloneSessionSpec,
   AgentCloneTools,
 } from './agent-clone-session.js';
-import type { AgentUserInput } from './agent-session.js';
 import {
   buildCloneDistillOptions,
   buildCloneSessionOptions,
   cloneMcpServers,
   foldClaudeMessage,
 } from './claude-provider.js';
-import { toSdkContent } from './claude-user-content.js';
+import { toSdkInput } from './claude-user-content.js';
 import { stageCloneMcpServers, type CloneMcpConfigFile } from './clone-mcp-config-file.js';
 import { readSessionUsage } from './usage.js';
 
@@ -29,16 +23,6 @@ export type ClaudeCloneQueryFn = typeof query;
 
 export function toClaudeMcpServerConfig(tools: AgentCloneTools): McpServerConfig {
   return tools.server as McpServerConfig;
-}
-
-async function* toSdkInput(input: AsyncIterable<AgentUserInput>): AsyncGenerator<SDKUserMessage> {
-  for await (const next of input) {
-    yield {
-      type: 'user',
-      message: { role: 'user', content: toSdkContent(next) },
-      parent_tool_use_id: null,
-    };
-  }
 }
 
 // 資格つきの MCP 登録は CLI の argv ではなくファイルで渡す: argv は同じ器の他のプロセスから読めるため
