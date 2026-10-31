@@ -37,17 +37,13 @@ export function removeGrave<T>(
 
 /**
  * 墓標ごとの「蒸留が続けて失敗した回数」（#4898）。graveId → 回数。3つの器で同じ形で持つ。
- * 保存値は `{ counts: { [graveId]: n } }`。古い形（`{ graveId, failures }` の1件）も読める。
+ * 保存値は `{ counts: { [graveId]: n } }`。
  */
 export type DistillFailureCounts = Record<string, number>;
 
 export function parseDistillFailureCounts(value: unknown): DistillFailureCounts | null {
   if (typeof value !== 'object' || value === null) return null;
-  const { counts, graveId, failures } = value as {
-    counts?: unknown;
-    graveId?: unknown;
-    failures?: unknown;
-  };
+  const { counts } = value as { counts?: unknown };
   const isCount = (n: unknown): n is number =>
     typeof n === 'number' && Number.isInteger(n) && n >= 0;
   if (typeof counts === 'object' && counts !== null && !Array.isArray(counts)) {
@@ -56,12 +52,6 @@ export function parseDistillFailureCounts(value: unknown): DistillFailureCounts 
       if (id.length === 0 || !isCount(n)) return null;
       result[id] = n;
     }
-    return result;
-  }
-  // 古い形: 種類ごとに1件だけ
-  if (typeof graveId === 'string' && graveId.length > 0 && isCount(failures)) {
-    const result: DistillFailureCounts = Object.create(null) as DistillFailureCounts;
-    result[graveId] = failures;
     return result;
   }
   return null;
