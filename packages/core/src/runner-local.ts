@@ -31,6 +31,7 @@ import type {
 } from './runner-protocol.js';
 import { RUNNER_CAPABILITIES } from './runner-protocol.js';
 import { readExecutionResources } from './runner-resources.js';
+import { definedProps } from './defined-props.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
 /**
@@ -106,27 +107,19 @@ class LocalRunner implements RunnerClient {
       runnerId: this.runnerId,
       workspacePath: this.workspacePath,
       emit: (event) => this.#deliver(event),
-      ...(options.queryFn === undefined ? {} : { queryFn: options.queryFn }),
-      ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.withheldEnvKeys === undefined
-        ? {}
-        : { withheldEnvKeys: options.withheldEnvKeys }),
-      ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
-      ...(options.profile === undefined ? {} : { profile: options.profile }),
-      ...(options.attachmentsRoot === undefined
-        ? {}
-        : { attachmentsRoot: options.attachmentsRoot }),
-      ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
-      ...(options.outboxRoot === undefined ? {} : { outboxRoot: options.outboxRoot }),
-      ...(options.outboxStagedRoot === undefined
-        ? {}
-        : { outboxStagedRoot: options.outboxStagedRoot }),
-      ...(options.rescueStagedRoot === undefined
-        ? {}
-        : { rescueStagedRoot: options.rescueStagedRoot }),
-      ...(options.contextUsageTimeoutMs === undefined
-        ? {}
-        : { contextUsageTimeoutMs: options.contextUsageTimeoutMs }),
+      ...definedProps({
+        queryFn: options.queryFn,
+        env: options.env,
+        withheldEnvKeys: options.withheldEnvKeys,
+        credentials: options.credentials,
+        profile: options.profile,
+        attachmentsRoot: options.attachmentsRoot,
+        pluginsRoot: options.pluginsRoot,
+        outboxRoot: options.outboxRoot,
+        outboxStagedRoot: options.outboxStagedRoot,
+        rescueStagedRoot: options.rescueStagedRoot,
+        contextUsageTimeoutMs: options.contextUsageTimeoutMs,
+      }),
     });
     // 同じプロセスのデーモンは、預けた退避を下の `fetchArchive` で取りに来られる（#4485）
   }

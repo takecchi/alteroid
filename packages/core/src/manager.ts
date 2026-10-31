@@ -167,6 +167,7 @@ import type {
   RunnerWaiting,
   UnpushedWorkResult,
 } from './runner-protocol.js';
+import { definedProps } from './defined-props.js';
 import { brief, ONE_SHOT_ALLOW_TTL_MS } from './runner.js';
 import type {
   InboxEvent,
@@ -620,32 +621,20 @@ function unpushedWorkObservationOf(
         worktrees: outcome.result.worktrees.map((worktree) => ({
           relativePath: worktree.relativePath,
           branch: worktree.branch,
-          ...(worktree.remoteOrigin === undefined ? {} : { remoteOrigin: worktree.remoteOrigin }),
-          ...(worktree.unpushedCommitCount === undefined
-            ? {}
-            : { unpushedCommitCount: worktree.unpushedCommitCount }),
-          ...(worktree.unpushedCommitCountUnknown === undefined
-            ? {}
-            : { unpushedCommitCountUnknown: worktree.unpushedCommitCountUnknown }),
-          ...(worktree.uncommittedChangeCount === undefined
-            ? {}
-            : { uncommittedChangeCount: worktree.uncommittedChangeCount }),
-          ...(worktree.uncommittedChangeCountUnknown === undefined
-            ? {}
-            : { uncommittedChangeCountUnknown: worktree.uncommittedChangeCountUnknown }),
+          ...definedProps({
+            remoteOrigin: worktree.remoteOrigin,
+            unpushedCommitCount: worktree.unpushedCommitCount,
+            unpushedCommitCountUnknown: worktree.unpushedCommitCountUnknown,
+            uncommittedChangeCount: worktree.uncommittedChangeCount,
+            uncommittedChangeCountUnknown: worktree.uncommittedChangeCountUnknown,
+          }),
         })),
-        ...(outcome.result.truncatedAtCount === undefined
-          ? {}
-          : { truncatedAtCount: outcome.result.truncatedAtCount }),
-        ...(outcome.result.stoppedEarly === undefined
-          ? {}
-          : { stoppedEarly: outcome.result.stoppedEarly }),
-        ...(outcome.result.scratchRootsUnknown === undefined
-          ? {}
-          : { scratchRootsUnknown: outcome.result.scratchRootsUnknown }),
-        ...(outcome.result.unreadableDirCount === undefined
-          ? {}
-          : { unreadableDirCount: outcome.result.unreadableDirCount }),
+        ...definedProps({
+          truncatedAtCount: outcome.result.truncatedAtCount,
+          stoppedEarly: outcome.result.stoppedEarly,
+          scratchRootsUnknown: outcome.result.scratchRootsUnknown,
+          unreadableDirCount: outcome.result.unreadableDirCount,
+        }),
       }
     : {
         kind: 'unavailable',
@@ -848,9 +837,7 @@ function denialReasonSnapshotOf(event: {
 }): DenialReasonSnapshot | undefined {
   const snapshot: DenialReasonSnapshot = {
     ...(event.reasonType === undefined ? {} : { reasonType: event.reasonType }),
-    ...(event.reason === undefined ? {} : { reason: event.reason }),
-    ...(event.message === undefined ? {} : { message: event.message }),
-    ...(event.inputHead === undefined ? {} : { inputHead: event.inputHead }),
+    ...definedProps({ reason: event.reason, message: event.message, inputHead: event.inputHead }),
   };
   return Object.keys(snapshot).length === 0 ? undefined : snapshot;
 }
@@ -5285,18 +5272,12 @@ class Pool implements ManagerPool {
         managerId: manager.managerId,
         status: manager.status,
         live: manager.live,
-        ...(manager.awaitingBackground === undefined
-          ? {}
-          : { awaitingBackground: manager.awaitingBackground }),
-        ...(manager.tokenGeneration === undefined
-          ? {}
-          : { tokenGeneration: manager.tokenGeneration }),
-        ...(manager.activeTokenGeneration === undefined
-          ? {}
-          : { activeTokenGeneration: manager.activeTokenGeneration }),
-        ...(manager.tokenGenerationUnknownReason === undefined
-          ? {}
-          : { tokenGenerationUnknownReason: manager.tokenGenerationUnknownReason }),
+        ...definedProps({
+          awaitingBackground: manager.awaitingBackground,
+          tokenGeneration: manager.tokenGeneration,
+          activeTokenGeneration: manager.activeTokenGeneration,
+          tokenGenerationUnknownReason: manager.tokenGenerationUnknownReason,
+        }),
       };
       if (manager.runnerId === undefined) {
         unassigned.push(item);
@@ -14064,9 +14045,7 @@ function summaryOf(
     managerId: job.id,
     status: job.status,
     live,
-    ...(runnerLostSince === undefined ? {} : { runnerLostSince }),
-    ...(runnerVanished === undefined ? {} : { runnerVanished }),
-    ...(runnerListedAt === undefined ? {} : { runnerListedAt }),
+    ...definedProps({ runnerLostSince, runnerVanished, runnerListedAt }),
     ...(sessionMissingSince === undefined
       ? {}
       : {
@@ -14082,9 +14061,7 @@ function summaryOf(
             job.lastUnpushedWorkObservation.at >= record.runnerSessionSince,
         }),
     // 3欄は独立に出し分ける: `turnEndedAt` だけは元の行が `timestamp` を持たないとき単独で欠けうるので、その有無で残り2つを畳まない（`toolUseStall*` も同じ）。
-    ...(turnEndedAt === undefined ? {} : { turnEndedAt }),
-    ...(turnEndReason === undefined ? {} : { turnEndReason }),
-    ...(turnEndTail === undefined ? {} : { turnEndTail }),
+    ...definedProps({ turnEndedAt, turnEndReason, turnEndTail }),
     // `toolUseStallAt` は元の行が `timestamp` を持たないと単独で欠けうるので、`turnEnded*` と独立に出し分ける（片方の有無でもう片方を畳まない）。
     ...(toolUseStallAt === undefined ? {} : { toolUseStallAt }),
     ...(toolUseStallPending === undefined ? {} : { toolUseStallPending }),

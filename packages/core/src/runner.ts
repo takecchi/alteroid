@@ -265,6 +265,7 @@ import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
 import { WorkerToolWatch, type WorkerToolWatchClock } from './runner-worker-tool-watch.js';
 import { RunnerFenceError } from './runner-protocol.js';
+import { definedProps } from './defined-props.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
@@ -790,13 +791,6 @@ function gitSpawnFn(
 
 export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   return new Host(options);
-}
-
-// `exactOptionalPropertyTypes` のもとで、未指定の項目を `undefined` で渡さずキーごと省く（受け手は `in` ではなく値で見るが、型が `x?: T` で `undefined` を許さないため）
-function definedProps<T extends object>(props: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
-  return Object.fromEntries(Object.entries(props).filter(([, value]) => value !== undefined)) as {
-    [K in keyof T]?: Exclude<T[K], undefined>;
-  };
 }
 
 function sameRuleSet(a: readonly string[], b: readonly string[]): boolean {
