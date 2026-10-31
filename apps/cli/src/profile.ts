@@ -52,9 +52,6 @@ interface ProfileEntryView {
   version: string;
 }
 
-// 生成型は `version` を任意のままにしている（openapi 側は別の PR）ので、CLI の型で必須に直す
-type ProfileView = Omit<ProfileState, 'entries'> & { entries: ProfileEntryView[] };
-
 interface ApplyResult {
   ok: boolean;
   error?: string;
@@ -65,7 +62,7 @@ interface ApplyResult {
 interface UpdateView {
   updatedAt: string;
   entries?: ProfileEntryView[];
-  composed?: { clone: ProfileView['clone']; runner: ProfileView['runner'] };
+  composed?: { clone: ProfileState['clone']; runner: ProfileState['runner'] };
   clone: ApplyResult;
   runners: (ApplyResult & { runnerId: string })[];
 }
@@ -86,12 +83,12 @@ function parseName(raw: string | undefined): string {
   return name;
 }
 
-async function fetchProfile(target: Target): Promise<ProfileView> {
-  return (await request(target, '/profile')) as ProfileView;
+async function fetchProfile(target: Target): Promise<ProfileState> {
+  return (await request(target, '/profile')) as ProfileState;
 }
 
 /** 書き込みの前提にする版（#4592）。読んだ行の版、読んだときに行が無ければ `null`（無いときだけ作る）。 */
-function readVersionOf(profile: ProfileView, name: string): string | null {
+function readVersionOf(profile: ProfileState, name: string): string | null {
   const row = profile.entries.find((entry) => entry.name === name);
   return row === undefined ? null : row.version;
 }
