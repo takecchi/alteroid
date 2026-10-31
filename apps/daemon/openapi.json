@@ -2676,19 +2676,38 @@
                           "type": "string"
                         },
                         "target": {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "practice"
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "practice"
+                                },
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": ["kind", "slug"],
+                              "additionalProperties": false
                             },
-                            "slug": {
-                              "type": "string",
-                              "minLength": 1
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "task"
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": ["kind"],
+                              "additionalProperties": false
                             }
-                          },
-                          "required": ["kind", "slug"],
-                          "additionalProperties": false
+                          ]
                         },
                         "humanAction": {
                           "type": "object",
@@ -8435,19 +8454,38 @@
                                 "type": "string"
                               },
                               "target": {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "const": "practice"
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "practice"
+                                      },
+                                      "slug": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["kind", "slug"],
+                                    "additionalProperties": false
                                   },
-                                  "slug": {
-                                    "type": "string",
-                                    "minLength": 1
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "task"
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["kind"],
+                                    "additionalProperties": false
                                   }
-                                },
-                                "required": ["kind", "slug"],
-                                "additionalProperties": false
+                                ]
                               },
                               "humanAction": {
                                 "type": "object",
@@ -10696,19 +10734,38 @@
                           "type": "string"
                         },
                         "target": {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "practice"
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "practice"
+                                },
+                                "slug": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": ["kind", "slug"],
+                              "additionalProperties": false
                             },
-                            "slug": {
-                              "type": "string",
-                              "minLength": 1
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "task"
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": ["kind"],
+                              "additionalProperties": false
                             }
-                          },
-                          "required": ["kind", "slug"],
-                          "additionalProperties": false
+                          ]
                         },
                         "humanAction": {
                           "type": "object",
@@ -15254,19 +15311,38 @@
                                   "type": "string"
                                 },
                                 "target": {
-                                  "type": "object",
-                                  "properties": {
-                                    "kind": {
-                                      "type": "string",
-                                      "const": "practice"
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "practice"
+                                        },
+                                        "slug": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["kind", "slug"],
+                                      "additionalProperties": false
                                     },
-                                    "slug": {
-                                      "type": "string",
-                                      "minLength": 1
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "task"
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["kind"],
+                                      "additionalProperties": false
                                     }
-                                  },
-                                  "required": ["kind", "slug"],
-                                  "additionalProperties": false
+                                  ]
                                 },
                                 "humanAction": {
                                   "type": "object",
@@ -17380,19 +17456,38 @@
                                   "type": "string"
                                 },
                                 "target": {
-                                  "type": "object",
-                                  "properties": {
-                                    "kind": {
-                                      "type": "string",
-                                      "const": "practice"
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "practice"
+                                        },
+                                        "slug": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["kind", "slug"],
+                                      "additionalProperties": false
                                     },
-                                    "slug": {
-                                      "type": "string",
-                                      "minLength": 1
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "task"
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["kind"],
+                                      "additionalProperties": false
                                     }
-                                  },
-                                  "required": ["kind", "slug"],
-                                  "additionalProperties": false
+                                  ]
                                 },
                                 "humanAction": {
                                   "type": "object",
@@ -19506,19 +19601,38 @@
                                 "type": "string"
                               },
                               "target": {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "const": "practice"
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "practice"
+                                      },
+                                      "slug": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["kind", "slug"],
+                                    "additionalProperties": false
                                   },
-                                  "slug": {
-                                    "type": "string",
-                                    "minLength": 1
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "task"
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["kind"],
+                                    "additionalProperties": false
                                   }
-                                },
-                                "required": ["kind", "slug"],
-                                "additionalProperties": false
+                                ]
                               },
                               "humanAction": {
                                 "type": "object",
@@ -21623,19 +21737,38 @@
                                 "type": "string"
                               },
                               "target": {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "const": "practice"
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "practice"
+                                      },
+                                      "slug": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["kind", "slug"],
+                                    "additionalProperties": false
                                   },
-                                  "slug": {
-                                    "type": "string",
-                                    "minLength": 1
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "task"
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": ["kind"],
+                                    "additionalProperties": false
                                   }
-                                },
-                                "required": ["kind", "slug"],
-                                "additionalProperties": false
+                                ]
                               },
                               "humanAction": {
                                 "type": "object",

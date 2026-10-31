@@ -149,6 +149,15 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
         void mutate(KEY.practice(entry.target.slug));
         void mutate(KEY.practiceVersions(entry.target.slug));
       }
+      if (entry.target?.kind === 'task') {
+        // 一覧は開閉どちらの束も取り直す。詳細（`byId`）は、指された id のものだけ（id を省いた一括の行では全部）
+        const taskId = entry.target.id;
+        void mutate((key) => {
+          if (!isKeyOfType(key, 'tasks')) return false;
+          const byId = (key as { byId?: unknown }).byId;
+          return byId === undefined || taskId === undefined || byId === taskId;
+        });
+      }
       break;
     case 'worker_wait':
       break;

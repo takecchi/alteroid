@@ -453,8 +453,19 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      *
      * **optional（版のずれへの備え）。** 無い行は「やり方の書き込みではない」とは限らない
      * （この欄が入る前のやり方の書き込みにも無い）。読む側は無い行を壊さず「印なし」として扱う。
+     *
+     * `kind: 'task'` は、task を足す・閉じる・開き直す・並べ替える・状態を変える・「続く」の印を変える
+     * 判断（クローンの `task_*` の道具と、人間の task の口）の行に付く。Web が SSE で task の一覧
+     * （と開いている詳細）を取り直す手がかりで、文面から推測する代わりに構造で持つ。
+     * `id` はその1件を指す。一括（`task_set_status_many`）のように1件を指せない行は `id` を省く（一覧だけを指す）。
+     * 欄が入る前の task の行（宛先なし）は、今までどおり読める。
      */
-    target: z.object({ kind: z.literal('practice'), slug: z.string().min(1) }).optional(),
+    target: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('practice'), slug: z.string().min(1) }),
+        z.object({ kind: z.literal('task'), id: z.string().min(1).optional() }),
+      ])
+      .optional(),
     /**
      * 人間が API から直接した操作（クローンの作ったもの・進めていたものを取り消す・書き換える）の印。
      * 文面（grounds）から拾う代わりに構造で持つ: 文言を直した瞬間に黙って外れるため。

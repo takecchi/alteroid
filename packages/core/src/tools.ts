@@ -1740,6 +1740,7 @@ async function retractTaskReopenEntry(
 ): Promise<void> {
   await appendJournalOrDrop('task_set_status', journal, {
     type: 'decision',
+    target: { kind: 'task', id: taskId },
     decision: `直前の task の開き直しの行は効いていない（開き直していない）。理由: ${why}`,
     grounds: `${taskId} の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す`,
   });
@@ -5856,6 +5857,7 @@ export function createCloneTools(context: ToolContext) {
           stores.journal,
           {
             type: 'decision',
+            target: { kind: 'task', id: entry.id },
             decision: `task を足した（${entry.id}）: ${title}`,
             grounds: `自分で task_add した。置き場所: ${describeTaskPlacement(resolved.placement)}。起点の会話: ${originId}。本文: ${body}`,
           },
@@ -5922,6 +5924,7 @@ export function createCloneTools(context: ToolContext) {
           stores.journal,
           {
             type: 'decision',
+            target: { kind: 'task', id: taskId },
             decision: `task の並びを変えた（${taskId}）: ${describeTaskPlacement(placement)}へ`,
             grounds: '自分で task_move した',
           },
@@ -6022,6 +6025,7 @@ export function createCloneTools(context: ToolContext) {
             // 行から実際に外れた記録が日誌に無い状態を作らない
             await appendJournalOrDrop('task_set_status', stores.journal, {
               type: 'decision',
+              target: { kind: 'task', id: taskId },
               decision: `開き直し（${taskId}）の間に閉じ直されていた。実際に行から外した記録: ${describeTaskClosedRecord(result.before)}`,
               grounds: `先の行の記録: ${describeTaskClosedRecord(journaledFirst)}`,
             });
@@ -6409,6 +6413,8 @@ export function createCloneTools(context: ToolContext) {
                   stores.journal,
                   {
                     type: 'decision',
+                    // 1件を指せない一括の行: id を省き、task の一覧だけを取り直させる
+                    target: { kind: 'task' },
                     decision:
                       `task を絞り込みでまとめて ${status} にした` +
                       `（${chunk.number}/${chunk.total} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
@@ -11478,7 +11484,7 @@ function renderJournalEntry(
     }
     case 'decision': {
       // 印の無い行の head は従来の `[decision]` のまま: 既存の読み手（画面・試験）の形を変えないため
-      const practice = entry.target === undefined ? '' : ` practice=${entry.target.slug}`;
+      const practice = entry.target?.kind === 'practice' ? ` practice=${entry.target.slug}` : '';
       const human =
         entry.humanAction === undefined
           ? ''
