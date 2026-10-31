@@ -381,4 +381,49 @@ describe('再接続時の取り直し', () => {
     await act(async () => {});
     expect(profileCalls(stub)).toBe(1);
   }, 10_000);
+
+  it('enabled を false から true に戻すと、戻って最初の open で表示中のキーを取り直す', async () => {
+    function ToggleProbe({ enabled }: { enabled: boolean }) {
+      const live = useJournalLive(enabled);
+      const manager = useManager(MANAGER_ID);
+      return (
+        <div>
+          <div data-testid="status">{live.status}</div>
+          <div data-testid="manager">{manager.data?.manager.managerId ?? ''}</div>
+        </div>
+      );
+    }
+    const state = { streams: 0 };
+    const stub = stubFetch((url, init) => {
+      if (url.endsWith('/journal/stream')) {
+        state.streams += 1;
+        return sse([{ event: 'open', data: { ok: true } }], {
+          keepOpen: true,
+          signal: init?.signal,
+        });
+      }
+      if (url.endsWith(`/managers/${MANAGER_ID}`)) return json(MANAGER_DETAIL);
+      return undefined;
+    });
+    const tree = (enabled: boolean) => (
+      <Providers>
+        <ToggleProbe enabled={enabled} />
+      </Providers>
+    );
+    const { rerender } = render(tree(true));
+
+    await screen.findByText(MANAGER_ID);
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('live'));
+    await act(async () => {});
+    const managerCalls = () =>
+      stub.calls.filter((u) => u.endsWith(`/managers/${MANAGER_ID}`)).length;
+    expect(managerCalls()).toBe(1);
+
+    rerender(tree(false));
+    await act(async () => {});
+    rerender(tree(true));
+    await waitFor(() => expect(state.streams).toBe(2));
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('live'));
+    await waitFor(() => expect(managerCalls()).toBeGreaterThan(1));
+  });
 });
