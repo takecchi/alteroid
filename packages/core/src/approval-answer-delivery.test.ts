@@ -619,3 +619,51 @@ describe('枠以外の失敗で終わった human_answer は、配達の印を�
     await next.clone.stop();
   });
 });
+
+describe('回答済み未配達の拾い直しで、配達印の書き込みが落ちても回答を配る', () => {
+  it('印の書き込みを1回落としても、拾い直した回答がクローンへ配られ、受信箱にも積まれる', async () => {
+    const base = createMemoryStores();
+    let failedOnce = false;
+    const jobs = new Proxy(base.jobs, {
+      get(target, prop, receiver) {
+        if (prop === 'updateApproval') {
+          return async (id: string, mutate: (current: PendingApproval) => PendingApproval | null) =>
+            target.updateApproval(id, (current) => {
+              const next = mutate(current);
+              if (
+                !failedOnce &&
+                current.answerDelivery === 'pending' &&
+                next?.answerDelivery === 'delivered'
+              ) {
+                failedOnce = true;
+                throw new Error('配達済みの印の書き込みが落ちた（テスト用）');
+              }
+              return next;
+            });
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const stores: Stores = { ...base, jobs };
+    const approval = seedApproval({
+      answeredAt: '2026-09-01T00:05:00.000Z',
+      answer: '許可します',
+      answerDelivery: 'pending',
+    });
+    await stores.jobs.putApproval(approval);
+
+    const { clone, inputs } = bootClone(stores, 'hang');
+    await waitFor(() => inputs.length > 0, '印が落ちても拾い直した回答のターンが起きる');
+
+    expect(failedOnce).toBe(true);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain('回答: 許可します');
+    const pending = (await stores.inbox.peekPending()).entries;
+    expect(pending.map((entry) => entry.event.id)).toEqual([humanAnswerEvent(approval).id]);
+
+    void clone;
+  });
+});
