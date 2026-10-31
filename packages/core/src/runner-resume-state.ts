@@ -78,12 +78,7 @@ export class RunnerResumeState {
     this.#resumeAttempt = { sessionId };
   }
 
-  // `#sessionId` と `#seed` には触れない: 前者は開き直す前と同じ値で、後者の生ログからの引き継ぎは別経路が持つ。
-  armResumeAttempt(sessionId: string): void {
-    this.#resumeAttempt = { sessionId };
-  }
-
-  // 生ログが無いときは `armResumeAttempt` と同じにする: 引き継ぐ記録が無いのに作り直しへ倒すと、記録の無い後継が空の会話から始まるため
+  // 生ログが無いときは投げた resume だけを立て、`#seed` と回転の保留には触れない: 引き継ぐ記録が無いのに作り直しへ倒すと、記録の無い後継が空の会話から始まるため
   beginRotationResume(sessionId: string, entries: unknown[] | undefined): void {
     this.#resumeAttempt = { sessionId };
     if (entries === undefined) return;
