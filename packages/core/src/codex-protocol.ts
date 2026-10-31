@@ -1063,12 +1063,6 @@ export const CODEX_SCHEMA_ENUMS: readonly CodexSchemaEnum[] = [
   { def: 'v2/CancelLoginAccountStatus', values: CODEX_CANCEL_LOGIN_STATUSES },
 ];
 
-export function isCodexServerNotificationMethod(
-  method: string,
-): method is CodexServerNotificationMethod {
-  return Object.hasOwn(CODEX_SERVER_NOTIFICATIONS, method);
-}
-
 export function isCodexServerRequestMethod(method: string): method is CodexServerRequestMethod {
   return Object.hasOwn(CODEX_SERVER_REQUESTS, method);
 }
