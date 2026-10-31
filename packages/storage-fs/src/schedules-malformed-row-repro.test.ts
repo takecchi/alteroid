@@ -188,7 +188,7 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
     const stores = createFsStores(root);
 
     await captureStderr(async () => {
-      await stores.schedules.remove('bad-kind');
+      await stores.schedules.removeIfPresent('bad-kind');
     });
 
     const raw = JSON.parse(await readFile(schedulesPath, 'utf8')) as { schedules: unknown[] };

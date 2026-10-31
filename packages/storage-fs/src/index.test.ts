@@ -1646,7 +1646,7 @@ describe('FsScheduleStore', () => {
       'schedule',
     );
     await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
 
     expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
       '2026-08-12T01:00:00.000Z',
@@ -1767,7 +1767,7 @@ describe('FsScheduleStore', () => {
     ).toBeNull();
 
     await stores.schedules.put(plan);
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
     expect(
       await stores.schedules.claimRun(
         'issue-round',
@@ -1794,7 +1794,7 @@ describe('FsScheduleStore', () => {
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
   });
 
-  it('読んでから確定するまでに remove / put が割り込んでも、古い版では確定しない', async () => {
+  it('読んでから確定するまでに removeIfPresent / put が割り込んでも、古い版では確定しない', async () => {
     await stores.schedules.put(plan);
 
     const [claimedAfterRemove] = await Promise.all([
@@ -1804,7 +1804,7 @@ describe('FsScheduleStore', () => {
         '2026-08-13T00:00:00.000Z',
         'schedule',
       ),
-      stores.schedules.remove('issue-round'),
+      stores.schedules.removeIfPresent('issue-round'),
     ]);
     if (claimedAfterRemove !== null) {
       expect(await stores.schedules.get('issue-round')).toBeNull();
@@ -1838,7 +1838,7 @@ describe('FsScheduleStore', () => {
         '2026-08-13T00:00:00.000Z',
         'schedule',
       ),
-      stores.schedules.remove('しらない'),
+      stores.schedules.removeIfPresent('しらない'),
     ]);
 
     const plans = (await stores.schedules.list()).entries;
@@ -1848,7 +1848,7 @@ describe('FsScheduleStore', () => {
 
   it('外せる', async () => {
     await stores.schedules.put(plan);
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
 
     expect((await stores.schedules.list()).entries).toEqual([]);
   });

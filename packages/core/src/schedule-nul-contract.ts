@@ -15,7 +15,6 @@ export async function verifyScheduleNulContract(store: ScheduleStore): Promise<v
 
   const readOutcomes: Array<[string, () => Promise<unknown>, unknown]> = [
     ['get(NULを含むkind)はnull', () => store.get(nulKind), null],
-    ['remove(NULを含むkind)は何も返さない', () => store.remove(nulKind), undefined],
     ['removeIfPresent(NULを含むkind)はnull', () => store.removeIfPresent(nulKind), null],
     [
       'editRequest(NULを含むkind)はnull',
@@ -70,7 +69,7 @@ export async function verifyScheduleNulContract(store: ScheduleStore): Promise<v
   if (emptyThrown === undefined) fail('NULだけの本文を受け付けた（落とすと空になる）');
   if ((await store.get(kind))?.request !== '直し') fail('NULだけの本文を断ったのに行が変わった');
 
-  await store.remove(kind);
+  await store.removeIfPresent(kind);
   if (JSON.stringify(await store.list()) !== before)
     fail('読んだだけ・断っただけなのに行が変わった');
 }

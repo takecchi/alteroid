@@ -107,7 +107,7 @@ describe('removeScheduleJournalFirst（#5234）', () => {
     stores.schedules = {
       ...real,
       async removeIfPresent(kind, options) {
-        await real.remove(kind); // 割り込み
+        await real.removeIfPresent(kind); // 割り込み
         return real.removeIfPresent(kind, options);
       },
     };
@@ -295,7 +295,7 @@ describe('schedule_remove（#5234）', () => {
     stores.schedules = {
       ...real,
       async removeIfPresent(kind, options) {
-        await real.remove(kind);
+        await real.removeIfPresent(kind);
         return real.removeIfPresent(kind, options);
       },
     };

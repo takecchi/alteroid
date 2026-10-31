@@ -101,7 +101,7 @@ export async function verifyScheduleIfMatchContract(store: ScheduleStore): Promi
   await store.put({ kind, spec, request: '後勝ちput', createdAt: t(0), updatedAt: t(8) });
   if ((await store.get(kind))?.request !== '後勝ちput') fail('ifMatch 省略の put が書けない');
 
-  await store.remove(kind);
+  await store.removeIfPresent(kind);
   const racers = [1, 2, 3, 4].map((n) =>
     conflictOf(() =>
       store.put(
@@ -143,5 +143,5 @@ export async function verifyScheduleIfMatchContract(store: ScheduleStore): Promi
   await store.put({ kind, spec, request: '後勝ちで外す', createdAt: t(0), updatedAt: t(1) });
   if ((await store.removeIfPresent(kind)) === null) fail('版を省いた removeIfPresent が外せない');
 
-  await store.remove(kind);
+  await store.removeIfPresent(kind);
 }
