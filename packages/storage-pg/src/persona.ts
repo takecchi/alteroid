@@ -141,46 +141,51 @@ export class PgPersonaStore implements PersonaStore {
       options?.humanTouchedAt === undefined ? undefined : new Date(options.humanTouchedAt);
     const touchedValue = touched === undefined ? {} : { humanTouchedAt: touched };
     const touchedSet = touchedAtSet(touched);
-    const rows =
-      ifMatch === undefined
-        ? await this.#upsert(key, body, now, touched)
-        : // 読んでから書かない: その間の別の書き手を見逃すため。比較は書き込みと同じ1文の中で行う。
-          ifMatch === null
-          ? await this.#db
-              .insert(memory)
-              .values({
-                slug: key,
-                content: body,
-                contentSha256: sha256Hex(body),
-                updatedAt: now,
-                createdAt: now,
-                ...touchedValue,
-              })
-              .onConflictDoNothing({ target: memory.slug })
-              .returning(returning)
-          : await this.#db
-              .update(memory)
-              .set({
-                content: body,
-                contentSha256: sha256Hex(body),
-                updatedAt: now,
-                ...touchedSet,
-              })
-              .where(
-                and(
-                  eq(memory.slug, key),
-                  sql`encode(sha256(convert_to(${memory.content}, 'UTF8')), 'hex') = ${ifMatch}`,
-                ),
-              )
-              .returning(returning);
-    if (ifMatch !== undefined && rows[0] === undefined) {
+    // 本文の文と派生値の更新（`#updateDerived`）を1つのトランザクションにする: 別々だと、後者だけが失敗したときに本文（と印）は変わったのに呼び手には失敗が返り、「書いていない」という応答・打ち消しの日誌と食い違うため
+    const written = await this.#db.transaction(async (tx) => {
+      const rows =
+        ifMatch === undefined
+          ? await this.#upsert(tx, key, body, now, touched)
+          : // 読んでから書かない: その間の別の書き手を見逃すため。比較は書き込みと同じ1文の中で行う。
+            ifMatch === null
+            ? await tx
+                .insert(memory)
+                .values({
+                  slug: key,
+                  content: body,
+                  contentSha256: sha256Hex(body),
+                  updatedAt: now,
+                  createdAt: now,
+                  ...touchedValue,
+                })
+                .onConflictDoNothing({ target: memory.slug })
+                .returning(returning)
+            : await tx
+                .update(memory)
+                .set({
+                  content: body,
+                  contentSha256: sha256Hex(body),
+                  updatedAt: now,
+                  ...touchedSet,
+                })
+                .where(
+                  and(
+                    eq(memory.slug, key),
+                    sql`encode(sha256(convert_to(${memory.content}, 'UTF8')), 'hex') = ${ifMatch}`,
+                  ),
+                )
+                .returning(returning);
+      if (ifMatch !== undefined && rows[0] === undefined) return null;
+      return this.#finishWrite(tx, key, slug, prior, rows);
+    });
+    if (written === null) {
       throw new MemoryConflictError(slug, await this.read(slug));
     }
-    return this.#finishWrite(key, slug, prior, rows);
+    return written;
   }
 
-  async #upsert(key: string, body: string, now: Date, touched: Date | undefined) {
-    return await this.#db
+  async #upsert(db: Db, key: string, body: string, now: Date, touched: Date | undefined) {
+    return await db
       .insert(memory)
       // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
       // ハッシュは本文と同じ1文で書く（#4739）: 別の文で後から書くと、交錯した書き手・途中の失敗で本文とずれ、保護の判定が `unknown` に倒れるため
@@ -210,6 +215,7 @@ export class PgPersonaStore implements PersonaStore {
   }
 
   async #finishWrite(
+    db: Db,
     key: string,
     slug: string,
     prior:
@@ -231,6 +237,7 @@ export class PgPersonaStore implements PersonaStore {
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
     const { describedAt, describedBytes, describedBytesAt } = await this.#updateDerived(
+      db,
       key,
       prior,
       row,
@@ -242,6 +249,7 @@ export class PgPersonaStore implements PersonaStore {
   // 基準点に `written` を使わない: `deltaBytes: 0` から始まり、この書き込み自身の増減が測れなくなるため。
   // `Buffer.byteLength` を変えない: `toDocument` の `bytes` と測り方がずれると、書いた直後から「少し変わっている」に化けるため。
   async #updateDerived(
+    db: Db,
     slug: string,
     prior:
       | {
@@ -279,7 +287,7 @@ export class PgPersonaStore implements PersonaStore {
     const describedBytes = next.describedBytes === undefined ? null : next.describedBytes;
     const describedBytesAt =
       next.describedBytesAt === undefined ? null : new Date(next.describedBytesAt);
-    await this.#db
+    await db
       .update(memory)
       // ハッシュはここで書かない（#4739）: 本文と同じ1文で書いてある。ここで書くと、交錯した別の書き手の本文に古いハッシュを重ねるため
       .set({
@@ -328,39 +336,43 @@ export class PgPersonaStore implements PersonaStore {
       when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${tail}
       else ${memory.content} || E'\n\n' || ${tail}
     end`;
-    const rows = await this.#db
-      .insert(memory)
-      // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
-      .values({
-        slug: key,
-        content: body,
-        contentSha256: sha256Hex(body),
-        updatedAt: now,
-        createdAt: now,
-      })
-      .onConflictDoUpdate({
-        target: memory.slug,
-        // ハッシュは連結した本文から同じ1文で出す（#4739）
-        set: {
-          content: appended,
-          contentSha256: sql`encode(sha256(convert_to(${appended}, 'UTF8')), 'hex')`,
+    // write と同じく、本文の文と派生値の更新を1つのトランザクションにする
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .insert(memory)
+        // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
+        .values({
+          slug: key,
+          content: body,
+          contentSha256: sha256Hex(body),
           updatedAt: now,
-        },
-      })
-      .returning({
-        slug: memory.slug,
-        content: memory.content,
-        updatedAt: memory.updatedAt,
-        createdAt: memory.createdAt,
-      });
-    const row = rows[0];
-    if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
-    const { describedAt, describedBytes, describedBytesAt } = await this.#updateDerived(
-      key,
-      prior,
-      row,
-    );
-    return toDocument({ ...row, describedAt, describedBytes, describedBytesAt });
+          createdAt: now,
+        })
+        .onConflictDoUpdate({
+          target: memory.slug,
+          // ハッシュは連結した本文から同じ1文で出す（#4739）
+          set: {
+            content: appended,
+            contentSha256: sql`encode(sha256(convert_to(${appended}, 'UTF8')), 'hex')`,
+            updatedAt: now,
+          },
+        })
+        .returning({
+          slug: memory.slug,
+          content: memory.content,
+          updatedAt: memory.updatedAt,
+          createdAt: memory.createdAt,
+        });
+      const row = rows[0];
+      if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
+      const { describedAt, describedBytes, describedBytesAt } = await this.#updateDerived(
+        tx,
+        key,
+        prior,
+        row,
+      );
+      return toDocument({ ...row, describedAt, describedBytes, describedBytesAt });
+    });
   }
 
   async remove(slug: string, options?: RemoveMemoryOptions): Promise<void> {
