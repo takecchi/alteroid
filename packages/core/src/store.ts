@@ -91,15 +91,29 @@ export function memoryVersion(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-export interface WriteMemoryOptions {
-  /** 前提の版（`memoryVersion`）。書く瞬間の版と違えば書かず `MemoryConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
+/** 書くときの前提の版。書く瞬間の版と違えば書かず `*ConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
+export interface IfMatchWriteOptions {
   ifMatch?: string | null;
 }
 
-export interface RemoveMemoryOptions {
-  /** 前提の版（`memoryVersion`）。合わなければ消さず `MemoryConflictError`。省略は無条件。 */
+/** 消すときの前提の版 `ifMatch`。合わなければ消さず各 `*ConflictError`。省略は無条件。 */
+export interface IfMatchRemoveOptions {
   ifMatch?: string;
 }
+
+/** 前提の版 `ifMatch` が、いまの値と合うか（`undefined` は常に合う）。`versionOf` は文字列のときだけ呼ぶ。 */
+export function versionMatches<T>(
+  current: T | null,
+  ifMatch: string | null | undefined,
+  versionOf: (current: T) => string,
+): boolean {
+  if (ifMatch === undefined) return true;
+  if (ifMatch === null) return current === null;
+  return current !== null && versionOf(current) === ifMatch;
+}
+
+export type WriteMemoryOptions = IfMatchWriteOptions;
+export type RemoveMemoryOptions = IfMatchRemoveOptions;
 
 /** 前提の版が合わず、書かなかった。`current` はいまの文書（無ければ `null`）。 */
 export class MemoryConflictError extends Error {
@@ -116,9 +130,7 @@ export function memoryVersionMatches(
   current: { content: string } | null,
   ifMatch: string | null | undefined,
 ): boolean {
-  if (ifMatch === undefined) return true;
-  if (ifMatch === null) return current === null;
-  return current !== null && memoryVersion(current.content) === ifMatch;
+  return versionMatches(current, ifMatch, (c) => memoryVersion(c.content));
 }
 
 export interface PersonaStore {
@@ -823,10 +835,7 @@ export function describeUnreadableScheduleEdit(error: UnreadableScheduleError): 
  * 予定の「版」は `ScheduledRequest.updatedAt`。本文の編集（`editRequest` / `put`）では進み、発火（`claimRun` / `completeRun`）では動かない
  * （`claimRun` の `expectedUpdatedAt` の照合に使う値と同じ）。時刻なので、同じミリ秒に2回書かれると区別できない。
  */
-export interface WriteScheduleOptions {
-  /** 前提の版（読んだ時の `updatedAt`）。書く瞬間の版と違えば書かず `ScheduleConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
-  ifMatch?: string | null;
-}
+export type WriteScheduleOptions = IfMatchWriteOptions;
 
 /** 前提の版が合わず、書かなかった。`current` はいまの依頼（無ければ、読めない形のときも `null`）。 */
 export class ScheduleConflictError extends Error {
@@ -843,9 +852,7 @@ export function scheduleVersionMatches(
   current: Pick<ScheduledRequest, 'updatedAt'> | null,
   ifMatch: string | null | undefined,
 ): boolean {
-  if (ifMatch === undefined) return true;
-  if (ifMatch === null) return current === null;
-  return current !== null && current.updatedAt === ifMatch;
+  return versionMatches(current, ifMatch, (c) => c.updatedAt);
 }
 
 /**
@@ -886,7 +893,7 @@ export interface ScheduleStore {
    */
   removeIfPresent(
     kind: string,
-    options?: { ifMatch?: string },
+    options?: IfMatchRemoveOptions,
   ): Promise<ScheduledRequest | 'unreadable' | null>;
 
   /**
@@ -1855,10 +1862,7 @@ export function practiceVersion(practice: Pick<Practice, 'kind' | 'title' | 'con
     .digest('hex');
 }
 
-export interface WritePracticeOptions {
-  /** 前提の版（`practiceVersion`）。書く瞬間の版と違えば書かず `PracticeConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
-  ifMatch?: string | null;
-}
+export type WritePracticeOptions = IfMatchWriteOptions;
 
 /** 前提の版が合わず、書かなかった。`current` はいまのやり方（無ければ、読めない形のときも `null`）。 */
 export class PracticeConflictError extends Error {
@@ -1870,19 +1874,14 @@ export class PracticeConflictError extends Error {
   }
 }
 
-export interface RemovePracticeOptions {
-  /** 前提の版（`practiceVersion`）。合わなければ消さず `PracticeConflictError`。省略は無条件。 */
-  ifMatch?: string;
-}
+export type RemovePracticeOptions = IfMatchRemoveOptions;
 
 /** 前提の版 `ifMatch` が、いまのやり方と合うか（`undefined` は前提なし＝常に合う）。 */
 export function practiceVersionMatches(
   current: Pick<Practice, 'kind' | 'title' | 'content'> | null,
   ifMatch: string | null | undefined,
 ): boolean {
-  if (ifMatch === undefined) return true;
-  if (ifMatch === null) return current === null;
-  return current !== null && practiceVersion(current) === ifMatch;
+  return versionMatches(current, ifMatch, practiceVersion);
 }
 
 /**
