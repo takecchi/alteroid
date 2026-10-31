@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
+import { sha256Hex } from './auth.js';
 import { pluginDirName, validatePluginFilePath, type StoredPlugin } from './plugins.js';
 import type { PluginStore } from './store.js';
 
@@ -475,10 +476,6 @@ async function readMarker(dir: string): Promise<unknown> {
   } catch {
     return null;
   }
-}
-
-function sha256Hex(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
 }
 
 /** 一覧の本文。パスの辞書順で固定し、同じ中身なら同じ本文になる。 */

@@ -1,3 +1,4 @@
+import { percentile } from './http-timing.js';
 import type { JournalEntry } from './schema.js';
 
 // `turn_timing`（#5086）を人が読む形にする。`journal_read` の1行・本文と、`self_status` の要約が同じ言い方を使う
@@ -133,12 +134,6 @@ export function describeTurnTimingBody(entry: TurnTimingEntry): string {
     lines.push(`- 消費（このターンのメインループ）: ${describeTokens(entry.tokens)}`);
   }
   return lines.join('\n');
-}
-
-function percentile(sorted: readonly number[], ratio: number): number {
-  if (sorted.length === 0) return 0;
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(ratio * sorted.length) - 1));
-  return sorted[index] ?? 0;
 }
 
 // トリガー別の行の上限。他の一覧と定数を共有しない（片方だけ直したくなったときに一緒に動かないため）

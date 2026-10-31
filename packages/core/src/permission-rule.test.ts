@@ -185,21 +185,12 @@ describe('describePermissionRuleBreadth', () => {
   });
 
   it('前方一致は、固定された先頭の語数が多いほど狭い（Issue #863 の例: gh pr merge / gh / *）', () => {
-    expect(describePermissionRuleBreadth('Bash(gh pr merge:*)')).toEqual({
-      level: 'narrow',
-      prefixWordCount: 3,
-    });
-    expect(describePermissionRuleBreadth('Bash(gh:*)')).toEqual({
-      level: 'broad',
-      prefixWordCount: 1,
-    });
+    expect(describePermissionRuleBreadth('Bash(gh pr merge:*)')).toEqual({ level: 'narrow' });
+    expect(describePermissionRuleBreadth('Bash(gh:*)')).toEqual({ level: 'broad' });
   });
 
   it('2語の前方一致は medium', () => {
-    expect(describePermissionRuleBreadth('Bash(gh release:*)')).toEqual({
-      level: 'medium',
-      prefixWordCount: 2,
-    });
+    expect(describePermissionRuleBreadth('Bash(gh release:*)')).toEqual({ level: 'medium' });
   });
 
   it('境界値: 3語で narrow、2語で medium、1語で broad', () => {
@@ -211,7 +202,6 @@ describe('describePermissionRuleBreadth', () => {
   it('語数の多い前方一致（4語以上）も narrow のまま（narrow は下限であって上限ではない）', () => {
     expect(describePermissionRuleBreadth('Bash(gh release edit --draft:*)')).toEqual({
       level: 'narrow',
-      prefixWordCount: 4,
     });
   });
 
@@ -224,10 +214,7 @@ describe('describePermissionRuleBreadth', () => {
   });
 
   it('matchPermissionRule と同じ語境界の意味論を使う——連続する空白も1つの区切りとして数える', () => {
-    expect(describePermissionRuleBreadth('Bash(gh  release:*)')).toEqual({
-      level: 'medium',
-      prefixWordCount: 2,
-    });
+    expect(describePermissionRuleBreadth('Bash(gh  release:*)')).toEqual({ level: 'medium' });
   });
 });
 
