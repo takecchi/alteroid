@@ -3342,6 +3342,31 @@ describe('recordTrialSuccess（#5989: 試しで通った鍵の扱いを直列の
     }
   });
 
+  it('⚠️ 現役を読んだ後、選び直しの読みまでの間に現役が別の鍵へ替わったら、替わった後の現役の記録は消さない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await coolBoth(h);
+    const store = h.stores.tokens;
+    const realReadActive = store.readActive.bind(store);
+    let reads = 0;
+    store.readActive = async () => {
+      const active = await realReadActive();
+      reads += 1;
+      if (reads === 1) {
+        // 直列のキューの外の書き手（人間の PUT /tokens など）が、2回の読みの間に現役を替える
+        await store.writeActive({ tokenId: 'tok-b', generation: 2, rotatedAt: AT });
+      }
+      return active;
+    };
+
+    const outcome = await h.rotator.recordTrialSuccess({ tokenId: 'tok-a' });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.recovered).toBeUndefined();
+    expect(await isCooling(h, 'tok-b')).toBe(true);
+  });
+
   it('現役の行が消えていれば、試しの成功でも回さない（ターンの成功と同じ扱い）', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
