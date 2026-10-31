@@ -17,3 +17,11 @@ export function formatMinutesAgo(elapsedMs: number): string {
   if (hours < 24) return `${hours}時間${minutes % 60}分前`;
   return `${Math.floor(hours / 24)}日${hours % 24}時間前`;
 }
+
+// 日へは繰り上げない（`25時間3分`）: 背景処理待ち・消えた runner のように、時間で数える待ちの長さを言うため
+export function formatDurationMinutes(elapsedMs: number): string {
+  const totalMinutes = Math.floor(elapsedMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours < 1 ? `${String(minutes)}分` : `${String(hours)}時間${String(minutes)}分`;
+}

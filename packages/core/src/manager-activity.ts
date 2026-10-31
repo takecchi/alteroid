@@ -1,5 +1,6 @@
 import { assertNever } from './assert-never.js';
 import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
+import { formatMinutesAgo } from './format-elapsed.js';
 import { describeValidity, statusValidity } from './inbox-validity.js';
 import type { JobStatus } from './schema.js';
 
@@ -115,17 +116,4 @@ export function describeReportDrift(input: {
     `${describeValidity(validity, input.managerId, '台帳へ書かれた')} ` +
     `${ageClause}いま走っているターンの中身ではない。`
   );
-}
-
-// `clone.ts` の `formatElapsed` を共通化しない: あちらは private で、丸め方の粒度（秒単位から／分単位から）が違い、共通化すると字面が変わる。
-function formatMinutesAgo(elapsedMs: number): string {
-  const minutes = Math.floor(elapsedMs / 60000);
-  if (minutes < 1) return '1分未満前';
-  if (minutes < 60) return `${minutes}分前`;
-  const hours = Math.floor(minutes / 60);
-  const remainderMinutes = minutes % 60;
-  if (hours < 24) return `${hours}時間${remainderMinutes}分前`;
-  const days = Math.floor(hours / 24);
-  const remainderHours = hours % 24;
-  return `${days}日${remainderHours}時間前`;
 }
