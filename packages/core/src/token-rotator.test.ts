@@ -3364,6 +3364,7 @@ describe('recordTrialSuccess（#5989: 試しで通った鍵の扱いを直列の
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
     expect(outcome.recovered).toBeUndefined();
+    expect(outcome.why).toContain('試しの成功を観測したが、世代が合わない');
     expect(await isCooling(h, 'tok-b')).toBe(true);
   });
 

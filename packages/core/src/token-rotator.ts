@@ -82,8 +82,8 @@ export type TokenVerdictOrigin =
       observedBy?: { tokenId: string; generation: number };
     }
   | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } }
-  // 世代を名乗らない: 回し手が自分の直列のキューの中で現役を読んで渡すので、照合する相手が常に今の現役のため
-  | { source: 'trial' };
+  // 世代を名乗る: 直列のキューの外に現役の指名を書く経路（PUT /tokens など）があり、読みと選び直しの間に現役が替わりうるため
+  | { source: 'trial'; observedBy: { tokenId: string; generation: number } };
 
 export type TokenRotationOutcome =
   | {
@@ -880,7 +880,13 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         if (active !== null && active.tokenId === input.tokenId) {
           return reconsiderLocked({
             reason: 'trial_succeeded',
-            current: { verdict: { verdict: 'usable' }, origin: { source: 'trial' } },
+            current: {
+              verdict: { verdict: 'usable' },
+              origin: {
+                source: 'trial',
+                observedBy: { tokenId: active.tokenId, generation: active.generation },
+              },
+            },
           });
         }
         await recordTrialVerdictLocked({ tokenId: input.tokenId, verdict: { verdict: 'usable' } });
@@ -1030,8 +1036,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       };
     }
 
-    // 世代の門は turn_success だけ: 回った後に届いた前の世代の成功が、未試行の新しい現役の記録を usable にしうるため
-    if (current !== undefined && current.origin.source === 'turn_success') {
+    // 世代の門は turn_success と trial に掛ける: 回った後に届いた前の世代の成功が、未試行の新しい現役の記録を usable にしうるため
+    if (
+      current !== undefined &&
+      (current.origin.source === 'turn_success' || current.origin.source === 'trial')
+    ) {
       const freshness = observationFreshness(active, current.origin.observedBy);
       if (freshness !== 'current') {
         return {
@@ -1039,7 +1048,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           signal: 'none' as const,
           reason,
           why:
-            'ターンの成功を観測したが、世代が合わない（もう回した後、' +
+            `${current.origin.source === 'trial' ? '試しの成功' : 'ターンの成功'}を観測したが、世代が合わない（もう回した後、` +
             'あるいはまだ一度も試していない現役についての成功なので、捨てる）',
         };
       }
