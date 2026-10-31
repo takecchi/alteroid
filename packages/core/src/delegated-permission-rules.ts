@@ -130,10 +130,7 @@ export interface DelegatedPermissionRuleService {
   // `ManagerPool` が購読して押し込みの帳面に積む（`McpServerService.onPushed` と同じ）。
   // `unnamed` は配る先の名簿を引けず runner を名指せなかった回（`results` の `runnerId` は空）。受け取る側が知っている runner 全部への失敗として扱う。
   onPushed?(
-    listener: (
-      results: readonly PermissionRulesRunnerResult[],
-      scope?: { unnamed: true },
-    ) => void,
+    listener: (results: readonly PermissionRulesRunnerResult[], scope?: { unnamed: true }) => void,
   ): () => void;
 }
 
