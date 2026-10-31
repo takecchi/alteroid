@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync, readdirSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -72,5 +73,35 @@ describe('listGitScannableFiles（Issue #1817）', () => {
     execFileSync('git', ['init', '-q'], { cwd: dir, env: gitChildEnv() });
     const files = listGitScannableFiles({ cwd: dir }) as string[];
     expect(files).toEqual([]);
+  });
+});
+
+// 各検査の試験が #1817 を書き写さずに済むのは、検査がこの部品だけを通ると保証するこの歯があるため。
+// `verify-core.mjs` は指紋（`-co`）と `-v`（assume-unchanged の検出）を自前で取るので外す。
+const DIRECT_LS_FILES_ALLOWED = ['git-scannable-files-core.mjs', 'verify-core.mjs'];
+
+export function directLsFilesCallers(sources: { name: string; content: string }[]): string[] {
+  return sources
+    .filter(({ name }) => !DIRECT_LS_FILES_ALLOWED.includes(name))
+    .filter(({ content }) => /['"]ls-files['"]/.test(content))
+    .map(({ name }) => name);
+}
+
+describe('scripts/ の検査は `git ls-files` を直に呼ばない（Issue #1817）', () => {
+  it('実際の scripts/*.mjs に直に呼ぶものは無い', () => {
+    const dir = import.meta.dirname;
+    const sources = readdirSync(dir)
+      .filter((name) => name.endsWith('.mjs'))
+      .map((name) => ({ name, content: readFileSync(join(dir, name), 'utf8') }));
+    expect(sources.length).toBeGreaterThan(10);
+    expect(directLsFilesCallers(sources)).toEqual([]);
+  });
+
+  it('（陽性の対照）直に呼ぶ形は見つける', () => {
+    const sources = [
+      { name: 'check-new.mjs', content: "spawnSync('git', ['ls-files', '-z'])" },
+      { name: 'check-ok.mjs', content: "import { listGitScannableFiles } from './x.mjs';" },
+    ];
+    expect(directLsFilesCallers(sources)).toEqual(['check-new.mjs']);
   });
 });

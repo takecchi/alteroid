@@ -1,13 +1,9 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { writeFile as writeFileAsync } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { makeTempDir, makeTempDirSync } from '../vitest.tmpdir.js';
-
-import { gitChildEnv } from './git-child-env.js';
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
@@ -113,49 +109,5 @@ describe('実リポジトリの検査（listScannableFiles が返す対象全フ
             '\n除外リストは無い（#260）。表記を読める形へ書き換えて解消するか、' +
             '除外が本当に必要ならこのテストと doc の両方を更新すること。',
     ).toEqual([]);
-  });
-});
-
-describe('listScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
-  async function makeRepoWithUntrackedFile(): Promise<string> {
-    const dir = await makeTempDir('check-tracked-nul-bytes-1817-');
-    const git = (...args: string[]) =>
-      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
-    git('init', '-q');
-    git('config', 'user.email', 'test@example.invalid');
-    git('config', 'user.name', 'test');
-    await writeFileAsync(join(dir, 'tracked.txt'), 'tracked\n');
-    git('add', '-A');
-    git('commit', '-qm', 'init');
-    await writeFileAsync(
-      join(dir, 'new-untracked.txt'),
-      Buffer.from(['a', NUL_CHAR, 'b'].join('')),
-    );
-    return dir;
-  }
-
-  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
-    const dir = await makeRepoWithUntrackedFile();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: gitChildEnv(),
-    })
-      .split('\0')
-      .filter((p) => p.length > 0);
-    expect(oldForm).not.toContain('new-untracked.txt');
-  });
-
-  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れ、NUL 混入を検出する', async () => {
-    const dir = await makeRepoWithUntrackedFile();
-    const paths = listScannableFiles(dir) as string[];
-    expect(paths).toContain('new-untracked.txt');
-
-    const files = paths.map((path) => ({
-      path,
-      content: readFileSync(join(dir, path), 'utf8'),
-    }));
-    const hits = findNulByteHits(files);
-    expect(hits.map((h: { path: string }) => h.path)).toContain('new-untracked.txt');
   });
 });
