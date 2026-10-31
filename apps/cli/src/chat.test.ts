@@ -791,7 +791,7 @@ describe('renderManagerList', () => {
         'まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること',
       );
       expect(text).toContain('失われるのは会話だけではない');
-      // `STALE_TOKEN_RESTART_ADVICE` の逐語は生成元の外では禁止（`pnpm check:stale-token-restart-advice`）なので、CLI は言い換える
+      // `STALE_TOKEN_RESTART_ADVICE` の逐語は生成元の外では禁止（`pnpm check:advice-single-source`）なので、CLI は言い換える
       expect(text).not.toContain('manager_start');
       expect(text).toContain('/msg');
     });

@@ -2900,7 +2900,7 @@ function cgroupEventsLine(
 }
 
 // 世代の生の番号は出さない: 人間の次の一手は増えない。`reattached-across-restart` の対処は CLI の語へ言い換える:
-// core の助言定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語を複製すると `pnpm check:stale-token-restart-advice` に引っかかる。
+// core の助言定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語を複製すると `pnpm check:advice-single-source` に引っかかる。
 function tokenGenerationUnknownReasonLine(
   tokenGenerationUnknownReason: ManagerListItem['tokenGenerationUnknownReason'],
 ): string | null {
