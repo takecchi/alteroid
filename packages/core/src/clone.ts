@@ -1883,18 +1883,40 @@ class Clone implements CloneHost {
       droppedFromDelivery > 0 ? droppedFromDelivery : await this.dropQueuedInboxEvents(ids);
     if (dropped === 0) return this.#interruptInFlight(isTarget);
     for (const id of ids) this.#heldForUsage.delete(id);
+    const closedTasks = await this.#closeWithdrawnTasks(ids);
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'outbound',
       text:
         `${EXCHANGE_KIND_DECISION_PREFIX}人間の求めで、順番待ちだった発言（clientMessageId ` +
-        `${target.clientMessageId}）を取り下げた。ターンを起こさず配らない。発言の行は日誌に残してある`,
+        `${target.clientMessageId}）を取り下げた。ターンを起こさず配らない。発言の行は日誌に残してある` +
+        (closedTasks > 0 ? '。同じ id の Task も取り下げ（cancelled）で閉じた' : ''),
       conversationId: target.conversationId,
       // 会話の読み直しが「この発言は取り下げた」と言う根拠（文面から id を読まない）
       withdrawnClientMessageId: target.clientMessageId,
     });
     return 'withdrawn';
+  }
+
+  // 取り下げた発言の Task（受理のとき `#openHumanTask` が同じ id で開いたもの）を取り下げで閉じる。
+  // 追加が進行中なら済むのを待つ。閉じ済み・無いものは何もしない。失敗しても取り下げは落とさず、stderr に残す
+  async #closeWithdrawnTasks(ids: readonly string[]): Promise<number> {
+    await Promise.all([...this.#taskOpens]);
+    let closed = 0;
+    for (const id of ids) {
+      try {
+        const result = await this.#stores.tasks.setStatus(id, 'cancelled', {
+          reason: '人間が発言を取り下げたため（配られる前に取り下げた）',
+          by: 'human',
+          at: new Date().toISOString(),
+        });
+        if (result.kind === 'changed') closed += 1;
+      } catch (error) {
+        noteDroppedRecord('取り下げた発言の Task の閉じ', id, error);
+      }
+    }
+    return closed;
   }
 
   async #stopRunningTurn(): Promise<'interrupted' | 'idle'> {
