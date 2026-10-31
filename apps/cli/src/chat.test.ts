@@ -3599,6 +3599,30 @@ describe('chat の /journal', () => {
   });
 
   describe('issue #2016 — worker_wait / turn_usage / context_usage / inbox_flow の要約', () => {
+    it('診断の行は 80 字を超えても切らずに出す（末尾の数字が読めなくなるため）', async () => {
+      const read = captureStdout();
+      const entry = {
+        id: 'j-ww-long',
+        at: '2026-09-01T00:00:00.000Z',
+        type: 'worker_wait',
+        openedAt: '2026-08-31T23:00:00.000Z',
+        tasks: 3,
+        turns: 10,
+        byCause: { input: 1, notification: 2, continuation: 7 },
+        toolless: 4,
+        notifications: 2,
+        submits: 1,
+        settled: false,
+      };
+      const { client } = stubClient({ journalEntries: [entry] });
+
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
+
+      const full = summarizeJournalEntry(entry as JournalEntry);
+      expect(full.length).toBeGreaterThan(80);
+      expect(read()).toContain(`[worker_wait] ${full}\n`);
+    });
+
     it('worker_wait は空欄ではなく、待った内訳を出す', async () => {
       const read = captureStdout();
       const { client } = stubClient({

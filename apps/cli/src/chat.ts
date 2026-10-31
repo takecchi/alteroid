@@ -40,6 +40,7 @@ import {
   CGROUP_EVENTS_UNKNOWN_NOTE,
   formatCgroupEventsNote,
 } from '@alteroid/core/cgroup-events-format';
+import { JOURNAL_DIAGNOSTICS_TYPES } from '@alteroid/core/journal-diagnostics-format';
 import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
@@ -3800,10 +3801,13 @@ function formatEntryFull(
 }
 
 // 要約は共有の `summarizeJournalEntry`（Web と同じ文）。端末の1行に収める切り詰めだけ CLI で掛ける。
-// github_observation は切らない: 末尾の CI の内訳が、0 件と「観測していない」を見分ける所のため。
+// github_observation と診断の行は切らない: 末尾の数字・CI の内訳が欠けると読めなくなるため（従来も切っていない）。
 function summaryLine(entry: JournalEntry): string {
   const line = summarizeJournalEntry(entry) ?? '';
-  return oneLine(line, entry.type === 'github_observation' ? Infinity : 80);
+  const whole =
+    entry.type === 'github_observation' ||
+    (JOURNAL_DIAGNOSTICS_TYPES as readonly string[]).includes(entry.type);
+  return oneLine(line, whole ? Infinity : 80);
 }
 
 function summarizeText(value: string): string {
