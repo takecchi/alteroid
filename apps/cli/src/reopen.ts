@@ -1,5 +1,7 @@
 import { stdout } from './terminal-out.js';
 
+import { describeReopenResult } from '@alteroid/logic';
+
 import { createClient, type DaemonClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeFailedResponse } from './format.js';
@@ -68,31 +70,4 @@ export async function requestReopen(
     );
   }
   return (await response.json()) as ReopenResult;
-}
-
-/** 応答の3値を人間の言葉にする。 */
-export function describeReopenResult(result: ReopenResult): string {
-  const lines: string[] = [];
-  switch (result.outcome) {
-    case 'deferred':
-      lines.push(
-        'いまのターンが終わった境界で、新しいセッションに開き直す（走っているターンは最後まで走る）。',
-      );
-      break;
-    case 'now':
-      lines.push('いまはセッションが無かった。次の合図から新しいセッションで始まる。');
-      break;
-    case 'unsupported':
-      lines.push('このデーモンのクローンは、セッションを開き直す口を持っていない。');
-      return lines.join('\n');
-  }
-  if (result.previousSessionId !== undefined && result.previousSessionId !== null) {
-    lines.push(`古いセッション id: ${result.previousSessionId}`);
-  }
-  if (result.runningManagers !== undefined && result.runningManagers > 0) {
-    lines.push(
-      `走っているマネージャーが ${String(result.runningManagers)} 本いる。マネージャーは止めていない。その報告は新しいセッションへ届く。`,
-    );
-  }
-  return lines.join('\n');
 }

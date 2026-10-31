@@ -30,10 +30,9 @@ import {
   useResetWorkspace,
   useShutdownDaemon,
   useVacateRunner,
-  type ReopenCloneSessionResult,
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
-import { formatDateTime, redactError } from '@alteroid/logic';
+import { describeReopenResult, formatDateTime, redactError } from '@alteroid/logic';
 import type {
   ClonePluginLoadObservation,
   RunnerPluginLoadObservation,
@@ -622,40 +621,6 @@ function ShutdownDaemon() {
       />
     </Card>
   );
-}
-
-/**
- * `POST /clone/session/reopen` の応答を人間の言葉にする。
- *
- * CLI の `describeReopenResult`（`apps/cli/src/reopen.ts`）と文言を1文字も違えていない。
- * 二重管理である——apps 同士はパッケージを共有しない（共有先は `packages/` だけ）ので、
- * 揃える手段がここへ書き写す以外に無い（`chat.tsx` の `describeCloneInterruptOutcome` と同じ事情）。
- * CLI 側の文言を直したらここも直すこと。
- */
-export function describeReopenResult(result: ReopenCloneSessionResult): string {
-  const lines: string[] = [];
-  switch (result.outcome) {
-    case 'deferred':
-      lines.push(
-        'いまのターンが終わった境界で、新しいセッションに開き直す（走っているターンは最後まで走る）。',
-      );
-      break;
-    case 'now':
-      lines.push('いまはセッションが無かった。次の合図から新しいセッションで始まる。');
-      break;
-    case 'unsupported':
-      lines.push('このデーモンのクローンは、セッションを開き直す口を持っていない。');
-      return lines.join('\n');
-  }
-  if (result.previousSessionId !== undefined && result.previousSessionId !== null) {
-    lines.push(`古いセッション id: ${result.previousSessionId}`);
-  }
-  if (result.runningManagers !== undefined && result.runningManagers > 0) {
-    lines.push(
-      `走っているマネージャーが ${String(result.runningManagers)} 本いる。マネージャーは止めていない。その報告は新しいセッションへ届く。`,
-    );
-  }
-  return lines.join('\n');
 }
 
 const REOPEN_REASON_MAX = 500;

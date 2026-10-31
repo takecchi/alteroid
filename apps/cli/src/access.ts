@@ -15,6 +15,7 @@ import {
 } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
+import { describeGrantedBy } from '@alteroid/logic';
 
 /**
  * 許可の有無の2値だけを持つ。「chat は可・記憶の編集は不可」のような行為別のスコープを足さない:
@@ -31,16 +32,6 @@ interface AccountView {
   grantedBy: string | null;
   granted: boolean;
   identities: { provider: string; email: string | null; lastLoginAt: string }[];
-}
-
-/**
- * Web UI の `describeGrantedBy()`（`apps/web/app/routes/access.tsx`）と同じ3分岐・同じ文言。
- * 片方を変えるならもう片方も変える。id は名前へ解決しない: そのアカウントが一覧から既に消えていることがありうるため。
- */
-function describeGrantedBy(grantedBy: string | null): string {
-  if (grantedBy === null) return '不明';
-  if (grantedBy === 'operator') return '実行環境の持ち主';
-  return grantedBy;
 }
 
 export async function accessListCommand(now: number = Date.now()): Promise<void> {

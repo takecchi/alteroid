@@ -12,6 +12,7 @@ import {
   inboxSourceLabel,
   inboxTypeLabel,
   localDateTimeToIso,
+  splitList,
 } from '@alteroid/logic';
 import type {
   InboxBacklog,
@@ -41,13 +42,6 @@ export default function Inbox() {
 }
 
 const INBOX_TYPE_ORDER = INBOX_TYPES;
-
-function splitList(value: string): string[] {
-  return value
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-}
 
 // 集計をやり直さない: 集計は core の summarizeInboxBacklog 1箇所のため
 function InboxBacklogCard() {
