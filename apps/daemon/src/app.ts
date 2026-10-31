@@ -1519,14 +1519,21 @@ function callbackPage(title: string, detail: string, autoClose = false): string 
   }</html>`;
 }
 
+// 行の要約（本文を載せない）。409 の `current`・更新の応答・GET が同じ欄を同じ順で返す。
+function profileEntryDigest(entry: EnvProfileEntry) {
+  return {
+    name: entry.name,
+    scope: entry.scope,
+    updatedAt: entry.updatedAt,
+    sha256: fingerprintOf(entry.script),
+    bytes: Buffer.byteLength(entry.script),
+    version: profileEntryVersionOf(entry),
+  };
+}
+
 function describeProfileEntries(entries: readonly EnvProfileEntry[]) {
   return {
-    entries: entries.map((entry) => ({
-      ...entry,
-      sha256: fingerprintOf(entry.script),
-      bytes: Buffer.byteLength(entry.script),
-      version: profileEntryVersionOf(entry),
-    })),
+    entries: entries.map((entry) => ({ ...entry, ...profileEntryDigest(entry) })),
     ...composedFingerprints(entries),
   };
 }
@@ -1584,16 +1591,8 @@ async function mutateProfile(
       '実行環境プロファイルの打ち消しの日誌',
       spec.route,
     );
-    // `detail` に載せるのはこちらが組んだ文だけで、送られてきた本文は載せない。
-    if (error instanceof ProfileInputError) {
-      return {
-        ok: false,
-        status: 400,
-        body: { error: 'プロファイルの入力が不正（保存していない）', detail: error.message },
-      };
-    }
-    // 文は欄名と固定の説明だけで、値を載せない。
-    if (error instanceof NulNotAllowedError) {
+    // `detail` に載せるのはこちらが組んだ文だけ（`NulNotAllowedError` の文は欄名と固定の説明だけ）で、送られてきた本文・値は載せない。
+    if (error instanceof ProfileInputError || error instanceof NulNotAllowedError) {
       return {
         ok: false,
         status: 400,
@@ -1612,17 +1611,7 @@ async function mutateProfile(
             current === null
               ? '読んだ後に、その行は消されている（または読んだ後に作られた行ではない）'
               : `読んだ後に、行 ${current.name} が変わっている・作られている`,
-          current:
-            current === null
-              ? null
-              : {
-                  name: current.name,
-                  scope: current.scope,
-                  updatedAt: current.updatedAt,
-                  sha256: fingerprintOf(current.script),
-                  bytes: Buffer.byteLength(current.script),
-                  version: profileEntryVersionOf(current),
-                },
+          current: current === null ? null : profileEntryDigest(current),
         }),
       };
     }
@@ -1681,19 +1670,11 @@ async function mutateProfile(
     spec.route,
   );
 
-  const described = describeProfileEntries(entries);
   return {
     ok: true,
     body: profileUpdateResponseSchema.parse({
       updatedAt: result.updatedAt ?? new Date().toISOString(),
-      entries: described.entries.map((entry) => ({
-        name: entry.name,
-        scope: entry.scope,
-        updatedAt: entry.updatedAt,
-        sha256: entry.sha256,
-        bytes: entry.bytes,
-        version: entry.version,
-      })),
+      entries: entries.map(profileEntryDigest),
       composed,
       // 成功でも `set -x` の出力（値入り）は `output` に載るので伏せる。
       clone:
@@ -2046,6 +2027,50 @@ export function createApp(deps: AppDeps) {
   if (deps.workerToolEvents !== undefined) {
     topologyActivity.attachWorkerTools(deps.workerToolEvents.subscribe);
   }
+  // `POST /events` と `POST /events/:source` の受け付けの本体（結び付け → 永続化 → 受け付けた印）。値を返すだけで、状態番号は route が決める。
+  async function acceptExternal(spec: {
+    principal: Principal;
+    source: string;
+    payload: unknown;
+    attachmentIds: readonly string[] | undefined;
+    onPersisted?: (id: string, at: string) => Promise<void>;
+  }) {
+    const { principal, source } = spec;
+    const id = randomUUID();
+    const attached = await bindEventAttachments(spec.attachmentIds, id, principal);
+    if (!attached.ok) {
+      return { kind: 'attach-failed' as const, body: attached.body, status: attached.status };
+    }
+    const at = new Date().toISOString();
+    // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
+    const outcome = await postExternalPersisted(
+      {
+        type: 'external',
+        id,
+        at,
+        source,
+        payload: spec.payload,
+        ...(principal.kind === 'integration'
+          ? { via: { keyId: principal.keyId, name: principal.name } }
+          : {}),
+        ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+      },
+      attached.refs,
+    );
+    if (outcome === 'unavailable') return { kind: 'unavailable' as const };
+    await spec.onPersisted?.(id, at);
+    // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
+    if (principal.kind === 'integration') {
+      topologyActivity.recordExternal({
+        keyId: principal.keyId,
+        name: principal.name,
+        source,
+        at,
+      });
+    }
+    return { kind: 'accepted' as const, id };
+  }
+
   const topologyStorage = createStorageHealthTracker({
     label:
       deps.storage === undefined
@@ -5707,37 +5732,16 @@ export function createApp(deps: AppDeps) {
         if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const accept = async (onPersisted?: (id: string, at: string) => Promise<void>) => {
-          const id = randomUUID();
-          const attached = await bindEventAttachments(attachmentIds, id, principal);
-          if (!attached.ok) return c.json(attached.body, attached.status);
-          const at = new Date().toISOString();
-          // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
-          const outcome = await postExternalPersisted(
-            {
-              type: 'external',
-              id,
-              at,
-              source,
-              payload,
-              ...(principal.kind === 'integration'
-                ? { via: { keyId: principal.keyId, name: principal.name } }
-                : {}),
-              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-            },
-            attached.refs,
-          );
-          if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-          await onPersisted?.(id, at);
-          // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
-          if (principal.kind === 'integration') {
-            topologyActivity.recordExternal({
-              keyId: principal.keyId,
-              name: principal.name,
-              source,
-              at,
-            });
-          }
-          return c.json({ ok: true as const, id });
+          const accepted = await acceptExternal({
+            principal,
+            source,
+            payload,
+            attachmentIds,
+            onPersisted,
+          });
+          if (accepted.kind === 'attach-failed') return c.json(accepted.body, accepted.status);
+          if (accepted.kind === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+          return c.json({ ok: true as const, id: accepted.id });
         };
         if (idempotencyKey === undefined) return accept();
         const scope = eventReceiptScopeOf(principal);
@@ -5816,34 +5820,10 @@ export function createApp(deps: AppDeps) {
         } catch {
           // JSON でなければ本文のまま渡す
         }
-        const id = randomUUID();
-        const attached = await bindEventAttachments(attachmentIds, id, principal);
-        if (!attached.ok) return c.json(attached.body, attached.status);
-        const at = new Date().toISOString();
-        const outcome = await postExternalPersisted(
-          {
-            type: 'external',
-            id,
-            at,
-            source,
-            payload,
-            ...(principal.kind === 'integration'
-              ? { via: { keyId: principal.keyId, name: principal.name } }
-              : {}),
-            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-          },
-          attached.refs,
-        );
-        if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-        if (principal.kind === 'integration') {
-          topologyActivity.recordExternal({
-            keyId: principal.keyId,
-            name: principal.name,
-            source,
-            at,
-          });
-        }
-        return c.json({ ok: true, id });
+        const accepted = await acceptExternal({ principal, source, payload, attachmentIds });
+        if (accepted.kind === 'attach-failed') return c.json(accepted.body, accepted.status);
+        if (accepted.kind === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+        return c.json({ ok: true, id: accepted.id });
       },
     )
 
