@@ -183,7 +183,12 @@ describe('作業者の落ちの印は、デーモンの再起動を跨いで残�
 
     expect(nudged).toEqual([JOB.id]);
     expect(after.fake.delivered).toEqual([NUDGE_TEXT]);
+    // 起こしたら台帳の印も下り、次の再起動では起こさない
+    expect((await stores.jobs.listJobs())[0]?.workerLimitStopped).toBeUndefined();
     await after.pool.stop();
+    const again = await open(stores, async () => 'ready');
+    expect(await again.pool.resumeStoppedByUsage()).toEqual([]);
+    await again.pool.stop();
   });
 
   it('⭐ 回転前の鍵で落ちてターンの終わりに現役が ready でなかった担当は、再起動の後に ready になったら周回の掃きで起こす', async () => {
