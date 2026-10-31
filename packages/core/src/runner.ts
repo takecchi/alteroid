@@ -2510,6 +2510,8 @@ interface PeerBinding {
   parked: boolean;
   heldAsks: { run: () => void; deny: (message: string) => void }[];
   heldStops: PeerTurnResult[];
+  // 畳み（`keepPeers`）が始まってから預け終えるまでの間だけ立つ: この間（使用量の読み出しの待ち）に届いた止まりどころを、セッションが `stopped` で黙って捨てず `heldStops` へ積む。`parked` とは別にする: `parked` を早く立てると、その間の確認（`askApproval`）まで `heldAsks` へ溜まり、`#settleAll` の順序が変わるため
+  holdingStops?: boolean;
   /** peer の rollout の読み済みの位置を持つ。結びと一緒に付け替え先へ渡る（作り直すと、読み済みの位置が消えて全行を預け直す）。 */
   rollouts: PeerRolloutMirror;
   /** 付け替え先が主の記録の鍵を知るまでの間、前のセッションが知っていた値を引き継ぐ。 */
@@ -3194,6 +3196,12 @@ class RunnerSession {
     options: { captureUnpushedWork?: boolean; keepPeers?: boolean } = {},
   ): Promise<void> {
     this.#sdkSession.markStopped();
+    // 預け終えるまでの間に届く背景 peer の止まりどころは、捨てずに預かる（下の `parked = true` で降ろす）
+    const parking =
+      options.keepPeers === true &&
+      this.#peerBroker !== undefined &&
+      this.#peerBinding !== undefined;
+    if (parking && this.#peerBinding !== undefined) this.#peerBinding.holdingStops = true;
 
     // `#settleAll` より前に状態を控える: 控えずに `#status` を読むと確認が解放された後の `running` を報告が名乗ってしまうため
     const statusAtStop = this.#sdkSession.status;
@@ -3216,12 +3224,9 @@ class RunnerSession {
     this.#sdkSession.wakeInput();
     // 鍵の付け替えのための畳み（`keepPeers`）では peer を閉じずに預ける（#4734）: peer は担当の Claude の鍵と関係の無い資格で走っていて、閉じると担当が持っていた作業者が黙って消えるため。
     // 人間・クローンの停止と器の畳みでは今どおり閉じる
-    if (
-      options.keepPeers === true &&
-      this.#peerBroker !== undefined &&
-      this.#peerBinding !== undefined
-    ) {
+    if (parking && this.#peerBroker !== undefined && this.#peerBinding !== undefined) {
       this.#peerBinding.parked = true;
+      this.#peerBinding.holdingStops = false;
       const parked: ParkedPeers = { broker: this.#peerBroker, binding: this.#peerBinding };
       this.#peerBroker = undefined;
       this.#peerBinding = undefined;
@@ -3504,7 +3509,7 @@ class RunnerSession {
       // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす
       onBackgroundStop: (result) => {
         if (binding.collectStop !== undefined) binding.collectStop(result);
-        else if (binding.parked) binding.heldStops.push(result);
+        else if (binding.parked || binding.holdingStops === true) binding.heldStops.push(result);
         else binding.session.#onPeerBackgroundStop(result);
       },
       // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため
