@@ -1666,14 +1666,7 @@ class Host implements RunnerHost {
     const spawnedPids = new Set<number>();
     const session = new RunnerSession({
       onPeersParked: (parked) => this.#parkPeers(managerId, parked),
-      onCloseRescue: (rescue) => {
-        this.#closeRescues.add(rescue);
-        // `finally` の派生を捨てない（#5972）: `rescue` が拒否すると派生の拒否は受け手が無い
-        const forget = (): void => {
-          this.#closeRescues.delete(rescue);
-        };
-        rescue.then(forget, forget);
-      },
+      onCloseRescue: (rescue) => trackUntilSettled(this.#closeRescues, rescue),
       managerId,
       request,
       cwd: this.#resolveCwd(cwd),
@@ -2166,9 +2159,7 @@ class Host implements RunnerHost {
     // 鍵の付け替えのためでない停止（人間・クローンが止めた）では、前に預かった peer も閉じる（#4734）
     // 預けた peer を閉じ終えるのを待ってからセッションを止めない: 間に待ちが挟まると「止めると決めた」印が立つ前に子が終わり、止め方どおりの SIGTERM を異常終了と言うため（#4488）。止める指示を先に出し、閉じるのは並べて待つ
     const closingParked =
-      options.keepPeers !== true
-        ? this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた')
-        : Promise.resolve();
+      options.keepPeers !== true ? this.#closeParkedPeers(managerId, 'stopped') : Promise.resolve();
     const session = this.#sessions.get(managerId);
     // 畳み始める前に立てる: `onClosed` が名簿から消した直後の走査にも守りを効かせるため（#5115）。背景処理を畳んだ回（`abandonTree`）は `#abandonedDelegationPids` が先に効く
     // keepPeers 無しの停止（人間・クローンが止めた）は、failed / lost で閉じて戻りを待っている担当の守りも外す（#5168）
@@ -2185,19 +2176,15 @@ class Host implements RunnerHost {
     // 待ち終えた後にもう一度閉じる（#5508）: 進行中の keepPeers の畳みは自分の畳みの中で peer を預けるので、先頭の閉じ（その時点の預かりだけ）には載らず、期限まで開いたまま残るため。
     // 印を立てて `#parkPeers` に預けさせない形は取らない: 鍵の付け替えの経路も通るので、印の立て下ろしと次の resume との競りを新しく持つことになる
     if (options.keepPeers !== true) {
-      await this.#closeParkedPeers(managerId, 'stopped', '人間・クローンが止めた');
+      await this.#closeParkedPeers(managerId, 'stopped');
     }
   }
 
   #parkPeers(managerId: string, parked: ParkedPeers): void {
     // 前に預かった分が残っていれば閉じる: 同じ担当の peer が2組あると、どちらを付け替えるか決められないため
-    this.#closeParkedPeersDetached(managerId, 'replaced', '同じ担当の peer を預かり直した');
+    this.#closeParkedPeersDetached(managerId, 'replaced');
     const timer = setTimeout(() => {
-      this.#closeParkedPeersDetached(
-        managerId,
-        'expired',
-        `鍵の付け替えで畳んだ担当が ${String(PEER_PARK_TTL_MS / 60_000)} 分戻らなかった`,
-      );
+      this.#closeParkedPeersDetached(managerId, 'expired');
     }, PEER_PARK_TTL_MS);
     timer.unref?.();
     this.#parkedPeers.set(managerId, { parked, timer });
@@ -2217,18 +2204,14 @@ class Host implements RunnerHost {
   }
 
   /** 閉じ終えるまで（閉じた後に届く背景ターンの止まりどころも）集めてから、デーモンへ `parked_peers_closed` を運ぶ（#4885）。 */
-  #closeParkedPeers(
-    managerId: string,
-    kind: 'expired' | 'stopped' | 'replaced' | 'shutdown',
-    reason: string,
-  ): Promise<void> {
+  #closeParkedPeers(managerId: string, kind: ParkedPeersCloseKind): Promise<void> {
     const parked = this.#takeParkedPeers(managerId);
     if (parked === undefined) return Promise.resolve();
     // 伏せ字は env と vault の値を渡して行う（#4923）: 形を持たない鍵が peer の出力に載っていても、抜粋・note に残さない
     const vaultValues = Object.values(this.#credentials?.values() ?? {});
     const closing = closeParkedPeers(
       parked,
-      reason,
+      PARKED_PEERS_CLOSE_REASON[kind],
       (text) => this.#emit({ type: 'note', managerId, text }),
       (text) => redactErrorText(text, process.env, vaultValues),
     ).then((closed) => {
@@ -2244,27 +2227,18 @@ class Host implements RunnerHost {
         })),
       });
     });
-    this.#closingPeers.add(closing);
-    // `finally` の派生を捨てない: `closing` が拒否すると派生の拒否は誰も受けず、runner ごと落ちる（#5972）。両方の道で外すだけにして、拒否の受け手は呼び手に任せる
-    const forget = (): void => {
-      this.#closingPeers.delete(closing);
-    };
-    closing.then(forget, forget);
+    trackUntilSettled(this.#closingPeers, closing);
     return closing;
   }
 
   /** 結果を待たない呼び手用（#5972）: 拒否を受けて stderr に残す。`void` で捨てると受け手のいない拒否になり、runner ごと落ちる。 */
-  #closeParkedPeersDetached(
-    managerId: string,
-    kind: 'expired' | 'stopped' | 'replaced' | 'shutdown',
-    reason: string,
-  ): void {
+  #closeParkedPeersDetached(managerId: string, kind: ParkedPeersCloseKind): void {
     const noteFailure = (error: unknown): void => {
       noteBackgroundFailure('預かった peer の閉じ', `managerId=${managerId} kind=${kind}`, error);
     };
     // 遅らせて呼ばない（同期に呼ぶ）: `#parkPeers` の「預かり直し」は、新しい預かりを入れる前に古い分を取るため
     try {
-      this.#closeParkedPeers(managerId, kind, reason).catch(noteFailure);
+      this.#closeParkedPeers(managerId, kind).catch(noteFailure);
     } catch (error) {
       noteFailure(error);
     }
@@ -2361,7 +2335,7 @@ class Host implements RunnerHost {
     // 終わった担当の退避も待つ（#4789）: 上で止めた担当の分も、それより前に終わった担当の分もここに積まれている
     await settle('終わった担当の退避の待ち', [...this.#closeRescues]);
     for (const managerId of [...this.#parkedPeers.keys()]) {
-      this.#closeParkedPeersDetached(managerId, 'shutdown', '器を畳む');
+      this.#closeParkedPeersDetached(managerId, 'shutdown');
     }
     // 閉じた後に届く背景ターンの止まりどころも待つ（#4885）: 待たずに返すと、知らせを運ぶ前に出口が閉じる
     await settle('預かった peer の閉じの待ち', [...this.#closingPeers]);
@@ -2397,6 +2371,16 @@ function pickupKey(kind: 'archive' | 'outbox' | 'rescue', managerId: string, id:
  * 戻らない（resume が別の器へ行った・失敗した）ときに peer の子プロセスを残し続けないため、期限で閉じる。
  */
 export const PEER_PARK_TTL_MS = 10 * 60_000;
+
+type ParkedPeersCloseKind = 'expired' | 'stopped' | 'replaced' | 'shutdown';
+
+/** 預かった peer を閉じた理由（日誌の文）。`parked_peers_closed` の `reason` は種別そのものを運ぶ。 */
+const PARKED_PEERS_CLOSE_REASON: Record<ParkedPeersCloseKind, string> = {
+  stopped: '人間・クローンが止めた',
+  replaced: '同じ担当の peer を預かり直した',
+  expired: `鍵の付け替えで畳んだ担当が ${String(PEER_PARK_TTL_MS / 60_000)} 分戻らなかった`,
+  shutdown: '器を畳む',
+};
 
 const RESOLVED_MEMORY_LIMIT = 512;
 
@@ -2509,6 +2493,15 @@ function taskRow(task: unknown): BackgroundTaskRow {
 function truncateWithNote(text: string, limit: number): string {
   if (text.length <= limit) return text;
   return text.slice(0, codePointBoundary(text, limit)) + `…（上限 ${limit} 文字で切った）`;
+}
+
+/** `pending` に積み、成否どちらでも外す。`finally` の派生を捨てない（#5972）: `promise` が拒否すると派生の拒否は受け手が無く、runner ごと落ちる。拒否の受け手は呼び手に任せる。 */
+function trackUntilSettled(pending: Set<Promise<unknown>>, promise: Promise<unknown>): void {
+  pending.add(promise);
+  const forget = (): void => {
+    pending.delete(promise);
+  };
+  promise.then(forget, forget);
 }
 
 /** 鍵の付け替えで畳む間に預かる peer の窓口の結び（#4734）。受け口はいつも `session`（いまの担当のセッション）へ回る。 */
@@ -5803,18 +5796,25 @@ class RunnerSession {
     this.#preToolInputHeads.set(record.toolUseId, preview);
   }
 
-  // 背景タスクの所有者をここで控える: `SubagentStop` の `background_tasks[]` に所有者の欄が無く、生ログにも構造化された形では出ないため
-  // 成功で決着した呼び出しの控え（`#preToolInputHeads` / `#oneShotAllowedToolUses`）を消す: 控えっぱなしにしない（成功後に拒否は届かない）
-  async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
+  // 成功・失敗どちらで決着した呼び出しでも、控え（`#preToolInputHeads` / `#oneShotAllowedToolUses`）を消す: 控えっぱなしにしない（決着後に拒否は届かない）
+  #settleToolUse(
+    record: Pick<AgentToolAuditRecord, 'toolUseId' | 'transcriptPath'>,
+    toolFailed: boolean,
+  ): void {
     if (typeof record.toolUseId === 'string') {
       this.#preToolInputHeads.delete(record.toolUseId);
       this.#oneShotAllowedToolUses.delete(record.toolUseId);
       this.#settleWorkerTool(record.toolUseId);
     }
-    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'passed', toolFailed: false });
+    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'passed', toolFailed });
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
     this.#markProgressed();
+  }
+
+  // 背景タスクの所有者をここで控える: `SubagentStop` の `background_tasks[]` に所有者の欄が無く、生ログにも構造化された形では出ないため
+  async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
+    this.#settleToolUse(record, false);
 
     if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 
@@ -6121,15 +6121,7 @@ class RunnerSession {
   // 自作ツールの除外を失敗側にだけ新設しない: 成功側と揃えるため
   // `#preToolInputHeads` / `#oneShotAllowedToolUses` を消す: 失敗は `#noteDenial` を経由せず、消さないと上限による `onForget` まで残るため
   async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
-    if (typeof record.toolUseId === 'string') {
-      this.#preToolInputHeads.delete(record.toolUseId);
-      this.#oneShotAllowedToolUses.delete(record.toolUseId);
-      this.#settleWorkerTool(record.toolUseId);
-    }
-    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'passed', toolFailed: true });
-    if (typeof record.transcriptPath === 'string')
-      this.#sdkSession.setTranscriptPath(record.transcriptPath);
-    this.#markProgressed();
+    this.#settleToolUse(record, true);
     // 失敗で終わっても、道具は分類器を通って走った: 連続の数えを0に戻す（このフックは文脈を返せないので、知らせは次に通った道具へ持ち越す）
     this.#denialStreaks.noteProgress(record.agentId ?? 'manager');
 
@@ -6277,11 +6269,12 @@ class RunnerSession {
       // 待ちの途中で畳まれたら起こし直さず返す: 結果が誰にも届かず、`recordCutOff` を通すと新しい世代で「打ち切った作業者」の注記を誤って出すため
       if (waitOutcome === 'released') {
         this.#note(
-          this.#truncateSubagentStopText(
+          truncateWithNote(
             `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
               `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした** ` +
               '— 完了を待っている途中でセッションが畳まれた（stop / 畳み直し / 世代交代）ので、' +
               `起こし直さずに返した。${stopHookActiveText}`,
+            SUBAGENT_STOP_NOTE_TEXT_LIMIT,
           ),
         );
         return { kind: 'continue' };
@@ -6304,7 +6297,7 @@ class RunnerSession {
         this.#emit({
           type: 'note',
           managerId: this.#id,
-          text: this.#truncateSubagentStopText(noteLines.join('\n')),
+          text: truncateWithNote(noteLines.join('\n'), SUBAGENT_STOP_NOTE_TEXT_LIMIT),
           stall: {
             agentId,
             ...(record.agentType === undefined ? {} : { agentType: record.agentType }),
@@ -6343,7 +6336,7 @@ class RunnerSession {
         ];
         return {
           kind: 'addContext',
-          text: this.#truncateSubagentStopText(contextLines.join('\n')),
+          text: truncateWithNote(contextLines.join('\n'), SUBAGENT_STOP_NOTE_TEXT_LIMIT),
         };
       }
 
@@ -6370,14 +6363,14 @@ class RunnerSession {
         ...taskLines,
         ...(unknownText === '' ? [] : [unknownText]),
         disclaimer,
-        // `taskLines` より後ろに置く: `#truncateSubagentStopText` は末尾から切るので、読み手がいちばん要る id / command を残すため
+        // `taskLines` より後ろに置く: `truncateWithNote` は末尾から切るので、読み手がいちばん要る id / command を残すため
         '出力の置き場所は、処理が終わったら知らせる（#1554）。',
         this.#resumeGuidance(agentId),
       ];
       this.#emit({
         type: 'note',
         managerId: this.#id,
-        text: this.#truncateSubagentStopText(noteLines.join('\n')),
+        text: truncateWithNote(noteLines.join('\n'), SUBAGENT_STOP_NOTE_TEXT_LIMIT),
         ...(shouldEscalateLimitNote ? { escalate: true } : {}),
         stall: {
           agentId,
@@ -6446,14 +6439,9 @@ class RunnerSession {
       const status = t.status ?? '(不明)';
       const description = t.description ?? '(不明)';
       const command = t.command === undefined ? '' : ` command=${t.command}`;
-      // `id` と `command` を `description` より前に置く: `#truncateSubagentStopText` は末尾から切るので、`description` が先に切られる側にするため
+      // `id` と `command` を `description` より前に置く: `truncateWithNote` は末尾から切るので、`description` が先に切られる側にするため
       return `- id=${id}${command} type=${type} status=${status} description=${description}`;
     });
-  }
-
-  // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
-  #truncateSubagentStopText(text: string): string {
-    return truncateWithNote(text, SUBAGENT_STOP_NOTE_TEXT_LIMIT);
   }
 
   /**
@@ -6474,13 +6462,14 @@ class RunnerSession {
       .join(' / ');
 
     this.#note(
-      this.#truncateSubagentStopText(
+      truncateWithNote(
         `SubagentStop: 当人が起こした背景処理が ${settled.length}件 配列に載っていたが、` +
           `**status は全部「終わった」側だった**（${listed}）。起こし直していない。` +
           'SDK は `background_tasks` を「in-flight」と名乗っているので、この行が出たら' +
           '計器のほうを疑う — 畳み終えた分が配列に残っているか、status の語彙が変わった' +
           'かである。⟹ この Issue（#570）へ、この行と SDK の版を添えて報告してほしい。' +
           '（雑音にしないため、この診断はセッションに1回だけ出す。）',
+        SUBAGENT_STOP_NOTE_TEXT_LIMIT,
       ),
     );
   }
@@ -6585,7 +6574,7 @@ class RunnerSession {
 
       // `stall` を載せない: `note.stall.outcome` の2語のどちらでもなく、欄を増やすとデプロイの窓で古い側が黙って落とすため
       // `escalate` も立てない: 観測だけなので、クローンの受信箱へ割り込む理由がまだ無いため
-      this.#note(this.#truncateStopNoteText(noteLines.join('\n')));
+      this.#note(truncateWithNote(noteLines.join('\n'), STOP_NOTE_TEXT_LIMIT));
     } catch (error: unknown) {
       try {
         this.#note(`Stop の観測に失敗した: ${reasonOf(error)}`);
@@ -6631,7 +6620,7 @@ class RunnerSession {
     this.#stopState.markStopIdleNoted();
 
     this.#note(
-      this.#truncateStopNoteText(
+      truncateWithNote(
         'Stop: マネージャーのターンが閉じたが、**背景処理も session_crons も 0件 だった**' +
           `（このセッションで通算 ${this.#stopState.stopFirings}回目の発火）。` +
           '⟹ SDK の言う「session is done」の側である。' +
@@ -6639,13 +6628,9 @@ class RunnerSession {
           '（雑音にしないため、この「0件で閉じた」診断はセッションに1回だけ出す —— `Stop` は' +
           'ターンが閉じるたびに来るので、毎回出せば日誌がターン数ぶんの同じ行で埋まる。' +
           '⟹ **2回目以降の「0件で閉じた」回は個別には残らない。** 続きは #861。）',
+        STOP_NOTE_TEXT_LIMIT,
       ),
     );
-  }
-
-  // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
-  #truncateStopNoteText(text: string): string {
-    return truncateWithNote(text, STOP_NOTE_TEXT_LIMIT);
   }
 
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
