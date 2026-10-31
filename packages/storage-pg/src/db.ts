@@ -8,6 +8,19 @@ export function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+export function optionalDate(value: string | null): Date | null {
+  return value === null ? null : new Date(value);
+}
+
+export function optionalIso(value: Date | null): string | null {
+  return value === null ? null : toIso(value);
+}
+
+// `JSON.stringify` へ戻して数える: pg の駆動子は渡す時点で JSON を解いてしまい、生の行文字列の長さが取れないため。
+export function byteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
+}
+
 // 素通しで返さない: 型情報を保たない経路では bigint が文字列のままになり、`+` が文字列連結になるため。
 export function toNumber(value: number | string): number {
   return typeof value === 'number' ? value : Number(value);

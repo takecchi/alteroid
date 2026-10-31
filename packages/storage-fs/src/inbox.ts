@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   compareIsoInstant,
   earliestIsoInstant,
+  extractRowField,
   inboxEventSchema,
   writeStderrLine,
 } from '@alteroid/core';
@@ -45,12 +46,6 @@ function extractEventId(raw: unknown): string | undefined {
   if (typeof event !== 'object' || event === null) return undefined;
   const id = (event as Record<string, unknown>).id;
   return typeof id === 'string' ? id : undefined;
-}
-
-function extractEntryAt(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const at = (raw as Record<string, unknown>).at;
-  return typeof at === 'string' ? at : undefined;
 }
 
 // zod のメッセージは使わず欄の名前だけを出す: 受け取った値を含みうるため
@@ -144,7 +139,7 @@ export class FsInboxStore implements InboxStore {
         .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries })),
       unreadable: file.invalidEventsRaw.map((raw): UnreadableInboxEvent => {
         const id = extractEventId(raw);
-        const at = extractEntryAt(raw);
+        const at = extractRowField(raw, 'at');
         const result = inboxEntrySchema.safeParse(raw);
         const reason = result.success
           ? '不正な行'

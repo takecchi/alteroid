@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   compareIntegrationKeyOrder,
+  extractRowId,
   hasNul,
   integrationKeyRecordSchema,
   prepareIntegrationKeyForWrite,
@@ -28,12 +29,6 @@ interface KeyFile {
   keys: IntegrationKeyRecord[];
   // 消さずに持ち回る: 次の書き込みで黙って消えないように
   invalidRaw: unknown[];
-}
-
-function rowIdOf(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const id = (raw as Record<string, unknown>).id;
-  return typeof id === 'string' ? id : undefined;
 }
 
 export class FsIntegrationKeyStore implements IntegrationKeyStore {
@@ -78,7 +73,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
   async listUnreadableIntegrationKeys(): Promise<UnreadableIntegrationKey[]> {
     const { invalidRaw } = await this.#read();
     return invalidRaw.map((raw): UnreadableIntegrationKey => {
-      const id = rowIdOf(raw);
+      const id = extractRowId(raw);
       const result = integrationKeyRecordSchema.safeParse(raw);
       return {
         ...(id === undefined ? {} : { id }),
@@ -94,7 +89,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
     const wanted = [...new Set(ids)];
     return withPathLock(this.#path, async () => {
       const file = await this.#read();
-      const present = new Set(file.invalidRaw.flatMap((raw) => rowIdOf(raw) ?? []));
+      const present = new Set(file.invalidRaw.flatMap((raw) => extractRowId(raw) ?? []));
       const unknown = wanted.filter((id) => !present.has(id));
       if (unknown.length > 0 || wanted.length === 0) {
         return { kind: 'unknown' as const, count: unknown.length };
@@ -107,7 +102,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
         keys: [
           ...file.keys,
           ...file.invalidRaw.filter((raw) => {
-            const id = rowIdOf(raw);
+            const id = extractRowId(raw);
             return id === undefined || !drop.has(id);
           }),
         ],
@@ -165,7 +160,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
       }
       invalidRaw.push(raw);
       const fields = [...new Set(result.error.issues.map((it) => String(it.path[0] ?? '(root)')))];
-      const id = rowIdOf(raw);
+      const id = extractRowId(raw);
       writeStderrLine(
         `alteroid: integration-keys の不正な行を読み飛ばしました（${index + 1} 行目、不正な欄: ${fields.join(',')}）` +
           `${id === undefined ? '' : ` id=${JSON.stringify(id)}`}\n`,

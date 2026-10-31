@@ -10,6 +10,7 @@ import {
   scheduledRequestSchema,
   scheduleVersionMatches,
   compareCodeUnits,
+  extractRowField,
   summarizeInvalidFields,
 } from '@alteroid/core';
 import type {
@@ -55,11 +56,7 @@ const EMPTY: ScheduleFile = {
   invalidPhasesRaw: [],
 };
 
-function extractKind(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const kind = (raw as Record<string, unknown>).kind;
-  return typeof kind === 'string' ? kind : undefined;
-}
+const extractKind = (raw: unknown): string | undefined => extractRowField(raw, 'kind');
 
 function unreadableError(kind: string, reason: string): UnreadableScheduleError {
   return new UnreadableScheduleError(

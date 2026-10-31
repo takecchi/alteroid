@@ -7,6 +7,7 @@ import {
   type CredentialEntry,
   type StoredCredential,
   compareCodeUnits,
+  extractRowField,
 } from '@alteroid/core';
 import type { CredentialVaultStore } from '@alteroid/core';
 import { z } from 'zod';
@@ -36,12 +37,6 @@ interface CredentialFile {
 }
 
 const EMPTY: CredentialFile = { credentials: [], invalidRaw: [] };
-
-function extractRowName(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const name = (raw as Record<string, unknown>).name;
-  return typeof name === 'string' ? name : undefined;
-}
 
 // `memory/` には置かない: 鍵そのものを持つ場所で、人間が手で書き換える前提ではないため
 export class FsCredentialVaultStore implements CredentialVaultStore {
@@ -81,7 +76,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       // 書き込む名前と一致する不正な行は外す: 残すと同じ名前の行が2つ並び、直したはずの跡が `list()` のたびに出続けるため
       const writtenNames = new Set(entries.map((entry) => entry.name));
       const invalidRaw = file.invalidRaw.filter((raw) => {
-        const name = extractRowName(raw);
+        const name = extractRowField(raw, 'name');
         return name === undefined || !writtenNames.has(name);
       });
       return { credentials: [...rows.values()], invalidRaw };

@@ -10,6 +10,7 @@ import {
   practiceVersionSchema,
   UnreadablePracticeError,
   compareCodeUnits,
+  extractRowField,
   summarizeInvalidFields,
 } from '@alteroid/core';
 import type {
@@ -60,11 +61,7 @@ const EMPTY: PracticeFile = {
   invalidPracticeVersionsRaw: [],
 };
 
-function extractSlug(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const slug = (raw as Record<string, unknown>).slug;
-  return typeof slug === 'string' ? slug : undefined;
-}
+const extractSlug = (raw: unknown): string | undefined => extractRowField(raw, 'slug');
 
 function extractVersion(raw: unknown): number | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;

@@ -22,8 +22,10 @@ export function describeSkippedRow(
   );
 }
 
-export function extractRowId(raw: unknown): string | undefined {
+export function extractRowField(raw: unknown, key: string): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
-  const id = (raw as Record<string, unknown>).id;
-  return typeof id === 'string' ? id : undefined;
+  const field = (raw as Record<string, unknown>)[key];
+  return typeof field === 'string' ? field : undefined;
 }
+
+export const extractRowId = (raw: unknown): string | undefined => extractRowField(raw, 'id');

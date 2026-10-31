@@ -16,6 +16,7 @@ import {
   type TokenRotationSettings,
   type UnreadableToken,
   compareCodeUnits,
+  extractRowField,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -53,13 +54,6 @@ interface TokenPoolFile {
 
 const EMPTY: TokenPoolFile = { tokens: [], invalidTokensRaw: [] };
 
-// `value` には触れない: トークン本体が入るため
-function extractRowLabel(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const label = (raw as Record<string, unknown>).label;
-  return typeof label === 'string' ? label : undefined;
-}
-
 function describeUnreadableTokenPoolField(params: {
   field: 'settings' | 'active';
   reason: string;
@@ -94,7 +88,8 @@ export class FsTokenPoolStore implements TokenPoolStore {
     const { invalidTokensRaw } = await this.#read();
     return invalidTokensRaw.map((raw): UnreadableToken => {
       const id = extractRowId(raw);
-      const label = extractRowLabel(raw);
+      // `value` には触れない: トークン本体が入るため
+      const label = extractRowField(raw, 'label');
       const result = agentTokenRowSchema.safeParse(raw);
       const reason = result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
       return {

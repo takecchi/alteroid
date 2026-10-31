@@ -34,18 +34,13 @@ import {
 } from '@alteroid/core';
 import {
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
-  describeGithubCi,
   JOURNAL_SEARCH_UNCOVERED_LIST,
 } from '@alteroid/core/cli-light';
 import {
   CGROUP_EVENTS_UNKNOWN_NOTE,
   formatCgroupEventsNote,
 } from '@alteroid/core/cgroup-events-format';
-import {
-  JOURNAL_DIAGNOSTICS_TYPES,
-  summarizeJournalDiagnosticsEntry,
-  type JournalDiagnosticsEntryLike,
-} from '@alteroid/core/journal-diagnostics-format';
+import { JOURNAL_DIAGNOSTICS_TYPES } from '@alteroid/core/journal-diagnostics-format';
 import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
@@ -57,7 +52,12 @@ import {
   formatUnpushedWorkObservationWorktrees,
   isEmptyCompleteUnpushedWorkObservation,
 } from '@alteroid/core/unpushed-work-observation-format';
-import { JOURNAL_MAX_LIMIT, readThroughUnreadable } from '@alteroid/logic';
+import {
+  JOURNAL_MAX_LIMIT,
+  readThroughUnreadable,
+  summarizeJournalEntry,
+  type JournalEntry,
+} from '@alteroid/logic';
 import type { InferResponseType } from 'hono/client';
 
 import {
@@ -1684,7 +1684,7 @@ export async function runSlashCommand(
         }
       }
       for (const entry of entries) {
-        stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
+        stdout.write(`  ${entry.at}  [${entry.type}] ${summaryLine(entry)}\n`);
         stdout.write(`      id: ${entry.id}\n`);
       }
       // 件数でなく `next` で言う: 一部が読めない頁は `limit` に届かないまま続きが在る
@@ -3800,57 +3800,14 @@ function formatEntryFull(
   return lines.join('\n');
 }
 
-function summarize(entry: Record<string, unknown>): string {
-  for (const key of ['text', 'decision', 'question', 'summary', 'body', 'tool']) {
-    const value = entry[key];
-    if (typeof value === 'string') return summarizeText(value);
-  }
-  // 上の6キーを持たない診断系は、Web と同じ文言を共有の口（`@alteroid/core/journal-diagnostics-format`）から借りる: 2箇所で複製しない。
-  if (isJournalDiagnosticsEntry(entry)) return summarizeJournalDiagnosticsEntry(entry);
-  // 観測者は申告であることを落とさない。
-  if (entry.type === 'github_observation') return summarizeGithubObservation(entry);
-  if (entry.type === 'conversation_deleted') {
-    return summarizeText(
-      `会話 ${String(entry.deletedConversationId)} を削除した（${String(entry.hiddenCount)} 件。${String(entry.deletedBy)}）`,
-    );
-  }
-  return '';
-}
-
-function summarizeGithubObservation(entry: Record<string, unknown>): string {
-  const result = entry.result as
-    | {
-        status?: string;
-        openIssues?: number;
-        openPulls?: number;
-        ci?: Parameters<typeof describeGithubCi>[0]['ci'];
-        ciUnavailable?: string;
-        truncated?: boolean;
-        reason?: string;
-      }
-    | undefined;
-  const head = `${String(entry.repo)}（観測者 ${String(entry.observedBy)}）`;
-  if (result?.status === 'ok') {
-    return (
-      `${head} open Issue ${String(result.openIssues)} 件 / open PR ${String(result.openPulls)} 件` +
-      (result.truncated === true ? '（limit に達した。下限）' : '') +
-      // 伏せる: ciUnavailable と checks は観測した側の自由文で、失敗の reason と同じく gh の失敗文が入りうるため
-      ` / ${redactBody(describeGithubCi(result))}`
-    );
-  }
-  if (result?.status === 'failed')
-    return `${head} 取れなかった: ${summarizeText(result.reason ?? '')}`;
-  return head;
-}
-
-// 欄の形までは検査しない: `GET /journal` はサーバ側で `journalEntrySchema` を通った行しか返さないので、`type` が一致すれば欄の形も一致する前提を置く。
-function isJournalDiagnosticsEntry(
-  entry: Record<string, unknown>,
-): entry is JournalDiagnosticsEntryLike {
-  return (
-    typeof entry.type === 'string' &&
-    (JOURNAL_DIAGNOSTICS_TYPES as readonly string[]).includes(entry.type)
-  );
+// 要約は共有の `summarizeJournalEntry`（Web と同じ文）。端末の1行に収める切り詰めだけ CLI で掛ける。
+// github_observation と診断の行は切らない: 末尾の数字・CI の内訳が欠けると読めなくなるため（従来も切っていない）。
+function summaryLine(entry: JournalEntry): string {
+  const line = summarizeJournalEntry(entry) ?? '';
+  const whole =
+    entry.type === 'github_observation' ||
+    (JOURNAL_DIAGNOSTICS_TYPES as readonly string[]).includes(entry.type);
+  return oneLine(line, whole ? Infinity : 80);
 }
 
 function summarizeText(value: string): string {

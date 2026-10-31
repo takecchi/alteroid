@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   addTaskRow,
   editTaskRow,
+  extractRowField,
   hasNul,
   isTaskOfConversation,
   listTaskRows,
@@ -55,13 +56,6 @@ interface TaskFile {
   readonly unreadable: UnreadableRow[];
 }
 
-// `id` / `createdAt` 以外を覗かない: 抽出を広げて `body` まで拾うと「本文を載せない」制約が抽出のほうから破れる
-function stringFieldOf(value: unknown, key: 'id' | 'createdAt'): string | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const field = (value as Record<string, unknown>)[key];
-  return typeof field === 'string' ? field : undefined;
-}
-
 function splitRows(raw: { rank: unknown; task: unknown }[]): TaskFile {
   const rows: TaskRow[] = [];
   const unreadable: UnreadableRow[] = [];
@@ -71,11 +65,12 @@ function splitRows(raw: { rank: unknown; task: unknown }[]): TaskFile {
       rows.push({ rank, task: parsed.data });
       continue;
     }
-    const createdAtCandidate = stringFieldOf(task, 'createdAt');
+    // `id` / `createdAt` 以外を覗かない: 抽出を広げて `body` まで拾うと「本文を載せない」制約が抽出のほうから破れる
+    const createdAtCandidate = extractRowField(task, 'createdAt');
     unreadable.push({
       rank,
       value: task,
-      id: stringFieldOf(task, 'id'),
+      id: extractRowField(task, 'id'),
       createdAt:
         createdAtCandidate !== undefined &&
         unreadableTaskSchema.shape.createdAt.safeParse(createdAtCandidate).success
