@@ -12,6 +12,7 @@ import {
   memoryVersionMatches,
   memoryProtectionRebuildDecision,
   nextDescribedState,
+  noteDroppedRecord,
   resolveMemoryDescriptionFreshness,
   sha256Hex,
   stripMemoryContent,
@@ -302,10 +303,16 @@ export class FsPersonaStore implements PersonaStore {
       }
       await rm(this.#path(slug), { force: true });
       // 保護状態の派生値（human 印）も一緒に消す: 印だけが実体の無いまま残るのは監査上の嘘になるため
-      const index = await this.#readIndex();
-      if (slug in index) {
-        delete index[slug];
-        await this.#writeIndex(index);
+      // 索引の更新の失敗は握って跡だけ残す: 実体は既に消えており、ここで投げると呼び手が「消していない」と取り違えるため。
+      // 索引は次の読みで組み直せる（残った行があっても、実体が無い slug には `markHumanTouched` / `markCreatedAt` が新しい行を作らず、読み出しは実体が無ければ null を返すので害は小さい）
+      try {
+        const index = await this.#readIndex();
+        if (slug in index) {
+          delete index[slug];
+          await this.#writeIndex(index);
+        }
+      } catch (error) {
+        noteDroppedRecord('記憶の削除後の索引の更新', `slug=${slug}`, error);
       }
     });
   }
