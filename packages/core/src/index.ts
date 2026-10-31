@@ -737,10 +737,7 @@ export { NulNotAllowedError, assertNoNul, hasNul, stripNul } from './nul-guard.j
 export { stripNulDeep, stripNulWellFormed } from './nul-guard.js';
 export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
 export { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
-export {
-  verifyCredentialSeedOnceContract,
-  verifyCredentialVaultContract,
-} from './credential-contract.js';
+export { verifyCredentialVaultContract } from './credential-contract.js';
 export { verifyTokenPoolContract } from './token-pool-contract.js';
 export { verifyCodexChatgptAuthContract } from './codex-chatgpt-auth-contract.js';
 export * from './codex-chatgpt-auth.js';

@@ -1501,7 +1501,6 @@ export function createMemoryStores(): Stores {
 
   // `put` は全文置換にしない: 空文字は「外す」で、入力に無い名前は触らない。ここだけ全文置換だと本物で他の鍵が消える。
   const credentialRows = new Map<string, StoredCredential>();
-  const credentialSeedMarkers = new Set<string>();
 
   const credentials: CredentialVaultStore = {
     async list() {
@@ -1525,25 +1524,6 @@ export function createMemoryStores(): Stores {
         });
       }
       return credentials.list();
-    },
-    async seedOnce(marker, entries) {
-      assertValidCredentialEntries(entries);
-      if (credentialSeedMarkers.has(marker)) return [];
-      credentialSeedMarkers.add(marker);
-      const at = new Date().toISOString();
-      const written: string[] = [];
-      for (const entry of entries) {
-        if (entry.value.length === 0 || credentialRows.has(entry.name)) continue;
-        credentialRows.set(entry.name, {
-          name: entry.name,
-          value: entry.value,
-          updatedAt: at,
-          scope: entry.scope ?? 'all',
-          secret: entry.secret ?? true,
-        });
-        written.push(entry.name);
-      }
-      return written;
     },
   };
 

@@ -29,17 +29,15 @@ const rowSchema = z.object({
 // 行の中身はここで検査しない: `z.array(rowSchema)` にすると、1行の不正が配列全体を道連れにするため
 const topLevelSchema = z.object({
   credentials: z.array(z.unknown()).default([]),
-  seeded: z.array(z.string()).default([]),
 });
 
 interface CredentialFile {
   credentials: StoredCredential[];
   // 消さずに持ち回る: 書き戻しに入れないと、人間が手で書いた不正な行が黙って消えるため
   invalidRaw: unknown[];
-  seeded: string[];
 }
 
-const EMPTY: CredentialFile = { credentials: [], invalidRaw: [], seeded: [] };
+const EMPTY: CredentialFile = { credentials: [], invalidRaw: [] };
 
 function extractRowName(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
@@ -88,40 +86,9 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
         const name = extractRowName(raw);
         return name === undefined || !writtenNames.has(name);
       });
-      return { credentials: [...rows.values()], invalidRaw, seeded: file.seeded };
+      return { credentials: [...rows.values()], invalidRaw };
     });
     return [...written.credentials].sort((a, b) => compareCodeUnits(a.name, b.name));
-  }
-
-  async seedOnce(marker: string, entries: readonly CredentialEntry[]): Promise<string[]> {
-    assertValidCredentialEntries(entries);
-    const at = new Date().toISOString();
-    const written: string[] = [];
-    await this.#update((file) => {
-      if (file.seeded.includes(marker)) return file;
-      const rows = new Map(file.credentials.map((row) => [row.name, row]));
-      // 同じ名前の壊れた行は上書きしない: 人間の手が入っている行のため
-      const invalidNames = new Set(file.invalidRaw.map((raw) => extractRowName(raw)));
-      for (const entry of entries) {
-        if (entry.value.length === 0 || rows.has(entry.name) || invalidNames.has(entry.name)) {
-          continue;
-        }
-        rows.set(entry.name, {
-          name: entry.name,
-          value: entry.value,
-          updatedAt: at,
-          scope: entry.scope ?? 'all',
-          secret: entry.secret ?? true,
-        });
-        written.push(entry.name);
-      }
-      return {
-        credentials: [...rows.values()],
-        invalidRaw: file.invalidRaw,
-        seeded: [...file.seeded, marker],
-      };
-    });
-    return written;
   }
 
   async #read(): Promise<CredentialFile> {
@@ -145,7 +112,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
           })}\n`,
         );
       });
-      return { credentials, invalidRaw, seeded: top.seeded };
+      return { credentials, invalidRaw };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
@@ -158,11 +125,7 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       const next = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
       // 不正な行も一緒に書き戻す: 入れないと、人間が手で書いた不正な行が次の書き込みで黙って消えるため
-      const serialized: { credentials: unknown[]; seeded?: string[] } = {
-        credentials: [...next.credentials, ...next.invalidRaw],
-        // 印が1つも無いファイルには欄を足さない: 既存のファイルの形を変えないため
-        ...(next.seeded.length > 0 ? { seeded: next.seeded } : {}),
-      };
+      const serialized = { credentials: [...next.credentials, ...next.invalidRaw] };
       // rename 後に絞らず、一時ファイルを 0600 で作る: 隙間で他人が読めるため
       await writeFileAtomic(this.#path, `${JSON.stringify(serialized, null, 2)}\n`, {
         mode: 0o600,

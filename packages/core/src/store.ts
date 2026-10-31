@@ -1447,16 +1447,6 @@ export interface CredentialVaultStore {
    * 入口で断る（3実装とも同じ型付きの例外）: 名前・値に NUL があれば `NulNotAllowedError`、`CREDENTIAL_NAME` に合わない名前（空文字を含む）は `InvalidCredentialNameError`。1件でも断れば何も書かない。
    */
   put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]>;
-  /**
-   * 名前付きの印が無いときだけ、行が無い名前を1度だけ書く。返すのは実際に書いた名前（印が既にあれば空）。
-   * 器の環境変数にだけ置かれていた鍵（`GH_TOKEN` 等）を、器の env を土台にする経路を撤去する際に正本へ移す1回きりの移行用
-   * （`env-vars-boot.ts` の `migrateEnvBaseCredentialsOnce`）。印を持つのは「画面で消した後の再起動で蘇らせない」ため
-   * （無いと、正本から消した名前が器の env から毎回戻ってくる。`env_profile_entries_migrated` と同じ理由）。
-   *
-   * 既に行が在る名前は上書きしない（人間が置いたものが勝つ）。書いても書かなくても印は立てる。
-   * 印の確認・行の書き込み・印を立てる操作は1つの区間で行う（3実装とも）。入口の検査は `put` と同じ。
-   */
-  seedOnce(marker: string, entries: readonly CredentialEntry[]): Promise<string[]>;
 }
 
 /**
