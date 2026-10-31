@@ -3291,6 +3291,79 @@ describe('recordTrialVerdict（Issue #1501: ダメ元の試しの結果を記録
   });
 });
 
+describe('recordTrialSuccess（#5989: 試しで通った鍵の扱いを直列のキューの中で決める）', () => {
+  async function coolBoth(h: Harness): Promise<void> {
+    await h.stores.tokens.replace(
+      (await h.stores.tokens.list()).map((token) => ({
+        ...token,
+        cooldownUntil: Date.parse(AT) + 60 * 60_000,
+        lastRejectedAt: AT,
+        lastRejectedReason: '上限',
+      })),
+    );
+  }
+
+  it('現役自身が通ると、止まった記録だけを消して recovered を出す（回さない・世代はそのまま）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await coolBoth(h);
+
+    const outcome = await h.rotator.recordTrialSuccess({ tokenId: 'tok-a' });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(h.spreadCalls).toEqual([]);
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    expect(await isCooling(h, 'tok-b')).toBe(true);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 1 });
+    expect(outcome.recovered).toMatchObject({ tokenId: 'tok-a', label: 'first' });
+    expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
+  });
+
+  it('現役でない鍵が通ると、その鍵の止まった記録を消してから選び直す（reason は trial_succeeded）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await coolBoth(h);
+
+    const outcome = await h.rotator.recordTrialSuccess({ tokenId: 'tok-b' });
+
+    expect(outcome.reason).toBe('trial_succeeded');
+    expect(await isCooling(h, 'tok-b')).toBe(false);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b' });
+  });
+
+  it('現役の指名が読めなくても、通った鍵の止まった記録は消える', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await coolBoth(h);
+    breakActiveToken(h);
+
+    await h.rotator.recordTrialSuccess({ tokenId: 'tok-a' });
+
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  });
+
+  it('⚠️ 先に並んだ回転が現役を替えても、あとの試しの成功は替わった後の現役で判断する', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.replace(
+      (await h.stores.tokens.list()).map((token) =>
+        token.id === 'tok-a' ? { ...token, cooldownUntil: Date.parse(AT) + 60 * 60_000 } : token,
+      ),
+    );
+
+    const [rotation, success] = await Promise.all([
+      h.rotator.reconsider({ reason: 'tick' }),
+      h.rotator.recordTrialSuccess({ tokenId: 'tok-a' }),
+    ]);
+
+    expect(rotation.kind).toBe('rotated');
+    expect(success.reason).toBe('trial_succeeded');
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b' });
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  });
+});
+
 describe('#4844: 値が差し替わった行', () => {
   it('現役の行の値を差し替えると（pool_changed）、新しい値を撒き直し、世代を上げる', async () => {
     const h = harness();

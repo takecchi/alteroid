@@ -33,8 +33,8 @@ export function isRejectionForTrialBackoff(observation: {
 export interface TokenTrialWatchOptions {
   stores: Stores;
   trial: TokenTrialPort;
-  reconsider: TokenRotator['reconsider'];
   recordTrialVerdict: TokenRotator['recordTrialVerdict'];
+  recordTrialSuccess: TokenRotator['recordTrialSuccess'];
   onOutcome: (outcome: TokenRotationOutcome) => Promise<void>;
   now?: () => number;
   tickMs?: number;
@@ -115,32 +115,8 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     pendingConfirmation.set(token.id, now());
     const fold = describeTrialFailureFold(failedBefore);
 
-    // 現役かどうかは、いま読み直して決める: 選んだ時点から結果が届くまでに既に回っている可能性があるため。
-    // 指名が読めないときは「現役ではない」側へ進む: 既に試し終えたトークンの記録なので、安全に倒せるため。
-    let active: ActiveAgentToken | null;
-    try {
-      active = await options.stores.tokens.readActive();
-    } catch (error) {
-      if (!(error instanceof UnreadableActiveTokenError)) throw error;
-      active = null;
-    }
-    if (active !== null && active.tokenId === token.id) {
-      const outcome = await options.reconsider({
-        reason: 'turn_succeeded',
-        current: {
-          verdict: { verdict: 'usable' },
-          origin: {
-            source: 'turn_success',
-            observedBy: { tokenId: active.tokenId, generation: active.generation },
-          },
-        },
-      });
-      await options.onOutcome(annotateOutcome(outcome, fold));
-      return;
-    }
-
-    await options.recordTrialVerdict({ tokenId: token.id, verdict: { verdict: 'usable' } });
-    const outcome = await options.reconsider({ reason: 'trial_succeeded' });
+    // 現役かどうかは回し手が自分の直列のキューの中で読んで決める: こちらで読むと、読んだ後に回転が割り込むため。
+    const outcome = await options.recordTrialSuccess({ tokenId: token.id });
     await options.onOutcome(annotateOutcome(outcome, fold));
   }
 

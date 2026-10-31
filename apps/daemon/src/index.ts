@@ -1001,8 +1001,8 @@ export async function main(): Promise<void> {
           withheldEnvKeys: storage.withheldEnvKeys,
         }),
     },
-    reconsider: (input) => tokenRotator.reconsider(input),
     recordTrialVerdict: (input) => tokenRotator.recordTrialVerdict(input),
+    recordTrialSuccess: (input) => tokenRotator.recordTrialSuccess(input),
     onOutcome: (outcome) => settleTokenOutcome(outcome),
   });
 
