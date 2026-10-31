@@ -1813,16 +1813,6 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
 }
 
-/**
- * 試験専用: 委譲の鍵で引くプロセス内の Map/Set の大きさ。畳んだ担当の分が溜まっていないかを、私有の欄を覗かずに数える（#6019）。
- * 本番の経路は呼ばない。`createManagerPool` が返したもの以外を渡すと投げる。
- */
-export function managerKeyedStateSizes(pool: ManagerPool): Record<string, number> {
-  if (!(pool instanceof Pool))
-    throw new Error('managerKeyedStateSizes: createManagerPool の返り値ではない');
-  return pool.managerKeyedStateSizes();
-}
-
 interface ResumeConfirmation {
   state: ResumeConfirmationState;
   /** resume を出した先。印はこの器から届いたものだけ数える（移送の前の器から遅れて届いた出来事で確定しないため）。 */
@@ -5283,46 +5273,6 @@ class Pool implements ManagerPool {
 
   pluginLoadOf(runnerId: string): RunnerPluginLoadObservation | undefined {
     return this.#pluginLoad.get(runnerId);
-  }
-
-  /** 試験専用の観測口（{@link managerKeyedStateSizes}）。委譲の鍵（managerId）で引く Map/Set の大きさだけを返す。 */
-  managerKeyedStateSizes(): Record<string, number> {
-    return {
-      records: this.#records.size,
-      tokenIdentities: this.#tokenIdentities.size,
-      resumedCount: this.#resumedCount.size,
-      resumedIntoLiveProcess: this.#resumedIntoLiveProcess.size,
-      unresumable: this.#unresumable.size,
-      turnEndProbedAt: this.#turnEndProbedAt.size,
-      undeliveredTurnEndRecovered: this.#undeliveredTurnEndRecovered.size,
-      pluginLoadDigests: this.#pluginLoadDigests.size,
-      rescueStashJournaled: this.#rescueStashJournaled.size,
-      transcriptTailJournaled: this.#transcriptTailJournaled.size,
-      usageStopped: this.#usageStopped.size,
-      workerLimitStopped: this.#workerLimitStopped.size,
-      usageWakeRetry: this.#usageWakeRetry.size,
-      workerLimitWakeRetry: this.#workerLimitWakeRetry.size,
-      rotationFoldDueAt: this.#rotationFoldDueAt.size,
-      resetTimeSkewMatches: this.#resetTimeSkewMatches.size,
-      withheldReports: this.#withheldReports.size,
-      synthesizedNotices: this.#synthesizedNotices.size,
-      withheldCarriedToWindow: this.#withheldCarriedToWindow.size,
-      synthesizedNoticeStreaks: this.#synthesizedNoticeStreaks.size,
-      rateLimitJournalFolds: this.#rateLimitJournalFolds.size,
-      autoFoldSkipJournalWritten: this.#autoFoldSkipJournalWritten.size,
-      reattachBusyRetries: this.#reattachBusyRetries.size,
-      resumeConfirmations: this.#resumeConfirmations.size,
-      lastStaleDecline: this.#lastStaleDecline.size,
-      lastHeldStuckNotice: this.#lastHeldStuckNotice.size,
-      heldMessageJobs: this.#heldMessageJobs.size,
-      relocationRefusals: this.#relocationRefusals.size,
-      relocatingTo: this.#relocatingTo.size,
-      sameRunnerResumeWindow: this.#sameRunnerResumeWindow.size,
-      deferredEvents: this.#deferredEvents.size,
-      reportFetchGates: this.#reportFetchGates.size,
-      rescueStashChains: this.#rescueStashChains.size,
-      supersedePending: this.#supersedePending.size,
-    };
   }
 
   async runners(
