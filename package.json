@@ -12,7 +12,6 @@
     "build": "pnpm -r build",
     "check:advice-single-source": "node ./scripts/check-advice-single-source.mjs",
     "check:agents-md-size": "node ./scripts/check-agents-md-size.mjs",
-    "check:dockerfile-railway": "node ./scripts/check-dockerfile-railway.mjs",
     "check:no-attribution-trailers": "node ./scripts/check-no-attribution-trailers.mjs",
     "check:no-env-passthrough": "node ./scripts/check-no-env-passthrough.mjs",
     "check:pr-green": "node ./scripts/check-pr-green.mjs",

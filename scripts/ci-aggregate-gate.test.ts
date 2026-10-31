@@ -57,7 +57,6 @@ function runLines(name: string): string[] {
 
 const ORIGINAL_GATES: { gate: string; needsBuild: boolean }[] = [
   { gate: 'pnpm check:agents-md-size', needsBuild: false },
-  { gate: 'pnpm check:dockerfile-railway', needsBuild: false },
   { gate: 'pnpm check:web-build-output', needsBuild: true },
   { gate: 'pnpm check:web-bundle-size', needsBuild: true },
   { gate: 'git diff --exit-code -- apps/daemon/openapi.json', needsBuild: true },

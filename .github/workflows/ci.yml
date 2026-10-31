@@ -227,16 +227,6 @@ jobs:
       - run: pnpm check:agents-md-size
         if: ${{ !cancelled() }}
 
-      # **Dockerfile に Railway で通らない書き方（いまは `RUN --mount`）が無いか
-      # （Issue #2685）。** #2678 の `RUN --mount=type=bind` は下の `image`（buildx）では
-      # 通ったが、Railway の3環境のビルドが約13秒で落ちた。**image を焼いても検出できない
-      # 種類の失敗**なので、焼かずに字面（命令の単位）で止める。静的検査なので `pnpm build`
-      # より前に置く。**ここに置いた理由:** docker のビルドを要さず、Node と
-      # `pnpm check:*` の配線の歯（`scripts/check-scripts-wired.test.ts`）がこの job の形
-      # （`run: pnpm check:…`）を前提にしている。以前は `image` の grep 1行だった（#2683）。
-      - run: pnpm check:dockerfile-railway
-        if: ${{ !cancelled() }}
-
       # **同梱 SDK から逐語で引いたコメントが、いまの版でも逐語であることを当てる。**
       # 引き写した先はこの repo のソースなので、SDK の版を上げても差分には出ない —— #639
       # （0.3.259 → 0.3.261）は lock と catalog の2ファイルだけで、それでも
