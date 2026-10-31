@@ -102,7 +102,6 @@ export type PermissionRuleBreadthLevel = 'exact' | 'narrow' | 'medium' | 'broad'
 
 export interface PermissionRuleBreadth {
   level: PermissionRuleBreadthLevel;
-  prefixWordCount?: number;
 }
 
 const NARROW_PREFIX_WORD_COUNT = 3;
@@ -119,7 +118,7 @@ export function describePermissionRuleBreadth(rule: string): PermissionRuleBread
       : prefixWordCount === 2
         ? 'medium'
         : 'broad';
-  return { level, prefixWordCount };
+  return { level };
 }
 
 /**

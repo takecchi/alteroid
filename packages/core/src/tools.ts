@@ -395,7 +395,7 @@ import {
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
 import { describeWaitingKind } from './waiting-kind-format.js';
-import { formatElapsedAgo } from './format-elapsed.js';
+import { formatElapsedAgo, formatMinutesAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 import { strictToolInput } from './strict-tool-input.js';
 import { chunkIdsByChars } from './chunk-ids.js';
@@ -1404,17 +1404,8 @@ function describeUnrecognised(
   );
 }
 
-// `formatElapsed` と共通化しない: 分の位まで丸めると、ゾンビが何時間経っているかが見えなくなるため
 function describeZombieAge(seconds: number): string {
-  if (seconds < 60) return `${seconds}秒前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分前`;
-  const hours = Math.floor(minutes / 60);
-  const remainderMinutes = minutes % 60;
-  if (hours < 24) return `${hours}時間${remainderMinutes}分前`;
-  const days = Math.floor(hours / 24);
-  const remainderHours = hours % 24;
-  return `${days}日${remainderHours}時間前`;
+  return seconds < 60 ? `${seconds}秒前` : formatMinutesAgo(seconds * 1000);
 }
 
 function describeAgeBucketLabel(upToSec: number | undefined): string {

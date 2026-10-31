@@ -6,6 +6,7 @@ import {
   describeInboxBacklogQueuedInMemory,
   foldInboxBacklogByType,
 } from './inbox-backlog.js';
+import { formatMinutesAgo } from './format-elapsed.js';
 import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -221,20 +222,6 @@ export function latestManagerStartAt(managers: readonly ManagerSummary[]): numbe
     if (latest === undefined || startedAtMs > latest) latest = startedAtMs;
   }
   return latest;
-}
-
-// 既存の経過の字面関数と共有しない: 新しい依存を増やさず、丸め方の粒度が違うため。
-// 負の経過は「1分未満前」へ丸める: 経過を省くと「最後はいつだったか」の合図そのものが消えるため
-function formatElapsedSinceLastStart(elapsedMs: number): string {
-  const minutes = Math.floor(elapsedMs / 60000);
-  if (minutes < 1) return '1分未満前';
-  if (minutes < 60) return `${minutes}分前`;
-  const hours = Math.floor(minutes / 60);
-  const remainderMinutes = minutes % 60;
-  if (hours < 24) return `${hours}時間${remainderMinutes}分前`;
-  const days = Math.floor(hours / 24);
-  const remainderHours = hours % 24;
-  return `${days}日${remainderHours}時間前`;
 }
 
 // RunnerLiveness の6値は畳まない: unreachable / unusable / lost / vacating の違いはクローンの判断材料そのものため
@@ -461,9 +448,7 @@ export function describeSituation(input: {
   const recentStarts = countRecentManagerStarts(input.managers, at);
   const latestStart = latestManagerStartAt(input.managers);
   const lastStartClause =
-    latestStart === undefined
-      ? ''
-      : `（最後の起動は ${formatElapsedSinceLastStart(at - latestStart)}）`;
+    latestStart === undefined ? '' : `（最後の起動は ${formatMinutesAgo(at - latestStart)}）`;
   const showTokens = !(input.tokens === undefined && input.active === undefined);
   // lost は「その他」の直前に置く: lost はそこから切り出したもので、隣に並べば「その他が減って lost が増えた」と読めるため
   // 経過の句だけ引数にする: 経過は時刻の流れだけで毎回変わるので、「変化なし」の比較（`materials`）には入れず、出す行にだけ入れるため

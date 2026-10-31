@@ -17,6 +17,7 @@ import {
   type CodexServerRequestMap,
   type CodexServerRequestMethod,
 } from './codex-protocol.js';
+import { isPlainObject as isRecord } from './mcp-servers-schema.js';
 
 export type CodexAppServerChild = Pick<AgentChildProcess, 'stdin' | 'stdout'> &
   Partial<Pick<AgentChildProcess, 'on' | 'off'>>;
@@ -87,10 +88,6 @@ const LOG_LINE_LIMIT = 200;
 
 function clip(line: string): string {
   return clipWithEllipsis(line, LOG_LINE_LIMIT);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** 駆動役とデバイスログインが app-server の子を起こす既定の形（どちらも試験は `spawnProcess` で差し替える）。 */

@@ -16,7 +16,6 @@ import {
   CODEX_SERVER_NOTIFICATIONS,
   CODEX_SERVER_REQUESTS,
   CODEX_UNHANDLED_SERVER_REQUEST_METHODS,
-  isCodexServerNotificationMethod,
   isCodexServerRequestMethod,
 } from './codex-protocol.js';
 
@@ -144,13 +143,9 @@ describe('メソッド名', () => {
   });
 
   it('型ガードは表と同じ集合を指す', () => {
-    for (const m of Object.keys(CODEX_SERVER_NOTIFICATIONS)) {
-      expect(isCodexServerNotificationMethod(m)).toBe(true);
-    }
     for (const m of Object.keys(CODEX_SERVER_REQUESTS)) {
       expect(isCodexServerRequestMethod(m)).toBe(true);
     }
-    expect(isCodexServerNotificationMethod('toString')).toBe(false);
     expect(isCodexServerRequestMethod('item/tool/call')).toBe(false);
   });
 });
