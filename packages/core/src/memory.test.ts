@@ -3492,7 +3492,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const last = sections[sections.length - 1]!;
 
         const head = renderMemoryOutline(sections);
-        const tail = renderMemoryOutline(sections, 'tail');
+        const tail = renderMemoryOutline(sections, { side: 'tail' });
 
         expect(head).toContain(first.id);
         expect(head).not.toContain(last.id);
@@ -3506,7 +3506,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(renderMemoryOutline(sections)).toMatch(
           /…末尾 \d+ 節は省略（節は全 400 件あり、先頭から \d+ 件だけ出した）。/,
         );
-        expect(renderMemoryOutline(sections, 'tail')).toMatch(
+        expect(renderMemoryOutline(sections, { side: 'tail' })).toMatch(
           /…先頭 \d+ 節は省略（節は全 400 件あり、末尾から \d+ 件だけ出した）。/,
         );
       });
@@ -3515,10 +3515,12 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const sections = sectionsOf();
 
         expect(renderMemoryOutline(sections)).toContain('side=tail');
-        expect(renderMemoryOutline(sections, 'tail')).toContain('side を渡さずに呼べば出る');
+        expect(renderMemoryOutline(sections, { side: 'tail' })).toContain(
+          'side を渡さずに呼べば出る',
+        );
         // 「中央」の語だけを測らない: 逆のことを言う文面（「中央も出る」）が素通りする。
         expect(renderMemoryOutline(sections)).toContain('どちらの向きでも出ない');
-        expect(renderMemoryOutline(sections, 'tail')).toContain('どちらの向きでも出ない');
+        expect(renderMemoryOutline(sections, { side: 'tail' })).toContain('どちらの向きでも出ない');
       });
 
       it('断り書きは穴が空いている側へ置く（既定は最後の行、tail は先頭の行）', () => {
@@ -3526,7 +3528,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const withoutOverflowNote = (text: string): string[] =>
           text.split('\n').filter((line) => !line.startsWith('⚠ この文書は大きすぎて'));
         const head = withoutOverflowNote(renderMemoryOutline(sectionsOf()));
-        const tail = withoutOverflowNote(renderMemoryOutline(sectionsOf(), 'tail'));
+        const tail = withoutOverflowNote(renderMemoryOutline(sectionsOf(), { side: 'tail' }));
 
         expect(head.at(-1)).toContain('節は省略');
         expect(head[0]).not.toContain('節は省略');
@@ -3537,7 +3539,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       it("引数を渡さないのは side='head' と同じ（既定の向きを変えていない）", () => {
         const sections = sectionsOf();
 
-        expect(renderMemoryOutline(sections)).toBe(renderMemoryOutline(sections, 'head'));
+        expect(renderMemoryOutline(sections)).toBe(renderMemoryOutline(sections, { side: 'head' }));
       });
 
       it('⭐ 出る節id は並びの端そのもので、向きで1文字も変わらない', () => {
@@ -3545,7 +3547,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const all = sections.map((section) => section.id);
 
         const headIds = idsIn(renderMemoryOutline(sections));
-        const tailIds = idsIn(renderMemoryOutline(sections, 'tail'));
+        const tailIds = idsIn(renderMemoryOutline(sections, { side: 'tail' }));
 
         expect(headIds.length).toBeGreaterThan(1);
         expect(tailIds.length).toBeGreaterThan(1);
@@ -3556,14 +3558,16 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       it('予算に入りきる文書では、向きを渡しても出力が1文字も変わらない（切っていない）', () => {
         const sections = scanMemorySections(withFrontmatter).sections;
 
-        expect(renderMemoryOutline(sections, 'tail')).toBe(renderMemoryOutline(sections, 'head'));
-        expect(renderMemoryOutline(sections, 'tail')).not.toContain('節は省略');
+        expect(renderMemoryOutline(sections, { side: 'tail' })).toBe(
+          renderMemoryOutline(sections, { side: 'head' }),
+        );
+        expect(renderMemoryOutline(sections, { side: 'tail' })).not.toContain('節は省略');
       });
 
       it("side='tail' でも本文を1文字も出さない（向きを足しても消えない性質）", () => {
         const doc = ['# 見出し', 'SECRET-XYZ-999', '', '## 子', 'SECRET-XYZ-999', ''].join('\n');
 
-        const outline = renderMemoryOutline(scanMemorySections(doc).sections, 'tail');
+        const outline = renderMemoryOutline(scanMemorySections(doc).sections, { side: 'tail' });
 
         expect(outline).not.toContain('SECRET-XYZ-999');
         expect(outline).toContain('## 子');
@@ -3584,7 +3588,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
 
       it('同じ3点が tail 側の断り書きにも見える（共有の1文字列を使っている）', () => {
-        const outline = renderMemoryOutline(sections(), 'tail');
+        const outline = renderMemoryOutline(sections(), { side: 'tail' });
 
         expect(outline).toContain('8,000');
         expect(outline).toContain('memory_outline の1回のツール応答');
@@ -3603,7 +3607,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
       it('自身を「目次」と呼ばない（取り違えの発端はこの語の重複だった）', () => {
         const outline = renderMemoryOutline(sections());
-        const tailOutline = renderMemoryOutline(sections(), 'tail');
+        const tailOutline = renderMemoryOutline(sections(), { side: 'tail' });
 
         expect(outline).not.toContain('次の目次がそこへ届く');
         expect(tailOutline).toContain('次に memory_outline を呼んだときの応答にそれが載る');
@@ -3640,7 +3644,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
 
       it('⭐ 同じ族の名乗りが tail 側の断り書きにも見える（共有の1文字列を使っている）', () => {
-        const outline = renderMemoryOutline(sections(), 'tail');
+        const outline = renderMemoryOutline(sections(), { side: 'tail' });
 
         expect(outline).toContain('この数字だけではどの予算かは決まらない');
         expect(outline).toContain('同じ理由で同じ値を持つ予算が他にもある');
@@ -3668,11 +3672,9 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const bare = renderMemoryOutline(sections);
         const emptyOptions = renderMemoryOutline(sections, {});
         const explicitHead = renderMemoryOutline(sections, { side: 'head' });
-        const stringForm = renderMemoryOutline(sections, 'head');
 
         expect(emptyOptions).toBe(bare);
         expect(explicitHead).toBe(bare);
-        expect(stringForm).toBe(bare);
       });
 
       it('q が見出しに1つも一致しないとき、一致0件だと明示する（予算で切れたのとは違う文言）', () => {

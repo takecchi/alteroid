@@ -11645,7 +11645,6 @@ function renderJournalEntry(
         entry.retained === undefined
           ? ''
           : `\n残存: unread=${entry.retained.unread} redelivered=${entry.retained.redelivered} ` +
-            `redeliveredClosed=${entry.retained.redeliveredClosed} ` +
             `pendingCollapse=${entry.retained.pendingCollapse}`;
       return {
         head:

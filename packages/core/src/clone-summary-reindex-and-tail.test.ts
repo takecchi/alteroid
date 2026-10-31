@@ -634,7 +634,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
     expect(row.retained).toEqual({
       unread: 1,
       redelivered: 1,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
 
@@ -685,7 +684,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
     expect(row.retained).toEqual({
       unread: 1,
       redelivered: 1,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
 
@@ -745,7 +743,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
     expect(row.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
     // 待ち行列の節は落としてから見る（#5469 P6c）: 起こし直しの時点で台帳と同じ id の Task が積まれており（P5）、その題は待ち行列の先頭に出る。ここで見たいのは「消された合図が配られていない」こと

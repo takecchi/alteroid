@@ -14057,7 +14057,9 @@ describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
     } as never);
 
     const reply = await h.call('journal_read', { id: entry.id });
-    expect(reply).toContain('残存: unread=1 redelivered=2 redeliveredClosed=3 pendingCollapse=4');
+    // 入力は欄を外す前の古い行（redeliveredClosed を持つ）のまま。読めて、その欄は出ない
+    expect(reply).toContain('残存: unread=1 redelivered=2 pendingCollapse=4');
+    expect(reply).not.toContain('redeliveredClosed');
 
     const listReply = await h.call('journal_read', { types: ['inbox_flow'] });
     const head = listReply.match(/\[inbox_flow [^\]]*\]/)?.[0];

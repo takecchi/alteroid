@@ -4436,23 +4436,13 @@
                               "minimum": 0,
                               "maximum": 9007199254740991
                             },
-                            "redeliveredClosed": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
                             "pendingCollapse": {
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 9007199254740991
                             }
                           },
-                          "required": [
-                            "unread",
-                            "redelivered",
-                            "redeliveredClosed",
-                            "pendingCollapse"
-                          ],
+                          "required": ["unread", "redelivered", "pendingCollapse"],
                           "additionalProperties": false
                         }
                       },
@@ -10226,23 +10216,13 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
-                                  "redeliveredClosed": {
-                                    "type": "integer",
-                                    "minimum": 0,
-                                    "maximum": 9007199254740991
-                                  },
                                   "pendingCollapse": {
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   }
                                 },
-                                "required": [
-                                  "unread",
-                                  "redelivered",
-                                  "redeliveredClosed",
-                                  "pendingCollapse"
-                                ],
+                                "required": ["unread", "redelivered", "pendingCollapse"],
                                 "additionalProperties": false
                               }
                             },
@@ -12476,23 +12456,13 @@
                               "minimum": 0,
                               "maximum": 9007199254740991
                             },
-                            "redeliveredClosed": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
                             "pendingCollapse": {
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 9007199254740991
                             }
                           },
-                          "required": [
-                            "unread",
-                            "redelivered",
-                            "redeliveredClosed",
-                            "pendingCollapse"
-                          ],
+                          "required": ["unread", "redelivered", "pendingCollapse"],
                           "additionalProperties": false
                         }
                       },
@@ -17047,23 +17017,13 @@
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     },
-                                    "redeliveredClosed": {
-                                      "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
                                     "pendingCollapse": {
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     }
                                   },
-                                  "required": [
-                                    "unread",
-                                    "redelivered",
-                                    "redeliveredClosed",
-                                    "pendingCollapse"
-                                  ],
+                                  "required": ["unread", "redelivered", "pendingCollapse"],
                                   "additionalProperties": false
                                 }
                               },
@@ -19183,23 +19143,13 @@
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     },
-                                    "redeliveredClosed": {
-                                      "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
                                     "pendingCollapse": {
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
                                     }
                                   },
-                                  "required": [
-                                    "unread",
-                                    "redelivered",
-                                    "redeliveredClosed",
-                                    "pendingCollapse"
-                                  ],
+                                  "required": ["unread", "redelivered", "pendingCollapse"],
                                   "additionalProperties": false
                                 }
                               },
@@ -21319,23 +21269,13 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
-                                  "redeliveredClosed": {
-                                    "type": "integer",
-                                    "minimum": 0,
-                                    "maximum": 9007199254740991
-                                  },
                                   "pendingCollapse": {
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   }
                                 },
-                                "required": [
-                                  "unread",
-                                  "redelivered",
-                                  "redeliveredClosed",
-                                  "pendingCollapse"
-                                ],
+                                "required": ["unread", "redelivered", "pendingCollapse"],
                                 "additionalProperties": false
                               }
                             },
@@ -23446,23 +23386,13 @@
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   },
-                                  "redeliveredClosed": {
-                                    "type": "integer",
-                                    "minimum": 0,
-                                    "maximum": 9007199254740991
-                                  },
                                   "pendingCollapse": {
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
                                   }
                                 },
-                                "required": [
-                                  "unread",
-                                  "redelivered",
-                                  "redeliveredClosed",
-                                  "pendingCollapse"
-                                ],
+                                "required": ["unread", "redelivered", "pendingCollapse"],
                                 "additionalProperties": false
                               }
                             },
