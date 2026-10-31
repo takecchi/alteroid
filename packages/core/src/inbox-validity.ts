@@ -1,3 +1,4 @@
+import { assertNever } from './assert-never.js';
 import type { InboxEvent, JobStatus } from './schema.js';
 
 // この述語の戻り値で行を消さない: 決めるのは添える言葉だけで、消すなら `inbox-staleness.ts` の側で合図の性質だけで決めるため
@@ -34,10 +35,8 @@ export function inboxEventValidity(
     case 'self_initiative':
     case 'distill':
       return { kind: 'unclaimed' };
-    default: {
-      const exhaustive: never = event;
-      throw new Error(`未知の受信箱イベント種別（validity）: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return assertNever('未知の受信箱イベント種別（validity）', event);
   }
 }
 
@@ -64,9 +63,7 @@ export function describeValidity(
     case 'unchanged':
     case 'unclaimed':
       return '';
-    default: {
-      const exhaustive: never = validity;
-      throw new Error(`未知の validity: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return assertNever('未知の validity', validity);
   }
 }

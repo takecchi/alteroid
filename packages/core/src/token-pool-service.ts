@@ -16,6 +16,7 @@ import {
 } from './token-pool.js';
 import { reasonOf, writeStderrLine } from './dropped-record.js';
 import type { UnreadableToken } from './schema.js';
+import { createSerialQueue } from './serial-queue.js';
 import { UnreadableTokenSettingsError, type Stores } from './store.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 
@@ -127,15 +128,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
   }
 
   // この serial() は回し手の書き込みを待たない: 回し手と排他にするのは writeLock
-  let tail: Promise<unknown> = Promise.resolve();
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   // UnreadableTokenSettingsError 以外は飲み込まず投げる: 器そのものの異常まで「設定が壊れている」に化けさせないため
   async function readSettingsOrUnreadable(): Promise<

@@ -16,6 +16,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
+import { createSerialQueue } from './serial-queue.js';
 import {
   compareProfileEntryNames,
   PROFILE_ENTRY_NAME,
@@ -217,15 +218,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
   >();
 
   // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
-  let tail: Promise<unknown> = Promise.resolve();
-  function serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = tail.then(work, work);
-    tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
+  const { run: serial } = createSerialQueue();
 
   interface Plan {
     rows: EnvProfileEntry[];
