@@ -6,6 +6,7 @@
  * **知らせるだけで、止めない・断らない**（`block` を使わない）。
  */
 
+import { clipWithEllipsis } from './excerpt.js';
 import { resolveEnumEnv } from './placed-env.js';
 
 export const REPORT_LANGUAGE_ENV = 'ALTEROID_REPORT_LANGUAGE';
@@ -227,9 +228,7 @@ export const REPORT_LANGUAGE_NOTICE_INTERVAL_MS = 10 * 60_000;
 export const REPORT_LANGUAGE_EXAMPLE_MAX_CHARS = 80;
 
 export function excerptExample(sentence: string): string {
-  return sentence.length > REPORT_LANGUAGE_EXAMPLE_MAX_CHARS
-    ? `${sentence.slice(0, REPORT_LANGUAGE_EXAMPLE_MAX_CHARS)}…`
-    : sentence;
+  return clipWithEllipsis(sentence, REPORT_LANGUAGE_EXAMPLE_MAX_CHARS);
 }
 
 export function describeReportLanguageNotice(example: string): string {

@@ -499,7 +499,9 @@ function stringifyToolResponseForValidationCheck(toolResponse: unknown): string 
   }
 }
 
-export const MCP_SERVER_NAME = 'alteroid';
+import { MCP_SERVER_NAME } from './mcp-server-name.js';
+
+export { MCP_SERVER_NAME };
 
 /** いまのターンの返信に添える添付の口（`reply_attach`）。 */
 export interface ReplyAttachments {

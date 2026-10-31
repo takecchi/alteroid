@@ -35,7 +35,13 @@ import type {
 } from '@alteroid/logic';
 import { saveChatDraft, saveChatDraftMark } from '@alteroid/logic';
 
-import { isKeyOfType, KEY } from './queries';
+import {
+  forgetOwnDeletedConversation,
+  isConversationKeyOf,
+  isKeyOfType,
+  KEY,
+  rememberOwnDeletedConversation,
+} from './queries';
 import { writeThenRefresh } from './write-then-refresh';
 import {
   answerWithin,
@@ -117,6 +123,19 @@ export class MemoryConflictError extends ApiError {
   }
 }
 
+// 版の衝突（記憶・やり方の 409）は、一覧を取り直してから `current` ごと投げる。4か所に同じ形を書くと、取り直す鍵や文言のどれかだけがずれる
+async function throwIfVersionConflict<Current>(
+  result: { response: Response; error?: unknown },
+  refresh: () => Promise<unknown>,
+  fallbackMessage: string,
+  toError: (message: string, current: Current | null) => ApiError,
+): Promise<void> {
+  if (result.response.status !== 409 || result.error === undefined) return;
+  await refresh();
+  const body = result.error as { error?: string; current?: Current | null };
+  throw toError(body.error ?? fallbackMessage, body.current ?? null);
+}
+
 export function useSaveMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -126,17 +145,13 @@ export function useSaveMemory() {
         params: { path: { slug } },
         body: ifMatch === undefined ? { content } : { content, ifMatch },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { document: MemoryDocument; version: string } | null;
-        };
-        throw new MemoryConflictError(
-          body.error ?? '記憶が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]),
+        '記憶が読んだ後に変わっている',
+        (message, current: { document: MemoryDocument; version: string } | null) =>
+          new MemoryConflictError(message, current),
+      );
       const saved = unwrap(result);
       await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
       return { document: saved.document, version: saved.version };
@@ -153,17 +168,13 @@ export function useDeleteMemory() {
       const result = await api.api.DELETE('/memory/{slug}', {
         params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { document: MemoryDocument; version: string } | null;
-        };
-        throw new MemoryConflictError(
-          body.error ?? '記憶が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]),
+        '記憶が読んだ後に変わっている',
+        (message, current: { document: MemoryDocument; version: string } | null) =>
+          new MemoryConflictError(message, current),
+      );
       unwrap(result);
       await mutate(KEY.memory);
     },
@@ -190,17 +201,13 @@ export function useSavePractice() {
         params: { path: { slug } },
         body: ifMatch === undefined ? { kind, title, content } : { kind, title, content, ifMatch },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { practice: Practice; version: string } | null;
-        };
-        throw new PracticeConflictError(
-          body.error ?? 'やり方が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]),
+        'やり方が読んだ後に変わっている',
+        (message, current: { practice: Practice; version: string } | null) =>
+          new PracticeConflictError(message, current),
+      );
       const saved = unwrap(result);
       await Promise.all([
         mutate(KEY.practices),
@@ -221,17 +228,13 @@ export function useDeletePractice() {
       const result = await api.api.DELETE('/practices/{slug}', {
         params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
       });
-      if (result.response.status === 409 && result.error !== undefined) {
-        await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
-        const body = result.error as {
-          error?: string;
-          current?: { practice: Practice; version: string } | null;
-        };
-        throw new PracticeConflictError(
-          body.error ?? 'やり方が読んだ後に変わっている',
-          body.current ?? null,
-        );
-      }
+      await throwIfVersionConflict(
+        result,
+        () => Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]),
+        'やり方が読んだ後に変わっている',
+        (message, current: { practice: Practice; version: string } | null) =>
+          new PracticeConflictError(message, current),
+      );
       unwrap(result);
       await Promise.all([mutate(KEY.practices), mutate(KEY.practiceVersions(slug))]);
     },
@@ -935,10 +938,6 @@ export function useEndConversation() {
   );
 }
 
-function isConversationKeyOf(key: unknown, conversationId: string): boolean {
-  return isKeyOfType(key, 'conversation') && (key as { id?: unknown }).id === conversationId;
-}
-
 // 論理削除。結果（件数・`incomplete`・`remainsIn`）は呼び出し側が人間へ見せるので、そのまま返す。
 // 下書きもここで消す: 消した会話の id で残る本文は、どこからも開けないのに端末に平文で残るだけになるため
 export function useDeleteConversation() {
@@ -946,9 +945,14 @@ export function useDeleteConversation() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (conversationId: string): Promise<ConversationDeleteResult> => {
+      rememberOwnDeletedConversation(conversationId);
       const result = await api.api
         .DELETE('/conversations/{id}', { params: { path: { id: conversationId } } })
-        .then(unwrap);
+        .then(unwrap)
+        .catch((caught: unknown) => {
+          forgetOwnDeletedConversation(conversationId);
+          throw caught;
+        });
       saveChatDraft(conversationId, '');
       saveChatDraftMark(conversationId, undefined);
       // 一覧・未読数・本文・台帳を捨てる。`use-journal-live.ts` の `conversation_deleted` と同じ束（墓標の SSE を待たずに揃える）

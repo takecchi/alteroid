@@ -2,6 +2,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { isNotFound } from '~/lib/is-not-found';
+import { describePluginSourceProblem } from '~/lib/plugin-source-check';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useAction } from '~/lib/use-action';
 import { useState } from 'react';
@@ -231,6 +232,13 @@ function AddPlugin({ initial }: { initial: PluginSourceForm }) {
     setExpired(false);
     if (!parsed.ok) {
       setInputError(parsed.error);
+      setPreview(null);
+      return;
+    }
+    // 送る前に、daemon と同じ core の規則で形を見る。合わなければ送らず、どの欄がどう違うかを言う（形に合うのに daemon が断ったときの文は、そのまま出る）
+    const problem = describePluginSourceProblem(parsed.request);
+    if (problem !== undefined) {
+      setInputError(problem);
       setPreview(null);
       return;
     }

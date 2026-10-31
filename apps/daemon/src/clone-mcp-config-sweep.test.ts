@@ -47,7 +47,7 @@ describe('デーモンのクローンの MCP 設定の掃きの配線', () => {
 
   it('起動時に1回掃き、入力に tmpRoot・live・自分の pid・now を渡す', async () => {
     const { sweeper, calls } = setup([]);
-    await sweeper.runOnce();
+    await sweeper.refresh();
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ tmpRoot: '/fake-tmp', ownPid: 99, now: Date.now() });
     expect([...calls[0]!.liveDirs]).toEqual(['/fake-tmp/live']);
@@ -120,6 +120,47 @@ describe('デーモンのクローンの MCP 設定の掃きの配線', () => {
     await vi.advanceTimersByTimeAsync(CLONE_MCP_CONFIG_SWEEP_EVERY_MS);
     expect(n).toBe(2);
     sweeper.stop();
+  });
+
+  it('前の掃きが長引く間は重ねず、終わってから周期を数えて次を掃く', async () => {
+    let release: (() => void) | undefined;
+    let n = 0;
+    const sweeper = startCloneMcpConfigSweeping({
+      journal: { append: async () => undefined as never },
+      sweep: async () => {
+        n += 1;
+        if (n === 1) await new Promise<void>((resolve) => (release = resolve));
+        return EMPTY;
+      },
+      writeLine: () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(CLONE_MCP_CONFIG_SWEEP_EVERY_MS * 3);
+    expect(n).toBe(1);
+    release?.();
+    await vi.advanceTimersByTimeAsync(CLONE_MCP_CONFIG_SWEEP_EVERY_MS - 1);
+    expect(n).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(n).toBe(2);
+    sweeper.stop();
+  });
+
+  it('掃いている最中に止めたら次を予約しない', async () => {
+    let release: (() => void) | undefined;
+    let n = 0;
+    const sweeper = startCloneMcpConfigSweeping({
+      journal: { append: async () => undefined as never },
+      sweep: async () => {
+        n += 1;
+        await new Promise<void>((resolve) => (release = resolve));
+        return EMPTY;
+      },
+      writeLine: () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    sweeper.stop();
+    release?.();
+    await vi.advanceTimersByTimeAsync(CLONE_MCP_CONFIG_SWEEP_EVERY_MS * 3);
+    expect(n).toBe(1);
   });
 
   it('止めた後は掃かない', async () => {
