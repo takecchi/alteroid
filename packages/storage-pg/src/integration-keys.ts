@@ -15,16 +15,8 @@ import type {
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { toIso } from './db.js';
+import { optionalDate, optionalIso, toIso } from './db.js';
 import { integrationKeys } from './schema.js';
-
-function optionalDate(value: string | null): Date | null {
-  return value === null ? null : new Date(value);
-}
-
-function optionalIso(value: Date | null): string | null {
-  return value === null ? null : toIso(value);
-}
 
 // 素の値を入れない: `sha256` だけを持つ。
 export class PgIntegrationKeyStore implements IntegrationKeyStore {

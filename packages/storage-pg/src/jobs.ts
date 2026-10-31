@@ -23,7 +23,7 @@ import type {
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls } from './db.js';
+import { byteLength, stripNulls } from './db.js';
 import { approvals, jobs } from './schema.js';
 
 // `migrate.ts` の `approvals_conversation_id_idx` と同じ式にする: 違うと索引が効かないため。
@@ -409,8 +409,4 @@ export class PgJobStore implements JobStore {
       return { jobs: removedJobs.length, approvals: removedApprovals.length };
     });
   }
-}
-
-function byteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
 }
