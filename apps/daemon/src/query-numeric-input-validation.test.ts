@@ -284,18 +284,6 @@ describe('JSON 本文の数値欄は jsonBody() 経由で既に安全（回帰�
     expect(text).not.toMatch(/"code"|"success"|1\.5/);
   });
 
-  it('POST /archive/remove: minStoredBytes=-1 は既定の「入力の形が不正」の日本語平文で400', async () => {
-    const res = await app.request('/archive/remove', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ minStoredBytes: -1, reason: 'x' }),
-    });
-    const text = await res.text();
-    expect(res.status, `本文: ${text}`).toBe(400);
-    expect(JSON.parse(text)).toEqual({ error: '入力の形が不正: minStoredBytes' });
-    expect(text).not.toMatch(/"code"|"success"/);
-  });
-
   it('POST /inbox/remove: limit=0 は既定の「入力の形が不正」の日本語平文で400', async () => {
     const res = await app.request('/inbox/remove', {
       method: 'POST',

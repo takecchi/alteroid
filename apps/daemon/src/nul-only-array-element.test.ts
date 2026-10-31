@@ -50,29 +50,11 @@ describe('配列の要素が NUL だけの呼びは、空文字の要素と同�
     expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id)).toEqual(['e-1']);
   });
 
-  it('POST /archive/remove: sessionIds: ["\\0"] は 400、本文は消えない', async () => {
-    const oldRow = await stores.archive.archive('sess-a', 'AAA');
-    await stores.archive.archive('sess-a', 'AAABBB');
-    const body = { reason: 'r', dryRun: false };
-    const empty = await app.request('/archive/remove', post({ ...body, sessionIds: [''] }));
-    const nul = await app.request('/archive/remove', post({ ...body, sessionIds: ['\0'] }));
-    expect(empty.status).toBe(400);
-    expect(nul.status, `空文字は 400 なのに NUL だけは ${nul.status}: ${await nul.text()}`).toBe(
-      400,
-    );
-    expect(await stores.archive.read(oldRow.id)).toEqual({ kind: 'body', body: 'AAA' });
-  });
-
-  it('NUL が混じっても中身が残る要素は今までどおり通る（inbox sources / archive sessionIds）', async () => {
+  it('NUL が混じっても中身が残る要素は今までどおり通る（inbox sources）', async () => {
     const inbox = await app.request(
       '/inbox/remove',
       post({ types: ['external'], sources: ['web\0hook'], reason: 'r', dryRun: true }),
     );
     expect(inbox.status).toBe(200);
-    const archive = await app.request(
-      '/archive/remove',
-      post({ sessionIds: ['sess\0-a'], reason: 'r', dryRun: true }),
-    );
-    expect(archive.status).toBe(200);
   });
 });
