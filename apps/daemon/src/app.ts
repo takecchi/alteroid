@@ -12,7 +12,6 @@ import type {
   PluginDistributionService,
   PluginFetcher,
   EnvProfileEntry,
-  ArchiveEntry,
   ChatStreamEvent,
   CloneHost,
   CredentialService,
@@ -45,8 +44,10 @@ import {
   type MemoryDocument,
   MemoryConflictError,
   memoryVersion,
+  memoryVersionMatches,
   PracticeConflictError,
   practiceVersion,
+  practiceVersionMatches,
   ScheduleConflictError,
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
@@ -70,9 +71,6 @@ import {
   RESERVED_SCHEDULE_KINDS,
   isReservedEventSource,
   DAEMON_ATTACHMENT_USAGE_SOURCE,
-  ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
-  ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
-  ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   classifyTokenPolicyChange,
@@ -124,7 +122,6 @@ import {
   localDayRange,
   matchesInboxRemoveManyFilter,
   normalizeJournalTimeBoundary,
-  removeArchiveChunkJournalFirst,
   removeArchiveJournalFirst,
   removeInboxChunkJournalFirst,
   summarizeInboxBacklog,
@@ -165,7 +162,6 @@ import {
   scheduleKindSchema,
   SCHEDULE_EVERY_MINUTES_MAX_MESSAGE,
   scheduleSpecSchema,
-  selectArchiveRemovalTargets,
   startSseHeartbeat,
   readProgress,
   DEFAULT_PROGRESS_WINDOW_HOURS,
@@ -194,7 +190,6 @@ import {
   type HumanActionKind,
   type ApprovalPagingKey,
   type IntegrationKeyRecord,
-  type ArchiveRemoveManyFilter,
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
@@ -264,9 +259,6 @@ import {
   approvalsResponseSchema,
   approvalTraceResponseSchema,
   archiveListResponseSchema,
-  archiveRemoveManyRequestSchema,
-  archiveRemoveManyResponseSchema,
-  archiveRemoveManyStoppedResponseSchema,
   archiveRemovedResponseSchema,
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
@@ -1302,6 +1294,20 @@ function undoneByHumanEntry(operation: string, subject: string, why: string): Jo
   };
 }
 
+// 日誌を先に書いた人間の操作が効かなかったとき、`why` を理由に打ち消しの行を積む関数（積めなければ跡だけ残す）。
+function humanRetractor(
+  stores: Pick<Stores, 'journal'>,
+  spec: { operation: string; subject: string; what: string; detail: string },
+): (why: string) => Promise<JournalEntry | undefined> {
+  return (why) =>
+    appendJournalOrDrop(
+      stores,
+      undoneByHumanEntry(spec.operation, spec.subject, why),
+      spec.what,
+      spec.detail,
+    );
+}
+
 // task の1行を読む。読めない行は例外にせず値で返す（無い 404 と読めない 409 を書き分けるため）
 async function readTask(
   stores: Pick<Stores, 'tasks'>,
@@ -1513,14 +1519,21 @@ function callbackPage(title: string, detail: string, autoClose = false): string 
   }</html>`;
 }
 
+// 行の要約（本文を載せない）。409 の `current`・更新の応答・GET が同じ欄を同じ順で返す。
+function profileEntryDigest(entry: EnvProfileEntry) {
+  return {
+    name: entry.name,
+    scope: entry.scope,
+    updatedAt: entry.updatedAt,
+    sha256: fingerprintOf(entry.script),
+    bytes: Buffer.byteLength(entry.script),
+    version: profileEntryVersionOf(entry),
+  };
+}
+
 function describeProfileEntries(entries: readonly EnvProfileEntry[]) {
   return {
-    entries: entries.map((entry) => ({
-      ...entry,
-      sha256: fingerprintOf(entry.script),
-      bytes: Buffer.byteLength(entry.script),
-      version: profileEntryVersionOf(entry),
-    })),
+    entries: entries.map((entry) => ({ ...entry, ...profileEntryDigest(entry) })),
     ...composedFingerprints(entries),
   };
 }
@@ -1578,16 +1591,8 @@ async function mutateProfile(
       '実行環境プロファイルの打ち消しの日誌',
       spec.route,
     );
-    // `detail` に載せるのはこちらが組んだ文だけで、送られてきた本文は載せない。
-    if (error instanceof ProfileInputError) {
-      return {
-        ok: false,
-        status: 400,
-        body: { error: 'プロファイルの入力が不正（保存していない）', detail: error.message },
-      };
-    }
-    // 文は欄名と固定の説明だけで、値を載せない。
-    if (error instanceof NulNotAllowedError) {
+    // `detail` に載せるのはこちらが組んだ文だけ（`NulNotAllowedError` の文は欄名と固定の説明だけ）で、送られてきた本文・値は載せない。
+    if (error instanceof ProfileInputError || error instanceof NulNotAllowedError) {
       return {
         ok: false,
         status: 400,
@@ -1606,17 +1611,7 @@ async function mutateProfile(
             current === null
               ? '読んだ後に、その行は消されている（または読んだ後に作られた行ではない）'
               : `読んだ後に、行 ${current.name} が変わっている・作られている`,
-          current:
-            current === null
-              ? null
-              : {
-                  name: current.name,
-                  scope: current.scope,
-                  updatedAt: current.updatedAt,
-                  sha256: fingerprintOf(current.script),
-                  bytes: Buffer.byteLength(current.script),
-                  version: profileEntryVersionOf(current),
-                },
+          current: current === null ? null : profileEntryDigest(current),
         }),
       };
     }
@@ -1675,19 +1670,11 @@ async function mutateProfile(
     spec.route,
   );
 
-  const described = describeProfileEntries(entries);
   return {
     ok: true,
     body: profileUpdateResponseSchema.parse({
       updatedAt: result.updatedAt ?? new Date().toISOString(),
-      entries: described.entries.map((entry) => ({
-        name: entry.name,
-        scope: entry.scope,
-        updatedAt: entry.updatedAt,
-        sha256: entry.sha256,
-        bytes: entry.bytes,
-        version: entry.version,
-      })),
+      entries: entries.map(profileEntryDigest),
       composed,
       // 成功でも `set -x` の出力（値入り）は `output` に載るので伏せる。
       clone:
@@ -2040,6 +2027,50 @@ export function createApp(deps: AppDeps) {
   if (deps.workerToolEvents !== undefined) {
     topologyActivity.attachWorkerTools(deps.workerToolEvents.subscribe);
   }
+  // `POST /events` と `POST /events/:source` の受け付けの本体（結び付け → 永続化 → 受け付けた印）。値を返すだけで、状態番号は route が決める。
+  async function acceptExternal(spec: {
+    principal: Principal;
+    source: string;
+    payload: unknown;
+    attachmentIds: readonly string[] | undefined;
+    onPersisted?: (id: string, at: string) => Promise<void>;
+  }) {
+    const { principal, source } = spec;
+    const id = randomUUID();
+    const attached = await bindEventAttachments(spec.attachmentIds, id, principal);
+    if (!attached.ok) {
+      return { kind: 'attach-failed' as const, body: attached.body, status: attached.status };
+    }
+    const at = new Date().toISOString();
+    // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
+    const outcome = await postExternalPersisted(
+      {
+        type: 'external',
+        id,
+        at,
+        source,
+        payload: spec.payload,
+        ...(principal.kind === 'integration'
+          ? { via: { keyId: principal.keyId, name: principal.name } }
+          : {}),
+        ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+      },
+      attached.refs,
+    );
+    if (outcome === 'unavailable') return { kind: 'unavailable' as const };
+    await spec.onPersisted?.(id, at);
+    // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
+    if (principal.kind === 'integration') {
+      topologyActivity.recordExternal({
+        keyId: principal.keyId,
+        name: principal.name,
+        source,
+        at,
+      });
+    }
+    return { kind: 'accepted' as const, id };
+  }
+
   const topologyStorage = createStorageHealthTracker({
     label:
       deps.storage === undefined
@@ -3951,12 +3982,8 @@ export function createApp(deps: AppDeps) {
         const { content, ifMatch } = c.req.valid('json');
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す: ふつうの衝突のたびに `write` と `write_failed` の2行を日誌へ積まないため。
         // ここを抜けた後に割り込まれた回は、下の `persona.write` の排他が 409 にし、打ち消しの行で対応を保つ。
-        if (ifMatch !== undefined) {
-          const matches =
-            ifMatch === null
-              ? before === null
-              : before !== null && memoryVersion(before.content) === ifMatch;
-          if (!matches) return c.json(memoryConflictBody(before, 'write'), 409);
+        if (!memoryVersionMatches(before, ifMatch)) {
+          return c.json(memoryConflictBody(before, 'write'), 409);
         }
         // 日誌を先に書き、書けなければ本文を書かずに 500（#4774）: 本文の後に書いて `appendJournalOrDrop` で握ると、本文は変わったのに裏付けの `cause:'human'` の行が無く、`markHumanTouched` も呼べない「印の付かない人間の保存」が生まれる（クローンが次の蒸留で黙って上書きできてしまう）。
         let entry;
@@ -4065,7 +4092,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い。ふつうの衝突のたびに2行を積まない）。
-        if (memoryVersion(existing.content) !== ifMatch) {
+        if (!memoryVersionMatches(existing, ifMatch)) {
           return c.json(memoryConflictBody(existing, 'remove'), 409);
         }
         // 日誌を先に書き、書けなければ消さずに 500（#5243）: 消した後に書いて `appendJournalOrDrop` で握ると、人間がクローンの記憶を消したのにクローンへ名指しされず、学びにもならない。
@@ -4087,17 +4114,15 @@ export function createApp(deps: AppDeps) {
           await stores.persona.remove(slug, { ifMatch });
         } catch (error) {
           // 先の行を打ち消す: 消していない。
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              '記憶を消す',
-              `記憶 ${slug} の削除`,
-              error instanceof MemoryConflictError
-                ? '消す直前に記憶が書き換えられていた（見た版と違う）'
-                : '記憶の削除が失敗した',
-            ),
-            '記憶削除の打ち消しの日誌',
-            `slug=${slug}`,
+          await humanRetractor(stores, {
+            operation: '記憶を消す',
+            subject: `記憶 ${slug} の削除`,
+            what: '記憶削除の打ち消しの日誌',
+            detail: `slug=${slug}`,
+          })(
+            error instanceof MemoryConflictError
+              ? '消す直前に記憶が書き換えられていた（見た版と違う）'
+              : '記憶の削除が失敗した',
           );
           if (error instanceof MemoryConflictError) {
             return c.json(memoryConflictBody(error.current, 'remove'), 409);
@@ -4233,13 +4258,7 @@ export function createApp(deps: AppDeps) {
         // 既に在る行（読めない形の行を含む）の書き直しだけが、日誌を先に書く対象（#5243）。新しく置く回は取り消しでも書き換えでもないので、今までどおり書いた後に残す。
         const rewriting = before !== null || beforeWasUnreadable;
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（書かないので書く跡が無い）。読めない行は版が比べられないので、store の排他の中の判定に任せる。
-        if (
-          ifMatch !== undefined &&
-          !beforeWasUnreadable &&
-          !(ifMatch === null
-            ? before === null
-            : before !== null && practiceVersion(before) === ifMatch)
-        ) {
+        if (!beforeWasUnreadable && !practiceVersionMatches(before, ifMatch)) {
           return c.json(practiceConflictBody(before, 'write'), 409);
         }
         const entryAfter: JournalEntryInput = {
@@ -4284,17 +4303,15 @@ export function createApp(deps: AppDeps) {
           practice = await stores.practices.write({ slug, kind, title, content }, { ifMatch });
         } catch (error) {
           if (rewriting) {
-            await appendJournalOrDrop(
-              stores,
-              undoneByHumanEntry(
-                'やり方を書き直す',
-                `やり方 ${slug} の書き直し`,
-                error instanceof PracticeConflictError
-                  ? '書き直す直前にやり方が変わっていた（見た版と違う）'
-                  : 'やり方の書き込みが失敗した',
-              ),
-              'やり方書き直しの打ち消しの日誌',
-              `slug=${slug}`,
+            await humanRetractor(stores, {
+              operation: 'やり方を書き直す',
+              subject: `やり方 ${slug} の書き直し`,
+              what: 'やり方書き直しの打ち消しの日誌',
+              detail: `slug=${slug}`,
+            })(
+              error instanceof PracticeConflictError
+                ? '書き直す直前にやり方が変わっていた（見た版と違う）'
+                : 'やり方の書き込みが失敗した',
             );
           }
           // 黙って上書きしない: 書いていない。
@@ -4371,7 +4388,7 @@ export function createApp(deps: AppDeps) {
           );
         }
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い）。
-        if (existing !== null && ifMatch !== undefined && practiceVersion(existing) !== ifMatch) {
+        if (existing !== null && !practiceVersionMatches(existing, ifMatch)) {
           return c.json(practiceConflictBody(existing, 'remove'), 409);
         }
         // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
@@ -4409,17 +4426,15 @@ export function createApp(deps: AppDeps) {
         try {
           await stores.practices.remove(slug, ifMatch === undefined ? undefined : { ifMatch });
         } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              'やり方を消す',
-              `やり方 ${slug} の削除`,
-              error instanceof PracticeConflictError
-                ? '消す直前にやり方が変わっていた（見た版と違う）'
-                : 'やり方の削除が失敗した',
-            ),
-            'やり方削除の打ち消しの日誌',
-            `slug=${slug}`,
+          await humanRetractor(stores, {
+            operation: 'やり方を消す',
+            subject: `やり方 ${slug} の削除`,
+            what: 'やり方削除の打ち消しの日誌',
+            detail: `slug=${slug}`,
+          })(
+            error instanceof PracticeConflictError
+              ? '消す直前にやり方が変わっていた（見た版と違う）'
+              : 'やり方の削除が失敗した',
           );
           // 黙って消さない。
           if (error instanceof PracticeConflictError) {
@@ -5717,37 +5732,16 @@ export function createApp(deps: AppDeps) {
         if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const accept = async (onPersisted?: (id: string, at: string) => Promise<void>) => {
-          const id = randomUUID();
-          const attached = await bindEventAttachments(attachmentIds, id, principal);
-          if (!attached.ok) return c.json(attached.body, attached.status);
-          const at = new Date().toISOString();
-          // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
-          const outcome = await postExternalPersisted(
-            {
-              type: 'external',
-              id,
-              at,
-              source,
-              payload,
-              ...(principal.kind === 'integration'
-                ? { via: { keyId: principal.keyId, name: principal.name } }
-                : {}),
-              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-            },
-            attached.refs,
-          );
-          if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-          await onPersisted?.(id, at);
-          // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
-          if (principal.kind === 'integration') {
-            topologyActivity.recordExternal({
-              keyId: principal.keyId,
-              name: principal.name,
-              source,
-              at,
-            });
-          }
-          return c.json({ ok: true as const, id });
+          const accepted = await acceptExternal({
+            principal,
+            source,
+            payload,
+            attachmentIds,
+            onPersisted,
+          });
+          if (accepted.kind === 'attach-failed') return c.json(accepted.body, accepted.status);
+          if (accepted.kind === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+          return c.json({ ok: true as const, id: accepted.id });
         };
         if (idempotencyKey === undefined) return accept();
         const scope = eventReceiptScopeOf(principal);
@@ -5826,34 +5820,10 @@ export function createApp(deps: AppDeps) {
         } catch {
           // JSON でなければ本文のまま渡す
         }
-        const id = randomUUID();
-        const attached = await bindEventAttachments(attachmentIds, id, principal);
-        if (!attached.ok) return c.json(attached.body, attached.status);
-        const at = new Date().toISOString();
-        const outcome = await postExternalPersisted(
-          {
-            type: 'external',
-            id,
-            at,
-            source,
-            payload,
-            ...(principal.kind === 'integration'
-              ? { via: { keyId: principal.keyId, name: principal.name } }
-              : {}),
-            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-          },
-          attached.refs,
-        );
-        if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-        if (principal.kind === 'integration') {
-          topologyActivity.recordExternal({
-            keyId: principal.keyId,
-            name: principal.name,
-            source,
-            at,
-          });
-        }
-        return c.json({ ok: true, id });
+        const accepted = await acceptExternal({ principal, source, payload, attachmentIds });
+        if (accepted.kind === 'attach-failed') return c.json(accepted.body, accepted.status);
+        if (accepted.kind === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+        return c.json({ ok: true, id: accepted.id });
       },
     )
 
@@ -6319,13 +6289,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { status, reason } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を閉じる', `${id} を閉じる操作`, why),
-            'task を閉じる日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: 'task を閉じる',
+          subject: `${id} を閉じる操作`,
+          what: 'task を閉じる日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '閉じて'), 409);
@@ -6419,13 +6388,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('閉じた task を開き直す', `${id} を開き直す操作`, why),
-            '閉じた task を開き直す日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: '閉じた task を開き直す',
+          subject: `${id} を開き直す操作`,
+          what: '閉じた task を開き直す日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '開き直して'), 409);
@@ -6509,13 +6477,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { placement } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を並べ替える', `${id} を動かす操作`, why),
-            'task を並べ替える日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: 'task を並べ替える',
+          subject: `${id} を動かす操作`,
+          what: 'task を並べ替える日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '動かして'), 409);
@@ -6624,13 +6591,12 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { title, body, ifMatch } = c.req.valid('json');
-        const retract = (why: string) =>
-          appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を直す', `${id} の編集`, why),
-            'task の編集の日誌の打ち消し',
-            `id=${id}`,
-          );
+        const retract = humanRetractor(stores, {
+          operation: 'task を直す',
+          subject: `${id} の編集`,
+          what: 'task の編集の日誌の打ち消し',
+          detail: `id=${id}`,
+        });
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
           return c.json(unreadableTaskBody(read.reason, '直して'), 409);
@@ -8768,226 +8734,6 @@ export function createApp(deps: AppDeps) {
             ...(guard.kind === 'allowed-with-override'
               ? { override: { managerId: guard.managerId, reason: guard.reason } }
               : {}),
-          }),
-        );
-      },
-    )
-
-    // 墓標（`TranscriptGrave`）を守る: `#pickUpTranscriptGrave` が次の起動時にこの id から蒸留を拾い直すので、本文を一括で落とすとまだ記憶へ移せていない区間が永久に失われる。`isNewest` は「セッションの最新行」を守るだけで意味が違うので、`protectedIds` という別経路で独立に渡す。
-    // 走行中の委譲の行は一括では開けない（`overrideReason` はこの入力に無い）: 一括で複数件を無条件に開ける形は事故の芽が大きい。実行は `stores.archive.remove(id)` を1件ずつ（一括 UPDATE にしない: 1行1トランザクション・`WHERE removed_at IS NULL` で冪等・再開可能）。
-    .post(
-      '/archive/remove',
-      describeRoute({
-        tags: ['archive'],
-        summary: 'アーカイブ済み生ログを絞り込んでまとめて tombstone する',
-        description:
-          'クローン専用の口（クローンの道具 `archive_remove_many` と同じ関数。' +
-          'CLI・Web UI には出さない）。アーカイブ済み生ログの本文を絞り込んで' +
-          'まとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も' +
-          '消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも' +
-          '渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを' +
-          '空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）と' +
-          'セッションの最新行（`skipped.newest`）は一括では開けない——開放が' +
-          '要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の' +
-          '`overrideReason` を使うこと。含有が証明できない行' +
-          '（`skipped.notContained`）は `requireContainment: false` を明示' +
-          'しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は' +
-          '`requireContainment` に関わらず常に守る（`skipped.protected`）。' +
-          '本文だけを落とす（tombstone）——行そのものは消えない。' +
-          '**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /' +
-          '`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの' +
-          '事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。' +
-          '`remove()` 自体を呼ばないので測れない）だけである。' +
-          '**実行時の `raced` は、選定と走行中チェックを通った行が、実際に' +
-          'tombstone する瞬間には他経路（別の一括呼び出し・自動の畳み・' +
-          '単発の `DELETE /archive/:id` など）にすでに tombstone されて' +
-          'いた件数である。** この行はこの呼びが消したことにしない——' +
-          '`removedIds` にも `removedBytes` にも載らず、`raced` だけで' +
-          '数える（日誌には塊の先の行へ書いたうえで、消せなかった id の打ち消しの行を足す）。' +
-          '**塊ごとに、日誌の先の行を書いてから消す。** 書けなかったらその塊は消さずに' +
-          'そこで止め（後ろの塊も消さない）、500 でそれまでに消した分を返す。',
-        responses: {
-          200: jsonResponse('試算、または実際に消した結果。', archiveRemoveManyResponseSchema),
-          500: jsonResponse(
-            '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
-              '止める前の塊は消えている——`removedIds` / `removedBytes` / `raced` がどこまでかを言う。',
-            archiveRemoveManyStoppedResponseSchema,
-          ),
-          400: {
-            description:
-              '絞り込みが1つも無い、`before` が ISO8601 として読めない、`limit` が' +
-              `${ARCHIVE_REMOVE_MANY_LIMIT_MAX} を超える、または requireContainment: ` +
-              'false なのに sessionIds が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(archiveRemoveManyRequestSchema),
-      async (c) => {
-        const { sessionIds, before, minStoredBytes, requireContainment, dryRun, limit, reason } =
-          c.req.valid('json');
-
-        // 絞り込みの無い呼びを断る: 1回でアーカイブを空にできてしまう。
-        if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
-          return c.json(
-            {
-              error:
-                'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
-                '——それは絞り込みが無いのと同じで、1回でアーカイブを空にできて' +
-                'しまう。**1件も消していない。**',
-            },
-            400,
-          );
-        }
-        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
-          // 存在しない日付・日付でない文字列を別の時刻として読んで消さず、時差の無い時刻をデーモンの地方時刻として読んで消さない: 元に戻せない一括削除なので時差を必須にする（道具 `inbox_remove_many` と同じ門・同じ文言）。
-          return c.json(
-            {
-              error:
-                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
-                '**1件も消していない。**',
-            },
-            400,
-          );
-        }
-        if (limit !== undefined && limit > ARCHIVE_REMOVE_MANY_LIMIT_MAX) {
-          return c.json(
-            {
-              error: `limit は ${ARCHIVE_REMOVE_MANY_LIMIT_MAX} 件までである。**1件も消していない。**`,
-            },
-            400,
-          );
-        }
-        if (requireContainment === false && sessionIds === undefined) {
-          return c.json(
-            {
-              error:
-                'requireContainment: false は sessionIds を名指ししたときだけ渡せる' +
-                '——含有の証明を外した状態で全セッションを対象にすると、事故で' +
-                '内容が失われる範囲が際限なく広がる。**1件も消していない。**',
-            },
-            400,
-          );
-        }
-
-        // 順番待ちの墓標も守る（#4884）
-        const protectedIds = (await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId);
-
-        const filter: ArchiveRemoveManyFilter = {
-          ...(sessionIds === undefined ? {} : { sessionIds }),
-          ...(before === undefined ? {} : { before }),
-          ...(minStoredBytes === undefined ? {} : { minStoredBytes }),
-        };
-        // 絞りと選定は `selectArchiveRemovalTargets` に閉じる: SQL 側に同じ判定を複製しない。
-        const allRows = await stores.archive.list();
-        const selection = selectArchiveRemovalTargets(allRows, filter, {
-          requireContainment,
-          limit: limit ?? ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
-          protectedIds,
-        });
-
-        // `denied` / `unknown` はどちらも安全側に倒して飛ばす。この guard ループは dryRun 分岐より前で回す: `guardArchiveRemoval` はプロセス内の像を読むだけで安く、後ろに置くと下見が「guard で減る前」の数を返して実行と `targeted` / `skipped.inUse` が食い違い、下見が実行の予告にならない（この口は「下見を既定にして、見てから押す」のが設計の中心）。
-        // 第4引数には `selectArchiveRemovalTargets` へ渡したのと同じ実効値を渡す: `false`（`sessionIds` を名指ししたときだけ開ける道）は含有の証明が無いので、ここでも狭めてはいけない。値をそのまま転送して選定側と guard 側の条件を揃える。
-        const effectiveRequireContainment = requireContainment ?? true;
-        const removableTargets: ArchiveEntry[] = [];
-        let skippedInUse = 0;
-        for (const target of selection.targets) {
-          const guard = guardArchiveRemoval(
-            clone.managers,
-            target.id,
-            undefined,
-            effectiveRequireContainment,
-          );
-          if (guard.kind === 'denied' || guard.kind === 'unknown') {
-            skippedInUse += 1;
-            continue;
-          }
-          removableTargets.push(target);
-        }
-
-        // `targeted` は guard を通った後の件数にする: guard 前の件数だと、飛ばした行が `targeted` と `skipped.inUse` の両方に数えられて `matched === targeted + remaining + skipped の総和` が破れる。`removedIds` も guard 通過後だけ。`limit` は guard より前に効くので、`targeted` が `limit` に届かないのに `remaining` が残ることはバグではない。
-        const targeted = removableTargets.length;
-
-        if (dryRun !== false) {
-          return c.json(
-            archiveRemoveManyResponseSchema.parse({
-              ok: true,
-              dryRun: true,
-              totalRows: selection.totalRows,
-              matched: selection.matched,
-              targeted,
-              removedIds: removableTargets.map((row) => row.id),
-              removedBytes: 0,
-              remaining: selection.remaining,
-              skipped: { ...selection.skipped, inUse: skippedInUse },
-              // dryRun は `remove()` を呼ばないので raced は測れない: 欄を省くと「測っていない」と区別がつかなくなるので常に0で出す。
-              raced: 0,
-            }),
-          );
-        }
-
-        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeArchiveChunkJournalFirst`）: 本文は戻らないので、消してから書くと日誌が落ちた回に何を消したかが残らない。
-        // 塊の先の行が書けなければ、その塊は消さずにそこで止める（後ろの塊も消さない）。止める前の塊は消えているので、どこまで消したかを 500 の本文で返す。
-        const chunks = chunkIdsByChars(
-          removableTargets.map((row) => row.id),
-          ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
-        );
-        const filterText = [
-          ...(sessionIds === undefined ? [] : [`sessionIds=[${sessionIds.join(', ')}]`]),
-          ...(before === undefined ? [] : [`before=${before}`]),
-          ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
-        ].join(' / ');
-        const removedIds: string[] = [];
-        let removedBytes = 0;
-        let raced = 0;
-        for (const [index, chunk] of chunks.entries()) {
-          const chunkIds = new Set(chunk);
-          const chunkTargetIds = removableTargets
-            .filter((row) => chunkIds.has(row.id))
-            .map((row) => row.id);
-          const outcome = await removeArchiveChunkJournalFirst(stores, chunkTargetIds, () => ({
-            type: 'decision',
-            decision:
-              '人間がアーカイブ済み生ログの本文を絞り込みで一括して tombstone する' +
-              `（${index + 1}/${chunks.length} 塊目、この塊は ${chunkTargetIds.length} 件）: ${reason}\n` +
-              `絞り込み: ${filterText}\n` +
-              `消す id: ${chunkTargetIds.join(' ')}`,
-            grounds: '人間が直接 API から操作した',
-          }));
-          if (outcome.kind === 'journal-failed') {
-            noteDroppedRecord(
-              'アーカイブ一括 tombstone の日誌（この塊は消していない）',
-              `chunk=${index + 1}/${chunks.length} count=${chunkTargetIds.length}`,
-              kindOfError(outcome.error),
-            );
-            return c.json(
-              archiveRemoveManyStoppedResponseSchema.parse({
-                ...journalWriteFailedBody(),
-                removedIds,
-                removedBytes,
-                raced,
-              }),
-              500,
-            );
-          }
-          // 他経路が先に消していた id（`already` も同じ競合）はこの呼びが消したことにしない: `targeted` には数えているので、黙って落とすと `targeted === removedIds.length + raced` が破れる。隠さず `raced` へ数える。
-          removedIds.push(...outcome.removedIds);
-          removedBytes += outcome.removedBytes;
-          raced += outcome.racedIds.length;
-        }
-
-        return c.json(
-          archiveRemoveManyResponseSchema.parse({
-            ok: true,
-            dryRun: false,
-            totalRows: selection.totalRows,
-            matched: selection.matched,
-            targeted,
-            removedIds,
-            removedBytes,
-            remaining: selection.remaining,
-            skipped: { ...selection.skipped, inUse: skippedInUse },
-            raced,
           }),
         );
       },

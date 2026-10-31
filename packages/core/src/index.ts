@@ -379,11 +379,7 @@ export {
   type ApplyCredentialsResult,
   type CredentialService,
 } from './credential-service.js';
-export {
-  applyAppScopedEnvVars,
-  migrateEnvBaseCredentialsOnce,
-  seedDefaultEnvVars,
-} from './env-vars-boot.js';
+export { applyAppScopedEnvVars, seedDefaultEnvVars } from './env-vars-boot.js';
 export {
   DEFAULT_PROFILE_PATH,
   PROFILE_EVAL_TIMEOUT_MS,

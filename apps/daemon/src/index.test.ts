@@ -517,18 +517,15 @@ describe('describeReopenedTokenNotice', () => {
 describe('子プロセスの env の土台は、書き写す前のスナップショットである（2026-10-06）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-  it('スナップショット → 移行 → 書き写し の順に並ぶ', () => {
+  it('スナップショット → 書き写し の順に並ぶ', () => {
     const anchors = [
       'const bootEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };',
-      'await migrateEnvBaseCredentialsOnce(stores, bootEnvSnapshot);',
       'await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);',
     ];
     expect(missingAnchors(source, anchors)).toEqual([]);
     const snapshotAt = source.indexOf(anchors[0] ?? '');
-    const migrateAt = source.indexOf(anchors[1] ?? '');
-    const applyAt = source.indexOf(anchors[2] ?? '');
-    expect(snapshotAt).toBeLessThan(migrateAt);
-    expect(migrateAt).toBeLessThan(applyAt);
+    const applyAt = source.indexOf(anchors[1] ?? '');
+    expect(snapshotAt).toBeLessThan(applyAt);
   });
 
   it('クローンの子の土台と、同一プロセスの runner の env に、スナップショット由来を渡す', () => {

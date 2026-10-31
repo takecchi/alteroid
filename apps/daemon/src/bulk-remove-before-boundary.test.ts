@@ -47,15 +47,6 @@ describe('一括削除の before の読み（存在しない日付・時差な�
     });
     expect(response.status).toBe(400);
   });
-
-  it.each([
-    ['存在しない日付', '2026-02-31T00:00:00Z'],
-    ['時差が無い', '2026-10-06T00:00:00'],
-  ])('POST /archive/remove は %s の before を 400 で断る', async (_label, before) => {
-    const app = setup();
-    const response = await post(app, '/archive/remove', { before, reason: '古い退避の整理' });
-    expect(response.status).toBe(400);
-  });
 });
 
 describe('一括削除の before は時差つきの時刻だけ（#3390）', () => {
@@ -85,25 +76,6 @@ describe('一括削除の before は時差つきの時刻だけ（#3390）', () 
     expect(error).toContain('1件も消していない');
   });
 
-  it.each(REFUSED)(
-    'POST /archive/remove は「%s」を、道具と同じ文言の 400 で断る',
-    async (before) => {
-      const app = setup();
-      const response = await post(app, '/archive/remove', {
-        before,
-        reason: '古い退避の整理',
-        dryRun: false,
-      });
-      expect(response.status).toBe(400);
-      const { error } = (await response.json()) as { error: string };
-      expect(error).toContain(
-        `before に渡された「${before}」は日時として読めない、または時差が無い`,
-      );
-      expect(error).toContain('時差 Z か +09:00 を必ず書くこと');
-      expect(error).toContain('1件も消していない');
-    },
-  );
-
   it.each(ACCEPTED)('POST /inbox/remove は時差つきの「%s」を通す（試算）', async (before) => {
     const app = setup();
     const response = await post(app, '/inbox/remove', {
@@ -111,12 +83,6 @@ describe('一括削除の before は時差つきの時刻だけ（#3390）', () 
       before,
       reason: '古い合図の整理',
     });
-    expect(response.status).toBe(200);
-  });
-
-  it.each(ACCEPTED)('POST /archive/remove は時差つきの「%s」を通す（試算）', async (before) => {
-    const app = setup();
-    const response = await post(app, '/archive/remove', { before, reason: '古い退避の整理' });
     expect(response.status).toBe(200);
   });
 });
