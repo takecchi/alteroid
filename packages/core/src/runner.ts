@@ -2485,6 +2485,34 @@ function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'un
   return 'unknown';
 }
 
+/** SDK の背景処理の1行（`unknown`）から、文字列の欄だけを読む。文字列でない欄は `undefined`（読み手が既定を決める）。 */
+interface BackgroundTaskRow {
+  id?: string;
+  type?: string;
+  status?: string;
+  description?: string;
+  command?: string;
+}
+
+function taskRow(task: unknown): BackgroundTaskRow {
+  const t = task as Record<keyof BackgroundTaskRow, unknown>;
+  const str = (value: unknown): string | undefined =>
+    typeof value === 'string' ? value : undefined;
+  return {
+    id: str(t.id),
+    type: str(t.type),
+    status: str(t.status),
+    description: str(t.description),
+    command: str(t.command),
+  };
+}
+
+// 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
+function truncateWithNote(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  return text.slice(0, codePointBoundary(text, limit)) + `…（上限 ${limit} 文字で切った）`;
+}
+
 /** 鍵の付け替えで畳む間に預かる peer の窓口の結び（#4734）。受け口はいつも `session`（いまの担当のセッション）へ回る。 */
 interface PeerBinding {
   session: RunnerSession;
@@ -6194,8 +6222,8 @@ class RunnerSession {
       const stopHookActive = record.stopHookActive;
 
       const mine = tasks.filter((task) => {
-        const id = (task as { id?: unknown }).id;
-        if (typeof id !== 'string' || agentId === undefined) return false;
+        const { id } = taskRow(task);
+        if (id === undefined || agentId === undefined) return false;
         return this.#stopState.backgroundTaskOwner(id) === agentId;
       });
 
@@ -6210,7 +6238,7 @@ class RunnerSession {
       const settled: unknown[] = [];
       let unknownStatusCount = 0;
       for (const task of mine) {
-        const kind = classifyBackgroundTaskStatus((task as { status?: unknown }).status);
+        const kind = classifyBackgroundTaskStatus(taskRow(task).status);
         if (kind === 'settled') {
           settled.push(task);
           continue;
@@ -6244,8 +6272,8 @@ class RunnerSession {
             'この行が出たら計器のほうを疑う — SDK が status の語彙を変えた見込みが高い。';
       // `id` を防御的にもう一度 `typeof` で絞る: 前提が崩れても例外で落ちない側へ倒すため
       const remainingIds = remaining
-        .map((task) => (task as { id?: unknown }).id)
-        .filter((id): id is string => typeof id === 'string');
+        .map((task) => taskRow(task).id)
+        .filter((id): id is string => id !== undefined);
       const waitOutcome = await this.#waitForBackgroundTasks(remainingIds);
 
       // 待ちの途中で畳まれたら起こし直さず返す: 結果が誰にも届かず、`recordCutOff` を通すと新しい世代で「打ち切った作業者」の注記を誤って出すため
@@ -6292,10 +6320,8 @@ class RunnerSession {
         // 出力の置き場所が取れなければ「取れなかった」と書く: 作り物のパスを主張しないため
         const snapshotCommands = new Map<string, string>();
         for (const task of remaining) {
-          const t = task as { id?: unknown; command?: unknown };
-          if (typeof t.id === 'string' && typeof t.command === 'string') {
-            snapshotCommands.set(t.id, t.command);
-          }
+          const { id, command } = taskRow(task);
+          if (id !== undefined && command !== undefined) snapshotCommands.set(id, command);
         }
         const finishedLines = remainingIds.map((id) => {
           const command = snapshotCommands.get(id) ?? this.#stopState.backgroundTaskCommand(id);
@@ -6366,9 +6392,9 @@ class RunnerSession {
         },
       });
       const cutOffTasks: CutOffBackgroundTaskSummary[] = remaining.flatMap((task) => {
-        const t = task as { id?: unknown; command?: unknown };
-        if (typeof t.id !== 'string') return [];
-        return [{ id: t.id, ...(typeof t.command === 'string' ? { command: t.command } : {}) }];
+        const { id, command } = taskRow(task);
+        if (id === undefined) return [];
+        return [{ id, ...(command === undefined ? {} : { command }) }];
       });
       this.#cutOffWorkers.recordCutOff(agentId, cutOffTasks);
 
@@ -6416,18 +6442,12 @@ class RunnerSession {
 
   #renderSubagentStopTaskLines(tasks: readonly unknown[]): string[] {
     return tasks.map((task) => {
-      const t = task as {
-        id?: unknown;
-        type?: unknown;
-        status?: unknown;
-        description?: unknown;
-        command?: unknown;
-      };
-      const id = typeof t.id === 'string' ? t.id : '(不明)';
-      const type = typeof t.type === 'string' ? t.type : '(不明)';
-      const status = typeof t.status === 'string' ? t.status : '(不明)';
-      const description = typeof t.description === 'string' ? t.description : '(不明)';
-      const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
+      const t = taskRow(task);
+      const id = t.id ?? '(不明)';
+      const type = t.type ?? '(不明)';
+      const status = t.status ?? '(不明)';
+      const description = t.description ?? '(不明)';
+      const command = t.command === undefined ? '' : ` command=${t.command}`;
       // `id` と `command` を `description` より前に置く: `#truncateSubagentStopText` は末尾から切るので、`description` が先に切られる側にするため
       return `- id=${id}${command} type=${type} status=${status} description=${description}`;
     });
@@ -6435,11 +6455,7 @@ class RunnerSession {
 
   // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
   #truncateSubagentStopText(text: string): string {
-    if (text.length <= SUBAGENT_STOP_NOTE_TEXT_LIMIT) return text;
-    return (
-      text.slice(0, codePointBoundary(text, SUBAGENT_STOP_NOTE_TEXT_LIMIT)) +
-      `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`
-    );
+    return truncateWithNote(text, SUBAGENT_STOP_NOTE_TEXT_LIMIT);
   }
 
   /**
@@ -6454,9 +6470,7 @@ class RunnerSession {
 
     const listed = settled
       .map((task) => {
-        const t = task as { type?: unknown; status?: unknown };
-        const type = typeof t.type === 'string' ? t.type : '(不明)';
-        const status = typeof t.status === 'string' ? t.status : '(不明)';
+        const { type = '(不明)', status = '(不明)' } = taskRow(task);
         return `type=${type} status=${status}`;
       })
       .join(' / ');
@@ -6479,18 +6493,16 @@ class RunnerSession {
     if (this.#stopState.ownerLookupFailureNoted) return;
 
     const orphans = tasks.filter((task) => {
-      const t = task as { id?: unknown; type?: unknown };
-      if (!isOwnerRecordableTaskType(t.type)) return false;
-      return typeof t.id !== 'string' || !this.#stopState.hasBackgroundTaskOwner(t.id);
+      const { id, type } = taskRow(task);
+      if (!isOwnerRecordableTaskType(type)) return false;
+      return id === undefined || !this.#stopState.hasBackgroundTaskOwner(id);
     });
     if (orphans.length === 0) return;
 
     this.#stopState.markOwnerLookupFailureNoted();
     const listed = orphans
       .map((task) => {
-        const t = task as { id?: unknown; type?: unknown };
-        const id = typeof t.id === 'string' ? t.id : '(不明)';
-        const type = typeof t.type === 'string' ? t.type : '(不明)';
+        const { id = '(不明)', type = '(不明)' } = taskRow(task);
         return `id=${id} type=${type}`;
       })
       .join(' / ');
@@ -6535,7 +6547,7 @@ class RunnerSession {
       const statuses = { live: 0, settled: 0, unknown: 0 };
       for (const task of tasks) {
         owners[this.#stopTaskOwnerKind(task)] += 1;
-        statuses[classifyBackgroundTaskStatus((task as { status?: unknown }).status)] += 1;
+        statuses[classifyBackgroundTaskStatus(taskRow(task).status)] += 1;
       }
 
       const stopHookActiveText =
@@ -6591,30 +6603,24 @@ class RunnerSession {
   #stopTaskOwnerKind(
     task: unknown,
   ): 'manager' | 'worker' | 'delegation' | 'unrecordable' | 'unresolved' {
-    const t = task as { id?: unknown; type?: unknown };
-    const owner = typeof t.id === 'string' ? this.#stopState.backgroundTaskOwner(t.id) : undefined;
+    const { id, type } = taskRow(task);
+    const owner = id === undefined ? undefined : this.#stopState.backgroundTaskOwner(id);
     if (owner !== undefined) return owner === '' ? 'manager' : 'worker';
-    if (t.type === 'subagent') return 'delegation';
-    return isOwnerRecordableTaskType(t.type) ? 'unresolved' : 'unrecordable';
+    if (type === 'subagent') return 'delegation';
+    return isOwnerRecordableTaskType(type) ? 'unresolved' : 'unrecordable';
   }
 
   // `#renderSubagentStopTaskLines` を使い回さない: 起こし直しの回数を付けると `0回目` が並び、「起こし直しの枠がまだ在る」と読まれるため
   #renderStopTaskLine(task: unknown): string {
-    const t = task as {
-      id?: unknown;
-      type?: unknown;
-      status?: unknown;
-      description?: unknown;
-      command?: unknown;
-    };
-    const id = typeof t.id === 'string' ? t.id : '(不明)';
-    const type = typeof t.type === 'string' ? t.type : '(不明)';
-    const status = typeof t.status === 'string' ? t.status : '(不明)';
-    const description = typeof t.description === 'string' ? t.description : '(不明)';
-    const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
+    const t = taskRow(task);
+    const id = t.id ?? '(不明)';
+    const type = t.type ?? '(不明)';
+    const status = t.status ?? '(不明)';
+    const description = t.description ?? '(不明)';
+    const command = t.command === undefined ? '' : ` command=${t.command}`;
     const kind = this.#stopTaskOwnerKind(task);
     const owner =
-      kind === 'worker' && typeof t.id === 'string'
+      kind === 'worker' && t.id !== undefined
         ? `worker:${this.#stopState.backgroundTaskOwner(t.id) ?? ''}`
         : kind;
     return `- id=${id} owner=${owner} type=${type} status=${status} description=${description}${command}`;
@@ -6641,11 +6647,7 @@ class RunnerSession {
 
   // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
   #truncateStopNoteText(text: string): string {
-    if (text.length <= STOP_NOTE_TEXT_LIMIT) return text;
-    return (
-      text.slice(0, codePointBoundary(text, STOP_NOTE_TEXT_LIMIT)) +
-      `…（上限 ${STOP_NOTE_TEXT_LIMIT} 文字で切った）`
-    );
+    return truncateWithNote(text, STOP_NOTE_TEXT_LIMIT);
   }
 
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
