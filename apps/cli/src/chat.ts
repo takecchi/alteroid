@@ -736,6 +736,9 @@ export function foldTrailingBackslashes(line: string): { text: string; continues
   };
 }
 
+// POST /chat の通信そのものが落ちた直近の送信（応答が返った時点で捨てる）。デーモンが受け取ったか分からない。
+let unreachedSend: { key: string; clientMessageId: string } | null = null;
+
 export async function sendMessage(
   target: Target,
   text: string,
@@ -751,8 +754,18 @@ export async function sendMessage(
     hooks?: ReplHooks;
   } = {},
 ): Promise<string | null> {
-  // 送信ごとに新しい id: 取り下げた id での再送は重複として受理されて配られない。
-  const clientMessageId = randomUUID();
+  // 新しい発言は新しい id: 取り下げた id での再送は重複として受理されて配られない。
+  // 通信そのものが落ちた送信の同じ発言の送り直しだけは同じ id（web と同じ）: デーモンが受け取り済みなら重複として弾かれる。
+  const resendKey = JSON.stringify([
+    target.baseUrl,
+    text,
+    conversationId,
+    supersedes ?? null,
+    options.attachments ?? [],
+  ]);
+  const clientMessageId =
+    unreachedSend?.key === resendKey ? unreachedSend.clientMessageId : randomUUID();
+  unreachedSend = null;
   const stream = new AbortController();
   const turn: TurnHandle = {
     clientMessageId,
@@ -780,6 +793,7 @@ export async function sendMessage(
     }),
   }).catch((error: unknown) => {
     if (turn.withdrawn) return null;
+    unreachedSend = { key: resendKey, clientMessageId };
     throw error;
   });
   if (response === null) {
@@ -868,6 +882,8 @@ async function renderChatEvents(
   let failedOrLimited = false;
   let ended = false;
   let sawEvent = false;
+  let duplicateOpen = false;
+  let sawAfterOpen = false;
   // 本文は改行までためて、行ごとに伏せてから書く: チャンクごとに伏せると、2つのチャンクにまたがったトークンは
   // どちらの断片も規則に合わずに出る。端末へ書いたものは取り消せない。
   let pending = '';
@@ -898,9 +914,15 @@ async function renderChatEvents(
       sawEvent = true;
       clearStatus();
       if (event.name !== 'text') flushPending();
+      if (event.name !== 'open') sawAfterOpen = true;
       switch (event.name) {
         case 'open': {
-          const data = event.json<{ conversationId: string; pending?: unknown }>();
+          const data = event.json<{
+            conversationId: string;
+            pending?: unknown;
+            duplicate?: boolean;
+          }>();
+          if (data?.duplicate === true) duplicateOpen = true;
           if (data) {
             nextConversationId = data.conversationId;
             turn.conversationId = data.conversationId;
@@ -1015,6 +1037,13 @@ async function renderChatEvents(
   flushPending();
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
+  if (!ended && !turn.withdrawn && !resuming && duplicateOpen && !sawAfterOpen) {
+    // open（duplicate）だけで閉じた受け取り済みの送り直しは「途中で切れた」ではない（web と同じ）: 二重には積んでいない。
+    ended = true;
+    stdout.write(
+      '  前の送信は受け取り済みでした（二重には送っていません）。返答はこれから出るか、/resume・/conversation で読めます\n',
+    );
+  }
   if (!ended && !turn.withdrawn) {
     stdout.write(
       !sawEvent
