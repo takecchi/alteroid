@@ -298,3 +298,32 @@ describe('過去の評定のキーを持つ行が読める（#2699）', () => {
     if (parsed.success) expect(parsed.data.status).toBe('done');
   });
 });
+
+describe('外した欄を持つ古い行が読める（#6048）', () => {
+  it('journalEntrySchema: inbox_flow.retained.redeliveredClosed を持つ古い行は通り、その欄は捨てられる', () => {
+    const parsed = journalEntrySchema.safeParse({
+      type: 'inbox_flow',
+      id: 'j1',
+      at: '2026-01-01T00:00:00.000Z',
+      windowStartedAt: '2026-01-01T00:00:00.000Z',
+      arrived: { total: 0, byType: [] },
+      delivered: { total: 0, byType: [] },
+      settled: { total: 0, byType: [] },
+      pending: { count: 0 },
+      retained: { unread: 1, redelivered: 2, redeliveredClosed: 3, pendingCollapse: 4 },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'inbox_flow') {
+      expect(parsed.data.retained).toEqual({ unread: 1, redelivered: 2, pendingCollapse: 4 });
+    }
+  });
+
+  it('inboxEventSchema: commitmentExempt を持つ古い受信箱の行は通り、その欄は捨てられる', () => {
+    const parsed = inboxEventSchema.safeParse({
+      ...managerMessageEvent({ text: '本文はなんでもよい' }),
+      commitmentExempt: true,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect('commitmentExempt' in parsed.data).toBe(false);
+  });
+});

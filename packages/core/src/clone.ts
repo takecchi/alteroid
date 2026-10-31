@@ -424,22 +424,9 @@ export function compactionLikelyThisTurn(
 }
 
 /**
- * 差分・畳みを使ってよいと言えない回か（#4941）。`compactionLikelyThisTurn` の見込みに加えて、見込みの材料が取れない回（使用量の観測が無い・閾値や量が不明・自動要約の有無が不明）も真にする（安全側）。
- * 材料が無いまま偽にすると、要約が走っても差分の参照（「全文は会話の上にある」）だけが残る。自動要約が無効と分かっている回（`isAutoCompactEnabled === false`）は、要約が走らないので偽。
+ * 使用量の観測から固定文を全文へ戻す理由のラベル（日誌の計測用。#4941）。`compactionLikelyThisTurn` の見込みに加えて、見込みの材料が取れない回（使用量の観測が無い・閾値や量が不明・自動要約の有無が不明）も戻す（安全側）。戻さない回は null。
+ * 自動要約が無効と分かっている回（`isAutoCompactEnabled === false`）は、要約が走らないので null。
  */
-export function compactionLikelyOrUnknownThisTurn(
-  usage: {
-    totalTokens?: number;
-    autoCompactThreshold?: number;
-    isAutoCompactEnabled?: boolean;
-    error?: string;
-  } | null,
-  lastGrowthTokens: number,
-): boolean {
-  return digestUsageResetReason(usage, lastGrowthTokens) !== null;
-}
-
-/** 使用量の観測から固定文を全文へ戻す理由のラベル（日誌の計測用。`compactionLikelyOrUnknownThisTurn` の判定と同じ分岐）。戻さない回は null。 */
 export type DigestUsageResetReason =
   'usage_null' | 'usage_error' | 'usage_threshold_missing' | 'compaction_likely';
 
@@ -3477,7 +3464,7 @@ class Clone implements CloneHost {
   /**
    * この入力を受け取る会話が、前の全文の載った会話と同じと言えない回か（#4941）。
    * `query === null`（`#ensureQuery` が resume の有無を問わず開き直す）に加え、入力を閉じて作り直しを待っている窓（`inputEndedForRecycle`。`clearQuery()` まで `query` は非 null で、`#ensureQuery` は resume なしの新しい会話を開く）。
-   * 使用量の観測が取れない回も真（`compactionLikelyOrUnknownThisTurn`）。
+   * 使用量の観測が取れない回も真（`digestUsageResetReason`）。
    */
   #conversationMayDifferFromLastFull(): boolean {
     return this.#fullReasonThisTurn() !== null;
@@ -8373,8 +8360,6 @@ class Clone implements CloneHost {
       retained: {
         unread: this.#delivery.unreadSize,
         redelivered: this.#delivery.redeliveryState.redeliveredSize,
-        // 台帳で片付け済みの配り直しを控える仕組みは外れた（台帳の撤去の段3）。欄は、この欄を持つ古い日誌の行を読み続けるために残し、常に 0 を書く
-        redeliveredClosed: 0,
         pendingCollapse: this.#delivery.collapseSize,
       },
     });

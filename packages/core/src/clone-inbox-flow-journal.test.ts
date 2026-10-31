@@ -120,7 +120,6 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     expect(row.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
 
@@ -147,13 +146,11 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     expect(first.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
     expect(second.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
 
@@ -198,20 +195,18 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     expect(first.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 1,
     });
     expect(second.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 1,
     });
 
     await s.clone.stop();
   });
 
-  it('拾い直した合図は retained.redelivered に一時的に載り（redeliveredClosed は台帳の撤去のあと常に 0）、消し込みが効いた後の窓では0に戻る（`this.#redelivered.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
+  it('拾い直した合図は retained.redelivered に一時的に載り、消し込みが効いた後の窓では0に戻る（`this.#redelivered.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
     const stores = createMemoryStores();
 
     const live = humanMessage('生きている拾い直し', 'conv-live');
@@ -245,7 +240,6 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     expect(first.retained).toEqual({
       unread: 1,
       redelivered: 1,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
 
@@ -262,7 +256,6 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     expect(second.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      redeliveredClosed: 0,
       pendingCollapse: 0,
     });
 
