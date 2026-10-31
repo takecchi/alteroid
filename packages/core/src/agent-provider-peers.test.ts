@@ -7,7 +7,6 @@ import {
   PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
-  resolvePeerModels,
   resolvePeerModelsOf,
   resolvePeerOpening,
   samePeerOpening,
@@ -82,25 +81,29 @@ describe('ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS の解釈（#3934）', () => {
 
   it('置かれた一覧は、開いているかどうかに依らず採る（資格は後から届くため）', () => {
     const env = { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: 'gpt-5.5' };
-    expect(resolvePeerModels(env, defaultsOf)).toEqual({ codex: ['gpt-5.5'] });
+    expect(resolvePeerModelsOf(env, CODEX, defaultsOf)).toEqual({
+      models: ['gpt-5.5'],
+      source: 'env',
+    });
   });
 
   it('未設定・空・空白だけなら既定の一覧', () => {
     for (const raw of [undefined, '', '   ']) {
       const env = raw === undefined ? {} : { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: raw };
-      expect(resolvePeerModels(env, defaultsOf)).toEqual({ codex: [...DEFAULTS] });
-      expect(resolvePeerModelsOf(env, CODEX, defaultsOf)?.source).toBe('default');
+      expect(resolvePeerModelsOf(env, CODEX, defaultsOf)).toEqual({
+        models: [...DEFAULTS],
+        source: 'default',
+      });
     }
   });
 
   it('既定の一覧も変数も無い provider は載せない（model 引数を出さない）', () => {
-    expect(resolvePeerModels({}, () => undefined)).toEqual({});
-    expect(resolvePeerModels({}, () => [])).toEqual({});
+    expect(resolvePeerModelsOf({}, CODEX, () => undefined)).toBeUndefined();
+    expect(resolvePeerModelsOf({}, CODEX, () => [])).toBeUndefined();
   });
 
   it('置かれた一覧は既定に足さず置き換える', () => {
     const env = { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: 'gpt-6-astra' };
-    expect(resolvePeerModels(env, defaultsOf)).toEqual({ codex: ['gpt-6-astra'] });
     expect(resolvePeerModelsOf(env, CODEX, defaultsOf)).toEqual({
       models: ['gpt-6-astra'],
       source: 'env',
@@ -121,8 +124,9 @@ describe('ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS の解釈（#3934）', () => {
   });
 
   it('層の provider（Claude）の一覧は読まない', () => {
-    expect(resolvePeerModels({ ALTEROID_MANAGER_PEER_CLAUDE_MODELS: 'opus' }, defaultsOf)).toEqual({
-      codex: [...DEFAULTS],
-    });
+    expect(
+      resolvePeerModelsOf({ ALTEROID_MANAGER_PEER_CLAUDE_MODELS: 'opus' }, CODEX, defaultsOf)
+        ?.models,
+    ).toEqual([...DEFAULTS]);
   });
 });

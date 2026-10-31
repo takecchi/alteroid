@@ -92,7 +92,7 @@ const EXEMPT: readonly Exemption[] = [
   },
   {
     tool: 'memory_list',
-    why: '説明文が名乗る一覧が実装側に配列として存在しない（保護状態の言い方は describeMemoryProtectionStatus が持つが、説明文はその値を列挙していない）。ふるまいの歯は tools.test.ts の memory_list の節が持つ',
+    why: '説明文が名乗る一覧が実装側に配列として存在しない。ふるまいの歯は tools.test.ts の memory_list の節が持つ',
   },
   {
     tool: 'progress_read',

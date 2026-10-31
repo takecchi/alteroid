@@ -114,20 +114,3 @@ export function resolvePeerModelsOf(
   if (fallback === undefined || fallback.length === 0) return undefined;
   return { models: [...fallback], source: 'default' };
 }
-
-/**
- * peer になれる provider ごとにモデルの一覧を解く（{@link resolvePeerModelsOf}）。どちらも無い provider は載せない。
- * 開いているかどうかには依らない（資格は後から届くので、起動時に「使われない」とは言えない）。
- */
-export function resolvePeerModels(
-  env: NodeJS.ProcessEnv,
-  defaultsOf: PeerDefaultModelsOf,
-  providers: readonly AgentProviderId[] = PEER_PROVIDER_IDS,
-): Partial<Record<AgentProviderId, readonly string[]>> {
-  const models: Partial<Record<AgentProviderId, readonly string[]>> = {};
-  for (const provider of providers) {
-    const resolved = resolvePeerModelsOf(env, provider, defaultsOf);
-    if (resolved !== undefined) models[provider] = resolved.models;
-  }
-  return models;
-}
