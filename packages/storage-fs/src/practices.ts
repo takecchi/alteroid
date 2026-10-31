@@ -10,6 +10,7 @@ import {
   practiceVersionSchema,
   UnreadablePracticeError,
   compareCodeUnits,
+  describeSkippedRow,
   summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
@@ -70,31 +71,6 @@ function extractVersion(raw: unknown): number | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const version = (raw as Record<string, unknown>).version;
   return typeof version === 'number' ? version : undefined;
-}
-
-// slug 以外の値は載せない: `title` / `content` には人間・クローンの自由文がそのまま入りうるため
-function describeSkippedPracticeRow(params: {
-  index: number;
-  reason: string;
-  slug?: string;
-}): string {
-  const slugNote = params.slug === undefined ? '' : ` slug=${JSON.stringify(params.slug)}`;
-  return (
-    `alteroid: practices の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${slugNote}`
-  );
-}
-
-function describeSkippedPracticeVersionRow(params: {
-  index: number;
-  reason: string;
-  slug?: string;
-}): string {
-  const slugNote = params.slug === undefined ? '' : ` slug=${JSON.stringify(params.slug)}`;
-  return (
-    `alteroid: practiceVersions の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${slugNote}`
-  );
 }
 
 // 1本の配列へ合流させる: 分けたまま書くと、次の `#read()` で未知のキーとして黙って捨てられるため
@@ -327,11 +303,12 @@ export class FsPracticeStore implements PracticeStore {
           return;
         }
         invalidPracticesRaw.push(rawEntry);
+        // slug 以外の値は載せない: `title` / `content` には人間・クローンの自由文がそのまま入りうるため
         writeStderrLine(
-          `${describeSkippedPracticeRow({
+          `${describeSkippedRow('practices', 'slug', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            slug: extractSlug(rawEntry),
+            key: extractSlug(rawEntry),
           })}\n`,
         );
       });
@@ -345,10 +322,10 @@ export class FsPracticeStore implements PracticeStore {
         }
         invalidPracticeVersionsRaw.push(rawVersion);
         writeStderrLine(
-          `${describeSkippedPracticeVersionRow({
+          `${describeSkippedRow('practiceVersions', 'slug', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            slug: extractSlug(rawVersion),
+            key: extractSlug(rawVersion),
           })}\n`,
         );
       });

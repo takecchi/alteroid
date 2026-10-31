@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   compareIsoInstant,
   createUnreadableRowOnce,
+  describeSkippedRow,
   permissionGrantSchema,
   preparePermissionGrantForPut,
   UnreadablePermissionGrantError,
@@ -37,15 +38,6 @@ interface GrantFile {
 }
 
 const EMPTY: GrantFile = { grants: [], invalidGrantsRaw: [] };
-
-// id 以外の値は載せない: `allows` / `denies` / `answer` には人間の回答の原文がそのまま入りうるため
-function describeSkippedGrantRow(params: { index: number; reason: string; id?: string }): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: 許可の記録の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
-}
 
 export class FsPermissionGrantStore implements PermissionGrantStore {
   readonly #dir: string;
@@ -192,11 +184,12 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
         }
         invalidGrantsRaw.push(rawGrant);
         if (this.#unreadableOnce.sawUnreadable(key)) {
+          // id 以外の値は載せない: `allows` / `denies` / `answer` には人間の回答の原文がそのまま入りうるため
           writeStderrLine(
-            `${describeSkippedGrantRow({
+            `${describeSkippedRow('許可の記録', 'id', {
               index,
               reason: summarizeInvalidFields(result.error.issues),
-              id,
+              key: id,
             })}\n`,
           );
         }

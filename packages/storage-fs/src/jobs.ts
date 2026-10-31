@@ -8,6 +8,7 @@ import {
   pendingApprovalSchema,
   UnreadableApprovalError,
   UnreadableJobError,
+  describeSkippedRow,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -62,28 +63,6 @@ function summarizeRawApprovalProblem(raw: unknown): string {
 function summarizeRawJobProblem(raw: unknown): string {
   const result = jobSchema.safeParse(raw);
   return result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
-}
-
-// id 以外の値は載せない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうるため
-function describeSkippedJobRow(params: { index: number; reason: string; id?: string }): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: jobs の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
-}
-
-// id 以外の値は載せない: `question` / `context` には人間の依頼文がそのまま入りうるため
-function describeSkippedApprovalRow(params: {
-  index: number;
-  reason: string;
-  id?: string;
-}): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: approvals の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
 }
 
 export class FsJobStore implements JobStore {
@@ -259,11 +238,12 @@ export class FsJobStore implements JobStore {
           return;
         }
         invalidJobsRaw.push(rawJob);
+        // id 以外の値は載せない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうるため
         writeStderrLine(
-          `${describeSkippedJobRow({
+          `${describeSkippedRow('jobs', 'id', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawJob),
+            key: extractRowId(rawJob),
           })}\n`,
         );
       });
@@ -276,11 +256,12 @@ export class FsJobStore implements JobStore {
           return;
         }
         invalidApprovalsRaw.push(rawApproval);
+        // id 以外の値は載せない: `question` / `context` には人間の依頼文がそのまま入りうるため
         writeStderrLine(
-          `${describeSkippedApprovalRow({
+          `${describeSkippedRow('approvals', 'id', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawApproval),
+            key: extractRowId(rawApproval),
           })}\n`,
         );
       });

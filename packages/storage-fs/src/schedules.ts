@@ -10,6 +10,7 @@ import {
   scheduledRequestSchema,
   scheduleVersionMatches,
   compareCodeUnits,
+  describeSkippedRow,
   summarizeInvalidFields,
   writeStderrLine,
 } from '@alteroid/core';
@@ -73,27 +74,6 @@ function throwIfUnreadable(file: ScheduleFile, kind: string): void {
   if (invalidRaw === undefined) return;
   const result = scheduledRequestSchema.safeParse(invalidRaw);
   throw unreadableError(kind, result.success ? '不正な行' : result.error.message);
-}
-
-/** kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。 */
-function describeSkippedScheduleRow(params: {
-  index: number;
-  reason: string;
-  kind?: string;
-}): string {
-  const kindNote = params.kind === undefined ? '' : ` kind=${JSON.stringify(params.kind)}`;
-  return (
-    `alteroid: schedules の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${kindNote}`
-  );
-}
-
-function describeSkippedPhaseRow(params: { index: number; reason: string; kind?: string }): string {
-  const kindNote = params.kind === undefined ? '' : ` kind=${JSON.stringify(params.kind)}`;
-  return (
-    `alteroid: phases の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${kindNote}`
-  );
 }
 
 /** `invalid*Raw` は1本の配列へ合流させる: 分けたまま書くと、次の `#read()` が未知のキーとして黙って捨てる。 */
@@ -339,11 +319,12 @@ export class FsScheduleStore implements ScheduleStore {
           return;
         }
         invalidSchedulesRaw.push(rawEntry);
+        // kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。
         writeStderrLine(
-          `${describeSkippedScheduleRow({
+          `${describeSkippedRow('schedules', 'kind', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            kind: extractKind(rawEntry),
+            key: extractKind(rawEntry),
           })}\n`,
         );
       });
@@ -357,10 +338,10 @@ export class FsScheduleStore implements ScheduleStore {
         }
         invalidPhasesRaw.push(rawPhase);
         writeStderrLine(
-          `${describeSkippedPhaseRow({
+          `${describeSkippedRow('phases', 'kind', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            kind: extractKind(rawPhase),
+            key: extractKind(rawPhase),
           })}\n`,
         );
       });

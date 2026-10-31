@@ -14,6 +14,7 @@ import {
   prepareAccountForWrite,
   prepareIdentityForWrite,
   prepareLoginRequestForWrite,
+  describeSkippedRow,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -81,14 +82,6 @@ function identityKeyMatches(raw: unknown, provider: string, subject: string): bo
   return key.provider === provider && key.subject === subject;
 }
 
-function describeSkippedAccountRow(params: { index: number; reason: string; id?: string }): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: accounts の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
-}
-
 function describeSkippedIdentityRow(params: {
   index: number;
   reason: string;
@@ -104,30 +97,6 @@ function describeSkippedIdentityRow(params: {
   return (
     `alteroid: identities の不正な行を読み飛ばしました` +
     `（${params.index + 1} 行目、${params.reason}）${keyNote}`
-  );
-}
-
-function describeSkippedAccessTokenRow(params: {
-  index: number;
-  reason: string;
-  id?: string;
-}): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: accessTokens の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
-}
-
-function describeSkippedLoginRequestRow(params: {
-  index: number;
-  reason: string;
-  id?: string;
-}): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: loginRequests の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
   );
 }
 
@@ -545,10 +514,10 @@ export class FsAuthStore implements AuthStore {
         }
         invalidAccountsRaw.push(rawAccount);
         writeStderrLine(
-          `${describeSkippedAccountRow({
+          `${describeSkippedRow('accounts', 'id', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawAccount),
+            key: extractRowId(rawAccount),
           })}\n`,
         );
       });
@@ -583,10 +552,10 @@ export class FsAuthStore implements AuthStore {
         }
         invalidAccessTokensRaw.push(rawToken);
         writeStderrLine(
-          `${describeSkippedAccessTokenRow({
+          `${describeSkippedRow('accessTokens', 'id', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawToken),
+            key: extractRowId(rawToken),
           })}\n`,
         );
       });
@@ -601,10 +570,10 @@ export class FsAuthStore implements AuthStore {
         }
         invalidLoginRequestsRaw.push(rawRequest);
         writeStderrLine(
-          `${describeSkippedLoginRequestRow({
+          `${describeSkippedRow('loginRequests', 'id', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawRequest),
+            key: extractRowId(rawRequest),
           })}\n`,
         );
       });

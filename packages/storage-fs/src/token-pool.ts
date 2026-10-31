@@ -16,6 +16,7 @@ import {
   type TokenRotationSettings,
   type UnreadableToken,
   compareCodeUnits,
+  describeSkippedRow,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -57,15 +58,6 @@ function extractRowLabel(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const label = (raw as Record<string, unknown>).label;
   return typeof label === 'string' ? label : undefined;
-}
-
-// id 以外の値は載せない: `value`（トークン本体）が入りうるため
-function describeSkippedTokenRow(params: { index: number; reason: string; id?: string }): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: tokens の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
 }
 
 function describeUnreadableTokenPoolField(params: {
@@ -187,11 +179,12 @@ export class FsTokenPoolStore implements TokenPoolStore {
           return;
         }
         invalidTokensRaw.push(rawToken);
+        // id 以外の値は載せない: `value`（トークン本体）が入りうるため
         writeStderrLine(
-          `${describeSkippedTokenRow({
+          `${describeSkippedRow('tokens', 'id', {
             index,
             reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawToken),
+            key: extractRowId(rawToken),
           })}\n`,
         );
       });
