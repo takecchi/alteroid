@@ -44,21 +44,6 @@ describe('RunnerResumeState — takeAttempt（読んで null に戻す）', () =
   });
 });
 
-describe('RunnerResumeState — armResumeAttempt（#reopenForTokenRotation が呼ぶ）', () => {
-  it('resumeAttempt だけを立て、sessionId / seed には触れない', () => {
-    const state = new RunnerResumeState();
-    state.beginResume('session-1', [{ a: 1 }] as unknown as Parameters<
-      RunnerResumeState['beginResume']
-    >[1]);
-    state.takeAttempt();
-    state.markProgressed();
-    state.armResumeAttempt('session-1');
-    expect(state.takeAttempt()).toEqual({ sessionId: 'session-1' });
-    expect(state.seed).toBeUndefined();
-    expect(state.sessionId).toBe('session-1');
-  });
-});
-
 describe('RunnerResumeState — beginRotationResume（鍵の回転で開き直す resume）', () => {
   const entries = [{ a: 1 }] as unknown as Parameters<RunnerResumeState['beginResume']>[1];
 
