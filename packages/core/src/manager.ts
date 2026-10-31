@@ -3994,7 +3994,7 @@ class Pool implements ManagerPool {
         question: pending.summary,
         approvalId: pending.requestId,
         managerId,
-        answeredAt: new Date(this.#now()).toISOString(),
+        answeredAt: this.#nowIso(),
         /*
          * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
          * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
@@ -4033,7 +4033,7 @@ class Pool implements ManagerPool {
     let fingerprintMatched = false;
     let staleDelivery: { generation: number; blockers: string[] } | undefined;
     // 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
-    const turnStartedAt = new Date(this.#now()).toISOString();
+    const turnStartedAt = this.#nowIso();
     let outgoing = message;
     if (record.job.status === 'done') {
       const oldestHeldAt = record.job.heldMessages?.[0]?.heldAt;
@@ -4110,7 +4110,7 @@ class Pool implements ManagerPool {
                   ...(folded.foldedBackgroundCommands ?? []),
                 ].slice(0, FOLD_NOTICE_COMMANDS_MAX),
               }),
-          at: new Date(this.#now()).toISOString(),
+          at: this.#nowIso(),
         };
         // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
         await this.#persist(record).catch(() => undefined);
@@ -4145,7 +4145,7 @@ class Pool implements ManagerPool {
       );
       if (missing) {
         record.attached = false;
-        record.sessionMissingSince ??= new Date(this.#now()).toISOString();
+        record.sessionMissingSince ??= this.#nowIso();
         // 由来は上書きする（生存確認が先に置いた `unlisted` より強い観測）が、時刻は `??=` のまま: 最初に気づいた時刻を動かさない。
         record.sessionMissingKind = 'resume-failed';
         await this.#persist(record);
@@ -4657,7 +4657,7 @@ class Pool implements ManagerPool {
    * そちらが先に畳めば、この時刻より早く届くだけである。
    */
   #heldFoldDueAt(oldestHeldAt: string | undefined, awaitingSince: string | undefined): number {
-    const starts = [oldestHeldAt ?? new Date(this.#now()).toISOString(), awaitingSince]
+    const starts = [oldestHeldAt ?? this.#nowIso(), awaitingSince]
       .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
       .filter((at) => !Number.isNaN(at));
     return Math.min(...starts) + HELD_FORCE_FOLD_AFTER_MS;
@@ -4682,7 +4682,7 @@ class Pool implements ManagerPool {
           'この伝言は預からなかった。送ってもいない。',
       };
     }
-    const heldAt = new Date(this.#now()).toISOString();
+    const heldAt = this.#nowIso();
     const previous = record.job.heldMessages;
     record.job.heldMessages = [...held, { text: message, heldAt, reason }];
     try {
@@ -5300,9 +5300,7 @@ class Pool implements ManagerPool {
     // 指紋・資源は明示的に頼まれたときだけ聞きに行く。同じ `open` を材料にして往復を増やさない。
     const open =
       options.fingerprints || options.resources
-        ? new Map(
-            (await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]),
-          )
+        ? new Map((await this.#runnersOrEmpty()).map((runner) => [runner.runnerId, runner]))
         : undefined;
 
     const placed = await Promise.all(
@@ -5331,7 +5329,7 @@ class Pool implements ManagerPool {
             ...(resources.oldestPendingAt === undefined
               ? {}
               : { oldestPendingAt: resources.oldestPendingAt }),
-            observedAt: new Date(this.#now()).toISOString(),
+            observedAt: this.#nowIso(),
             // `resources()` は instanceId を運ばないので、名簿がいま知っている値を観測時点のものとして凍結する。
             ...(entry.instanceId === undefined
               ? {}
@@ -5942,7 +5940,7 @@ class Pool implements ManagerPool {
       return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
     }
     // 観測の時刻は問い合わせる前に取る: 後で取ると遅れて返った観測がいつも新しくなり、上書きガードが働かない。
-    const observedAt = new Date(this.#now()).toISOString();
+    const observedAt = this.#nowIso();
     const { outcome, observerInstanceId } = await this.#probeUnpushedWork(
       managerId,
       record,
@@ -6015,7 +6013,7 @@ class Pool implements ManagerPool {
     observedAt?: string,
     observerInstanceId?: string,
   ): Promise<void> {
-    const at = observedAt ?? new Date(this.#now()).toISOString();
+    const at = observedAt ?? this.#nowIso();
     const observation = unpushedWorkObservationOf(outcome, at, source);
     if (
       !isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
@@ -6692,7 +6690,7 @@ class Pool implements ManagerPool {
       ...event.skipped,
     ];
     const instanceBefore = this.#sighting(fromRunnerId).instanceId;
-    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(fromRunnerId);
     const named =
       runner !== null && this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_RESCUE_FILES);
     const removeStaged = async (fileId: string): Promise<void> => {
@@ -6751,7 +6749,7 @@ class Pool implements ManagerPool {
         skipped.push({ path: file.path, reason: `fetch-failed: ${outcome.reason}` });
         continue;
       }
-      const at = new Date(this.#now()).toISOString();
+      const at = this.#nowIso();
       const entry: RescueStashEntry = {
         worktree: event.worktree,
         path: file.path,
@@ -7089,7 +7087,7 @@ class Pool implements ManagerPool {
     let rescue = job.lastRescue;
     if (rescue === undefined) return;
     // 終端を初めて見た時刻を台帳に残す（猶予の起点。`rescue-cleanup.ts`）。変わらなければ書かない。
-    const nowIso = new Date(this.#now()).toISOString();
+    const nowIso = this.#nowIso();
     const marked = syncTerminalMark(job.status, rescue, nowIso);
     if (marked !== null) {
       const wrote = await this.#updateRescueLedger(
@@ -7110,7 +7108,7 @@ class Pool implements ManagerPool {
       if (reason === undefined || pushed === undefined) continue;
       budget.deletesLeft -= 1;
       const outcome = await this.#deleteRescueRefVia(job, pushed);
-      const at = new Date(this.#now()).toISOString();
+      const at = this.#nowIso();
       const attempts = outcome.ok
         ? undefined
         : (pushed.removal?.failureKind === undefined ? 0 : (pushed.removal.attempts ?? 1)) + 1;
@@ -7231,7 +7229,7 @@ class Pool implements ManagerPool {
   ): Promise<{ ok: true; alreadyGone: boolean } | { ok: false; kind: RescueRemovalFailureKind }> {
     if (pushed.remote === undefined) return { ok: false, kind: 'no-remote' };
     const primary = await this.#runnerOf({ job, waiting: [], attached: false });
-    const open = await this.#runners.list().catch(() => []);
+    const open = await this.#runnersOrEmpty();
     const seen = new Set<string>();
     const candidates = [primary, ...open].filter((candidate): candidate is RunnerClient => {
       if (candidate === null || candidate.deleteRescueRef === undefined) return false;
@@ -8221,7 +8219,7 @@ class Pool implements ManagerPool {
           this.#post({
             type: 'manager_message',
             id: randomUUID(),
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
             managerId: job.id,
             kind: 'report',
             text:
@@ -8326,7 +8324,7 @@ class Pool implements ManagerPool {
     }
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
-    record.stopConfirmedAt = new Date(this.#now()).toISOString();
+    record.stopConfirmedAt = this.#nowIso();
     // await の前の宛先を覚えておく: await の後にこれと食い違えば、委譲は別の runner へ移っている。
     const runnerIdBeforeConfirm = record.job.runnerId;
 
@@ -8420,7 +8418,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'manager_message',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         managerId,
         kind: 'report',
         text: messageText,
@@ -8459,7 +8457,7 @@ class Pool implements ManagerPool {
     // 吐き出さないと、その窓のタイマーはデーモンと一緒に消え、器の入れ替えで届いた知らせ（`turn_failed` 等）が配られない。
     await this.#drainNoticeWindows();
     // runner のマネージャーは止めない: デーモンの都合で人の仕事を殺さない。
-    for (const runner of await this.#runners.list().catch(() => [])) {
+    for (const runner of await this.#runnersOrEmpty()) {
       await runner.close().catch(() => undefined);
     }
     // 閉じた後にもう一度吐き出す: 2回目の吐き出しの台帳読みの間と、runner を閉じ終えるまでに届いた出来事も担当ごとの窓へ積まれ、
@@ -8486,7 +8484,7 @@ class Pool implements ManagerPool {
     // 待ち終えた runner は二度待たない。
     const waited = new Set<string>();
     for (;;) {
-      const runners = (await this.#runners.list().catch(() => [])).filter(
+      const runners = (await this.#runnersOrEmpty()).filter(
         (runner) =>
           this.#farewellRunners.has(runner.runnerId) &&
           runner.awaitStreamEnd !== undefined &&
@@ -8693,7 +8691,7 @@ class Pool implements ManagerPool {
    */
   async #ensureConnected(): Promise<void> {
     if (this.#stopped) return;
-    const runners = await this.#runners.list().catch(() => []);
+    const runners = await this.#runnersOrEmpty();
     await Promise.all(runners.map((runner) => this.#connectTo(runner).catch(() => undefined)));
   }
 
@@ -8874,7 +8872,7 @@ class Pool implements ManagerPool {
         if (known && !relocating) known.attached = false;
 
         // 印は resume を挑む直前に置き、戻れたときに消す: `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ resume が成功しなかった、が成り立つ。
-        const missingAt = new Date(this.#now()).toISOString();
+        const missingAt = this.#nowIso();
 
         // 手を動かしている最中だったものだけ戻す: `done` は死ではなく待機で、起こすと開いたままの窓を勝手に閉じる。判定より前に `#records` へ載せない: 終わった仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
         // 古い写し（ループ先頭の `job`）で判定しない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。`known` が無いときは読み直した `fresh` で判定し、record も同じ行から作る。
@@ -9059,7 +9057,7 @@ class Pool implements ManagerPool {
             this.#post({
               type: 'manager_message',
               id: randomUUID(),
-              at: new Date(this.#now()).toISOString(),
+              at: this.#nowIso(),
               managerId: job.id,
               kind: 'report',
               text:
@@ -9227,7 +9225,7 @@ class Pool implements ManagerPool {
     const runnerId = record.job.runnerId;
     // `select` を呼ばない: 繋がるまで待つので、起動時の引き取りや `manager_send` の下で台帳を読むだけの操作が固まる。開いている runner が無いなら「宛先が居ない」と答えるのが正しい。
     if (runnerId === undefined) {
-      const open = await this.#runners.list().catch(() => []);
+      const open = await this.#runnersOrEmpty();
       return open[0] ?? null;
     }
     return this.#runners.get(runnerId);
@@ -9497,7 +9495,7 @@ class Pool implements ManagerPool {
     }
     const managerId = event.managerId;
     record.job.lastReport = event.text;
-    record.job.lastReportAt = new Date(this.#now()).toISOString();
+    record.job.lastReportAt = this.#nowIso();
     record.job.lastReportStatus = event.status;
     delete record.job.lastFoldedTurn;
     await this.#persist(record);
@@ -9628,7 +9626,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId,
       kind: 'report',
       text:
@@ -9656,7 +9654,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId,
       kind: 'report',
       text: `runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。以後は自動で引き取ります。`,
@@ -10246,7 +10244,7 @@ class Pool implements ManagerPool {
       return;
     }
     if (targets.length === 0) return;
-    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(fromRunnerId);
     if (runner === null) return;
     await Promise.allSettled(
       targets.map(async ({ fileId, kind }) => {
@@ -10268,7 +10266,7 @@ class Pool implements ManagerPool {
     const rejectedFiles = event.rejectedFiles ?? [];
     if (files.length === 0) return { attachments: [], rejected: rejectedFiles.map(rejectedFileOf) };
     const instanceBefore = this.#sighting(fromRunnerId).instanceId;
-    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(fromRunnerId);
     const fallbackReason = (reason: string): ManagerReportFiles => ({
       attachments: [],
       rejected: [
@@ -10360,7 +10358,7 @@ class Pool implements ManagerPool {
 
     if (event.type === 'codex_auth') {
       if (this.#codexAuth === undefined) return;
-      const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+      const runner = await this.#runnerOrNull(fromRunnerId);
       await this.#codexAuth.onRunnerNotice(event, fromRunnerId, runner);
       return;
     }
@@ -10435,7 +10433,7 @@ class Pool implements ManagerPool {
         // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
         if (event.pluginLoad !== undefined) {
           this.#pluginLoad.set(fromRunnerId, {
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
             managerId: event.managerId,
             pluginLoad: event.pluginLoad,
           });
@@ -10486,7 +10484,7 @@ class Pool implements ManagerPool {
           // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
           record.job.lastFoldedTurn = {
             text: reportFullTextOf(event),
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
           await this.#persist(record);
           return;
@@ -10504,7 +10502,7 @@ class Pool implements ManagerPool {
         // 台帳と日誌には全文を残す: `manager_report` と画面の「最後の報告」は `lastReport` を読むので、途中の発言を見たいときはそこから引ける
         record.job.lastReport = reportFullTextOf(event);
         // `#noteRunnerSessionSince` と同じ時計（`this.#now()`）で書く: `reportSeenInSession` が前後を比べるので、別の時計だと注入した時計の試験で崩れる。
-        record.job.lastReportAt = new Date(this.#now()).toISOString();
+        record.job.lastReportAt = this.#nowIso();
         // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
         // `isTerminalJobStatus` は使わない: `done` を含むが、`done` は idle を兼ね再び走り出せる。managerId ごとの直列化は配達順に効くので採らない。
         const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
@@ -10541,13 +10539,13 @@ class Pool implements ManagerPool {
           record.job.lastFailure = {
             code: event.failure.code,
             via: event.failure.via,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
           // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
           // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
           if (isQuotaFailure(event.failure) && !this.#usageStopped.has(event.managerId)) {
             this.#usageStopped.add(event.managerId);
-            record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+            record.job.usageStoppedAt ??= this.#nowIso();
             markedByFailure = true;
           }
         }
@@ -10557,7 +10555,7 @@ class Pool implements ManagerPool {
         } else {
           record.job.lastUnreported = {
             ...event.unreported,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
         }
         await this.#persist(record);
@@ -10730,7 +10728,7 @@ class Pool implements ManagerPool {
             question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
             approvalId: event.requestId,
             managerId: event.managerId,
-            withdrawnAt: new Date(this.#now()).toISOString(),
+            withdrawnAt: this.#nowIso(),
             withdrawnReason:
               `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
               `理由: ${event.withdrawn.reason}`,
@@ -10812,7 +10810,7 @@ class Pool implements ManagerPool {
       }
 
       case 'tool_use': {
-        record.lastToolSettledAt = new Date(this.#now()).toISOString();
+        record.lastToolSettledAt = this.#nowIso();
         await this.#journal({
           type: 'tool_use',
           actor: event.actor,
@@ -10846,7 +10844,7 @@ class Pool implements ManagerPool {
         const key = denialKey(event.tool, actorLayer);
         const count = (denied.get(key) ?? 0) + 1;
         denied.set(key, count);
-        (record.deniedLastAt ??= new Map()).set(key, new Date(this.#now()).toISOString());
+        (record.deniedLastAt ??= new Map()).set(key, this.#nowIso());
         // この回に無ければ前回分を消す: 「最新1件」の像なので古い理由を持ち越さない。
         const reasonSnapshot = denialReasonSnapshotOf(event);
         if (reasonSnapshot === undefined) {
@@ -11073,7 +11071,7 @@ class Pool implements ManagerPool {
             })),
             ...event.peers.map((peer) => ({ ...peer, reason })),
           ],
-          at: new Date(this.#now()).toISOString(),
+          at: this.#nowIso(),
         };
         await this.#persist(record).catch(() => undefined);
         return;
@@ -11151,7 +11149,7 @@ class Pool implements ManagerPool {
           // 台帳にも写す: `Set` はデーモンの作り直しで消え、入れ替わりを跨いだ委譲が二度と起こされない。代入は `Set.add` と同じ同期の位置に置く（`await` を挟むと並行の `report` に先を越され、片方だけ遅れて真になる窓ができる）。
           // 欄が既に立っていれば persist しない（通知は何度も届く）。書き込みの失敗で下を巻き添えにしない: 下の回し手への受け渡しが鍵を回す契機そのもので、投げると鍵が回らないまま全員が止まる。
           if (record.job.usageStoppedAt === undefined) {
-            record.job.usageStoppedAt = new Date(this.#now()).toISOString();
+            record.job.usageStoppedAt = this.#nowIso();
             try {
               await this.#persist(record);
             } catch (error) {
@@ -11517,7 +11515,7 @@ class Pool implements ManagerPool {
         this.#usageWakeOwed.delete(event.managerId);
         if (quotaReason) {
           this.#usageStopped.add(event.managerId);
-          record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+          record.job.usageStoppedAt ??= this.#nowIso();
           // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
           await this.#persist(record).catch((error: unknown) => {
             noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
@@ -11615,7 +11613,7 @@ class Pool implements ManagerPool {
                   : '。受信箱へは出さない'),
           });
           if (notice !== undefined) {
-            record.job.lateDoneNotifiedAt = new Date(this.#now()).toISOString();
+            record.job.lateDoneNotifiedAt = this.#nowIso();
             await this.#persist(record);
             this.#emit(event.managerId, 'report', notice);
           }
@@ -11684,7 +11682,7 @@ class Pool implements ManagerPool {
         if (event.status === 'failed' && event.systemError !== undefined) {
           record.job.lastSystemError = {
             ...event.systemError,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
         }
         // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
@@ -11692,13 +11690,13 @@ class Pool implements ManagerPool {
         if (event.status === 'failed' && event.cgroupEvents !== undefined) {
           record.job.lastCgroupEvents = {
             ...event.cgroupEvents,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
         }
         // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
         // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
         if (event.unpushedWork !== undefined) {
-          const at = new Date(this.#now()).toISOString();
+          const at = this.#nowIso();
           const observation = unpushedWorkObservationOf(event.unpushedWork, at, 'closed');
           if (
             isUnpushedWorkObservationAtLeastAsNewAs(
@@ -11747,7 +11745,7 @@ class Pool implements ManagerPool {
           const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
           if (quotaReason && !this.#usageStopped.has(event.managerId)) {
             this.#usageStopped.add(event.managerId);
-            record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+            record.job.usageStoppedAt ??= this.#nowIso();
             markedByClosed = reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason;
             // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
             await this.#persist(record).catch((error: unknown) => {
@@ -11893,7 +11891,7 @@ class Pool implements ManagerPool {
 
       case 'rescue_ref': {
         // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
-        const at = new Date(this.#now()).toISOString();
+        const at = this.#nowIso();
         const previousRescue = record.job.lastRescue;
         // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
         const instanceId = this.#sighting(fromRunnerId).instanceId;
@@ -11932,7 +11930,7 @@ class Pool implements ManagerPool {
       case 'rescue_files': {
         // #4924: 移った後の古い器からは取り込まない。退避先は、捨てる回も消させる（器の退避先と待ちの集合に積み残さない）
         if (this.#movedAwayFrom(record, fromRunnerId)) {
-          const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+          const runner = await this.#runnerOrNull(fromRunnerId);
           if (runner !== null && runner.deleteRescueFile !== undefined) {
             for (const file of event.files) {
               await runner
@@ -12157,6 +12155,15 @@ class Pool implements ManagerPool {
     this.#pushFailureFolds.clear();
   }
 
+  // 一時障害は「居ない」「空」に倒す（呼び出し側が個別に握り直す必要が無い口）。async にせず元の Promise をそのまま返す: await の回数・順を変えない。
+  #runnerOrNull(runnerId: string) {
+    return this.#runners.get(runnerId).catch(() => null);
+  }
+
+  #runnersOrEmpty() {
+    return this.#runners.list().catch(() => []);
+  }
+
   #nowIso(): string {
     return new Date(this.#now()).toISOString();
   }
@@ -12225,7 +12232,7 @@ class Pool implements ManagerPool {
     const health = this.#pushHealth.get(runnerId);
     if (health === undefined) return;
 
-    const runner = await this.#runners.get(runnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(runnerId);
     if (runner === null) {
       return;
     }
@@ -12430,7 +12437,7 @@ class Pool implements ManagerPool {
     text: string,
     awaitingBackground: { count: number; breakdown: string },
   ): void {
-    const now = new Date(this.#now()).toISOString();
+    const now = this.#nowIso();
     const existing = this.#withheldReports.get(managerId);
     this.#setWithheld(managerId, {
       count: (existing?.count ?? 0) + 1,
@@ -12655,7 +12662,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId: job.id,
       kind: 'report',
       text: [
@@ -12847,7 +12854,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'external',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         // `runner-registry` を流用する: 枠の1通と同じ理由（専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要る）。
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `restored:${cause}:${openedAt}`,
@@ -12945,7 +12952,7 @@ class Pool implements ManagerPool {
           count: 0,
           // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
           excerpts: [],
-          flushedAt: new Date(this.#now()).toISOString(),
+          flushedAt: this.#nowIso(),
         });
       } else {
         this.#setWithheld(managerId, undefined);
@@ -12978,7 +12985,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId,
       kind,
       text: outgoing,
@@ -13105,7 +13112,7 @@ class Pool implements ManagerPool {
       }
     }
     if (suppressed && streak !== undefined) {
-      const at = new Date(this.#now()).toISOString();
+      const at = this.#nowIso();
       streak.suppressed += 1;
       streak.suppressedArrived += arrived;
       streak.firstAt ??= at;
@@ -13302,7 +13309,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'external',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         // `runner-registry` を流用する: 専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要るため（`scratch_sweep` と同じ形で積む）。
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `quota-stop:${windowKey}:${openedAt}`,
@@ -13331,7 +13338,7 @@ class Pool implements ManagerPool {
   }
 
   async #persist(record: ManagerRecord): Promise<void> {
-    record.job.updatedAt = new Date(this.#now()).toISOString();
+    record.job.updatedAt = this.#nowIso();
     // 生存の時刻は別のタイマーで進めず、書くついでに進める: 委譲ごとにタイマーが増え、進める条件を2箇所で判定することになる。
     // 応えているプロセスが違うなら進めない: 入れ替わった器の貸し出しが生き続け、引き取れる時刻が来ない。
     const lease = record.job.lease;
@@ -13365,7 +13372,7 @@ class Pool implements ManagerPool {
       if (taskStatusForJob(record.job.status) === 'waiting') {
         if (!wasActive) delete record.job.endedAt;
       } else if (before === null || wasActive) {
-        record.job.endedAt = new Date(this.#now()).toISOString();
+        record.job.endedAt = this.#nowIso();
       }
     }
     try {
@@ -13442,7 +13449,7 @@ class Pool implements ManagerPool {
   async #moveTask(taskId: string, to: TaskStatus, jobId: string, why: string): Promise<void> {
     const result = await this.#stores.tasks.setStatus(taskId, to, {
       by: 'daemon',
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
     });
     if (result.kind !== 'changed') return;
     await this.#journal({
@@ -13502,7 +13509,7 @@ class Pool implements ManagerPool {
 
   // 像（`ManagerRecord.runnerSessionSince`）はプロセス内にしか置かない: 生存確認と未 push 観測の判定は「再起動後は欄が無い」前提で倒れ先を決めている。
   #noteRunnerSessionSince(record: ManagerRecord): void {
-    const at = new Date(this.#now()).toISOString();
+    const at = this.#nowIso();
     record.runnerSessionSince = at;
     record.job.runnerSessionSince = at;
     // start / resume は新しいターンの始まりでもある。`send()` が先に書いた値より後ろへだけ進める。
@@ -13625,7 +13632,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'external',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         payload: {
           text:
@@ -13661,7 +13668,7 @@ class Pool implements ManagerPool {
       question: item.summary,
       approvalId: item.requestId,
       managerId: record.job.id,
-      withdrawnAt: new Date(this.#now()).toISOString(),
+      withdrawnAt: this.#nowIso(),
       withdrawnReason:
         'この確認への答えは届かない（答えを送ったが、runner はこの確認をもう持っていなかった）',
     });
@@ -13672,7 +13679,7 @@ class Pool implements ManagerPool {
     const dropped = record.waiting;
     record.waiting = [];
     if (dropped.length === 0) return;
-    const at = new Date(this.#now()).toISOString();
+    const at = this.#nowIso();
     for (const item of dropped) {
       void this.#journal({
         type: 'escalation',
