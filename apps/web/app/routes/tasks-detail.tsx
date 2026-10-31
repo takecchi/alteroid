@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 
 import { DiscardConfirmDialog } from '~/components/discard-confirm-dialog';
-import { EditConflictBand } from '~/components/edit-conflict-band';
 import { LoadError } from '~/components/load-error';
 import {
   EditedBadge,
@@ -286,26 +285,43 @@ function TaskEditor({
       </div>
 
       {conflict !== undefined && (
-        <EditConflictBand
-          className="mt-2"
-          heading="開いたあとに、裏でこの行が変わった。"
-          retryLabel="いまの内容の上で、下書きを保存し直す"
-          discardLabel="下書きを捨てて、いまの内容にする"
-          busy={busy}
-          onRetry={() => void save(adoptConflictVersion(conflict))}
-          onDiscard={() => {
-            adoptConflictVersion(conflict);
-            setTitleDraft(undefined);
-            setBodyDraft(undefined);
-          }}
+        // 版付きの編集が 409（開いたあとに裏で変わった）で断られたときの帯。下書きは残してある。
+        <div
+          role="alert"
+          className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
         >
+          <p className="mb-2 break-words">
+            <strong>開いたあとに、裏でこの行が変わった。</strong>
+            保存していない。下書きはそのまま残してある。
+          </p>
           <CodeBlock label="いまの title" maxHeight="4rem">
             {redactBody(conflict.title)}
           </CodeBlock>
           <CodeBlock label="いまの本文" maxHeight="12rem" className="mt-2">
             {redactBody(conflict.body)}
           </CodeBlock>
-        </EditConflictBand>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => void save(adoptConflictVersion(conflict))}
+            >
+              いまの内容の上で、下書きを保存し直す
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                adoptConflictVersion(conflict);
+                setTitleDraft(undefined);
+                setBodyDraft(undefined);
+              }}
+            >
+              下書きを捨てて、いまの内容にする
+            </Button>
+          </div>
+        </div>
       )}
       <ErrorNote error={failure} className="mt-2" />
     </div>
