@@ -11,7 +11,6 @@
   "apps/runner/src/stopping-session-send-resume.test.ts": 1,
   "apps/web/app/routes/access.test.tsx": 1,
   "apps/web/app/routes/chat.test.tsx": 1,
-  "apps/web/app/routes/commitments.ime-enter.test.tsx": 1,
   "apps/web/app/routes/permissions.test.tsx": 1,
   "packages/core/src/approval-answer-delivery.test.ts": 2,
   "packages/core/src/clone-answer-action-stamp.test.ts": 1,

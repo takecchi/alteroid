@@ -570,7 +570,6 @@ export async function chatCommand(): Promise<void> {
             `（${line.split(/\s+/)[0] ?? ''} を取り消しました。クローンのターンには触れていません）`,
             (signal) =>
               runSlashCommand(line, slashClient, listed, {
-                conversationId,
                 target,
                 confirm: async (summary) => {
                   const confirmed = await confirmInRepl(summary, (question) =>
@@ -1283,12 +1282,6 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /commitments all     片付けたものも含めて見る
 /commitment <番号|id>  台帳の1件を全文で（本文・片付けた理由を80字で切らない。番号は /commitments の並び。
                      片付けた行も引ける）
-/commit <本文>       引き受けたことを台帳へ積む
-/commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
-                     直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
-/done <番号|id> <理由>  片付けたことを記録する（理由は必須。番号は /commitments の並び）
-/commit-reopen <番号|id> <理由>  片付けた行を未了へ開き直す（理由は必須。閉じた行の番号は
-                     /commitments all の並び。/commitments だと閉じた行は番号が振られないので id で指す）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>] [layer=<種>] [site=<場所>] [token=<id>]  利用状況（いくら使ったか）
                      layer= は ${usageLayerSchema.options.join(' / ')}、site= は
                      ${usageSiteSchema.options.join(' / ')} のどれか。token= は
@@ -1302,8 +1295,8 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /quit                終了
 `;
 
-// 承認待ち・台帳・会話・マネージャー・待ちは別々に持つ: 1本にまとめると `/approvals` の直後の `/done 1` が
-// 承認待ちの id を閉じに行く。`managers` と `waiting` も別物で、`/managers` の直後の `/reply 1` で
+// 承認待ち・台帳・会話・マネージャー・待ちは別々に持つ: 1本にまとめると `/approvals` の直後の `/commitment 1` が
+// 承認待ちの id を台帳から引きに行く。`managers` と `waiting` も別物で、`/managers` の直後の `/reply 1` で
 // マネージャーの id が requestId として使われてはいけない。
 export interface Listed {
   approvals: string[];
@@ -1327,7 +1320,6 @@ export interface Listed {
 }
 
 export interface SlashContext {
-  conversationId: string | null;
   target: Target;
   confirm: (summary: string) => Promise<boolean>;
   onFailed: (reason: string) => void;
@@ -1348,7 +1340,6 @@ export async function runSlashCommand(
   context: SlashContext,
 ): Promise<'ok' | 'quit'> {
   const {
-    conversationId,
     target,
     confirm,
     onFailed,
@@ -1471,7 +1462,7 @@ export async function runSlashCommand(
           created,
         );
         stdout.write(`${failure}\n`);
-        // 書き込み系の HTTP の失敗も失敗として渡す（#5240。`/done` と同じ形）
+        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
         onFailed(failure);
         return 'ok';
       }
@@ -2733,12 +2724,6 @@ export async function runSlashCommand(
       listed.commitments.length = 0;
       listed.commitments.push(...ids);
       stdout.write(`${text}\n`);
-      if (ids.length > 0) {
-        stdout.write('  /done <番号> <理由> で片付けたことを記録できます\n');
-      }
-      if (includeClosed && entries.some((entry) => entry.closedAt !== undefined)) {
-        stdout.write('  /commit-reopen <番号> <理由> で開き直せます（片付けた行だけ）\n');
-      }
       return 'ok';
     }
 
@@ -2782,132 +2767,6 @@ export async function runSlashCommand(
           ['id'],
         )}\n`,
       );
-      return 'ok';
-    }
-
-    case '/commit': {
-      const body = rawTail(line, 1);
-      if (body.length === 0) {
-        return usageError('使い方: /commit <本文>（引き受けたままの仕事として台帳へ積みます）\n');
-      }
-      const response = await client.commitments.$post({
-        json: {
-          body,
-          // 会話が始まっていなければ付けない: 嘘の出どころを埋めない。
-          ...(conversationId === null ? {} : { source: conversationId }),
-        },
-      });
-      if (response.ok) {
-        stdout.write('台帳に積みました（/commitments で確認できます）\n');
-        return 'ok';
-      }
-      const failure =
-        response.status === 404 ? '台帳に積めませんでした' : await errorDetail(response);
-      stdout.write(`${failure}\n`);
-      // 書き込み系の HTTP の失敗も失敗として渡す（#5236。`/commit-reopen` と同じ形）
-      onFailed(failure);
-      return 'ok';
-    }
-
-    case '/done': {
-      const [reference] = rest;
-      // 理由は必須: 書かれていないまま「閉じた」事実だけを残さない。
-      const reason = rawTail(line, 2);
-      if (!reference || reason.length === 0) {
-        return usageError(
-          '使い方: /done <番号|id> <理由>（番号は /commitments の並び）\n' +
-            '  理由が要ります（何をもって片付いたかを、後から読んで確かめられるように残すため）\n',
-        );
-      }
-      const id = resolveListedId(reference, listed.commitments);
-      if (id === null) {
-        const missing = `[${reference}] は /commitments の一覧にありません`;
-        stdout.write(`${missing}\n`);
-        // 書き込み系なので失敗として渡す（#4795）
-        onFailed(missing);
-        return 'ok';
-      }
-      const response = await client.commitments[':id'].close.$post({
-        param: { id },
-        json: { reason },
-      });
-      if (response.ok) {
-        stdout.write('片付いたことを記録しました\n');
-        return 'ok';
-      }
-      // 失敗の理由を1つに畳まない: 「既に片付いている」と「そんな id は無い」は次の一手が違う。
-      // 409 は言い換えずにサーバの文言を出す（#5273）: 「既に片付いている」のほかに「未了のまま在るのに閉じられなかった」があり（#5072）、潰すと閉じていない行を閉じたと読ませる
-      const failure =
-        response.status === 404 ? 'その id は台帳にありません' : await errorDetail(response);
-      stdout.write(`${failure}\n`);
-      // 「既に片付いている」も失敗として渡す（#5236）: 閉じるつもりの行が既に閉じていた回を、呼び手が見分けられるように
-      onFailed(failure);
-      return 'ok';
-    }
-
-    // `/done` に相乗りせず、`alteroid reopen`（クローンのセッションを開き直す別物）とも混ぜない。
-    // 409 は「まだ閉じていない」「同じ担当・同じ本文の未了が在る」「読めない形」と中身が複数あるので、サーバの文言をそのまま出す。
-    case '/commit-reopen': {
-      const [reference] = rest;
-      const reason = rawTail(line, 2);
-      if (!reference || reason.length === 0) {
-        return usageError(
-          '使い方: /commit-reopen <番号|id> <理由>（閉じた行の番号は /commitments all の並び）\n' +
-            '  理由が要ります（なぜ開き直すかを、後から読んで確かめられるように日誌へ残すため）。' +
-            '/commitments だと閉じた行に番号が振られないので、その場合は id を渡します\n',
-        );
-      }
-      const id = resolveListedId(reference, listed.commitments);
-      if (id === null) {
-        const missing = `[${reference}] は /commitments の一覧にありません`;
-        stdout.write(`${missing}\n`);
-        // 書き込み系なので失敗として渡す（#4795）
-        onFailed(missing);
-        return 'ok';
-      }
-      const response = await client.commitments[':id'].reopen.$post({
-        param: { id },
-        json: { reason },
-      });
-      if (response.ok) {
-        stdout.write('開き直しました（閉じた時刻・主体・理由は日誌に逐語で残っています）\n');
-        return 'ok';
-      }
-      const failure = await errorDetail(response);
-      stdout.write(`${failure}\n`);
-      onFailed(failure);
-      return 'ok';
-    }
-
-    // `/edit` に相乗りしない: 番号の置き場が違い、混ぜると `/commitments` の直後の `/edit 1` が会話の発言を指す。
-    // 直せる行の条件をここへ写さない: 断るのはサーバで、写すとサーバ側の線が動いた日に CLI だけが静かに嘘になる。
-    case '/commit-edit': {
-      const [reference] = rest;
-      const body = rawTail(line, 2);
-      if (!reference || body.length === 0) {
-        return usageError(
-          '使い方: /commit-edit <番号|id> <新しい本文>（番号は /commitments の並び）\n',
-        );
-      }
-      const id = resolveListedId(reference, listed.commitments);
-      if (id === null) {
-        const missing = `[${reference}] は /commitments の一覧にありません`;
-        stdout.write(`${missing}\n`);
-        // 書き込み系なので失敗として渡す（#4795）
-        onFailed(missing);
-        return 'ok';
-      }
-      const response = await client.commitments[':id'].$patch({
-        param: { id },
-        json: { body },
-      });
-      if (response.ok) {
-        stdout.write('本文を直しました（直す前の本文は日誌に逐語で残っています）\n');
-        return 'ok';
-      }
-      const failure = await errorDetail(response);
-      stdout.write(`${failure}\n`);
-      onFailed(failure);
       return 'ok';
     }
 
@@ -3596,9 +3455,6 @@ const REFERENCE_FIRST_COMMANDS: ReadonlySet<string> = new Set([
   '/approval',
   '/answer',
   '/commitment',
-  '/done',
-  '/commit-edit',
-  '/commit-reopen',
 ]);
 
 function resolveListedId(reference: string, listed: string[]): string | null {

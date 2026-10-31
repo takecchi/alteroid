@@ -6,8 +6,6 @@ import {
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
   CREDENTIAL_NAME,
-  CLOSE_MANY_LIMIT_DEFAULT,
-  CLOSE_MANY_LIMIT_MAX,
   commitmentOriginSchema,
   commitmentSchema,
   createMemoryStores,
@@ -586,12 +584,6 @@ export const scheduleListResponseSchema = z.object({
   unreadable: z.array(unreadableScheduleSchema).optional(),
 });
 
-// 片付き済み・読めない行の 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
-export const commitmentConflictResponseSchema = z.object({
-  error: z.string(),
-  current: commitmentSchema.nullable(),
-});
-
 // 外向きの view を別に書かない: 伏せるものが無く、別 view にすると人間が API で見る台帳とクローンが `commitment_list` で見る台帳がずれるため。
 // `updatedAt` は `commitmentUpdatedAt` で導く: 受け手に `closedAt ?? at` を書き直させないため。
 // 一覧（`GET /commitments`）と詳細（`GET /commitments/{id}`）で同じ形にする
@@ -731,72 +723,6 @@ export const taskMigrateRequestSchema = z.object({
     .string()
     .min(1)
     .describe('dry-run（`GET /tasks/migration-plan`）が返した計画の指紋。必須'),
-});
-
-// 返さないと閉じられない: 閉じる口は id を取るので、返さないと人間は積めるが自分で閉じられない片道の口になる。
-export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
-
-// 検証の本体（空・NUL だけ・空白だけ・`limit` の範囲・在る起点を全部並べた呼び・`until` の時差）はハンドラが `describeCloseManyViolation`（クローンの道具 `commitment_close_many` と同じ関数）へ任せる: ここで `.min(1)` や `.int()` を書くと、zod の英語の断り文が道具と違う文面で返り、「共有した検証」が2つの実装の一致に戻るため。ここが持つのは型だけ。
-export const commitmentCloseManyRequestSchema = z.object({
-  origin: z
-    .array(commitmentOriginSchema)
-    .describe('閉じる対象の起点（1件以上。在る起点を全部並べた呼びは断る）'),
-  source: z.array(z.string()).optional().describe('出所の完全一致（q の部分一致とは別物）'),
-  q: z.string().optional().describe('本文か出所への部分一致（大文字小文字を区別しない）'),
-  until: z
-    .string()
-    .optional()
-    .describe('この時刻までに載った行だけ（ISO8601。時差が必須。その瞬間ちょうどの行は含む）'),
-  reason: z
-    .string()
-    .describe('何をもってこの絞り込みに当たる行が片付いたとするか（空白だけは断る）'),
-  dryRun: z.boolean().optional().describe('省略すると true（数えるだけで1件も閉じない）'),
-  limit: z
-    .number()
-    .optional()
-    .describe(
-      `1回で閉じる上限（1以上${CLOSE_MANY_LIMIT_MAX}以下の整数。省略すると ${CLOSE_MANY_LIMIT_DEFAULT}）。古い側から閉じる`,
-    ),
-});
-
-const commitmentCloseManySampleSchema = z.object({
-  id: z.string(),
-  at: z.string(),
-  origin: commitmentOriginSchema,
-  source: z.string().optional(),
-  bodyExcerpt: z.string(),
-});
-
-// クローンの道具と同じ情報を構造にした応答（試算と実行で同じ形）: `closed` / `chunks` は試算では 0。`ids` は試算では対象、実行では閉じた id で、どちらも先頭だけ（残りは `idsOmitted`。実行のときは全 id が日誌に塊ごとに残る）。
-export const commitmentCloseManyResponseSchema = z.object({
-  ok: z.literal(true),
-  dryRun: z.boolean(),
-  funnel: z.object({
-    open: z.number().int(),
-    origin: z.number().int(),
-    source: z.number().int().optional(),
-    q: z.number().int().optional(),
-    until: z.number().int().optional(),
-  }),
-  matched: z.number().int(),
-  targeted: z.number().int(),
-  closed: z.number().int(),
-  chunks: z.number().int(),
-  remaining: z.number().int(),
-  ids: z.array(z.string()),
-  idsOmitted: z.number().int(),
-  oldestAt: z.string().optional(),
-  newestAt: z.string().optional(),
-  samples: z.array(commitmentCloseManySampleSchema).optional(),
-  raced: z.number().int(),
-  trimmedJustClosed: z.number().int(),
-  unreadable: z.number().int(),
-});
-
-// 塊の先の日誌が書けなかったので、そこで止めた回の応答（500）。止める前の塊は閉じているので、どこまで閉じたかを返す。
-export const commitmentCloseManyStoppedResponseSchema = journalWriteFailedResponseSchema.extend({
-  closed: z.number().int(),
-  closedIds: z.array(z.string()),
 });
 
 const managerWaitingSchema = z.object({
@@ -1938,8 +1864,8 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     {
       name: 'commitments',
       description:
-        '引き受けたまま終わっていない仕事の台帳。クローンの commitment_* と同じものを' +
-        '人間の側からも読み・積み・閉じられる',
+        '引き受けたまま終わっていない仕事の旧台帳。読むだけで、クローンにも人間にも書く口は無い' +
+        '（仕事は task で持つ）。クローンの commitment_list と同じものを人間の側から読める',
     },
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },

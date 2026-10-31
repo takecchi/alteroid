@@ -5201,27 +5201,6 @@ describe('HTTP API', () => {
     expect(missing.status).toBe(404);
   });
 
-  it('人間が台帳へ積んだものが一覧に出る（origin は human で、id が返る）', async () => {
-    const opened = await app.request(
-      '/commitments',
-      json({ body: 'issue #42 のレビュー指摘を直す', source: 'gh-42' }),
-    );
-
-    expect(opened.status).toBe(200);
-    const { ok, id } = (await opened.json()) as { ok: boolean; id: string };
-    expect(ok).toBe(true);
-    expect(id).not.toBe('');
-
-    const list = await app.request('/commitments');
-    expect(list.status).toBe(200);
-    expect(await list.json()).toMatchObject({
-      entries: [{ id, origin: 'human', source: 'gh-42', body: 'issue #42 のレビュー指摘を直す' }],
-    });
-
-    expect((await stores.commitments.list()).entries).toMatchObject([{ id, origin: 'human' }]);
-    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
-  });
-
   it('チャットで積んだ行に、その会話への返答が日誌にあれば respondedAt が付く', async () => {
     await stores.commitments.open({
       id: 'cmt-answered',
@@ -5314,18 +5293,6 @@ describe('HTTP API', () => {
     expect(body.entries.find((entry) => entry.id === 'cmt-done')?.activeManagerIds).toBeUndefined();
   });
 
-  it('積んだ側が自分で選べるのは本文と出所だけ（origin を human 以外にできない）', async () => {
-    // 人間に選ばせない: 人間が積んだものが `self` を名乗れてしまい、クローンが約束の由来を区別できなくなるから。
-    const response = await app.request(
-      '/commitments',
-      json({ body: '出所を偽る', origin: 'self', id: 'なりすまし' }),
-    );
-
-    expect(response.status).toBe(200);
-    expect((await stores.commitments.list()).entries).toMatchObject([{ origin: 'human' }]);
-    expect((await stores.commitments.list()).entries[0]?.id).not.toBe('なりすまし');
-  });
-
   it('lastCgroupEvents（#1517）と lastUnpushedWorkObservation（#1266）が GET /managers の応答まで届く', async () => {
     fake.managerList.push({
       managerId: 'mgr-cgroup-unpushed',
@@ -5408,15 +5375,20 @@ describe('HTTP API', () => {
     expect(single.manager.lastUnpushedWorkObservation).toEqual(observation);
   });
 
+  // 台帳へ書く口は無い（段2b）ので、片付いた行は store で直に作る（旧台帳の読み）
   it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
-    const opened = await app.request('/commitments', json({ body: '日報の体裁を直す' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    const closed = await app.request(
-      `/commitments/${id}/close`,
-      json({ reason: '直して PR を出した' }),
+    await stores.commitments.open({
+      id: 'cm-closed',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: '日報の体裁を直す',
+    });
+    await stores.commitments.close(
+      'cm-closed',
+      '2026-01-02T00:00:00.000Z',
+      '直して PR を出した',
+      'human',
     );
-    expect(closed.status).toBe(200);
 
     expect(await (await app.request('/commitments')).json()).toEqual({
       entries: [],
@@ -5431,12 +5403,8 @@ describe('HTTP API', () => {
 
     const all = await app.request('/commitments?includeClosed=true');
     expect(await all.json()).toMatchObject({
-      entries: [{ id, body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
+      entries: [{ id: 'cm-closed', body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
     });
-    expect((await stores.commitments.get(id))?.closedBy).toBe('human');
-    expect(await stores.commitments.get(id)).not.toBeNull();
-    // #5243: 積んだ行（1）＋閉じる前の行（2）＋閉じた後の行（3）。旧は積んだ行と閉じた後の行の2行
-    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(3);
   });
 
   // 片方の枝だけ測ると導出を潰す変異が生き残るので、未了（右枝＝`at`）と片付いた（左枝＝`closedAt`）の両方を測る。
@@ -5474,303 +5442,6 @@ describe('HTTP API', () => {
   it('読めない includeClosed は弾く（黙って既定へ倒さない）', async () => {
     expect((await app.request('/commitments?includeClosed=yes')).status).toBe(400);
     expect((await app.request('/commitments?includeClosed=1')).status).toBe(400);
-  });
-
-  it('無い id を閉じると 404、二度目は 409（いつ・どう片付けたかを本文に入れる）', async () => {
-    expect((await app.request('/commitments/nope/close', json({ reason: 'x' }))).status).toBe(404);
-
-    const opened = await app.request('/commitments', json({ body: '二度閉じの確認' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    expect(
-      (await app.request(`/commitments/${id}/close`, json({ reason: '最初の始末' }))).status,
-    ).toBe(200);
-
-    const again = await app.request(`/commitments/${id}/close`, json({ reason: '後から来た始末' }));
-    expect(again.status).toBe(409);
-    expect(((await again.json()) as { error: string }).error).toContain('最初の始末');
-    expect(await stores.commitments.get(id)).toMatchObject({ closedReason: '最初の始末' });
-
-    const openedAgain = await app.request('/commitments', json({ body: '理由なしの確認' }));
-    const other = (await openedAgain.json()) as { id: string };
-    expect((await app.request(`/commitments/${other.id}/close`, json({ reason: '' }))).status).toBe(
-      400,
-    );
-    expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
-    expect(
-      (await app.request(`/commitments/${other.id}/close`, json({ reason: ' \n ' }))).status,
-    ).toBe(400);
-    expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
-  });
-
-  // #5243 で反転（Issue #2037 の「落ちても 200」を、日誌を先に書く「落ちたら閉じず 500」へ）: 閉じた後に書いて握ると、人間が取り消したのにクローンへ名指しされず学びにもならない。stderr に跡が1行出て、その行に理由の本文は載らない保証は残してある。
-  it(
-    '日誌への追記が落ちたら、閉じずに 500 を返す（Issue #5243。旧 #2037）。' +
-      'stderr に跡が1行出て、その行に理由の本文は載らない',
-    async () => {
-      const opened = await app.request('/commitments', json({ body: '日誌が落ちても片付く件' }));
-      const { id } = (await opened.json()) as { id: string };
-
-      const failingJournal: Stores = {
-        ...stores,
-        journal: {
-          ...stores.journal,
-          append: () => {
-            throw new Error('journal store unavailable (test)');
-          },
-        },
-      };
-      const withFailingJournal = createApp({
-        clone: fake.clone,
-        stores: failingJournal,
-        token: 'test-token',
-        shutdown: () => undefined,
-      });
-
-      let response: Response | undefined;
-      const lines = await captureStderr(async () => {
-        response = await withFailingJournal.request(
-          `/commitments/${id}/close`,
-          json({ reason: 'SECRET-CLOSE-REASON' }),
-        );
-      });
-
-      expect(response?.status).toBe(500);
-      expect(await response?.json()).toMatchObject({ code: 'journal_write_failed' });
-
-      expect((await stores.commitments.get(id))?.closedAt).toBeUndefined();
-
-      const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
-      expect(dropped).toHaveLength(1);
-      expect(dropped[0]).not.toContain('SECRET-CLOSE-REASON');
-    },
-  );
-
-  it('人間が積んだ未了の行は本文を直せる（editedAt/editedBy が入り、他の欄は不変）', async () => {
-    const opened = await app.request('/commitments', json({ body: 'もとの依頼', source: 'gh-1' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    const patched = await app.request(`/commitments/${id}`, {
-      ...json({ body: '直した依頼' }),
-      method: 'PATCH',
-    });
-    expect(patched.status).toBe(200);
-    expect(await patched.json()).toEqual({ ok: true });
-
-    const entry = await stores.commitments.get(id);
-    expect(entry?.body).toBe('直した依頼');
-    expect(entry?.editedBy).toBe('human');
-    expect(entry?.editedAt).not.toBeUndefined();
-    expect(entry?.origin).toBe('human');
-    expect(entry?.source).toBe('gh-1');
-    expect(entry?.closedAt).toBeUndefined();
-
-    const decisions = await stores.journal.list({ types: ['decision'] });
-    expect(decisions).toHaveLength(2);
-    const decisionTexts = decisions.map((d) => (d.type === 'decision' ? d.decision : ''));
-    expect(decisionTexts).toEqual(expect.arrayContaining([expect.stringContaining('もとの依頼')]));
-    expect(decisionTexts).toEqual(expect.arrayContaining([expect.stringContaining('直した依頼')]));
-  });
-
-  it('クローン（self）やマネージャー（manager）が立てた行は人間からは直せない（403）', async () => {
-    await stores.commitments.open({
-      id: 'cm-self',
-      at: '2026-08-12T00:00:00.000Z',
-      origin: 'self',
-      body: 'クローンが自分で立てた仕事',
-    });
-    await stores.commitments.open({
-      id: 'cm-manager',
-      at: '2026-08-12T00:00:00.000Z',
-      origin: 'manager',
-      source: 'mgr-1',
-      body: 'マネージャーの報告',
-    });
-
-    for (const id of ['cm-self', 'cm-manager']) {
-      const response = await app.request(`/commitments/${id}`, {
-        ...json({ body: '書き換えたい' }),
-        method: 'PATCH',
-      });
-      expect(response.status, id).toBe(403);
-    }
-    expect((await stores.commitments.get('cm-self'))?.body).toBe('クローンが自分で立てた仕事');
-    expect((await stores.commitments.get('cm-manager'))?.body).toBe('マネージャーの報告');
-  });
-
-  // 文面そのものは固定しない（道具の名前の有無だけを見る）: 言い回しを良くする PR をここで赤くしないため。
-  it('403 の本文は、出口が在る self にだけ commitment_edit を名指しする（manager には出さない）', async () => {
-    await stores.commitments.open({
-      id: 'cm-self',
-      at: '2026-08-12T00:00:00.000Z',
-      origin: 'self',
-      body: 'クローンが自分で立てた仕事',
-    });
-    await stores.commitments.open({
-      id: 'cm-manager',
-      at: '2026-08-12T00:00:00.000Z',
-      origin: 'manager',
-      source: 'mgr-1',
-      body: 'マネージャーの報告',
-    });
-
-    const failures = await Promise.all(
-      ['cm-self', 'cm-manager'].map(async (id) => {
-        const response = await app.request(`/commitments/${id}`, {
-          ...json({ body: '書き換えたい' }),
-          method: 'PATCH',
-        });
-        expect(response.status, id).toBe(403);
-        return ((await response.json()) as { error: string }).error;
-      }),
-    );
-
-    expect(failures[0]).toContain('commitment_edit');
-    expect(failures[1]).not.toContain('commitment_edit');
-  });
-
-  it('無い id は 404、既に片付いている行は 409（いつ・どう片付いたかを本文に入れる）', async () => {
-    expect(
-      (
-        await app.request('/commitments/nope', {
-          ...json({ body: '直したい' }),
-          method: 'PATCH',
-        })
-      ).status,
-    ).toBe(404);
-
-    const opened = await app.request('/commitments', json({ body: '片付け済みの確認' }));
-    const { id } = (await opened.json()) as { id: string };
-    await app.request(`/commitments/${id}/close`, json({ reason: 'もう片付いた' }));
-
-    const patched = await app.request(`/commitments/${id}`, {
-      ...json({ body: '後から直したい' }),
-      method: 'PATCH',
-    });
-    expect(patched.status).toBe(409);
-    expect(((await patched.json()) as { error: string }).error).toContain('もう片付いた');
-    expect((await stores.commitments.get(id))?.body).toBe('片付け済みの確認');
-  });
-
-  it('空の body は 400 で受け付けない', async () => {
-    const opened = await app.request('/commitments', json({ body: '空の確認' }));
-    const { id } = (await opened.json()) as { id: string };
-
-    const patched = await app.request(`/commitments/${id}`, {
-      ...json({ body: '' }),
-      method: 'PATCH',
-    });
-    expect(patched.status).toBe(400);
-    expect((await stores.commitments.get(id))?.body).toBe('空の確認');
-  });
-
-  describe('PATCH /commitments/:id の ifMatch（Issue #3786）', () => {
-    const at = '2026-08-12T00:00:00.000Z';
-    const patch = (id: string, body: unknown) =>
-      app.request(`/commitments/${id}`, { ...json(body), method: 'PATCH' });
-    const openHuman = (id = 'cm-1') =>
-      stores.commitments.open({ id, at, origin: 'human', body: '最初' });
-
-    it('版が合えば書け、書くと版が editedAt へ進む。省略は従来どおり後勝ち', async () => {
-      await openHuman();
-      const ok = await patch('cm-1', { body: '版つき', ifMatch: at });
-      expect(ok.status).toBe(200);
-      const edited = await stores.commitments.get('cm-1');
-      expect(edited?.body).toBe('版つき');
-
-      const next = await patch('cm-1', { body: '二回目', ifMatch: edited?.editedAt });
-      expect(next.status).toBe(200);
-
-      const lastWins = await patch('cm-1', { body: '後勝ち' });
-      expect(lastWins.status).toBe(200);
-      expect((await stores.commitments.get('cm-1'))?.body).toBe('後勝ち');
-    });
-
-    it('版が古ければ 409 で書かれず、current が最新の行。片付き済みの 409 とは current の鍵で見分ける', async () => {
-      await openHuman();
-      await stores.commitments.editBody('cm-1', '別の書き手', '2026-08-13T00:00:00.000Z', 'human');
-      const stale = await patch('cm-1', { body: '古い版から', ifMatch: at });
-      expect(stale.status).toBe(409);
-      const body = (await stale.json()) as { error: string; current: unknown };
-      expect(body.current).toMatchObject({
-        id: 'cm-1',
-        body: '別の書き手',
-        editedAt: '2026-08-13T00:00:00.000Z',
-      });
-      expect((await stores.commitments.get('cm-1'))?.body).toBe('別の書き手');
-      expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(0);
-
-      await openHuman('cm-2');
-      await stores.commitments.close('cm-2', '2026-08-14T00:00:00.000Z', '済んだ', 'human');
-      const closed = await patch('cm-2', { body: '閉じた後', ifMatch: at });
-      expect(closed.status).toBe(409);
-      expect('current' in ((await closed.json()) as object)).toBe(false);
-    });
-
-    it('読んだ後に行が消えていれば 409 で current は null', async () => {
-      await openHuman();
-      const original = stores.commitments.editBody.bind(stores.commitments);
-      stores.commitments.editBody = async (...args) => {
-        await stores.commitments.clear();
-        return original(...args);
-      };
-      const response = await patch('cm-1', { body: '消えた後', ifMatch: at });
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({
-        error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）',
-        current: null,
-      });
-    });
-
-    it('同じ版を前提にした同時の2書き込みは、1件だけ通る', async () => {
-      await openHuman();
-      const [a, b] = await Promise.all([
-        patch('cm-1', { body: 'A', ifMatch: at }),
-        patch('cm-1', { body: 'B', ifMatch: at }),
-      ]);
-      expect([a.status, b.status].sort()).toEqual([200, 409]);
-    });
-  });
-
-  it('ブラウザの単純リクエストでは台帳を積めない・閉じられない・本文も直せない', async () => {
-    await stores.commitments.open({
-      id: 'cm-1',
-      at: '2026-08-12T00:00:00.000Z',
-      origin: 'human',
-      body: '人間が頼んだこと',
-    });
-
-    for (const { path, body, method } of [
-      { path: '/commitments', body: '{"body":"注入された宿題"}', method: undefined },
-      { path: '/commitments/cm-1/close', body: '{"reason":"注入"}', method: undefined },
-      { path: '/commitments/cm-1', body: '{"body":"改ざんされた本文"}', method: 'PATCH' as const },
-    ]) {
-      expect(
-        (await app.request(path, { ...simpleRequest(body), ...(method ? { method } : {}) })).status,
-        path,
-      ).toBe(400);
-
-      for (const contentType of [
-        'text/plain;application/json',
-        'application/x-www-form-urlencoded',
-        'multipart/form-data; boundary=application/json',
-      ]) {
-        const disguised = await app.request(path, {
-          method: method ?? 'POST',
-          headers: { 'content-type': contentType },
-          body,
-        });
-        expect(disguised.status, `${path} [${contentType}]`).toBe(400);
-      }
-    }
-
-    expect(await stores.commitments.list({ includeClosed: true })).toEqual({
-      entries: [
-        { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
-      ],
-      unreadable: [],
-      trimmedClosed: 0,
-    });
   });
 
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {
@@ -5951,8 +5622,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       title: 't',
       content: 'c',
     });
-    const openedForClose = await app.request('/commitments', json({ body: '閉じる対象' }));
-    const { id: closeId } = (await openedForClose.json()) as { id: string };
     await stores.schedules.put({
       kind: 'table-kind',
       spec: { type: 'daily', at: '09:00' },
@@ -5960,8 +5629,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       createdAt: '2026-08-12T00:00:00.000Z',
       updatedAt: '2026-08-12T00:00:00.000Z',
     });
-    const openedForPatch = await app.request('/commitments', json({ body: '編集対象' }));
-    const { id: patchId } = (await openedForPatch.json()) as { id: string };
     await stores.inbox.put(
       {
         type: 'human_message',
@@ -6058,31 +5725,6 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
           ),
       },
       {
-        name: 'POST /commitments/:id/close',
-        widened: true,
-        tracesDrop: true,
-        request: () =>
-          withFailingJournal.request(
-            `/commitments/${closeId}/close`,
-            json({ reason: '表で閉じる' }),
-          ),
-      },
-      {
-        name: 'POST /commitments',
-        request: () => withFailingJournal.request('/commitments', json({ body: '積む対象' })),
-      },
-      {
-        // #5242 で反転: 書き直した後に日誌を書いていた（落ちても 200）のを、日誌を先に書く（落ちたら書き直さず 500）へ。編集前の本文は日誌にしか残らないので、跡が日誌に無いまま上書きしてはいけない。
-        name: 'PATCH /commitments/:id',
-        widened: true,
-        tracesDrop: true,
-        request: () =>
-          withFailingJournal.request(`/commitments/${patchId}`, {
-            ...json({ body: '直した本文' }),
-            method: 'PATCH',
-          }),
-      },
-      {
         name: 'PUT /mcp-servers',
         widened: true,
         request: () =>
@@ -6138,13 +5780,10 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     // 外す前の日誌が書けなかったので、外していない（#5234）
     expect((await stores.schedules.get('table-kind'))?.request).toBe('既存の依頼');
     expect(await stores.mcpServers.read()).toBeNull();
-    // 日誌が書けなかった4口は、状態を変えていない（#5243）
+    // 日誌が書けなかった口は、状態を変えていない（#5243）
     expect((await stores.persona.read('table-memory'))?.content).toBe('# 元の内容\n');
     expect((await stores.practices.read('table-practice'))?.title).toBe('t');
     expect(await stores.practices.read('table-practice-del')).not.toBeNull();
-    expect((await stores.commitments.get(closeId))?.closedAt).toBeUndefined();
-    // 編集前の本文が日誌に無いまま上書きしていない（#5242）
-    expect((await stores.commitments.get(patchId))?.body).toBe('編集対象');
     // 消す前の日誌が書けなかったので、消えていない・配達も止めていない（#5244）
     expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id)).toEqual([
       'table-inbox-1',
@@ -8413,7 +8052,7 @@ describe('OpenAPI', () => {
       '/schedule',
       '/schedule/{kind}/run',
       '/commitments',
-      '/commitments/{id}/close',
+      '/commitments/{id}',
       '/managers',
       '/managers/{id}',
       '/managers/{id}/transcript',
@@ -11461,16 +11100,16 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       body: { kind: 'my_task', request: DUMMY },
     },
     {
-      name: 'POST /commitments',
-      path: '/commitments',
+      name: 'POST /tasks',
+      path: '/tasks',
       method: 'POST',
-      body: { body: DUMMY, source: '' },
+      body: { title: DUMMY, body: DUMMY, source: '' },
     },
     {
-      name: 'POST /commitments/:id/close',
-      path: '/commitments/c-1/close',
+      name: 'POST /tasks/:id/close',
+      path: '/tasks/t-1/close',
       method: 'POST',
-      body: { reason: [DUMMY] },
+      body: { status: 'done', reason: [DUMMY] },
     },
     {
       name: 'POST /managers/:id/messages',
@@ -11695,10 +11334,10 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     expect(response.status).toBe(415);
   });
 
-  it('PATCH（台帳の本文を後から直す）の preflight が通る（Issue #580）', async () => {
+  it('PATCH（task の本文を後から直す）の preflight が通る（Issue #580）', async () => {
     const app = appWith(['https://www.example.com']);
     const response = await app.request(
-      '/commitments/some-id',
+      '/tasks/some-id',
       preflight('https://www.example.com', 'PATCH'),
     );
 

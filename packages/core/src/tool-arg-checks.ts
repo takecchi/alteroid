@@ -1,6 +1,6 @@
 import { stripNul } from './nul-guard.js';
 
-// `tools.ts` から切り出した（文言も判定も1文字も変えていない）: 道具と HTTP が同じ断り文を返す関数（`commitment-close-many.ts`）が、`tools.ts` を import すると循環するため。
+// `tools.ts` から切り出した（文言も判定も1文字も変えていない）: 道具が断り文を返す関数（`commitment-close-many.ts`）が、`tools.ts` を import すると循環するため。
 
 // `.describe()` と断り文の両方から同じ関数を呼ぶ: 数値を2箇所へ手で書き写すと片方だけ直して食い違うため
 export function formatIntRangeJa(range: { min?: number; max?: number }): string {

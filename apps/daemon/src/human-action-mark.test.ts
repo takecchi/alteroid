@@ -148,11 +148,12 @@ beforeEach(() => {
   sends = [];
 });
 
-describe('POST /commitments/:id/close の印', () => {
+// 台帳の close / reopen の口は外れた（段2b）。同じ印の付き方は task の close / reopen が持つ。
+describe('POST /tasks/:id/close の印', () => {
   async function open(): Promise<string> {
     const opened = await buildPlainApp().request(
-      '/commitments',
-      call({}, 'POST', { body: '日報の体裁を直す' }),
+      '/tasks',
+      call({}, 'POST', { title: '日報', body: '日報の体裁を直す' }),
     );
     return ((await opened.json()) as { id: string }).id;
   }
@@ -160,16 +161,16 @@ describe('POST /commitments/:id/close の印', () => {
   it.each([
     ['認証を切った構成', {}, { kind: 'operator', auth: 'disabled' }],
     ['持ち主のトークン', OPERATOR, { kind: 'operator', auth: 'operator-token' }],
-  ])('%s: commitment_close と行の id と via が付く', async (_name, headers, via) => {
+  ])('%s: task_close と行の id と via が付く', async (_name, headers, via) => {
     const id = await open();
     const response = await buildPlainApp().request(
-      `/commitments/${id}/close`,
-      call(headers, 'POST', { reason: '直した' }),
+      `/tasks/${id}/close`,
+      call(headers, 'POST', { status: 'done', reason: '直した' }),
     );
     expect(response.status).toBe(200);
 
     expect(decisionWithGrounds(await decisions(), '人間が直接 API から閉じた').humanAction).toEqual(
-      { kind: 'commitment_close', target: id, via },
+      { kind: 'task_close', target: id, via },
     );
   });
 
@@ -178,18 +179,18 @@ describe('POST /commitments/:id/close の印', () => {
     const { headers, accountId } = await grantedAccountToken(app);
     const id = await open();
     const response = await app.request(
-      `/commitments/${id}/close`,
-      call(headers, 'POST', { reason: '直した' }),
+      `/tasks/${id}/close`,
+      call(headers, 'POST', { status: 'done', reason: '直した' }),
     );
     expect(response.status).toBe(200);
 
     expect(decisionWithGrounds(await decisions(), '人間が直接 API から閉じた').humanAction).toEqual(
-      { kind: 'commitment_close', target: id, via: { kind: 'account', accountId } },
+      { kind: 'task_close', target: id, via: { kind: 'account', accountId } },
     );
   });
 });
 
-describe('POST /commitments/:id/reopen の印', () => {
+describe('POST /tasks/:id/reopen の印', () => {
   // grounds は開き直す前の記録を後ろに続けるので、前方一致で1行に絞る
   function reopenDecision(all: Awaited<ReturnType<typeof decisions>>) {
     const found = all.filter((entry) => entry.grounds?.startsWith('人間が直接 API から開き直した'));
@@ -200,27 +201,27 @@ describe('POST /commitments/:id/reopen の印', () => {
   async function openClosed(): Promise<string> {
     const app = buildPlainApp();
     const opened = await app.request(
-      '/commitments',
-      call({}, 'POST', { body: '日報の体裁を直す' }),
+      '/tasks',
+      call({}, 'POST', { title: '日報', body: '日報の体裁を直す' }),
     );
     const id = ((await opened.json()) as { id: string }).id;
-    await app.request(`/commitments/${id}/close`, call({}, 'POST', { reason: '直した' }));
+    await app.request(`/tasks/${id}/close`, call({}, 'POST', { status: 'done', reason: '直した' }));
     return id;
   }
 
   it.each([
     ['認証を切った構成', {}, { kind: 'operator', auth: 'disabled' }],
     ['持ち主のトークン', OPERATOR, { kind: 'operator', auth: 'operator-token' }],
-  ])('%s: commitment_reopen と行の id と via が付く', async (_name, headers, via) => {
+  ])('%s: task_reopen と行の id と via が付く', async (_name, headers, via) => {
     const id = await openClosed();
     const response = await buildPlainApp().request(
-      `/commitments/${id}/reopen`,
+      `/tasks/${id}/reopen`,
       call(headers, 'POST', { reason: 'まだ終わっていない' }),
     );
     expect(response.status).toBe(200);
 
     expect(reopenDecision(await decisions()).humanAction).toEqual({
-      kind: 'commitment_reopen',
+      kind: 'task_reopen',
       target: id,
       via,
     });
@@ -231,61 +232,16 @@ describe('POST /commitments/:id/reopen の印', () => {
     const { headers, accountId } = await grantedAccountToken(app);
     const id = await openClosed();
     const response = await app.request(
-      `/commitments/${id}/reopen`,
+      `/tasks/${id}/reopen`,
       call(headers, 'POST', { reason: 'まだ終わっていない' }),
     );
     expect(response.status).toBe(200);
 
     expect(reopenDecision(await decisions()).humanAction).toEqual({
-      kind: 'commitment_reopen',
+      kind: 'task_reopen',
       target: id,
       via: { kind: 'account', accountId },
     });
-  });
-
-  // 開き直しは日誌を先に書く。重複・割り込みで効かなかった回に、先の行が印を持ったまま残らないこと（#5272）
-  it('同じ担当・同じ本文の未了が在って開き直せなかった回は、どの行にも印が付かない', async () => {
-    const base = { at: '2026-10-19T00:00:00.000Z', origin: 'manager', source: 'mgr-1' } as const;
-    await stores.commitments.open({ ...base, id: 'old', body: '同じ本文' });
-    await stores.commitments.close('old', '2026-10-19T01:00:00.000Z', '片付けた', 'clone');
-    await stores.commitments.open({ ...base, id: 'new', body: '同じ本文' });
-
-    const response = await buildPlainApp().request(
-      '/commitments/old/reopen',
-      call(OPERATOR, 'POST', { reason: 'まだ終わっていない' }),
-    );
-    expect(response.status).toBe(409);
-
-    const all = await decisions();
-    expect(all.filter((entry) => entry.humanAction !== undefined)).toEqual([]);
-    // 先の行そのものは残っている（印だけが無い）
-    expect(all.some((entry) => entry.grounds?.includes('closedReason=片付けた'))).toBe(true);
-  });
-
-  it('先読みの後に別の手で開き直されていた回は、どの行にも印が付かない', async () => {
-    const id = await openClosed();
-    const reopen = stores.commitments.reopen.bind(stores.commitments);
-    stores = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        reopen: async (target) => {
-          await reopen(target);
-          return reopen(target);
-        },
-      },
-    };
-
-    const response = await buildPlainApp().request(
-      `/commitments/${id}/reopen`,
-      call(OPERATOR, 'POST', { reason: 'まだ終わっていない' }),
-    );
-    expect(response.status).toBe(409);
-
-    const marked = (await decisions()).filter(
-      (entry) => entry.humanAction?.kind === 'commitment_reopen',
-    );
-    expect(marked).toEqual([]);
   });
 });
 
@@ -511,7 +467,7 @@ describe('連携の鍵（人間ではない）には付けない', () => {
       source: 'ci.main',
       limits: {} as never,
     };
-    expect(humanActionOf(integration, 'commitment_close', 'c-1')).toEqual({});
+    expect(humanActionOf(integration, 'task_close', 't-1')).toEqual({});
   });
 
   it('humanActionOf は operator・account の principal へ via を写す', () => {
@@ -549,8 +505,8 @@ describe('連携の鍵（人間ではない）には付けない', () => {
     const before = (await decisions()).length;
 
     const statuses = await Promise.all([
-      app.request('/commitments/c-1/close', call(headers, 'POST', { reason: 'x' })),
-      app.request('/commitments/c-1/reopen', call(headers, 'POST', { reason: 'x' })),
+      app.request('/tasks/t-1/close', call(headers, 'POST', { status: 'done', reason: 'x' })),
+      app.request('/tasks/t-1/reopen', call(headers, 'POST', { reason: 'x' })),
       app.request('/schedule/issue-round', call(headers, 'DELETE')),
       app.request('/practices/daily', call(headers, 'DELETE')),
       app.request(

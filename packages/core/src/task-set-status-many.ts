@@ -8,7 +8,7 @@ import type { CommitmentStore, TaskStore } from './store.js';
 import { UnreadableTaskError } from './store.js';
 
 // 道具 `task_set_status_many`（クローン）の検証・絞り込み・Task ストアへの当て方。
-// 台帳の `commitment_close_many` の置き換え（#5923）。検証は `describeCloseManyViolation` を共有する（daemon の `POST /commitments/close-many` と同じ作法を2つ書かない）。
+// 台帳の `commitment_close_many` の置き換え（#5923）。検証は `describeCloseManyViolation`（`commitment-close-many.ts`）に任せる。
 // 日誌は塊ごとに書く（塊の割り方は `closeManyInChunks`）。Task の一括の口は TaskStore に足さない: 1件ずつの `setStatus` が遷移の規則と排他を持っており、
 // 一括用の別経路を3実装に足すと、遷移の規則が2か所に割れるため。Task は数千件溜める前提ではないので、1件ずつの書き直しの重さは許す
 

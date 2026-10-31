@@ -24,7 +24,6 @@ export function slashArgs(
     client,
     listed,
     {
-      conversationId: null,
       target,
       confirm: async () => false,
       onFailed: () => {},

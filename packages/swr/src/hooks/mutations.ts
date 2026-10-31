@@ -8,7 +8,6 @@ import type {
   AgentTokenView,
   AttachmentList,
   ApprovalSelection,
-  Commitment,
   ConversationDeleteResult,
   ConversationSummary,
   EnvVarScope,
@@ -293,109 +292,6 @@ export function useAnswerApprovals() {
       return results;
     },
     [api, refreshApprovals],
-  );
-}
-
-// 台帳のキーは両方回す: 画面は表示の切り替えでキーを変えるので、片方だけだと切り替えた先が古いままになる
-function useRefreshCommitments() {
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    () =>
-      Promise.all([
-        mutate(KEY.commitments(false)),
-        mutate(KEY.commitments(true)),
-        mutate((key) => isKeyOfType(key, 'progress')),
-      ]),
-    [mutate],
-  );
-}
-
-export function usePushCommitment() {
-  const api = useApi();
-  const refresh = useRefreshCommitments();
-  return useCallback(
-    async (body: string) => {
-      await writeThenRefresh(async () => {
-        expectOk(await api.api.POST('/commitments', { body: { body } }));
-      }, refresh);
-    },
-    [api, refresh],
-  );
-}
-
-export function useCloseCommitment() {
-  const api = useApi();
-  const refresh = useRefreshCommitments();
-  return useCallback(
-    async (id: string, reason: string) => {
-      await writeThenRefresh(async () => {
-        expectOk(
-          await api.api.POST('/commitments/{id}/close', {
-            params: { path: { id } },
-            body: { reason },
-          }),
-        );
-      }, refresh);
-    },
-    [api, refresh],
-  );
-}
-
-export function useReopenCommitment() {
-  const api = useApi();
-  const refresh = useRefreshCommitments();
-  return useCallback(
-    async (id: string, reason: string) => {
-      await writeThenRefresh(async () => {
-        expectOk(
-          await api.api.POST('/commitments/{id}/reopen', {
-            params: { path: { id } },
-            body: { reason },
-          }),
-        );
-      }, refresh);
-    },
-    [api, refresh],
-  );
-}
-
-// 可否をここで先回りして弾かない: サーバの規則を写すと、サーバ側の線が変わった日に画面だけがずれるため
-/** 読んだ版（`editedAt ?? at`）と違うと断られた。`current` が null なら、読んだあとに行が消えている。 */
-export class CommitmentConflictError extends ApiError {
-  readonly current: Commitment | null;
-
-  constructor(message: string, current: Commitment | null) {
-    super(409, message);
-    this.name = 'CommitmentConflictError';
-    this.current = current;
-  }
-}
-
-// 版の衝突は本文に `current` の鍵があるかで見分ける: 片付き済み・読めない行の 409 は `{ error }` だけで、
-// 混ぜると「下書きを新しい版に載せ直す」を勧めてしまう。`ifMatch` を送らない呼び出しは従来どおり後勝ち
-export function useEditCommitment() {
-  const api = useApi();
-  const refresh = useRefreshCommitments();
-  return useCallback(
-    async (id: string, body: string, ifMatch?: string) => {
-      await writeThenRefresh(async () => {
-        const result = await api.api.PATCH('/commitments/{id}', {
-          params: { path: { id } },
-          body: ifMatch === undefined ? { body } : { body, ifMatch },
-        });
-        if (result.response.status === 409 && typeof result.error === 'object') {
-          const conflict = result.error as { error?: string; current?: Commitment | null } | null;
-          if (conflict !== null && 'current' in conflict) {
-            throw new CommitmentConflictError(
-              conflict.error ?? '本文が読んだ後に変わっている',
-              conflict.current ?? null,
-            );
-          }
-        }
-        expectOk(result);
-      }, refresh);
-    },
-    [api, refresh],
   );
 }
 

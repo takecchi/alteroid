@@ -964,15 +964,10 @@ export class UnreadableCommitmentError extends Error {
  * `UnreadableCommitmentError` を人間・クローンへ返す1文へ変換する共通の文面。
  * HTTP の口と道具が別ファイルなので、同じ状況の説明を手で書くと片方だけ直して食い違う。
  *
- * 「閉じることはできる」は常に言ってよい: `POST /commitments/:id/close` と `commitment_close` は読めない行を閉じられる。
- * 本文の書き直しは、この関数を呼ぶどの口からもできない（本文が読める形へ戻る保証が無い）。
+ * 台帳へ書く口はクローンにも人間にも無い（台帳の撤去の段2a・2b）ので、読めない行を閉じる・書き直す案内は載せない。
  */
 export function describeUnreadableCommitment(error: UnreadableCommitmentError): string {
-  return (
-    `${error.message}。close で閉じることはできる` +
-    '（POST /commitments/:id/close・commitment_close）。' +
-    '本文の書き直し（PATCH /commitments/:id・commitment_edit）はできない。'
-  );
+  return `${error.message}。台帳は読むだけで、読めない形の行は閉じることも書き直すこともできない。`;
 }
 
 /**
@@ -1175,7 +1170,7 @@ export interface CommitmentStore {
 
   /**
    * 閉じた行を未了へ戻す。`open` は冪等のまま変えない（同じ id の `open` は閉じた行を蘇らせない）ので、開き直す口は別に持つ。
-   * 呼ばれるのは人間（`POST /commitments/:id/reopen`）かクローン（`commitment_reopen`）が閉じた行を名指ししたときだけで、受信箱の配り直しからは呼ばれない。
+   * 人間の口（`POST /commitments/:id/reopen`）もクローンの道具（`commitment_reopen`）も外れた（台帳の撤去の段2a・2b）ので、いまの呼び手は移行・試験だけで、受信箱の配り直しからは呼ばれない。契約は段3で store ごと外すまで保つ。
    *
    * `closedAt` / `closedReason` / `closedBy` を外し、`autoCloseWhenBack` も外す: 器が自動で閉じた行を人間が否定したのに、
    * 担当が戻った合図で器がまた閉じると、否定が黙って覆る。外した印の代わりに消えない印 `autoCloseDeclined: true` を付ける（#5271）:
@@ -1201,7 +1196,7 @@ export interface CommitmentStore {
    * 競合しうる不変条件（まだ閉じていない）だけをストアの1操作へ畳み、競合しない方針判断（どの `origin` の行を直してよいか）は呼び出し側に残す
    * （AGENTS.md「不変条件はストアの1操作に閉じること」）。
    *
-   * `by` は必須（理由は `close` の `by`）。`PATCH /commitments/:id` は `origin: 'human'` の行だけを直し `'human'` を、`commitment_edit` は `origin: 'self'` の行だけを直し `'clone'` を渡す。
+   * `by` は必須（理由は `close` の `by`）。呼ぶ口（人間の `PATCH /commitments/:id`・クローンの `commitment_edit`）は外れた（台帳の撤去の段2a・2b）ので、いまの呼び手は試験だけ。契約は段3で store ごと外すまで保つ。
    *
    * 呼び出し側は、編集の前後の本文を日誌へ逐語で残すこと。台帳が守っているのは不変性ではなく追跡可能性で（`commitmentSchema.editedAt`）、
    * 原文が日誌から読み戻せない編集の口はその線を壊す。日誌は別のストアなのでストアは強制できない: 新しい呼び出し元を足すなら `journal.append` を必ず対にする。

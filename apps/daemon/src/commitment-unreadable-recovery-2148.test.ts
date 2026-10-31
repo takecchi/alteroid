@@ -34,12 +34,6 @@ function stubCloneHost(): CloneHost {
   };
 }
 
-const json = (body: unknown) => ({
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify(body),
-});
-
 const BAD_ID = 'bad-commitment';
 const BAD_BODY = '壊れた約束の本文（跡に出てはいけない）';
 const BAD_AT = '2026-09-02T00:00:00.000Z';
@@ -86,7 +80,7 @@ async function pgStoresWithBadRow(): Promise<Stores> {
 describe.each([
   ['fs', fsStoresWithBadRow],
   ['pg', pgStoresWithBadRow],
-] as const)('読めない約束を直す・閉じる口（%s 実装。issue #2148）', (_label, makeStores) => {
+] as const)('読めない約束を読む口（%s 実装。issue #2148）', (_label, makeStores) => {
   let stores: Stores;
   let app: ReturnType<typeof createApp>;
 
@@ -100,64 +94,27 @@ describe.each([
     });
   });
 
-  describe('(1) 閉じる', () => {
-    it('POST /commitments/:id/close は読めない約束も閉じられる（直す前は500）', async () => {
-      const close = await app.request(`/commitments/${BAD_ID}/close`, json({ reason: '閉じた' }));
-      const body = (await close.json().catch(() => undefined)) as unknown;
-      expect(close.status, `本文: ${JSON.stringify(body)}`).toBe(200);
-    });
-
-    it('閉じた後、既定の一覧（includeClosed 省略）には出ない', async () => {
-      await app.request(`/commitments/${BAD_ID}/close`, json({ reason: '閉じた' }));
-      const list = await app.request('/commitments');
-      const listBody = (await list.json()) as { unreadable: { id?: string }[] };
-      expect(listBody.unreadable.map((row) => row.id)).not.toContain(BAD_ID);
-    });
-
-    it('閉じた後、includeClosed=true では unreadable に残る（entries には出ない・本文は漏れない）', async () => {
-      await app.request(`/commitments/${BAD_ID}/close`, json({ reason: '閉じた' }));
-      const list = await app.request('/commitments?includeClosed=true');
-      const listBody = (await list.json()) as {
-        entries: { id: string }[];
-        unreadable: { id?: string }[];
-      };
-      expect(listBody.unreadable.map((row) => row.id)).toContain(BAD_ID);
-      expect(listBody.entries.map((entry) => entry.id)).not.toContain(BAD_ID);
-      expect(JSON.stringify(listBody)).not.toContain(BAD_BODY);
-    });
-
-    it('既に閉じた読めない約束をもう一度閉じようとすると 409（本文は漏れない）', async () => {
-      await app.request(`/commitments/${BAD_ID}/close`, json({ reason: '閉じた' }));
-      const again = await app.request(`/commitments/${BAD_ID}/close`, json({ reason: 'もう一度' }));
-      const body = (await again.json()) as { error: string };
-      expect(again.status).toBe(409);
-      expect(body.error).not.toContain(BAD_BODY);
-    });
-
-    it('本当に無い id は今までどおり 404', async () => {
-      const close = await app.request('/commitments/never-existed/close', json({ reason: 'x' }));
-      expect(close.status).toBe(404);
-    });
+  // 台帳へ書く口は無い（段2b）ので、読めない約束は読む口でだけ見える: 「片付いた」ではなく読めない行として、本文は漏らさずに
+  it('GET /commitments は読めない約束を unreadable に載せる（entries には出ない・本文は漏れない）', async () => {
+    const list = await app.request('/commitments');
+    const listBody = (await list.json()) as {
+      entries: { id: string }[];
+      unreadable: { id?: string }[];
+    };
+    expect(listBody.unreadable.map((row) => row.id)).toContain(BAD_ID);
+    expect(listBody.entries.map((entry) => entry.id)).not.toContain(BAD_ID);
+    expect(JSON.stringify(listBody)).not.toContain(BAD_BODY);
   });
 
-  describe('(3) 名乗る（本文の書き直しは通さない）', () => {
-    it('PATCH /commitments/:id は読めない約束で 409（本文は漏れない）', async () => {
-      const patch = await app.request(`/commitments/${BAD_ID}`, {
-        ...json({ body: '書き直したい' }),
-        method: 'PATCH',
-      });
-      const body = (await patch.json()) as { error: string };
-      expect(patch.status, `本文: ${JSON.stringify(body)}`).toBe(409);
-      expect(body.error).toContain('close');
-      expect(body.error).not.toContain(BAD_BODY);
-    });
+  it('GET /commitments/:id は読めない約束で 409（本文は漏れない）', async () => {
+    const response = await app.request(`/commitments/${BAD_ID}`);
+    const body = (await response.json()) as { error: string };
+    expect(response.status, `本文: ${JSON.stringify(body)}`).toBe(409);
+    expect(body.error).not.toContain(BAD_BODY);
+  });
 
-    it('本当に無い id は PATCH でも今までどおり 404', async () => {
-      const patch = await app.request('/commitments/never-existed', {
-        ...json({ body: 'x' }),
-        method: 'PATCH',
-      });
-      expect(patch.status).toBe(404);
-    });
+  it('GET /commitments/:id は本当に無い id で 404', async () => {
+    const response = await app.request('/commitments/never-existed');
+    expect(response.status).toBe(404);
   });
 });

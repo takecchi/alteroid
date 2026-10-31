@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -67,22 +67,5 @@ describe('片付けた理由を伏せて出す（#3870）', () => {
     await waitFor(() => expect(document.body.textContent).toContain('どう片付いたか'));
     expect(document.body.textContent).toContain('理由 ');
     expect(document.body.textContent).not.toContain(SECRET);
-  });
-
-  it('「既に片付いた」の断りに出す理由も伏せる', async () => {
-    const open: Commitment = { id: 'cmt-1', at: CLOSED.at, origin: 'human', body: 'もとの本文' };
-    const server = { entries: [open] };
-    stubEntries(server);
-    renderPage();
-    await screen.findByText('もとの本文');
-    fireEvent.change(screen.getByLabelText(/を片付けた理由$/), { target: { value: '書きかけ' } });
-
-    server.entries = [{ ...CLOSED, closedBy: 'human' }];
-    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
-
-    const orphans = await screen.findByRole('list', { name: '一覧から外れた仕事' });
-    await waitFor(() => expect(within(orphans).getByText(/片付けた理由:/)).toBeTruthy());
-    expect(orphans.textContent).toContain('理由 ');
-    expect(orphans.textContent).not.toContain(SECRET);
   });
 });
