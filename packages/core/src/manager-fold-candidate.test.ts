@@ -16,6 +16,7 @@ function baseInput(overrides: Partial<ManagerFoldCandidateInput> = {}): ManagerF
     hasAwaitingBackgroundSignal: false,
     awaitingBackgroundSignalVersionConfirmed: true,
     activityKind: 'active',
+    hasHeldMessages: false,
     lastTurnEndedAt: '2026-09-24T05:00:00.000Z',
     ...overrides,
   };
@@ -30,6 +31,12 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
     expect(line).toContain('畳む候補');
     expect(line).toContain('7時間');
     expect(line).toContain('いまは表示だけで、畳む操作はしない');
+  });
+
+  it('預かりの伝言が残っていれば候補にしない（「自動で届ける」の約束を守る）', () => {
+    const input = baseInput({ hasHeldMessages: true });
+    expect(isManagerFoldCandidate(input, NOW)).toBe(false);
+    expect(describeManagerFoldCandidate(input, NOW)).toBeNull();
   });
 
   it('閾値ちょうど（6時間）は候補になる（境界は以上）', () => {
@@ -105,6 +112,7 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
       hasAwaitingBackgroundSignal: false,
       awaitingBackgroundSignalVersionConfirmed: false,
       activityKind: 'active',
+      hasHeldMessages: false,
       lastTurnEndedAt: '2000-01-01T00:00:00.000Z',
     };
     expect(isManagerFoldCandidate(unconfirmedInput, NOW)).toBe(false);

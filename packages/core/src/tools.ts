@@ -8584,6 +8584,7 @@ export function createCloneTools(context: ToolContext) {
                 ) ??
                   false),
               activityKind: classifyManagerActivity(managerActivityInputOf(manager)),
+              hasHeldMessages: manager.heldMessages !== undefined,
               lastTurnEndedAt: manager.updatedAt,
             },
             now,
