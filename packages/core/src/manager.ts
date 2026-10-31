@@ -3635,8 +3635,18 @@ class Pool implements ManagerPool {
       ['plugins', plugins],
       ['agentToken', agentTokenPushes],
     ] as const) {
-      const unsubscribe = source?.onPushed?.((results) =>
-        this.#recordDirectPushResults(kind, results),
+      const unsubscribe = source?.onPushed?.((results, scope?: { unnamed: true }) =>
+        this.#recordDirectPushResults(
+          kind,
+          // 名指せなかった失敗は、この manager が知っている runner（帳面に載っている runner）全部の失敗として記録する。
+          scope?.unnamed === true
+            ? [...this.#pushHealth.keys()].map((runnerId) => ({
+                runnerId,
+                ok: false,
+                error: results[0]?.error,
+              }))
+            : results,
+        ),
       );
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
