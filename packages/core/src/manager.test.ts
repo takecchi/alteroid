@@ -7581,6 +7581,8 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     pids?: { current: number; max: number };
     capabilities?: string[];
     extraRunners?: RunnerClient[];
+    // 預かりの伝言（`Job.heldMessages`）を台帳に持たせた状態で始める
+    heldMessages?: Job['heldMessages'];
   }) {
     const id = 'mgr-idle';
     const fake = swappableRunner('runner-a');
@@ -7614,6 +7616,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       cwd: '/work/project',
       sessionId: `sess-${id}`,
       runnerId: 'runner-a',
+      ...(options.heldMessages === undefined ? {} : { heldMessages: options.heldMessages }),
     });
 
     let clock = Date.parse(REPORT_AT);
@@ -7721,6 +7724,32 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
           (event as { managerId?: string }).managerId === id,
       ),
     ).toBe(true);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('⭐ 預かりの伝言が残っている done の担当は、条件をすべて満たしても畳む候補にしない（「自動で届ける」の約束を守る）', async () => {
+    const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      heldMessages: [
+        { text: '続きをお願い', heldAt: '2026-08-31T23:40:00.000Z', reason: '担当が忙しい' },
+      ],
+    });
+    expect((await pool.list()).find((m) => m.managerId === id)?.heldMessages).toMatchObject({
+      count: 1,
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    expect(overview.autoFolded).toEqual([]);
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(
+      decisions.some((entry) => 'decision' in entry && entry.decision.includes('[auto-fold]')),
+    ).toBe(false);
 
     await pool.stop();
     await registry.stop();
