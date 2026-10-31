@@ -4103,7 +4103,16 @@ class Clone implements CloneHost {
           await this.#markAnswerDelivered(approval.id, approval.answeredAt);
         } else {
           await this.#stores.inbox.put(event, event.at);
-          await this.#markAnswerDelivered(approval.id, approval.answeredAt);
+          // 印の失敗は握って跡を残し、配達（`post()`）は止めない: 止めると次の再起動まで人間の回答が配られず、担当が確認待ちのまま止まるため。`'pending'` のまま残れば再起動で同じ回答がもう一度配られうるが、`inbox.put` は同じ id の上書きで、約束は「少なくとも1回」
+          try {
+            await this.#markAnswerDelivered(approval.id, approval.answeredAt);
+          } catch (markError) {
+            noteDroppedRecord(
+              '回答の配達印の確定（拾い直し時）',
+              inboxEventShape(event),
+              markError,
+            );
+          }
           this.post(event);
         }
         reconciled += 1;
