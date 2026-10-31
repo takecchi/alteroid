@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { editCommitmentBodyJournalFirst } from './commitment-edit.js';
-import type { ManagerPool } from './manager.js';
 import type { Commitment, JournalEntryInput } from './schema.js';
 import { CommitmentConflictError } from './store.js';
 import { createMemoryStores } from './testing.js';
-import { createCloneTools } from './tools.js';
 
 type MemoryStores = ReturnType<typeof createMemoryStores>;
 
@@ -250,67 +248,6 @@ describe('editCommitmentBodyJournalFirst（#5242）', () => {
     await expect(
       editCommitmentBodyJournalFirst(broken, existing, 'x', 'clone', entry),
     ).rejects.toThrow('store down');
-    const text = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
-    expect(text).toContain('直前の本文編集の行は効いていない（本文は直していない）');
-  });
-});
-
-describe('commitment_edit は日誌を先に書く（#5242）', () => {
-  function tools(stores: MemoryStores) {
-    const list = createCloneTools({
-      stores,
-      emit: () => undefined,
-      conversationId: () => undefined,
-      memoryCause: () => 'clone',
-      managers: {} as unknown as ManagerPool,
-    });
-    const found = list.find((tool) => tool.name === 'commitment_edit');
-    if (!found) throw new Error('commitment_edit が無い');
-    return found;
-  }
-
-  it('日誌に書けないときは書き直さず、行為が起きていないと投げる', async () => {
-    const stores = createMemoryStores();
-    await openRow(stores);
-    await expect(
-      tools(failingJournal(stores)).handler({ id: 'c1', body: '直した後の本文' } as never, {}),
-    ).rejects.toThrow('行為は起きていない');
-    expect((await stores.commitments.get('c1'))?.body).toBe('直す前の本文');
-  });
-
-  it('書き直す瞬間に、編集前後の本文を持つ先の行が日誌に在る', async () => {
-    const stores = createMemoryStores();
-    await openRow(stores);
-    const seen: string[] = [];
-    const spied = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        async editBody(...args: Parameters<MemoryStores['commitments']['editBody']>) {
-          seen.push(JSON.stringify(await stores.journal.list({ types: ['decision'] })));
-          return stores.commitments.editBody(...args);
-        },
-      },
-    } as unknown as MemoryStores;
-
-    const result = await tools(spied).handler({ id: 'c1', body: '直した後の本文' } as never, {});
-
-    expect(JSON.stringify(result)).toContain('直した');
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).toContain('編集前「直す前の本文」→ 編集後「直した後の本文」');
-  });
-
-  it('日誌を書いた後に閉じられたら、打ち消しの行を足し、片付いていると言う', async () => {
-    const stores = createMemoryStores();
-    await openRow(stores);
-    const raced = interruptEdit(stores, async () => {
-      await stores.commitments.close('c1', '2026-10-07T01:00:00.000Z', '閉じた', 'human');
-    });
-
-    const result = await tools(raced).handler({ id: 'c1', body: '直した後の本文' } as never, {});
-
-    expect(JSON.stringify(result)).toContain('既に');
-    expect((await stores.commitments.get('c1'))?.body).toBe('直す前の本文');
     const text = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
     expect(text).toContain('直前の本文編集の行は効いていない（本文は直していない）');
   });

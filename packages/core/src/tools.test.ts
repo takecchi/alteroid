@@ -46,7 +46,6 @@ import { memoryVersion, practiceVersion, UnreadableApprovalError } from './store
 import type { Stores } from './store.js';
 import {
   UnreadableActiveTokenError,
-  UnreadableCommitmentError,
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
 } from './store.js';
@@ -14298,8 +14297,8 @@ describe('システムプロンプトの道具一覧', () => {
     expect(section).toContain('task_set_status` で done にして閉じる');
     // 人間が書いた記憶を統合の走行から守る（memory_* をまたぐ）
     expect(section).toContain('人間が一度でも書いた文書');
-    // 台帳は順序を持たない
-    expect(section).toContain('順序は持たない');
+    // 旧台帳は読むだけ（もう何も載らず、閉じる道具も無い）
+    expect(section).toContain('読むだけ。もう何も載らず、閉じる道具も無い');
     // 記号・指示語の指す先は推測で埋めず conversation_read を引く
     expect(section).toContain('推測で埋めずにここを引くこと');
     // 実行される定義ではない（practice_*）
@@ -14432,8 +14431,7 @@ describe('プロンプトの索引から外した規則は、道具の説明文�
     ['task_say', 'ask_human を使うこと'],
     ['approval_withdraw', 'manager_send（decision 付き）'],
     ['usage_read', '「取れなかった」と「0」は分けて出る'],
-    ['commitment_edit', '`origin` が `self`'],
-    ['commitment_close_many', '`dryRun: false` を明示'],
+    ['task_set_status_many', '`dryRun: false` を明示'],
     ['inbox_remove_many', '`human_message` / `human_answer`'],
     ['progress_read', '`github_observation_record`'],
     ['practice_write', '実行される定義ではない'],
@@ -14797,7 +14795,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         request: `仕込み${pad}: ${long}`,
         everyMinutes: 60,
       });
-      await h.call('commitment_open', { body: `約束${pad}: ${long}` });
+      await h.stores.commitments.open({
+        id: `seed-${pad}`,
+        at: `2026-01-01T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `約束${pad}: ${long}`,
+      });
       await h.call('task_add', { title: `task${pad}`, body: `本文${pad}: ${long}` });
       await h.stores.persona.write(
         `doc-${pad}`,
@@ -15585,7 +15588,13 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
-      await h.call('commitment_open', { body: `約束${String(index).padStart(3, '0')}: ${long}` });
+      await h.stores.commitments.open({
+        // 実際に載る id と同じ長さ（UUID）にする: 一覧の1件あたりの字数が予算の当たり方を決めるため
+        id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `約束${String(index).padStart(3, '0')}: ${long}`,
+      });
     }
 
     const reply = await h.call('commitment_list', {});
@@ -15671,14 +15680,19 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
   });
 
   it('0件のときは断りを足さない', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'c-healthy',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '健全な依頼',
+    });
     const tools = createCloneTools({
-      stores: createMemoryStores(),
+      stores,
       emit: () => undefined,
       memoryCause: () => 'clone',
       conversationId: () => undefined,
     });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    await opened?.handler({ body: '健全な依頼' } as never, {});
 
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
@@ -15757,253 +15771,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
   });
 });
 
-describe('commitment_open は「載せた」と名乗る前にストアを確かめる（issue #856）', () => {
-  it('通常どおり書けたときは名乗り、日誌にも決定を残す（回帰）', async () => {
-    const tools = createCloneTools({
-      stores: createMemoryStores(),
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    const result = await opened?.handler({ body: '健全な依頼' } as never, {});
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).toContain('台帳に載せた');
-    expect(reply).not.toContain('確認できなかった');
-  });
-
-  it('open() が例外を投げずに解決しても、直後の get(id) が null なら「載せた」と名乗らない', async () => {
-    const stores = createMemoryStores();
-    const silentlyLostWrite: Stores = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        async open() {
-          return { opened: true, folded: false };
-        },
-        async get() {
-          return null;
-        },
-      },
-    };
-    const tools = createCloneTools({
-      stores: silentlyLostWrite,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    const result = await opened?.handler({ body: '静かに消える依頼' } as never, {});
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).not.toContain('台帳に載せた');
-    expect(reply).toContain('確認できなかった');
-
-    const decisions = await silentlyLostWrite.journal.list({ types: ['decision'] });
-    expect(
-      decisions.some(
-        (entry) => entry.type === 'decision' && entry.decision.includes('台帳に載せた'),
-      ),
-    ).toBe(false);
-  });
-
-  it('open() が解決しても、直後の get(id) が UnreadableCommitmentError を投げるなら「載せた」と名乗らない', async () => {
-    const stores = createMemoryStores();
-    const unreadableAfterWrite: Stores = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        async open() {
-          return { opened: true, folded: false };
-        },
-        async get(id) {
-          return Promise.reject(new UnreadableCommitmentError(`${id} は壊れて読めない`));
-        },
-      },
-    };
-    const tools = createCloneTools({
-      stores: unreadableAfterWrite,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    const result = await opened?.handler({ body: '読めなくなる依頼' } as never, {});
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).not.toContain('台帳に載せた');
-    expect(reply).toContain('確認できなかった');
-
-    const decisions = await unreadableAfterWrite.journal.list({ types: ['decision'] });
-    expect(
-      decisions.some(
-        (entry) => entry.type === 'decision' && entry.decision.includes('台帳に載せた'),
-      ),
-    ).toBe(false);
-  });
-
-  it('get(id) が UnreadableCommitmentError 以外を投げたら握り潰さずに上へ通す（器そのものの障害と取り違えない）', async () => {
-    const stores = createMemoryStores();
-    const brokenStore: Stores = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        async open() {
-          return { opened: true, folded: false };
-        },
-        async get() {
-          throw new Error('DB接続断（器そのものの障害。テスト用）');
-        },
-      },
-    };
-    const tools = createCloneTools({
-      stores: brokenStore,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    await expect(opened?.handler({ body: '器が壊れている依頼' } as never, {})).rejects.toThrow(
-      'DB接続断（器そのものの障害。テスト用）',
-    );
-  });
-});
-
-describe('commitment_close が「台帳に無い」と答えるとき、機械側の記録の有無で言い分ける（issue #1060）', () => {
-  it('機械が名乗った記録が日誌に在れば、「載った後に消えた」（#856 本体）と言う', async () => {
-    const stores = createMemoryStores();
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        '受信箱の合図から、引き受けた仕事として台帳に開いた（id: c-vanished）。' +
-        '合図: manager_message kind=report',
-    });
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const close = tools.find((entry) => entry.name === 'commitment_close');
-    const result = await close?.handler(
-      { id: 'c-vanished', reason: '片付けようとした' } as never,
-      {},
-    );
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).toContain('台帳に無い');
-    expect(reply).toContain('機械が名乗った記録は日誌に在る');
-    expect(reply).toContain('台帳に載った後に行が消えたということである');
-    expect(reply).not.toMatch(/#\d+/);
-    expect(reply).toContain('id の取り違えではない');
-  });
-
-  it('機械が名乗った記録も日誌に無ければ、id の取り違えの可能性を言う（「名乗っていない」とは断定しない）', async () => {
-    const stores = createMemoryStores();
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const close = tools.find((entry) => entry.name === 'commitment_close');
-    const result = await close?.handler(
-      { id: 'c-typo-xyz', reason: '片付けようとした' } as never,
-      {},
-    );
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).toContain('台帳に無い');
-    expect(reply).toContain('機械が名乗った記録も日誌に無い');
-    expect(reply).toContain('取り違えた可能性がある');
-    expect(reply).toContain('記録自体が落ちた場合と');
-  });
-
-  it('日誌が読めなければ「判定できない」と言い、握り潰して他の2つへ倒さない', async () => {
-    const stores = createMemoryStores();
-    const broken: Stores = {
-      ...stores,
-      journal: {
-        ...stores.journal,
-        // 読みは1日ずつの窓で遡る（#5140）ので、窓の読み（listPage）と最古の時刻（oldestAt）を壊す
-        list: () => Promise.reject(new Error('DB接続断（テスト用）')),
-        listPage: () => Promise.reject(new Error('DB接続断（テスト用）')),
-        oldestAt: () => Promise.reject(new Error('DB接続断（テスト用）')),
-      },
-    };
-    const tools = createCloneTools({
-      stores: broken,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const close = tools.find((entry) => entry.name === 'commitment_close');
-    const result = await close?.handler(
-      { id: 'c-unreadable', reason: '片付けようとした' } as never,
-      {},
-    );
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).toContain('台帳に無い');
-    expect(reply).toContain('どちらかは判定できない');
-    expect(reply).toContain('DB接続断（テスト用）');
-    expect(reply).not.toContain('機械が名乗った記録は日誌に在る');
-    expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
-  });
-
-  it('⭐ 日誌を時間の予算の内で探し切れなければ、探した範囲を名乗り、「無い」とも取り違えとも言い切らない（#5140）', async () => {
-    const stores = createMemoryStores();
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: '関係の無い内部ターン',
-    });
-    // 窓の上端を3日先に置き、予算を0にする: 最初の1日の窓で日誌の最古に届かず、予算切れで止まる
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-      journalSearch: {
-        budgetMs: 0,
-        now: () => new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-      },
-    });
-    const close = tools.find((entry) => entry.name === 'commitment_close');
-    const result = await close?.handler(
-      { id: 'c-far-away', reason: '片付けようとした' } as never,
-      {},
-    );
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    expect(reply).toContain('台帳に無い');
-    expect(reply).toContain('それより古い側は、時間の予算（0 秒）を使い切って見ていない');
-    expect(reply).toContain('判定できない');
-    expect(reply).toContain('journal_read q="c-far-away" until=');
-    expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
-  });
-
-  it('⚠️ 対象は commitment_close だけである（commitment_edit の同じ枝は変えない）', async () => {
-    const stores = createMemoryStores();
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const edit = tools.find((entry) => entry.name === 'commitment_edit');
-    const editResult = await edit?.handler({ id: 'c-none', body: '書き換え' } as never, {});
-    const editReply = (editResult?.content ?? [])
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('');
-    expect(editReply).toBe('引き受けた仕事 c-none は台帳に無い。');
-  });
-});
-
 describe('commitment_list は物理削除された片付き行を隠さない（issue #416）', () => {
   it('一覧の末尾に「保持上限を超えて物理削除された片付き行が累計 N 件ある」が出る', async () => {
     const stores = createMemoryStores();
@@ -16023,8 +15790,12 @@ describe('commitment_list は物理削除された片付き行を隠さない（
       memoryCause: () => 'clone',
       conversationId: () => undefined,
     });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    await opened?.handler({ body: '健全な依頼' } as never, {});
+    await withTrimmed.commitments.open({
+      id: 'c-healthy',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '健全な依頼',
+    });
 
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
@@ -16059,14 +15830,19 @@ describe('commitment_list は物理削除された片付き行を隠さない（
   });
 
   it('0件のときは断りを足さない', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'c-healthy',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '健全な依頼',
+    });
     const tools = createCloneTools({
-      stores: createMemoryStores(),
+      stores,
       emit: () => undefined,
       memoryCause: () => 'clone',
       conversationId: () => undefined,
     });
-    const opened = tools.find((entry) => entry.name === 'commitment_open');
-    await opened?.handler({ body: '健全な依頼' } as never, {});
 
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
@@ -18591,20 +18367,20 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       return events.filter((event) => commitmentFor(event) !== null).map((event) => event.type);
     }
 
-    // #5469 P5: 台帳へ自動で載る出所は人間の2つだけ（manager_message / external は台帳にも Task にも自動では載せない）。
-    // 説明文の側の歯（下）は、人間の回答が載ることを引き続き測る。manager/external は載らないことを、実装側のこの列挙が測る
-    it('実装側: 台帳を開く出所は人間の2つだけである', () => {
-      expect(openingEventTypes()).toEqual(['human_message', 'human_answer']);
+    // #5923: クローンは台帳へ書かない。自動で開くのは人間の発言の Task だけ（回答・manager_message / external は何も開かない）。
+    // 説明文の側の歯（下）は、台帳へはもう何も載らないと名乗っていることを測る
+    it('実装側: 合図から開く（Task の元になる）出所は人間の発言だけである', () => {
+      expect(openingEventTypes()).toEqual(['human_message']);
     });
 
-    it('説明文が、人間の回答（ask_human の答え）も自動で載ると言っている', () => {
+    it('説明文が、台帳へはもう何も載らない（読むだけ）と言っている', () => {
       const description = descriptionOf('commitment_list');
       expect(
-        /人間の回答|承認待ちへの回答/.test(description),
-        '【赤の意味】commitment_list の説明文が、台帳へ自動で載る出所を3つしか名乗っていない。' +
-          'clone.ts の commitmentFor は human_answer にも台帳を開く（＝ ask_human の答えが来ると' +
-          '1件開く）ので、説明文がそれを予告していない。prompt.ts の側は正しく4つ言っている',
-      ).toBe(true);
+        description,
+        '【赤の意味】commitment_list の説明文が、台帳へもう何も載らないことを名乗っていない。' +
+          '#5923 でクローンは台帳へ書かなくなったので、「自動的にここへ載る」と読める説明が残ると、' +
+          '載るはずの行を待ち続ける',
+      ).toContain('もう何も載らない');
     });
   });
 
@@ -19068,55 +18844,21 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      tool: 'commitment_open',
-      firstLine: ACT_COMPLETED,
-      async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-12');
-        const tools = createCloneTools({
-          stores,
-          emit: () => {},
-          memoryCause: () => 'clone',
-          conversationId: () => undefined,
-        });
-        return callExpectingError(tools, 'commitment_open', { body: '宿題を引き受けた' });
-      },
-    },
-    {
-      tool: 'commitment_close',
-      firstLine: ACT_COMPLETED,
-      async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13');
-        await stores.commitments.open({
-          id: 'c-close-test',
-          at: '2026-01-01T00:00:00.000Z',
-          origin: 'self',
-          body: '片付ける件',
-        });
-        const tools = createCloneTools({
-          stores,
-          emit: () => {},
-          memoryCause: () => 'clone',
-          conversationId: () => undefined,
-        });
-        return callExpectingError(tools, 'commitment_close', {
-          id: 'c-close-test',
-          reason: '終わった',
-        });
-      },
-    },
-    {
-      tool: 'commitment_close_many',
-      // 反転（#5452）: 以前は ACT_COMPLETED で「完了した・やり直さないこと」と返し、残りの塊を閉じていないことも閉じた id も伝えなかった。
-      // いまは、塊が 1 つ（最後の塊）なので全件を閉じ終えたと名乗る（残りの塊がある回は「途中で止まった」。個別の歯は commitment-close-many-partial-journal.test.ts）
+      tool: 'task_set_status_many',
+      // 塊が 1 つ（最後の塊）なので全件を閉じ終えたと名乗る（残りの塊がある回は「途中で止まった」）
       firstLine: '⚠⚠ 全件を閉じ終えた・最後の塊の日誌が未記録・閉じ直し禁止',
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13b');
-        await stores.commitments.open({
-          id: 'c-close-many-test',
-          at: '2026-01-01T00:00:00.000Z',
+        const at = '2026-01-01T00:00:00.000Z';
+        await stores.tasks.add({
+          id: 't-status-many-test',
+          createdAt: at,
+          updatedAt: at,
+          status: 'queued',
           origin: 'external',
           source: 'token-pool',
-          body: '知らせ',
+          title: '知らせ',
+          body: '本文',
         });
         const tools = createCloneTools({
           stores,
@@ -19124,41 +18866,14 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           memoryCause: () => 'clone',
           conversationId: () => undefined,
         });
-        return callExpectingError(tools, 'commitment_close_many', {
+        const outcome = await callExpectingError(tools, 'task_set_status_many', {
           origin: ['external'],
+          status: 'done',
           reason: '知らせなので引き受ける対象が無い',
           dryRun: false,
         });
-      },
-    },
-    {
-      tool: 'commitment_reopen',
-      // 反転（#5176）: 以前は reopen が先で ACT_COMPLETED だった。いまは日誌が先で、落ちたら開き直していない。
-      firstLine: ACT_NOT_PERFORMED,
-      async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13c');
-        await stores.commitments.open({
-          id: 'c-reopen-test',
-          at: '2026-01-01T00:00:00.000Z',
-          origin: 'self',
-          body: '開き直す件',
-        });
-        await stores.commitments.close(
-          'c-reopen-test',
-          '2026-01-01T01:00:00.000Z',
-          '閉じた',
-          'clone',
-        );
-        const tools = createCloneTools({
-          stores,
-          emit: () => {},
-          memoryCause: () => 'clone',
-          conversationId: () => undefined,
-        });
-        return callExpectingError(tools, 'commitment_reopen', {
-          id: 'c-reopen-test',
-          reason: 'まだ終わっていなかった',
-        });
+        expect((await stores.tasks.get('t-status-many-test'))?.status).toBe('done');
+        return outcome;
       },
     },
     // task_*（#5469 P2）は書いた後に日誌を書く: 開き直しの閉じた記録も `before` を日誌の本文へ入れるので、落ちたときは act-completed（書いた事実は残る）
@@ -19295,32 +19010,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           reason: '終わった',
         });
         expect((await stores.tasks.get('t-status-test'))?.status).toBe('done');
-        return outcome;
-      },
-    },
-    {
-      tool: 'commitment_edit',
-      // #5242 で反転: 書き直した後に日誌を書いて `act-completed` だったのを、書き直す前に書く `act-not-performed` へ（編集前の本文は日誌にしか残らない）
-      firstLine: ACT_NOT_PERFORMED,
-      async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-14');
-        await stores.commitments.open({
-          id: 'c-edit-test',
-          at: '2026-01-01T00:00:00.000Z',
-          origin: 'self',
-          body: '直す前の本文',
-        });
-        const tools = createCloneTools({
-          stores,
-          emit: () => {},
-          memoryCause: () => 'clone',
-          conversationId: () => undefined,
-        });
-        const outcome = await callExpectingError(tools, 'commitment_edit', {
-          id: 'c-edit-test',
-          body: '直した後の本文',
-        });
-        expect((await stores.commitments.get('c-edit-test'))?.body).toBe('直す前の本文');
         return outcome;
       },
     },

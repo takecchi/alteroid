@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { CLONE_TOOL_NAMES } from '@alteroid/core';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -70,35 +69,7 @@ function renderProbe(frames: Frame[]) {
   return stub;
 }
 
-const LEDGER_WRITERS = CLONE_TOOL_NAMES.filter(
-  (name) => name.startsWith('commitment_') && name !== 'commitment_list',
-);
-
 describe('台帳の取り直し（SSE）', () => {
-  it('core の名簿に台帳を書く道具が居る（数え上げが空にならない）', () => {
-    expect([...LEDGER_WRITERS].sort()).toEqual([
-      'commitment_close',
-      'commitment_close_many',
-      'commitment_edit',
-      'commitment_open',
-      'commitment_reopen',
-    ]);
-  });
-
-  it.each(LEDGER_WRITERS)('クローン自身の %s の tool_use で一覧を取り直す', async (tool) => {
-    const stub = renderProbe([toolUse('t1', 'clone', tool)]);
-    await waitFor(() => {
-      expect(commitmentFetches(stub)).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  it('クローンが起こしたサブエージェントの台帳の道具でも取り直す', async () => {
-    const stub = renderProbe([toolUse('t1', 'clone:sub:general-purpose', 'commitment_close')]);
-    await waitFor(() => {
-      expect(commitmentFetches(stub)).toBeGreaterThanOrEqual(2);
-    });
-  });
-
   it('exchange(with: human) で取り直す（「未着手」の印）', async () => {
     const stub = renderProbe([exchange('e1', 'human', 'outbound')]);
     await waitFor(() => {
@@ -113,15 +84,17 @@ describe('台帳の取り直し（SSE）', () => {
     });
   });
 
-  it('台帳を書かない道具の tool_use（commitment_list・Bash）では取り直さない', async () => {
+  // クローンの台帳の書き込みの道具は外した（#5923）: 旧い名前の tool_use が届いても取り直さない
+  it('道具の tool_use（commitment_list・旧い commitment_close・Bash）では取り直さない', async () => {
     const stub = renderProbe([
       toolUse('t1', 'clone', 'commitment_list'),
       toolUse('t2', 'clone', 'Bash'),
       toolUse('t3', 'clone:sub:general-purpose', 'Read'),
+      toolUse('t4', 'clone', 'commitment_close'),
     ]);
     await screen.findByText('loaded');
     await waitFor(() => {
-      expect(screen.getByTestId('received').textContent).toBe('3');
+      expect(screen.getByTestId('received').textContent).toBe('4');
     });
     expect(commitmentFetches(stub)).toBe(1);
   });

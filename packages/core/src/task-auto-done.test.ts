@@ -262,15 +262,14 @@ describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
     expect(built.body).toBe(entry?.body);
   });
 
-  it('human_answer は Task を作る合図ではない（台帳の行は載るが、Task は作らない。回答のイベントは会話 id を持つ）', () => {
+  it('human_answer は Task を作る合図ではない（回答のイベントは会話 id を持つが、台帳にも Task にも開かない。#5923）', () => {
     expect(opensHumanTask(answer)).toBe(false);
     expect(opensHumanTask(message)).toBe(true);
-    // 台帳には移行期のあいだ載る
-    expect(commitmentFor(answer)?.origin).toBe('human');
+    expect(commitmentFor(answer)).toBeNull();
   });
 });
 
-describe('commitmentFor: 人間の合図だけが台帳に開く（#5469 P5）', () => {
+describe('commitmentFor: Task の元になる行を作るのは人間の発言だけ（#5469 P5・#5923。台帳へは書かない）', () => {
   const at = '2026-10-29T01:00:00.000Z';
 
   it('manager_message・external・timer・self_initiative は開かない', () => {
@@ -283,13 +282,13 @@ describe('commitmentFor: 人間の合図だけが台帳に開く（#5469 P5）',
     for (const event of events) expect(commitmentFor(event), event.type).toBeNull();
   });
 
-  it('human_message・human_answer は開く', () => {
+  it('human_message は開き、human_answer は開かない', () => {
     expect(
       commitmentFor({ type: 'human_message', id: 'h', at, text: 'やって', conversationId: 'c' })
         ?.origin,
     ).toBe('human');
     expect(
-      commitmentFor({ type: 'human_answer', id: 'a', at, approvalId: 'p', answer: 'ok' })?.origin,
-    ).toBe('human');
+      commitmentFor({ type: 'human_answer', id: 'a', at, approvalId: 'p', answer: 'ok' }),
+    ).toBeNull();
   });
 });

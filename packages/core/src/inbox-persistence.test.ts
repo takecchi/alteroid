@@ -631,10 +631,6 @@ async function waitForNoUnread(stores: Stores): Promise<void> {
   await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読が消える');
 }
 
-async function waitForCommitment(stores: Stores, id: string): Promise<void> {
-  await waitFor(async () => (await stores.commitments.get(id)) !== null, `台帳に ${id} が現れる`);
-}
-
 // #5469 P5: manager_message / external は台帳に開かなくなったが、アップグレード前に開いた行と、その合図の未読（受信箱）が残った状態は実在する。
 // 「台帳の行が閉じていれば配り直しを畳む」「開いていれば全文で配る」という保証は、その行の側（人間の合図と同じ配線）に残っているので、
 // 古い版が開いた形の行を直接置いて、同じ歯で測り続ける（歯を外して保証を弱めない）。置く行は古い版の commitmentFor が組んだものと同じ origin・id・at
@@ -731,7 +727,13 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     await idle();
     dying.clone.post(event);
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitForCommitment(stores, event.id);
+    // 以前の版が人間の発言を台帳へ開いていた行（クローンはもう台帳へ書かない。#5923）をアップグレード前の状態として置く
+    await stores.commitments.open({
+      id: event.id,
+      at: event.at,
+      origin: 'human',
+      body: text,
+    });
 
     expect(
       await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', 'もう対応済み', 'clone'),

@@ -67,7 +67,6 @@ describe('道具の返り値が履歴へ積む量', () => {
       { name: 'commitment_list', args: {} },
       { name: 'journal_read', args: { limit: 100 } },
       { name: 'manager_report', args: { managerId: 'mgr-103' } },
-      { name: 'commitment_close', args: { id: 'commit-00001', reason: '済' } },
       { name: 'task_add', args: { title: '確認', body: '了解しました。' } },
     ]);
     const by = Object.fromEntries(samples.map((sample) => [sample.call.name, sample]));
@@ -78,7 +77,6 @@ describe('道具の返り値が履歴へ積む量', () => {
       expect(by[name]!.result.chars).toBeGreaterThan(3_000);
     }
     expect(by['manager_report']!.result.chars).toBeLessThan(2_500);
-    expect(by['commitment_close']!.result.chars).toBeLessThan(100);
     expect(by['task_add']!.result.chars).toBeLessThan(300);
   }, 60_000);
 });

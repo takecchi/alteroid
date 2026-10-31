@@ -43,7 +43,7 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     source: () => Object.values(RESERVED_SCHEDULE_KIND_ENV_KEYS),
   },
   {
-    tool: 'commitment_close_many',
+    tool: 'task_set_status_many',
     label: 'commitmentOriginSchema の値（packages/core/src/schema.ts）',
     source: () => commitmentOriginSchema.options,
   },
@@ -101,14 +101,6 @@ const EXEMPT: readonly Exemption[] = [
   {
     tool: 'github_observation_record',
     why: '説明文が名乗る一覧（enum・配列）が無い。入力は githubObservationInputSchema（日誌の枝から導く）が名乗る。ふるまいの歯は github-observation-record.test.ts が持つ',
-  },
-  {
-    tool: 'commitment_close',
-    why: '説明文が名乗る一覧（enum・配列）が無い（かつて数え直していた評定の値は、評定の仕組みごと #2699 で消えた）',
-  },
-  {
-    tool: 'commitment_reopen',
-    why: '説明文が名乗る一覧（enum・配列）が無い（言うのは外れる欄の名前と closedBy の例だけ）。ふるまいの歯は commitment-reopen.test.ts が持つ',
   },
   {
     tool: 'task_list',
@@ -178,12 +170,7 @@ const EXEMPT: readonly Exemption[] = [
   { tool: 'schedule_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
   {
     tool: 'commitment_list',
-    why: '台帳へ自動で載る出所は clone.ts の commitmentFor の switch が持ち、配列ではない。ふるまいを走らせる歯を tools.test.ts に置いた',
-  },
-  { tool: 'commitment_open', why: '実装側に、説明文が数え直すような一覧が無い' },
-  {
-    tool: 'commitment_edit',
-    why: '直せる行の条件（origin: self）は1値であって一覧ではない',
+    why: '台帳へはもう何も載らない（#5923）。Task を開く出所は clone.ts の commitmentFor の switch が持ち、配列ではない。ふるまいを走らせる歯を tools.test.ts に置いた',
   },
   { tool: 'profile_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'profile_write', why: '実装側に、説明文が数え直すような一覧が無い' },
@@ -251,8 +238,8 @@ interface ArrayExampleSubject {
 // 値は欄の zod で確かめる。enum の欄は実在する値だけが通る。自由文字列の欄（source / sources）は文字列の配列であることまでしか確かめられない
 const ARRAY_EXAMPLE_SUBJECTS: readonly ArrayExampleSubject[] = [
   { tool: 'manager_list', field: 'status' },
-  { tool: 'commitment_close_many', field: 'origin' },
-  { tool: 'commitment_close_many', field: 'source' },
+  { tool: 'task_set_status_many', field: 'origin' },
+  { tool: 'task_set_status_many', field: 'source' },
   { tool: 'commitment_list', field: 'origin' },
   { tool: 'inbox_remove_many', field: 'types' },
   { tool: 'inbox_remove_many', field: 'sources' },
