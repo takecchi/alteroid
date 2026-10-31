@@ -2,6 +2,7 @@ import { assertNoNul, stripNulWellFormed as cleanText } from './nul-guard.js';
 import { taskSchema } from './schema.js';
 import type { TaskOrigin, JobStatus, Task, TaskClosedBy, TaskStatus } from './schema.js';
 import { compareIsoInstant } from './iso-instant.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 // Task の状態遷移と並びの規則。純関数だけを置き、メモリ・fs・pg の3実装が同じものを呼ぶ。
 // 3実装が規則をそれぞれ持つと必ずずれる。pg も「全行を読む → ここの関数で次の行を作る → 変わった行だけ書く」の形で、規則を SQL に書き直さない。
@@ -177,7 +178,7 @@ export function listTaskRows(rows: readonly TaskRow[], includeClosed: boolean): 
       (a, b) =>
         a.rank - b.rank ||
         compareIsoInstant(a.task.createdAt, b.task.createdAt) ||
-        compareText(a.task.id, b.task.id),
+        compareCodeUnits(a.task.id, b.task.id),
     )
     .map((row) => row.task);
   if (!includeClosed) return open;
@@ -187,7 +188,7 @@ export function listTaskRows(rows: readonly TaskRow[], includeClosed: boolean): 
     .sort(
       (a, b) =>
         compareIsoInstant(b.closedAt ?? b.updatedAt, a.closedAt ?? a.updatedAt) ||
-        compareText(a.id, b.id),
+        compareCodeUnits(a.id, b.id),
     );
   return [...open, ...closed];
 }
@@ -206,10 +207,6 @@ export function isTaskOfConversation(
 ): boolean {
   if (value.originConversationId === conversationId) return true;
   return (value.origin === 'human' || value.origin === 'self') && value.source === conversationId;
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**

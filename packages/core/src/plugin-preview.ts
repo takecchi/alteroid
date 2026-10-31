@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { FetchedPlugin, SkippedEntry } from './plugin-fetch.js';
 import { planPluginExtraction } from './plugin-extract.js';
 import type { PluginSource } from './plugins.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 // 要約は展開器の計画を通して作る: 「落ちると言ったもの」と「実際に落ちるもの」をずらさないため。
 
@@ -66,7 +67,7 @@ function bodyOf(bytes: Uint8Array): string {
 }
 
 const uniqueSorted = (values: string[]) =>
-  [...new Set(values)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  [...new Set(values)].sort((a, b) => compareCodeUnits(a, b));
 
 export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSummary {
   const { files } = fetched;
@@ -128,7 +129,7 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
     const excerpt = excerptOf(file.content);
     if (excerpt !== null) skillExcerpts.push({ path: file.path, ...excerpt });
   }
-  skillExcerpts.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  skillExcerpts.sort((a, b) => compareCodeUnits(a.path, b.path));
 
   return {
     name: fetched.name,
@@ -139,7 +140,7 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
     totalBytes: files.reduce((sum, f) => sum + bytesOf(f), 0),
     files: files
       .map((f) => ({ path: f.path, size: bytesOf(f), executable: f.executable }))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+      .sort((a, b) => compareCodeUnits(a.path, b.path)),
     counts: { skills: skillDirs.size, agents, commands },
     hooks: { present: hooksPaths.length > 0, paths: hooksPaths },
     modules: { present: modulesPaths.length > 0, paths: modulesPaths },
@@ -157,7 +158,7 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
     skipped: fetched.skipped,
     extractorDrops: dropsAll
       .map((d) => ({ path: d.path, reason: d.reason }))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+      .sort((a, b) => compareCodeUnits(a.path, b.path)),
     skillExcerpts,
   };
 }

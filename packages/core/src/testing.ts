@@ -124,7 +124,6 @@ import type {
   UsageStore,
 } from './store.js';
 import {
-  compareProfileEntryNames,
   ensureTrailingNewline,
   JournalAnchorNotFoundError,
   MemoryConflictError,
@@ -930,9 +929,7 @@ export function createMemoryStores(): Stores {
         };
       });
       return summaries.sort(
-        (x, y) =>
-          y.storedBytes - x.storedBytes ||
-          (x.sessionId < y.sessionId ? -1 : x.sessionId > y.sessionId ? 1 : 0),
+        (x, y) => y.storedBytes - x.storedBytes || compareCodeUnits(x.sessionId, y.sessionId),
       );
     },
     async read(id) {
@@ -1346,7 +1343,7 @@ export function createMemoryStores(): Stores {
   const profile: ProfileStore = {
     async list() {
       return [...envProfile.values()]
-        .sort((x, y) => compareProfileEntryNames(x.name, y.name))
+        .sort((x, y) => compareCodeUnits(x.name, y.name))
         .map((row) => ({ ...row }));
     },
     async set(name, script, scope) {

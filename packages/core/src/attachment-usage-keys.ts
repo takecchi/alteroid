@@ -1,3 +1,4 @@
+import { compareCodeUnits } from './code-unit-order.js';
 /**
  * 添付の使用量の「連携の鍵ごとの内訳」を、表示へ出す形（並び順と上限）に整える。
  * CLI・クローンの道具（file_list）・Web の使用量の表示が同じものを使う: 並びや上限が表示ごとに違うと、同じ数が入口ごとに別の顔で見える。
@@ -30,7 +31,7 @@ export function integrationKeyUsageView(
 ): IntegrationKeyUsageView {
   const all = Object.entries(byIntegrationKey ?? {})
     .map(([id, bucket]) => ({ id, count: bucket.count, totalBytes: bucket.totalBytes }))
-    .sort((a, b) => b.totalBytes - a.totalBytes || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    .sort((a, b) => b.totalBytes - a.totalBytes || compareCodeUnits(a.id, b.id));
   return {
     rows: all.slice(0, INTEGRATION_KEY_USAGE_DISPLAY_LIMIT),
     omitted: Math.max(0, all.length - INTEGRATION_KEY_USAGE_DISPLAY_LIMIT),

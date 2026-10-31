@@ -18,6 +18,7 @@ import {
   type Probe,
   type Resolver,
 } from './plugin-fetch-guard.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 /**
  * 作業ツリーを作らない: checkout すると `.gitattributes` のフィルタや symlink の実体化が効くから。
@@ -384,7 +385,7 @@ async function readPluginFiles(
       keep.push(entry);
     }
   }
-  skipped.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  skipped.sort((a, b) => compareCodeUnits(a.path, b.path));
 
   if (keep.length > ctx.limits.maxFiles) throw invalid('ファイルの数が多すぎる');
   let total = 0;

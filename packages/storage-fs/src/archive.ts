@@ -11,6 +11,7 @@ import {
   stripNul,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
+  compareCodeUnits,
   createUnreadableRowOnce,
   fingerprintArchiveBody,
   matchArchiveIdStamp,
@@ -156,9 +157,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
       };
     });
     return summaries.sort(
-      (a, b) =>
-        b.storedBytes - a.storedBytes ||
-        (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0),
+      (a, b) => b.storedBytes - a.storedBytes || compareCodeUnits(a.sessionId, b.sessionId),
     );
   }
 

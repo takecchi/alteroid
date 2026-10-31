@@ -25,6 +25,7 @@ import {
   summarizeUsage,
   usageDate,
 } from './usage.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 export interface DigestWindow {
   since: Date;
@@ -468,7 +469,7 @@ function createSourceTally(maxKeys: number) {
     get rows(): { source: string; count: number }[] {
       return Array.from(counts, ([source, count]) => ({ source, count })).sort((a, b) => {
         if (a.count !== b.count) return b.count - a.count;
-        return a.source < b.source ? -1 : a.source > b.source ? 1 : 0;
+        return compareCodeUnits(a.source, b.source);
       });
     },
     get overflowCount(): number {
@@ -509,7 +510,7 @@ function summarizeExternalSources(
 
   rows.sort((a, b) => {
     if (a.topSummaryCount !== b.topSummaryCount) return b.topSummaryCount - a.topSummaryCount;
-    return a.source < b.source ? -1 : a.source > b.source ? 1 : 0;
+    return compareCodeUnits(a.source, b.source);
   });
   return rows;
 }

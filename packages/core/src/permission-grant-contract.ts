@@ -1,6 +1,7 @@
 import type { PermissionGrant } from './schema.js';
 import type { PermissionGrantStore } from './store.js';
 import { expectNulRejected } from './nul-contract-support.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 /**
  * vitest に依存しない素の非同期関数にする: `storage-fs` / `storage-pg` へ vitest を持ち込まないため。
@@ -21,7 +22,7 @@ export async function verifyPermissionGrantStoreContract(
       return Object.fromEntries(
         Object.entries(value as Record<string, unknown>)
           .filter(([, v]) => v !== undefined)
-          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .sort(([a], [b]) => compareCodeUnits(a, b))
           .map(([k, v]) => [k, canonicalize(v)]),
       );
     }

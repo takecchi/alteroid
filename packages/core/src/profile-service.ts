@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { compareCodeUnits } from './code-unit-order.js';
 import { fingerprintOf } from './credentials.js';
 import { redactErrorText } from './denial-input-head.js';
 import { reasonOf } from './dropped-record.js';
@@ -18,7 +19,6 @@ import type {
 } from './runner-protocol.js';
 import { createSerialQueue } from './serial-queue.js';
 import {
-  compareProfileEntryNames,
   PROFILE_ENTRY_NAME,
   type EnvProfileEntry,
   type EnvProfileScope,
@@ -48,7 +48,7 @@ export function composeProfileScript(
   const parts = entries
     .filter((entry) => target === 'all' || profileScopeAppliesTo(entry.scope, target))
     .filter((entry) => entry.script.trim().length > 0)
-    .sort((a, b) => compareProfileEntryNames(a.name, b.name))
+    .sort((a, b) => compareCodeUnits(a.name, b.name))
     .map((entry) => (entry.script.endsWith('\n') ? entry.script : `${entry.script}\n`));
   return normalizeProfileScript(parts.join('\n'));
 }

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { fingerprintOf } from './credentials.js';
 import { nonBlankString } from './non-blank-string.js';
 import { limitRecoveryOf, limitRecoverySchema, type LimitRecovery } from './usage-limits.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 // 失効（invalidatedAt）を回す契機に含めない（人間の決定）: 現役が失効しても全層が止まったままになり、人間が手で外すまで復旧しない。「未実装」ではなくそう決めたもの
 export const tokenRotationPolicySchema = z.enum(['free_exhausted', 'overage_exhausted', 'off']);
@@ -165,7 +166,7 @@ export class TokenPoolInputError extends Error {
  */
 export function tokenPoolVersionOf(tokens: readonly AgentToken[]): string {
   const rows = [...tokens]
-    .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .sort((a, b) => a.order - b.order || compareCodeUnits(a.id, b.id))
     .map((token) => [
       token.id,
       token.label,

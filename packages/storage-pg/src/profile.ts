@@ -1,6 +1,6 @@
 import {
   assertProfileRowWritable,
-  compareProfileEntryNames,
+  compareCodeUnits,
   type EnvProfileEntry,
   type EnvProfileScope,
   type ProfileStore,
@@ -32,7 +32,7 @@ export class PgProfileStore implements ProfileStore {
         scope: scopeOf(row.scope),
         updatedAt: row.updatedAt.toISOString(),
       }))
-      .sort((a, b) => compareProfileEntryNames(a.name, b.name));
+      .sort((a, b) => compareCodeUnits(a.name, b.name));
   }
 
   async set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry> {
