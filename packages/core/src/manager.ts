@@ -5410,6 +5410,7 @@ class Pool implements ManagerPool {
           status: manager.status,
           hasAwaitingBackgroundSignal: manager.awaitingBackground !== undefined,
           awaitingBackgroundSignalVersionConfirmed: capabilityConfirmed,
+          hasHeldMessages: manager.heldMessages !== undefined,
           // `managerActivityInputOf`（`tools.ts`）と同じ field 選択を import せずここでも行う: 循環 import を避けるため。
           activityKind: classifyManagerActivity({
             turnEndReason: manager.turnEndReason,
