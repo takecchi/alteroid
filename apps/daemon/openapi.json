@@ -6299,11 +6299,11 @@
                       "type": "string"
                     },
                     "created": {
-                      "description": "新規に作ったなら true、既存の記憶を置き換えたなら false（slug の打ち間違いに気づく手掛かり）",
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "新規に作ったなら true、既存の記憶を置き換えたなら false（slug の打ち間違いに気づく手掛かり）"
                     }
                   },
-                  "required": ["document", "version"],
+                  "required": ["document", "version", "created"],
                   "additionalProperties": false
                 }
               }
@@ -7645,11 +7645,11 @@
                       "type": "string"
                     },
                     "created": {
-                      "description": "新規に作ったなら true、既存（読めない形の行を含む）を置き換えたなら false",
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "新規に作ったなら true、既存（読めない形の行を含む）を置き換えたなら false"
                     }
                   },
-                  "required": ["practice", "version"],
+                  "required": ["practice", "version", "created"],
                   "additionalProperties": false
                 }
               }
@@ -25529,11 +25529,11 @@
                       "const": true
                     },
                     "replaced": {
-                      "description": "既に在った kind を置き換えたとき true、新しく作ったとき false。置き換えたときは旧本文・旧周期が日誌（decision）に残っている。",
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "既に在った kind を置き換えたとき true、新しく作ったとき false。置き換えたときは旧本文・旧周期が日誌（decision）に残っている。"
                     }
                   },
-                  "required": ["ok"],
+                  "required": ["ok", "replaced"],
                   "additionalProperties": false
                 }
               }
@@ -30234,7 +30234,15 @@
                             "type": "string"
                           }
                         },
-                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"],
+                        "required": [
+                          "name",
+                          "script",
+                          "scope",
+                          "updatedAt",
+                          "sha256",
+                          "bytes",
+                          "version"
+                        ],
                         "additionalProperties": false
                       }
                     },
@@ -30331,7 +30339,7 @@
                             "type": "string"
                           }
                         },
-                        "required": ["name", "scope", "updatedAt", "sha256", "bytes"],
+                        "required": ["name", "scope", "updatedAt", "sha256", "bytes", "version"],
                         "additionalProperties": false
                       }
                     },
@@ -30514,7 +30522,7 @@
                               "type": "string"
                             }
                           },
-                          "required": ["name", "scope", "updatedAt", "sha256", "bytes"],
+                          "required": ["name", "scope", "updatedAt", "sha256", "bytes", "version"],
                           "additionalProperties": false
                         },
                         {
@@ -30614,7 +30622,7 @@
                             "type": "string"
                           }
                         },
-                        "required": ["name", "scope", "updatedAt", "sha256", "bytes"],
+                        "required": ["name", "scope", "updatedAt", "sha256", "bytes", "version"],
                         "additionalProperties": false
                       }
                     },
@@ -30814,7 +30822,7 @@
                               "type": "string"
                             }
                           },
-                          "required": ["name", "scope", "updatedAt", "sha256", "bytes"],
+                          "required": ["name", "scope", "updatedAt", "sha256", "bytes", "version"],
                           "additionalProperties": false
                         },
                         {
