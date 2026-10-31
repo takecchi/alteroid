@@ -976,17 +976,13 @@ describe('CodexManagerDriver: 使用量', () => {
       { type: 'turn_ended' }
     >[];
     const expectedFirst = {
-      'gpt-5': codexUsageToLedgerTotals('gpt-5', {
-        kind: 'requests',
-        requests: [
-          { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 100 },
-          { inputTokens: 2000, cachedInputTokens: 0, outputTokens: 50 },
-        ],
-      }),
-      'gpt-5-mini': codexUsageToLedgerTotals('gpt-5-mini', {
-        kind: 'requests',
-        requests: [{ inputTokens: 4000, cachedInputTokens: 1000, outputTokens: 400 }],
-      }),
+      'gpt-5': codexUsageToLedgerTotals('gpt-5', [
+        { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 100 },
+        { inputTokens: 2000, cachedInputTokens: 0, outputTokens: 50 },
+      ]),
+      'gpt-5-mini': codexUsageToLedgerTotals('gpt-5-mini', [
+        { inputTokens: 4000, cachedInputTokens: 1000, outputTokens: 400 },
+      ]),
     };
     expect(ended[0]!.usage!.models).toEqual(expectedFirst);
     expect(ended[0]!.usage!.sessionId).toBe('thr-1');
@@ -995,13 +991,10 @@ describe('CodexManagerDriver: 使用量', () => {
     expect(expectedFirst['gpt-5'].inputTokens).toBe(800 + 2000);
     expect(ended[1]!.usage!.models['gpt-5']).toEqual(expectedFirst['gpt-5']);
     expect(ended[1]!.usage!.models['gpt-5-mini']).toEqual(
-      codexUsageToLedgerTotals('gpt-5-mini', {
-        kind: 'requests',
-        requests: [
-          { inputTokens: 4000, cachedInputTokens: 1000, outputTokens: 400 },
-          { inputTokens: 500, cachedInputTokens: 0, outputTokens: 10 },
-        ],
-      }),
+      codexUsageToLedgerTotals('gpt-5-mini', [
+        { inputTokens: 4000, cachedInputTokens: 1000, outputTokens: 400 },
+        { inputTokens: 500, cachedInputTokens: 0, outputTokens: 10 },
+      ]),
     );
     expect(await h.session.sessionModelUsage()).toEqual(ended[1]!.usage!.models);
   });

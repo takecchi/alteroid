@@ -44,14 +44,8 @@ describe('computeCodexCostUSD', () => {
     expect(cost).toBeCloseTo(0.25 + 0.1, 10);
   });
 
-  it('reasoning は output の内数なので足さない', () => {
-    const base = computeCodexCostUSD('gpt-5', usage({ outputTokens: 1_000_000 }));
-    const withReasoning = computeCodexCostUSD(
-      'gpt-5',
-      usage({ outputTokens: 1_000_000, reasoningOutputTokens: 700_000, totalTokens: 1_000_000 }),
-    );
-    expect(withReasoning).toBe(base);
-    expect(base).toBeCloseTo(10, 10);
+  it('output は単価どおりに計算する（reasoning は欄に無く、足されない）', () => {
+    expect(computeCodexCostUSD('gpt-5', usage({ outputTokens: 1_000_000 }))).toBeCloseTo(10, 10);
   });
 
   it('cached が input を超えていても負にならない', () => {

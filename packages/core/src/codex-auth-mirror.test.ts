@@ -5,11 +5,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import {
-  CodexAuthMirror,
-  codexAuthFingerprintOf,
-  type CodexAuthNotice,
-} from './codex-auth-mirror.js';
+import { CodexAuthMirror, type CodexAuthNotice } from './codex-auth-mirror.js';
+import { fingerprintOf } from './credentials.js';
 
 const V1 = '{"tokens":{"refresh_token":"rt-1-fake"}}';
 const V2 = '{"tokens":{"refresh_token":"rt-2-fake"}}';
@@ -49,7 +46,7 @@ describe('runner の CODEX_HOME への写し（#3939）', () => {
     expect(m.status()).toEqual({
       placed: true,
       revision: 'r1',
-      fingerprint: codexAuthFingerprintOf(V1),
+      fingerprint: fingerprintOf(V1),
     });
   });
 
@@ -59,14 +56,14 @@ describe('runner の CODEX_HOME への写し（#3939）', () => {
     await writeFile(join(dir, 'codex-home', 'auth.json'), REFRESHED);
     await m.check();
     expect(notices).toEqual([
-      { kind: 'changed', baseRevision: 'r1', fingerprint: codexAuthFingerprintOf(REFRESHED) },
+      { kind: 'changed', baseRevision: 'r1', fingerprint: fingerprintOf(REFRESHED) },
     ]);
     expect(JSON.stringify(notices)).not.toContain('rt-refreshed-fake');
     expect(m.takeWriteBack('other')).toBeNull();
-    expect(m.takeWriteBack(codexAuthFingerprintOf(REFRESHED))).toEqual({
+    expect(m.takeWriteBack(fingerprintOf(REFRESHED))).toEqual({
       value: REFRESHED,
       baseRevision: 'r1',
-      fingerprint: codexAuthFingerprintOf(REFRESHED),
+      fingerprint: fingerprintOf(REFRESHED),
     });
     await m.check();
     expect(notices).toHaveLength(1);

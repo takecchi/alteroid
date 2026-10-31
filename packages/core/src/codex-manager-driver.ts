@@ -46,8 +46,6 @@
  *   `turn_ended.usage` と `sessionModelUsage()` で返す。
  */
 
-import { spawn } from 'node:child_process';
-
 import type { AgentContentBlock, AgentEvent } from './agent-events.js';
 import type { AgentPermissionRequest } from './agent-session.js';
 import type {
@@ -56,8 +54,6 @@ import type {
   AgentManagerDriver,
   AgentManagerSession,
   AgentManagerSessionSpec,
-  AgentSpawnOptions,
-  AgentSpawnProcess,
   AgentUserInput,
 } from './agent-session.js';
 import { mapCodexApproval } from './codex-approval.js';
@@ -65,7 +61,7 @@ import {
   CodexAppServerClient,
   CodexAppServerClosedError,
   CodexRpcError,
-  type CodexAppServerClientError,
+  defaultSpawnProcess,
 } from './codex-app-server-client.js';
 import {
   buildCodexApiKeyLoginParams,
@@ -140,10 +136,6 @@ const TOOL_NAME_FILE_CHANGE = 'fileChange';
 const DEFAULT_CLOSE_GRACE_MS = 1500;
 
 export interface CodexManagerDriverOptions {
-  command?: string;
-  defaultSpawn?: AgentSpawnProcess;
-  clientVersion?: string;
-  onClientError?: (error: { kind: string }) => void;
   closeGraceMs?: number;
   /** runner に降りた ChatGPT ログイン。無ければ今までどおり（`CODEX_HOME` に触らない）。 */
   chatgptAuth?: CodexChatgptAuthHandle;
@@ -154,15 +146,6 @@ export function childEnvOf(env: NodeJS.ProcessEnv): Record<string, string | unde
   const out: Record<string, string | undefined> = { ...env };
   delete out[CODEX_API_KEY_ENV_NAME];
   return out;
-}
-
-function defaultSpawnProcess(options: AgentSpawnOptions): AgentChildProcess {
-  return spawn(options.command, options.args, {
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    env: options.env as NodeJS.ProcessEnv,
-    signal: options.signal,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
 }
 
 interface Deferred<T> {
@@ -313,7 +296,7 @@ class CodexManagerSession implements AgentManagerSession {
   async #produce(): Promise<void> {
     if (this.#closing) return;
     const spec = this.#spec;
-    const spawnProcess = spec.spawnProcess ?? this.#options.defaultSpawn ?? defaultSpawnProcess;
+    const spawnProcess = spec.spawnProcess ?? defaultSpawnProcess;
     const hasApiKey = this.#apiKey !== undefined;
     const env = childEnvOf(spec.env);
     // **鍵が先、無ければ ChatGPT ログイン**（`selectCodexAuth` の優先順）。鍵があるときは
@@ -337,7 +320,7 @@ class CodexManagerSession implements AgentManagerSession {
       if (this.#closing) return;
     }
     const child = spawnProcess({
-      command: this.#options.command ?? 'codex',
+      command: 'codex',
       args: buildCodexAppServerArgs({ ephemeralCredentials: hasApiKey }),
       cwd: spec.cwd,
       env,
@@ -346,9 +329,7 @@ class CodexManagerSession implements AgentManagerSession {
     this.#child = child;
     // stderr を resume して捨てる: 読まれないパイプは詰まって子を止めるため
     (child as { stderr?: { resume?: () => void } }).stderr?.resume?.();
-    const client = new CodexAppServerClient(child, {
-      onError: (error) => this.#options.onClientError?.({ kind: describeClientError(error) }),
-    });
+    const client = new CodexAppServerClient(child);
     this.#client = client;
     this.#registerHandlers(client);
 
@@ -358,7 +339,7 @@ class CodexManagerSession implements AgentManagerSession {
         client.initialize({
           name: 'alteroid',
           title: 'alteroid',
-          version: this.#options.clientVersion ?? '0',
+          version: '0',
         }),
       );
       await this.#authenticate(client);
@@ -691,8 +672,6 @@ class CodexManagerSession implements AgentManagerSession {
       inputTokens: last.inputTokens,
       cachedInputTokens: last.cachedInputTokens,
       outputTokens: last.outputTokens,
-      reasoningOutputTokens: last.reasoningOutputTokens,
-      totalTokens: last.totalTokens,
     });
     this.#requests.set(key, list);
   }
@@ -703,7 +682,7 @@ class CodexManagerSession implements AgentManagerSession {
     for (const [model, requests] of this.#requests) {
       models[model === '' ? 'unknown' : model] = codexUsageToLedgerTotals(
         model === '' ? undefined : model,
-        { kind: 'requests', requests },
+        requests,
       );
     }
     return models;
@@ -855,11 +834,6 @@ export function isUnauthorizedCodexError(info: unknown): boolean {
       detail !== null &&
       (detail as { httpStatusCode?: unknown }).httpStatusCode === 401,
   );
-}
-
-function describeClientError(error: CodexAppServerClientError): string {
-  // 本文（行）は載せない: 秘密が載りうるため
-  return error.kind;
 }
 
 // 画像を一時ファイル（localImage）にしない: 書き出しと後片付けが要らず、app-server が別のファイル系にいても届き、ターンの途中で落ちても残骸が出ないため
