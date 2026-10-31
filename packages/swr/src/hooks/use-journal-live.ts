@@ -31,13 +31,23 @@ export function useJournalLive(enabled = true): JournalLive {
     mutateRef.current = mutate;
   }, [mutate]);
 
+  // 止めた（enabled が false）間は購読が切れているのと同じ: effect が作り直されても「切れていた」を持ち越し、戻って最初の open で取り直す
+  const lostRef = useRef(false);
+  const startedRef = useRef(false);
+
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      // 一度も張っていないなら取りこぼす物も無い: はじめから止まっていた場合に余計な取り直しをしない
+      if (startedRef.current) lostRef.current = true;
+      return;
+    }
+    startedRef.current = true;
     const controller = new AbortController();
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
-    let lost = false;
+    let lost = lostRef.current;
+    lostRef.current = false;
 
     async function connect(): Promise<void> {
       setStatus('connecting');
