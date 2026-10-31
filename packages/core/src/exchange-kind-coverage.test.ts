@@ -46,6 +46,20 @@ function readCoreSource(file: string): string {
   return readFileSync(path.join(CORE_SRC_DIR, file), 'utf8');
 }
 
+/**
+ * `type: 'exchange'` を実際に書く私有 helper の定義（ファイル → メソッド名）。
+ * helper の本体は text を変数で受けるので接頭辞の検査の対象にならない。代わりに、helper の呼び出し
+ * （`this.#journalExchange('inbound' | 'outbound', text)`）の側を書き込み箇所として数える。
+ */
+const EXCHANGE_HELPER_DEFINITIONS: Record<string, string> = {
+  'manager.ts': '#journalExchange',
+};
+
+/**
+ * 書き込み箇所の走査。2つの形を数える:
+ *  - `journal(` / `journal.append(` に渡すオブジェクトリテラルが `type: 'exchange'` を持つもの（従来どおり）
+ *  - helper `this.#journalExchange(role, text, …)` の呼び出し（`with: 'manager'` を固定で書く helper。text は第2引数）
+ */
 function findJournalCallObjects(file: string): ExchangeWriteSite[] {
   const text = readCoreSource(file);
   const sites: ExchangeWriteSite[] = [];
@@ -61,26 +75,52 @@ function findJournalCallObjects(file: string): ExchangeWriteSite[] {
     }
     const objectText = text.slice(openBraceIndex, end + 1);
     if (!/type:\s*'exchange'/.test(objectText)) continue;
+    const enclosing = enclosingDeclaration(text, m.index);
+    if (enclosing === EXCHANGE_HELPER_DEFINITIONS[file]) continue;
     const line = text.slice(0, m.index).split('\n').length;
+    sites.push({ file, line, objectText, enclosing, start: openBraceIndex, end });
+  }
+  const helperRe = /\bthis\.#?journalExchange\(/g;
+  while ((m = helperRe.exec(text)) !== null) {
+    const openParenIndex = m.index + m[0].length - 1;
+    const end = findMatchingBrace(text, openParenIndex, '(', ')');
+    if (end === -1) {
+      throw new Error(
+        `${file}: ${m.index} にある journalExchange( 呼び出しの閉じ括弧が見つからない（括弧の対応が崩れている）`,
+      );
+    }
+    const args = text.slice(openParenIndex + 1, end);
+    const head = /^\s*'(?:inbound|outbound)',\s*/.exec(args);
+    if (!head) {
+      throw new Error(
+        `${file}: ${m.index} にある journalExchange( の第1引数が 'inbound' / 'outbound' の字面ではない（走査が読めない）`,
+      );
+    }
     sites.push({
       file,
-      line,
-      objectText,
+      line: text.slice(0, m.index).split('\n').length,
+      // 既存の欄の取り出しをそのまま使うため、`text` 欄を持つオブジェクトの形に直す（with は helper が 'manager' で固定）。
+      objectText: `{ with: 'manager', text: ${args.slice(head[0].length)} }`,
       enclosing: enclosingDeclaration(text, m.index),
-      start: openBraceIndex,
+      start: openParenIndex,
       end,
     });
   }
-  return sites;
+  return sites.sort((a, b) => a.start - b.start);
 }
 
-function findMatchingBrace(text: string, openBraceIndex: number): number {
+function findMatchingBrace(
+  text: string,
+  openIndex: number,
+  open: '{' | '(' = '{',
+  close: '}' | ')' = '}',
+): number {
   let depth = 0;
   let inBacktick = false;
   let templateExprDepth = 0;
   let inSingle = false;
   let inDouble = false;
-  for (let i = openBraceIndex; i < text.length; i += 1) {
+  for (let i = openIndex; i < text.length; i += 1) {
     const ch = text[i];
     const prev = i > 0 ? text[i - 1] : '';
     if (inSingle) {
@@ -120,11 +160,11 @@ function findMatchingBrace(text: string, openBraceIndex: number): number {
       inBacktick = true;
       continue;
     }
-    if (ch === '{') {
+    if (ch === open) {
       depth += 1;
       continue;
     }
-    if (ch === '}') {
+    if (ch === close) {
       depth -= 1;
       if (depth === 0) return i;
       continue;
@@ -341,11 +381,14 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
 
 /**
  * `journal(` / `journal.append(` の形を取らずに `type: 'exchange'` を書いている箇所の明示の例外表（メソッド名 → 理由）。
- * 走査が見落とす書き方を黙って通さないための表で、いまは空である。
+ * 走査が見落とす書き方を黙って通さないための表で、載るのは helper の本体だけ（呼び出し側は走査が別に数える）。
  */
 const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, string>> = {
   'clone.ts': {},
-  'manager.ts': {},
+  'manager.ts': {
+    '#journalExchange':
+      'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
+  },
 };
 
 function exchangeLiteralsOutside(

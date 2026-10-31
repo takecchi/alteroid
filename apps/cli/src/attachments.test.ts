@@ -264,9 +264,8 @@ describe('renderAttachmentUsage: 連携の鍵別', () => {
       ]),
     );
 
-  it('byIntegrationKey が無い（古いデーモン）・空なら、今の1行のまま', () => {
+  it('byIntegrationKey が空なら、今の1行のまま', () => {
     const line = '使用量: 合計 3 件 2.9 KB（人間 3 件 2.9 KB）';
-    expect(renderAttachmentUsage(base)).toBe(line);
     expect(renderAttachmentUsage({ ...base, byIntegrationKey: {} })).toBe(line);
   });
 

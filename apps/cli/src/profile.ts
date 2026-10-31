@@ -48,11 +48,12 @@ interface ProfileEntryView {
   updatedAt: string;
   sha256: string;
   bytes: number;
-  // 行の版。書き込みの `ifMatch` に返す（古いデーモンは返さない）
-  version?: string;
+  // 行の版。書き込みの `ifMatch` に返す
+  version: string;
 }
 
-type ProfileView = ProfileState;
+// 生成型は `version` を任意のままにしている（openapi 側は別の PR）ので、CLI の型で必須に直す
+type ProfileView = Omit<ProfileState, 'entries'> & { entries: ProfileEntryView[] };
 
 interface ApplyResult {
   ok: boolean;
@@ -86,11 +87,11 @@ function parseName(raw: string | undefined): string {
 }
 
 async function fetchProfile(target: Target): Promise<ProfileView> {
-  return (await request(target, '/profile')) as ProfileState;
+  return (await request(target, '/profile')) as ProfileView;
 }
 
 /** 書き込みの前提にする版（#4592）。読んだ行の版、読んだときに行が無ければ `null`（無いときだけ作る）。 */
-function readVersionOf(profile: ProfileView, name: string): string | null | undefined {
+function readVersionOf(profile: ProfileView, name: string): string | null {
   const row = profile.entries.find((entry) => entry.name === name);
   return row === undefined ? null : row.version;
 }
@@ -357,9 +358,9 @@ function describeComposed(result: UpdateView): void {
 async function put(
   name: string,
   script: string,
-  known?: Target,
-  scope?: ProfileScope,
-  ifMatch?: string | null,
+  known: Target | undefined,
+  scope: ProfileScope | undefined,
+  ifMatch: string | null,
 ): Promise<void> {
   if (script.trim().length === 0) {
     throw new Error(EMPTY_BODY_MESSAGE);
@@ -370,7 +371,7 @@ async function put(
     body: JSON.stringify({
       script,
       ...(scope === undefined ? {} : { scope }),
-      ...(ifMatch === undefined ? {} : { ifMatch }),
+      ifMatch,
     }),
   })) as UpdateView;
 
