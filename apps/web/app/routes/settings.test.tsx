@@ -56,7 +56,6 @@ interface RunnersResponse {
 function renderSettings(response: RunnersResponse) {
   stubFetch((url) => {
     if (url.includes('/runners')) return json(response);
-    if (url.includes('/auth/providers')) return json({ providers: [] });
     if (url.includes('/me')) return json({ status: 'open' });
     if (url.includes('/health')) return json({ ok: true });
     return json({});
@@ -737,7 +736,6 @@ describe('デーモンを止める（ShutdownDaemon）', () => {
       if (url.includes('/runners')) {
         return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
       }
-      if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
       if (url.includes('/health')) return json({ ok: true });
       return json({});
@@ -812,7 +810,6 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
   function renderWithReset() {
     stubFetch((url) => {
       if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
-      if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
       if (url.includes('/health')) return json({ ok: true });
       return json({});
@@ -868,7 +865,6 @@ describe('サーバを止める・リセット — 送信中・失敗・成功�
         return path === 'reset' ? json({ ok: true, cleared: { memory: 3 } }) : json({});
       }
       if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
-      if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
       if (url.includes('/health')) return json({ ok: true });
       return json({});
@@ -934,7 +930,6 @@ describe('runner を空ける（vacate）', () => {
     const stub = stubFetch((url) => {
       if (url.includes('/runners/vacate')) return json(vacateBody);
       if (url.includes('/runners')) return json({ runners, daemonRevision: DAEMON_UNKNOWN });
-      if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
       if (url.includes('/health')) return json({ ok: true });
       return json({});
@@ -1032,7 +1027,6 @@ describe('runner を空ける（vacate）', () => {
           daemonRevision: DAEMON_UNKNOWN,
         });
       }
-      if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
       if (url.includes('/health')) return json({ ok: true });
       return json({});
@@ -1118,7 +1112,6 @@ describe('実行中は窓の Esc（cancel）を止める — #3349', () => {
   function renderPending() {
     stubFetch((url) => {
       if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
-      if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
       if (url.includes('/health')) return json({ ok: true });
       return json({});

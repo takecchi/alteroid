@@ -59,7 +59,6 @@ function renderSettings(path: string, answer: () => Response) {
     if (url.endsWith(path)) return answer();
     if (url.includes('/runners'))
       return json({ runners: [], daemonRevision: { status: 'unknown' } });
-    if (url.includes('/auth/providers')) return json({ providers: [] });
     if (url.includes('/me')) return json({ status: 'open' });
     if (url.includes('/health')) return json({ ok: true });
     return json({});

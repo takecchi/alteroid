@@ -244,9 +244,8 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/journal/no-such-id', { headers: OPERATOR })).status).toBe(404);
   });
 
-  it('/health と /auth/* は資格が無くても読める（ログインの前に通る必要がある）', async () => {
+  it('/health は資格が無くても読める（ログインの前に通る必要がある）', async () => {
     expect((await app.request('/health')).status).toBe(200);
-    expect((await app.request('/auth/providers')).status).toBe(200);
   });
 
   it('GET /status（記憶の置き場）は資格が無ければ 401、持ち主のトークンなら通る（#2869）', async () => {
