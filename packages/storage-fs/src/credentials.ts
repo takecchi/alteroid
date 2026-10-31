@@ -4,18 +4,16 @@ import { dirname } from 'node:path';
 import {
   assertValidCredentialEntries,
   CREDENTIAL_NAME,
-  describeSkippedCredentialRow,
   type CredentialEntry,
   type StoredCredential,
   compareCodeUnits,
-  summarizeInvalidFields,
-  writeStderrLine,
 } from '@alteroid/core';
 import type { CredentialVaultStore } from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
+import { partitionRows } from './partition-rows.js';
 
 const rowSchema = z.object({
   // 読むときにも形を検査する: ファイルは手で書き換えられ、`../../x` のような名前がそのまま runner へ降りて器の外を指すため
@@ -95,23 +93,13 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const top = topLevelSchema.parse(JSON.parse(raw));
-      const credentials: StoredCredential[] = [];
-      const invalidRaw: unknown[] = [];
-      top.credentials.forEach((rawRow, index) => {
-        const result = rowSchema.safeParse(rawRow);
-        if (result.success) {
-          credentials.push(result.data);
-          return;
-        }
-        invalidRaw.push(rawRow);
-        writeStderrLine(
-          `${describeSkippedCredentialRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            name: extractRowName(rawRow),
-          })}\n`,
-        );
-      });
+      // `value` は載せない: 名前（`name`）だけを出す
+      const { valid: credentials, invalid: invalidRaw } = partitionRows(
+        top.credentials,
+        rowSchema,
+        'credentials',
+        'name',
+      );
       return { credentials, invalidRaw };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;

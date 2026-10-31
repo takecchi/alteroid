@@ -10,9 +10,7 @@ import {
   practiceVersionSchema,
   UnreadablePracticeError,
   compareCodeUnits,
-  describeSkippedRow,
   summarizeInvalidFields,
-  writeStderrLine,
 } from '@alteroid/core';
 import type {
   Practice,
@@ -29,6 +27,7 @@ import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
+import { partitionRows } from './partition-rows.js';
 
 // 旧い `bytes` 欄を持つ既存の行を読めなくしない: `.strict()` / `.passthrough()` を足さない（zod は既定で未知のキーを落とすため、そのまま読める）
 const practiceRecordSchema = practiceSchema.omit({ chars: true });
@@ -294,41 +293,19 @@ export class FsPracticeStore implements PracticeStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const top = fileSchema.parse(JSON.parse(raw));
-      const practices: PracticeRecord[] = [];
-      const invalidPracticesRaw: unknown[] = [];
-      top.practices.forEach((rawEntry, index) => {
-        const result = practiceRecordSchema.safeParse(rawEntry);
-        if (result.success) {
-          practices.push(result.data);
-          return;
-        }
-        invalidPracticesRaw.push(rawEntry);
-        // slug 以外の値は載せない: `title` / `content` には人間・クローンの自由文がそのまま入りうるため
-        writeStderrLine(
-          `${describeSkippedRow('practices', 'slug', {
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            key: extractSlug(rawEntry),
-          })}\n`,
-        );
-      });
-      const practiceVersions: PracticeVersionRecord[] = [];
-      const invalidPracticeVersionsRaw: unknown[] = [];
-      top.practiceVersions.forEach((rawVersion, index) => {
-        const result = practiceVersionRecordSchema.safeParse(rawVersion);
-        if (result.success) {
-          practiceVersions.push(result.data);
-          return;
-        }
-        invalidPracticeVersionsRaw.push(rawVersion);
-        writeStderrLine(
-          `${describeSkippedRow('practiceVersions', 'slug', {
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            key: extractSlug(rawVersion),
-          })}\n`,
-        );
-      });
+      // slug 以外の値は載せない: `title` / `content` には人間・クローンの自由文がそのまま入りうるため
+      const { valid: practices, invalid: invalidPracticesRaw } = partitionRows(
+        top.practices,
+        practiceRecordSchema,
+        'practices',
+        'slug',
+      );
+      const { valid: practiceVersions, invalid: invalidPracticeVersionsRaw } = partitionRows(
+        top.practiceVersions,
+        practiceVersionRecordSchema,
+        'practiceVersions',
+        'slug',
+      );
       return { practices, invalidPracticesRaw, practiceVersions, invalidPracticeVersionsRaw };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;

@@ -14,7 +14,6 @@ import {
   prepareAccountForWrite,
   prepareIdentityForWrite,
   prepareLoginRequestForWrite,
-  describeSkippedRow,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -36,6 +35,7 @@ import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
+import { partitionRows } from './partition-rows.js';
 
 // 行の中身はここで検査しない: 行のスキーマを直接使うと、1行の不正が配列全体を道連れにするため
 const fileSchema = z.object({
@@ -504,23 +504,11 @@ export class FsAuthStore implements AuthStore {
       const raw = await readFile(this.#path, 'utf8');
       const top = fileSchema.parse(JSON.parse(raw));
 
-      const accounts: AuthAccount[] = [];
-      const invalidAccountsRaw: unknown[] = [];
-      top.accounts.forEach((rawAccount, index) => {
-        const result = authAccountSchema.safeParse(rawAccount);
-        if (result.success) {
-          accounts.push(result.data);
-          return;
-        }
-        invalidAccountsRaw.push(rawAccount);
-        writeStderrLine(
-          `${describeSkippedRow('accounts', 'id', {
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            key: extractRowId(rawAccount),
-          })}\n`,
-        );
-      });
+      const { valid: accounts, invalid: invalidAccountsRaw } = partitionRows(
+        top.accounts,
+        authAccountSchema,
+        'accounts',
+      );
 
       const identities: AuthIdentity[] = [];
       const invalidIdentitiesRaw: unknown[] = [];
@@ -542,41 +530,17 @@ export class FsAuthStore implements AuthStore {
         );
       });
 
-      const accessTokens: AccessTokenRecord[] = [];
-      const invalidAccessTokensRaw: unknown[] = [];
-      top.accessTokens.forEach((rawToken, index) => {
-        const result = accessTokenRecordSchema.safeParse(rawToken);
-        if (result.success) {
-          accessTokens.push(result.data);
-          return;
-        }
-        invalidAccessTokensRaw.push(rawToken);
-        writeStderrLine(
-          `${describeSkippedRow('accessTokens', 'id', {
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            key: extractRowId(rawToken),
-          })}\n`,
-        );
-      });
+      const { valid: accessTokens, invalid: invalidAccessTokensRaw } = partitionRows(
+        top.accessTokens,
+        accessTokenRecordSchema,
+        'accessTokens',
+      );
 
-      const loginRequests: LoginRequest[] = [];
-      const invalidLoginRequestsRaw: unknown[] = [];
-      top.loginRequests.forEach((rawRequest, index) => {
-        const result = loginRequestSchema.safeParse(rawRequest);
-        if (result.success) {
-          loginRequests.push(result.data);
-          return;
-        }
-        invalidLoginRequestsRaw.push(rawRequest);
-        writeStderrLine(
-          `${describeSkippedRow('loginRequests', 'id', {
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            key: extractRowId(rawRequest),
-          })}\n`,
-        );
-      });
+      const { valid: loginRequests, invalid: invalidLoginRequestsRaw } = partitionRows(
+        top.loginRequests,
+        loginRequestSchema,
+        'loginRequests',
+      );
 
       return {
         accounts,
