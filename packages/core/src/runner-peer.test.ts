@@ -570,7 +570,9 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       cwd: '/work',
       request: 'やって',
     });
-    await waitFor(() => sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')));
+    await waitFor(() =>
+      sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),
+    );
     expect(sdk.inputs.at(-1)).toContain('approval_id=');
     await s.client.close();
     await s.host.shutdown();
