@@ -42,6 +42,7 @@ import type {
 } from '@alteroid/core';
 import {
   conversationBindingKey,
+  type MemoryDocument,
   MemoryConflictError,
   memoryVersion,
   PracticeConflictError,
@@ -534,17 +535,50 @@ const octetStreamClient = createMiddleware(async (c, next) => {
   await next();
 });
 
-const memoryBody = z.object({ content: z.string(), ifMatch: z.string().nullable().optional() });
+// 書き込みの `ifMatch`: 省略は後勝ち、`null` は「まだ無いこと」を前提にする（読んだ版を前提にする書き込みの共通の欄）。
+const ifMatchField = z.string().nullable().optional();
+const memoryBody = z.object({ content: z.string(), ifMatch: ifMatchField });
 // `ifMatch` の省略は 428 で断るが形の検査では必須にしない: スラッグ不正 400・無い 404 を先に返すためハンドラで 404 の後に断る。`null` は受けない（無いものを消す意味が無い）。
-const memoryDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
-// 読めない形で入っている行だけは版なしで消せる。
-const practiceDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
+// やり方の削除も同じ形（読めない形で入っている行だけは版なしで消せる）。
+const ifMatchDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
+
+// 記憶・やり方の 409 の本文の組み立て（検査の順序は route ごとに違うので寄せない）。`error` は `as const` のリテラルのまま返す: 文が `string` に広がると `hc` の応答の型が変わる。
+const MEMORY_CONFLICT_ERROR = {
+  write: '記憶が読んだ後に変わっています（書き換えていません）',
+  remove: '記憶が読んだ後に変わっています（消していません）',
+} as const;
+const memoryCurrent = (document: MemoryDocument) => ({
+  document,
+  version: memoryVersion(document.content),
+});
+const memoryConflictBody = <Op extends keyof typeof MEMORY_CONFLICT_ERROR>(
+  current: MemoryDocument | null,
+  op: Op,
+) => ({
+  error: MEMORY_CONFLICT_ERROR[op],
+  current: current === null ? null : memoryCurrent(current),
+});
+const PRACTICE_CONFLICT_ERROR = {
+  write: 'やり方が読んだ後に変わっています（書き換えていません）',
+  remove: 'やり方が読んだ後に変わっています（消していません）',
+} as const;
+const practiceCurrent = (practice: Practice) => ({
+  practice,
+  version: practiceVersion(practice),
+});
+const practiceConflictBody = <Op extends keyof typeof PRACTICE_CONFLICT_ERROR>(
+  current: Practice | null,
+  op: Op,
+) => ({
+  error: PRACTICE_CONFLICT_ERROR[op],
+  current: current === null ? null : practiceCurrent(current),
+});
 // `kind` に列挙を課さない: 道具（`practice_write`）と HTTP とで書ける種類が食い違う（`practiceKindSchema` の doc）。`title` も core 側に制約が無いので足さない。
 const practiceBody = z.object({
   kind: practiceKindSchema,
   title: z.string(),
   content: z.string(),
-  ifMatch: z.string().nullable().optional(),
+  ifMatch: ifMatchField,
 });
 const answerFields = {
   answer: z.string().min(1).optional(),
@@ -558,18 +592,18 @@ const answerIsNotBlank = (body: { answer?: string; selections?: unknown }) =>
   body.selections !== undefined ||
   body.answer === undefined ||
   stripNul(body.answer).trim().length > 0;
-const answerBody = z
-  .object(answerFields)
-  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
-  .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] });
+const withAnswerChecks = <
+  T extends z.ZodType<{ answer?: string | undefined; selections?: unknown }>,
+>(
+  schema: T,
+) =>
+  schema
+    .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
+    .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] });
+const answerBody = withAnswerChecks(z.object(answerFields));
 const answersBody = z.object({
   answers: z
-    .array(
-      z
-        .object({ id: z.string().min(1), ...answerFields })
-        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' })
-        .refine(answerIsNotBlank, { message: 'answer が空白だけ', path: ['answer'] }),
-    )
+    .array(withAnswerChecks(z.object({ id: z.string().min(1), ...answerFields })))
     .min(1)
     .max(200),
 });
@@ -669,12 +703,14 @@ const journalStreamQuery = z.object({
 const archiveRemoveQuery = z.object({
   overrideReason: z.string().optional(),
 });
+// 「空」は NUL を落とした後で見る: ストアは NUL を落とすので、落とす前の長さで見ると NUL だけの値が空のまま届く。`nonBlankString`（空白だけも弾く）とは別物。
+const nonNulString = z
+  .string()
+  .min(1)
+  .refine((value) => stripNul(value).length > 0);
 const managerMessageBody = z.object({
-  // 「空」は NUL を落とした後で見る: ストアは NUL を落とすので、落とす前の長さで見ると NUL だけの text が空の追加指示として届く。
-  text: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0),
+  // NUL だけの text が空の追加指示として届かないよう `nonNulString` で見る。
+  text: nonNulString,
   requestId: z.string().min(1).optional(),
   decision: z.enum(['allow', 'deny']).optional(),
   // `POST /attachments` が返した id。道具 `manager_send` の `attachments` と同じ意味・同じ検証（`loadManagerAttachments`）。
@@ -682,18 +718,14 @@ const managerMessageBody = z.object({
 });
 const abortBody = z.object({
   // NUL だけの reason は、止めた後の文言と日誌の理由が空欄になるので入口で断る。
-  reason: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0)
-    .optional(),
+  reason: nonNulString.optional(),
 });
 const scheduleBody = z.object({
   kind: scheduleKindSchema,
   // 「空」は NUL を落とした後で、空白だけも空として見る（道具 `schedule_create` と同じ判定）: 落とす前の長さで見ると NUL だけの `request` が検査を抜け、ハンドラが日誌へ書いた後で 500 になる。空白だけは中身の無い依頼が毎回届く。
   request: nonBlankString,
   spec: scheduleSpecSchema,
-  ifMatch: z.string().nullable().optional(),
+  ifMatch: ifMatchField,
 });
 
 // `z.coerce.boolean()` を使わない: `?includeClosed=false` が true になり、一覧が片付いたもので埋まる。
@@ -717,11 +749,7 @@ const taskAddBody = z.object({
   title: taskTitleField,
   body: nonBlankString,
   // 起点の会話。無ければ付けない: 嘘の出どころを埋めない。
-  source: z
-    .string()
-    .min(1)
-    .refine((value) => stripNul(value).length > 0)
-    .optional(),
+  source: nonNulString.optional(),
   // 省くと既定の置き場所（`placeTask`。human 起点は開いている human 起点の最後の直後）
   placement: taskPlacementBody.optional(),
 });
@@ -871,6 +899,15 @@ function noBodyPostRequestBody(description: string) {
   };
 }
 
+// 本文を読まない POST（`{}` を送る約束の口）の `requestBody`。`consequence` は「ブラウザの単純リクエストで〜」に続く、守っている相手の言い方（「〜ないため」まで）。
+function emptyJsonPostRequestBody(consequence: string) {
+  return noBodyPostRequestBody(
+    '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+      '`content-type: application/json` が要る（ブラウザの単純リクエストで' +
+      `${consequence}）。`,
+  );
+}
+
 // ステータスの数値は各経路の `describeRoute` に直に書く: 「実際に返すステータスが宣言されているか」を測る歯が、リテラルのキーを経路ごとに読む。
 function eventBadRequestResponse() {
   return {
@@ -1009,6 +1046,16 @@ function whereValidationFailed(issues: readonly { readonly path?: readonly unkno
     .join(', ');
 }
 
+// 400 の本文の文: `prefix` の後ろに、形が不正な項目（`where`）があれば `: ${where}` を続ける。
+function withWhere(prefix: string, where: string): string {
+  return prefix + (where === '' ? '' : `: ${where}`);
+}
+
+// 400 の本文が `{ error: prefix[: where] }` だけの経路の `onInvalid`。
+function invalidWith(prefix: string): (where: string) => { error: string } {
+  return (where) => ({ error: withWhere(prefix, where) });
+}
+
 // 必須の項目を持たないが、本文が無ければ 400 で断る経路の `describeRoute` に置く（#5194）: hono-openapi 1.5 は、必須の項目を
 // 持たないオブジェクトの本文に `requestBody.required` を付けない。`refine` で「どれか1つが要る」と縛った本文は spec からそれが見えず、
 // 何も言わないと本文を省けると読めるため。本文が無い要求は `jsonBody` が `{}` として検査するので、全部省略可の本文には付けない（省いても通る）
@@ -1017,9 +1064,7 @@ const REQUIRED_JSON_BODY = { required: true, content: {} } as const;
 // `app.ts` の中で `validator('json', ...)` を直接書かない: `hook` を渡し忘れた経路だけ `@hono/standard-validator` の既定の 400（本文そのものを返す）に落ちるので、ここへ集約して付け忘れを作れなくする。`onInvalid` を上書きしてよいのも、混ぜてよいのは `where` だけで送られてきた値は混ぜない。
 function jsonBody<Schema extends z.ZodTypeAny>(
   schema: Schema,
-  onInvalid: (where: string) => Record<string, unknown> = (where) => ({
-    error: '入力の形が不正' + (where === '' ? '' : `: ${where}`),
-  }),
+  onInvalid: (where: string) => Record<string, unknown> = invalidWith('入力の形が不正'),
 ) {
   return validator('json', schema, (result, c) => {
     if (result.success) return;
@@ -1030,9 +1075,7 @@ function jsonBody<Schema extends z.ZodTypeAny>(
 // `app.ts` の中で `validator('query', ...)` を直接書かない（`jsonBody` と同じ理由）: `hook` を渡さないと既定の 400 がクエリそのものと zod の issue 配列を返す。
 function queryParams<Schema extends z.ZodTypeAny>(
   schema: Schema,
-  onInvalid: (where: string) => Record<string, unknown> = (where) => ({
-    error: '入力の形が不正' + (where === '' ? '' : `: ${where}`),
-  }),
+  onInvalid: (where: string) => Record<string, unknown> = invalidWith('入力の形が不正'),
 ) {
   return validator('query', schema, (result, c) => {
     if (result.success) return;
@@ -1142,7 +1185,10 @@ async function applyPlugins(deps: {
   }
 }
 
-function describePluginDelivery(runners: ApplyPluginsResult['runners']): string {
+// runner への配布結果を日誌の文にする（plugin・プロファイル・MCP サーバ・環境変数の全部が同じ書式）。値も `error` の本文も載せない。
+function describePluginDelivery(
+  runners: readonly { readonly runnerId: string; readonly ok: boolean }[],
+): string {
   const text = runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
   return text.length === 0 ? '配る先なし' : text;
 }
@@ -1272,6 +1318,11 @@ async function readTask(
   }
 }
 
+// 読めない行を書き直さずに 409 で断る本文（task の書き込み4口。`verb` は「〜いない」の前の動詞のて形: 閉じて・開き直して・動かして・直して）。
+function unreadableTaskBody(reason: string, verb: string): { error: string } {
+  return { error: `${reason}。読めない形のまま書き直さないので、${verb}いない。` };
+}
+
 // 閉じた task の記録を逐語で言う。開き直すと行から消える（`TaskStore.setStatus` の注）ので、日誌へ残す材料
 function describeClosedTask(task: Task): string {
   return (
@@ -1370,6 +1421,19 @@ async function removeUnreadableRowsWithJournal(params: {
     );
   }
   return result;
+}
+
+// 読めない行を id で消す口（permission-grants・integration-keys・access）の 404 / 200 の本文。状態番号は route 側に残す。`noun` は「読めない○○の行」の○○、`hint` は読めない行の id を確かめる口の言い方。
+function unreadableRowsMissingBody(count: number, noun: string, hint: string): { error: string } {
+  return {
+    error:
+      `指した id のうち ${String(count)} 件が、読めない${noun}の行に無い` +
+      `（何も消していない。id は ${hint}で確かめる）`,
+  };
+}
+
+function unreadableRowsRemovedBody(ids: readonly string[]) {
+  return unreadableRowsRemoveResponseSchema.parse({ removedIds: ids, count: ids.length });
 }
 
 // `message` を含めない: ストアのエラー文には行の中身（トークンの値）が載りうる。
@@ -1590,7 +1654,6 @@ async function mutateProfile(
     allScript.length === 0
       ? {}
       : { sha256: fingerprintOf(allScript), bytes: Buffer.byteLength(allScript) };
-  const delivered = result.runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
   await appendJournalOrDrop(
     deps.stores,
     {
@@ -1605,7 +1668,7 @@ async function mutateProfile(
       grounds:
         `${spec.actor}（${spec.route}）。` +
         '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
-        `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+        `runner への配布: ${describePluginDelivery(result.runners)}` +
         '（マネージャー・作業者には次に開くセッションから効く）。',
     },
     '実行環境プロファイルの日誌',
@@ -2763,9 +2826,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(chatBody, (where) => ({
-        error: 'text が空（添付も無い）、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(chatBody, invalidWith('text が空（添付も無い）、または本文の形が不正')),
       async (c) => {
         const {
           text,
@@ -3108,11 +3169,7 @@ export function createApp(deps: AppDeps) {
         summary: '会話の終了（蒸留の契機）',
         description:
           '会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。運ぶ情報は無い（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで蒸留ターンを' +
-            '起こされないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('蒸留ターンを起こされないため'),
         responses: {
           200: jsonResponse('蒸留を促した。', okResponseSchema),
           ...noBodyPostResponses(),
@@ -3225,11 +3282,13 @@ export function createApp(deps: AppDeps) {
           403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
         },
       }),
-      jsonBody(cloneSessionReopenRequestSchema, (where) => ({
-        error:
+      jsonBody(
+        cloneSessionReopenRequestSchema,
+        invalidWith(
           '`confirm: true` を伴っていないか、形が不正（セッションの開き直しは確認を必須にしてある。' +
-          `reason は 1〜500 字）${where === '' ? '' : `: ${where}`}`,
-      })),
+            'reason は 1〜500 字）',
+        ),
+      ),
       async (c) => {
         if (clone.reopenSession === undefined) {
           return c.json(cloneSessionReopenResponseSchema.parse({ outcome: 'unsupported' }));
@@ -3882,9 +3941,7 @@ export function createApp(deps: AppDeps) {
           500: journalWriteFailedResponse('日誌が書けなかった（**本文を書いていない**）。'),
         },
       }),
-      jsonBody(memoryBody, (where) => ({
-        error: '記憶の本文の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(memoryBody, invalidWith('記憶の本文の形が不正')),
       async (c) => {
         const slug = c.req.param('slug');
         if (!memorySlugSchema.safeParse(slug).success) {
@@ -3899,18 +3956,7 @@ export function createApp(deps: AppDeps) {
             ifMatch === null
               ? before === null
               : before !== null && memoryVersion(before.content) === ifMatch;
-          if (!matches) {
-            return c.json(
-              {
-                error: '記憶が読んだ後に変わっています（書き換えていません）' as const,
-                current:
-                  before === null
-                    ? null
-                    : { document: before, version: memoryVersion(before.content) },
-              },
-              409,
-            );
-          }
+          if (!matches) return c.json(memoryConflictBody(before, 'write'), 409);
         }
         // 日誌を先に書き、書けなければ本文を書かずに 500（#4774）: 本文の後に書いて `appendJournalOrDrop` で握ると、本文は変わったのに裏付けの `cause:'human'` の行が無く、`markHumanTouched` も呼べない「印の付かない人間の保存」が生まれる（クローンが次の蒸留で黙って上書きできてしまう）。
         let entry;
@@ -3953,16 +3999,7 @@ export function createApp(deps: AppDeps) {
           );
           // 黙って上書きしない: 書いていない。
           if (error instanceof MemoryConflictError) {
-            return c.json(
-              {
-                error: '記憶が読んだ後に変わっています（書き換えていません）' as const,
-                current:
-                  error.current === null
-                    ? null
-                    : { document: error.current, version: memoryVersion(error.current.content) },
-              },
-              409,
-            );
+            return c.json(memoryConflictBody(error.current, 'write'), 409);
           }
           throw error;
         }
@@ -4008,7 +4045,7 @@ export function createApp(deps: AppDeps) {
           500: journalWriteFailedResponse('消す前の日誌が書けなかった（**消していない**）。'),
         },
       }),
-      queryParams(memoryDeleteQuery),
+      queryParams(ifMatchDeleteQuery),
       async (c) => {
         const slug = c.req.param('slug');
         if (!memorySlugSchema.safeParse(slug).success) {
@@ -4022,20 +4059,14 @@ export function createApp(deps: AppDeps) {
           return c.json(
             {
               error: '消す記憶の版（ifMatch）が無いので、消していません' as const,
-              current: { document: existing, version: memoryVersion(existing.content) },
+              current: memoryCurrent(existing),
             },
             428,
           );
         }
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い。ふつうの衝突のたびに2行を積まない）。
         if (memoryVersion(existing.content) !== ifMatch) {
-          return c.json(
-            {
-              error: '記憶が読んだ後に変わっています（消していません）' as const,
-              current: { document: existing, version: memoryVersion(existing.content) },
-            },
-            409,
-          );
+          return c.json(memoryConflictBody(existing, 'remove'), 409);
         }
         // 日誌を先に書き、書けなければ消さずに 500（#5243）: 消した後に書いて `appendJournalOrDrop` で握ると、人間がクローンの記憶を消したのにクローンへ名指しされず、学びにもならない。
         // 先の行は `memory_update`（`cause:'human'`）にせず `decision` にする: `memory_update` の `cause:'human'` は `deriveHumanTouchedAtFromJournal` などが派生値の根拠に読む行なので、消せなかった回に残すと派生を誤らせる。`decision` の先の行は humanAction を持たないので、クローンへ名指しもされない。
@@ -4069,16 +4100,7 @@ export function createApp(deps: AppDeps) {
             `slug=${slug}`,
           );
           if (error instanceof MemoryConflictError) {
-            return c.json(
-              {
-                error: '記憶が読んだ後に変わっています（消していません）' as const,
-                current:
-                  error.current === null
-                    ? null
-                    : { document: error.current, version: memoryVersion(error.current.content) },
-              },
-              409,
-            );
+            return c.json(memoryConflictBody(error.current, 'remove'), 409);
           }
           throw error;
         }
@@ -4191,9 +4213,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(practiceBody, (where) => ({
-        error: 'やり方の本文の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(practiceBody, invalidWith('やり方の本文の形が不正')),
       async (c) => {
         const slug = c.req.param('slug');
         if (!practiceSlugSchema.safeParse(slug).success) {
@@ -4212,11 +4232,6 @@ export function createApp(deps: AppDeps) {
         }
         // 既に在る行（読めない形の行を含む）の書き直しだけが、日誌を先に書く対象（#5243）。新しく置く回は取り消しでも書き換えでもないので、今までどおり書いた後に残す。
         const rewriting = before !== null || beforeWasUnreadable;
-        const conflictBody = (current: Practice | null) => ({
-          error: 'やり方が読んだ後に変わっています（書き換えていません）' as const,
-          current:
-            current === null ? null : { practice: current, version: practiceVersion(current) },
-        });
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（書かないので書く跡が無い）。読めない行は版が比べられないので、store の排他の中の判定に任せる。
         if (
           ifMatch !== undefined &&
@@ -4225,7 +4240,7 @@ export function createApp(deps: AppDeps) {
             ? before === null
             : before !== null && practiceVersion(before) === ifMatch)
         ) {
-          return c.json(conflictBody(before), 409);
+          return c.json(practiceConflictBody(before, 'write'), 409);
         }
         const entryAfter: JournalEntryInput = {
           type: 'decision',
@@ -4284,7 +4299,7 @@ export function createApp(deps: AppDeps) {
           }
           // 黙って上書きしない: 書いていない。
           if (error instanceof PracticeConflictError) {
-            return c.json(conflictBody(error.current), 409);
+            return c.json(practiceConflictBody(error.current, 'write'), 409);
           }
           throw error;
         }
@@ -4325,7 +4340,7 @@ export function createApp(deps: AppDeps) {
           500: journalWriteFailedResponse('消す前の日誌が書けなかった（**消していない**）。'),
         },
       }),
-      queryParams(practiceDeleteQuery),
+      queryParams(ifMatchDeleteQuery),
       async (c) => {
         const slug = c.req.param('slug');
         if (!practiceSlugSchema.safeParse(slug).success) {
@@ -4350,19 +4365,14 @@ export function createApp(deps: AppDeps) {
           return c.json(
             {
               error: '消すやり方の版（ifMatch）が無いので、消していません' as const,
-              current: { practice: existing, version: practiceVersion(existing) },
+              current: practiceCurrent(existing),
             },
             428,
           );
         }
-        const conflictBody = (current: Practice | null) => ({
-          error: 'やり方が読んだ後に変わっています（消していません）' as const,
-          current:
-            current === null ? null : { practice: current, version: practiceVersion(current) },
-        });
         // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い）。
         if (existing !== null && ifMatch !== undefined && practiceVersion(existing) !== ifMatch) {
-          return c.json(conflictBody(existing), 409);
+          return c.json(practiceConflictBody(existing, 'remove'), 409);
         }
         // 行を作るのは try の外: 作る側の例外を「日誌に書けなかった」と取り違えない。
         const entryBefore: JournalEntryInput = {
@@ -4413,7 +4423,7 @@ export function createApp(deps: AppDeps) {
           );
           // 黙って消さない。
           if (error instanceof PracticeConflictError) {
-            return c.json(conflictBody(error.current), 409);
+            return c.json(practiceConflictBody(error.current, 'remove'), 409);
           }
           throw error;
         }
@@ -5077,9 +5087,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(answersBody, (where) => ({
-        error: 'answers の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(answersBody, invalidWith('answers の形が不正')),
       async (c) => {
         const results: { id: string; ok: boolean; error?: string }[] = [];
         const { answers } = c.req.valid('json');
@@ -5191,9 +5199,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(answerBody, (where) => ({
-        error: 'answer の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(answerBody, invalidWith('answer の形が不正')),
       async (c) => {
         const id = c.req.param('id');
         let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
@@ -5292,11 +5298,7 @@ export function createApp(deps: AppDeps) {
           '「終端は別の状態であって削除ではない」思想）。**取り消しは次の Bash 呼び出しから' +
           '効く**——`#onPreToolUse` は呼び出しのたびにストアを引き直し、キャッシュしない。' +
           '既に取り消し済みでも 200（`revokedAt` は上書きしない）。運ぶ情報は無い（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで許可を' +
-            '落とされないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('許可を落とされないため'),
         responses: {
           200: jsonResponse('取り消した（既に取り消し済みでも 200）。', okResponseSchema),
           404: errorResponse('該当する許可が無い。'),
@@ -5377,11 +5379,10 @@ export function createApp(deps: AppDeps) {
           500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
         },
       }),
-      jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
-        error:
-          '読めない行の id の入力の形が不正（何も消していない）' +
-          (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        unreadableRowsRemoveRequestSchema,
+        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
+      ),
       async (c) => {
         const result = await removeUnreadableRowsWithJournal({
           stores,
@@ -5393,23 +5394,18 @@ export function createApp(deps: AppDeps) {
         });
         if (result.kind === 'unknown') {
           return c.json(
-            {
-              error:
-                `指した id のうち ${String(result.count)} 件が、読めない許可の行に無い` +
-                '（何も消していない。id は `GET /permission-grants` の `rowsUnreadable.rows[].id`（alteroid permission list）で確かめる）',
-            },
+            unreadableRowsMissingBody(
+              result.count,
+              '許可',
+              '`GET /permission-grants` の `rowsUnreadable.rows[].id`（alteroid permission list）',
+            ),
             404,
           );
         }
         if (result.kind === 'failed') {
           return c.json({ error: '許可の記録を保存できなかった' as const }, 500);
         }
-        return c.json(
-          unreadableRowsRemoveResponseSchema.parse({
-            removedIds: result.ids,
-            count: result.ids.length,
-          }),
-        );
+        return c.json(unreadableRowsRemovedBody(result.ids));
       },
     )
 
@@ -5462,11 +5458,10 @@ export function createApp(deps: AppDeps) {
         },
       }),
       humanOnly,
-      jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
-        error:
-          '読めない行の id の入力の形が不正（何も消していない）' +
-          (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        unreadableRowsRemoveRequestSchema,
+        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
+      ),
       async (c) => {
         const result = await removeUnreadableRowsWithJournal({
           stores,
@@ -5479,23 +5474,18 @@ export function createApp(deps: AppDeps) {
         });
         if (result.kind === 'unknown') {
           return c.json(
-            {
-              error:
-                `指した id のうち ${String(result.count)} 件が、読めない連携の鍵の行に無い` +
-                '（何も消していない。id は `GET /integration-keys` の `rowsUnreadable.rows[].id`（alteroid integration list）で確かめる）',
-            },
+            unreadableRowsMissingBody(
+              result.count,
+              '連携の鍵',
+              '`GET /integration-keys` の `rowsUnreadable.rows[].id`（alteroid integration list）',
+            ),
             404,
           );
         }
         if (result.kind === 'failed') {
           return c.json({ error: '連携の鍵を保存できなかった' as const }, 500);
         }
-        return c.json(
-          unreadableRowsRemoveResponseSchema.parse({
-            removedIds: result.ids,
-            count: result.ids.length,
-          }),
-        );
+        return c.json(unreadableRowsRemovedBody(result.ids));
       },
     )
 
@@ -5526,9 +5516,10 @@ export function createApp(deps: AppDeps) {
         },
       }),
       humanOnly,
-      jsonBody(integrationKeyCreateRequestSchema, (where) => ({
-        error: '連携の鍵の入力の形が不正（何も作っていない）' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        integrationKeyCreateRequestSchema,
+        invalidWith('連携の鍵の入力の形が不正（何も作っていない）'),
+      ),
       async (c) => {
         const input = c.req.valid('json');
         // daemon 自身が使う予約語の source の鍵は作らない: 外から名乗れる鍵になる。
@@ -5599,10 +5590,7 @@ export function createApp(deps: AppDeps) {
         description:
           '連携の鍵を失効させる。以後その鍵は 401 になる（発行済みの値を消さなくても即座に効く）。' +
           '失効済みの鍵への再実行は 200（先の失効の時刻を動かさない）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで失効させられないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('失効させられないため'),
         responses: {
           200: jsonResponse('失効した（既に失効済みでも 200）。', integrationKeyResponseSchema),
           404: errorResponse('該当する鍵が無い。'),
@@ -5716,9 +5704,7 @@ export function createApp(deps: AppDeps) {
           ...eventAttachmentResponses(),
         },
       }),
-      jsonBody(eventBody, (where) => ({
-        error: 'source/payload の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(eventBody, invalidWith('source/payload の形が不正')),
       async (c) => {
         const { source, payload, attachments: attachmentIds, idempotencyKey } = c.req.valid('json');
         const principal = c.get('principal');
@@ -5937,8 +5923,7 @@ export function createApp(deps: AppDeps) {
       }),
       jsonBody(scheduleBody, (where) => ({
         error:
-          'kind/request/spec の形が不正' +
-          (where === '' ? '' : `: ${where}`) +
+          withWhere('kind/request/spec の形が不正', where) +
           // every の分数の断りは上限と代わりの書き方を伝える。値は混ぜない（固定の文だけ）。
           (where.split(', ').includes('spec.minutes')
             ? `（${SCHEDULE_EVERY_MINUTES_MAX_MESSAGE}）`
@@ -6180,11 +6165,7 @@ export function createApp(deps: AppDeps) {
         description:
           'これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や' +
           '外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで自律ターンを' +
-            '起こされないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('自律ターンを起こされないため'),
         responses: {
           200: jsonResponse('起こした。', okResponseSchema),
           404: errorResponse('知らない kind。'),
@@ -6269,9 +6250,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(taskAddBody, (where) => ({
-        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(taskAddBody, invalidWith('body の形が不正')),
       async (c) => {
         const { title, body, source, placement } = c.req.valid('json');
         const now = new Date().toISOString();
@@ -6336,18 +6315,20 @@ export function createApp(deps: AppDeps) {
           500: journalWriteFailedResponse('閉じる前の日誌が書けなかった（**閉じていない**）。'),
         },
       }),
-      jsonBody(taskCloseBody, (where) => ({
-        error: 'status / reason の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(taskCloseBody, invalidWith('status / reason の形が不正')),
       async (c) => {
         const id = c.req.param('id');
         const { status, reason } = c.req.valid('json');
+        const retract = (why: string) =>
+          appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry('task を閉じる', `${id} を閉じる操作`, why),
+            'task を閉じる日誌の打ち消し',
+            `id=${id}`,
+          );
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
-          return c.json(
-            { error: `${read.reason}。読めない形のまま書き直さないので、閉じていない。` },
-            409,
-          );
+          return c.json(unreadableTaskBody(read.reason, '閉じて'), 409);
         }
         if (read.kind === 'absent') return c.json({ error: 'not found' as const }, 404);
         if (isTaskClosed(read.task.status)) {
@@ -6386,35 +6367,14 @@ export function createApp(deps: AppDeps) {
             at: new Date().toISOString(),
           });
         } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              'task を閉じる',
-              `${id} を閉じる操作`,
-              'task の閉じる操作が失敗した',
-            ),
-            'task を閉じる日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract('task の閉じる操作が失敗した');
           if (error instanceof UnreadableTaskError) {
-            return c.json(
-              { error: `${reasonOf(error)}。読めない形のまま書き直さないので、閉じていない。` },
-              409,
-            );
+            return c.json(unreadableTaskBody(reasonOf(error), '閉じて'), 409);
           }
           throw error;
         }
         if (result.kind !== 'changed') {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              'task を閉じる',
-              `${id} を閉じる操作`,
-              '閉じる直前に行が無くなっていた・既にその状態だった・遷移が許されなかった',
-            ),
-            'task を閉じる日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract('閉じる直前に行が無くなっていた・既にその状態だった・遷移が許されなかった');
           if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
           return c.json(
             {
@@ -6455,20 +6415,20 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(taskReopenBody, (where) => ({
-        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(taskReopenBody, invalidWith('reason の形が不正')),
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
+        const retract = (why: string) =>
+          appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry('閉じた task を開き直す', `${id} を開き直す操作`, why),
+            '閉じた task を開き直す日誌の打ち消し',
+            `id=${id}`,
+          );
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
-          return c.json(
-            {
-              error: `${read.reason}。読めない形のまま書き直さないので、開き直していない。`,
-            },
-            409,
-          );
+          return c.json(unreadableTaskBody(read.reason, '開き直して'), 409);
         }
         if (read.kind === 'absent') return c.json({ error: 'not found' as const }, 404);
         if (!isTaskClosed(read.task.status)) {
@@ -6499,35 +6459,14 @@ export function createApp(deps: AppDeps) {
             at: new Date().toISOString(),
           });
         } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              '閉じた task を開き直す',
-              `${id} を開き直す操作`,
-              'task の開き直しが失敗した',
-            ),
-            '閉じた task を開き直す日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract('task の開き直しが失敗した');
           if (error instanceof UnreadableTaskError) {
-            return c.json(
-              { error: `${reasonOf(error)}。読めない形のまま書き直さないので、開き直していない。` },
-              409,
-            );
+            return c.json(unreadableTaskBody(reasonOf(error), '開き直して'), 409);
           }
           throw error;
         }
         if (result.kind !== 'changed') {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              '閉じた task を開き直す',
-              `${id} を開き直す操作`,
-              '開き直す直前に行が無くなっていた・既に閉じていなかった',
-            ),
-            '閉じた task を開き直す日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract('開き直す直前に行が無くなっていた・既に閉じていなかった');
           if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
           return c.json({ error: `${id} は閉じていない。何もしていない` }, 409);
         }
@@ -6566,20 +6505,20 @@ export function createApp(deps: AppDeps) {
           500: journalWriteFailedResponse('動かす前の日誌が書けなかった（**動かしていない**）。'),
         },
       }),
-      jsonBody(taskMoveBody, (where) => ({
-        error: 'placement の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(taskMoveBody, invalidWith('placement の形が不正')),
       async (c) => {
         const id = c.req.param('id');
         const { placement } = c.req.valid('json');
+        const retract = (why: string) =>
+          appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry('task を並べ替える', `${id} を動かす操作`, why),
+            'task を並べ替える日誌の打ち消し',
+            `id=${id}`,
+          );
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
-          return c.json(
-            {
-              error: `${read.reason}。読めない形のまま書き直さないので、動かしていない。`,
-            },
-            409,
-          );
+          return c.json(unreadableTaskBody(read.reason, '動かして'), 409);
         }
         if (read.kind === 'absent') return c.json({ error: 'not found' as const }, 404);
         if (isTaskClosed(read.task.status)) {
@@ -6608,35 +6547,14 @@ export function createApp(deps: AppDeps) {
         try {
           result = await stores.tasks.move(id, placement);
         } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              'task を並べ替える',
-              `${id} を動かす操作`,
-              'task の並べ替えが失敗した',
-            ),
-            'task を並べ替える日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract('task の並べ替えが失敗した');
           if (error instanceof UnreadableTaskError) {
-            return c.json(
-              { error: `${reasonOf(error)}。読めない形のまま書き直さないので、動かしていない。` },
-              409,
-            );
+            return c.json(unreadableTaskBody(reasonOf(error), '動かして'), 409);
           }
           throw error;
         }
         if (result.kind !== 'moved') {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry(
-              'task を並べ替える',
-              `${id} を動かす操作`,
-              `動かせなかった（${result.kind}）`,
-            ),
-            'task を並べ替える日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract(`動かせなかった（${result.kind}）`);
           if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
           if (result.kind === 'closed') {
             return c.json({ error: `${id} は閉じていて動かせない。何もしていない` }, 409);
@@ -6702,18 +6620,20 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(taskEditBody, (where) => ({
-        error: 'title / body の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(taskEditBody, invalidWith('title / body の形が不正')),
       async (c) => {
         const id = c.req.param('id');
         const { title, body, ifMatch } = c.req.valid('json');
+        const retract = (why: string) =>
+          appendJournalOrDrop(
+            stores,
+            undoneByHumanEntry('task を直す', `${id} の編集`, why),
+            'task の編集の日誌の打ち消し',
+            `id=${id}`,
+          );
         const read = await readTask(stores, id);
         if (read.kind === 'unreadable') {
-          return c.json(
-            { error: `${read.reason}。読めない形のまま書き直さないので、直していない。` },
-            409,
-          );
+          return c.json(unreadableTaskBody(read.reason, '直して'), 409);
         }
         if (read.kind === 'absent') return c.json({ error: 'not found' as const }, 404);
         const existing = read.task;
@@ -6767,31 +6687,14 @@ export function createApp(deps: AppDeps) {
             { at: new Date().toISOString(), ...(ifMatch === undefined ? {} : { ifMatch }) },
           );
         } catch (error) {
-          await appendJournalOrDrop(
-            stores,
-            undoneByHumanEntry('task を直す', `${id} の編集`, 'task の書き直しが失敗した'),
-            'task の編集の日誌の打ち消し',
-            `id=${id}`,
-          );
+          await retract('task の書き直しが失敗した');
           if (error instanceof UnreadableTaskError) {
-            return c.json(
-              { error: `${reasonOf(error)}。読めない形のまま書き直さないので、直していない。` },
-              409,
-            );
+            return c.json(unreadableTaskBody(reasonOf(error), '直して'), 409);
           }
           throw error;
         }
         if (result.kind === 'edited') return c.json(okResponseSchema.parse({ ok: true }));
-        await appendJournalOrDrop(
-          stores,
-          undoneByHumanEntry(
-            'task を直す',
-            `${id} の編集`,
-            '書く直前に行が無くなっていた・閉じていた・読んだ版と変わっていた',
-          ),
-          'task の編集の日誌の打ち消し',
-          `id=${id}`,
-        );
+        await retract('書く直前に行が無くなっていた・閉じていた・読んだ版と変わっていた');
         if (result.kind === 'conflict') {
           return c.json(
             {
@@ -7081,9 +6984,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(managerMessageBody, (where) => ({
-        error: 'text の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(managerMessageBody, invalidWith('text の形が不正')),
       async (c) => {
         const { text, requestId, decision, attachments: attachmentIds } = c.req.valid('json');
         const managerId = c.req.param('id');
@@ -7224,9 +7125,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(abortBody, (where) => ({
-        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(abortBody, invalidWith('reason の形が不正')),
       async (c) => {
         const { reason } = c.req.valid('json');
         const result = await clone.managers.abort(
@@ -7354,9 +7253,7 @@ export function createApp(deps: AppDeps) {
           ),
         },
       }),
-      jsonBody(runnersVacateCommandSchema, (where) => ({
-        error: 'runnerId の形が不正（空けていない）' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(runnersVacateCommandSchema, invalidWith('runnerId の形が不正（空けていない）')),
       async (c) => {
         const { runnerId } = c.req.valid('json');
         const { handshakeSkipped } = await clone.managers.vacate(runnerId);
@@ -7566,9 +7463,10 @@ export function createApp(deps: AppDeps) {
         },
       }),
       // 既定の 400 を使わない（`PUT /profile/:name` と同じ理由）: 本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで `env` / `headers` の鍵が応答へ載る。
-      jsonBody(mcpServersUpdateRequestSchema, (where) => ({
-        error: 'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        mcpServersUpdateRequestSchema,
+        invalidWith('MCP サーバの登録の形が不正（保存していない）'),
+      ),
       async (c) => {
         // 前の登録は日誌のためにしか使わない（全文置換なので差分の計算も配布も前を見ない）: 保存済みの登録が壊れていても置き直す口を塞がず、「読めなかった」と書いて進む。「なし」とは書き分ける（前は空だったと取り違えない）。理由は `reasonOf` を通す。
         let previousText: string;
@@ -7648,9 +7546,6 @@ export function createApp(deps: AppDeps) {
           throw error;
         }
         // 差し替え自体はもう効いているので、後で分かった配布結果は2行目として足す（落ちても 500 にしない。値は書かない）。
-        const delivered = applied.runners
-          .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
-          .join(', ');
         await appendJournalOrDrop(
           deps.stores,
           {
@@ -7663,7 +7558,7 @@ export function createApp(deps: AppDeps) {
               `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
               `前の登録: ${previousText}。` +
               '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
-              `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+              `runner への配布: ${describePluginDelivery(applied.runners)}` +
               '（マネージャーには次に開くセッションから効く）。',
           },
           'MCP サーバ登録の日誌',
@@ -7717,9 +7612,7 @@ export function createApp(deps: AppDeps) {
           503: errorResponse('取得の口が無い、または公式 marketplace の URL が未設定。'),
         },
       }),
-      jsonBody(pluginPreviewRequestSchema, (where) => ({
-        error: 'plugin の取り元の指定が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(pluginPreviewRequestSchema, invalidWith('plugin の取り元の指定が不正')),
       async (c) => {
         const fetcher = deps.pluginFetcher;
         if (fetcher === undefined) {
@@ -7787,9 +7680,7 @@ export function createApp(deps: AppDeps) {
           500: journalWriteFailedResponse('日誌が書けなかったので入れていない。'),
         },
       }),
-      jsonBody(pluginInstallRequestSchema, (where) => ({
-        error: 'plugin の確定の指定が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(pluginInstallRequestSchema, invalidWith('plugin の確定の指定が不正')),
       async (c) => {
         const { previewId, scope, enableHooks, enableMcp } = c.req.valid('json');
         const fetched = pluginPreviews.get(previewId);
@@ -8044,9 +7935,7 @@ export function createApp(deps: AppDeps) {
         },
       }),
       // 既定の 400 を使わない: `hook` を渡さないと `@hono/standard-validator` が本文そのものを `data` に載せて返し（`RESTRICTED_DATA_FIELDS` は cookie だけで `json` は素通し）、`name` の形式ミス1つでその回に送った全部の鍵の値が応答へ載る。返すのは `path` だけ。
-      jsonBody(credentialsUpdateRequestSchema, (where) => ({
-        error: '鍵の入力の形が不正（置いていない）' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(credentialsUpdateRequestSchema, invalidWith('鍵の入力の形が不正（置いていない）')),
       async (c) => {
         if (deps.credentials === undefined) {
           return c.json({ error: '鍵の正本の器が無い' as const }, 503);
@@ -8105,9 +7994,6 @@ export function createApp(deps: AppDeps) {
         ]
           .filter((part) => part !== null)
           .join('。');
-        const delivered = result.runners
-          .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
-          .join(', ');
         await appendJournalOrDrop(
           deps.stores,
           {
@@ -8116,7 +8002,7 @@ export function createApp(deps: AppDeps) {
             grounds:
               `${describeActor(c.get('principal'))}（PUT /credentials）。` +
               '値は書かない（鍵そのものである）。' +
-              `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+              `runner への配布: ${describePluginDelivery(result.runners)}` +
               '。',
           },
           '環境変数（鍵）の日誌',
@@ -8360,10 +8246,10 @@ export function createApp(deps: AppDeps) {
         },
       }),
       // 既定の 400 を使わない: `hook` を渡さないと `@hono/standard-validator` が本文そのものを `data` に載せて返し（`RESTRICTED_DATA_FIELDS` は cookie だけで `json` は素通し。`@hono/standard-validator@0.4.0` で観測）、`label` を1つ書き忘れただけでその回に送った全部の値が応答へ載る。返すのは `path` だけ。
-      jsonBody(tokensUpdateRequestSchema, (where) => ({
-        error:
-          'トークンのプールの入力の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        tokensUpdateRequestSchema,
+        invalidWith('トークンのプールの入力の形が不正（保存していない）'),
+      ),
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
@@ -8530,11 +8416,10 @@ export function createApp(deps: AppDeps) {
           403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
-      jsonBody(tokensUnreadableRemoveRequestSchema, (where) => ({
-        error:
-          '読めない行の id の入力の形が不正（何も消していない）' +
-          (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        tokensUnreadableRemoveRequestSchema,
+        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
+      ),
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
@@ -8648,9 +8533,7 @@ export function createApp(deps: AppDeps) {
           403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
-      jsonBody(tokensPolicyUpdateRequestSchema, (where) => ({
-        error: '設定の入力の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(tokensPolicyUpdateRequestSchema, invalidWith('設定の入力の形が不正')),
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
@@ -9387,9 +9270,7 @@ export function createApp(deps: AppDeps) {
           400: errorResponse('本文の形が不正。'),
         },
       }),
-      jsonBody(githubObservationRequestSchema, (where) => ({
-        error: 'github 観測の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(githubObservationRequestSchema, invalidWith('github 観測の形が不正')),
       async (c) => {
         const body = c.req.valid('json');
         const entry = await stores.journal.append({ type: 'github_observation', ...body });
@@ -9432,9 +9313,7 @@ export function createApp(deps: AppDeps) {
           400: errorResponse('未知のログイン手段、または手段が1つも設定されていない。'),
         },
       }),
-      jsonBody(loginBody, (where) => ({
-        error: 'provider/label の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(loginBody, invalidWith('provider/label の形が不正')),
       async (c) => {
         const { provider, label } = c.req.valid('json');
         if (authPlan.providers.length === 0) {
@@ -9530,9 +9409,7 @@ export function createApp(deps: AppDeps) {
           400: errorResponse('秘密が違う、期限切れ、または既に引き取り済み。'),
         },
       }),
-      jsonBody(claimBody, (where) => ({
-        error: 'claimSecret の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(claimBody, invalidWith('claimSecret の形が不正')),
       async (c) => {
         const result = await authService.claim({
           requestId: c.req.param('requestId'),
@@ -9595,11 +9472,7 @@ export function createApp(deps: AppDeps) {
         description:
           '同じアカウントの他のトークンは巻き込まない。**operator の資格（状態ファイルの ' +
           'token）では呼べない**——失効させる対象（アクセストークン）を持たないため。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで' +
-            'ログアウトさせられないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('ログアウトさせられないため'),
         responses: {
           200: jsonResponse('失効させた（既に失効済みだった場合を含む）。', okResponseSchema),
           400: errorResponse('operator の資格では失効させられない。'),
@@ -9681,11 +9554,7 @@ export function createApp(deps: AppDeps) {
           'ままである）。\n\n' +
           '**この口は許可を持つアカウントからも叩ける**（2026-09-06 のオーナー決定で' +
           '実行環境の持ち主と同格）。⟹ 許可は伝播する。誰が誰を通したかは日誌に残る。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで持ち主を' +
-            '足されないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('持ち主を足されないため'),
         responses: {
           200: jsonResponse(
             '許可した（既に許可済みでも 200。その場合、日誌には「付与していない（既に許可済みだった）」の打ち消しが残り、`grantedBy` は先の許可者のまま）。',
@@ -9702,6 +9571,13 @@ export function createApp(deps: AppDeps) {
         // 対象を先に引く（門前払い。無ければ 404 で日誌は書かない）: 早期の検査でしかなく、実際に許可される保証は `authService.grant` の結果でしか取れない。
         const before = await stores.auth.getAccount(accountId);
         if (before === null) return c.json({ error: 'not found' as const }, 404);
+        const retract = (decision: string, grounds: string) =>
+          appendJournalOrDrop(
+            stores,
+            { type: 'decision', decision, grounds },
+            'アクセス許可付与の打ち消しの日誌',
+            `accountId=${accountId}`,
+          );
 
         // `describeActor` を省いて `operator` 固定にしない: 許可は人間の手を経ずに伝播しうるので、ここが唯一の歯止め。日誌を先に書き、書けなければ状態を変えずに 500: 状態変更の後に書いて `appendJournalOrDrop` で握ると「記録の無い許可」を作ってしまう。
         await stores.journal.append({
@@ -9715,29 +9591,17 @@ export function createApp(deps: AppDeps) {
           result = await authService.grant(accountId, actorOf(c.get('principal')));
         } catch (error) {
           // 日誌には「付与した」が残っているので打ち消す: 記録が多すぎる側の穴は「記録の無い許可」より安全側。
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `アクセス許可を付与できなかった: ${describeAccount(before)}`,
-              grounds: `${describeActor(c.get('principal'))}（alteroid access grant、状態の変更が失敗）`,
-            },
-            'アクセス許可付与の打ち消しの日誌',
-            `accountId=${accountId}`,
+          await retract(
+            `アクセス許可を付与できなかった: ${describeAccount(before)}`,
+            `${describeActor(c.get('principal'))}（alteroid access grant、状態の変更が失敗）`,
           );
           throw error;
         }
         if (result.status === 'not_found') {
           // 対象を引いてから状態を変えるまでの間に消えた: 同じ理由で打ち消す。
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `アクセス許可を付与できなかった: ${describeAccount(before)}`,
-              grounds: `${describeActor(c.get('principal'))}（alteroid access grant、対象が消えていた）`,
-            },
-            'アクセス許可付与の打ち消しの日誌',
-            `accountId=${accountId}`,
+          await retract(
+            `アクセス許可を付与できなかった: ${describeAccount(before)}`,
+            `${describeActor(c.get('principal'))}（alteroid access grant、対象が消えていた）`,
           );
           return c.json({ error: 'not found' as const }, 404);
         }
@@ -9747,17 +9611,10 @@ export function createApp(deps: AppDeps) {
           result.account.grantedAt === before.grantedAt &&
           result.account.grantedBy === before.grantedBy
         ) {
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision: `アクセス許可を付与していない（既に許可済みだった）: ${describeAccount(before)}`,
-              grounds:
-                `${describeActor(c.get('principal'))}（alteroid access grant、` +
-                `${before.grantedBy ?? '不明'} が ${before.grantedAt} に許可済み）`,
-            },
-            'アクセス許可付与の打ち消しの日誌',
-            `accountId=${accountId}`,
+          await retract(
+            `アクセス許可を付与していない（既に許可済みだった）: ${describeAccount(before)}`,
+            `${describeActor(c.get('principal'))}（alteroid access grant、` +
+              `${before.grantedBy ?? '不明'} が ${before.grantedAt} に許可済み）`,
           );
         }
         return c.json(
@@ -9775,11 +9632,7 @@ export function createApp(deps: AppDeps) {
           '発行済みトークンは消さない。**許可はリクエストごとに見ているので、' +
           'これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。運ぶ情報は' +
           '無い（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストで持ち主の' +
-            '許可を落とされないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('持ち主の許可を落とされないため'),
         responses: {
           200: jsonResponse(
             '取り消した（既に未許可でも 200。その場合、日誌には「アクセス許可の取り消し（読んだ時点で既に未許可だった）」と残る）。',
@@ -9856,11 +9709,10 @@ export function createApp(deps: AppDeps) {
           500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
         },
       }),
-      jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
-        error:
-          '読めない行の id の入力の形が不正（何も消していない）' +
-          (where === '' ? '' : `: ${where}`),
-      })),
+      jsonBody(
+        unreadableRowsRemoveRequestSchema,
+        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
+      ),
       async (c) => {
         const result = await removeUnreadableRowsWithJournal({
           stores,
@@ -9872,23 +9724,18 @@ export function createApp(deps: AppDeps) {
         });
         if (result.kind === 'unknown') {
           return c.json(
-            {
-              error:
-                `指した id のうち ${String(result.count)} 件が、読めないアカウントの行に無い` +
-                '（何も消していない。id は `GET /access` の `rowsUnreadable.rows[].id`（alteroid access list）で確かめる）',
-            },
+            unreadableRowsMissingBody(
+              result.count,
+              'アカウント',
+              '`GET /access` の `rowsUnreadable.rows[].id`（alteroid access list）',
+            ),
             404,
           );
         }
         if (result.kind === 'failed') {
           return c.json({ error: 'アカウントを保存できなかった' as const }, 500);
         }
-        return c.json(
-          unreadableRowsRemoveResponseSchema.parse({
-            removedIds: result.ids,
-            count: result.ids.length,
-          }),
-        );
+        return c.json(unreadableRowsRemovedBody(result.ids));
       },
     )
 
@@ -9899,11 +9746,7 @@ export function createApp(deps: AppDeps) {
         tags: ['system'],
         summary: 'デーモンを止める',
         description: '`daemon stop` の受け口。運ぶ情報は無い（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
-            '`content-type: application/json` が要る（ブラウザの単純リクエストでデーモンを' +
-            '止められないため）。',
-        ),
+        requestBody: emptyJsonPostRequestBody('デーモンを止められないため'),
         responses: {
           200: jsonResponse('停止を受け付けた（実際の停止は少し遅れる）。', okResponseSchema),
           ...noBodyPostResponses(),
