@@ -1,6 +1,7 @@
 import type { Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Turn } from './clone.js';
+import { InputQueue } from './input-queue.js';
 
 export class CloneSdkSession<Q extends { close(): void } = Query, I = SDKUserMessage> {
   #query: Q | null = null;
@@ -98,27 +99,22 @@ export class CloneSdkSession<Q extends { close(): void } = Query, I = SDKUserMes
     }
   }
 
-  readonly #input: I[] = [];
-  #inputWaiter: (() => void) | null = null;
+  readonly #input = new InputQueue<I>(true);
 
   enqueueInput(message: I): void {
-    this.#input.push(message);
+    this.#input.enqueue(message);
   }
 
   dequeueInput(): I | undefined {
-    return this.#input.shift();
+    return this.#input.dequeue();
   }
 
   waitForInput(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.#inputWaiter = resolve;
-    });
+    return this.#input.wait();
   }
 
   wakeInput(): void {
-    const waiter = this.#inputWaiter;
-    this.#inputWaiter = null;
-    waiter?.();
+    this.#input.wake();
   }
 
   #recycleForToken = false;

@@ -3,7 +3,6 @@ import type {
   Options,
   PermissionResult,
   Query,
-  SDKUserMessage,
   SessionKey,
   SessionStore,
   SessionStoreEntry,
@@ -16,10 +15,9 @@ import type {
   AgentManagerSessionSpec,
   AgentPermissionDecision,
   AgentSessionLog,
-  AgentUserInput,
 } from './agent-session.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
-import { toSdkContent } from './claude-user-content.js';
+import { toSdkInput } from './claude-user-content.js';
 import { stageCloneMcpServers, type CloneMcpConfigFile } from './clone-mcp-config-file.js';
 import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { readSessionUsage } from './usage.js';
@@ -31,16 +29,6 @@ export function toClaudePermissionResult(decision: AgentPermissionDecision): Per
   return decision.updatedInput === undefined
     ? { behavior: 'allow' }
     : { behavior: 'allow', updatedInput: decision.updatedInput };
-}
-
-async function* toSdkInput(input: AsyncIterable<AgentUserInput>): AsyncGenerator<SDKUserMessage> {
-  for await (const next of input) {
-    yield {
-      type: 'user',
-      message: { role: 'user', content: toSdkContent(next) },
-      parent_tool_use_id: null,
-    };
-  }
 }
 
 /**
