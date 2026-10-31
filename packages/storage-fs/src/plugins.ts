@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -12,7 +12,7 @@ import {
 } from '@alteroid/core';
 import type { PluginInput, PluginStore, PluginSummary, StoredPlugin } from '@alteroid/core';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
@@ -37,13 +37,8 @@ export class FsPluginStore implements PluginStore {
 
   async #readFile(name: string): Promise<StoredPlugin | null> {
     const path = this.#pathOf(name);
-    let raw: string;
-    try {
-      raw = await readFile(path, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const raw = await readTextIfExists(path);
+    if (raw === undefined) return null;
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -130,12 +125,7 @@ export class FsPluginStore implements PluginStore {
       this.#dir,
       async () => {
         const path = this.#pathOf(name);
-        try {
-          await readFile(path);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-          throw error;
-        }
+        if ((await readTextIfExists(path)) === undefined) return false;
         await rm(path, { force: true });
         return true;
       },

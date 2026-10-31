@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -22,7 +22,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 import { partitionRows } from './partition-rows.js';
 
@@ -221,22 +221,18 @@ export class FsJobStore implements JobStore {
   }
 
   async #read(): Promise<JobFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = fileSchema.parse(JSON.parse(raw));
-      // id 以外の値は載せない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうるため
-      const { valid: jobs, invalid: invalidJobsRaw } = partitionRows(top.jobs, jobSchema, 'jobs');
-      // id 以外の値は載せない: `question` / `context` には人間の依頼文がそのまま入りうるため
-      const { valid: approvals, invalid: invalidApprovalsRaw } = partitionRows(
-        top.approvals,
-        pendingApprovalSchema,
-        'approvals',
-      );
-      return { jobs, invalidJobsRaw, approvals, invalidApprovalsRaw };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
+    // id 以外の値は載せない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうるため
+    const { valid: jobs, invalid: invalidJobsRaw } = partitionRows(top.jobs, jobSchema, 'jobs');
+    // id 以外の値は載せない: `question` / `context` には人間の依頼文がそのまま入りうるため
+    const { valid: approvals, invalid: invalidApprovalsRaw } = partitionRows(
+      top.approvals,
+      pendingApprovalSchema,
+      'approvals',
+    );
+    return { jobs, invalidJobsRaw, approvals, invalidApprovalsRaw };
   }
 
   // 1本の配列へ合流させる: 分けたまま書くと、次の `#read()` で未知のキーとして黙って捨てられるため

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import {
@@ -29,7 +29,7 @@ import {
   writeStderrLine,
 } from '@alteroid/core';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 // 上限を超えたら黙って上書きへ落ちず投げる: 「捨てた」ことが観測できない形を作らないため
@@ -167,13 +167,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
     const marker = await this.#readMarker(id);
     if (marker !== null)
       return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
-    try {
-      const body = await readFile(join(this.#dir, id), 'utf8');
-      return { kind: 'body', body };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
-      throw error;
-    }
+    const body = await readTextIfExists(join(this.#dir, id));
+    return body === undefined ? { kind: 'missing' } : { kind: 'body', body };
   }
 
   async readTail(id: string, maxChars: number): Promise<ArchiveRead> {
@@ -299,15 +294,10 @@ export class FsTranscriptArchive implements TranscriptArchive {
 
   // 読めない印は投げる: 印が在る（消されたかもしれない）行の本体を、読めないまま「在る」と返さないため
   async #readMarker(id: string): Promise<{ removedAt: string; bytes: number } | null> {
-    let raw: string;
-    try {
-      raw = await readFile(this.#markerPath(id), 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.#unreadableOnce.sawReadable(`.removed:${id}`);
-        return null;
-      }
-      throw error;
+    const raw = await readTextIfExists(this.#markerPath(id));
+    if (raw === undefined) {
+      this.#unreadableOnce.sawReadable(`.removed:${id}`);
+      return null;
     }
     try {
       const marker = JSON.parse(raw) as { removedAt: string; bytes: number };
@@ -328,15 +318,10 @@ export class FsTranscriptArchive implements TranscriptArchive {
   }
 
   async #readMeta(id: string): Promise<ArchiveMeta | null> {
-    let raw: string;
-    try {
-      raw = await readFile(this.#metaPath(id), 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.#unreadableOnce.sawReadable(`.meta.json:${id}`);
-        return null;
-      }
-      throw error;
+    const raw = await readTextIfExists(this.#metaPath(id));
+    if (raw === undefined) {
+      this.#unreadableOnce.sawReadable(`.meta.json:${id}`);
+      return null;
     }
     try {
       const meta = JSON.parse(raw) as ArchiveMeta;

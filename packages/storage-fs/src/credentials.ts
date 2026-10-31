@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
@@ -12,7 +12,7 @@ import {
 import type { CredentialVaultStore } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 import { partitionRows } from './partition-rows.js';
 
@@ -85,21 +85,17 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
   }
 
   async #read(): Promise<CredentialFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = topLevelSchema.parse(JSON.parse(raw));
-      // `value` は載せない: 名前（`name`）だけを出す
-      const { valid: credentials, invalid: invalidRaw } = partitionRows(
-        top.credentials,
-        rowSchema,
-        'credentials',
-        'name',
-      );
-      return { credentials, invalidRaw };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = topLevelSchema.parse(JSON.parse(raw));
+    // `value` は載せない: 名前（`name`）だけを出す
+    const { valid: credentials, invalid: invalidRaw } = partitionRows(
+      top.credentials,
+      rowSchema,
+      'credentials',
+      'name',
+    );
+    return { credentials, invalidRaw };
   }
 
   // 書き込んだ `CredentialFile` を返す: `put()` が書き込み直後に `#read()` し直すと、読み飛ばしの跡が二重に出るため

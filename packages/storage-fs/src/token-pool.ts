@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
@@ -23,7 +23,7 @@ import {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 import { partitionRows } from './partition-rows.js';
 
@@ -162,62 +162,58 @@ export class FsTokenPoolStore implements TokenPoolStore {
   }
 
   async #read(): Promise<TokenPoolFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = fileSchema.parse(JSON.parse(raw));
-      // id 以外の値は載せない: `value`（トークン本体）が入りうるため
-      const { valid: tokens, invalid: invalidTokensRaw } = partitionRows(
-        top.tokens,
-        agentTokenRowSchema,
-        'tokens',
-      );
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
+    // id 以外の値は載せない: `value`（トークン本体）が入りうるため
+    const { valid: tokens, invalid: invalidTokensRaw } = partitionRows(
+      top.tokens,
+      agentTokenRowSchema,
+      'tokens',
+    );
 
-      let settings: TokenRotationSettings | undefined;
-      let invalidSettingsRaw: unknown;
-      if (top.settings !== undefined) {
-        const result = tokenRotationSettingsSchema.safeParse(top.settings);
-        if (result.success) {
-          settings = result.data;
-        } else {
-          invalidSettingsRaw = top.settings;
-          writeStderrLine(
-            `${describeUnreadableTokenPoolField({
-              field: 'settings',
-              reason: summarizeInvalidFields(result.error.issues),
-            })}\n`,
-          );
-        }
+    let settings: TokenRotationSettings | undefined;
+    let invalidSettingsRaw: unknown;
+    if (top.settings !== undefined) {
+      const result = tokenRotationSettingsSchema.safeParse(top.settings);
+      if (result.success) {
+        settings = result.data;
+      } else {
+        invalidSettingsRaw = top.settings;
+        writeStderrLine(
+          `${describeUnreadableTokenPoolField({
+            field: 'settings',
+            reason: summarizeInvalidFields(result.error.issues),
+          })}\n`,
+        );
       }
-
-      let active: ActiveAgentToken | undefined;
-      let invalidActiveRaw: unknown;
-      if (top.active !== undefined) {
-        const result = activeAgentTokenSchema.safeParse(top.active);
-        if (result.success) {
-          active = result.data;
-        } else {
-          invalidActiveRaw = top.active;
-          writeStderrLine(
-            `${describeUnreadableTokenPoolField({
-              field: 'active',
-              reason: summarizeInvalidFields(result.error.issues),
-            })}\n`,
-          );
-        }
-      }
-
-      return {
-        tokens,
-        invalidTokensRaw,
-        ...(settings === undefined ? {} : { settings }),
-        ...(invalidSettingsRaw === undefined ? {} : { invalidSettingsRaw }),
-        ...(active === undefined ? {} : { active }),
-        ...(invalidActiveRaw === undefined ? {} : { invalidActiveRaw }),
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
     }
+
+    let active: ActiveAgentToken | undefined;
+    let invalidActiveRaw: unknown;
+    if (top.active !== undefined) {
+      const result = activeAgentTokenSchema.safeParse(top.active);
+      if (result.success) {
+        active = result.data;
+      } else {
+        invalidActiveRaw = top.active;
+        writeStderrLine(
+          `${describeUnreadableTokenPoolField({
+            field: 'active',
+            reason: summarizeInvalidFields(result.error.issues),
+          })}\n`,
+        );
+      }
+    }
+
+    return {
+      tokens,
+      invalidTokensRaw,
+      ...(settings === undefined ? {} : { settings }),
+      ...(invalidSettingsRaw === undefined ? {} : { invalidSettingsRaw }),
+      ...(active === undefined ? {} : { active }),
+      ...(invalidActiveRaw === undefined ? {} : { invalidActiveRaw }),
+    };
   }
 
   async #update(mutate: (file: TokenPoolFile) => TokenPoolFile): Promise<void> {

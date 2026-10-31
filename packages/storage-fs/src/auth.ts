@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -33,7 +33,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 import { partitionRows } from './partition-rows.js';
 
@@ -500,62 +500,58 @@ export class FsAuthStore implements AuthStore {
   }
 
   async #read(): Promise<AuthFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = fileSchema.parse(JSON.parse(raw));
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
 
-      const { valid: accounts, invalid: invalidAccountsRaw } = partitionRows(
-        top.accounts,
-        authAccountSchema,
-        'accounts',
+    const { valid: accounts, invalid: invalidAccountsRaw } = partitionRows(
+      top.accounts,
+      authAccountSchema,
+      'accounts',
+    );
+
+    const identities: AuthIdentity[] = [];
+    const invalidIdentitiesRaw: unknown[] = [];
+    top.identities.forEach((rawIdentity, index) => {
+      const result = authIdentitySchema.safeParse(rawIdentity);
+      if (result.success) {
+        identities.push(result.data);
+        return;
+      }
+      invalidIdentitiesRaw.push(rawIdentity);
+      const key = extractIdentityKey(rawIdentity);
+      writeStderrLine(
+        `${describeSkippedIdentityRow({
+          index,
+          reason: summarizeInvalidFields(result.error.issues),
+          provider: key.provider,
+          subject: key.subject,
+        })}\n`,
       );
+    });
 
-      const identities: AuthIdentity[] = [];
-      const invalidIdentitiesRaw: unknown[] = [];
-      top.identities.forEach((rawIdentity, index) => {
-        const result = authIdentitySchema.safeParse(rawIdentity);
-        if (result.success) {
-          identities.push(result.data);
-          return;
-        }
-        invalidIdentitiesRaw.push(rawIdentity);
-        const key = extractIdentityKey(rawIdentity);
-        writeStderrLine(
-          `${describeSkippedIdentityRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            provider: key.provider,
-            subject: key.subject,
-          })}\n`,
-        );
-      });
+    const { valid: accessTokens, invalid: invalidAccessTokensRaw } = partitionRows(
+      top.accessTokens,
+      accessTokenRecordSchema,
+      'accessTokens',
+    );
 
-      const { valid: accessTokens, invalid: invalidAccessTokensRaw } = partitionRows(
-        top.accessTokens,
-        accessTokenRecordSchema,
-        'accessTokens',
-      );
+    const { valid: loginRequests, invalid: invalidLoginRequestsRaw } = partitionRows(
+      top.loginRequests,
+      loginRequestSchema,
+      'loginRequests',
+    );
 
-      const { valid: loginRequests, invalid: invalidLoginRequestsRaw } = partitionRows(
-        top.loginRequests,
-        loginRequestSchema,
-        'loginRequests',
-      );
-
-      return {
-        accounts,
-        invalidAccountsRaw,
-        identities,
-        invalidIdentitiesRaw,
-        accessTokens,
-        invalidAccessTokensRaw,
-        loginRequests,
-        invalidLoginRequestsRaw,
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    return {
+      accounts,
+      invalidAccountsRaw,
+      identities,
+      invalidIdentitiesRaw,
+      accessTokens,
+      invalidAccessTokensRaw,
+      loginRequests,
+      invalidLoginRequestsRaw,
+    };
   }
 
   // 1本ずつの配列へ合流させる: 分けたまま書くと、次の `#read()` で未知のキーとして黙って捨てられるため

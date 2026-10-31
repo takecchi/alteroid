@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -20,7 +20,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const fileSchema = z.object({ keys: z.array(z.unknown()).default([]) });
@@ -142,13 +142,8 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
   }
 
   async #read(): Promise<KeyFile> {
-    let text: string;
-    try {
-      text = await readFile(this.#path, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { keys: [], invalidRaw: [] };
-      throw error;
-    }
+    const text = await readTextIfExists(this.#path);
+    if (text === undefined) return { keys: [], invalidRaw: [] };
     const top = fileSchema.parse(JSON.parse(text));
     const keys: IntegrationKeyRecord[] = [];
     const invalidRaw: unknown[] = [];
