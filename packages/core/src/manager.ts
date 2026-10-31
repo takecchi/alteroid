@@ -10499,7 +10499,28 @@ class Pool implements ManagerPool {
             routine: true,
           });
           // 畳む前に像と状態を見直す: 上の `await` の間に `abort()` / `#retire()` が走り切ると在庫が消えており、ここで積むと止めた委譲の報告を `flushWithheldReports()` が受信箱へ配ってしまう（#5504）。日誌の `decision` は事実として残す。
-          if (this.#records.get(event.managerId) !== record || record.job.status === 'stopped') {
+          if (record.job.status === 'stopped') return;
+          // 人間・クローンが止めたのではなく、同じ担当の `closed`（done など）に追い越されて `#retire()` されただけなら、積まずに今すぐ配る: 積んでも `closed` はもう在庫を見終えており、`flushWithheldReports()` も像が無くて拾わないので、本文がクローンへ届かず消える。`closed` の「report 無し」の知らせは `lastReportAt` が書かれていて出ないので、二重にもならない。
+          if (this.#records.get(event.managerId) !== record) {
+            this.#emit(
+              event.managerId,
+              'report',
+              this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
+              undefined,
+              undefined,
+              'full',
+              event.failure !== undefined || event.unreported !== undefined,
+            );
+            // 上で書いた「受信箱へは回さない」の decision は消せないので、実際には配ったことを日誌に足す（日誌だけ読む人に「配られていない」と読ませない）。
+            await this.#journal({
+              type: 'decision',
+              decision: `[${event.managerId}] 同じ担当の closed に追い越されたので、畳まずに受信箱へ配った`,
+              grounds:
+                `managerId=${event.managerId} ` +
+                `awaitingBackground.count=${String(awaitingBackground.count)} ` +
+                `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
+              routine: true,
+            });
             return;
           }
           this.#withholdBackgroundReport(event.managerId, event.text, awaitingBackground);
