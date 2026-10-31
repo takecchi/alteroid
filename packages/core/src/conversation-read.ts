@@ -35,11 +35,6 @@ export interface ConversationReadView {
   unreadable?: string;
 }
 
-export const EMPTY_CONVERSATION_READ_VIEW: ConversationReadView = {
-  baseline: null,
-  positions: {},
-};
-
 export async function loadConversationReadView(
   store: ConversationReadStore,
   now: string,

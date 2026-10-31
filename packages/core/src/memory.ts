@@ -23,7 +23,6 @@ import type {
   MemoryDescriptionFreshness,
   MemoryDocKind,
   MemoryFrontmatterState,
-  MemoryProtectionStatus,
 } from './schema.js';
 import type { JournalQuery, JournalStore } from './store.js';
 
@@ -70,19 +69,6 @@ export interface MemoryFloor {
 
 export function assertNeverMemoryProtectionStatus(status: never): never {
   return assertNever('未知の記憶保護状態', status);
-}
-
-export function describeMemoryProtectionStatus(status: MemoryProtectionStatus): string {
-  switch (status.kind) {
-    case 'human':
-      return '人間が過去に書いた記憶（human）';
-    case 'clone-only':
-      return 'クローンだけが書いてきた記憶（clone-only）';
-    case 'unknown':
-      return '履歴が無い、または外から書き換えられた可能性がある記憶（unknown。守る側の既定）';
-    default:
-      return assertNeverMemoryProtectionStatus(status);
-  }
 }
 
 // 日誌を全件読みにしない: 日誌が育つと1回の呼び出しでヒープに載る量が育ち、起動時の OOM の疑いになるため

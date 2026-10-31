@@ -27,7 +27,6 @@ import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } 
 // 知らない `approval_id`、セッションが閉じた・ターンが終わった・マネージャーが止まった、はどれも拒否として閉じる。
 // ほかの peer セッションを起こしても閉じない: 並べて頼むと無関係な確認まで拒否される。期限は付けない。
 // 消費を報告しない provider は 0 を積まず「取れなかった」として数える。
-export const PEER_TOOL_NAMES = ['peer_run', 'peer_reply', 'peer_approve'] as const;
 
 /** 道具の名前は `mcp__alteroid-peer__peer_run` になる。 */
 export const PEER_MCP_SERVER_NAME = 'alteroid-peer';

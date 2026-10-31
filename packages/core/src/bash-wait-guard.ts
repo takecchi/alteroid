@@ -401,18 +401,11 @@ function isBoundedLoop(keyword: 'until' | 'while', cond: string, body: string): 
 // 前景の `gh run watch` を弾かない: ALTERNATIVES (1) が勧めている形を自分で禁じることになり、代替の無い拒否になるため
 // `timeout` に包まれた背景の `gh run watch` を弾かない: 全体が `timeout N ...` に包まれていれば有界と読む約束を、この形のためだけに崩さないため
 // 背景指定はコマンド文字列に現れない: `run_in_background` は invocation.backgrounded として呼び出し側から受け取る
-export const GH_RUN_WATCH_RE = /\bgh\b(?:(?!;|&&|\|\||\||\n).)*?\brun\s+watch\b/;
-
 const GH_WORD_SRC_FOR_RUN_WATCH = String.raw`\bgh\b`;
 const RUN_WATCH_SRC = String.raw`\brun\s+watch\b`;
 const RUN_WATCH_SEGMENT_END_SRC = /[;|\n\r\u2028\u2029]|&&/.source;
 
 // 区切りの中の最初の `gh` だけを試す: 正規表現のままだと、区切りの無い1行に `gh` が並ぶと `gh` ごとに区切りまで読み直して2乗になるため
-export function findGhRunWatch(command: string): { index: number; end: number } | null {
-  const found = findGhRunWatchFrom(command, 0);
-  return found === null ? null : { index: found.index, end: found.end };
-}
-
 function findGhRunWatchFrom(
   command: string,
   from0: number,

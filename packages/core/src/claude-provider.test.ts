@@ -1894,6 +1894,102 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
     });
   });
 
+  it.each(['allow', 'ask'] as const)(
+    'buildManagerSessionOptions: %s に書き換えが付くと、permissionDecision と一緒に updatedInput・additionalContext を運ぶ',
+    async (kind) => {
+      const options = buildManagerSessionOptions({
+        model: 'opus',
+        permissionMode: DEFAULT_PERMISSION_MODE,
+        systemPromptAppend: '追記',
+        workerAgentName: WORKER_AGENT_NAME,
+        workerPrompt: '作業者のプロンプト',
+        workerModel: 'sonnet',
+        cwd: '/work',
+        env: {},
+        sessionStore,
+        canUseTool,
+        onPostToolUse: () => ({ kind: 'continue' }),
+        onPostToolUseFailure: () => {},
+        onPreCompact: () => {},
+        onUserPromptSubmit: () => {},
+        onSubagentStop: () => ({ kind: 'continue' }),
+        onStop: () => {},
+        onPreToolUse: () => ({
+          kind,
+          reason: '理由',
+          rewrite: { input: { command: 'timeout 60 true' }, note: '書き換えた' },
+        }),
+        onPermissionDenied: async () => ({ kind: 'no-retry' }),
+        managerAutoMemoryEnabled: false,
+      });
+
+      const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+        hook_event_name: 'PreToolUse',
+        session_id: 's',
+        cwd: '/work',
+        tool_name: 'Bash',
+        tool_input: { command: 'true' },
+        tool_use_id: 'tu-rw',
+      });
+
+      expect(result).toEqual({
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: kind,
+          permissionDecisionReason: '理由',
+          updatedInput: { command: 'timeout 60 true' },
+          additionalContext: '書き換えた',
+        },
+      });
+    },
+  );
+
+  it('PermissionDenied で未知の kind が渡ったら安全側（{ continue: true }）へ倒し、跡を1本残す', async () => {
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'bogus' }) as never,
+      managerAutoMemoryEnabled: false,
+    });
+
+    let result: unknown;
+    const lines = await captureStderr(async () => {
+      result = await invokeHook(options.hooks?.PermissionDenied?.[0]?.hooks[0], {
+        hook_event_name: 'PermissionDenied',
+        session_id: 's',
+        cwd: '/work',
+        tool_name: 'Bash',
+        tool_input: {},
+        tool_use_id: 'tu-pd',
+      });
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(
+      lines.some(
+        (line) =>
+          line.includes('PermissionDenied の中立な判断の包み直し') &&
+          line.includes('未知の AgentPermissionDeniedDecision.kind が渡った: {"kind":"bogus"}'),
+      ),
+    ).toBe(true);
+  });
+
   it('未知の kind が渡ったら安全側（{ continue: true }）へ倒し、跡を1本残す（実行時の倒れ先。型では弾かれるはずの値が渡ったときの防御）', async () => {
     const options = buildManagerSessionOptions({
       model: 'opus',

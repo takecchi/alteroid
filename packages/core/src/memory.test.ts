@@ -31,7 +31,6 @@ import {
   MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET,
   describeMemoryFloor,
   describeMemoryPremiseRanking,
-  describeMemoryProtectionStatus,
   describeMemoryReinjectionEstimate,
   MEMORY_REINJECTION_ESTIMATE_NOTE,
   describeMemorySectionMoveHierarchyJumpWarning,
@@ -58,7 +57,7 @@ import {
   type MemorySection,
   type MemoryTocIssue,
 } from './memory.js';
-import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
+import type { JournalEntry, MemoryDescriptionFreshness } from './schema.js';
 import { fillListingBudget } from './excerpt.js';
 import { listPageByOverfetch } from './journal-page.js';
 import { JournalAnchorNotFoundError } from './store.js';
@@ -84,29 +83,6 @@ describe('記憶の載せ方', () => {
 });
 
 describe('MemoryProtectionStatus の網羅性', () => {
-  const ALL_STATUSES: MemoryProtectionStatus[] = [
-    { kind: 'human' },
-    { kind: 'clone-only' },
-    { kind: 'unknown' },
-  ];
-
-  it('3状態それぞれで描画が例外を投げずに返る', () => {
-    for (const status of ALL_STATUSES) {
-      expect(() => describeMemoryProtectionStatus(status)).not.toThrow();
-    }
-  });
-
-  it('3状態それぞれが異なる一言を返す（unknown を human や clone-only に読み替えない）', () => {
-    const labels = new Set(ALL_STATUSES.map((status) => describeMemoryProtectionStatus(status)));
-    expect(labels.size).toBe(3);
-  });
-
-  it('未知の状態（型では弾かれるはずの値）が来たら、黙って倒れず例外を投げる', () => {
-    const unknownVariant = { kind: 'new-kind' } as unknown as MemoryProtectionStatus;
-
-    expect(() => describeMemoryProtectionStatus(unknownVariant)).toThrow();
-  });
-
   it('assertNeverMemoryProtectionStatus 自体も、渡されたものを含めて例外を投げる', () => {
     const bogus = { kind: 'bogus' } as never;
     expect(() => assertNeverMemoryProtectionStatus(bogus)).toThrow(/bogus/);
