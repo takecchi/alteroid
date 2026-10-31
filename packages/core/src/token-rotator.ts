@@ -81,7 +81,9 @@ export type TokenVerdictOrigin =
       source: 'account_probe';
       observedBy?: { tokenId: string; generation: number };
     }
-  | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } };
+  | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } }
+  // 世代を名乗る: 直列のキューの外に現役の指名を書く経路（PUT /tokens など）があり、読みと選び直しの間に現役が替わりうるため
+  | { source: 'trial'; observedBy: { tokenId: string; generation: number } };
 
 export type TokenRotationOutcome =
   | {
@@ -188,6 +190,8 @@ export interface TokenRotator {
     tokenId: string;
     verdict: TokenCandidateVerdict;
   }): Promise<'written' | 'unchanged' | 'missing'>;
+  /** 試しで通った鍵の扱い。現役かどうかは直列のキューの中で読み、現役なら止まった記録を消し、そうでなければ usable を記録して選び直す。 */
+  recordTrialSuccess(input: { tokenId: string }): Promise<TokenRotationOutcome>;
   // dangling / withheld では値を戻さない: 人間の判断を実装が黙って覆すことになるため
   restore(): Promise<TokenRestoreOutcome>;
 }
@@ -860,350 +864,379 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       }),
 
     recordTrialVerdict: (input: { tokenId: string; verdict: TokenCandidateVerdict }) =>
-      serial(async () => {
-        const tokens = await stores.tokens.list();
-        const row = tokens.find((token) => token.id === input.tokenId);
-        if (row === undefined) return 'missing' as const;
-        const at = now().toISOString();
-        const { verdict } = input;
-        let mutate: (token: AgentToken) => AgentToken;
-        if (verdict.verdict === 'usable') {
-          if (row.cooldownUntil === undefined && row.lastRejectedAt === undefined) {
-            return 'unchanged' as const;
-          }
-          mutate = (token) => markTokenUsable(token, at);
-        } else if (verdict.verdict === 'unusable' && verdict.retryAt !== undefined) {
-          if (row.cooldownUntil === verdict.retryAt) return 'unchanged' as const;
-          // 設定が読めなくても書く: この分岐は resets を必ず運ぶので、冷却の期限は設定に依存しないため
-          const settingsRead = await readSettingsOrUnreadable(stores.tokens);
-          const retryAt = verdict.retryAt;
-          const reason = verdict.reason;
-          mutate = (token) =>
-            markTokenUnusable(token, {
-              at,
-              message: reason,
-              resets: { at: retryAt, source: 'quota_reset' },
-              ...(settingsRead.readable
-                ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
-                : {}),
-            });
-        } else {
-          return 'unchanged' as const;
-        }
-        const wrote = await writeLock.run(async () => {
-          const latest = await stores.tokens.list();
-          if (!latest.some((token) => token.id === input.tokenId)) return false;
-          await stores.tokens.replace(
-            latest.map((token) => (token.id === input.tokenId ? mutate(token) : token)),
-          );
-          return true;
-        });
-        return wrote ? ('written' as const) : ('unchanged' as const);
-      }),
+      serial(() => recordTrialVerdictLocked(input)),
 
     reconsider: (input: {
       reason: TokenReconsiderReason;
       current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
-    }) =>
+    }) => serial(() => reconsiderLocked(input)),
+
+    // 現役を読むところから記録・選び直しまでを1回の serial に入れる: 外で読むと、読んだ後に回転が割り込んで古い「現役かどうか」で動くため
+    recordTrialSuccess: (input: { tokenId: string }) =>
       serial(async () => {
-        const { reason, current } = input;
-        const currentVerdict = current?.verdict;
-        const [tokens, settingsRead, activeRead] = await Promise.all([
-          stores.tokens.list(),
-          readSettingsOrUnreadable(stores.tokens),
-          readActiveOrUnreadable(stores.tokens),
-        ]);
+        const activeRead = await readActiveOrUnreadable(stores.tokens);
+        // 指名が読めないときは「現役ではない」側へ進む: 既に試し終えた鍵の記録なので、安全に倒せるため
         const active = activeRead.readable ? activeRead.active : null;
-        const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
-
-        // exhausted にしない: あちらは全層が止まる顔で、ここは何も起きていないため
-        if (tokens.length === 0) {
-          return {
-            kind: 'ignored' as const,
-            signal: 'none' as const,
-            reason,
-            why: 'プールにトークンが1本も無い（器の環境変数だけの構成。回す先が無い）',
-          };
-        }
-
-        const currentId = active?.tokenId;
-        const currentRow =
-          currentId === undefined ? undefined : tokens.find((token) => token.id === currentId);
-
-        if (currentId === undefined) {
-          // 成功は回す契機にしない: turn_succeeded はターンが成功した証拠であって、選び直す判定ではないため
-          if (reason === 'turn_succeeded') {
-            return {
-              kind: 'ignored' as const,
-              signal: 'none' as const,
-              reason,
-              why: 'ターンの成功を観測したが、まだ一度も指名していない（成功は回す契機にしない）',
-            };
-          }
-
-          // signal は stranded を借りない: あちらは記録の上で現役が通らないという別の事実の印のため
-          if (!settingsRead.readable) {
-            return {
-              kind: 'ignored' as const,
-              signal: 'settings_unreadable' as const,
-              reason,
-              why: `まだ一度も指名していない。回転の設定が読めなかった（${settingsRead.reason}）ので、この回は回さない`,
-            };
-          }
-          if (settingsRead.settings.rotateOn === 'off') {
-            return {
-              kind: 'ignored' as const,
-              signal: 'stranded' as const,
-              reason,
-              why: 'まだ一度も指名していない。回す契機の設定が off なので回さない（記録だけする）',
-            };
-          }
-          const sweep = await sweepCandidates(tokens, [], settingsRead.settings);
-          return finishSweep({
-            sweep,
-            active: null,
-            ...(activeUnreadableReason === undefined ? {} : { activeUnreadableReason }),
-            signal: 'stranded' as const,
-            reason,
-            whyHead: 'まだ一度も指名していない',
+        if (active !== null && active.tokenId === input.tokenId) {
+          return reconsiderLocked({
+            reason: 'trial_succeeded',
+            current: {
+              verdict: { verdict: 'usable' },
+              origin: {
+                source: 'trial',
+                observedBy: { tokenId: active.tokenId, generation: active.generation },
+              },
+            },
           });
         }
-
-        // 現役の行の値が同じ id のまま差し替わったら、新しい値を撒き直す: 現役が ready だと下の判定は「回す契機が無い」で終わり、
-        // runner とクローンが前の鍵のまま次に枠へ当たるまで動くため。pool_changed でだけ見る（値が変わるのは PUT /tokens だけ）。
-        // 撒いた値を覚えていて、その世代が現役の記録と一致するときだけ比べる（spreadMark の注釈）。
-        // 世代を上げる: 前の鍵について走っている観測を stale として捨てさせるため
-        if (
-          reason === 'pool_changed' &&
-          currentRow !== undefined &&
-          currentRow.value !== undefined &&
-          currentRow.value !== '' &&
-          spreadMark !== null &&
-          active !== null &&
-          spreadMark.tokenId === active.tokenId &&
-          spreadMark.generation === active.generation &&
-          spreadMark.fingerprint !== fingerprintOf(currentRow.value) &&
-          tokenAvailabilityAt(currentRow, now().getTime()) === 'ready'
-        ) {
-          const placed = await nominateRow(currentRow, active, activeUnreadableReason);
-          return {
-            kind: 'rotated' as const,
-            fromTokenId: currentRow.id,
-            toTokenId: currentRow.id,
-            toLabel: currentRow.label,
-            generation: placed.generation,
-            signal: 'none' as const,
-            reason,
-            spread: placed.spread,
-            why: `現役「${currentRow.label}」の値が差し替わった（同じ id のまま）ので、新しい値を撒き直した`,
-          };
-        }
-
-        // 世代の門は turn_success だけ: 回った後に届いた前の世代の成功が、未試行の新しい現役の記録を usable にしうるため
-        if (current !== undefined && current.origin.source === 'turn_success') {
-          const freshness = observationFreshness(active, current.origin.observedBy);
-          if (freshness !== 'current') {
-            return {
-              kind: 'ignored' as const,
-              signal: 'none' as const,
-              reason,
-              why:
-                'ターンの成功を観測したが、世代が合わない（もう回した後、' +
-                'あるいはまだ一度も試していない現役についての成功なので、捨てる）',
-            };
-          }
-        }
-
-        // 身元が無い probe には掛けない: 照合する相手が無いため
-        if (
-          current !== undefined &&
-          current.origin.source === 'account_probe' &&
-          current.origin.observedBy !== undefined &&
-          observationFreshness(active, current.origin.observedBy) === 'stale'
-        ) {
-          return {
-            kind: 'ignored' as const,
-            signal: 'none' as const,
-            reason,
-            why:
-              '枠の probe を観測したが、測った鍵がもう現役ではない（測っている間に回った）' +
-              'ので、その判定は現役へ当てずに捨てる',
-          };
-        }
-
-        if (
-          current !== undefined &&
-          current.verdict.verdict === 'usable' &&
-          currentRow !== undefined
-        ) {
-          // hasRejection とは別に無条件で忘れる: 行に止まった記録が無い回でも記憶のほうは残っているため
-          forgetRejections(currentRow.id);
-          const availability = tokenAvailabilityAt(currentRow, now().getTime());
-          const hasRejection =
-            currentRow.lastRejectedAt !== undefined || currentRow.cooldownUntil !== undefined;
-          const observedHow =
-            current.origin.source === 'turn_success'
-              ? 'ターンが実際に成功した'
-              : 'probe で通ることを観測した';
-          // disabled / invalidated には触らない: 人間の判断を通ったことを理由に覆すことになるため
-          if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
-            // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
-            const recoveredAt = now().toISOString();
-            const currentRowId = currentRow.id;
-            await writeLock.run(async () => {
-              const latest = await stores.tokens.list();
-              if (!latest.some((token) => token.id === currentRowId)) return;
-              await stores.tokens.replace(
-                latest.map((token) =>
-                  token.id === currentRowId ? markTokenUsable(token, recoveredAt) : token,
-                ),
-              );
-            });
-            return {
-              kind: 'ignored' as const,
-              signal: 'none' as const,
-              reason,
-              // source はリテラルで書かない: 生産者を足したときにこの分岐だけ追随し忘れるため
-              recovered: {
-                tokenId: currentRow.id,
-                label: currentRow.label,
-                source: current.origin.source,
-              },
-              why: `現役「${currentRow.label}」は${observedHow}（止まった記録を消した。冷却の見込みが実際より長かった分がここで戻る）`,
-            };
-          }
-          return {
-            kind: 'ignored' as const,
-            signal: 'none' as const,
-            reason,
-            why: `現役「${currentRow.label}」は${observedHow}（回す契機が無い）`,
-          };
-        }
-
-        // current ではなく reason を見る: current を条件にすると、判定を落とした状態で契機だけが届いた場合に素通りするため
-        if (reason === 'turn_succeeded') {
-          return {
-            kind: 'ignored' as const,
-            signal: 'none' as const,
-            reason,
-            why: 'ターンの成功を観測したが、現役の記録に反映できなかった（行がプールに見つからない等）。成功は回す契機にしない',
-          };
-        }
-
-        let pool = tokens;
-        let blockedByProbe = false;
-        let probeUnusableUnrecorded: string | undefined;
-        if (currentVerdict?.verdict === 'unusable' && currentRow !== undefined) {
-          const resets =
-            currentVerdict.retryAt === undefined
-              ? undefined
-              : { at: currentVerdict.retryAt, source: 'quota_reset' as const };
-          // 既定値へすり替えない: 設定が読めず resets も無ければ書かない
-          if (resets !== undefined || settingsRead.readable) {
-            const at = now().toISOString();
-            const currentRowId = currentRow.id;
-            const reason = currentVerdict.reason;
-            const fallbackCooldownMs = settingsRead.readable
-              ? settingsRead.settings.cooldownMs
-              : undefined;
-            // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
-            pool = await writeLock.run(async () => {
-              const latest = await stores.tokens.list();
-              if (!latest.some((token) => token.id === currentRowId)) return latest;
-              return stores.tokens.replace(
-                latest.map((token) =>
-                  token.id === currentRowId
-                    ? markTokenUnusable(token, {
-                        at,
-                        message: reason,
-                        ...(resets === undefined ? {} : { resets }),
-                        ...(fallbackCooldownMs === undefined ? {} : { fallbackCooldownMs }),
-                      })
-                    : token,
-                ),
-              );
-            });
-            blockedByProbe = true;
-          } else {
-            probeUnusableUnrecorded = currentVerdict.reason;
-          }
-        }
-
-        const row = pool.find((token) => token.id === currentId);
-        const availability =
-          row === undefined ? 'dangling' : tokenAvailabilityAt(row, now().getTime());
-
-        if (availability === 'ready') {
-          // reopened の判定より前に置く: 後ろだと明けた合図を出して返り、probe で通らないと観測した事実が消えるため
-          if (probeUnusableUnrecorded !== undefined && !settingsRead.readable) {
-            return {
-              kind: 'ignored' as const,
-              signal: 'settings_unreadable' as const,
-              reason,
-              why: `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${probeUnusableUnrecorded}）。回転の設定が読めなかったので冷却を書けず、この回は回さない（${settingsRead.reason}）`,
-            };
-          }
-          // rotateOn: 'off' でも出す: あれは勝手に鍵を移すなであって、止まったままにしておけではないため
-          if (
-            row?.cooldownUntil !== undefined &&
-            announcedReopen.get(row.id) !== row.cooldownUntil
-          ) {
-            announcedReopen.set(row.id, row.cooldownUntil);
-            const elapsedAt = new Date(row.cooldownUntil).toISOString();
-            return {
-              kind: 'ignored' as const,
-              signal: 'none' as const,
-              reason,
-              reopened: { tokenId: row.id, label: row.label, cooldownUntil: elapsedAt },
-              why: `現役「${row.label}」の冷却が明けた（${elapsedAt}）。**時計で明けたのであって、通ることを観測したわけではない**`,
-            };
-          }
-          return {
-            kind: 'ignored' as const,
-            signal: 'none' as const,
-            reason,
-            why: `記録の上ではいまの現役「${row?.label ?? currentId}」が通る（回す契機が無い。健全な鍵から勝手に移らない）`,
-          };
-        }
-
-        const stranded =
-          availability === 'dangling'
-            ? `現役として記録された id（${currentId}）の行がプールに無い`
-            : blockedByProbe
-              ? `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${currentVerdict?.verdict === 'unusable' ? currentVerdict.reason : ''}）`
-              : `記録の上でいまの現役「${row?.label ?? currentId}」は通らない（${availability}）`;
-
-        // signal は stranded を借りない: 設定が読めないことと記録の上で現役が通らないことは別の事実のため
-        if (!settingsRead.readable) {
-          return {
-            kind: 'ignored' as const,
-            signal: 'settings_unreadable' as const,
-            reason,
-            why: `${stranded}。回転の設定が読めなかった（${settingsRead.reason}）ので、この回は回さない`,
-          };
-        }
-
-        if (settingsRead.settings.rotateOn === 'off') {
-          return {
-            kind: 'ignored' as const,
-            signal: 'stranded' as const,
-            reason,
-            why: `${stranded}。回す契機の設定が off なので回さない（記録だけする）`,
-          };
-        }
-
-        const sweep = await sweepCandidates(pool, [currentId], settingsRead.settings);
-        return finishSweep({
-          sweep,
-          active,
-          // 指名が無いときに fromTokenId を名乗らない: 回したことのない鍵から回ったことになるため
-          ...(active === null ? {} : { outgoingId: active.tokenId }),
-          signal: 'stranded' as const,
-          reason,
-          whyHead: stranded,
-        });
+        await recordTrialVerdictLocked({ tokenId: input.tokenId, verdict: { verdict: 'usable' } });
+        return reconsiderLocked({ reason: 'trial_succeeded' });
       }),
   };
+
+  // 以下の2本は serial の中から呼ぶ本体（serial は入れ子で待てないので、外の口と recordTrialSuccess が同じ本体を通す）
+  async function recordTrialVerdictLocked(input: {
+    tokenId: string;
+    verdict: TokenCandidateVerdict;
+  }): Promise<'written' | 'unchanged' | 'missing'> {
+    const tokens = await stores.tokens.list();
+    const row = tokens.find((token) => token.id === input.tokenId);
+    if (row === undefined) return 'missing' as const;
+    const at = now().toISOString();
+    const { verdict } = input;
+    let mutate: (token: AgentToken) => AgentToken;
+    if (verdict.verdict === 'usable') {
+      if (row.cooldownUntil === undefined && row.lastRejectedAt === undefined) {
+        return 'unchanged' as const;
+      }
+      mutate = (token) => markTokenUsable(token, at);
+    } else if (verdict.verdict === 'unusable' && verdict.retryAt !== undefined) {
+      if (row.cooldownUntil === verdict.retryAt) return 'unchanged' as const;
+      // 設定が読めなくても書く: この分岐は resets を必ず運ぶので、冷却の期限は設定に依存しないため
+      const settingsRead = await readSettingsOrUnreadable(stores.tokens);
+      const retryAt = verdict.retryAt;
+      const reason = verdict.reason;
+      mutate = (token) =>
+        markTokenUnusable(token, {
+          at,
+          message: reason,
+          resets: { at: retryAt, source: 'quota_reset' },
+          ...(settingsRead.readable
+            ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
+            : {}),
+        });
+    } else {
+      return 'unchanged' as const;
+    }
+    const wrote = await writeLock.run(async () => {
+      const latest = await stores.tokens.list();
+      if (!latest.some((token) => token.id === input.tokenId)) return false;
+      await stores.tokens.replace(
+        latest.map((token) => (token.id === input.tokenId ? mutate(token) : token)),
+      );
+      return true;
+    });
+    return wrote ? ('written' as const) : ('unchanged' as const);
+  }
+
+  async function reconsiderLocked(input: {
+    reason: TokenReconsiderReason;
+    current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
+  }): Promise<TokenRotationOutcome> {
+    const { reason, current } = input;
+    const currentVerdict = current?.verdict;
+    const [tokens, settingsRead, activeRead] = await Promise.all([
+      stores.tokens.list(),
+      readSettingsOrUnreadable(stores.tokens),
+      readActiveOrUnreadable(stores.tokens),
+    ]);
+    const active = activeRead.readable ? activeRead.active : null;
+    const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
+
+    // exhausted にしない: あちらは全層が止まる顔で、ここは何も起きていないため
+    if (tokens.length === 0) {
+      return {
+        kind: 'ignored' as const,
+        signal: 'none' as const,
+        reason,
+        why: 'プールにトークンが1本も無い（器の環境変数だけの構成。回す先が無い）',
+      };
+    }
+
+    const currentId = active?.tokenId;
+    const currentRow =
+      currentId === undefined ? undefined : tokens.find((token) => token.id === currentId);
+
+    if (currentId === undefined) {
+      // 成功は回す契機にしない: turn_succeeded はターンが成功した証拠であって、選び直す判定ではないため
+      if (reason === 'turn_succeeded') {
+        return {
+          kind: 'ignored' as const,
+          signal: 'none' as const,
+          reason,
+          why: 'ターンの成功を観測したが、まだ一度も指名していない（成功は回す契機にしない）',
+        };
+      }
+
+      // signal は stranded を借りない: あちらは記録の上で現役が通らないという別の事実の印のため
+      if (!settingsRead.readable) {
+        return {
+          kind: 'ignored' as const,
+          signal: 'settings_unreadable' as const,
+          reason,
+          why: `まだ一度も指名していない。回転の設定が読めなかった（${settingsRead.reason}）ので、この回は回さない`,
+        };
+      }
+      if (settingsRead.settings.rotateOn === 'off') {
+        return {
+          kind: 'ignored' as const,
+          signal: 'stranded' as const,
+          reason,
+          why: 'まだ一度も指名していない。回す契機の設定が off なので回さない（記録だけする）',
+        };
+      }
+      const sweep = await sweepCandidates(tokens, [], settingsRead.settings);
+      return finishSweep({
+        sweep,
+        active: null,
+        ...(activeUnreadableReason === undefined ? {} : { activeUnreadableReason }),
+        signal: 'stranded' as const,
+        reason,
+        whyHead: 'まだ一度も指名していない',
+      });
+    }
+
+    // 現役の行の値が同じ id のまま差し替わったら、新しい値を撒き直す: 現役が ready だと下の判定は「回す契機が無い」で終わり、
+    // runner とクローンが前の鍵のまま次に枠へ当たるまで動くため。pool_changed でだけ見る（値が変わるのは PUT /tokens だけ）。
+    // 撒いた値を覚えていて、その世代が現役の記録と一致するときだけ比べる（spreadMark の注釈）。
+    // 世代を上げる: 前の鍵について走っている観測を stale として捨てさせるため
+    if (
+      reason === 'pool_changed' &&
+      currentRow !== undefined &&
+      currentRow.value !== undefined &&
+      currentRow.value !== '' &&
+      spreadMark !== null &&
+      active !== null &&
+      spreadMark.tokenId === active.tokenId &&
+      spreadMark.generation === active.generation &&
+      spreadMark.fingerprint !== fingerprintOf(currentRow.value) &&
+      tokenAvailabilityAt(currentRow, now().getTime()) === 'ready'
+    ) {
+      const placed = await nominateRow(currentRow, active, activeUnreadableReason);
+      return {
+        kind: 'rotated' as const,
+        fromTokenId: currentRow.id,
+        toTokenId: currentRow.id,
+        toLabel: currentRow.label,
+        generation: placed.generation,
+        signal: 'none' as const,
+        reason,
+        spread: placed.spread,
+        why: `現役「${currentRow.label}」の値が差し替わった（同じ id のまま）ので、新しい値を撒き直した`,
+      };
+    }
+
+    // 世代の門は turn_success と trial に掛ける: 回った後に届いた前の世代の成功が、未試行の新しい現役の記録を usable にしうるため
+    if (
+      current !== undefined &&
+      (current.origin.source === 'turn_success' || current.origin.source === 'trial')
+    ) {
+      const freshness = observationFreshness(active, current.origin.observedBy);
+      if (freshness !== 'current') {
+        return {
+          kind: 'ignored' as const,
+          signal: 'none' as const,
+          reason,
+          why:
+            `${current.origin.source === 'trial' ? '試しの成功' : 'ターンの成功'}を観測したが、世代が合わない（もう回した後、` +
+            'あるいはまだ一度も試していない現役についての成功なので、捨てる）',
+        };
+      }
+    }
+
+    // 身元が無い probe には掛けない: 照合する相手が無いため
+    if (
+      current !== undefined &&
+      current.origin.source === 'account_probe' &&
+      current.origin.observedBy !== undefined &&
+      observationFreshness(active, current.origin.observedBy) === 'stale'
+    ) {
+      return {
+        kind: 'ignored' as const,
+        signal: 'none' as const,
+        reason,
+        why:
+          '枠の probe を観測したが、測った鍵がもう現役ではない（測っている間に回った）' +
+          'ので、その判定は現役へ当てずに捨てる',
+      };
+    }
+
+    if (current !== undefined && current.verdict.verdict === 'usable' && currentRow !== undefined) {
+      // hasRejection とは別に無条件で忘れる: 行に止まった記録が無い回でも記憶のほうは残っているため
+      forgetRejections(currentRow.id);
+      const availability = tokenAvailabilityAt(currentRow, now().getTime());
+      const hasRejection =
+        currentRow.lastRejectedAt !== undefined || currentRow.cooldownUntil !== undefined;
+      const observedHow = {
+        turn_success: 'ターンが実際に成功した',
+        trial: '試しで通ることを観測した',
+        account_probe: 'probe で通ることを観測した',
+      }[current.origin.source];
+      // disabled / invalidated には触らない: 人間の判断を通ったことを理由に覆すことになるため
+      if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
+        // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
+        const recoveredAt = now().toISOString();
+        const currentRowId = currentRow.id;
+        await writeLock.run(async () => {
+          const latest = await stores.tokens.list();
+          if (!latest.some((token) => token.id === currentRowId)) return;
+          await stores.tokens.replace(
+            latest.map((token) =>
+              token.id === currentRowId ? markTokenUsable(token, recoveredAt) : token,
+            ),
+          );
+        });
+        return {
+          kind: 'ignored' as const,
+          signal: 'none' as const,
+          reason,
+          // source はリテラルで書かない: 生産者を足したときにこの分岐だけ追随し忘れるため
+          recovered: {
+            tokenId: currentRow.id,
+            label: currentRow.label,
+            source: current.origin.source,
+          },
+          why: `現役「${currentRow.label}」は${observedHow}（止まった記録を消した。冷却の見込みが実際より長かった分がここで戻る）`,
+        };
+      }
+      return {
+        kind: 'ignored' as const,
+        signal: 'none' as const,
+        reason,
+        why: `現役「${currentRow.label}」は${observedHow}（回す契機が無い）`,
+      };
+    }
+
+    // current ではなく reason を見る: current を条件にすると、判定を落とした状態で契機だけが届いた場合に素通りするため
+    // 試しの成功（origin が trial）も同じ扱い: 現役の鍵が通った記録で、選び直す判定ではないため
+    if (reason === 'turn_succeeded' || current?.origin.source === 'trial') {
+      return {
+        kind: 'ignored' as const,
+        signal: 'none' as const,
+        reason,
+        why: `${current?.origin.source === 'trial' ? '試しの成功' : 'ターンの成功'}を観測したが、現役の記録に反映できなかった（行がプールに見つからない等）。成功は回す契機にしない`,
+      };
+    }
+
+    let pool = tokens;
+    let blockedByProbe = false;
+    let probeUnusableUnrecorded: string | undefined;
+    if (currentVerdict?.verdict === 'unusable' && currentRow !== undefined) {
+      const resets =
+        currentVerdict.retryAt === undefined
+          ? undefined
+          : { at: currentVerdict.retryAt, source: 'quota_reset' as const };
+      // 既定値へすり替えない: 設定が読めず resets も無ければ書かない
+      if (resets !== undefined || settingsRead.readable) {
+        const at = now().toISOString();
+        const currentRowId = currentRow.id;
+        const reason = currentVerdict.reason;
+        const fallbackCooldownMs = settingsRead.readable
+          ? settingsRead.settings.cooldownMs
+          : undefined;
+        // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
+        pool = await writeLock.run(async () => {
+          const latest = await stores.tokens.list();
+          if (!latest.some((token) => token.id === currentRowId)) return latest;
+          return stores.tokens.replace(
+            latest.map((token) =>
+              token.id === currentRowId
+                ? markTokenUnusable(token, {
+                    at,
+                    message: reason,
+                    ...(resets === undefined ? {} : { resets }),
+                    ...(fallbackCooldownMs === undefined ? {} : { fallbackCooldownMs }),
+                  })
+                : token,
+            ),
+          );
+        });
+        blockedByProbe = true;
+      } else {
+        probeUnusableUnrecorded = currentVerdict.reason;
+      }
+    }
+
+    const row = pool.find((token) => token.id === currentId);
+    const availability = row === undefined ? 'dangling' : tokenAvailabilityAt(row, now().getTime());
+
+    if (availability === 'ready') {
+      // reopened の判定より前に置く: 後ろだと明けた合図を出して返り、probe で通らないと観測した事実が消えるため
+      if (probeUnusableUnrecorded !== undefined && !settingsRead.readable) {
+        return {
+          kind: 'ignored' as const,
+          signal: 'settings_unreadable' as const,
+          reason,
+          why: `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${probeUnusableUnrecorded}）。回転の設定が読めなかったので冷却を書けず、この回は回さない（${settingsRead.reason}）`,
+        };
+      }
+      // rotateOn: 'off' でも出す: あれは勝手に鍵を移すなであって、止まったままにしておけではないため
+      if (row?.cooldownUntil !== undefined && announcedReopen.get(row.id) !== row.cooldownUntil) {
+        announcedReopen.set(row.id, row.cooldownUntil);
+        const elapsedAt = new Date(row.cooldownUntil).toISOString();
+        return {
+          kind: 'ignored' as const,
+          signal: 'none' as const,
+          reason,
+          reopened: { tokenId: row.id, label: row.label, cooldownUntil: elapsedAt },
+          why: `現役「${row.label}」の冷却が明けた（${elapsedAt}）。**時計で明けたのであって、通ることを観測したわけではない**`,
+        };
+      }
+      return {
+        kind: 'ignored' as const,
+        signal: 'none' as const,
+        reason,
+        why: `記録の上ではいまの現役「${row?.label ?? currentId}」が通る（回す契機が無い。健全な鍵から勝手に移らない）`,
+      };
+    }
+
+    const stranded =
+      availability === 'dangling'
+        ? `現役として記録された id（${currentId}）の行がプールに無い`
+        : blockedByProbe
+          ? `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${currentVerdict?.verdict === 'unusable' ? currentVerdict.reason : ''}）`
+          : `記録の上でいまの現役「${row?.label ?? currentId}」は通らない（${availability}）`;
+
+    // signal は stranded を借りない: 設定が読めないことと記録の上で現役が通らないことは別の事実のため
+    if (!settingsRead.readable) {
+      return {
+        kind: 'ignored' as const,
+        signal: 'settings_unreadable' as const,
+        reason,
+        why: `${stranded}。回転の設定が読めなかった（${settingsRead.reason}）ので、この回は回さない`,
+      };
+    }
+
+    if (settingsRead.settings.rotateOn === 'off') {
+      return {
+        kind: 'ignored' as const,
+        signal: 'stranded' as const,
+        reason,
+        why: `${stranded}。回す契機の設定が off なので回さない（記録だけする）`,
+      };
+    }
+
+    const sweep = await sweepCandidates(pool, [currentId], settingsRead.settings);
+    return finishSweep({
+      sweep,
+      active,
+      // 指名が無いときに fromTokenId を名乗らない: 回したことのない鍵から回ったことになるため
+      ...(active === null ? {} : { outgoingId: active.tokenId }),
+      signal: 'stranded' as const,
+      reason,
+      whyHead: stranded,
+    });
+  }
 }
 
 // 成功だけを数えて 2/3 と書かない: どれが落ちたのかが読めなくなるため

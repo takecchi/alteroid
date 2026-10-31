@@ -531,7 +531,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     earliestAt: isoDateTime.optional(),
     // `default` で埋めない: 無いことは「推測ではない」ではなく、出所を持たない行（この欄を書かない版・以前の行）のため
     cooldownSource: z.enum(['quota_reset', 'overage_reset', 'notice_text', 'default']).optional(),
-    recoveredSource: z.enum(['account_probe', 'turn_success']).optional(),
+    // `turn_success` は残す: 試しの成功を `turn_success` と書いていた版の行が日誌に残っており、読めなくなるため
+    recoveredSource: z.enum(['account_probe', 'turn_success', 'trial']).optional(),
     noticeText: z.string().optional(),
     text: z.string(),
   }),

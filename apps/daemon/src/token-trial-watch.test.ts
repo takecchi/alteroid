@@ -5,6 +5,7 @@ import {
   UnreadableActiveTokenError,
   createMemoryStores,
   createTokenRotator,
+  tokenRotationEntry,
   usageTransitionOf,
   type AgentToken,
   type Stores,
@@ -57,7 +58,7 @@ const RECOVERED: TokenRotationOutcome = {
   kind: 'ignored',
   signal: 'none',
   why: '止まっていた現役が、また通ることを観測できた',
-  recovered: { tokenId: 'a', label: 'a', source: 'turn_success' },
+  recovered: { tokenId: 'a', label: 'a', source: 'trial' },
 };
 
 const ROTATED: TokenRotationOutcome = {
@@ -104,7 +105,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(ROTATED),
+      recordTrialSuccess: () => Promise.resolve(ROTATED),
       onOutcome: async (outcome) => {
         outcomes.push(outcome);
       },
@@ -126,7 +127,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(ROTATED),
+      recordTrialSuccess: () => Promise.resolve(ROTATED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -145,7 +146,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -170,7 +171,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -190,7 +191,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -202,23 +203,22 @@ describe('token-trial-watch: 試す条件と対象', () => {
 });
 
 describe('token-trial-watch: 通ったら', () => {
-  it('現役自身が通ったら turn_succeeded で reconsider し、fold した why を渡す', async () => {
+  it('通ったら recordTrialSuccess に鍵の id だけを渡し、fold した why を出す', async () => {
     const stores = createMemoryStores();
     await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 24 * 60 * 60 * 1000 });
     await stores.tokens.writeActive({ tokenId: 'a', generation: 3, rotatedAt: '' });
     const trial = fakeTrial({ verdict: 'unusable', reason: '駄目だった' });
-    const reconsiderCalls: unknown[] = [];
+    const successCalls: unknown[] = [];
     const outcomes: TokenRotationOutcome[] = [];
-    const reconsider: TokenRotator['reconsider'] = (input) => {
-      reconsiderCalls.push(input);
-      return Promise.resolve(RECOVERED);
-    };
     let nowMs = AT;
     const watch = startTokenTrialWatch({
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider,
+      recordTrialSuccess: (input) => {
+        successCalls.push(input);
+        return Promise.resolve(RECOVERED);
+      },
       onOutcome: async (outcome) => {
         outcomes.push(outcome);
       },
@@ -232,70 +232,107 @@ describe('token-trial-watch: 通ったら', () => {
     await vi.advanceTimersByTimeAsync(40);
     watch.stop();
 
-    expect(reconsiderCalls).toEqual([
-      {
-        reason: 'turn_succeeded',
-        current: {
-          verdict: { verdict: 'usable' },
-          origin: { source: 'turn_success', observedBy: { tokenId: 'a', generation: 3 } },
-        },
-      },
-    ]);
+    expect(successCalls).toEqual([{ tokenId: 'a' }]);
     expect(outcomes).toHaveLength(1);
     expect((outcomes[0] as { why: string }).why).toContain('1');
     expect((outcomes[0] as { why: string }).why).toContain('ダメ元');
   });
+});
 
-  it('現役以外の候補が通ったら markTokenUsable のうえで trial_succeeded を出す', async () => {
-    const stores = createMemoryStores();
-    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
-    await seedToken(stores, { id: 'b', order: 1, cooldownUntil: AT + 60 * 60 * 1000 });
-    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
-
-    const reconsiderCalls: unknown[] = [];
-    const outcomes: TokenRotationOutcome[] = [];
-    const reconsider: TokenRotator['reconsider'] = (input) => {
-      reconsiderCalls.push(input);
-      return Promise.resolve(ROTATED);
-    };
-    const port: TokenTrialPort = {
-      trial: async () => {
-        await stores.tokens.writeActive({ tokenId: 'other', generation: 9, rotatedAt: '' });
-        return { verdict: 'usable' };
+// 実物の回し手を1本だけ作って recordTrialVerdict / recordTrialSuccess の両方へ配る（daemon の配線と同じ。2本にすると直列のキューが別になる）。
+function realRotator(stores: Stores): {
+  rotator: TokenRotator;
+  spreadCalls: string[];
+} {
+  const spreadCalls: string[] = [];
+  const rotator = createTokenRotator({
+    stores,
+    probe: { probe: () => Promise.resolve({ verdict: 'usable' as const }) },
+    spread: {
+      spread: (token) => {
+        spreadCalls.push(token.id ?? '');
+        return Promise.resolve([{ target: 'runner-primary', ok: true }]);
       },
-    };
+    },
+    now: () => new Date(AT),
+  });
+  return { rotator, spreadCalls };
+}
+
+describe('token-trial-watch: 通ったときの記録と知らせ（実物の回し手。#5989）', () => {
+  async function runWith(
+    stores: Stores,
+    trial: TokenTrialPort,
+  ): Promise<{ outcomes: TokenRotationOutcome[]; spreadCalls: string[]; rotator: TokenRotator }> {
+    const { rotator, spreadCalls } = realRotator(stores);
+    const outcomes: TokenRotationOutcome[] = [];
     const watch = startTokenTrialWatch({
       stores,
-      recordTrialVerdict: realRecordTrialVerdict(stores),
-      trial: port,
-      reconsider,
+      recordTrialVerdict: (input) => rotator.recordTrialVerdict(input),
+      trial,
+      recordTrialSuccess: (input) => rotator.recordTrialSuccess(input),
       onOutcome: async (outcome) => {
         outcomes.push(outcome);
       },
       tickMs: 5,
       now: () => AT,
     });
-    await settle();
+    await vi.advanceTimersByTimeAsync(40);
     watch.stop();
+    return { outcomes, spreadCalls, rotator };
+  }
 
-    expect(reconsiderCalls).toEqual([{ reason: 'trial_succeeded' }]);
-    const tokens = await stores.tokens.list();
-    const row = tokens.find((t) => t.id === 'a');
+  it('現役自身が通ると、止まった記録だけが消えて recovered が出る（回さない・世代はそのまま）', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, {
+      id: 'a',
+      order: 0,
+      cooldownUntil: AT + 60 * 60 * 1000,
+      lastRejectedAt: new Date(AT).toISOString(),
+      lastRejectedReason: '上限',
+    });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 3, rotatedAt: '' });
+    const { outcomes, spreadCalls } = await runWith(stores, fakeTrial({ verdict: 'usable' }).port);
+
+    expect(spreadCalls).toEqual([]);
+    const row = (await stores.tokens.list()).find((t) => t.id === 'a');
     expect(row?.cooldownUntil).toBeUndefined();
+    expect(row?.lastRejectedAt).toBeUndefined();
+    expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'a', generation: 3 });
     expect(outcomes).toHaveLength(1);
+    const outcome = outcomes[0]!;
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.recovered).toEqual({ tokenId: 'a', label: 'a', source: 'trial' });
+    expect(outcome.reason).toBe('trial_succeeded');
+    const entry = tokenRotationEntry(outcome);
+    expect(entry?.event).toBe('recovered');
+    expect(entry?.recoveredSource).toBe('trial');
   });
 
-  it('読み直しが UnreadableActiveTokenError を投げても、trial_succeeded 側で usable を記録する', async () => {
+  it('現役でない候補が通ると、その鍵の止まった記録を消してから選び直す（現役は回る）', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    await seedToken(stores, { id: 'b', order: 1, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const port: TokenTrialPort = {
+      trial: async () => {
+        await stores.tokens.writeActive({ tokenId: 'b', generation: 9, rotatedAt: '' });
+        return { verdict: 'usable' };
+      },
+    };
+    const { outcomes } = await runWith(stores, port);
+
+    const row = (await stores.tokens.list()).find((t) => t.id === 'a');
+    expect(row?.cooldownUntil).toBeUndefined();
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.reason).toBe('trial_succeeded');
+  });
+
+  it('現役の指名が読めなくなっていても、通った鍵の記録は消える', async () => {
     const stores = createMemoryStores();
     await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
     await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
-
-    const reconsiderCalls: unknown[] = [];
-    const outcomes: TokenRotationOutcome[] = [];
-    const reconsider: TokenRotator['reconsider'] = (input) => {
-      reconsiderCalls.push(input);
-      return Promise.resolve(ROTATED);
-    };
     const port: TokenTrialPort = {
       trial: async () => {
         stores.tokens.readActive = () => {
@@ -304,25 +341,55 @@ describe('token-trial-watch: 通ったら', () => {
         return { verdict: 'usable' };
       },
     };
+    const { outcomes } = await runWith(stores, port);
+
+    const row = (await stores.tokens.list()).find((t) => t.id === 'a');
+    expect(row?.cooldownUntil).toBeUndefined();
+    expect(outcomes).toHaveLength(1);
+  });
+
+  it('⚠️ 結果が届く間に回転が割り込んでも、通った鍵の止まった記録は消える（古い現役の判断で捨てない）', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    await seedToken(stores, { id: 'b', order: 1, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const { rotator } = realRotator(stores);
+
+    // 試しの結果を受けて現役を読む（目盛りの1回目の次の読み）ところで、回転を1本差し込む。
+    const realReadActive = stores.tokens.readActive.bind(stores.tokens);
+    let reads = 0;
+    stores.tokens.readActive = async () => {
+      const active = await realReadActive();
+      reads += 1;
+      if (reads === 2) {
+        const pool = await stores.tokens.list();
+        await stores.tokens.replace(
+          pool.map((t) => (t.id === 'b' ? { ...t, cooldownUntil: undefined } : t)),
+        );
+        void rotator.reconsider({ reason: 'tick' });
+      }
+      return active;
+    };
+
+    const outcomes: TokenRotationOutcome[] = [];
     const watch = startTokenTrialWatch({
       stores,
-      recordTrialVerdict: realRecordTrialVerdict(stores),
-      trial: port,
-      reconsider,
+      recordTrialVerdict: (input) => rotator.recordTrialVerdict(input),
+      trial: fakeTrial({ verdict: 'usable' }).port,
+      recordTrialSuccess: (input) => rotator.recordTrialSuccess(input),
       onOutcome: async (outcome) => {
         outcomes.push(outcome);
       },
       tickMs: 5,
       now: () => AT,
     });
-    await settle();
+    await vi.advanceTimersByTimeAsync(60);
     watch.stop();
 
-    expect(reconsiderCalls).toEqual([{ reason: 'trial_succeeded' }]);
-    const tokens = await stores.tokens.list();
-    const row = tokens.find((t) => t.id === 'a');
+    // 回転が先に入るか後に入るかは実装次第（どちらでも a の記録は消える）なので、回転の結果は縛らない。
+    expect(reads).toBeGreaterThanOrEqual(2);
+    const row = (await stores.tokens.list()).find((t) => t.id === 'a');
     expect(row?.cooldownUntil).toBeUndefined();
-    expect(outcomes).toHaveLength(1);
   });
 });
 
@@ -354,7 +421,7 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
         stores,
         recordTrialVerdict: realRecordTrialVerdict(stores),
         trial: trial.port,
-        reconsider: () => Promise.resolve(ROTATED),
+        recordTrialSuccess: () => Promise.resolve(ROTATED),
         onOutcome: () => Promise.resolve(),
         tickMs: 5,
         now: () => AT,
@@ -384,7 +451,7 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
         stores,
         recordTrialVerdict: realRecordTrialVerdict(stores),
         trial: trial.port,
-        reconsider: () => Promise.resolve(ROTATED),
+        recordTrialSuccess: () => Promise.resolve(ROTATED),
         onOutcome: () => Promise.resolve(),
         tickMs: 5,
         now: () => AT,
@@ -424,7 +491,7 @@ describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さ�
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial,
-      reconsider: () => Promise.resolve(ROTATED),
+      recordTrialSuccess: () => Promise.resolve(ROTATED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -496,7 +563,7 @@ describe('token-trial-watch: 試しが投げた例外の文は伏せ字を通す
         stores,
         recordTrialVerdict: realRecordTrialVerdict(stores),
         trial: port,
-        reconsider: () => Promise.resolve(RECOVERED),
+        recordTrialSuccess: () => Promise.resolve(RECOVERED),
         onOutcome: () => Promise.resolve(),
         tickMs: 5,
         now: () => AT,
@@ -523,7 +590,7 @@ describe('token-trial-watch: 失敗したら', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: async (outcome) => {
         outcomes.push(outcome);
       },
@@ -550,7 +617,7 @@ describe('token-trial-watch: 失敗したら', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -581,7 +648,7 @@ describe('token-trial-watch: 失敗したら', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -607,7 +674,7 @@ describe('token-trial-watch: 偽陽性の退き方（設計点8）', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => nowMs,
@@ -638,7 +705,7 @@ describe('token-trial-watch: 偽陽性の退き方（設計点8）', () => {
       stores,
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
-      reconsider: () => Promise.resolve(RECOVERED),
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => nowMs,

@@ -2841,7 +2841,7 @@
                         },
                         "recoveredSource": {
                           "type": "string",
-                          "enum": ["account_probe", "turn_success"]
+                          "enum": ["account_probe", "turn_success", "trial"]
                         },
                         "noticeText": {
                           "type": "string"
@@ -8600,7 +8600,7 @@
                               },
                               "recoveredSource": {
                                 "type": "string",
-                                "enum": ["account_probe", "turn_success"]
+                                "enum": ["account_probe", "turn_success", "trial"]
                               },
                               "noticeText": {
                                 "type": "string"
@@ -10861,7 +10861,7 @@
                         },
                         "recoveredSource": {
                           "type": "string",
-                          "enum": ["account_probe", "turn_success"]
+                          "enum": ["account_probe", "turn_success", "trial"]
                         },
                         "noticeText": {
                           "type": "string"
@@ -15401,7 +15401,7 @@
                                 },
                                 "recoveredSource": {
                                   "type": "string",
-                                  "enum": ["account_probe", "turn_success"]
+                                  "enum": ["account_probe", "turn_success", "trial"]
                                 },
                                 "noticeText": {
                                   "type": "string"
@@ -17527,7 +17527,7 @@
                                 },
                                 "recoveredSource": {
                                   "type": "string",
-                                  "enum": ["account_probe", "turn_success"]
+                                  "enum": ["account_probe", "turn_success", "trial"]
                                 },
                                 "noticeText": {
                                   "type": "string"
@@ -19653,7 +19653,7 @@
                               },
                               "recoveredSource": {
                                 "type": "string",
-                                "enum": ["account_probe", "turn_success"]
+                                "enum": ["account_probe", "turn_success", "trial"]
                               },
                               "noticeText": {
                                 "type": "string"
@@ -21770,7 +21770,7 @@
                               },
                               "recoveredSource": {
                                 "type": "string",
-                                "enum": ["account_probe", "turn_success"]
+                                "enum": ["account_probe", "turn_success", "trial"]
                               },
                               "noticeText": {
                                 "type": "string"

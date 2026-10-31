@@ -188,6 +188,8 @@ export function describeRecoveredSource(
       return 'セッションを使わずに、利用枠を直接確かめて観測した';
     case 'turn_success':
       return '実際の応答が成功したので観測できた（セッション単位の上限にも効く）';
+    case 'trial':
+      return '試しに使って通ったので観測できた（実際のターンの成功ではない）';
     default:
       return describeUnknown(source, '回復の観測元');
   }

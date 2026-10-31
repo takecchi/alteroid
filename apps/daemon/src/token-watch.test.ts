@@ -49,6 +49,7 @@ function fake(): Fake {
     },
     restore: () => Promise.resolve({ kind: 'none' as const, why: '' }),
     recordTrialVerdict: () => Promise.resolve('unchanged' as const),
+    recordTrialSuccess: () => Promise.resolve(ignored),
   } satisfies TokenRotator;
   return {
     rotator,
@@ -197,6 +198,8 @@ describe('見張り: 契機を回し手へ渡す', () => {
       },
       restore: () => Promise.resolve({ kind: 'none' as const, why: '' }),
       recordTrialVerdict: () => Promise.resolve('unchanged' as const),
+      recordTrialSuccess: () =>
+        Promise.resolve({ kind: 'ignored' as const, signal: 'none' as const, why: '' }),
     } satisfies TokenRotator;
     const watch = startTokenRotationWatch({
       rotator,
