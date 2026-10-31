@@ -408,11 +408,6 @@ const RUN_WATCH_SRC = String.raw`\brun\s+watch\b`;
 const RUN_WATCH_SEGMENT_END_SRC = /[;|\n\r\u2028\u2029]|&&/.source;
 
 // 区切りの中の最初の `gh` だけを試す: 正規表現のままだと、区切りの無い1行に `gh` が並ぶと `gh` ごとに区切りまで読み直して2乗になるため
-export function findGhRunWatch(command: string): { index: number; end: number } | null {
-  const found = findGhRunWatchFrom(command, 0);
-  return found === null ? null : { index: found.index, end: found.end };
-}
-
 function findGhRunWatchFrom(
   command: string,
   from0: number,
