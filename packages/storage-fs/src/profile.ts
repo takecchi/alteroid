@@ -15,13 +15,9 @@ import { writeFileAtomic } from './atomic.js';
 // JSON に包まず素のシェルスクリプトで持つ: 包むと人間が `vi` で直せなくなるため
 // `memory/` には置かない: クローンのシステムプロンプトへ鍵が載るため
 export class FsProfileStore implements ProfileStore {
-  readonly #legacyPath: string;
   readonly #dir: string;
-  // 移行を1本に並べる: 同時の `list` が二重に移さないため
-  #migrating: Promise<void> = Promise.resolve();
 
-  constructor(legacyPath: string, dir: string) {
-    this.#legacyPath = legacyPath;
+  constructor(dir: string) {
     this.#dir = dir;
   }
 
@@ -34,7 +30,6 @@ export class FsProfileStore implements ProfileStore {
   }
 
   async list(): Promise<EnvProfileEntry[]> {
-    await this.#migrateLegacy();
     return this.#readAll();
   }
 
@@ -80,26 +75,6 @@ export class FsProfileStore implements ProfileStore {
     }
   }
 
-  #migrateLegacy(): Promise<void> {
-    const next = this.#migrating.then(async () => {
-      let info;
-      try {
-        info = await stat(this.#legacyPath);
-      } catch {
-        return;
-      }
-      const script = await readFile(this.#legacyPath, 'utf8');
-      // 新しい側を優先する: 人間が移行後に直した値を、旧ファイルで巻き戻さないため
-      if (script.trim().length > 0 && !(await this.#exists(this.#scriptPath('default')))) {
-        await this.#writeRow('default', script, 'all', info.mtime);
-      }
-      await rm(this.#legacyPath, { force: true });
-    });
-    // 失敗しても列は止めない: 次の `list` が挑み直せるように
-    this.#migrating = next.catch(() => undefined);
-    return next;
-  }
-
   async #exists(path: string): Promise<boolean> {
     try {
       await stat(path);
@@ -121,14 +96,12 @@ export class FsProfileStore implements ProfileStore {
 
   async set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry> {
     assertProfileRowWritable({ name, script });
-    await this.#migrateLegacy();
     const at = new Date();
     await this.#writeRow(name, script, scope, at);
     return { name, script, scope, updatedAt: at.toISOString() };
   }
 
   async remove(name: string): Promise<boolean> {
-    await this.#migrateLegacy();
     const existed = await this.#exists(this.#scriptPath(name));
     await rm(this.#scriptPath(name), { force: true });
     // 隣のファイルも消す: 残すと、同じ名前で別の本文を置いたとき古い撒く先が黙って効くため
@@ -151,7 +124,6 @@ export class FsProfileStore implements ProfileStore {
   async clear(): Promise<number> {
     const count = (await this.list()).length;
     await rm(this.#dir, { recursive: true, force: true });
-    await rm(this.#legacyPath, { force: true });
     return count;
   }
 }
