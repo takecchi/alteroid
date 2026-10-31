@@ -84,7 +84,6 @@ function bootClone(
   return { ...fake, clone };
 }
 
-// `source` に予約語（`token-pool` 等）を使わない: `commitmentFor` が特別扱いし、台帳が開く前提の歯が赤くなるため
 function externalNotice(
   payload: string,
   id = 'evt-ext',
@@ -631,270 +630,15 @@ async function waitForNoUnread(stores: Stores): Promise<void> {
   await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読が消える');
 }
 
-// #5469 P5: manager_message / external は台帳に開かなくなったが、アップグレード前に開いた行と、その合図の未読（受信箱）が残った状態は実在する。
-// 「台帳の行が閉じていれば配り直しを畳む」「開いていれば全文で配る」という保証は、その行の側（人間の合図と同じ配線）に残っているので、
-// 古い版が開いた形の行を直接置いて、同じ歯で測り続ける（歯を外して保証を弱めない）。置く行は古い版の commitmentFor が組んだものと同じ origin・id・at
-async function seedLegacyLedgerRow(stores: Stores, event: InboxEvent): Promise<void> {
-  const origin = event.type === 'external' ? 'external' : 'manager';
-  await stores.commitments.open({
-    id: event.id,
-    at: event.at,
-    origin,
-    body: '（アップグレード前に開いた行）',
-  });
-}
-
-// `commitment_close` を呼ばせず台帳を直接閉じる: `fakeSdk` はツール呼び出しを再現しないため
-describe('片付け済みの配り直し（ターンを起こさずに畳む）', () => {
-  it('既に commitment_close で片付けていたら、ターンを1本も起こさない（本文も断り書きもモデルへ渡らない）', async () => {
-    // 最初の1回分の日誌書き込みだけを落とす: 落とさないと dying が書いた全文で満たせてしまうため
-    const base = createMemoryStores();
-    let droppedFirstManagerExchange = false;
-    const stores: Stores = {
-      ...base,
-      journal: {
-        ...base.journal,
-        append(entry) {
-          if (
-            !droppedFirstManagerExchange &&
-            entry.type === 'exchange' &&
-            entry.with === 'manager' &&
-            entry.role === 'inbound'
-          ) {
-            droppedFirstManagerExchange = true;
-            return Promise.reject(new Error('最初の1回だけ落とす（検証のため）'));
-          }
-          return base.journal.append(entry);
-        },
-      },
-    };
-
-    const dying = bootClone(stores, 'hang');
-    await idle();
-    dying.clone.post(report('CLOSED-REPORT 本文はこれだけ長くしておく', 'evt-closed'));
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await seedLegacyLedgerRow(stores, report('CLOSED-REPORT', 'evt-closed'));
-
-    expect(
-      await stores.commitments.close(
-        'evt-closed',
-        '2026-08-02T00:00:00.000Z',
-        'もう対応済み',
-        'clone',
-      ),
-    ).toBe(true);
-
-    const reborn = bootClone(stores);
-    // 「畳んだ跡」を待つ形にしない: 畳まない側の壊れ方が待ちの時間切れとして出て、赤の出どころが自分のアサーションでなくなるため
-    await waitForNoUnread(stores);
-    await reborn.clone.stop();
-
-    expect(reborn.inputs).toEqual([]);
-
-    expect(droppedFirstManagerExchange).toBe(true);
-    const journal = await stores.journal.list({ types: ['exchange'] });
-    const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
-    expect(
-      exchanges.some(
-        (entry) =>
-          entry.role === 'inbound' &&
-          entry.with === 'manager' &&
-          entry.text.includes('CLOSED-REPORT 本文はこれだけ長くしておく'),
-      ),
-    ).toBe(true);
-
-    const folded = exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'));
-    const foldedText = folded?.text ?? '';
-    expect(foldedText).toContain('再起動後の配り直しである');
-    expect(foldedText).toContain('片付けた時刻');
-    expect(foldedText).toContain('2026-08-02T00:00:00.000Z');
-    expect(foldedText).toContain('もう対応済み');
-    expect(foldedText).toContain('journal_read');
-    expect(foldedText).toContain('mgr-1');
-    expect(
-      exchanges.some((entry) => entry.text.includes('未読のまま残っていた合図を配り直した')),
-    ).toBe(true);
-
-    expect(await stores.inbox.claimPending()).toEqual([]);
-  });
-
-  it('human_message でも同じくターンを起こさない（配線は起点ごとに分かれているので `manager_message` だけでは足りない）', async () => {
-    const stores = createMemoryStores();
-    const text = 'CLOSED-HUMAN-MSG 本文はこれだけ長くしておく';
-    const event = humanMessage(text);
-
-    const dying = bootClone(stores, 'hang');
-    await idle();
-    dying.clone.post(event);
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    // 以前の版が人間の発言を台帳へ開いていた行（クローンはもう台帳へ書かない。#5923）をアップグレード前の状態として置く
-    await stores.commitments.open({
-      id: event.id,
-      at: event.at,
-      origin: 'human',
-      body: text,
-    });
-
-    expect(
-      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', 'もう対応済み', 'clone'),
-    ).toBe(true);
-
-    const reborn = bootClone(stores);
-    await waitForNoUnread(stores);
-    await reborn.clone.stop();
-
-    expect(reborn.inputs).toEqual([]);
-    const journal = await stores.journal.list({ types: ['exchange'] });
-    const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
-    expect(exchanges.some((entry) => entry.with === 'human' && entry.text === text)).toBe(true);
-    expect(exchanges.some((entry) => entry.text.includes('journal_read'))).toBe(true);
-    expect(await stores.inbox.claimPending()).toEqual([]);
-  });
-
-  it('human で閉じていても同じくターンを1本も起こさず畳み、日誌には「人間が既にこの合図を片付けている」と載る', async () => {
-    const stores = createMemoryStores();
-
-    const dying = bootClone(stores, 'hang');
-    await idle();
-    dying.clone.post(
-      report('CLOSED-BY-HUMAN-REPORT 本文はこれだけ長くしておく', 'evt-closed-human'),
-    );
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await seedLegacyLedgerRow(stores, report('CLOSED-BY-HUMAN-REPORT', 'evt-closed-human'));
-
-    expect(
-      await stores.commitments.close(
-        'evt-closed-human',
-        '2026-08-02T00:00:00.000Z',
-        '人間が対応済みと判断した',
-        'human',
-      ),
-    ).toBe(true);
-
-    const reborn = bootClone(stores);
-    await waitForNoUnread(stores);
-    await reborn.clone.stop();
-
-    expect(reborn.inputs).toEqual([]);
-
-    const journal = await stores.journal.list({ types: ['exchange'] });
-    const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
-    const folded = exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'));
-    const foldedText = folded?.text ?? '';
-    expect(foldedText).toContain('人間が既にこの合図を片付けている');
-    expect(foldedText).toContain('片付けた時刻（POST /commitments/:id/close）');
-    expect(foldedText).not.toContain('クローンは既にこの合図を片付けている');
-    expect(foldedText).toContain('2026-08-02T00:00:00.000Z');
-    expect(foldedText).toContain('人間が対応済みと判断した');
-
-    expect(await stores.inbox.claimPending()).toEqual([]);
-  });
-
-  it('external も畳むが、`external_event` の本文追記は落とさない（`journal_read` の案内が空を指さない）', async () => {
-    const base = createMemoryStores();
-    let droppedFirstExternal = false;
-    const stores: Stores = {
-      ...base,
-      journal: {
-        ...base.journal,
-        append(entry) {
-          if (!droppedFirstExternal && entry.type === 'external_event') {
-            droppedFirstExternal = true;
-            return Promise.reject(new Error('最初の1回だけ落とす（検証のため）'));
-          }
-          return base.journal.append(entry);
-        },
-      },
-    };
-    const event: InboxEvent = {
-      type: 'external',
-      id: 'evt-ext',
-      at: '2026-08-01T00:00:00.000Z',
-      source: 'github',
-      payload: 'CLOSED-EXTERNAL 本文はこれだけ長くしておく',
-    };
-
-    const dying = bootClone(stores, 'hang');
-    await idle();
-    dying.clone.post(event);
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await seedLegacyLedgerRow(stores, event);
-    expect(
-      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', '対応済み', 'clone'),
-    ).toBe(true);
-
-    const reborn = bootClone(stores);
-    await waitForNoUnread(stores);
-    await reborn.clone.stop();
-
-    expect(reborn.inputs).toEqual([]);
-    expect(droppedFirstExternal).toBe(true);
-    const events = await stores.journal.list({ types: ['external_event'] });
-    expect(
-      events.some(
-        (entry) =>
-          entry.type === 'external_event' &&
-          entry.source === 'github' &&
-          entry.summary.includes('CLOSED-EXTERNAL 本文はこれだけ長くしておく'),
-      ),
-    ).toBe(true);
-    expect(await stores.inbox.claimPending()).toEqual([]);
-  });
-
-  it('片付け済みの配り直しを畳むとき、本文（journalIncomingBody）→「畳んだ」の1行、の順で journal.append が呼ばれる（characterization。Issue #1744）', async () => {
-    const base = createMemoryStores();
-    const order: string[] = [];
-    const stores: Stores = {
-      ...base,
-      journal: {
-        ...base.journal,
-        append: async (entry) => {
-          if (entry.type === 'external_event') order.push('body');
-          else if (
-            entry.type === 'exchange' &&
-            entry.text.includes('片付け済みの配り直しなので、ターンを起こさずに畳んだ')
-          ) {
-            order.push('folded-line');
-          }
-          return base.journal.append(entry);
-        },
-      },
-    };
-
-    const event: InboxEvent = {
-      type: 'external',
-      id: 'evt-fold-order',
-      at: '2026-08-01T00:00:00.000Z',
-      source: 'github',
-      payload: '畳む順序を確かめるための本文',
-    };
-
-    const dying = bootClone(stores, 'hang');
-    await idle();
-    dying.clone.post(event);
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await seedLegacyLedgerRow(stores, event);
-    expect(
-      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', '対応済み', 'clone'),
-    ).toBe(true);
-
-    order.length = 0;
-
-    const reborn = bootClone(stores);
-    await waitForNoUnread(stores);
-    await reborn.clone.stop();
-
-    expect(order).toEqual(['body', 'folded-line']);
-  });
-
-  it('未了（クローンがまだ片付けていない）合図の配り直しは、1文字も変えず全文のままターンへ届く（畳まない）', async () => {
+// 台帳で片付け済みの配り直しを畳む仕組みは台帳の撤去（段3）で外れた。配り直した合図は、古い版が台帳へ開いた行の有無によらず、1文字も変えず全文のままターンへ届く
+describe('配り直した合図は全文のままターンへ届く（片付け済みでも畳まない）', () => {
+  it('配り直しの報告は、1文字も変えず全文のままターンへ届く（畳まない）', async () => {
     const stores = createMemoryStores();
 
     const dying = bootClone(stores, 'hang');
     await idle();
     dying.clone.post(report('OPEN-REPORT 本文はこれだけ長くしておく', 'evt-open'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await seedLegacyLedgerRow(stores, report('OPEN-REPORT', 'evt-open'));
 
     const reborn = bootClone(stores);
     // 「入力が来ること」を待つ形にしない: 誤って畳んだ壊れ方が待ちの時間切れとして出て、赤の出どころが自分のアサーションでなくなるため
@@ -904,7 +648,7 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     expect(reborn.inputs).toHaveLength(1);
     const prompt = reborn.inputs[0] ?? '';
     expect(prompt).toContain('OPEN-REPORT 本文はこれだけ長くしておく');
-    expect(prompt).not.toContain('クローンは既にこの合図を片付けている');
+    expect(prompt).not.toContain('既に片付けている');
     const journal = await stores.journal.list({ types: ['exchange'] });
     expect(
       journal.some(
@@ -913,42 +657,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(false);
 
     await reborn.clone.stop();
-  });
-
-  it('片付き確認（commitments.get）が失敗しても全文で配る。ターンは落ちない（雑音であって喪失ではない側へ倒す）', async () => {
-    const base = createMemoryStores();
-    let failNextGet = false;
-    const stores: Stores = {
-      ...base,
-      commitments: {
-        ...base.commitments,
-        get: (id: string) => {
-          if (failNextGet) return Promise.reject(new Error('台帳が読めない'));
-          return base.commitments.get(id);
-        },
-      },
-    };
-
-    const dying = bootClone(stores, 'hang');
-    await idle();
-    dying.clone.post(report('THROW-REPORT 本文はこれだけ長くしておく', 'evt-throw'));
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await seedLegacyLedgerRow(stores, report('THROW-REPORT', 'evt-throw'));
-    expect(
-      await stores.commitments.close('evt-throw', new Date().toISOString(), '片付けた', 'clone'),
-    ).toBe(true);
-
-    failNextGet = true;
-    const lines = await captureStderr(async () => {
-      const reborn = bootClone(stores);
-      await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
-
-      const prompt = reborn.inputs[0] ?? '';
-      expect(prompt).toContain('THROW-REPORT 本文はこれだけ長くしておく');
-
-      await reborn.clone.stop();
-    });
-    expect(lines.some((line) => line.includes('配り直しの片付き確認'))).toBe(true);
   });
 });
 
@@ -1158,8 +866,6 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-429-1');
-
-    expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
   });
 
   it('token-pool の再現: 同一 payload の external（source: token-pool）を3連投しても、受信箱の未読は1件', async () => {

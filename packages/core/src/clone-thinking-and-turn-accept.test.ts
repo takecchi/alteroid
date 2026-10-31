@@ -243,7 +243,6 @@ describe('クローン — 考えている合図（thinking）', () => {
     const open = (await s.stores.tasks.list()).entries;
     expect(open.map((entry) => entry.origin)).toEqual(['human']);
     expect(open[0]?.body).toContain('ghp_');
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
   });
 
   it('片付けの窓（止まった後）で書き込みが尽きたら、跡は「失われた」と名乗る（issue #1144）', async () => {

@@ -163,14 +163,14 @@ describe('クローン — attach の pending（#3990）', () => {
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    // ターンの準備（未了の台帳の読み出し）で止めて、取り出し済み・開始前の区間を作る。
-    const original = stores.commitments.list.bind(stores.commitments);
+    // ターンの準備（待ち行列の読み出し）で止めて、取り出し済み・開始前の区間を作る。
+    const original = stores.tasks.list.bind(stores.tasks);
     let reached = false;
     let proceed!: () => void;
     const hold = new Promise<void>((resolve) => {
       proceed = resolve;
     });
-    stores.commitments.list = async (...args) => {
+    stores.tasks.list = async (...args) => {
       reached = true;
       await hold;
       return original(...args);

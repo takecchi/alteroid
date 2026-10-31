@@ -268,38 +268,4 @@ describe('ターンの入力を日誌に残す（#243）— 人間の回答は�
 
     await s.clone.stop();
   });
-
-  it('片付け済みの配り直しでは、ターンを起こさない代わりに、断り書きの全文が畳んだ跡へ残る', async () => {
-    const stores = createMemoryStores();
-    await seedApproval(stores);
-
-    // 以前の版が回答を台帳へ開いていた行（クローンはもう台帳へ書かない。#5923）をアップグレード前の状態として置く
-    await stores.commitments.open({
-      id: 'evt-answer',
-      at: AT,
-      origin: 'human',
-      source: 'apr-243',
-      body: `承認待ち apr-243 への回答: ${ANSWER}`,
-    });
-    const dying = bootClone(stores, 'hang');
-    dying.clone.post(answerEvent);
-    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    expect(await stores.commitments.close('evt-answer', AT, 'もう対応済み', 'clone')).toBe(true);
-
-    const reborn = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読の消し込み');
-    await reborn.clone.stop();
-
-    expect(reborn.inputs).toEqual([]);
-    const exchanges = (await stores.journal.list({ types: ['exchange'] })).flatMap((entry) =>
-      entry.type === 'exchange' ? [entry] : [],
-    );
-    const text =
-      exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'))?.text ?? '';
-
-    expect(text).toContain('apr-243');
-    expect(text).toContain('再起動後の配り直しである');
-    expect(text).toContain('approvals_list');
-    expect(text).not.toContain(ANSWER);
-  });
 });

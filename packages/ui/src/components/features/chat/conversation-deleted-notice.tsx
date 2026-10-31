@@ -3,7 +3,6 @@
 export interface ConversationDeletedSummary {
   hiddenCount: number;
   attachmentsRemoved: number;
-  commitmentsRemoved: number;
   incomplete: readonly string[];
   remainsIn: readonly string[];
 }
@@ -15,7 +14,7 @@ export function ConversationDeletedNotice({ result }: { result: ConversationDele
         会話を削除しました。この会話の発言は、どの画面・クローンからも読めなくなりました。
       </span>
       <span className="block">
-        {`発言 ${result.hiddenCount} 件を読めなくし、添付 ${result.attachmentsRemoved} 件・台帳の約束 ${result.commitmentsRemoved} 件を消しました。`}
+        {`発言 ${result.hiddenCount} 件を読めなくし、添付 ${result.attachmentsRemoved} 件を消しました。`}
       </span>
       {result.incomplete.length > 0 && (
         <span className="mt-1 block text-warn" data-conversation-deleted-incomplete>

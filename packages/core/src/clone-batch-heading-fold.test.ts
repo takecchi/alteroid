@@ -80,7 +80,6 @@ const kinds: Kind[] = [
       managerReportBatchPrompt(
         [report('r1', `報告A-${tag}`), report('r2', `報告B-${tag}`)],
         { kind: 'none' },
-        [{ kind: 'unknown' }, { kind: 'unknown' }],
         new Date('2026-08-20T10:05:00.000Z'),
         new Map(),
         fold,

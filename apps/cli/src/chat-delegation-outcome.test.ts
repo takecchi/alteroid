@@ -89,7 +89,6 @@ const target = { baseUrl: base, headers: {}, remote: false, note: null };
 const listed = {
   approvals: [],
   managerAnchors: {},
-  commitments: [],
   conversations: [],
   managers: [],
   waiting: [{ managerId: 'mgr1', requestId: 'r1' }],

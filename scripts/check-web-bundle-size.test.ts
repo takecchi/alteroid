@@ -68,13 +68,13 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   it('#335 の実測（単一チャンク 1,198,608 B）を通すと、単一チャンク・総量の両方の予算を超える', () => {
     // 残りは単一チャンクの予算未満の3ファイルに割る: 1ファイルにまとめると、そのファイル自体も単一チャンクの予算を超えてしまうため。
     const result = judgeBundleSize([
-      { path: 'commitments.js', bytes: 1_198_608 },
+      { path: 'tasks.js', bytes: 1_198_608 },
       { path: 'other-1.js', bytes: 242_000 },
       { path: 'other-2.js', bytes: 242_000 },
       { path: 'other-3.js', bytes: 242_545 },
     ]);
     expect(result.ok).toBe(false);
-    expect(result.oversized.map((h: { path: string }) => h.path)).toEqual(['commitments.js']);
+    expect(result.oversized.map((h: { path: string }) => h.path)).toEqual(['tasks.js']);
     expect(result.totalOver).toBe(true);
     expect(result.totalBytes).toBe(1_925_153);
   });
@@ -91,6 +91,6 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   // 現在の値そのものを固定する: `-core.mjs` 側だけを直して予算を黙って上げられないようにするため。
   it('⚠️ 閾値は固定してある（上げるにはここと -core.mjs の両方を直すこと）', () => {
     expect(SINGLE_CHUNK_MAX_BYTES).toBe(262_144);
-    expect(TOTAL_MAX_BYTES).toBe(1_314_816);
+    expect(TOTAL_MAX_BYTES).toBe(1_310_720);
   });
 });

@@ -3,14 +3,6 @@ import {
   createManagerPool,
   createRunnerRegistry,
   scanJournalPages,
-  verifyCommitmentEditIfMatchContract,
-  verifyCommitmentEditBeforeContract,
-  verifyCommitmentRemoveForConversationContract,
-  verifyCommitmentEditUnreadableContract,
-  verifyCommitmentAutoCloseMarkContract,
-  verifyCommitmentFoldContract,
-  verifyCommitmentReopenContract,
-  verifyCommitmentTieOrderContract,
   verifyJournalStoreHorizonContract,
   verifyConversationPageContract,
   verifyJournalStoreOrderContract,
@@ -45,7 +37,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
 import {
-  commitments as commitmentsTable,
   jobs as jobsTable,
   journal as journalTable,
   schedules as schedulesTable,
@@ -486,48 +477,6 @@ describe('PgJournalStore', () => {
 
     it('会話の一覧の頁送り（日誌の継続点の上の組み立て）が、頁の連結=全件・窓より小さい頁・同着・使えない継続点で揃う', async () => {
       await verifyConversationPageContract(stores.journal);
-    });
-
-    it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
-      await verifyCommitmentFoldContract(stores.commitments);
-    });
-
-    it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
-      await verifyCommitmentTieOrderContract(stores.commitments);
-    });
-
-    it('自動クローズの印の契約（#5164。3実装で同じことを測る）', async () => {
-      await verifyCommitmentAutoCloseMarkContract(stores.commitments);
-    });
-
-    it('開き直しの契約（#5176。3実装で同じことを測る）', async () => {
-      await verifyCommitmentReopenContract(stores.commitments);
-    });
-
-    it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
-      await verifyCommitmentEditIfMatchContract(stores.commitments);
-    });
-
-    it('editBody が返す before の契約（#5251。3実装で同じことを測る。書き換えと同じ排他の中で読んだ行）', async () => {
-      await verifyCommitmentEditBeforeContract(stores.commitments);
-    });
-
-    it('removeForConversation の契約（#4218・#4355。3実装で同じことを測る。human / self かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
-      await verifyCommitmentRemoveForConversationContract(stores.commitments);
-    });
-
-    it('読めない行への editBody の契約（#4064。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
-      await captureStderr(async () => {
-        await verifyCommitmentEditUnreadableContract(stores.commitments, async (id) => {
-          // `open` は形を断るので、表へ直に書く。
-          const at = new Date('2026-01-01T00:00:00.000Z');
-          await db.insert(commitmentsTable).values({
-            id,
-            at,
-            commitment: { id, at: at.toISOString(), origin: 'future-origin', body: '壊れた行' },
-          });
-        });
-      });
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

@@ -42,7 +42,6 @@ function routedClient(
 function emptyListed(): Listed {
   return {
     approvals: [],
-    commitments: [],
     conversations: [],
     managers: [],
     managerAnchors: {},

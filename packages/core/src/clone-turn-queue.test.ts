@@ -224,10 +224,13 @@ describe('編集ターン（supersedes）—— #record と #runHumanTurn の配
       text: '元の本文',
       conversationId: 'conv-side-effect',
     });
-    await stores.commitments.open({
-      id: 'commit-untouched',
-      at: new Date().toISOString(),
+    await stores.tasks.add({
+      id: 'task-untouched',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: 'queued',
       origin: 'human',
+      title: '編集前のターンが開いた依頼',
       body: '編集前のターンが開いた依頼',
     });
 
@@ -243,9 +246,9 @@ describe('編集ターン（supersedes）—— #record と #runHumanTurn の配
     await waitFor(() => calls.length > 0, 'セッションが開くこと');
     clone.stop();
 
-    const commitment = await stores.commitments.get('commit-untouched');
-    expect(commitment).not.toBeNull();
-    expect(commitment?.closedAt).toBeUndefined();
+    const task = await stores.tasks.get('task-untouched');
+    expect(task).not.toBeNull();
+    expect(task?.closedAt).toBeUndefined();
     const stillThere = await stores.journal.get(original.id);
     expect(stillThere?.type).toBe('exchange');
     expect(stillThere && stillThere.type === 'exchange' ? stillThere.text : undefined).toBe(

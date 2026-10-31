@@ -23,16 +23,6 @@ export {
   serializeDistillFailureCounts,
 } from './grave-queue.js';
 export type { DistillFailureCounts } from './grave-queue.js';
-/** 台帳の並び順・継続点の実装は1つにする: `commitment_list` と `GET /commitments` が別々に持つと、契約の一致を見張れない。 */
-export {
-  commitmentPosition,
-  compareCommitmentPosition,
-  encodeCommitmentCursor,
-  decodeCommitmentCursor,
-  resolveCommitmentCursor,
-  type CommitmentPosition,
-  type CommitmentCursor,
-} from './commitment-cursor.js';
 /** `JobStore.listApprovals` は並び順を契約していないので、承認待ちの並びを決めるのはストアではなくこの比較である。 */
 export {
   compareApprovalPagingKeyAsc,
@@ -220,13 +210,11 @@ export type {
   SummarizeProgressInput,
 } from './progress.js';
 export {
-  buildCommitmentDerivations,
   DEFAULT_PROGRESS_WINDOW_HOURS,
   InvalidProgressWindowError,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
   readRepliesByConversation,
-  readUnreadableJobsForCommitments,
 } from './progress-read.js';
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
 export {
@@ -508,36 +496,6 @@ export type {
 export { verifyTaskStoreContract } from './task-store-contract.js';
 export { verifyTaskRemoveForConversationContract } from './task-remove-for-conversation-contract.js';
 export { TASK_TITLE_MAX, describeTaskPlacement } from './task-tools.js';
-// 台帳 → Task の移行（#5469 P7。純関数・dryRun・指紋つきの実行。起動時・道具には繋がない）
-export {
-  commitmentMigrationFingerprint,
-  MigrationPlanChangedError,
-  migrateCommitmentsToTasks,
-  migrationTaskTitle,
-  OriginConversationLookupError,
-  planCommitmentMigration,
-  taskFromCommitment,
-} from './commitment-task-migration.js';
-export type {
-  CommitmentMigrationAction,
-  CommitmentMigrationExecution,
-  CommitmentMigrationFailure,
-  CommitmentMigrationOriginConversationCounts,
-  CommitmentMigrationPlan,
-  CommitmentMigrationPlanItem,
-  CommitmentMigrationPlanRow,
-  CommitmentMigrationReport,
-  CommitmentMigrationStores,
-  CommitmentMigrationSummary,
-  MigrateCommitmentsOptions,
-  OriginConversationResolution,
-} from './commitment-task-migration.js';
-export { verifyCommitmentTaskMigrationContract } from './commitment-task-migration-contract.js';
-export type { CommitmentMigrationFixture } from './commitment-task-migration-contract.js';
-export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
-export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
-export { verifyCommitmentAutoCloseMarkContract } from './commitment-auto-close-mark-contract.js';
-export { verifyCommitmentReopenContract } from './commitment-reopen-contract.js';
 export { scheduleReplaceEntry } from './schedule-replace.js';
 export { removeScheduleJournalFirst } from './schedule-remove.js';
 export type { JournalFirstScheduleRemoveResult, ScheduleRemoveTarget } from './schedule-remove.js';
@@ -551,10 +509,6 @@ export type {
   JournalFirstArchiveRemoveResult,
   JournalFirstInboxChunkResult,
 } from './removal-journal-first.js';
-export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
-export { verifyCommitmentEditBeforeContract } from './commitment-edit-before-contract.js';
-export { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
-export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPluginStoreContract } from './plugin-store-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
@@ -660,11 +614,6 @@ export {
   type InboxDeliveryStopper,
   type InboxRemoveManyFilter,
 } from './inbox-backlog.js';
-export {
-  countSupersedingReports,
-  describeSuperseded,
-  type SupersededDecision,
-} from './superseded.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 /** SSE を出す側が daemon と runner の3経路に分かれるので core に置く: `apps/*` の片側に置くと、もう片側から逆向きの依存になる。 */
 export {

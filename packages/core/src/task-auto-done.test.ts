@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { commitmentFor } from './clone.js';
 import {
   autoCloseRepliedTasks,
   selectTasksToAutoClose,
@@ -227,7 +226,7 @@ describe('autoCloseRepliedTasks: 閉じて日誌に残す', () => {
   });
 });
 
-describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
+describe('taskFromHumanIntake: 合図と同じ id の Task', () => {
   const at = '2026-10-29T01:00:00.000Z';
   const message: Extract<InboxEvent, { type: 'human_message' }> = {
     type: 'human_message',
@@ -236,19 +235,16 @@ describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
     text: `${'あ'.repeat(70)}\n2行目`,
     conversationId: 'conv-9',
   };
-  const answer: InboxEvent = {
-    type: 'human_answer',
-    id: 'evt-2',
-    at,
-    approvalId: 'appr-1',
-    answer: 'はい',
-    conversationId: 'conv-9',
-  };
+  const ref = (id: string, name: string) => ({
+    id,
+    name,
+    mediaType: 'text/plain',
+    size: 1,
+    sha256: 'a'.repeat(64),
+  });
 
-  it('human_message: id・source は台帳の行と同じ、起点の会話付き、title は先頭行60字', () => {
-    const entry = commitmentFor(message);
-    expect(entry).not.toBeNull();
-    const built = taskFromHumanIntake(entry!, message, NOW);
+  it('human_message: id・source は合図のとおり、起点の会話付き、title は先頭行60字、本文は全文', () => {
+    const built = taskFromHumanIntake(message, NOW);
     expect(built).toMatchObject({
       id: 'evt-1',
       status: 'queued',
@@ -256,39 +252,63 @@ describe('taskFromHumanIntake: 台帳の行と同じ id の Task', () => {
       source: 'conv-9',
       originConversationId: 'conv-9',
       createdAt: at,
+      updatedAt: NOW,
     });
     expect([...built.title]).toHaveLength(60);
     expect(built.title.endsWith('…')).toBe(true);
-    expect(built.body).toBe(entry?.body);
+    expect(built.body).toBe(message.text);
   });
 
-  it('human_answer は Task を作る合図ではない（回答のイベントは会話 id を持つが、台帳にも Task にも開かない。#5923）', () => {
-    expect(opensHumanTask(answer)).toBe(false);
-    expect(opensHumanTask(message)).toBe(true);
-    expect(commitmentFor(answer)).toBeNull();
+  it('添付だけの発言は、本文が空にならず添付の名前が入る（#4029）', () => {
+    const built = taskFromHumanIntake(
+      { ...message, text: '', attachments: [ref('a1', 'shot.png')] },
+      NOW,
+    );
+    expect(built.body).toBe('［添付 1件: shot.png］');
+    expect(built.title).toBe('［添付 1件: shot.png］');
+  });
+
+  it('本文と添付の両方がある発言は、本文の後ろに添付の名前が付く', () => {
+    const built = taskFromHumanIntake(
+      {
+        ...message,
+        text: 'これを見て',
+        attachments: [ref('a1', 'shot.png'), ref('a2', 'run.log')],
+      },
+      NOW,
+    );
+    expect(built.body).toBe('これを見て［添付 2件: shot.png、run.log］');
+  });
+
+  it('添付が多いときは先頭の3件の名前だけを出し、残りは件数にする', () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map((n) => ref(n, `${n}.txt`));
+    expect(taskFromHumanIntake({ ...message, text: '', attachments: many }, NOW).body).toBe(
+      '［添付 5件: a.txt、b.txt、c.txt、ほか 2 件］',
+    );
+  });
+
+  it('添付の無い発言の body は変わらない', () => {
+    expect(taskFromHumanIntake({ ...message, text: 'やって' }, NOW).body).toBe('やって');
   });
 });
 
-describe('commitmentFor: Task の元になる行を作るのは人間の発言だけ（#5469 P5・#5923。台帳へは書かない）', () => {
+describe('opensHumanTask: Task を開く合図は人間の発言だけ（#5469 P5・#5923）', () => {
   const at = '2026-10-29T01:00:00.000Z';
 
-  it('manager_message・external・timer・self_initiative は開かない', () => {
+  it('manager_message・external・timer・self_initiative・human_answer は開かない', () => {
     const events: InboxEvent[] = [
       { type: 'manager_message', id: 'm', at, managerId: 'mgr', kind: 'report', text: '終わった' },
       { type: 'external', id: 'x', at, source: 'github', payload: { a: 1 } },
       { type: 'timer', id: 't', at, kind: 'k', reason: 'r' } as unknown as InboxEvent,
       { type: 'self_initiative', id: 's', at, reason: 'r' } as unknown as InboxEvent,
+      { type: 'human_answer', id: 'a', at, approvalId: 'p', answer: 'ok' },
     ];
-    for (const event of events) expect(commitmentFor(event), event.type).toBeNull();
+    for (const event of events) expect(opensHumanTask(event), event.type).toBe(false);
   });
 
-  it('human_message は開き、human_answer は開かない', () => {
+  it('human_message は開く', () => {
     expect(
-      commitmentFor({ type: 'human_message', id: 'h', at, text: 'やって', conversationId: 'c' })
-        ?.origin,
-    ).toBe('human');
-    expect(
-      commitmentFor({ type: 'human_answer', id: 'a', at, approvalId: 'p', answer: 'ok' }),
-    ).toBeNull();
+      opensHumanTask({ type: 'human_message', id: 'h', at, text: 'やって', conversationId: 'c' }),
+    ).toBe(true);
   });
 });

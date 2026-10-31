@@ -70,8 +70,8 @@ function Awaiting() {
           meta="12分前"
           renderLink={renderLink}
         />
-        <AwaitingCountRow label="未了" action={link('仕事へ')}>
-          未了の仕事 <span className="text-foreground">5</span> 件
+        <AwaitingCountRow label="未了" action={link('待ち行列へ')}>
+          待ち行列の未了 <span className="text-foreground">5</span> 件
         </AwaitingCountRow>
       </ul>
     </AwaitingYouCard>
@@ -94,7 +94,12 @@ function Tiles({ narrow }: { narrow?: boolean }) {
       }
     >
       <HomeTile icon={Hourglass} title="作業の進捗" action={link('詳しく')}>
-        <Stat label="実行中の委譲" value="3" unit="件" hint="未了の仕事 5 件・7日で 12 件閉じた" />
+        <Stat
+          label="動いているマネージャー"
+          value="3"
+          unit="件"
+          hint="待ち行列の未了 5 件・7日で 12 件閉じた"
+        />
       </HomeTile>
       <HomeTile icon={CalendarClock} title="次の自動実行" action={link('予定へ')}>
         <Stat label="日報を書く" value="21:00" hint="ほか 2 件" />

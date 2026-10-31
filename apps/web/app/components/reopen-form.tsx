@@ -5,7 +5,7 @@ import { Button, ErrorNote, Input } from '@alteroid/ui';
 import { useReportDirty } from '~/lib/leave-guard';
 import { useAction } from '~/lib/use-action';
 
-// 閉じた行を否定する口。commitments と tasks の閉じた行で共有する。
+// 閉じた行を否定する口（tasks の閉じた行が使う）。
 // 閉じた主体（器が自動で閉じた行も含む）で出し分けない: 否定できる相手を画面の側で狭めると、サーバの規則が変わった日に画面だけがずれる。
 export function ReopenForm({
   dirtyId,

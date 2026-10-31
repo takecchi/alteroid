@@ -67,7 +67,7 @@ function renderProbe(conversationId: string, tombstoneAfter: PromiseLike<unknown
         deletedAt: '2026-10-31T00:00:00.000Z',
         hiddenCount: 2,
         attachmentsRemoved: 0,
-        commitmentsRemoved: 0,
+        tasksRemoved: 0,
         queuedDropped: 0,
         approvalsLinked: 0,
         incomplete: [],
@@ -76,7 +76,7 @@ function renderProbe(conversationId: string, tombstoneAfter: PromiseLike<unknown
       });
     }
     if (/\/conversations\?/.test(url)) return json({ conversations: [], scanned: 0 });
-    if (url.includes('/commitments') || url.includes('/unread')) return json({});
+    if (url.includes('/unread')) return json({});
     return undefined;
   });
   render(

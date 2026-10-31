@@ -53,7 +53,7 @@ const ICONS: Record<string, LucideIcon> = {
   '/': LayoutDashboard,
   '/chat': MessageSquare,
   '/approvals': BellRing,
-  '/commitments': ListChecks,
+  '/tasks': ListChecks,
   '/managers': Users,
   '/reports': BookText,
   '/journal': Activity,

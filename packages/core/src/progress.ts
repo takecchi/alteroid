@@ -10,14 +10,14 @@
  * - `tasks_younger_than_window` を `closed_too_few` より先にするのは、閉じた件数そのものが短い期間のものである
  *   ときに「件数が少ない」と言うと、材料が欠けているという原因を隠すため。
  * - 閉じた task を物理的に刈る器は無い（`TaskStore` の3実装とも持たない）ので、刈りによる数え落としの印
- *   （旧台帳の `trimmedClosed`・`history_incomplete`）は持たない。
+ *   （`trimmedClosed`・`history_incomplete`）は持たない。
  */
 
 import { isRunningJobStatus } from './job-status-running.js';
 import {
-  commitmentOriginSchema,
+  taskOriginSchema,
   taskIsResponseJudgeable,
-  type CommitmentOrigin,
+  type TaskOrigin,
   type Job,
   type JobStatus,
   type Task,
@@ -92,8 +92,8 @@ export interface ProgressAgeBuckets {
 export interface ProgressBacklog {
   /** 未了（開いている task。`closedAt` が無い）の総数。`unreadable` は含まない。 */
   total: number;
-  /** `commitmentOriginSchema` の全値をキーに持つ。0 は「その origin の未了が無い」。 */
-  byOrigin: Record<CommitmentOrigin, number>;
+  /** `taskOriginSchema` の全値をキーに持つ。0 は「その origin の未了が無い」。 */
+  byOrigin: Record<TaskOrigin, number>;
   age: {
     /** 未了の中で最古の `createdAt`。未了が0件なら `null`。 */
     oldestAt: string | null;
@@ -105,7 +105,7 @@ export interface ProgressBacklog {
    * `untouched` / `responded` / `unjudgeable` / `notApplicable` は排他で、足すと `total` になる。
    * `unjudgeable` は会話（`originConversationId`）の無い human の task: 返事を結べないので「未着手」に数えない。
    * `delegated` は他と排他ではない（未着手のまま委譲が走っている task が在りうる）。
-   * `Job.taskId` がその task を指す、終わっていない（`isTerminalJobStatus` が偽: running・waiting_human）委譲が在れば数える（台帳のときの数え方のまま）。
+   * `Job.taskId` がその task を指す、終わっていない（`isTerminalJobStatus` が偽: running・waiting_human）委譲が在れば数える。
    */
   byState: {
     untouched: number;
@@ -182,9 +182,9 @@ function median(sortedAscending: readonly number[]): number | null {
   return lo === undefined ? hi : (lo + hi) / 2;
 }
 
-function emptyByOrigin(): Record<CommitmentOrigin, number> {
-  const out = {} as Record<CommitmentOrigin, number>;
-  for (const origin of commitmentOriginSchema.options) out[origin] = 0;
+function emptyByOrigin(): Record<TaskOrigin, number> {
+  const out = {} as Record<TaskOrigin, number>;
+  for (const origin of taskOriginSchema.options) out[origin] = 0;
   return out;
 }
 

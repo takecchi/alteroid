@@ -105,9 +105,6 @@ export const KEY = {
     ({ type: 'approvals', answeredDates: true, limit }) as const,
   approvalsAnsweredOn: (date: string) => ({ type: 'approvals', answeredOn: date }) as const,
   approvalById: (id: string) => ({ type: 'approvals', byId: id }) as const,
-  commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
-  // `type` を `commitments` のまま揃える: 台帳の一覧を無効にする束（日誌の行・変更の後）で、詳細も一緒に取り直されるため
-  commitmentById: (id: string) => ({ type: 'commitments', byId: id }) as const,
   tasks: (includeClosed: boolean) => ({ type: 'tasks', includeClosed }) as const,
   // `type` を `tasks` のまま揃える: 一覧を無効にする束で、詳細も一緒に取り直されるため
   taskById: (id: string) => ({ type: 'tasks', byId: id }) as const,
@@ -321,30 +318,6 @@ export function useConversationApprovals(conversationId: string | null) {
           params: { query: { pending: 'false', order: 'asc', conversationId } },
         })
         .then(unwrap),
-  );
-}
-
-// 画面で並べ直さない: 並べ直すと、齢の見え方が CLI・クローンとここで食い違う
-export function useCommitments(includeClosed = false) {
-  const api = useApi();
-  return useSWR(
-    KEY.commitments(includeClosed),
-    ({ includeClosed }) =>
-      api.api
-        .GET('/commitments', {
-          params: { query: { includeClosed: includeClosed ? 'true' : 'false' } },
-        })
-        .then(unwrap),
-    // 別キーになっても前の一覧を出したままにする: スピナーに置き換わると、未了の行の書きかけ（下書き・片付ける理由）が unmount で消える
-    { keepPreviousData: true },
-  );
-}
-
-// 台帳の1行を全文で読む（#5089）。一覧は片付いた行の本文・閉じた理由を先頭に切るので、全文が要るときだけ引く。`null` の間は取りに行かない
-export function useCommitment(id: string | null) {
-  const api = useApi();
-  return useSWR(id === null ? null : KEY.commitmentById(id), ({ byId }) =>
-    api.api.GET('/commitments/{id}', { params: { path: { id: byId } } }).then(unwrap),
   );
 }
 

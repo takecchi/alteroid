@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
-import type { CommitmentOrigin, Task } from './schema.js';
-import { commitmentOriginSchema } from './schema.js';
+import type { TaskOrigin, Task } from './schema.js';
+import { taskOriginSchema } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { CLONE_TOOL_NAMES, createCloneTools } from './tools.js';
@@ -27,7 +27,7 @@ function runner(stores: Stores) {
 
 const BASE_AT = Date.parse('2026-01-01T00:00:00.000Z');
 
-function taskAt(index: number, origin: CommitmentOrigin, overrides: Partial<Task> = {}): Task {
+function taskAt(index: number, origin: TaskOrigin, overrides: Partial<Task> = {}): Task {
   const at = new Date(BASE_AT + index * 1000).toISOString();
   return {
     id: randomUUID(),
@@ -53,7 +53,6 @@ async function decisionTexts(stores: Stores): Promise<string[]> {
 describe('task_set_status_many の登録', () => {
   it('道具の名簿に在り、台帳の書き込みの道具は名簿に無い', () => {
     expect(CLONE_TOOL_NAMES).toContain('task_set_status_many');
-    expect(CLONE_TOOL_NAMES).toContain('commitment_list');
     for (const removed of [
       'commitment_open',
       'commitment_close',
@@ -82,7 +81,6 @@ describe('task_set_status_many の登録', () => {
     ]) {
       expect(names, removed).not.toContain(removed);
     }
-    expect(names).toContain('commitment_list');
     expect(names).toContain('task_set_status_many');
   });
 });
@@ -99,7 +97,7 @@ describe('task_set_status_many の検証（describeCloseManyViolation の作法�
     await addAll(stores, tasks);
 
     const reply = await runner(stores)({
-      origin: commitmentOriginSchema.options,
+      origin: taskOriginSchema.options,
       status: 'done',
       reason: '全部片付けたつもり',
       dryRun: false,

@@ -119,7 +119,6 @@ ${buildSelfKnowledge(self)}
 - \`usage_read\`: 利用状況（アカウント全体の残り枠と支出上限、alteroid が使った分）。重い委譲を続けてよいかの材料はここにある。推定値であって請求明細ではない。
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）。
 - \`task_list\` / \`task_add\` / \`task_move\` / \`task_set_status\` / \`task_set_status_many\` / \`task_keep\`: 引き受けた仕事の器（順序と状態を持つ待ち行列）。人間の依頼は自動で載り、返答のターンの終わりに自動で done になる（止めるのが \`task_keep\`）。\`task_set_status_many\` は絞り込みでまとめて done / cancelled にする（既定は試算）。
-- \`commitment_list\`: 旧台帳（読むだけ。もう何も載らず、閉じる道具も無い）。残っている古い行を読む。続ける仕事は読んで \`task_add\` で引き取る。
 - \`progress_read\` / \`github_observation_record\`: 作業の進捗を task と委譲の行から数え直して読む／GitHub を見て数えた件数を日誌へ記録する（デーモンは GitHub を見に行かない）。
 - \`inbox_remove_many\`: 自分の側の都合で溜まった受信箱の合図を、絞り込んでまとめて畳む（人間起点の合図は選べない）。
 - \`profile_read\` / \`profile_write\` / \`profile_remove\`: 実行環境プロファイル（鍵・\`PATH\` など。使い方は上の「実行環境そのものを渡されたら」）。
@@ -322,7 +321,6 @@ export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いま�
 
 - 状況の「待ち行列の先頭」が先にやるもの。動かせるなら先頭から始める。実作業なら \`manager_start\` で委譲し、その task の id を \`taskId\` に渡す（渡さないと task は queued のまま先頭に残り、次の tick で同じ task からもう一本委譲しうる）。
 - 先頭を動かせない（外の返事待ち）なら \`task_set_status\` で waiting にして次へ。順序が違うと思えば \`task_move\` で並べ替える。先頭が waiting ばかりのときは、離れた所の動ける task が1件添えてある。
-- 「旧台帳に開いている N 件」と出ていたら、それは Task に同じ id が無い未了である（台帳へはもう書けない）。\`commitment_list\` で読み、続けるなら \`task_add\` で引き取り、順序は待ち行列の先頭とは別に、あなたが目的に照らして決める。
 - 走っている仕事の様子が気になるなら \`manager_list\` で見て、必要なら \`manager_send\` で追う。
 - 人間に確かめたいことができたら \`ask_human\` に積む（人間が居なくても、そこで止まるのはその件だけである）。
 - この tick は、動ける仕事（待ち行列の queued / needs_decision）があるときと、1日1回の点検のときだけ届く。来ない間も、人間・報告・timer の合図は通常どおり届く。

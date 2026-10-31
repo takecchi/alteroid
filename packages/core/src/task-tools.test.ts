@@ -279,11 +279,4 @@ describe('task_* 道具', () => {
     const h = harness();
     expect(await h.call('task_list', {})).toContain('task は無い');
   });
-
-  it('task_add は台帳（commitment）へは何も載せない（クローンは台帳へ書かない。#5923）', async () => {
-    const h = harness();
-    await h.call('task_add', { title: 'a', body: 'a' });
-    expect((await h.stores.commitments.list()).entries).toHaveLength(0);
-    expect(await h.ids()).toHaveLength(1);
-  });
 });

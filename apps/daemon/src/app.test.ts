@@ -5201,98 +5201,6 @@ describe('HTTP API', () => {
     expect(missing.status).toBe(404);
   });
 
-  it('チャットで積んだ行に、その会話への返答が日誌にあれば respondedAt が付く', async () => {
-    await stores.commitments.open({
-      id: 'cmt-answered',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      source: 'conv-1',
-      body: '直してほしい',
-    });
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'human',
-      role: 'outbound',
-      text: '直しました',
-      conversationId: 'conv-1',
-    });
-
-    const list = await app.request('/commitments');
-    const body = (await list.json()) as { entries: Array<{ id: string; respondedAt?: string }> };
-    expect(body.entries.find((entry) => entry.id === 'cmt-answered')?.respondedAt).toBeDefined();
-  });
-
-  it('返答が commitment.at より前にしか無ければ respondedAt は付かない（別の依頼への返答）', async () => {
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'human',
-      role: 'outbound',
-      text: '前の依頼への返信',
-      conversationId: 'conv-1',
-    });
-    await stores.commitments.open({
-      id: 'cmt-new',
-      at: new Date(Date.now() + 60_000).toISOString(),
-      origin: 'human',
-      source: 'conv-1',
-      body: '新しい依頼',
-    });
-
-    const list = await app.request('/commitments');
-    const body = (await list.json()) as { entries: Array<{ id: string; respondedAt?: string }> };
-    expect(body.entries.find((entry) => entry.id === 'cmt-new')?.respondedAt).toBeUndefined();
-  });
-
-  it('その会話で、行より後に始まった走行中のマネージャーが在れば activeManagerIds が付く', async () => {
-    await stores.commitments.open({
-      id: 'cmt-delegated',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      source: 'conv-2',
-      body: '調べておいて',
-    });
-    await stores.jobs.putJob({
-      id: 'mgr-running',
-      createdAt: '2026-01-02T00:00:00.000Z',
-      updatedAt: '2026-01-02T00:00:00.000Z',
-      status: 'running',
-      conversationId: 'conv-2',
-      summary: '調べておいて',
-    });
-
-    const list = await app.request('/commitments');
-    const body = (await list.json()) as {
-      entries: Array<{ id: string; activeManagerIds?: string[] }>;
-    };
-    expect(body.entries.find((entry) => entry.id === 'cmt-delegated')?.activeManagerIds).toEqual([
-      'mgr-running',
-    ]);
-  });
-
-  it('委譲が done/failed など終わっていれば activeManagerIds は付かない', async () => {
-    await stores.commitments.open({
-      id: 'cmt-done',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      source: 'conv-3',
-      body: '調べておいて',
-    });
-    await stores.jobs.putJob({
-      id: 'mgr-done',
-      createdAt: '2026-01-02T00:00:00.000Z',
-      updatedAt: '2026-01-02T00:00:00.000Z',
-      status: 'done',
-      conversationId: 'conv-3',
-      summary: '調べておいて',
-    });
-
-    const list = await app.request('/commitments');
-    const body = (await list.json()) as {
-      entries: Array<{ id: string; activeManagerIds?: string[] }>;
-    };
-    expect(body.entries.find((entry) => entry.id === 'cmt-done')?.activeManagerIds).toBeUndefined();
-  });
-
   it('lastCgroupEvents（#1517）と lastUnpushedWorkObservation（#1266）が GET /managers の応答まで届く', async () => {
     fake.managerList.push({
       managerId: 'mgr-cgroup-unpushed',
@@ -5373,75 +5281,6 @@ describe('HTTP API', () => {
       manager: { lastUnpushedWorkObservation?: unknown };
     };
     expect(single.manager.lastUnpushedWorkObservation).toEqual(observation);
-  });
-
-  // 台帳へ書く口は無い（段2b）ので、片付いた行は store で直に作る（旧台帳の読み）
-  it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
-    await stores.commitments.open({
-      id: 'cm-closed',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      body: '日報の体裁を直す',
-    });
-    await stores.commitments.close(
-      'cm-closed',
-      '2026-01-02T00:00:00.000Z',
-      '直して PR を出した',
-      'human',
-    );
-
-    expect(await (await app.request('/commitments')).json()).toEqual({
-      entries: [],
-      unreadable: [],
-      trimmedClosed: 0,
-    });
-    expect(await (await app.request('/commitments?includeClosed=false')).json()).toEqual({
-      entries: [],
-      unreadable: [],
-      trimmedClosed: 0,
-    });
-
-    const all = await app.request('/commitments?includeClosed=true');
-    expect(await all.json()).toMatchObject({
-      entries: [{ id: 'cm-closed', body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
-    });
-  });
-
-  // 片方の枝だけ測ると導出を潰す変異が生き残るので、未了（右枝＝`at`）と片付いた（左枝＝`closedAt`）の両方を測る。
-  it('一覧の updatedAt は commitmentUpdatedAt と一致する（未了は受け取った時刻、片付いたら片付けた時刻）', async () => {
-    await stores.commitments.open({
-      id: 'cm-updated-at',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      body: '更新時刻の確認',
-    });
-
-    const openList = (await (await app.request('/commitments')).json()) as {
-      entries: { id: string; at: string; updatedAt: string }[];
-    };
-    const openEntry = openList.entries.find((e) => e.id === 'cm-updated-at');
-    expect(openEntry?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
-    expect(openEntry?.updatedAt).toBe(openEntry?.at);
-
-    await stores.commitments.close(
-      'cm-updated-at',
-      '2026-02-02T00:00:00.000Z',
-      '確認終了',
-      'human',
-    );
-
-    const closedList = (await (await app.request('/commitments?includeClosed=true')).json()) as {
-      entries: { id: string; at: string; closedAt: string; updatedAt: string }[];
-    };
-    const closedEntry = closedList.entries.find((e) => e.id === 'cm-updated-at');
-    expect(closedEntry?.updatedAt).toBe('2026-02-02T00:00:00.000Z');
-    expect(closedEntry?.updatedAt).toBe(closedEntry?.closedAt);
-    expect(closedEntry?.updatedAt).not.toBe(closedEntry?.at);
-  });
-
-  it('読めない includeClosed は弾く（黙って既定へ倒さない）', async () => {
-    expect((await app.request('/commitments?includeClosed=yes')).status).toBe(400);
-    expect((await app.request('/commitments?includeClosed=1')).status).toBe(400);
   });
 
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {
@@ -5545,12 +5384,6 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
       'stderr に跡が1行出る',
     async () => {
       await stores.persona.write('values', '# 消えるはずの記憶\n');
-      await stores.commitments.open({
-        id: 'cm-reset-1',
-        at: new Date().toISOString(),
-        origin: 'human',
-        body: '消えるはずの仕事',
-      });
 
       const failingJournal: Stores = {
         ...stores,
@@ -5576,10 +5409,8 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
       expect(response?.status).toBe(200);
       const body = (await response?.json()) as { cleared: Record<string, number> };
       expect(body.cleared.memory).toBe(1);
-      expect(body.cleared.commitments).toBe(1);
 
       expect(await stores.persona.list()).toEqual([]);
-      expect((await stores.commitments.list()).entries).toEqual([]);
 
       const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
       expect(dropped).toHaveLength(1);
@@ -6061,221 +5892,6 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
 
     const body = (await (await app.request('/approvals')).json()) as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(['approvals']);
-  });
-});
-
-describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () => {
-  it('既定の呼び（limit/cursor を渡さない）では窓由来の鍵（total/nextCursor）が増えない', async () => {
-    await stores.commitments.open({
-      id: 'cm-1',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      body: 'x',
-    });
-
-    // `toMatchObject` ではなく `Object.keys` で鍵の集合そのものを留める: `unreadable` と `trimmedClosed` は窓の opt-in と無関係に常に載る鍵で、固定したいのは `total`/`nextCursor` が増えないことである。
-    const body = (await (await app.request('/commitments')).json()) as Record<string, unknown>;
-    expect(Object.keys(body)).toEqual(['entries', 'unreadable', 'trimmedClosed']);
-
-    const withIncludeClosed = (await (
-      await app.request('/commitments?includeClosed=true')
-    ).json()) as Record<string, unknown>;
-    expect(Object.keys(withIncludeClosed)).toEqual(['entries', 'unreadable', 'trimmedClosed']);
-  });
-
-  it('limit は件数を切り、total は全件、nextCursor が続きを示す', async () => {
-    for (let i = 0; i < 5; i += 1) {
-      await stores.commitments.open({
-        id: `cm-${i}`,
-        at: `2026-01-0${i + 1}T00:00:00.000Z`,
-        origin: 'human',
-        body: 'q',
-      });
-    }
-
-    const body = (await (await app.request('/commitments?limit=2')).json()) as {
-      entries: { id: string }[];
-      total?: number;
-      nextCursor?: string;
-    };
-    expect(body.entries.map((e) => e.id)).toEqual(['cm-0', 'cm-1']);
-    expect(body.total).toBe(5);
-    expect(body.nextCursor).toBeTruthy();
-  });
-
-  it('cursor を辿った結果は窓なしの全件（未了だけ）と同じ順序・同じ件数で一致する', async () => {
-    for (let i = 0; i < 7; i += 1) {
-      await stores.commitments.open({
-        id: `cm-${i}`,
-        at: new Date(2026, 0, i + 1).toISOString(),
-        origin: 'human',
-        body: 'q',
-      });
-    }
-
-    const full = (await (await app.request('/commitments')).json()) as {
-      entries: { id: string }[];
-    };
-    expect(full.entries).toHaveLength(7);
-
-    const collected: string[] = [];
-    let cursor: string | undefined;
-    for (;;) {
-      const qs = new URLSearchParams({ limit: '3' });
-      if (cursor !== undefined) qs.set('cursor', cursor);
-      const body = (await (await app.request(`/commitments?${qs.toString()}`)).json()) as {
-        entries: { id: string }[];
-        nextCursor?: string;
-      };
-      collected.push(...body.entries.map((e) => e.id));
-      if (body.nextCursor === undefined) break;
-      cursor = body.nextCursor;
-    }
-    expect(collected).toEqual(full.entries.map((e) => e.id));
-  });
-
-  it('includeClosed=true で2段を跨いで辿れる（未了を古い順→片付きを新しい順）', async () => {
-    for (let i = 1; i <= 3; i += 1) {
-      await stores.commitments.open({
-        id: `open-${i}`,
-        at: `2026-01-0${i}T00:00:00.000Z`,
-        origin: 'human',
-        body: `未了${i}`,
-      });
-    }
-    for (let i = 1; i <= 3; i += 1) {
-      const id = `closed-${i}`;
-      await stores.commitments.open({
-        id,
-        at: `2025-01-0${i}T00:00:00.000Z`,
-        origin: 'human',
-        body: `片付き${i}`,
-      });
-      await stores.commitments.close(id, `2026-03-0${i}T00:00:00.000Z`, '終わった', 'human');
-    }
-
-    const full = (await (await app.request('/commitments?includeClosed=true')).json()) as {
-      entries: { id: string }[];
-    };
-    expect(full.entries.map((e) => e.id)).toEqual([
-      'open-1',
-      'open-2',
-      'open-3',
-      'closed-3',
-      'closed-2',
-      'closed-1',
-    ]);
-
-    const collected: string[] = [];
-    let cursor: string | undefined;
-    for (;;) {
-      const qs = new URLSearchParams({ limit: '2', includeClosed: 'true' });
-      if (cursor !== undefined) qs.set('cursor', cursor);
-      const body = (await (await app.request(`/commitments?${qs.toString()}`)).json()) as {
-        entries: { id: string }[];
-        nextCursor?: string;
-      };
-      collected.push(...body.entries.map((e) => e.id));
-      if (body.nextCursor === undefined) break;
-      cursor = body.nextCursor;
-    }
-    expect(collected).toEqual(full.entries.map((e) => e.id));
-  });
-
-  it('includeClosed=false で刷った cursor を includeClosed=true へ渡すと400', async () => {
-    await stores.commitments.open({
-      id: 'cm-x',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      body: 'q',
-    });
-    const cursor = encodeCursor({
-      segment: 'open',
-      key: '2026-01-01T00:00:00.000Z',
-      id: 'cm-x',
-      includeClosed: 'false',
-    });
-    const res = await app.request(
-      `/commitments?includeClosed=true&cursor=${encodeURIComponent(cursor)}`,
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it('cursor が壊れていれば400', async () => {
-    const res = await app.request('/commitments?cursor=notbase64!!');
-    expect(res.status).toBe(400);
-  });
-
-  it('limit=0 / limit=abc はバリデーションで400', async () => {
-    expect((await app.request('/commitments?limit=0')).status).toBe(400);
-    expect((await app.request('/commitments?limit=abc')).status).toBe(400);
-  });
-
-  // id（行）の実在は検査しない: カーソルが指していた行が段（segment）を移っていても、`(segment, key, id)` の比較さえできれば続きは正しく決まる。
-  it('カーソルが指す行が閉じられて段を移っても、続きは400にならず飛ばさない', async () => {
-    for (let i = 1; i <= 3; i += 1) {
-      await stores.commitments.open({
-        id: `cm-${i}`,
-        at: `2026-01-0${i}T00:00:00.000Z`,
-        origin: 'human',
-        body: 'q',
-      });
-    }
-
-    const page1 = (await (await app.request('/commitments?includeClosed=true&limit=1')).json()) as {
-      entries: { id: string }[];
-      nextCursor?: string;
-    };
-    expect(page1.entries.map((e) => e.id)).toEqual(['cm-1']);
-    const cursor1 = page1.nextCursor;
-    expect(cursor1).toBeTruthy();
-
-    await stores.commitments.close('cm-1', '2026-05-01T00:00:00.000Z', '先に片付いた', 'human');
-
-    const page2 = (await (
-      await app.request(
-        `/commitments?includeClosed=true&limit=1&cursor=${encodeURIComponent(cursor1 as string)}`,
-      )
-    ).json()) as { entries: { id: string }[] };
-    expect(page2.entries.map((e) => e.id)).toEqual(['cm-2']);
-  });
-
-  it('unreadable は窓で切られない（limit=1 でも全件返る）', async () => {
-    const real = stores.commitments;
-    const unreadableRows = [
-      { id: 'broken-1', at: '2026-01-01T00:00:00.000Z', reason: '壊れている1' },
-      { id: 'broken-2', at: '2026-01-02T00:00:00.000Z', reason: '壊れている2' },
-      { id: 'broken-3', at: '2026-01-03T00:00:00.000Z', reason: '壊れている3' },
-    ];
-    stores.commitments = {
-      ...real,
-      async list(options) {
-        const { entries } = await real.list(options);
-        return { entries, unreadable: unreadableRows, trimmedClosed: 9 };
-      },
-    };
-
-    await stores.commitments.open({
-      id: 'cm-1',
-      at: '2026-02-01T00:00:00.000Z',
-      origin: 'human',
-      body: 'x',
-    });
-    await stores.commitments.open({
-      id: 'cm-2',
-      at: '2026-02-02T00:00:00.000Z',
-      origin: 'human',
-      body: 'y',
-    });
-
-    const body = (await (await app.request('/commitments?limit=1')).json()) as {
-      entries: { id: string }[];
-      unreadable: { id?: string }[];
-      trimmedClosed: number;
-    };
-    expect(body.entries).toHaveLength(1);
-    expect(body.unreadable).toEqual(unreadableRows);
-    expect(body.trimmedClosed).toBe(9);
   });
 });
 
@@ -7379,13 +6995,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.backlog.completeness).toEqual({ unreadable: 0, unreadableJobs: 0 });
   });
 
-  it('台帳（commitments）に積んだ行は進捗に数えない（Task だけから数える。#5910）', async () => {
-    await stores.commitments.open({ id: 'ledger-only', at: ago(300), origin: 'human', body: 'x' });
-    const body = await read();
-    expect(body.backlog.total).toBe(0);
-    expect(body.throughput.tasksOpened).toBe(0);
-  });
-
   it('観測の記録が無ければ github は not_observed で、理由が付く（0 件とは言わない）', async () => {
     const body = await read();
     expect(body.github.state).toBe('not_observed');
@@ -8051,8 +7660,6 @@ describe('OpenAPI', () => {
       '/events/{source}',
       '/schedule',
       '/schedule/{kind}/run',
-      '/commitments',
-      '/commitments/{id}',
       '/managers',
       '/managers/{id}',
       '/managers/{id}/transcript',

@@ -7,7 +7,6 @@ import { FsTranscriptArchive } from './archive.js';
 import { FsAttachmentStore } from './attachments.js';
 import { FsAuthStore } from './auth.js';
 import { FsCodexChatgptAuthStore } from './codex-auth.js';
-import { FsCommitmentStore } from './commitments.js';
 import { FsCredentialVaultStore } from './credentials.js';
 import { FsEventReceiptStore } from './event-receipts.js';
 import { FsInboxStore } from './inbox.js';
@@ -32,7 +31,6 @@ export { FsTranscriptArchive } from './archive.js';
 export { writeFileAtomic } from './atomic.js';
 export { FsAttachmentStore } from './attachments.js';
 export { FsAuthStore } from './auth.js';
-export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsCredentialVaultStore } from './credentials.js';
 export { LockTimeoutError, withPathLock } from './file-lock.js';
 export { FsEventReceiptStore } from './event-receipts.js';
@@ -66,7 +64,6 @@ export function createFsStores(
     journal,
     jobs: new FsJobStore(paths.jobs),
     schedules: new FsScheduleStore(paths.jobs),
-    commitments: new FsCommitmentStore(paths.jobs),
     tasks: new FsTaskStore(paths.jobs),
     practices: new FsPracticeStore(paths.jobs),
     inbox: new FsInboxStore(paths.jobs),
@@ -151,7 +148,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | --- | --- |
 | \`memory/\` | 記憶。クローンの価値観と学び。ここを書き換えると次の会話から反映される |
 | \`journal/\` | 日誌。追記専用の記録（JSONL）。クローンが聞かずに実行した判断もここに残る |
-| \`jobs/\` | ジョブと承認待ちキュー、継続中の依頼（\`schedules.json\`）、引き受けたまま終わっていない仕事（\`commitments.json\`）、順序と状態を持つ task（\`tasks.json\`） |
+| \`jobs/\` | ジョブと承認待ちキュー、継続中の依頼（\`schedules.json\`）、順序と状態を持つ task（\`tasks.json\`） |
 | \`archive/\` | セッションの生ログ（compaction 前に退避したもの） |
 | \`state/\` | デーモンの内部状態（セッション id など。消してもクローンは記憶から戻る） |
 | \`auth/\` | ログインしたアカウントと、alteroid を使ってよいかの許可。**手で編集しない**（許可の付与は \`alteroid access grant\`） |

@@ -3,7 +3,6 @@ import type { TurnInputText } from './turn-input.js';
 export class CloneNotices {
   readonly #turn: Record<TurnNoticeKey, string> = {
     redelivery: '',
-    superseded: '',
     validity: '',
     mergedBatchTruncation: '',
     commitment: '',
@@ -17,7 +16,7 @@ export class CloneNotices {
   // 畳むのは日誌だけにする: 2件目以降の合図は別の会話から来ているかもしれず、usage_limited まで畳むと送り主に何も見えなくなるため
   readonly #usage = new Map<string, string>();
 
-  // 複数の断り書きをまとめて渡す形にしない: 6本は await を挟んで1本ずつ代入されることがあり、途中状態の見え方が変わるため
+  // 複数の断り書きをまとめて渡す形にしない: 5本は await を挟んで1本ずつ代入されることがあり、途中状態の見え方が変わるため
   set(key: TurnNoticeKey, text: string): void {
     this.#turn[key] = text;
   }
@@ -57,11 +56,10 @@ export class CloneNotices {
 
 // 断り書きを起点ごとに配らない: 組み立ての起点は散っていて、入れ忘れた起点にだけ断りの無いターンが生まれる。ターンの入口は1か所のため
 export type TurnNoticeKey =
-  'redelivery' | 'superseded' | 'validity' | 'mergedBatchTruncation' | 'commitment' | 'situation';
+  'redelivery' | 'validity' | 'mergedBatchTruncation' | 'commitment' | 'situation';
 
 const TURN_NOTICE_KEYS: readonly TurnNoticeKey[] = [
   'redelivery',
-  'superseded',
   'validity',
   'mergedBatchTruncation',
   'commitment',

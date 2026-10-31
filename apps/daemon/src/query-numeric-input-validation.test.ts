@@ -144,16 +144,6 @@ describe('クエリの数値引数（範囲外・非整数）は日本語の平�
       valid: ['1', '200'],
     },
     {
-      route: 'GET /commitments',
-      field: 'limit',
-      build: (v) => `/commitments?limit=${v}`,
-      invalid: [
-        { label: '0（最小未満）', value: '0' },
-        { label: '非整数', value: 'abc' },
-      ],
-      valid: ['1', '500'],
-    },
-    {
       route: 'GET /managers',
       field: 'limit',
       build: (v) => `/managers?limit=${v}`,

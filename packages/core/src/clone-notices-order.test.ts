@@ -57,7 +57,7 @@ function fakeSdk(): { fn: typeof sdkQuery } {
 describe('Issue #1744: Clone#pump — #notices.set の呼び出し順（characterization）', () => {
   it(
     'human_message を1件処理する反復では、mergedBatchTruncation のリセット→' +
-      'redelivery→commitment→situation→validity→superseded の順で ' +
+      'redelivery→commitment→situation→validity の順で ' +
       '#notices.set が呼ばれる（noteRedeliveryPredicateHitB は human_message では ' +
       '条件を満たさないので鳴らない・上の doc を参照）',
     async () => {
@@ -74,7 +74,7 @@ describe('Issue #1744: Clone#pump — #notices.set の呼び出し順（characte
       ) {
         order.push(key);
         const result = originalSet.call(this, key, text);
-        if (key === 'superseded') resolveDone?.();
+        if (key === 'validity') resolveDone?.();
         return result;
       });
 
@@ -99,7 +99,6 @@ describe('Issue #1744: Clone#pump — #notices.set の呼び出し順（characte
         'commitment',
         'situation',
         'validity',
-        'superseded',
       ] satisfies TurnNoticeKey[]);
 
       await clone.stop();

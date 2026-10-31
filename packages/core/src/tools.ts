@@ -50,12 +50,6 @@ import {
   describeUnresolvedConversation,
   resolveConversationId,
 } from './conversation-lookup.js';
-import {
-  commitmentPosition,
-  compareCommitmentPosition,
-  encodeCommitmentCursor,
-  resolveCommitmentCursor,
-} from './commitment-cursor.js';
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
@@ -251,8 +245,7 @@ import {
   PERMISSION_GRANT_CONSENT_PHRASE,
   approvalQuestionSchema,
   describeAnsweredVia,
-  commitmentOriginSchema,
-  commitmentUpdatedAt,
+  taskOriginSchema,
   externalOutputLimits,
   githubObservationInputSchema,
   jobStatusSchema,
@@ -284,8 +277,7 @@ import type {
   AttachmentRef,
   Task,
   ChatStreamEvent,
-  Commitment,
-  CommitmentOrigin,
+  TaskOrigin,
   ExternalOutput,
   Job,
   JobStatus,
@@ -321,7 +313,6 @@ import {
   JournalAnchorNotFoundError,
   UnreadableActiveTokenError,
   UnreadableApprovalError,
-  UnreadableCommitmentError,
   UnreadableJournalEntryError,
   UnreadablePracticeError,
   UnreadableScheduleError,
@@ -416,7 +407,7 @@ import {
   CLOSE_MANY_SOURCES_SHOWN,
   closeManyInChunks,
   describeCloseManyFilter,
-} from './commitment-close-many.js';
+} from './task-close-many.js';
 import {
   TASK_STATUS_MANY_TARGETS,
   describeTaskStatusManyViolation,
@@ -633,7 +624,6 @@ export const CLONE_TOOL_NAMES = [
   'schedule_list',
   'schedule_create',
   'schedule_remove',
-  'commitment_list',
   'task_list',
   'task_add',
   'task_move',
@@ -720,7 +710,6 @@ export const TRACELESS_CLONE_TOOLS = [
   'approval_trace',
   'usage_read',
   'schedule_list',
-  'commitment_list',
   'task_list',
   'progress_read',
   'profile_read',
@@ -1266,10 +1255,7 @@ async function describeMissingReport(
   );
 }
 
-const COMMITMENT_LIST_BUDGET = 8_000;
-export const COMMITMENT_BODY_LIMIT = 240;
-const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
-// 定数は `commitment-close-many.ts` に在る（かつては HTTP の一括とも共有していた）。外へ出していた名前はここから変えない
+// 定数は `task-close-many.ts` に在る。外へ出していた名前はここから変えない
 export { CLOSE_MANY_LIMIT_MAX, CLOSE_MANY_JOURNAL_ID_CHARS };
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
 
@@ -1279,21 +1265,19 @@ const REMOVE_MANY_IDS_SHOWN = 20;
 // HTTP 層と共有しない: `POST /archive/remove` は `removedIds` を全件返し、間引きはテキスト応答だけの関心事のため
 const ARCHIVE_REMOVE_MANY_IDS_SHOWN = 20;
 const PROFILE_DISTRIBUTION_EXCERPT = 400;
-// `body` は切って捨てず `page()` で分けて渡す: 要約を禁じられた欄で構造的に長くなりうるため
-const COMMITMENT_PAGE = 8_000;
 
-const COMMITMENT_ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
+const TASK_ORIGIN_LABEL: Record<TaskOrigin, string> = {
   human: '人間の依頼',
   manager: 'マネージャーの報告',
   external: '外部イベント',
   self: '自分で気づいた宿題',
 };
 
-// `commitment-close-many.ts` から使うため `chunk-ids.ts` へ移した（`tools.ts` を import すると循環する）。外へ出す名前はここから変えない
+// `task-close-many.ts` から使うため `chunk-ids.ts` へ移した（`tools.ts` を import すると循環する）。外へ出す名前はここから変えない
 export { chunkIdsByChars };
 
-function commitmentOriginBadge(entry: { origin: CommitmentOrigin; source?: string }): string {
-  const label = COMMITMENT_ORIGIN_LABEL[entry.origin];
+function taskOriginBadge(entry: { origin: TaskOrigin; source?: string }): string {
+  const label = TASK_ORIGIN_LABEL[entry.origin];
   return entry.source === undefined ? `[${label}]` : `[${label} / ${entry.source}]`;
 }
 
@@ -1727,30 +1711,6 @@ function formatApprovalNotRecordedMessage(approval: PendingApproval, cause: unkn
     `理由: ${reason}`,
     'やり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。',
   ].join('\n');
-}
-
-// 「id が違う」と言い切らない: 古い片付き行は物理削除されうる。数えられなかった回を 0 と混ぜず、投げ直さない（単票の照会が道具の故障として落ちるため）
-async function describeMissingCommitment(stores: Stores, id: string): Promise<string> {
-  let trimmedClosed: number | null;
-  try {
-    trimmedClosed = (await stores.commitments.list()).trimmedClosed;
-  } catch {
-    trimmedClosed = null;
-  }
-  if (trimmedClosed === null) {
-    return (
-      `引き受けた仕事 ${id} は、いま台帳に無い。` +
-      '**この記憶ストアが片付き行を物理削除しているかどうかは読めなかった。** ' +
-      'id の打ち間違いなのか、一度は在った行が消えたのかは、ここでは決められない。'
-    );
-  }
-  if (trimmedClosed === 0) return `引き受けた仕事 ${id} は無い（id が違う）。`;
-  return (
-    `引き受けた仕事 ${id} は、いま台帳に無い。**「id が違う」とは言い切れない。** ` +
-    `この記憶ストアは保持上限を超えた片付き行を物理削除しており、累計 ${trimmedClosed} 件ある。` +
-    'この id がその中に在ったかどうかは、どこにも残っていない（消えた件数は数えているが、id は控えていない）。' +
-    '日誌側の記録が唯一の手掛かりになる。'
-  );
 }
 
 async function appendJournalOrThrow(
@@ -5629,327 +5589,14 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // 「やることの一覧」にしない: 器が持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけで、順序も優先度も締切も持たないため
-    tool(
-      'commitment_list',
-      [
-        '旧台帳（読むだけ）に残っている、引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
-        '**この台帳へはもう何も載らない**（人間の依頼は同じ id で task に載り、あなたが引き受けるものは task_add で足す）。ここに在るのは、以前に載った行だけである。',
-        '**閉じる道具はもう無い**（片付けるなら同じ仕事の task を task_set_status で閉じる。task の無い古い行は、人間が閉じる）。',
-        'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
-        '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
-        '一覧の各件で更新が出ないときは作成と同じ（更新＝最後に変わった時刻）。includeClosed なしは全件が未了で、状態の札は行に付かない。',
-        'origin で出所を絞れる（他の絞りと併用できる）。',
-        'q で本文・出所を語で探せる（他の絞りと併用できる）。',
-        'order で新しい順に変えられる（台帳が膨らんで予算で切れるとき、直近の行へ届くにはこちらを使う）。',
-        '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
-      ].join(' '),
-      {
-        id: z
-          .string()
-          .optional()
-          .describe(
-            'この1件を全文で読む（一覧に出ている id）。片付いた件も読める。他の条件は無視される（cursor も含む）',
-          ),
-        offset: z
-          .number()
-          .optional()
-          .describe(
-            `id で全文を読むとき、何文字目から読むか（件数ではなく文字数。${formatIntRangeJa({ min: 0 })}）`,
-          ),
-        includeClosed: z
-          .boolean()
-          .optional()
-          .describe('片付けたものも見る（既定は未了だけ）。何を片付けたかを振り返るとき用'),
-        origin: z
-          .array(z.enum(commitmentOriginSchema.options))
-          .optional()
-          .describe(
-            '例 {"origin":["external"]}。配列で渡し、値は引用符で囲む。出所（human/manager/external/self）で絞る。省略すると絞らない',
-          ),
-        // `q` は `body` と `source` の両方に当てる: `origin: 'manager'` の行は `source` が managerId で本文に入らず、`body` だけだと委譲の行を探せないため
-        q: z
-          .string()
-          .optional()
-          .describe(
-            '語で探す（大文字小文字を区別しない部分一致）。当てる先は body と source の両方' +
-              '（どちらかに当たれば残す。origin: manager の行は managerId が source に入り、' +
-              'body には入らないため）。他の絞りと併用できる。' +
-              'id を指定した全文モードでは他の条件と同じく無視される。',
-          ),
-        // `order` を足す: 予算で切る口で順序が固定だと、台帳が膨らんだとき片端の行へ予算のどこを歩いても到達しないため（HTTP は予算を持たないので足さない）
-        order: z
-          .enum(['oldest', 'newest'])
-          .optional()
-          .describe(
-            '並び順（既定は oldest=古い順。newest=新しい順）。' +
-              'newest にすると、台帳が膨らんで予算で切れる場合でも直近の行へ届く。' +
-              'cursor の order はこの値と揃えること（食い違うと明示のエラーになる）',
-          ),
-        cursor: z
-          .string()
-          .optional()
-          .describe(
-            '一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
-              '（自分で組み立てない）。省略すると先頭から（order が newest なら新しい方から）。' +
-              'includeClosed・order・origin・q はカーソルを取った呼びと揃えること' +
-              '（食い違うと明示のエラーになる）',
-          ),
-      },
-      async ({ id, offset = 0, includeClosed, origin, q, order, cursor }) => {
-        // 既定値は zod の `.default()` に持たせずここで明示する: `effectiveOrder` をカーソルの発行・比較・文言の全箇所で同じ1つの値として使うため
-        const effectiveOrder = order ?? 'oldest';
-        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
-        if (offsetError !== null) return text(offsetError);
-        if (id !== undefined) {
-          // 片付いた件も読める（`includeClosed` は要求しない）: `closedReason` は一覧では120字の抜粋で止まり、全文へ降りる口が無いと抜粋の分しか生きないため
-          // `UnreadableCommitmentError` だけを捕まえて3値目として返す: 器の障害まで飲み込むと「台帳が壊れている」に化けて見えなくなるため
-          let entry: Commitment | null;
-          try {
-            entry = await stores.commitments.get(id);
-          } catch (error) {
-            if (error instanceof UnreadableCommitmentError) {
-              return text(
-                `引き受けた仕事 ${id} は読めない形で入っている（片付いたのではない。` +
-                  '無いのとは違う）。本文はここでは取れない。',
-              );
-            }
-            throw error;
-          }
-          // 黙って空を返さない: 「無い」と「読めない」を混ぜると、id の打ち間違いが「存在しなかった」として片付くため
-          if (!entry) return text(await describeMissingCommitment(stores, id));
-          const head = [
-            `${entry.id} ${commitmentOriginBadge(entry)}`,
-            `作成: ${entry.at} / 更新: ${commitmentUpdatedAt(entry)}`,
-            entry.closedAt === undefined ? '状態: 未了' : `状態: ${entry.closedAt} に片付けた`,
-          ].join('\n');
-          // 片付けた理由を本文より先に置く: `body` は長くなりうるので、後ろだと `page()` の2ページ目へ落ちるため
-          const body = [
-            ...(entry.closedAt === undefined
-              ? []
-              : [`片付けたとした理由: ${entry.closedReason ?? '（理由の記録なし）'}`]),
-            `依頼（全文）: ${entry.body}`,
-          ].join('\n\n');
-          const part = page(body, offset, COMMITMENT_PAGE);
-          const tail = part.more
-            ? `\n\n…（ここで切れている。続きは commitment_list id=${entry.id} offset=${part.to}）`
-            : '';
-          return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
-        }
-
-        // 「無い」と返してよいのは entries・unreadable・trimmedClosed がすべて0件のときだけ: 削除された事実が静かに握り潰されるため
-        const {
-          entries: allEntries,
-          unreadable,
-          trimmedClosed,
-        } = await stores.commitments.list(
-          includeClosed === true ? { includeClosed: true } : undefined,
-        );
-        if (allEntries.length === 0 && unreadable.length === 0 && trimmedClosed === 0) {
-          return text('（引き受けたまま終わっていない仕事は無い）');
-        }
-        // `origin` / `q` は予算で切る前に効かせる: 絞りを後で掛けると、絞りに当たらない行が窓を食い尽くすため
-        const originFiltered =
-          origin === undefined
-            ? allEntries
-            : allEntries.filter((entry) => origin.includes(entry.origin));
-        const entries =
-          q === undefined
-            ? originFiltered
-            : originFiltered.filter((entry) => {
-                const needle = q.toLowerCase();
-                return (
-                  entry.body.toLowerCase().includes(needle) ||
-                  (entry.source !== undefined && entry.source.toLowerCase().includes(needle))
-                );
-              });
-        // `order` も `origin` / `q` と同じ側（予算で切る前・cursor を解決する前）で効かせる: 後回しにすると絞りや向きに当たらない行が窓を食い尽くすため
-        // `CommitmentStore.list` の契約は変えない: この反転はツール層だけの見え方
-        // 継続点の比較（`compareCommitmentPosition`）と同じ順に並べ直してから切る（#4780）: ストアの順（同じ時刻なら入れた順）のまま比較で絞ると、同じ時刻の行が id の順と食い違うとき頁の境目で飛ばされるため（デーモンの `GET /commitments` と同じ形）
-        const positioned = [...entries].sort((a, b) =>
-          compareCommitmentPosition(commitmentPosition(a), commitmentPosition(b)),
-        );
-        const ordered = effectiveOrder === 'newest' ? positioned.reverse() : positioned;
-        // `cursor` も予算で切る前に効かせる: 後で解決すると次の頁の起点が切った後に残った行からずれるため
-        // 判定できないカーソルは黙って先頭からへ倒さない: 呼び手が続きを読んだつもりで同じ行を繰り返し読むため
-        const cursorOutcome = resolveCommitmentCursor(
-          ordered,
-          includeClosed === true,
-          cursor,
-          effectiveOrder,
-          origin,
-          q,
-        );
-        if (cursorOutcome.kind === 'malformed') {
-          return text(
-            'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
-              '一覧を先頭から読み直すには cursor を付けずに commitment_list を呼ぶこと。',
-          );
-        }
-        if (cursorOutcome.kind === 'includeClosed-mismatch') {
-          return text(
-            `cursor は includeClosed=${cursorOutcome.cursorIncludeClosed} の一覧から出た続きの` +
-              `位置で、いまの呼び（includeClosed=${includeClosed === true}）と食い違う。` +
-              `commitment_list includeClosed=${cursorOutcome.cursorIncludeClosed} ` +
-              `order=${effectiveOrder} cursor=${cursor} のように includeClosed を揃えて呼び直すか、` +
-              'cursor を付けずに先頭から呼び直すこと。',
-          );
-        }
-        if (cursorOutcome.kind === 'order-mismatch') {
-          return text(
-            `cursor は order=${cursorOutcome.cursorOrder} の一覧から出た続きの位置で、` +
-              `いまの呼び（order=${effectiveOrder}）と食い違う。` +
-              `commitment_list order=${cursorOutcome.cursorOrder} includeClosed=${includeClosed === true} ` +
-              `cursor=${cursor} のように order を揃えて呼び直すか、` +
-              'cursor を付けずに先頭から呼び直すこと。',
-          );
-        }
-        if (cursorOutcome.kind === 'origin-mismatch') {
-          const cursorOriginText =
-            cursorOutcome.cursorOrigin === undefined
-              ? '絞っていない'
-              : cursorOutcome.cursorOrigin.join(',');
-          const currentOriginText = origin === undefined ? '絞っていない' : origin.join(',');
-          const cursorOriginArg =
-            cursorOutcome.cursorOrigin === undefined
-              ? ''
-              : `origin=${cursorOutcome.cursorOrigin.join(',')} `;
-          return text(
-            `cursor は origin=${cursorOriginText} の一覧から出た続きの位置で、` +
-              `いまの呼び（origin=${currentOriginText}）と食い違う。` +
-              `commitment_list ${cursorOriginArg}order=${effectiveOrder} ` +
-              `includeClosed=${includeClosed === true} cursor=${cursor} のように origin を揃えて` +
-              '呼び直すか、cursor を付けずに先頭から呼び直すこと。',
-          );
-        }
-        if (cursorOutcome.kind === 'q-mismatch') {
-          const cursorQText = cursorOutcome.cursorQ ?? '（絞っていない）';
-          const currentQText = q ?? '（絞っていない）';
-          const cursorQArg =
-            cursorOutcome.cursorQ === undefined ? '' : `q=${cursorOutcome.cursorQ} `;
-          return text(
-            `cursor は q="${cursorQText}" の一覧から出た続きの位置で、` +
-              `いまの呼び（q="${currentQText}"）と食い違う。` +
-              `commitment_list ${cursorQArg}order=${effectiveOrder} ` +
-              `includeClosed=${includeClosed === true} cursor=${cursor} のように q を揃えて` +
-              '呼び直すか、cursor を付けずに先頭から呼び直すこと。',
-          );
-        }
-        const view = cursorOutcome.view;
-        const items = view.map((entry) =>
-          renderListingEntry({
-            id: entry.id,
-            title: commitmentOriginBadge(entry),
-            createdAt: entry.at,
-            // 作成と違うときだけ更新を出す（未了の行は常に同じ）: 同じ時刻の2回目は情報にならないため
-            updatedAt:
-              commitmentUpdatedAt(entry) === entry.at ? undefined : commitmentUpdatedAt(entry),
-            summary: excerptLine(entry.body, COMMITMENT_BODY_LIMIT),
-            extra: [
-              entry.closedAt !== undefined
-                ? `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`
-                : // 片付けた分を出さない呼びでは全行が未了で、先頭の1行が言う: 行ごとの同じ札を積まないため
-                  includeClosed === true
-                  ? '  状態: 未了'
-                  : null,
-            ],
-          }),
-        );
-        const appliedFilters = [
-          ...(origin === undefined ? [] : ['origin']),
-          ...(q === undefined ? [] : ['q']),
-        ];
-        const lines = [
-          entries.length === 0
-            ? // 絞り込みで0件になったのを「読める行が無い」と言い分ける: 台帳の破損（`unreadable`）を疑わせないため
-              allEntries.length === 0
-              ? '（読める行は無い）'
-              : `（この${appliedFilters.join('・')}の絞り込みに当たる行は無い）`
-            : view.length === 0
-              ? // 絞り込みの結果ではなく、もうこれ以上先が無いことを明示する
-                '（cursor より後ろの行は無い。これが最後の頁）'
-              : renderListing(items, {
-                  budget: COMMITMENT_LIST_BUDGET,
-                  // `includeClosed` のときは「未了は」と言わない: `total` に片付いた分も含まれ、未了として数えた嘘になるため
-                  // ここではあえて `renderListing` が渡す値（`view.length`）を使わず `entries.length` を `total` にする: cursor で頁が進んでも変わらない母数にするため
-                  omitted: ({ rest, shown }) => {
-                    const total = entries.length;
-                    const lastShown = view[shown - 1];
-                    const nextCursor = encodeCommitmentCursor({
-                      ...commitmentPosition(lastShown!),
-                      includeClosed: includeClosed === true,
-                      order: effectiveOrder,
-                      ...(origin === undefined ? {} : { origin }),
-                      ...(q === undefined ? {} : { q }),
-                    });
-                    const scopeNoteParts = [
-                      ...(origin === undefined ? [] : [`origin: ${origin.join(', ')}`]),
-                      ...(q === undefined ? [] : [`q: "${q}"`]),
-                    ];
-                    const scopeNote =
-                      scopeNoteParts.length === 0 ? '' : `${scopeNoteParts.join(' / ')} に絞った、`;
-                    const countNote =
-                      includeClosed === true
-                        ? `片付けた分を含めて ${total} 件あり`
-                        : `未了は ${total} 件あり`;
-                    const directionNote =
-                      effectiveOrder === 'newest'
-                        ? includeClosed === true
-                          ? '省いたのは、未了ならこれより古い依頼、片付いた分ならこれより新しい記録である。'
-                          : '省いたのは、これより古い依頼である。'
-                        : includeClosed === true
-                          ? '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。'
-                          : '省いたのは、これより新しい依頼である。';
-                    const shownOrderNote = effectiveOrder === 'newest' ? '新しい順に' : '古い順に';
-                    return (
-                      `…ほか ${rest} 件は省略（${scopeNote}${countNote}、${shownOrderNote} ${shown} 件だけ` +
-                      `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる。` +
-                      `includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。`
-                    );
-                  },
-                }),
-        ];
-        // `entries` ではなく `view` で見る: 最後の頁で1件も出していないのにこの2行だけが付くのを避けるため
-        if (view.length > 0) {
-          lines.push(
-            `（本文は${COMMITMENT_BODY_LIMIT}字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）`,
-          );
-          if (includeClosed !== true) lines.unshift('（以下はすべて未了）');
-        }
-        if (unreadable.length > 0) {
-          const idsAll = unreadable
-            .map((entry) => entry.id)
-            .filter((id): id is string => id !== undefined);
-          // id の列挙にも上限を置く: 台帳の破損の度合いに比例して伸びるため
-          const ids = idsAll.slice(0, UNREADABLE_COMMITMENT_IDS_SHOWN);
-          const idsRest = idsAll.length - ids.length;
-          lines.push(
-            `**読めない行が ${unreadable.length} 件ある${
-              ids.length > 0
-                ? `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`
-                : ''
-            }。片付いたのではない。**`,
-          );
-        }
-        if (trimmedClosed > 0) {
-          lines.push(
-            `**保持上限を超えて物理削除された片付き行が累計 ${trimmedClosed} 件ある。** ` +
-              'この記憶ストアは片付いた行を新しい順に一定件数までしか残さない。' +
-              '削除された分の内容はここでは二度と読めない（日誌側の記録が唯一の手掛かりになる）。',
-          );
-        }
-        return text(lines.join('\n'));
-      },
-    ),
-
-    // 引き受けた仕事の器はここだけ: 順序と状態を持つ。旧台帳（commitment_list。読むだけ）から既存の行を移すのは P7 の移行で、クローンは台帳へ書かない（#5923）
+    // 引き受けた仕事の器はここだけ: 順序と状態を持つ
     tool(
       'task_list',
       [
         'task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。',
         '各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。',
         '既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。',
-        '引き受けた仕事の器はこれだけ（旧台帳の commitment_list は読むだけ）。人間の発言は、届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。自分で引き受けるもの・手を付けない気づき・未了の問いは task_add で足す。',
+        '引き受けた仕事の器はこれだけ。人間の発言は、届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。自分で引き受けるもの・手を付けない気づき・未了の問いは task_add で足す。',
         '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、答えの無い問い（ask_human・request_permission。前のターンのものを含む）が残っている会話の task（不要になった問いは approval_withdraw で取り下げると対象に戻る）、結び付いた委譲（manager_start の taskId）が走っている（running / waiting_human）task は閉じない。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
@@ -5997,7 +5644,7 @@ export function createCloneTools(context: ToolContext) {
             return text(`task ${id} は無い（task_list で実在する id を確かめること）。`);
           const head = [
             `${id} ${task.title}`,
-            `${commitmentOriginBadge({ origin: task.origin, source: task.source })}`,
+            `${taskOriginBadge({ origin: task.origin, source: task.source })}`,
             `作成: ${task.createdAt} / 更新: ${task.updatedAt}`,
             taskStatusLine(task),
             ...(task.originConversationId === undefined
@@ -6115,7 +5762,7 @@ export function createCloneTools(context: ToolContext) {
         '起点の会話は、いまのターンの会話か、報告を読んでいる委譲の起点に自動で結ばれる。どちらも無ければ新しい会話ができる（task_say の宛先になる）。',
         '知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、その会話への返答で器が自動で done にしないよう、task_keep で「続く」の印を付ける。',
         '置き場所を省くと既定の位置に入る（自分で足した件は末尾）。to で先頭・末尾・特定の task の前後を指せる。',
-        '手を付けない気づき・人間へ出したまま答えを得ていない問い（問いの全文と選択肢を逐語で）もここへ足す。旧台帳へは書けない。',
+        '手を付けない気づき・人間へ出したまま答えを得ていない問い（問いの全文と選択肢を逐語で）もここへ足す。',
       ].join(' '),
       {
         title: z
@@ -6455,7 +6102,7 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'progress_read',
       [
-        '作業の進捗を、task（待ち行列の行）と委譲の行から数え直して読む。旧台帳（commitment_list）の行は数えない。',
+        '作業の進捗を、task（待ち行列の行）と委譲の行から数え直して読む。',
         '積み上がり（未了の task の件数・起点別・齢）・実施中（委譲）・窓の中の消化・見込みを返す。',
         '**率（%）は出さない**（task に総量が無く、分母が定まらない）。取れないものは 0 にせず、状態か理由で言う。',
         '**GitHub（Issue / PR / CI）は観測していない**——出力にある「観測していない」は 0 件という意味ではない。',
@@ -6553,7 +6200,7 @@ export function createCloneTools(context: ToolContext) {
       ].join(''),
       {
         origin: z
-          .array(z.enum(commitmentOriginSchema.options))
+          .array(z.enum(taskOriginSchema.options))
           .describe(
             `例 {"origin":["self"]}。配列で渡し、値は引用符で囲む。` +
               `対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。`,
@@ -6602,7 +6249,7 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ origin, source, q, until, status, reason, dryRun, limit }) => {
-        // 検証は `commitment-close-many.ts` の `describeCloseManyViolation`（`task_set_status_many` の検証。`task-set-status-many.ts`）
+        // 検証は `task-close-many.ts` の `describeCloseManyViolation`（`task_set_status_many` の検証。`task-set-status-many.ts`）
         const input = { origin, source, q, until, status, reason, dryRun, limit };
         const violation = describeTaskStatusManyViolation(input);
         if (violation !== null) return text(violation);
@@ -6645,7 +6292,7 @@ export function createCloneTools(context: ToolContext) {
             why =
               '開いている task が1件も無い。**絞り込みの問題ではない**（変えるべきものがそもそも無い）。';
           } else if (afterOrigin.length === 0) {
-            const breakdown = commitmentOriginSchema.options
+            const breakdown = taskOriginSchema.options
               .map(
                 (known) => `${known} ${openEntries.filter((task) => task.origin === known).length}`,
               )
@@ -8783,7 +8430,7 @@ export function createCloneTools(context: ToolContext) {
               '省略すると絞らない。走っているものだけを見たいなら ["running","waiting_human"]。' +
               // `[]` の倒し方はクローンが読む面にも書く: 他の一覧は `[]` を0件として扱うので、ここだけ違うことを黙っていると読み手が「0件だ」と読むため
               '空の配列 [] も絞らない（渡さなかったのと同じ全件が出て、応答に「絞らずに全件を出した」と書く）。' +
-              '**journal_read の types / commitment_list の origin とは倒し方が違う**（あちらは [] を0件として扱う）。' +
+              '**journal_read の types とは倒し方が違う**（あちらは [] を0件として扱う）。' +
               '先頭の件数の行は絞る前の全体を出す',
           ),
         q: z
@@ -11498,10 +11145,10 @@ const FILTER_COUNTS_SCOPE_REF = '（上の件数は絞る前の全体）。';
 const FILTER_STATUS_EMPTY_FULL =
   '（渡さなかったのと同じ結果である。人間の GET /managers に揃えてある——' +
   '0件へ倒すと絞りを解除した呼びが「マネージャーが消えた」ように見えるため）。' +
-  '**journal_read の types / commitment_list の origin は [] を0件として扱うので、' +
+  '**journal_read の types は [] を0件として扱うので、' +
   'この道具だけ倒し方が違う**（理由は tools.ts の doc に在る）。';
 const FILTER_STATUS_EMPTY_REF =
-  '（[] は絞らない扱い。**journal_read・commitment_list の [] は0件で、この道具だけ逆**）。';
+  '（[] は絞らない扱い。**journal_read の [] は0件で、この道具だけ逆**）。';
 const FILTER_Q_MATCH_FULL =
   '（依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前への部分一致。大文字小文字と全角半角は区別しない）';
 const FILTER_Q_MATCH_REF =

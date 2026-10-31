@@ -22,7 +22,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
   args: {
-    title: '未了の仕事',
+    title: '待ち行列の未了',
     description: 'クローンが引き受けて、まだ片付いていないもの',
     action: <Button size="sm">絞り込む</Button>,
     children: (

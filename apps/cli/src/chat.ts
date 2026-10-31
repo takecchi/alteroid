@@ -5,7 +5,6 @@ import { stderr, stdout } from './terminal-out.js';
 
 import {
   approvalUpdatedAt,
-  commitmentUpdatedAt,
   describeAnsweredVia,
   denialActorTag,
   describeDenialFollowUp,
@@ -27,9 +26,7 @@ import {
   usageSiteSchema,
   type ApprovalSelection,
   type ApprovalTrace,
-  type Commitment,
   type UnreadableApproval,
-  type UnreadableCommitment,
   type UnreadableJob,
   type UnreadableSchedule,
   type UsageLayer,
@@ -97,7 +94,7 @@ import {
   interleaveApprovals,
 } from './conversation-approvals.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
-import { errorReason, formatElapsedAgo, oneLine } from './format.js';
+import { errorReason, oneLine } from './format.js';
 import {
   describeInterruptOutcome,
   requestInterruptOutcome,
@@ -468,7 +465,6 @@ export async function chatCommand(): Promise<void> {
   const listed: Listed = {
     approvals: [],
     managerAnchors: {},
-    commitments: [],
     conversations: [],
     managers: [],
     waiting: [],
@@ -1278,10 +1274,6 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
                      （回答は1語。複数語なら "..." で囲む。1件が駄目でも残りは進み、
                       結果は id ごとに出る）
-/commitments         引き受けたまま終わっていない仕事（番号付き）
-/commitments all     片付けたものも含めて見る
-/commitment <番号|id>  台帳の1件を全文で（本文・片付けた理由を80字で切らない。番号は /commitments の並び。
-                     片付けた行も引ける）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>] [layer=<種>] [site=<場所>] [token=<id>]  利用状況（いくら使ったか）
                      layer= は ${usageLayerSchema.options.join(' / ')}、site= は
                      ${usageSiteSchema.options.join(' / ')} のどれか。token= は
@@ -1295,12 +1287,11 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /quit                終了
 `;
 
-// 承認待ち・台帳・会話・マネージャー・待ちは別々に持つ: 1本にまとめると `/approvals` の直後の `/commitment 1` が
-// 承認待ちの id を台帳から引きに行く。`managers` と `waiting` も別物で、`/managers` の直後の `/reply 1` で
+// 承認待ち・会話・マネージャー・待ちは別々に持つ: 1本にまとめると `/approvals` の直後の `/manager 1` が
+// 承認待ちの id をマネージャーとして引きに行く。`managers` と `waiting` も別物で、`/managers` の直後の `/reply 1` で
 // マネージャーの id が requestId として使われてはいけない。
 export interface Listed {
   approvals: string[];
-  commitments: string[];
   conversations: string[];
   managers: string[];
   // `startedAt` を人間に打たせない: ミリ秒精度の ISO を手で写させると、CLI にだけ「打ち間違えると 400」という段差ができる。
@@ -2702,74 +2693,6 @@ export async function runSlashCommand(
       return 'ok';
     }
 
-    case '/commitments': {
-      // 承認待ちとは別のもの: 止まっていなくても片付いていない仕事はあるので、片方で他方は代用できない。
-      // `CLOSED_HISTORY_LIMIT` を超えた古い片付き行は物理削除され、その累計が `trimmedClosed` として応答に載る。
-      // `renderCommitments` へ渡して人間にも見える形にする。
-      const includeClosed = isKeyword(rest[0], 'all');
-      // `/commitments foo` を開いた行だけの一覧で返すと、`all` のつもりの綴り違いが「片付いた行は無い」と読める
-      const surplus = rest.slice(includeClosed ? 1 : 0).find((token) => token.length > 0);
-      if (surplus !== undefined) {
-        return usageError(`${surplusWordMessage(surplus, '/commitments、/commitments all')}\n`);
-      }
-      const response = await client.commitments.$get({
-        query: includeClosed ? { includeClosed: 'true' } : {},
-      });
-      if (!response.ok) {
-        stdout.write(`${await withDetail('台帳を読めませんでした', response)}\n`);
-        return 'ok';
-      }
-      const { entries, unreadable, trimmedClosed } = await response.json();
-      const { text, ids } = renderCommitments(entries, Date.now(), unreadable, trimmedClosed);
-      listed.commitments.length = 0;
-      listed.commitments.push(...ids);
-      stdout.write(`${text}\n`);
-      return 'ok';
-    }
-
-    case '/commitment': {
-      const [reference] = rest;
-      if (reference === undefined || rest.length > 1) {
-        return usageError('使い方: /commitment <番号|id>（番号は /commitments の並び）\n');
-      }
-      const id = resolveListedId(reference, listed.commitments);
-      if (id === null) {
-        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
-        return 'ok';
-      }
-      // 全文は詳細の口で取る（#5089）: 一覧は片付いた行の本文・片付けた理由を先頭に切って返すため。
-      // 無い（404）は数えない: 今までも一覧から探して見つからないだけで、失敗には数えていなかったため
-      const response = await absentOkClient.commitments[':id'].$get({ param: { id } });
-      if (!response.ok && response.status !== 404 && response.status !== 409) {
-        stdout.write(`${await withDetail('台帳を読めませんでした', response)}\n`);
-        return 'ok';
-      }
-      const found = response.ok ? (await response.json()).entry : undefined;
-      if (found === undefined) {
-        // 保持上限の注記は一覧が持つので、見つからなかったときだけ一覧を引く（今までと同じ文言にする）
-        const listed = await auxClient.commitments.$get({ query: { includeClosed: 'true' } });
-        const trimmedClosed = listed.ok ? (await listed.json()).trimmedClosed : 0;
-        const notes = [
-          response.status === 409 ? '在るが読めない形で入っている（消されたのではない）' : '',
-          renderTrimmedClosedNotice(trimmedClosed),
-        ].filter((line) => line !== '');
-        stdout.write(
-          `台帳に ${id} は見つかりません（id が違うか、片付けて保持上限で消えた）${
-            notes.length === 0 ? '' : `\n${notes.join('\n')}`
-          }\n`,
-        );
-        return 'ok';
-      }
-      stdout.write(
-        `${formatEntryFull(
-          `  ${found.closedAt === undefined ? '' : '✓ '}${found.id}`,
-          found as unknown as Record<string, unknown>,
-          ['id'],
-        )}\n`,
-      );
-      return 'ok';
-    }
-
     case '/usage': {
       const parsed = parseUsageFilters(rest);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
@@ -3454,7 +3377,6 @@ const REFERENCE_FIRST_COMMANDS: ReadonlySet<string> = new Set([
   '/approval-trace',
   '/approval',
   '/answer',
-  '/commitment',
 ]);
 
 function resolveListedId(reference: string, listed: string[]): string | null {
@@ -3825,24 +3747,6 @@ function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
   return pairs;
 }
 
-const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
-  human: '人間',
-  manager: 'マネージャー',
-  external: '外部',
-  self: '自分',
-};
-
-// 「片付いたのではない」を落とさない: 落とすと、読めない行が静かに未了から消えたのと区別が付かない。
-function renderUnreadableNotice(unreadable: UnreadableCommitment[]): string {
-  if (unreadable.length === 0) return '';
-  const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
-  return (
-    `  ⚠ 読めない行が ${unreadable.length} 件あります` +
-    (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
-    '。片付いたのではありません。'
-  );
-}
-
 // 「壊れた行であって、回答済み・取り下げ済みではない」を落とさない。番号は振らない: 読めない行へは `/answer` できない。
 function renderUnreadableApprovalNotice(unreadable: UnreadableApproval[]): string {
   if (unreadable.length === 0) return '';
@@ -3877,64 +3781,6 @@ function renderUnreadableScheduleNotice(unreadable: UnreadableSchedule[]): strin
     '。壊れた行であって、消された依頼ではありません。この一覧には載っていません。' +
     (kinds.length === 0 ? '' : '外すなら /unschedule <kind> です。')
   );
-}
-
-function renderTrimmedClosedNotice(trimmedClosed: number): string {
-  if (trimmedClosed === 0) return '';
-  return (
-    `  ⚠ 保持上限を超えて物理削除された片付き行が累計 ${trimmedClosed} 件あります。` +
-    '削除された分の内容はここでは二度と読めません。'
-  );
-}
-
-// 番号と id の対応をここで一緒に作って返す: 別々に並べ直すと、ずれた瞬間に人間が見ていないものを閉じる。
-// 番号は片付いたものにも振る: 抜け番にすると、人間が数え直して指すことになる。
-export function renderCommitments(
-  commitments: Commitment[],
-  now: number = Date.now(),
-  unreadable: UnreadableCommitment[] = [],
-  trimmedClosed = 0,
-): { text: string; ids: string[] } {
-  // 読めない行の断りを、読める行が0件のときも出す: 下の早期 return より後ろへ置くと、
-  // 読めない行だけの台帳が「仕事はありません」という安心な文言で出る。
-  const notices = [renderUnreadableNotice(unreadable), renderTrimmedClosedNotice(trimmedClosed)]
-    .filter((line) => line !== '')
-    .join('\n');
-
-  if (commitments.length === 0) {
-    return {
-      text:
-        notices === ''
-          ? '（引き受けたまま終わっていない仕事はありません）'
-          : `${notices}\n（読める行は無い）`,
-      ids: [],
-    };
-  }
-
-  const lines: string[] = [];
-  const ids: string[] = [];
-  if (notices !== '') lines.push(notices);
-
-  commitments.forEach((commitment, index) => {
-    ids.push(commitment.id);
-    const closed = commitment.closedAt !== undefined;
-    lines.push(`  [${index + 1}] ${closed ? '✓ ' : ''}${summarizeText(commitment.body)}`);
-    const from =
-      COMMITMENT_ORIGIN_LABEL[commitment.origin] +
-      (commitment.source === undefined ? '' : `(${commitment.source})`);
-    // 齢の表示は残す: 人間が一覧を読むときに効くのはそこで、ISO を足したから要らなくなるものではない。
-    lines.push(
-      `      id: ${commitment.id}  起点: ${from}  作成: ${commitment.at}` +
-        `（${formatElapsedAgo(commitment.at, now)}）  更新: ${commitmentUpdatedAt(commitment)}`,
-    );
-    if (closed) {
-      lines.push(
-        `      片付けた: ${commitment.closedAt ?? ''}  ${summarizeText(commitment.closedReason ?? '')}`,
-      );
-    }
-  });
-
-  return { text: lines.join('\n'), ids };
 }
 
 function formatEntryFull(

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ATTACHMENT_FROM_CLASSES } from './attachment.js';
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { commitmentOriginSchema, jobStatusSchema } from './schema.js';
+import { taskOriginSchema, jobStatusSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -44,8 +44,8 @@ const SUBJECTS: readonly EnumerationSubject[] = [
   },
   {
     tool: 'task_set_status_many',
-    label: 'commitmentOriginSchema の値（packages/core/src/schema.ts）',
-    source: () => commitmentOriginSchema.options,
+    label: 'taskOriginSchema の値（packages/core/src/schema.ts）',
+    source: () => taskOriginSchema.options,
   },
   {
     tool: 'self_status',
@@ -168,10 +168,6 @@ const EXEMPT: readonly Exemption[] = [
   },
   { tool: 'daily_report_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'schedule_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
-  {
-    tool: 'commitment_list',
-    why: '台帳へはもう何も載らない（#5923）。Task を開く出所は clone.ts の commitmentFor の switch が持ち、配列ではない。ふるまいを走らせる歯を tools.test.ts に置いた',
-  },
   { tool: 'profile_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'profile_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'profile_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
@@ -240,7 +236,6 @@ const ARRAY_EXAMPLE_SUBJECTS: readonly ArrayExampleSubject[] = [
   { tool: 'manager_list', field: 'status' },
   { tool: 'task_set_status_many', field: 'origin' },
   { tool: 'task_set_status_many', field: 'source' },
-  { tool: 'commitment_list', field: 'origin' },
   { tool: 'inbox_remove_many', field: 'types' },
   { tool: 'inbox_remove_many', field: 'sources' },
   { tool: 'journal_read', field: 'types' },

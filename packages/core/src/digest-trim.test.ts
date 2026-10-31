@@ -29,14 +29,6 @@ async function seedLikeIssue(stores: Stores): Promise<void> {
       lastReport: `担当 ${i} の途中経過。${'報告の本文が続く。'.repeat(10)}`,
     });
   }
-  for (let i = 0; i < 14; i += 1) {
-    await stores.commitments.open({
-      id: `cm-${i}`,
-      at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
-      origin: 'human',
-      body: `引き受けた仕事 ${i}。${'本文が続く。'.repeat(20)}`,
-    });
-  }
   // 待ち行列（#5469 P6b）: 開いている 5 件（queued 3 / waiting 1 / needs_decision 1）。件数の形は件数の1行だけで、先頭の描画は出さない
   for (const [i, status] of (
     ['needs_decision', 'queued', 'queued', 'waiting', 'queued'] as const
@@ -223,15 +215,12 @@ describe('件数の形の要約（#4938 の案2）', () => {
       '- 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 0' +
         ' / 記憶の更新 50 / 外部イベント 20 / 人間からの発言 0',
     );
-    // 待ち行列は件数の1行だけ（先頭の描画・節は出さない）。旧台帳は開いている行が残る間だけ件数の1行（節ではない）
+    // 待ち行列は件数の1行だけ（先頭の描画・節は出さない）。旧台帳の1行は外れた（台帳の撤去）
     expect(counts).toContain(
       '- 待ち行列: 開いている 5 件（queued 3 / waiting 1 / needs_decision 1）',
     );
     expect(counts).not.toContain('待ち行列の 0');
     expect(counts).not.toContain('## 待ち行列');
-    expect(counts).toContain(
-      '- 旧台帳に開いている 14 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
-    );
     // 全文の形には先頭の3件が出る（件数の形との差）
     expect(full).toContain('## 待ち行列の先頭');
     expect(full).toContain(

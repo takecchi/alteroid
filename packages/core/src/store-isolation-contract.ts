@@ -1,4 +1,4 @@
-import type { Commitment, Job, PendingApproval } from './schema.js';
+import type { Job, PendingApproval, Task } from './schema.js';
 import type { Stores } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため
@@ -40,17 +40,20 @@ export async function verifyStoreIsolationContract(stores: Stores): Promise<void
     );
   }
 
-  const commitment: Commitment = {
-    id: 'isolation-commitment',
-    at: '2026-01-01T00:00:00.000Z',
+  const task: Task = {
+    id: 'isolation-task',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    status: 'queued',
     origin: 'human',
+    title: '隔離の確認',
     body: '隔離の確認',
   };
-  await stores.commitments.open(commitment);
-  commitment.body = '書いた側で書き換えた';
-  const storedCommitment = await stores.commitments.get('isolation-commitment');
-  if (storedCommitment?.body !== '隔離の確認') {
-    fail(`open の後に呼び出し元が書き換えた値が、ストアへ漏れた: ${storedCommitment?.body}`);
+  await stores.tasks.add(task);
+  task.body = '書いた側で書き換えた';
+  const storedTask = await stores.tasks.get('isolation-task');
+  if (storedTask?.body !== '隔離の確認') {
+    fail(`add の後に呼び出し元が書き換えた値が、ストアへ漏れた: ${storedTask?.body}`);
   }
   const appended = await stores.journal.append({
     type: 'decision',

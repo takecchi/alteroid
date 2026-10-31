@@ -4,7 +4,7 @@ import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-co
 import { jobStatusSchema, type JobStatus } from './schema.js';
 import type { ManagerSummary } from './manager.js';
 
-// `index.ts` へ export しない: `commitment-cursor.ts` / `approval-cursor.ts` は対応する HTTP 側の口があるから公開しているが、3群の並びは `manager_list`（MCP 側）だけの判断で、`GET /managers` の錨（`compareManagerPagingKey`）はこの cursor の対応物ではない。
+// `index.ts` へ export しない: `approval-cursor.ts` は対応する HTTP 側の口があるから公開しているが、3群の並びは `manager_list`（MCP 側）だけの判断で、`GET /managers` の錨（`compareManagerPagingKey`）はこの cursor の対応物ではない。
 // 群の分け方は `positionOf` を引数で受け、この関数は知らない: 並び（走行中・返事待ち → `lost` → その他）は台帳10,000本で走行中が0件しか出なかった実測に基づく設計で、cursor のために変えない。
 // 錨は `managerId` を同値の破れ役として足した複合（`rank` / `startedAt` / `managerId`）: `rank` と `startedAt` が同値だと、keyset で繋いだときに同じ行を繰り返すか間を飛ばす。
 // cursor は `status` を持つ: 錨は刷られた一覧の中でしか意味を持たず、別の絞りの一覧へ繋ぐと行を繰り返すか飛ばす。食い違えば黙ってどちらかへ倒さず `status-mismatch` を返す。

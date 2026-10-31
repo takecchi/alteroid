@@ -7,7 +7,6 @@ const MARKERS: TurnInputText = {
   contextWindowFold: '<contextWindowFold>',
   droppedSignals: '<droppedSignals>',
   redelivery: '<redelivery>',
-  superseded: '<superseded>',
   validity: '<validity>',
   mergedBatchTruncation: '<mergedBatchTruncation>',
   commitment: '<commitment>',
@@ -20,7 +19,6 @@ const EMPTY: TurnInputText = {
   contextWindowFold: '',
   droppedSignals: '',
   redelivery: '',
-  superseded: '',
   validity: '',
   mergedBatchTruncation: '',
   commitment: '',
@@ -29,13 +27,12 @@ const EMPTY: TurnInputText = {
 };
 
 describe('composeTurnInputText — ターン入力の並び順', () => {
-  it('10の欄を、抽出前の `#runTurn` と同じ順で連ねる（外れた合図の要旨は開き直しの断りの直後。#4633）', () => {
+  it('9の欄を、抽出前の `#runTurn` と同じ順で連ねる（外れた合図の要旨は開き直しの断りの直後。#4633）', () => {
     expect(composeTurnInputText(MARKERS)).toBe(
       '<distillGap>' +
         '<contextWindowFold>' +
         '<droppedSignals>' +
         '<redelivery>' +
-        '<superseded>' +
         '<validity>' +
         '<mergedBatchTruncation>' +
         '<commitment>' +
@@ -59,9 +56,9 @@ describe('composeTurnInputText — ターン入力の並び順', () => {
     expect(oneNotice).toBe('<situation><body>');
   });
 
-  it('鮮度・切り方の4本は、全体の状態の2本より必ず先に来る', () => {
+  it('鮮度・切り方の3本は、全体の状態の2本より必ず先に来る', () => {
     const out = composeTurnInputText(MARKERS);
-    const freshness = ['<redelivery>', '<superseded>', '<validity>', '<mergedBatchTruncation>'];
+    const freshness = ['<redelivery>', '<validity>', '<mergedBatchTruncation>'];
     const overall = ['<commitment>', '<situation>'];
 
     const lastFreshness = Math.max(...freshness.map((m) => out.indexOf(m)));

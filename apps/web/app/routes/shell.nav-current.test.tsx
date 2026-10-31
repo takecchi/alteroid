@@ -110,10 +110,9 @@ const CASES: [string, string][] = [
   ['/approvals/answered', '承認待ち'],
   ['/approvals/answered/2026-09-30', '承認待ち'],
   ['/approvals/answered/2026-09-30/ap-1', '承認待ち'],
-  ['/commitments', '未了の仕事'],
-  ['/tasks', '未了の仕事'],
-  ['/tasks/task-1', '未了の仕事'],
-  ['/progress', '未了の仕事'],
+  ['/tasks', '待ち行列'],
+  ['/tasks/task-1', '待ち行列'],
+  ['/progress', '待ち行列'],
   ['/managers', 'マネージャー'],
   ['/managers/mgr-1', 'マネージャー'],
   ['/reports', '日報'],
@@ -150,7 +149,7 @@ describe('まとまりのどのページに居ても、代表の1行が選ばれ
   it('タブの定義から作った全経路も、それぞれ1行だけ選ばれる（サイドバーで選ばれないページを作らない）', async () => {
     const groups: [string, readonly { to: string }[]][] = [
       ['承認待ち', APPROVALS_TABS],
-      ['未了の仕事', WORK_TABS],
+      ['待ち行列', WORK_TABS],
       ['日誌', JOURNAL_TABS],
       ['記憶とやり方', MEMORY_TABS],
       ['予定と受信箱', SCHEDULE_TABS],
@@ -183,8 +182,8 @@ describe('サイドバーのまとまり', () => {
     expect(within(nav).getAllByText('記録')).toHaveLength(1);
     expect(within(nav).getAllByText('クローンの中身')).toHaveLength(1);
     // 見出し「仕事」と項目の名前を同じ語にしない: 同じ語が2回続くと、見出しと項目の区別がつかない（以前は項目も「仕事」で2件だった）
-    expect(within(nav).getAllByText('仕事')).toHaveLength(1);
-    expect(within(nav).getAllByText('未了の仕事')).toHaveLength(1);
+    expect(within(nav).getAllByText('作業')).toHaveLength(1);
+    expect(within(nav).getAllByText('待ち行列')).toHaveLength(1);
     const hrefs = within(nav)
       .getAllByRole('link')
       .map((link) => link.getAttribute('href'));
@@ -192,7 +191,7 @@ describe('サイドバーのまとまり', () => {
       '/',
       '/chat',
       '/approvals',
-      '/commitments',
+      '/tasks',
       '/managers',
       '/reports',
       '/journal',

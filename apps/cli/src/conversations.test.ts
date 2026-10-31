@@ -822,7 +822,6 @@ describe('alteroid conversations delete（#4218）', () => {
     deletedAt: '2026-10-08T00:00:00.000Z',
     hiddenCount: 12,
     attachmentsRemoved: 2,
-    commitmentsRemoved: 1,
     tasksRemoved: 2,
     queuedDropped: 3,
     approvalsLinked: 4,
@@ -866,7 +865,7 @@ describe('alteroid conversations delete（#4218）', () => {
     const text = read();
     expect(text).toContain('12 件');
     expect(text).toContain('添付: 2 件');
-    expect(text).toContain('台帳の約束: 1 件');
+    expect(text).not.toContain('台帳の約束');
     expect(text).toContain('  - クローンの SDK セッションの生ログ');
     expect(text).toContain('  - 蒸留済みの記憶・日報');
     expect(text).not.toContain('警告');
