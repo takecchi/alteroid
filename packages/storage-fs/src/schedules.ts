@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -24,7 +24,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 import { partitionRows } from './partition-rows.js';
 
@@ -303,27 +303,23 @@ export class FsScheduleStore implements ScheduleStore {
 
   /** 飛ばすのは行の形が不正なときだけ: ファイルが JSON として読めない・トップレベルの形が違うのは1行の問題ではないので例外のままにする。 */
   async #read(): Promise<ScheduleFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = fileSchema.parse(JSON.parse(raw));
-      // kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。
-      const { valid: schedules, invalid: invalidSchedulesRaw } = partitionRows(
-        top.schedules,
-        scheduledRequestSchema,
-        'schedules',
-        'kind',
-      );
-      const { valid: phases, invalid: invalidPhasesRaw } = partitionRows(
-        top.phases,
-        schedulePhaseSchema,
-        'phases',
-        'kind',
-      );
-      return { schedules, invalidSchedulesRaw, phases, invalidPhasesRaw };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
+    // kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。
+    const { valid: schedules, invalid: invalidSchedulesRaw } = partitionRows(
+      top.schedules,
+      scheduledRequestSchema,
+      'schedules',
+      'kind',
+    );
+    const { valid: phases, invalid: invalidPhasesRaw } = partitionRows(
+      top.phases,
+      schedulePhaseSchema,
+      'phases',
+      'kind',
+    );
+    return { schedules, invalidSchedulesRaw, phases, invalidPhasesRaw };
   }
 
   /** 読んだ結果に基づいて書くかを決める操作（`claimRun`）を、この排他区間の外へ出さない。 */

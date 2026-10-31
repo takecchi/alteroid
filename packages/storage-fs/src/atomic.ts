@@ -1,5 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+
+// ファイルが無いときだけ undefined を返す: ENOENT 以外（権限・EISDIR など）は握り潰さず投げ直すため
+export async function readTextIfExists(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
 
 export async function writeFileAtomic(
   path: string,

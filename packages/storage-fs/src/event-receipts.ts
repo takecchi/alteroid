@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import {
@@ -10,7 +10,7 @@ import {
 import type { EventReceipt, EventReceiptStore } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const receiptSchema = z.object({
@@ -32,13 +32,8 @@ export class FsEventReceiptStore implements EventReceiptStore {
   }
 
   async #load(): Promise<EventReceipt[]> {
-    let raw: string;
-    try {
-      raw = await readFile(this.#path, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return [];
     const parsed = fileSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) {
       const fields = parsed.error.issues.map((issue) => issue.path.join('.') || '(根)');

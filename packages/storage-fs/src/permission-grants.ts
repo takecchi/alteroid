@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -23,7 +23,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 // 行の中身はここで検査しない: `z.array(permissionGrantSchema)` にすると、1行の不正が配列全体を道連れにするため
@@ -167,38 +167,34 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   }
 
   async #read(): Promise<GrantFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = fileSchema.parse(JSON.parse(raw));
-      const grants: PermissionGrant[] = [];
-      const invalidGrantsRaw: unknown[] = [];
-      top.grants.forEach((rawGrant, index) => {
-        const result = permissionGrantSchema.safeParse(rawGrant);
-        const id = extractRowId(rawGrant);
-        // 鍵に配列の位置（index）を使わない: 他の行が増減すると、同じ壊れた行でも位置がずれるため
-        const key = unreadableRowKey(id, rawGrant);
-        if (result.success) {
-          grants.push(result.data);
-          this.#unreadableOnce.sawReadable(key);
-          return;
-        }
-        invalidGrantsRaw.push(rawGrant);
-        if (this.#unreadableOnce.sawUnreadable(key)) {
-          // id 以外の値は載せない: `allows` / `denies` / `answer` には人間の回答の原文がそのまま入りうるため
-          writeStderrLine(
-            `${describeSkippedRow('許可の記録', 'id', {
-              index,
-              reason: summarizeInvalidFields(result.error.issues),
-              key: id,
-            })}\n`,
-          );
-        }
-      });
-      return { grants, invalidGrantsRaw };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
+    const grants: PermissionGrant[] = [];
+    const invalidGrantsRaw: unknown[] = [];
+    top.grants.forEach((rawGrant, index) => {
+      const result = permissionGrantSchema.safeParse(rawGrant);
+      const id = extractRowId(rawGrant);
+      // 鍵に配列の位置（index）を使わない: 他の行が増減すると、同じ壊れた行でも位置がずれるため
+      const key = unreadableRowKey(id, rawGrant);
+      if (result.success) {
+        grants.push(result.data);
+        this.#unreadableOnce.sawReadable(key);
+        return;
+      }
+      invalidGrantsRaw.push(rawGrant);
+      if (this.#unreadableOnce.sawUnreadable(key)) {
+        // id 以外の値は載せない: `allows` / `denies` / `answer` には人間の回答の原文がそのまま入りうるため
+        writeStderrLine(
+          `${describeSkippedRow('許可の記録', 'id', {
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            key: id,
+          })}\n`,
+        );
+      }
+    });
+    return { grants, invalidGrantsRaw };
   }
 
   // 1本の配列へ合流させる: 分けたまま書くと、次の `#read()` で未知のキーとして黙って捨てられるため

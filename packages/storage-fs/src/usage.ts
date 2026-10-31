@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -37,7 +37,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 // 層と場所は既定を入れて読む: 既定無しだと、`layer` / `site` の無い既存の `usage.json` が起動時に台帳ごと読めなくなるため
@@ -526,15 +526,9 @@ export class FsUsageStore implements UsageStore {
     invalid: InvalidUsageEntries;
     unreadable: UnreadableUsageEntries;
   }> {
-    let top: z.infer<typeof fileSchema>;
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      top = fileSchema.parse(JSON.parse(raw));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return { file: EMPTY, invalid: NO_INVALID, unreadable: NO_UNREADABLE };
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return { file: EMPTY, invalid: NO_INVALID, unreadable: NO_UNREADABLE };
+    const top = fileSchema.parse(JSON.parse(raw));
     const rows = splitRecord('rows', top.rows, storedRowSchema);
     const baselines = splitRecord('baselines', top.baselines, storedBaselineSchema);
     const turns = splitRecord('turns', top.turns, storedTurnRowSchema);

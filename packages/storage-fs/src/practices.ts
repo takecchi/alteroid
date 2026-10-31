@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -26,7 +26,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 import { partitionRows } from './partition-rows.js';
 
@@ -287,27 +287,23 @@ export class FsPracticeStore implements PracticeStore {
   }
 
   async #read(): Promise<PracticeFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const top = fileSchema.parse(JSON.parse(raw));
-      // slug 以外の値は載せない: `title` / `content` には人間・クローンの自由文がそのまま入りうるため
-      const { valid: practices, invalid: invalidPracticesRaw } = partitionRows(
-        top.practices,
-        practiceRecordSchema,
-        'practices',
-        'slug',
-      );
-      const { valid: practiceVersions, invalid: invalidPracticeVersionsRaw } = partitionRows(
-        top.practiceVersions,
-        practiceVersionRecordSchema,
-        'practiceVersions',
-        'slug',
-      );
-      return { practices, invalidPracticesRaw, practiceVersions, invalidPracticeVersionsRaw };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
+    // slug 以外の値は載せない: `title` / `content` には人間・クローンの自由文がそのまま入りうるため
+    const { valid: practices, invalid: invalidPracticesRaw } = partitionRows(
+      top.practices,
+      practiceRecordSchema,
+      'practices',
+      'slug',
+    );
+    const { valid: practiceVersions, invalid: invalidPracticeVersionsRaw } = partitionRows(
+      top.practiceVersions,
+      practiceVersionRecordSchema,
+      'practiceVersions',
+      'slug',
+    );
+    return { practices, invalidPracticesRaw, practiceVersions, invalidPracticeVersionsRaw };
   }
 
   // `write` の「既存の `createdAt` を引き継ぐ」決定はこの区間の中で行う: 読んでから書くまでに別の書き込みが挟まると壊れるため
