@@ -363,6 +363,39 @@ describe('FsPersonaStore', () => {
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
     });
 
+    it('write の humanTouchedAt は本文と同時に human 印を立てる（新規作成・置換とも）', async () => {
+      await stores.persona.write('fresh', '# 新規\n', {
+        ifMatch: null,
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      expect(await stores.persona.protectionStatus('fresh')).toEqual({ kind: 'human' });
+
+      await stores.persona.write('values', '# 版1\n');
+      await stores.persona.write('values', '# 版2\n', {
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('write の humanTouchedAt は、書けなかった（版違い）回は印を立てない', async () => {
+      await stores.persona.write('values', '# 版1\n');
+      await expect(
+        stores.persona.write('values', '# 版2\n', {
+          ifMatch: 'stale',
+          humanTouchedAt: '2026-01-02T00:00:00.000Z',
+        }),
+      ).rejects.toThrow();
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
+    it('humanTouchedAt の無い write は既存の human 印を降ろさない', async () => {
+      await stores.persona.write('values', '# 版1\n', {
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      await stores.persona.write('values', '# 版2\n');
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
     it('list() は .index.json を拾わない（*.md しか見ない）', async () => {
       await stores.persona.write('values', '# 価値観\n');
       await stores.persona.markHumanTouched('values', new Date().toISOString());

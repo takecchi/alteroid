@@ -111,7 +111,14 @@ export function versionMatches<T>(
   return current !== null && versionOf(current) === ifMatch;
 }
 
-export type WriteMemoryOptions = IfMatchWriteOptions;
+export interface WriteMemoryOptions extends IfMatchWriteOptions {
+  /**
+   * 「人間が触った」印（ISO 時刻）を、本文と同じ排他・同じ1文で立てる。`markHumanTouched` と同じく単調非減少。
+   * 本文の後に別の呼び出しで立てると、その間は保護状態が `clone-only` のままで、蒸留が人間の本文を全置換・削除できる。
+   * 書かなかった（`MemoryConflictError` ほか）ときは印も立たない。
+   */
+  humanTouchedAt?: string;
+}
 export type RemoveMemoryOptions = IfMatchRemoveOptions;
 
 /** 前提の版が合わず、書かなかった。`current` はいまの文書（無ければ `null`）。 */

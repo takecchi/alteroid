@@ -27,6 +27,14 @@ import type { Db } from './db.js';
 import { byteOrder, stripNulls, toIso } from './db.js';
 import { memory } from './schema.js';
 
+// 既存行の印を降ろさず進める（`greatest` は null を無視する）: 単調非減少にするため
+function touchedAtSet(touched: Date | undefined): { humanTouchedAt?: ReturnType<typeof sql> } {
+  if (touched === undefined) return {};
+  return {
+    humanTouchedAt: sql`greatest(${memory.humanTouchedAt}, ${touched.toISOString()}::timestamptz)`,
+  };
+}
+
 // キャッシュしない: 外から書き換えられた記憶が次の会話に反映されなくなるため。
 export class PgPersonaStore implements PersonaStore {
   readonly #db: Db;
@@ -128,9 +136,14 @@ export class PgPersonaStore implements PersonaStore {
       createdAt: memory.createdAt,
     };
     const ifMatch = options?.ifMatch;
+    // 「人間が触った」印は本文と同じ1文で立てる: 別の文で後から立てると、その間は `clone-only` で、蒸留が人間の本文を全置換・削除できる。降ろさない（単調非減少）
+    const touched =
+      options?.humanTouchedAt === undefined ? undefined : new Date(options.humanTouchedAt);
+    const touchedValue = touched === undefined ? {} : { humanTouchedAt: touched };
+    const touchedSet = touchedAtSet(touched);
     const rows =
       ifMatch === undefined
-        ? await this.#upsert(key, body, now)
+        ? await this.#upsert(key, body, now, touched)
         : // 読んでから書かない: その間の別の書き手を見逃すため。比較は書き込みと同じ1文の中で行う。
           ifMatch === null
           ? await this.#db
@@ -141,12 +154,18 @@ export class PgPersonaStore implements PersonaStore {
                 contentSha256: sha256Hex(body),
                 updatedAt: now,
                 createdAt: now,
+                ...touchedValue,
               })
               .onConflictDoNothing({ target: memory.slug })
               .returning(returning)
           : await this.#db
               .update(memory)
-              .set({ content: body, contentSha256: sha256Hex(body), updatedAt: now })
+              .set({
+                content: body,
+                contentSha256: sha256Hex(body),
+                updatedAt: now,
+                ...touchedSet,
+              })
               .where(
                 and(
                   eq(memory.slug, key),
@@ -160,7 +179,7 @@ export class PgPersonaStore implements PersonaStore {
     return this.#finishWrite(key, slug, prior, rows);
   }
 
-  async #upsert(key: string, body: string, now: Date) {
+  async #upsert(key: string, body: string, now: Date, touched: Date | undefined) {
     return await this.#db
       .insert(memory)
       // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
@@ -171,10 +190,16 @@ export class PgPersonaStore implements PersonaStore {
         contentSha256: sha256Hex(body),
         updatedAt: now,
         createdAt: now,
+        ...(touched === undefined ? {} : { humanTouchedAt: touched }),
       })
       .onConflictDoUpdate({
         target: memory.slug,
-        set: { content: body, contentSha256: sha256Hex(body), updatedAt: now },
+        set: {
+          content: body,
+          contentSha256: sha256Hex(body),
+          updatedAt: now,
+          ...touchedAtSet(touched),
+        },
       })
       .returning({
         slug: memory.slug,

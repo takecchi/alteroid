@@ -411,6 +411,11 @@ export function createMemoryStores(): Stores {
       };
       documents.set(slug, doc);
       contentSha256.set(slug, sha256Hex(body));
+      const touchedAt = options?.humanTouchedAt;
+      if (touchedAt !== undefined) {
+        const prior = humanTouchedAt.get(slug);
+        if (prior === undefined || touchedAt > prior) humanTouchedAt.set(slug, touchedAt);
+      }
       return doc;
     },
     async append(slug, content) {
