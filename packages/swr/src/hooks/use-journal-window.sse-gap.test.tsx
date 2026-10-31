@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { JournalEntry } from '@alteroid/logic';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useLayoutEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -23,7 +23,13 @@ function Probe() {
   useLayoutEffect(() => {
     ids = win.entries.map((e) => e.id);
   });
-  return <div data-testid="len">{win.entries.length}</div>;
+  return (
+    <div>
+      <div data-testid="len">{win.entries.length}</div>
+      <div data-testid="error">{win.loadMoreError === undefined ? '' : 'error'}</div>
+      <button type="button" data-testid="retry" onClick={win.retryLoadMore} />
+    </div>
+  );
 }
 
 let originalFetch: typeof fetch;
@@ -54,14 +60,19 @@ const c = decision('c', atSecond(120));
 const d = decision('d', atSecond(130));
 
 /** 本物のデーモンと同じ形: 新しい順、`since` は含む（>=）、limit 件で切る。初回の読み込みの時点では a だけが在った。 */
-function stubDaemon(): { sinceAsked: string[] } {
+function stubDaemon(options: { failFirstSince?: boolean } = {}): { sinceAsked: string[] } {
   const sinceAsked: string[] = [];
   const server = [d, c, b, a];
+  let failPending = options.failFirstSince === true;
   stubFetch((url) => {
     if (!url.includes('/journal')) return undefined;
     const params = new URL(url).searchParams;
     const since = params.get('since');
     if (since !== null) sinceAsked.push(since);
+    if (since !== null && failPending) {
+      failPending = false;
+      return new Response('x', { status: 500 });
+    }
     const limit = Number(params.get('limit'));
     const rows = since === null ? [a] : server.filter((e) => Date.parse(e.at) >= Date.parse(since));
     const page = rows.slice(0, limit);
@@ -104,6 +115,21 @@ describe('useJournalWindow: SSE が切れていた間の行（#4575）', () => {
     const e = decision('e', atSecond(140));
     rerender(view('live', [e, d]));
     await waitFor(() => expect(ids).toEqual(['e', 'd', 'c', 'b', 'a']));
+  });
+
+  it('取り直しが1度失敗しても、再試行は切れた時点の先頭から取り直し、間の行を埋める', async () => {
+    const { sinceAsked } = stubDaemon({ failFirstSince: true });
+    const { rerender } = render(view('live', []));
+    await waitFor(() => expect(screen.getByTestId('len').textContent).toBe('1'));
+
+    rerender(view('offline', []));
+    rerender(view('live', [d]));
+    await waitFor(() => expect(sinceAsked).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId('error').textContent).not.toBe(''));
+
+    fireEvent.click(screen.getByTestId('retry'));
+    await waitFor(() => expect(ids).toEqual(['d', 'c', 'b', 'a']));
+    expect(sinceAsked).toEqual([a.at, a.at]);
   });
 
   it('対照: 切れていなければ、SSE の新着を今までどおり先頭へ積み、取り直しはしない', async () => {
