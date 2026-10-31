@@ -264,8 +264,9 @@ export const STATEMENTS = [
   `create unique index if not exists usage_turns_key_idx
      on usage_turns (date, manager_id, layer, site, token_id)`,
 
-  // 台帳の表 `commitments` を作る文はここに無い（#5469 P7 の段4）: 落とす側は `dropRetiredCommitmentsTable`。
-  // ここへ戻すと、落とした表を起動のたびに作り直し、落とす処理が毎回それを数えることになる。
+  // 台帳の表 `commitments` は廃止した（#5469 P7 の段4）: 在れば落とす（索引も一緒に消える）。連番は表に属していないので別に落とす。
+  `drop table if exists commitments`,
+  `drop sequence if exists commitments_seq_seq`,
 
   // 順序と状態を持つ待ち行列（#5469 P2）。台帳（commitments）とは別の表で、台帳から移した（#5908）。
   // rank は double precision（fractional rank）。隙間が尽きたときの振り直しは core の `placeTask` が決める。
@@ -757,83 +758,6 @@ function rowsOf(result: unknown): unknown[] {
   return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
 }
 
-// 数えて落とすまでを1つの文（= 1つのトランザクション）に入れる: 数えた後・落とす前に、入れ替え前の旧デーモンが未了の行を書き込むと、
-// JS で数えてから別の文で落とす形ではその行ごと失う。`access exclusive` を取ってから数えるので、数えた後に行は増えない。
-// `to_regclass` を文の中でも見る・`undefined_table` を握る: 並行に起動したもう1台が先に落としていても、こちらは何もせず通る。
-// `lock_timeout`（55P03）は握らない: `runMigrationStatement` が挑み直す。
-const DROP_RETIRED_COMMITMENTS_TABLE = `do $$
-begin
-  if to_regclass('public.commitments') is null then
-    return;
-  end if;
-  begin
-    lock table public.commitments in access exclusive mode;
-  exception when undefined_table then
-    return;
-  end;
-  if not exists (select 1 from public.commitments where closed_at is null) then
-    drop table public.commitments;
-    drop sequence if exists public.commitments_seq_seq;
-  end if;
-end
-$$`;
-
-async function commitmentsTableExists(db: Db): Promise<boolean> {
-  const result = await db.execute(
-    sql`select to_regclass('public.commitments') is not null as present`,
-  );
-  return (rowsOf(result)[0] as { present?: boolean } | undefined)?.present === true;
-}
-
-async function countOpenCommitments(db: Db): Promise<number> {
-  const result = await db.execute(
-    sql`select count(*)::int as open_rows from public.commitments where closed_at is null`,
-  );
-  return Number((rowsOf(result)[0] as { open_rows?: number | string } | undefined)?.open_rows ?? 0);
-}
-
-/**
- * 台帳のテーブル `commitments` を、未了の行が1件も無いときだけ落とす（#5469 P7 の段4）。起動のたびに通る。
- * 落とすと閉じた行も戻せない: だから未了が1件でも在れば落とさず、件数を警告して起動を続ける（台帳→Task の移行（#5908）を打つ前にデプロイされても、データを失わない）。
- * 投げない: 落とせなくても、残るのは使われない表だけなので、起動を止めない。次の起動でやり直す。
- * 表が無ければ何もしない（2回目以降の起動。起動の費用は `to_regclass` の1回だけ）。
- */
-export async function dropRetiredCommitmentsTable(
-  db: Db,
-  warn: (line: string) => void,
-  options: MigrateOptions = {},
-): Promise<void> {
-  try {
-    if (!(await commitmentsTableExists(db))) return;
-    const open = await countOpenCommitments(db);
-    if (open > 0) {
-      warn(
-        `alteroid: 台帳のテーブル commitments に未了の行が ${String(open)} 件残っているので、台帳のテーブルを落とさなかった（#5945）。` +
-          '#5908 の版の CLI で台帳→Task の移行を打ってから再起動すれば、次の起動で落とす。\n',
-      );
-      return;
-    }
-    await runMigrationStatement(db, DROP_RETIRED_COMMITMENTS_TABLE, warn, options);
-    if (await commitmentsTableExists(db)) {
-      warn(
-        'alteroid: 台帳のテーブル commitments を落とす間に未了の行が現れたので、落とさなかった（#5945）。' +
-          '#5908 の版の CLI で台帳→Task の移行を打ってから再起動すれば、次の起動で落とす。\n',
-      );
-      return;
-    }
-    warn(
-      'alteroid: 台帳のテーブル commitments と連番 commitments_seq_seq を落とした（未了の行は0件だった。#5945）\n',
-    );
-  } catch (error) {
-    // 数えた後に並行の1台が落とした（42P01）なら、目的は果たされている
-    if (pgErrorCode(error) === '42P01') return;
-    warn(
-      `alteroid: 台帳のテーブル commitments を落とせなかった（${collapseErrorCause(error)}）。` +
-        '起動は続け、次の起動でやり直す（#5945）\n',
-    );
-  }
-}
-
 export const AUTH_ACCOUNTS_EMAIL_LOWER_INDEX = 'auth_accounts_email_lower_idx';
 
 const AUTH_ACCOUNTS_EMAIL_IDX = 'auth_accounts_email_idx';
@@ -930,7 +854,6 @@ export async function migrate(
   for (const statement of STATEMENTS) {
     await runMigrationStatement(db, statement, warn, options);
   }
-  await dropRetiredCommitmentsTable(db, warn, options);
   await ensureAuthAccountsEmailLowerIndex(db, warn, options);
 }
 
@@ -947,8 +870,7 @@ export function statementsFingerprint(statements: readonly string[] = STATEMENTS
  * 流さない: 何もしない `ALTER TABLE ... IF NOT EXISTS` でもテーブルの ACCESS EXCLUSIVE を取りに行き、
  * 先行の長い読みがあるとその間そのテーブルへの書き込みを全部止めるため（デプロイの入れ替えで旧デーモンが動いている間に起きる）。
  * 文の一覧が変わった版では、今までどおり頭から1回流し、全部通った後に指紋を書く: 途中で落ちれば書かないので、次の起動でやり直す。
- * 索引を確かめてから作る `ensureAuthAccountsEmailLowerIndex` と、表の有無を見てから落とす `dropRetiredCommitmentsTable` は毎回呼ぶ: 先に有無を見ているので、ロックを取りに行かない。
- * 台帳の表を落とす側を毎回呼ぶ理由: 未了の行が在って落とさなかった起動のあと、移行を打って再起動したときに、文の一覧は変わっていないので `migrate` が流れず、落とす機会が無くなるため。
+ * 索引を確かめてから作る `ensureAuthAccountsEmailLowerIndex` は毎回呼ぶ: 先に有無を見ているので、ロックを取りに行かない。
  * 試験は `migrate()`（毎回すべて流す）を使い続ける: 文の一覧が変わる版では既存の DB へ頭から流すので、「2周目でも壊れない」は要り続けるため。
  */
 export async function migrateOnBoot(
@@ -957,7 +879,6 @@ export async function migrateOnBoot(
 ): Promise<void> {
   const fingerprint = statementsFingerprint();
   if ((await appliedStatementsFingerprint(db)) === fingerprint) {
-    await dropRetiredCommitmentsTable(db, warn);
     await ensureAuthAccountsEmailLowerIndex(db, warn);
     return;
   }

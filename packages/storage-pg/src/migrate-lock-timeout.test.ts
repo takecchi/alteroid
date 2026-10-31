@@ -1,13 +1,7 @@
-import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import {
-  AUTH_ACCOUNTS_EMAIL_LOWER_INDEX,
-  dropRetiredCommitmentsTable,
-  migrate,
-  STATEMENTS,
-} from './migrate.js';
+import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX, migrate, STATEMENTS } from './migrate.js';
 import { createEmptyTestDb } from './test-db.test-support.js';
 
 // マイグレーションの文ごとにロックの待ちへ上限を掛け、取れなければ挑み直す（#4747）
@@ -116,25 +110,5 @@ describe('migrate のロックの待ちと挑み直し（#4747）', () => {
     );
     await migrate(probe.db, () => undefined, { retryDelayMs: 1 });
     expect(probe.failed()).toBe(1);
-  });
-
-  // 落とす文もロックが取れなければ挑み直す: 旧デーモンの長い読みが台帳の表を握っていても、起動は待たされずに済み、読みが終われば落ちる
-  it('⭐ 台帳の表を落とす文がロックを取れない（55P03）ときは挑み直し、通れば落とす', async () => {
-    const { db } = await createEmptyTestDb();
-    await db.execute(
-      sql.raw(
-        'create table commitments (id text primary key, at timestamptz not null, closed_at timestamptz, commitment jsonb not null)',
-      ),
-    );
-    const probe = failingOnceWhere(db, (text) => text.startsWith('do $$'), '55P03');
-    const lines: string[] = [];
-    await dropRetiredCommitmentsTable(probe.db, (line) => lines.push(line), { retryDelayMs: 1 });
-    expect(probe.failed()).toBe(1);
-    expect(lines.join('')).toContain('code=55P03');
-    const result = await db.execute(
-      sql`select to_regclass('public.commitments') is not null as present`,
-    );
-    const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
-    expect((rows[0] as { present?: boolean }).present).toBe(false);
   });
 });
