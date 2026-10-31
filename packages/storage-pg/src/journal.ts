@@ -25,7 +25,7 @@ import type {
 import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toIso, toNumber } from './db.js';
+import { rowsOf, stripNulls, toIso, toNumber } from './db.js';
 import { journal } from './schema.js';
 
 // `entry` に `id` / `at` / `type` を書かない: 列から復元できる二重持ちで、日誌は行数が多く heap を食うため。
@@ -49,11 +49,6 @@ function restoreEntry(row: { id: string; at: Date; type: string; entry: unknown 
       ? (row.entry as Record<string, unknown>)
       : {};
   return { id: row.id, at: row.at.toISOString(), type: row.type, ...stored };
-}
-
-// `execute` の結果は器（node-postgres・PGlite）で形が違う: 配列そのものか、`rows` を持つ形
-function rowsOf(result: unknown): unknown[] {
-  return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
 }
 
 /** 返答の覚えを読み足すとき、前回の最後の `seq` から手前に重ねて読む行数（#5089。`humanReplies` の注記） */

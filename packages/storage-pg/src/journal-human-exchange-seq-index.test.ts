@@ -4,9 +4,14 @@ import { readConversationPage } from '@alteroid/core';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb } from './index.js';
-import { ensureJournalHumanExchangeSeqIndex, JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX } from './migrate.js';
+import { ensureDeferredIndex, JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX } from './migrate.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
+
+const ensureJournalHumanExchangeSeqIndex = (
+  target: Db,
+  warn: (line: string) => void,
+): Promise<void> => ensureDeferredIndex(target, JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX, warn);
 
 // 人間との往復の部分索引（会話の一覧 `GET /conversations` が 9 秒かかった件）
 

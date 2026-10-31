@@ -1,19 +1,8 @@
 import { collapseErrorCause, writeStderrLine } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 
-import type { Db } from './db.js';
-import {
-  ensureJournalConversationSeqIndex,
-  ensureJournalHumanExchangeSeqIndex,
-  ensureJournalHumanRepliesIndex,
-  ensureJournalTypeSeqIndex,
-  ensureJournalWithdrawalsIndex,
-  JOURNAL_CONVERSATION_SEQ_INDEX,
-  JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX,
-  JOURNAL_HUMAN_REPLIES_INDEX,
-  JOURNAL_TYPE_SEQ_INDEX,
-  JOURNAL_WITHDRAWALS_INDEX,
-} from './migrate.js';
+import { rowsOf, type Db } from './db.js';
+import { DEFERRED_JOURNAL_INDEXES, ensureDeferredIndex } from './migrate.js';
 
 /**
  * 起動の後に書き込みを止めずに作る索引の、1本ぶんの結果。
@@ -29,27 +18,10 @@ export interface DeferredIndexOutcome {
   reason?: string;
 }
 
-/**
- * 起動の後に作る索引の並び。1本ずつ作る: 並べると同じ日誌を2本の走査が同時に読み、器の I/O を一度に食うため。
- * 会話の一覧の窓の索引を先に作る: 人の待ちに直に効くのはこれで、既に在る索引の確かめは一瞬で済むため
- */
-const DEFERRED_INDEXES: readonly {
-  name: string;
-  ensure: (db: Db, warn: (line: string) => void) => Promise<void>;
-}[] = [
-  { name: JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX, ensure: ensureJournalHumanExchangeSeqIndex },
-  { name: JOURNAL_HUMAN_REPLIES_INDEX, ensure: ensureJournalHumanRepliesIndex },
-  { name: JOURNAL_WITHDRAWALS_INDEX, ensure: ensureJournalWithdrawalsIndex },
-  { name: JOURNAL_CONVERSATION_SEQ_INDEX, ensure: ensureJournalConversationSeqIndex },
-  { name: JOURNAL_TYPE_SEQ_INDEX, ensure: ensureJournalTypeSeqIndex },
-];
-
-/** 起動の後に作る索引の名前（並びは作る順） */
-export const DEFERRED_INDEX_NAMES: readonly string[] = DEFERRED_INDEXES.map((entry) => entry.name);
-
-function rowsOf(result: unknown): unknown[] {
-  return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
-}
+/** 起動の後に作る索引の名前（並びは作る順。表は `migrate.ts` の `DEFERRED_JOURNAL_INDEXES`） */
+export const DEFERRED_INDEX_NAMES: readonly string[] = DEFERRED_JOURNAL_INDEXES.map(
+  (entry) => entry.name,
+);
 
 /** 有効なら `true`、無い・無効なら `false`、読めなければ `undefined`（分からないものを「有効」にも「無い」にも倒さない） */
 async function indexValid(db: Db, name: string): Promise<boolean | undefined> {
@@ -76,14 +48,14 @@ export async function buildDeferredIndexes(
   const now = options.now ?? (() => performance.now());
   const warn = options.warn ?? ((line: string) => writeStderrLine(line));
   const outcomes: DeferredIndexOutcome[] = [];
-  for (const { name, ensure } of DEFERRED_INDEXES) {
+  for (const name of DEFERRED_INDEX_NAMES) {
     const started = now();
     if ((await indexValid(db, name)) === true) {
       outcomes.push({ index: name, state: 'valid', ms: Math.round(now() - started) });
       continue;
     }
     let warned: string | undefined;
-    await ensure(db, (line) => {
+    await ensureDeferredIndex(db, name, (line) => {
       warned = line.trim();
       warn(line);
     });

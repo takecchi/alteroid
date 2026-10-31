@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { collapseErrorCause, writeStderrLine } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 
-import type { Db } from './db.js';
+import { rowsOf, type Db } from './db.js';
 
 // drizzle-kit の生成ファイルを配らない: 起動が別手順に依存しないよう、「先にマイグレーションを流す」手順を足さない。
 // 既存行の意味を変える変更を黙って混ぜない: それは記憶の書き換えであり、人間の確認が要る。
@@ -575,187 +575,110 @@ export const STATEMENTS = [
 
 /** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */
 export const JOURNAL_HUMAN_REPLIES_INDEX = 'journal_human_replies_idx';
+/** 取り下げの印（`withdrawnClientMessageIds`）だけを持つ部分索引（#5089） */
+export const JOURNAL_WITHDRAWALS_INDEX = 'journal_withdrawals_idx';
+/** 会話を名指した読み（`JournalQuery.conversationId`）だけを持つ部分索引 */
+export const JOURNAL_CONVERSATION_SEQ_INDEX = 'journal_conversation_seq_idx';
+/** 人間との往復（`type = 'exchange'` かつ `with = 'human'`）だけを `seq` の順に持つ部分索引 */
+export const JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX = 'journal_human_exchange_seq_idx';
+/** 種別で絞った日誌を `seq` の順に読むための索引（#5264） */
+export const JOURNAL_TYPE_SEQ_INDEX = 'journal_type_seq_idx';
 
-// 述語は `PgJournalStore.humanReplies` の絞りと同じ式にする: 違うと索引が使われない
-const CREATE_JOURNAL_HUMAN_REPLIES_INDEX = `create index concurrently if not exists ${JOURNAL_HUMAN_REPLIES_INDEX}
-   on journal (seq) where type = 'exchange' and (entry->>'with') = 'human' and (entry->>'role') = 'outbound'`;
+interface DeferredIndexSpec {
+  readonly name: string;
+  /** `create index concurrently if not exists <name> …` */
+  readonly create: string;
+  /** 警告の「…が遅いだけ」の部分（索引なしで何が遅いか） */
+  readonly slow: string;
+  /** 警告の末尾に付ける出典 */
+  readonly ref?: string;
+}
 
 /**
- * 人間への返答の部分索引を、書き込みを止めずに作る（#5089。`/progress`・`/commitments` の「返答済み」の判定の読み出しを縮める）。
+ * 起動の後に書き込みを止めずに作る日誌の索引の並び（作る順）。
+ * 1本ずつ作る: 並べると同じ日誌を2本の走査が同時に読み、器の I/O を一度に食うため。
+ * 会話の一覧の窓の索引を先に作る: 人の待ちに直に効くのはこれで、既に在る索引の確かめは一瞬で済むため。
+ * 述語は読み手（`PgJournalStore`）の絞りと同じ式にする: 違うと索引が使われない。
+ */
+export const DEFERRED_JOURNAL_INDEXES: readonly DeferredIndexSpec[] = [
+  {
+    // 述語は `listPage` の `types: ['exchange'], with: ['human']` の絞りと同じ式にする。
+    // 鍵を `seq` だけにする: 読みは `order by seq desc limit`（会話の一覧の窓）と、継続点から `seq` の範囲で頁を進める読みのため。
+    // `journal_exchange_with_seq_idx`（`with`, `seq`）があるのに足す理由: planner は `type = 'exchange'` と `with = 'human'` を独立と見て行数を数分の1に見積もり、
+    // 2つの索引の BitmapAnd で人間との往復を**全部**本文ごと読んで並べ替えてから `limit` で切る計画に倒れる（偽の日誌 70 万行で窓 1 回 37,216 ページ・99ms、索引ありで約 8,200 ページ・13ms）。
+    // 本番は人間との往復の総数が多いほど読む量が増え、会話の一覧（`GET /conversations?limit=30`）で 9 秒かかった
+    name: JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX,
+    create: `create index concurrently if not exists ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}
+   on journal (seq) where type = 'exchange' and (entry->>'with') = 'human'`,
+    slow: '会話の一覧・会話 id の前方一致の読み出しが遅いだけ',
+  },
+  {
+    // 述語は `PgJournalStore.humanReplies` の絞りと同じ式にする
+    name: JOURNAL_HUMAN_REPLIES_INDEX,
+    create: `create index concurrently if not exists ${JOURNAL_HUMAN_REPLIES_INDEX}
+   on journal (seq) where type = 'exchange' and (entry->>'with') = 'human' and (entry->>'role') = 'outbound'`,
+    slow: '台帳の返答済みの判定が遅いだけ',
+    ref: '（#5089）',
+  },
+  {
+    // 述語は `PgJournalStore.withdrawnClientMessageIds` の絞りと同じ式にする。鍵を `at` にする: 読みは `since` 以降の範囲で引くため
+    name: JOURNAL_WITHDRAWALS_INDEX,
+    create: `create index concurrently if not exists ${JOURNAL_WITHDRAWALS_INDEX}
+   on journal (at) where type = 'exchange' and (entry->>'with') = 'self' and (entry->>'withdrawnClientMessageId') is not null`,
+    slow: '会話の一覧・詳細の取り下げの判定が遅いだけ',
+    ref: '（#5089）',
+  },
+  {
+    // 述語は `PgJournalStore.listPage` の `conversationId` の絞りと同じ式にする。
+    // 鍵の2つ目を `seq` にする: 読みは `order by seq desc limit` で新しい側から引くため
+    name: JOURNAL_CONVERSATION_SEQ_INDEX,
+    create: `create index concurrently if not exists ${JOURNAL_CONVERSATION_SEQ_INDEX}
+   on journal ((entry->>'conversationId'), seq) where (entry->>'conversationId') is not null`,
+    slow: '会話を名指した日誌の読み（会話の画面・既読・編集の判定）が遅いだけ',
+  },
+  {
+    // 鍵を `(type, seq)` にする: `listPage({ types })` は `order by seq desc limit` で新しい側から引くので、`journal_type_at_idx`（`type`, `at`）は並びに使えず、
+    // planner は主キーを新しい側から辿って種別で捨てる計画を選ぶ。日報（1 日 1 行前後）や GitHub の観測の記録のように薄い種別では、`limit` に届くまで日誌の大半を辿る（`GET /reports`・`GET /progress`）。
+    // 種別ごとの部分索引にしない: 種別はパラメータで渡るので、汎用の計画では部分索引の述語との一致を planner が確かめられず、使われないことがあるため
+    name: JOURNAL_TYPE_SEQ_INDEX,
+    create: `create index concurrently if not exists ${JOURNAL_TYPE_SEQ_INDEX}
+   on journal (type, seq)`,
+    slow: '日報の一覧・進捗の GitHub の観測の記録など、種別で絞った読み出しが遅いだけ',
+    ref: '（#5264）',
+  },
+];
+
+/**
+ * 日誌の索引を1本、書き込みを止めずに作る（`DEFERRED_JOURNAL_INDEXES` の名前で引く）。
  * `STATEMENTS` に置かない: 日誌は大きく（本番で GB 級）、普通の `create index` は作り終わるまで日誌への書き込みを止める。
  * デプロイの入れ替えでは旧デーモンが書き続けているので、`concurrently` で作る（トランザクションの外でしか打てないので `runMigrationStatement` は通さない）。
  * 起動を待たせない: 呼び手は起き上がった後に待たずに呼ぶ。作り終わるまでは索引なしで今までどおり動く（遅いだけ）。
  * 作りかけで落ちると無効（`indisvalid = false`）な索引が残るので、在っても無効なら消して作り直す。
  * 投げない: 作れなくても遅いだけで正しさは変わらないので、警告を出して次の起動でやり直す。
  */
-export async function ensureJournalHumanRepliesIndex(
+export async function ensureDeferredIndex(
   db: Db,
+  name: string,
   warn: (line: string) => void = (line) => writeStderrLine(line),
 ): Promise<void> {
+  const spec = DEFERRED_JOURNAL_INDEXES.find((entry) => entry.name === name);
+  if (spec === undefined) throw new Error(`unknown deferred index: ${name}`);
   try {
     const result = await db.execute(
-      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_HUMAN_REPLIES_INDEX}`,
+      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${name}`,
     );
     const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
     if (found?.valid === true) return;
     if (found !== undefined) {
-      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_HUMAN_REPLIES_INDEX}`));
+      await db.execute(sql.raw(`drop index concurrently if exists ${name}`));
     }
-    await db.execute(sql.raw(CREATE_JOURNAL_HUMAN_REPLIES_INDEX));
+    await db.execute(sql.raw(spec.create));
   } catch (error) {
     warn(
-      `alteroid: 日誌の索引 ${JOURNAL_HUMAN_REPLIES_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
-        '索引なしで動き続け（台帳の返答済みの判定が遅いだけ）、次の起動でやり直す（#5089）\n',
+      `alteroid: 日誌の索引 ${name} を作れなかった（${collapseErrorCause(error)}）。` +
+        `索引なしで動き続け（${spec.slow}）、次の起動でやり直す${spec.ref ?? ''}\n`,
     );
   }
-}
-
-/** 取り下げの印（`withdrawnClientMessageIds`）だけを持つ部分索引（#5089） */
-export const JOURNAL_WITHDRAWALS_INDEX = 'journal_withdrawals_idx';
-
-// 述語は `PgJournalStore.withdrawnClientMessageIds` の絞りと同じ式にする: 違うと索引が使われない。
-// 鍵を `at` にする: 読みは `since` 以降の範囲で引くため
-const CREATE_JOURNAL_WITHDRAWALS_INDEX = `create index concurrently if not exists ${JOURNAL_WITHDRAWALS_INDEX}
-   on journal (at) where type = 'exchange' and (entry->>'with') = 'self' and (entry->>'withdrawnClientMessageId') is not null`;
-
-/**
- * 取り下げの印の部分索引を、書き込みを止めずに作る（#5089。会話の一覧・詳細の取り下げの判定の読み出しを縮める）。
- * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
- */
-export async function ensureJournalWithdrawalsIndex(
-  db: Db,
-  warn: (line: string) => void = (line) => writeStderrLine(line),
-): Promise<void> {
-  try {
-    const result = await db.execute(
-      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_WITHDRAWALS_INDEX}`,
-    );
-    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
-    if (found?.valid === true) return;
-    if (found !== undefined) {
-      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_WITHDRAWALS_INDEX}`));
-    }
-    await db.execute(sql.raw(CREATE_JOURNAL_WITHDRAWALS_INDEX));
-  } catch (error) {
-    warn(
-      `alteroid: 日誌の索引 ${JOURNAL_WITHDRAWALS_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
-        '索引なしで動き続け（会話の一覧・詳細の取り下げの判定が遅いだけ）、次の起動でやり直す（#5089）\n',
-    );
-  }
-}
-
-/** 会話を名指した読み（`JournalQuery.conversationId`）だけを持つ部分索引 */
-export const JOURNAL_CONVERSATION_SEQ_INDEX = 'journal_conversation_seq_idx';
-
-// 述語は `PgJournalStore.listPage` の `conversationId` の絞りと同じ式にする: 違うと索引が使われない。
-// 鍵の2つ目を `seq` にする: 読みは `order by seq desc limit` で新しい側から引くため
-const CREATE_JOURNAL_CONVERSATION_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_CONVERSATION_SEQ_INDEX}
-   on journal ((entry->>'conversationId'), seq) where (entry->>'conversationId') is not null`;
-
-/**
- * 会話を名指した日誌の読みの部分索引を、書き込みを止めずに作る（会話の画面・既読・編集の判定が、全会話の窓を読まずに1会話だけを引くため）。
- * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
- */
-export async function ensureJournalConversationSeqIndex(
-  db: Db,
-  warn: (line: string) => void = (line) => writeStderrLine(line),
-): Promise<void> {
-  try {
-    const result = await db.execute(
-      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_CONVERSATION_SEQ_INDEX}`,
-    );
-    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
-    if (found?.valid === true) return;
-    if (found !== undefined) {
-      await db.execute(
-        sql.raw(`drop index concurrently if exists ${JOURNAL_CONVERSATION_SEQ_INDEX}`),
-      );
-    }
-    await db.execute(sql.raw(CREATE_JOURNAL_CONVERSATION_SEQ_INDEX));
-  } catch (error) {
-    warn(
-      `alteroid: 日誌の索引 ${JOURNAL_CONVERSATION_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
-        '索引なしで動き続け（会話を名指した日誌の読み（会話の画面・既読・編集の判定）が遅いだけ）、次の起動でやり直す\n',
-    );
-  }
-}
-
-/** 人間との往復（`type = 'exchange'` かつ `with = 'human'`）だけを `seq` の順に持つ部分索引 */
-export const JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX = 'journal_human_exchange_seq_idx';
-
-// 述語は `PgJournalStore.listPage` の `types: ['exchange'], with: ['human']` の絞りと同じ式にする: 違うと索引が使われない。
-// 鍵を `seq` だけにする: 読みは `order by seq desc limit`（会話の一覧の窓）と、継続点から `seq` の範囲で頁を進める読みのため。
-// `journal_exchange_with_seq_idx`（`with`, `seq`）があるのに足す理由: planner は `type = 'exchange'` と `with = 'human'` を独立と見て行数を数分の1に見積もり、
-// 2つの索引の BitmapAnd で人間との往復を**全部**本文ごと読んで並べ替えてから `limit` で切る計画に倒れる（偽の日誌 70 万行で窓 1 回 37,216 ページ・99ms、索引ありで約 8,200 ページ・13ms）。
-// 本番は人間との往復の総数が多いほど読む量が増え、会話の一覧（`GET /conversations?limit=30`）で 9 秒かかった
-const CREATE_JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}
-   on journal (seq) where type = 'exchange' and (entry->>'with') = 'human'`;
-
-/**
- * 人間との往復の部分索引を、書き込みを止めずに作る（会話の一覧の窓・会話 id の前方一致・日報・会話の削除の読み出しを、新しい順に辿って途中で止める形にする）。
- * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
- */
-export async function ensureJournalHumanExchangeSeqIndex(
-  db: Db,
-  warn: (line: string) => void = (line) => writeStderrLine(line),
-): Promise<void> {
-  try {
-    const result = await db.execute(
-      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}`,
-    );
-    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
-    if (found?.valid === true) return;
-    if (found !== undefined) {
-      await db.execute(
-        sql.raw(`drop index concurrently if exists ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX}`),
-      );
-    }
-    await db.execute(sql.raw(CREATE_JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX));
-  } catch (error) {
-    warn(
-      `alteroid: 日誌の索引 ${JOURNAL_HUMAN_EXCHANGE_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
-        '索引なしで動き続け（会話の一覧・会話 id の前方一致の読み出しが遅いだけ）、次の起動でやり直す\n',
-    );
-  }
-}
-
-/** 種別で絞った日誌を `seq` の順に読むための索引（#5264） */
-export const JOURNAL_TYPE_SEQ_INDEX = 'journal_type_seq_idx';
-
-// 鍵を `(type, seq)` にする: `listPage({ types })` は `order by seq desc limit` で新しい側から引くので、`journal_type_at_idx`（`type`, `at`）は並びに使えず、
-// planner は主キーを新しい側から辿って種別で捨てる計画を選ぶ。日報（1 日 1 行前後）や GitHub の観測の記録のように薄い種別では、`limit` に届くまで日誌の大半を辿る（`GET /reports`・`GET /progress`）。
-// 種別ごとの部分索引にしない: 種別はパラメータで渡るので、汎用の計画では部分索引の述語との一致を planner が確かめられず、使われないことがあるため
-const CREATE_JOURNAL_TYPE_SEQ_INDEX = `create index concurrently if not exists ${JOURNAL_TYPE_SEQ_INDEX}
-   on journal (type, seq)`;
-
-/**
- * 種別と `seq` の索引を、書き込みを止めずに作る（#5264。日報の一覧・進捗の GitHub の観測の記録の読み出しを、新しい順に辿って途中で止める形にする）。
- * 作り方・倒れ方は `ensureJournalHumanRepliesIndex` と同じ（`STATEMENTS` に置かない・`concurrently`・無効なら作り直す・投げない）。
- */
-export async function ensureJournalTypeSeqIndex(
-  db: Db,
-  warn: (line: string) => void = (line) => writeStderrLine(line),
-): Promise<void> {
-  try {
-    const result = await db.execute(
-      sql`select i.indisvalid as valid from pg_class c join pg_index i on i.indexrelid = c.oid where c.relname = ${JOURNAL_TYPE_SEQ_INDEX}`,
-    );
-    const found = rowsOf(result)[0] as { valid?: boolean } | undefined;
-    if (found?.valid === true) return;
-    if (found !== undefined) {
-      await db.execute(sql.raw(`drop index concurrently if exists ${JOURNAL_TYPE_SEQ_INDEX}`));
-    }
-    await db.execute(sql.raw(CREATE_JOURNAL_TYPE_SEQ_INDEX));
-  } catch (error) {
-    warn(
-      `alteroid: 日誌の索引 ${JOURNAL_TYPE_SEQ_INDEX} を作れなかった（${collapseErrorCause(error)}）。` +
-        '索引なしで動き続け（日報の一覧・進捗の GitHub の観測の記録など、種別で絞った読み出しが遅いだけ）、次の起動でやり直す（#5264）\n',
-    );
-  }
-}
-
-function rowsOf(result: unknown): unknown[] {
-  return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
 }
 
 export const AUTH_ACCOUNTS_EMAIL_LOWER_INDEX = 'auth_accounts_email_lower_idx';
