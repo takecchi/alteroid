@@ -23,7 +23,6 @@ import type {
   UnreadableAccount,
 } from '@alteroid/core';
 import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
-import type { SQL, SQLWrapper } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { byteOrder, optionalDate, optionalIso, stripNulls, toIso } from './db.js';
