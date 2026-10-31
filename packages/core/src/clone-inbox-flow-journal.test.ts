@@ -157,7 +157,7 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     await s.clone.stop();
   });
 
-  it('2つ目の窓では、1件目の消し込みが効いて retained.pendingCollapse が1のまま増えない（`#dropPendingCollapse` が `#forget` の中で効いていることの固定。畳み込みの索引は manager_message でしか増えない）', async () => {
+  it('2つ目の窓でも、取り出し済みの代表の索引が残らず retained.pendingCollapse が0のまま増えない（`#pump` の取り出しで `#dropPendingCollapse` が効いていることの固定。畳み込みの索引は manager_message でしか増えない）', async () => {
     // waitForDone は使えない: manager_message の会話 id は null で、setup() が購読している 'conv-1' に何も流れないため
     const s = setup(() => 'わかった');
     s.clone.post({
@@ -192,15 +192,16 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
       throw new Error('inbox_flow が日誌に無い');
     }
 
+    // 索引は代表がターンへ取り出された時点で落ちる（読まれている最中の代表に同文を畳まない）ので、ターンの終わりの行では0のまま増えない
     expect(first.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      pendingCollapse: 1,
+      pendingCollapse: 0,
     });
     expect(second.retained).toEqual({
       unread: 1,
       redelivered: 0,
-      pendingCollapse: 1,
+      pendingCollapse: 0,
     });
 
     await s.clone.stop();
