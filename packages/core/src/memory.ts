@@ -23,7 +23,6 @@ import type {
   MemoryDescriptionFreshness,
   MemoryDocKind,
   MemoryFrontmatterState,
-  MemoryProtectionStatus,
 } from './schema.js';
 import type { JournalQuery, JournalStore } from './store.js';
 
