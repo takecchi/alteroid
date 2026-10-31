@@ -1377,6 +1377,8 @@ describe('畳むまでの await の間に abort() が終わっても、止めた
       .map((event) => (event as { text?: string }).text ?? '')
       .join('\n----\n');
     expect(texts).toContain('追い越される報告の本文');
+    // 二重に届かない（closed 側の知らせが同じ報告を重ねない）
+    expect(texts.split('追い越される報告の本文').length - 1).toBe(1);
 
     await pool.stop();
   });
