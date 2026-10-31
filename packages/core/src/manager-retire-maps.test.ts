@@ -136,11 +136,16 @@ describe('担当の作成・畳みをくり返したあとの、委譲の鍵の 
     expect(sizes['resumeConfirmations']).toBe(0);
   });
 
-  it('畳んだ担当の分が残る欄の現状（溜まる）', async () => {
+  it('見回りの間隔の記憶（#turnEndProbedAt）は、畳んだ担当の分が残らない', async () => {
+    const sizes = await runCycles();
+    expect(sizes['turnEndProbedAt']).toBe(0);
+  });
+
+  // 次の3本は消さない欄（理由は manager.ts の各欄の doc）。増えるのは担当1本につき1件の小さな値で、消すと判定・日誌が変わる。
+  it('消さない欄は、畳んだ担当の分が1本につき1件ずつ残る（現状の固定）', async () => {
     const sizes = await runCycles();
     expect(sizes['tokenIdentities']).toBe(CYCLES);
     expect(sizes['resumedCount']).toBe(CYCLES);
-    expect(sizes['turnEndProbedAt']).toBe(CYCLES);
     expect(sizes['transcriptTailJournaled']).toBe(CYCLES);
   });
 });
