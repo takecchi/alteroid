@@ -100,6 +100,35 @@ export default function Files() {
     void mutate();
   }
 
+  // 削除が通ると行ごと消えて焦点が body に落ちる。消えたのを見届けたら、次の行の「削除」、無ければ前の行、どちらも無ければ一覧の見出しへ移す
+  // 削除を始めた時点の並びで隣を決める: 消えたあとの一覧には、もう消した行の位置が無いため
+  const pageRef = useRef<HTMLDivElement>(null);
+  const deleting = useRef<{ id: string; next?: string; prev?: string }>(undefined);
+  const items = data?.items;
+  useEffect(() => {
+    const pending = deleting.current;
+    if (pending === undefined || items?.some((item) => item.id === pending.id) !== false) return;
+    deleting.current = undefined;
+    // 隣が無い（undefined）ときは、どの行にも一致しない "undefined" で引いて null になる
+    const deleteButton = (id: string | undefined) =>
+      pageRef.current?.querySelector<HTMLElement>(
+        `[data-file-id="${String(id)}"] [data-file-action="delete"]`,
+      );
+    (
+      deleteButton(pending.next) ??
+      deleteButton(pending.prev) ??
+      pageRef.current?.querySelector<HTMLElement>('[data-list-heading]')
+    )?.focus();
+  }, [items]);
+  function onDeleting(id: string | undefined) {
+    const list = items ?? [];
+    const index = list.findIndex((item) => item.id === id);
+    deleting.current =
+      id === undefined || index < 0
+        ? undefined
+        : { id, next: list[index + 1]?.id, prev: list[index - 1]?.id };
+  }
+
   const filtered = kept !== undefined || from !== undefined || committed !== '';
 
   return (
@@ -107,12 +136,16 @@ export default function Files() {
       title="ファイル"
       description="預かっているファイルの一覧です。会話に添えられたもの・クローンや連携が置いたものも並びます"
     >
-      <div className="flex flex-col gap-4">
+      <div ref={pageRef} className="flex flex-col gap-4">
         <UsageCard usage={error === undefined ? data?.usage : undefined} />
         <UploadCard />
         <Card>
           <CardHeader
-            title="一覧"
+            title={
+              <span tabIndex={-1} data-list-heading className="outline-none">
+                一覧
+              </span>
+            }
             subtitle="新しい順"
             action={data === undefined ? undefined : <Badge>{data.items.length} 件表示</Badge>}
           />
@@ -207,7 +240,7 @@ export default function Files() {
             <>
               <ul aria-label="ファイル" aria-busy={isValidating}>
                 {data.items.map((item) => (
-                  <FileRow key={item.id} item={item} onGone={onGone} />
+                  <FileRow key={item.id} item={item} onGone={onGone} onDeleting={onDeleting} />
                 ))}
               </ul>
               {data.nextCursor !== undefined && (
@@ -397,7 +430,15 @@ function UploadCard() {
   );
 }
 
-function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string) => void }) {
+function FileRow({
+  item,
+  onGone,
+  onDeleting,
+}: {
+  item: AttachmentItem;
+  onGone: (name: string) => void;
+  onDeleting: (id: string | undefined) => void;
+}) {
   const api = useApi();
   const setKept = useSetAttachmentKept();
   const remove = useDeleteAttachment();
@@ -428,11 +469,15 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
     pressed.current = kind;
     setBusy(kind);
     setFailure(undefined);
+    if (kind === 'delete') onDeleting(item.id);
     try {
       await action();
     } catch (caught) {
       if (isGone(caught)) onGone(item.name);
-      else setFailure(caught);
+      else {
+        setFailure(caught);
+        if (kind === 'delete') onDeleting(undefined);
+      }
     } finally {
       setBusy(undefined);
     }
@@ -441,6 +486,7 @@ function FileRow({ item, onGone }: { item: AttachmentItem; onGone: (name: string
   return (
     <li
       ref={rowRef}
+      data-file-id={item.id}
       className="flex flex-col gap-2 border-b border-border px-4 py-3 text-xs last:border-b-0 sm:flex-row sm:items-start"
     >
       <Thumbnail item={item} />
