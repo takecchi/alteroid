@@ -1,10 +1,10 @@
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { CodexChatgptAuthRecord, CodexChatgptAuthStore } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const recordSchema = z.object({
@@ -29,13 +29,8 @@ export class FsCodexChatgptAuthStore implements CodexChatgptAuthStore {
   }
 
   async #read(): Promise<CodexChatgptAuthRecord | null> {
-    let raw: string;
-    try {
-      raw = await readFile(this.#path, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return null;
     let json: unknown;
     try {
       json = JSON.parse(raw);

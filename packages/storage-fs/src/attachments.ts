@@ -41,7 +41,7 @@ import {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const META_FILE = 'meta.json';
@@ -81,13 +81,8 @@ export class FsAttachmentStore implements AttachmentStore {
   }
 
   async #readMeta(dir: string): Promise<AttachmentMeta | undefined> {
-    let raw: string;
-    try {
-      raw = await readFile(join(dir, META_FILE), 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
-    }
+    const raw = await readTextIfExists(join(dir, META_FILE));
+    if (raw === undefined) return undefined;
     let json: unknown;
     try {
       json = JSON.parse(raw);

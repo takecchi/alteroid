@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -35,7 +35,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const rawFileSchema = z.object({
@@ -208,13 +208,9 @@ export class FsTaskStore implements TaskStore {
   }
 
   async #read(): Promise<TaskFile> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      return splitRows(rawFileSchema.parse(JSON.parse(raw)).tasks);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], unreadable: [] };
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return { rows: [], unreadable: [] };
+    return splitRows(rawFileSchema.parse(JSON.parse(raw)).tasks);
   }
 
   async #update<T>(mutate: (file: TaskFile) => { next: TaskFile; result: T }): Promise<T> {

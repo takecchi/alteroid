@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -17,7 +17,7 @@ import type {
 } from '@alteroid/core';
 import { z } from 'zod';
 
-import { writeFileAtomic } from './atomic.js';
+import { readTextIfExists, writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const inboxEntrySchema = z.object({
@@ -183,14 +183,9 @@ export class FsInboxStore implements InboxStore {
   }
 
   async #read(): Promise<InboxFile> {
-    let top: z.infer<typeof fileSchema>;
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      top = fileSchema.parse(JSON.parse(raw));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
-      throw error;
-    }
+    const raw = await readTextIfExists(this.#path);
+    if (raw === undefined) return EMPTY;
+    const top = fileSchema.parse(JSON.parse(raw));
     const events: InboxEntry[] = [];
     const invalidEventsRaw: unknown[] = [];
     top.events.forEach((rawEntry, index) => {

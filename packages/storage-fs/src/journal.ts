@@ -24,6 +24,8 @@ import type {
   JournalStore,
 } from '@alteroid/core';
 
+import { readTextIfExists } from './atomic.js';
+
 // 書き換えの口は用意しない: 聞かずに実行した判断が日誌に残ることが、人間の事後否定の実体だから
 export class FsJournalStore implements JournalStore {
   readonly #dir: string;
@@ -274,13 +276,8 @@ export class FsJournalStore implements JournalStore {
     dropped: Map<string, number>,
   ): Promise<{ file: string; index: number } | null> {
     const file = `${after.at.slice(0, 10)}.jsonl`;
-    let raw: string;
-    try {
-      raw = await readFile(join(this.#dir, file), 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const raw = await readTextIfExists(join(this.#dir, file));
+    if (raw === undefined) return null;
     const lines = raw.split('\n').filter((line) => line.length > 0);
     for (let i = 0; i < lines.length; i += 1) {
       const entry = parseLine(lines[i], dropped);
