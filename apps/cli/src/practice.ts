@@ -1,22 +1,24 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin } from 'node:process';
 import { PRACTICE_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import type { DaemonClient } from './client.js';
 import { connect } from './connect.js';
-import { withErrorReason, describeFailedResponse } from './format.js';
+import { describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
 import { type Target } from './target.js';
-import {
-  keepDraftOnFailure,
-  openEditorKeepingEdits,
-  readAllText,
-  readInputFile,
-} from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
+import {
+  finishRemove,
+  readSetBody,
+  reportEditConflict,
+  type DocFlowKind,
+} from './versioned-doc-flow.js';
+
+const KIND: DocFlowKind = { noun: 'やり方', command: 'practice' };
 
 // `kind` を固定の選択肢にしない: `practiceKindSchema` が自由文字列で、列挙ではないため
 export interface PracticeSummary {
@@ -217,23 +219,13 @@ export async function practiceEditCommand(
       if (!(error instanceof PracticeConflictCliError)) throw error;
       keep();
       const theirs = join(dir, `${slug}.current.md`);
-      if (error.current !== null) await writeFile(theirs, error.current.content, 'utf8');
-      stdout.write(
-        [
-          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-          `  あなたの編集（残してあります）: ${path}`,
-          error.current === null
-            ? '  いまのやり方: 無い（消されています）'
-            : `  いまのやり方: ${theirs}`,
-          ...(error.current === null
-            ? []
-            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
-          `  取り込んだら \`alteroid practice edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${shellQuote(path)}\`（先の書き込みを消します）。`,
-          '',
-        ].join('\n'),
-      );
-      throw new Error(`やり方が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+      throw await reportEditConflict(KIND, {
+        slug,
+        path,
+        theirsPath: theirs,
+        current: error.current === null ? null : error.current.content,
+        overwriteNote: '先の書き込みを消します',
+        writeTheirs: (content) => writeFile(theirs, content, 'utf8'),
         cause: error,
       });
     }
@@ -244,13 +236,6 @@ function emptyEditMessage(slug: string, resume: string): string {
   return (
     `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
     `空にしたいときだけ: ${resume} --allow-empty`
-  );
-}
-
-function emptyBodyMessage(slug: string): string {
-  return (
-    `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
-    '空にしたいときだけ --allow-empty を付けてください。'
   );
 }
 
@@ -271,13 +256,7 @@ export async function practiceSetCommand(
     throw new Error(missingKindTitleMessage('set', slug, unreadable));
   }
 
-  const content =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
-  if (options.allowEmpty !== true && content.trim().length === 0) {
-    throw new Error(emptyBodyMessage(slug));
-  }
+  const content = await readSetBody(KIND, slug, options);
   await write(client, target, slug, kind, title, content);
 }
 
@@ -296,53 +275,13 @@ export async function practiceRemoveCommand(
     param: { slug },
     query: ifMatch === undefined ? {} : { ifMatch },
   });
-  if (response.status === 409) {
-    const body = (await response.json()) as {
-      current?: { practice?: { content?: string }; version?: string } | null;
-    };
-    const current = body.current ?? null;
-    stdout.write(
-      [
-        `消していません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、すでに消されました）。`,
-        current === null
-          ? '  いまのやり方: 無い（すでに消されています）'
-          : `  いまのやり方の版: ${current.version ?? '（不明）'}（${String(current.practice?.content?.length ?? 0)} 文字）`,
-        ...(current === null
-          ? []
-          : [
-              `  いまの内容を読み直す: \`alteroid practice show ${slug}\`（版そのものは GET /practices/${slug} の version）`,
-              `  確かめたうえで消してよければ、もう一度 \`alteroid practice remove ${slug}\`（いまの版を読み直して消します）。`,
-            ]),
-        '',
-      ].join('\n'),
-    );
-    throw new Error(`やり方が読んだ後に変わっていたので消しませんでした: ${slug}`);
-  }
-  if (response.status === 428) {
-    throw new Error(
-      await withErrorReason(
-        `消していません: ${slug}（HTTP 428。このデーモンは削除に読んだ版を必須としています。` +
-          `\`alteroid practice show ${slug}\` で版を確かめ、\`alteroid practice remove ${slug} --if-match <版>\` で打ち直してください）`,
-        response,
-      ),
-    );
-  }
-  if (!response.ok) {
-    if (response.status === 400) {
-      throw new Error(`やり方の名前として成立しません: ${slug}`);
-    }
-    if (response.status === 404) {
-      throw new Error(`そんなやり方はありません: ${slug}`);
-    }
-    throw new Error(
-      await describeFailedResponse(
-        `やり方を消せませんでした: ${slug}（HTTP ${String(response.status)}）`,
-        response,
-        target,
-      ),
-    );
-  }
-  stdout.write(`消しました: ${slug}\n`);
+  await finishRemove(KIND, {
+    slug,
+    response,
+    target,
+    bodyKey: 'practice',
+    route: `/practices/${slug}`,
+  });
 }
 
 async function readVersionForRemove(

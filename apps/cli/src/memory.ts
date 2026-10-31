@@ -1,7 +1,6 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stdin } from 'node:process';
 import {
   MEMORY_SLUG_RULE,
   describeSlugViolation,
@@ -11,17 +10,20 @@ import { stderr, stdout, writeShownBody } from './terminal-out.js';
 
 import type { DaemonClient } from './client.js';
 import { connect } from './connect.js';
-import { formatElapsedAgo, withErrorReason, describeFailedResponse } from './format.js';
+import { formatElapsedAgo, describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
 import { type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import {
-  keepDraftOnFailure,
-  openEditorKeepingEdits,
-  readAllText,
-  readInputFile,
-} from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
+import {
+  finishRemove,
+  readSetBody,
+  reportEditConflict,
+  type DocFlowKind,
+} from './versioned-doc-flow.js';
+
+const KIND: DocFlowKind = { noun: '記憶', command: 'memory' };
 
 export type MemoryDescriptionDrift =
   | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
@@ -161,32 +163,18 @@ export async function memoryEditCommand(slug: string): Promise<void> {
       if (!(error instanceof MemoryConflictCliError)) throw error;
       keep();
       const theirs = join(dir, `${slug}.current.md`);
-      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
-      stdout.write(
-        [
-          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-          `  あなたの編集（残してあります）: ${path}`,
-          error.current === null
-            ? '  いまの記憶: 無い（消されています）'
-            : `  いまの記憶: ${theirs}`,
-          ...(error.current === null
-            ? []
-            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
-          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
-          '',
-        ].join('\n'),
-      );
-      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+      throw await reportEditConflict(KIND, {
+        slug,
+        path,
+        theirsPath: theirs,
+        current: error.current,
+        overwriteNote: 'クローンの書き込みを消します',
+        writeTheirs: (content) => writeFile(theirs, content, 'utf8'),
         cause: error,
       });
     }
   });
 }
-
-// 空の本文を書かない: 上流のコマンドが失敗して何も流さなかったとき記憶が黙って空になり、版の履歴が無く戻せないため
-const EMPTY_BODY_MESSAGE =
-  '本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ --allow-empty を付けてください。';
 
 // 確認は入力を読む前に出す: 標準入力から本文を読み切ると、その後の `yes` を聞けないため
 export async function memorySetCommand(
@@ -203,13 +191,7 @@ export async function memorySetCommand(
       io,
     );
   }
-  const content =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
-  if (options.allowEmpty !== true && content.trim().length === 0) {
-    throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
-  }
+  const content = await readSetBody(KIND, slug, options);
   await write(conn.client, conn.target, slug, content);
 }
 
@@ -246,53 +228,13 @@ export async function memoryRemoveCommand(
     param: { slug },
     query: ifMatch === undefined ? {} : { ifMatch },
   });
-  if (response.status === 409) {
-    const body = (await response.json()) as {
-      current?: { document?: { content?: string }; version?: string } | null;
-    };
-    const current = body.current ?? null;
-    stdout.write(
-      [
-        `消していません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、すでに消されました）。`,
-        current === null
-          ? '  いまの記憶: 無い（すでに消されています）'
-          : `  いまの記憶の版: ${current.version ?? '（不明）'}（${String(current.document?.content?.length ?? 0)} 文字）`,
-        ...(current === null
-          ? []
-          : [
-              `  いまの内容を読み直す: \`alteroid memory show ${slug}\`（版そのものは GET /memory/${slug} の version）`,
-              `  確かめたうえで消してよければ、もう一度 \`alteroid memory remove ${slug}\`（いまの版を読み直して消します）。`,
-            ]),
-        '',
-      ].join('\n'),
-    );
-    throw new Error(`記憶が読んだ後に変わっていたので消しませんでした: ${slug}`);
-  }
-  if (response.status === 428) {
-    throw new Error(
-      await withErrorReason(
-        `消していません: ${slug}（HTTP 428。このデーモンは削除に読んだ版を必須としています。` +
-          `\`alteroid memory show ${slug}\` で版を確かめ、\`alteroid memory remove ${slug} --if-match <版>\` で打ち直してください）`,
-        response,
-      ),
-    );
-  }
-  if (!response.ok) {
-    if (response.status === 400) {
-      throw new Error(`記憶の名前として成立しません: ${slug}`);
-    }
-    if (response.status === 404) {
-      throw new Error(`そんな記憶はありません: ${slug}`);
-    }
-    throw new Error(
-      await describeFailedResponse(
-        `記憶を消せませんでした: ${slug}（HTTP ${String(response.status)}）`,
-        response,
-        target,
-      ),
-    );
-  }
-  stdout.write(`消しました: ${slug}\n`);
+  await finishRemove(KIND, {
+    slug,
+    response,
+    target,
+    bodyKey: 'document',
+    route: `/memory/${slug}`,
+  });
 }
 
 // `null` は 404 と 400 だけにする: 他の失敗を `null` にすると、`edit` が読めていない既存の記憶を空の雛形で上書きするため
