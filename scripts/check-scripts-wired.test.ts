@@ -222,7 +222,6 @@ const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
   'check:web-bundle-size': { routes: ['steps', 'pr'] },
   'check:agents-md-size': { routes: ['steps', 'pr'] },
   'check:no-attribution-trailers': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
-  'check:dockerfile-railway': { routes: ['steps', 'pr'] },
 };
 
 function actualRoutes(name: string, wiredSteps: ReadonlySet<string>): Route[] {
