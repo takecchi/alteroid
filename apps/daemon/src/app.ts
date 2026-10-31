@@ -4016,7 +4016,8 @@ export function createApp(deps: AppDeps) {
         }
         let doc;
         try {
-          doc = await stores.persona.write(slug, content, { ifMatch });
+          // 印（`humanTouchedAt`）は本文と同じ排他・同じ1文で立てる: 本文の後に別の呼び出しで立てると、その間は `clone-only` で、蒸留が人間の本文を全置換・削除できた。書けなかった回は印も立たない。裏付けの行は上で先に書いてある。
+          doc = await stores.persona.write(slug, content, { ifMatch, humanTouchedAt: entry.at });
         } catch (error) {
           // 日誌には「人間が書いた」が残っているので打ち消す: `deriveHumanTouchedAtFromJournal` が、この行を印の根拠にしない。足せなければ跡だけ残し（`appendJournalOrDrop`）、応答は元の失敗のまま返す（再構築で印が立ちうるのは守りすぎの側）。
           await appendJournalOrDrop(
@@ -4038,8 +4039,6 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
-        // 本文が書けた後でだけ立てる: 書けなかったのに立てると、打ち消した行と派生値の対応が崩れる。裏付けの行は上で先に書いてある。
-        await stores.persona.markHumanTouched(slug, entry.at);
         // 無い slug への書き込みは新規作成: 打ち間違いの slug が更新と同じ 200 に紛れないよう、応答で言い分ける。
         return c.json({
           document: doc,

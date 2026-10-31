@@ -226,7 +226,7 @@ export class FsPersonaStore implements PersonaStore {
           throw new MemoryConflictError(slug, current);
         }
       }
-      return this.#writeNow(slug, content);
+      return this.#writeNow(slug, content, options?.humanTouchedAt);
     });
   }
 
@@ -238,16 +238,21 @@ export class FsPersonaStore implements PersonaStore {
     });
   }
 
-  async #writeNow(slug: string, content: string): Promise<MemoryDocument> {
+  async #writeNow(slug: string, content: string, humanTouchedAt?: string): Promise<MemoryDocument> {
     const before = await this.read(slug);
     const path = this.#path(slug);
     await mkdir(this.#dir, { recursive: true });
     await writeFileAtomic(path, ensureTrailingNewline(stripNul(content)));
     const written = await this.read(slug);
     if (!written) throw new Error(`記憶の書き込みに失敗: ${slug}`);
-    // `humanTouchedAt` は更新対象に含めない: 保護の印を降ろさない唯一の保証が、ここで触らないことだから
+    // `humanTouchedAt` は引数で渡された回にだけ、同じ索引の書き込みで立てる（降ろさない・単調非減少）。渡されない回は触らない: 保護の印を降ろさない保証のため
     const index = await this.#readIndex();
     const priorEntry = index[slug];
+    const priorTouched = priorEntry?.humanTouchedAt;
+    const nextTouched =
+      humanTouchedAt !== undefined && (priorTouched === undefined || humanTouchedAt > priorTouched)
+        ? humanTouchedAt
+        : priorTouched;
     // `describedAt` などは `written.updatedAt` / `written.bytes` と同じ値に確定させる: 別に採番すると mtime の精度差で `stale` に化けたり、1バイトずれたりするため
     const { describedAt, describedBytes, describedBytesAt } = nextDescribedState({
       priorContent: before?.content ?? null,
@@ -269,6 +274,7 @@ export class FsPersonaStore implements PersonaStore {
       describedBytes,
       describedBytesAt,
       createdAt,
+      ...(nextTouched === undefined ? {} : { humanTouchedAt: nextTouched }),
     };
     await this.#writeIndex(index);
     // 確定した値で戻り値を組み直す: 省くと、新規作成直後の戻り値だけが「不明」のままになり、pg 版の `RETURNING` と食い違うため

@@ -293,6 +293,54 @@ describe('PgPersonaStore', () => {
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
     });
 
+    it('write の humanTouchedAt は本文と同時に human 印を立てる（新規作成・置換・ifMatch とも）', async () => {
+      await stores.persona.write('fresh', '# 新規\n', {
+        ifMatch: null,
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      expect(await stores.persona.protectionStatus('fresh')).toEqual({ kind: 'human' });
+
+      await stores.persona.write('values', '# 版1\n');
+      await stores.persona.write('values', '# 版2\n', {
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+
+      await stores.persona.write('matched', '# 版1\n');
+      await stores.persona.write('matched', '# 版2\n', {
+        ifMatch: memoryVersion('# 版1\n'),
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      expect(await stores.persona.protectionStatus('matched')).toEqual({ kind: 'human' });
+    });
+
+    it('write の humanTouchedAt は、書けなかった（版違い）回は印を立てない', async () => {
+      await stores.persona.write('values', '# 版1\n');
+      await expect(
+        stores.persona.write('values', '# 版2\n', {
+          ifMatch: 'stale',
+          humanTouchedAt: '2026-01-02T00:00:00.000Z',
+        }),
+      ).rejects.toThrow();
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
+    it('humanTouchedAt は巻き戻らず、無い write は既存の human 印を降ろさない', async () => {
+      await stores.persona.write('values', '# 版1\n', {
+        humanTouchedAt: '2026-01-02T00:00:00.000Z',
+      });
+      await stores.persona.write('values', '# 版2\n', {
+        humanTouchedAt: '2020-01-01T00:00:00.000Z',
+      });
+      await stores.persona.write('values', '# 版3\n');
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+      const rows = await db
+        .select({ at: memory.humanTouchedAt })
+        .from(memory)
+        .where(eq(memory.slug, 'values'));
+      expect(rows[0]?.at?.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+    });
+
     it('remove() で保護状態も一緒に消える（実体の無い印を残さない）', async () => {
       await stores.persona.write('values', '# 価値観\n');
       await stores.persona.markHumanTouched('values', new Date().toISOString());

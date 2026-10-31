@@ -101,9 +101,9 @@ describe.each([
 ] as const)(
   '人間の PUT の途中で来た蒸留は、人間の本文を壊せない（%s 実装）',
   (_label, makeStores) => {
-    async function startPut() {
+    async function startPut(seed = true) {
       const stores = await makeStores();
-      await stores.persona.write(SLUG, OLD);
+      if (seed) await stores.persona.write(SLUG, OLD);
       const gate = gated(stores);
       const app = createApp({
         clone: stubClone(),
@@ -114,7 +114,7 @@ describe.each([
       const response = app.request(`/memory/${SLUG}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: HUMAN, ifMatch: memoryVersion(OLD) }),
+        body: JSON.stringify({ content: HUMAN, ifMatch: seed ? memoryVersion(OLD) : null }),
       });
       await gate.reached;
       return { stores, gate, response };
@@ -133,6 +133,55 @@ describe.each([
       expect(text).toContain('保護状態: human');
       expect((await stores.persona.read(SLUG))?.content).toBe(HUMAN);
       expect(await stores.persona.protectionStatus(SLUG)).toEqual({ kind: 'human' });
+    });
+
+    it('新規作成の PUT の途中でも、蒸留の全置換は human の保護で断られる', async () => {
+      const { stores, gate, response } = await startPut(false);
+      const text = await distillCaller(stores)('memory_write', {
+        slug: SLUG,
+        content: DISTILL,
+        summary: '蒸留の全置換',
+        base_version: memoryVersion(HUMAN),
+      });
+      gate.release();
+      expect((await response).status).toBe(200);
+      expect(text).toContain('保護状態: human');
+      expect((await stores.persona.read(SLUG))?.content).toBe(HUMAN);
+    });
+
+    it('本文が書けなかった PUT は印を立てない（打ち消しの日誌と合う）', async () => {
+      const stores = await makeStores();
+      await stores.persona.write(SLUG, OLD);
+      const failing = {
+        ...stores,
+        persona: new Proxy(stores.persona, {
+          get(target, prop) {
+            if (prop === 'write') return () => Promise.reject(new Error('書き込みの失敗'));
+            const value: unknown = Reflect.get(target, prop, target);
+            return typeof value === 'function'
+              ? (value as (...args: unknown[]) => unknown).bind(target)
+              : value;
+          },
+        }),
+      };
+      const app = createApp({
+        clone: stubClone(),
+        stores: failing,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+      const response = await app.request(`/memory/${SLUG}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: HUMAN, ifMatch: memoryVersion(OLD) }),
+      });
+      expect(response.status).toBe(500);
+      expect((await stores.persona.read(SLUG))?.content).toBe(OLD);
+      expect(await stores.persona.protectionStatus(SLUG)).toEqual({ kind: 'clone-only' });
+      const actions = (await stores.journal.list({ limit: 5 })).map((entry) =>
+        entry.type === 'memory_update' ? entry.action : entry.type,
+      );
+      expect(actions).toContain('write_failed');
     });
 
     it('memory_delete は human の保護で断られ、人間の本文が残る', async () => {
