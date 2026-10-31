@@ -1379,6 +1379,15 @@ describe('畳むまでの await の間に abort() が終わっても、止めた
     expect(texts).toContain('追い越される報告の本文');
     // 二重に届かない（closed 側の知らせが同じ報告を重ねない）
     expect(texts.split('追い越される報告の本文').length - 1).toBe(1);
+    // 日誌だけ読む人にも「配った」ことが読める
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(
+      decisions.some((entry) =>
+        JSON.stringify(entry).includes(
+          '同じ担当の closed に追い越されたので、畳まずに受信箱へ配った',
+        ),
+      ),
+    ).toBe(true);
 
     await pool.stop();
   });

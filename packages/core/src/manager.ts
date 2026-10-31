@@ -10511,6 +10511,16 @@ class Pool implements ManagerPool {
               'full',
               event.failure !== undefined || event.unreported !== undefined,
             );
+            // 上で書いた「受信箱へは回さない」の decision は消せないので、実際には配ったことを日誌に足す（日誌だけ読む人に「配られていない」と読ませない）。
+            await this.#journal({
+              type: 'decision',
+              decision: `[${event.managerId}] 同じ担当の closed に追い越されたので、畳まずに受信箱へ配った`,
+              grounds:
+                `managerId=${event.managerId} ` +
+                `awaitingBackground.count=${String(awaitingBackground.count)} ` +
+                `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
+              routine: true,
+            });
             return;
           }
           this.#withholdBackgroundReport(event.managerId, event.text, awaitingBackground);
