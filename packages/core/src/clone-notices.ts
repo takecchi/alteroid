@@ -54,6 +54,7 @@ export class CloneNotices {
   }
 }
 
+// `commitment` は待ち行列（Task）の断り。`TurnInputText` の欄名と揃えて台帳のころの名前のまま（`context-size-measure.ts` が引く）
 // 断り書きを起点ごとに配らない: 組み立ての起点は散っていて、入れ忘れた起点にだけ断りの無いターンが生まれる。ターンの入口は1か所のため
 export type TurnNoticeKey =
   'redelivery' | 'validity' | 'mergedBatchTruncation' | 'commitment' | 'situation';

@@ -113,6 +113,7 @@ export interface TurnInputText {
   readonly redelivery: string;
   readonly validity: string;
   readonly mergedBatchTruncation: string;
+  // 待ち行列（Task）の断り。欄名は台帳のころの `commitment` のまま: `context-size-measure.ts`（触らない約束）が欄名で内訳を引くため
   readonly commitment: string;
   readonly situation: string;
   readonly body: string;

@@ -134,7 +134,7 @@ export const humanActionKindSchema = z.enum([
   'manager_message',
   'commitment_close',
   'commitment_reopen',
-  // task（待ち行列）の側の人間の操作（#5469 P7c-1）。`commitment_*` は古い日誌の行を読むために残す。積む・編集は台帳の側にも印が無いので足さない
+  // task（待ち行列）の側の人間の操作（#5469 P7c-1）。`commitment_*`（廃止した台帳の側の操作）は古い日誌の行を読むために残す。積む・編集は台帳の側にも印が無かったので足さない
   'task_close',
   'task_reopen',
   'task_move',
@@ -147,7 +147,7 @@ export type HumanActionKind = z.infer<typeof humanActionKindSchema>;
 
 export const humanActionSchema = z.object({
   kind: humanActionKindSchema,
-  // 委譲の id・台帳の行の id・task の id・定期の依頼の kind・やり方の slug。種類ごとに指すものが違うので、型を分けず文字列で持つ
+  // 委譲の id・task の id（古い日誌の `commitment_*` は廃止した台帳の行の id）・定期の依頼の kind・やり方の slug。種類ごとに指すものが違うので、型を分けず文字列で持つ
   target: z.string().min(1),
   via: answeredViaSchema,
 });
@@ -290,7 +290,7 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     quotaStop: z.literal(true).optional(),
     // 全断片が5時間枠（session）の印を持つ枠の知らせ。担当が全員戻っていれば、クローンはターンを起こさず日誌にだけ残す（#4499）
     quotaSessionWindow: z.literal(true).optional(),
-    // 機構が「クローンが手を打つことの無い知らせ」と判定した印。台帳には開かない（受信箱と日誌には今どおり届く）。立っていない回はキーごと書かない（#5015）
+    // 書き手も読み手も無い（台帳の撤去で台帳へ開く判定ごと外れた。#5015 の印）。永続化された受信箱の古い行がこの欄を持つので、欄名は変えずに残す
     commitmentExempt: z.literal(true).optional(),
     // 名指しの担当がいまの鍵で戻っていれば、クローンがターンを起こさず日誌にだけ残してよい知らせの印（#5048）。立っていない回はキーごと書かない。
     // `movedFromGeneration` は積んだ時点の担当の鍵の世代: 在れば、担当がその世代から別の世代へ移って戻ったときだけ畳む（同じ鍵のまま作業者だけが落ちた回を消さないため）
@@ -562,7 +562,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     answeredAt: isoDateTime.optional(),
     answer: z.string().optional(),
     answeredVia: answeredViaSchema.optional(),
-    // 行は消さず、終端は別の新しい行として積む: `commitment_close` と同じ形にするため
+    // 行は消さず、終端は別の新しい行として積む: Task の閉じ方と同じ形にするため
     withdrawnAt: isoDateTime.optional(),
     withdrawnReason: z.string().optional(),
   }),
@@ -1003,7 +1003,6 @@ export const schedulePhaseSchema = z.object({
 export type SchedulePhase = z.infer<typeof schedulePhaseSchema>;
 
 // 起点（`origin`）を落とさない: 落とすと、一覧を見たクローンが人間との約束か自分で思い立ったことかを区別できないため
-// 台帳（Commitment）の撤去（#5469 P7）で名前を Task 側へ寄せた（`commitmentOriginSchema` → `taskOriginSchema`）。値は変えていない
 export const taskOriginSchema = z.enum(['human', 'manager', 'external', 'self']);
 export type TaskOrigin = z.infer<typeof taskOriginSchema>;
 
@@ -1032,8 +1031,7 @@ export const taskSchema = z.object({
   status: taskStatusSchema,
   origin: taskOriginSchema,
   source: z.string().optional(),
-  // P2 では任意: 台帳から自動で task を作らない（二重書き込みをしない）ので、起点の会話が定まらない task が生まれるため。
-  // 必須にするのは P4（`task_say` で会話の宛先を task に固定するとき）。それまで必須にすると、起点の無い task を作る道具が嘘の会話 id を要求する
+  // 任意: 台帳から移した行は起点の会話が定まらない（移行で作った行は欄を持たない）ため。必須にすると、起点の無い task を作る道具が嘘の会話 id を要求する
   originConversationId: z.string().optional(),
   // 短い一行。一覧にはこれと要旨だけを出し、全文は id 指定の口へ回す（listing-and-detail）
   title: z.string(),
@@ -1381,7 +1379,7 @@ export const jobSchema = z.object({
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
   status: jobStatusSchema,
-  // `commitmentId` のような専用の欄を足さず、`ToolContext.conversationId` を自動で写す: クローンが手で維持する欄を足すと、クローンはそれを忘れるため
+  // 専用の欄をクローンに渡させず、`ToolContext.conversationId` を自動で写す:クローンが手で維持する欄を足すと、クローンはそれを忘れるため
   conversationId: z.string().optional(),
   // この委譲が結び付いた task（`manager_start` の `taskId`）。委譲の状態が変わると、デーモンが task の状態を追わせる（#5469 P3）。
   // 起点の会話と違って呼び出し文脈から自動で写さない: 文脈には「いま扱っている task」がまだ無い（P5 以降）。クローンが渡す欄だが、渡し忘れても委譲は走る（結び付かないだけ）
@@ -1556,7 +1554,7 @@ export const pendingApprovalSchema = z.object({
   // `undefined` は拾い直しの対象にしない: 遡って配り直すと、とっくに人間の目から消えた古い回答が今さら届くため
   answerDelivery: z.enum(['pending', 'delivered']).optional(),
   conversationId: z.string().optional(),
-  // 行は消さない: `commitment_close` と同じく、理由ごと読み戻せるようにするため
+  // 行は消さない: Task の閉じ方と同じく、理由ごと読み戻せるようにするため
   withdrawnAt: isoDateTime.optional(),
   withdrawnReason: z.string().optional(),
   permissionRequest: permissionRequestSchema.optional(),

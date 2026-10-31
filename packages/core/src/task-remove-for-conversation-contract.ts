@@ -11,7 +11,7 @@ export interface TaskRemoveForConversationContractOptions {
 
 /**
  * `TaskStore.removeForConversation`（会話の削除）の契約を、実装1つに対して測る。
- * fs / pg / インメモリの3つが同じ関数を呼ぶ（`commitment-remove-for-conversation-contract.ts` と同じ形）。
+ * fs / pg / インメモリの3つが同じ関数を呼ぶ。
  *
  * 測る性質:
  * 1. `originConversationId === conversationId` の Task を、**未了も閉じた行も**物理的に消す（`get` が `null`、`list({ includeClosed: true })` に出ない）。
@@ -19,7 +19,7 @@ export interface TaskRemoveForConversationContractOptions {
  * 2. 起点の欄を持たない移行前の形の行（`origin: 'human'` / `'self'` で `source === conversationId`）も消す。台帳から移した行は `originConversationId` を持たず、
  *    本文は人間の発言そのものなので、欄で引くだけでは会話を消しても残る
  * 3. 別の会話の行・`origin: 'manager'` / `'external'` で `source` だけが同じ行・どちらの欄も無い行は残る
- * 4. 読めない行（`list()` の `unreadable`）も、生の値の欄が一致すれば消して件数に数える（`CommitmentStore.removeForConversation` と同じ作法。`plantUnreadable` がある器だけ測る）
+ * 4. 読めない行（`list()` の `unreadable`）も、生の値の欄が一致すれば消して件数に数える（`plantUnreadable` がある器だけ測る）
  * 5. 冪等（2度目は0件）。NUL を含む会話 id は「無い」と同じ（0件・何も消えない）。消した id は新しい行として足し直せる
  *
  * **会話の id はこの関数が決めた固有の値なので、空のストアでなくても測れる。**

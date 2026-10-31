@@ -41,7 +41,7 @@ const rawFileSchema = z.object({
   tasks: z.array(z.object({ rank: z.unknown(), task: z.unknown() })).default([]),
 });
 
-// 生の値を保持する: 書き戻しのたびに、読めなかった行が気づかれないままディスクから永久に消えるため（`FsCommitmentStore` と同じ）
+// 生の値を保持する: 書き戻しのたびに、読めなかった行が気づかれないままディスクから永久に消えるため
 interface UnreadableRow {
   readonly rank: unknown;
   readonly value: unknown;
@@ -97,8 +97,8 @@ function unreadableError(id: string, reason: string): UnreadableTaskError {
 
 /**
  * ファイル1枚（`tasks.json`）に全行を持つ。規則は core の `task.ts` に1本だけあり、ここは読み書きと排他だけ（メモリ・pg と共有）。
- * 閉じた行を刈らない: `CommitmentStore` の `CLOSED_HISTORY_LIMIT` のような物理削除は、task の閉じた記録（done / cancelled の理由）を失うので持たない。
- * 毎回全体を書き直す費用は、閉じた行が積もる P7 までに保持方針と合わせて決める（今は task を作る口が `task_add` だけで量が小さい）。
+ * 閉じた行を刈らない: 閉じた行の物理削除は、task の閉じた記録（done / cancelled の理由）を失うので持たない。
+ * 毎回全体を書き直す費用は、閉じた行が積もったときに保持方針と合わせて決める。
  */
 export class FsTaskStore implements TaskStore {
   readonly #dir: string;

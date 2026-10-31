@@ -9,7 +9,7 @@
  *   `UsageStore.aggregate()` の絞り込みだけは、書き込みが落として残すので落としてから引く。
  * - それ以外の本文は NUL を落として残す: pg の `stripNulls` と同じく、器の都合で記録を失わない。
  * - 記録を失うほうが害が大きい台帳の欄は、外から来る鍵でも断らず落として残す
- *   （`UsageStore` の `managerId`・`model`・`tokenId`、`CommitmentStore` の `source`、
+ *   （`UsageStore` の `managerId`・`model`・`tokenId`、
  *   `JobStore` の参照キー・印と承認待ちの `questions` / `selections` の文字列）。
  *   行を指す鍵（`id`）は断る。部品は `usage-input.ts`・`job-input.ts`。
  *

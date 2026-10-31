@@ -6,6 +6,7 @@ export type JournalStoreHumanActionContractSubject = Pick<JournalStore, 'append'
 
 const SAMPLES: readonly HumanAction[] = [
   { kind: 'manager_message', target: 'mgr-1', via: { kind: 'operator', auth: 'operator-token' } },
+  // 廃止した台帳の印。古い日誌の行を読み戻せることの歯として残す
   { kind: 'commitment_close', target: 'c-1', via: { kind: 'operator', auth: 'disabled' } },
   { kind: 'task_close', target: 't-1', via: { kind: 'operator', auth: 'disabled' } },
   { kind: 'task_reopen', target: 't-1', via: { kind: 'operator', auth: 'disabled' } },
