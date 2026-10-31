@@ -897,3 +897,11 @@ export {
   RUNNER_KEEP_ALIVE_TIMEOUT_MS,
   applyRunnerKeepAlive,
 } from './runner-keep-alive.js';
+
+// ── mutation-testing selftest 用の一時的な足場（#1166 面1）ここから ──
+// selftest 実行中だけ存在する。selftest が正常終了すれば自動で消える。
+// 置き去りを見つけたら、この行から直下の「ここまで」の行まで（このコメントを
+// 含めて3行）を削除してよい。フィクスチャ本体
+// （packages/core/src/mutation-selftest-delivery-fixture.ts）も合わせて削除すること。
+export { selftestDeliveryFixtureValue } from './mutation-selftest-delivery-fixture.js';
+// ── mutation-testing selftest 用の一時的な足場（#1166 面1）ここまで ──
