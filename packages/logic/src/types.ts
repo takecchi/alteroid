@@ -109,6 +109,8 @@ export type EnvVarScope = EnvVarView['scope'];
 export type EnvVarUpdateResult = Ok<paths['/credentials']['put']>;
 
 export type ProfileState = Ok<paths['/profile']['get']>;
+// apps/web がまだ import している別名。web 側を ProfileState に寄せたら外す
+export type NormalizedProfile = ProfileState;
 export type ProfileEntryView = ProfileState['entries'][number];
 export type ProfileScope = ProfileEntryView['scope'];
 export type ProfileUpdateResult = Ok<paths['/profile/{name}']['put']>;

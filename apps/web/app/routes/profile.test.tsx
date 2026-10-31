@@ -562,36 +562,6 @@ describe('/profile 画面 — 行を外す', () => {
   });
 });
 
-describe('/profile 画面 — 旧い形の応答（entries が無い）', () => {
-  const OLD = {
-    script: `${SECRET_LINE}\n`,
-    updatedAt: '2026-09-20T00:00:00.000Z',
-    sha256: 'o'.repeat(12),
-    bytes: 41,
-  };
-
-  function stubOldDaemon() {
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : null;
-      const url = request?.url ?? String(input);
-      const method = request?.method ?? init?.method ?? 'GET';
-      if (method === 'GET' && new URL(url).pathname === '/profile') return json(OLD, 200);
-      return json({ error: 'Not Found' }, 404);
-    }) as typeof fetch;
-  }
-
-  it('読み替えずに、読めない形で届いた旨のエラーを出し、一覧の本文は出さない', async () => {
-    stubOldDaemon();
-    renderScreen();
-
-    expect(
-      await screen.findByText(/プロファイルの応答が読めない形で届いた（entries が無い）/),
-    ).toBeTruthy();
-    expect(screen.queryByRole('button', { name: / を編集する$/ })).toBeNull();
-    expect(document.body.textContent).not.toContain('very-secret-value');
-  });
-});
-
 describe('/profile 画面 — 書きかけを確認なしで捨てない', () => {
   async function startDirty() {
     stubProfile();

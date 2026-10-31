@@ -5,12 +5,7 @@ import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
 
 import { redactedExcerpt } from '@alteroid/core/redact';
-import {
-  hasRunnerPushFailure,
-  normalizeProfile,
-  type NormalizedProfile,
-  type ProfileState,
-} from '@alteroid/logic';
+import { hasRunnerPushFailure, type ProfileState } from '@alteroid/logic';
 
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
@@ -57,7 +52,7 @@ interface ProfileEntryView {
   version?: string;
 }
 
-type ProfileView = NormalizedProfile;
+type ProfileView = ProfileState;
 
 interface ApplyResult {
   ok: boolean;
@@ -90,9 +85,8 @@ function parseName(raw: string | undefined): string {
   return name;
 }
 
-/** `entries` の無い応答（旧い形）は normalizeProfile が投げる。読み替えない。 */
 async function fetchProfile(target: Target): Promise<ProfileView> {
-  return normalizeProfile((await request(target, '/profile')) as ProfileState);
+  return (await request(target, '/profile')) as ProfileState;
 }
 
 /** 書き込みの前提にする版（#4592）。読んだ行の版、読んだときに行が無ければ `null`（無いときだけ作る）。 */

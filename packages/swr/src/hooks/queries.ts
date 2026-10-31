@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 
 import { ApiError, onErrorRetryKeepingNotFound, unwrap, useApi } from '../api';
-import { normalizeProfile } from '@alteroid/logic';
 import type {
   AttachmentFrom,
   AttachmentItem,
@@ -634,8 +633,7 @@ export function useCredentials() {
 // フォーカス・再接続で再取得しない: 本文には鍵が入りうるので、画面が開いているあいだ勝手に何度も運ばせない
 export function useProfile() {
   const api = useApi();
-  // `entries` 無しの応答（旧い形）は normalizeProfile が投げる。SWR の error として見える
-  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap).then(normalizeProfile), {
+  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap), {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
   });
