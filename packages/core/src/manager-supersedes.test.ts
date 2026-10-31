@@ -380,7 +380,7 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
     expect(notices[0]).toContain('supersedes');
   });
 
-  it('(c) 後継の居ない起こし直しの知らせには、台帳に開かない印（commitmentExempt）が付く（#5015）', async () => {
+  it('(c) 後継の居ない起こし直しの知らせには、畳んでよい印が付き、廃止した commitmentExempt は書かれない', async () => {
     const s = await setup({ rotateOnObservation: false });
     s.fake.push(sessionDiedBy429());
     await settle();
@@ -392,12 +392,12 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
     const notice = s.inbox.find(
       (event) => event.type === 'manager_message' && event.text.includes('新しい鍵で起こし直した'),
     );
-    expect(notice?.type === 'manager_message' && notice.commitmentExempt).toBe(true);
-    // 担当が戻っていればクローンが畳んでよい印も付く（世代の条件なし。#5048）
+    expect(notice !== undefined && 'commitmentExempt' in notice).toBe(false);
+    // 担当が戻っていればクローンが畳んでよい印が付く（世代の条件なし。#5048）
     expect(notice?.type === 'manager_message' && notice.foldWhenBack).toEqual({});
   });
 
-  it('(c) 起こし直し以外の断片（落ちた知らせ）が同じ合流窓の束に混ざる回は、印を付けず今どおり台帳に開く（#5015）', async () => {
+  it('(c) 起こし直し以外の断片（落ちた知らせ）が同じ合流窓の束に混ざる回は、畳んでよい印を付けない', async () => {
     const s = await setup({ rotateOnObservation: false, windowMs: 150 });
     s.fake.push(sessionDiedBy429());
     await settle();
@@ -412,7 +412,6 @@ describe('自動の起こし直しをクローンへ知らせる（#4861 案B）
       return found;
     });
     expect(notice?.type).toBe('manager_message');
-    expect(notice !== undefined && 'commitmentExempt' in notice).toBe(false);
     // 枠（429）で落ちた断片が混ざる束には、畳んでよい印も付けない（週の上限を消さないため。#5048）
     expect(notice !== undefined && 'foldWhenBack' in notice).toBe(false);
   });

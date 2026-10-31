@@ -1105,7 +1105,7 @@ class Clone implements CloneHost {
   #lastHumanConversationId: string | null = null;
   // 人間の依頼の Task の追加のうち、まだ終わっていないもの（`#openHumanTask`）。返答のターンの終わりが待つ: 届いた直後に返答が終わると、Task がまだ無く閉じ損ねるため
   readonly #taskOpens = new Set<Promise<void>>();
-  // Task に積めなかった人間の発言の id。断り書きが1回だけ名乗って外す（`#commitmentNoticeFor`）: 積めなかった事実を、積んだと偽らないため
+  // Task に積めなかった人間の発言の id。断り書きが1回だけ名乗って外す（`#taskQueueNoticeFor`）: 積めなかった事実を、積んだと偽らないため
   readonly #humanTaskFailures = new Set<string>();
   // いまのターンの間に起きた会話への返答と委譲の控え（#5469 P5 の自動 done。`#runTurn` が作り直し、`turn_ended` が読む）。
   // `Turn` に載せない: `Turn` は試験が欄を全部書いて作る型で、欄を足すと無関係の試験が壊れるため。ターンは同時に1つしか走らない
@@ -1267,7 +1267,7 @@ class Clone implements CloneHost {
    * 閾値（{@link UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD}）に達したら、文脈窓の実測を待たずに畳んで作り直す
    * （`#noteUnproductiveUsageBlockFold`）。`#ensureQuery` と成功した `result`（`#sessionAnswered` と同じ場所）で 0 へ戻す。
    *
-   * - 枠が閉じている間も再試行は本物のターンで、応答は空でも resume 素材が捨てられず、台帳・状況の断り書きが毎回積み重なるため畳む
+   * - 枠が閉じている間も再試行は本物のターンで、応答は空でも resume 素材が捨てられず、待ち行列・状況の断り書きが毎回積み重なるため畳む
    * - 回数では測らない: 数十バイトの tick と数十KBの実運用ターンで積む量が桁で違い、回数の閾値は試験の再試行数と本物の事故の回数の間に引けない
    * - ターン数上限ではない（`#noteContextWindowFold` の「暴走の止め」の doc と同じ考え方）: 数えるのは持ち越しを畳むかどうかで、再試行の回数・頻度は変えない。
    *   1度も答えていない持ち越しは保存する価値が無く、止めて悪くなるものが無い
@@ -2422,7 +2422,7 @@ class Clone implements CloneHost {
       this.#notices.set(
         'commitment',
         await timer
-          .time('prepare.commitment', () => this.#commitmentNoticeFor(batch))
+          .time('prepare.taskQueue', () => this.#taskQueueNoticeFor(batch))
           .catch((error: unknown) => {
             noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
             return '';
@@ -3413,7 +3413,7 @@ class Clone implements CloneHost {
 
   // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
   // 見出しは「いつ数えた値か」を名乗る: この節は会話履歴へ連結されてターンの数だけ並び、時刻が無いと古い節と新しい節が見分けられないため
-  async #commitmentNoticeFor(events: InboxEvent[]): Promise<string> {
+  async #taskQueueNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
 
@@ -3432,7 +3432,7 @@ class Clone implements CloneHost {
 
     // 固定の1文は同じ会話で1回だけ全文（#4937）
     const tailText = this.#digestDelta.fixed(
-      'commitment-notice-tail',
+      'task-queue-notice-tail',
       '全文は `task_list`。並べ替えは `task_move`。',
       '（`task_list`・`task_move` は会話の上と同じ）',
     );
@@ -3464,7 +3464,7 @@ class Clone implements CloneHost {
               ? `いま届いたこの ${placed.length} 件は task ${idsOf(placed)} として積んだ。`
               : `いま届いたこの一件は task ${idsOf(placed)} として積んだ。`) +
               this.#digestDelta.fixed(
-                'commitment-notice-task',
+                'task-queue-notice-task',
                 '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
                 '（自動 done・`task_keep`・`manager_start` は会話の上と同じ）',
               ),
@@ -3713,7 +3713,7 @@ class Clone implements CloneHost {
 
   /**
    * 断り書きのうち、システムが全文を組んだ3本（配り直し・前提の変化・束の打ち切り）の長い段落を、同じ会話の2回目から短い参照にする（#4943）。
-   * 掛けないもの: `commitment`（固定の1文は #4937 の仕組みで既に参照にしている）・`situation`（#4489 の説明の控えが持つ）。どちらも二重に掛けない。
+   * 掛けないもの: 待ち行列の断り（欄名は `commitment` のまま。固定の1文は #4937 の仕組みで既に参照にしている）・`situation`（#4489 の説明の控えが持つ）。どちらも二重に掛けない。
    * 日誌・SDK からの文言（人間・担当・外部の言葉）はこの3本には入らない。
    */
   #foldNoticeParagraphs(

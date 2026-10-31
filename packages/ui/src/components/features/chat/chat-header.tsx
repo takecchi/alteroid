@@ -142,7 +142,7 @@ export function ChatHeader({
           open={confirmingDelete}
           onOpenChange={setConfirmingDelete}
           title="この会話を削除しますか"
-          description="この会話の発言は、どの画面・クローンからも読めなくなります。元に戻せません。添付と、台帳のこの会話の約束も消えます。クローンの記憶や日報に既にまとめた内容など、消せないものは削除のあとに案内します。"
+          description="この会話の発言は、どの画面・クローンからも読めなくなります。元に戻せません。添付と、この会話から待ち行列に積まれた行も消えます。クローンの記憶や日報に既にまとめた内容など、消せないものは削除のあとに案内します。"
           confirmLabel="削除する"
           cancelLabel="やめる"
           destructive

@@ -2595,7 +2595,7 @@ const PERMISSION_ASK_AFTER_ANSWER =
 /**
  * 確認（`ask`）をクローンへ配る本文と描き方。届いたときと、再起動の引き取りで配り直すときの両方がここを通る。
  *
- * - `markup: 'none'` は `permission` のときだけ立てる: `summary` は道具の呼び出し引数の JSON ダンプで、バッククォートや `*` が入っていても Markdown ではなく、`commitments.tsx` が `<Markdown>` で描くと `<code>` に食われて字面から消える。
+ * - `markup: 'none'` は `permission` のときだけ立てる: `summary` は道具の呼び出し引数の JSON ダンプで、バッククォートや `*` が入っていても Markdown ではなく、`<Markdown>` で描くと `<code>` に食われて字面から消える。
  *   `runner.ts` 側で包まない: `<Markdown>` で描くのは1面だけで、残り5面は素テキストなので記号が増える。`runner` が文面を Markdown に変えたら黙って外れるので `runner-permission-summary-markup.test.ts` が固定している。
  *   `question` でも立てない（モデルが書いた文章）。ただし `describeQuestions()` が `brief(input)` へ落ちた回は `kind` が同じ `'question'` のままで、この層には区別する材料が無く化けが残る。塞ぐなら `ask` イベントへ欄を足す（`runner-protocol.ts` の版ずれの窓が開く別作業）。
  * - 配る本文にだけ答えたあとを足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
@@ -12909,7 +12909,6 @@ class Pool implements ManagerPool {
       foldedTurn,
       reportFiles,
       undefined,
-      false,
       foldWhenBack,
     );
   }
@@ -12925,7 +12924,6 @@ class Pool implements ManagerPool {
     foldedTurn = false,
     reportFiles?: ManagerReportFiles,
     quotaStop?: { readonly sessionWindow: boolean },
-    commitmentExempt = false,
     foldWhenBack?: FoldWhenBack,
   ): void {
     // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
@@ -12937,8 +12935,6 @@ class Pool implements ManagerPool {
     this.#withheldCarriedToWindow.delete(managerId);
     const withheld = this.#withheldReports.get(managerId);
     let outgoing = text;
-    // 印は安全側へ倒す: 背景処理の完了待ちで畳んだ報告を運ぶ回と、直前と同文の知らせを数だけ残した旨を足す回は、中身が台帳に要るかもしれないので付けない（#5015）
-    let exempt = commitmentExempt;
     // 畳んでよい印も同じ回に外す（#5048）: 足した中身（畳んだ報告・配らなかった知らせの件数）まで、担当が戻ったことを理由に消さないため
     let foldable = foldWhenBack;
     if (withheld !== undefined) {
@@ -12956,7 +12952,6 @@ class Pool implements ManagerPool {
       }
       // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
       if (withheld.count > 0) {
-        exempt = false;
         foldable = undefined;
         // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
         // 「少し前・少し後」と書く: 日誌の `exchange` は在庫を積む（`firstAt` / `lastAt`）より前に書かれ、`until` は含まないため、端の時刻そのままだと両端の報告を外す。
@@ -12972,7 +12967,6 @@ class Pool implements ManagerPool {
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
     this.#synthesizedNoticeStreaks.delete(managerId);
     if (streak !== undefined && streak.suppressed > 0) {
-      exempt = false;
       foldable = undefined;
       outgoing =
         `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
@@ -12996,7 +12990,6 @@ class Pool implements ManagerPool {
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
       ...(quotaStop === undefined ? {} : { quotaStop: true as const }),
       ...(quotaStop?.sessionWindow === true ? { quotaSessionWindow: true as const } : {}),
-      ...(exempt ? { commitmentExempt: true as const } : {}),
       // 添付を運ぶ報告には付けない: 添付は畳むと受け取られないため
       ...(foldable === undefined || reportFiles !== undefined ? {} : { foldWhenBack: foldable }),
       ...(reportFiles === undefined || reportFiles.attachments.length === 0
@@ -13134,13 +13127,10 @@ class Pool implements ManagerPool {
     const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined)
       ? { sessionWindow: allSessionWindow(entry.fragments) }
       : undefined;
-    // 後継の居ない起こし直しの知らせだけ、台帳に開かない印を付ける（#5015）。
-    // `supersededBy` が在る／後継を起こしている最中の担当は、窓の間に後継がつながった回なので、今までどおり台帳に開く（クローンが手を打つ余地が在る）。
+    // `supersededBy` が在る／後継を起こしている最中の担当は、窓の間に後継がつながった回（クローンが手を打つ余地が在る）。
     const noSuccessor =
       this.#records.get(managerId)?.job.supersededBy === undefined &&
       !this.#supersedePending.has(managerId);
-    const commitmentExempt =
-      entry.fragments.every((fragment) => fragment.label === 'usage_rewoken') && noSuccessor;
     // 担当が戻っていればクローンが畳んでよい束（#5048）: 起こし直し（後継が居ない回だけ）・背景処理を畳んだ起こし直し・セッションの落ちだけでできた束。
     // 枠の印の付いた断片が1つでも混ざる束は付けない（#4499 の判定に任せる。週の上限で落ちた知らせを消さないため）。後継が居る起こし直しは、どちらかを止める判断が要るので付けない
     const foldWhenBack =
@@ -13162,7 +13152,6 @@ class Pool implements ManagerPool {
       foldedTurn,
       undefined,
       quotaStop,
-      commitmentExempt,
       foldWhenBack,
     );
     // 対象外の束では新しい連鎖を立てない: 次に同じ族が来ても握りつぶす先が無く、記憶を持つだけ無駄。

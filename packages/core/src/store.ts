@@ -1004,7 +1004,7 @@ export interface TaskStore {
   setKeep(id: string, keep: boolean): Promise<TaskSetKeepResult>;
 
   /**
-   * title / body だけを書き換える（#5469 P7c-1。台帳の `editBody` に当たる）。状態・並び・`updatedAt`・起点には触れず、`editedAt` を `options.at` にする。
+   * title / body だけを書き換える（#5469 P7c-1）。状態・並び・`updatedAt`・起点には触れず、`editedAt` を `options.at` にする。
    * 閉じた行は `closed`（直さない）。`options.ifMatch`（`taskBodyVersion`）が合わなければ何も書かず `conflict`。比較と書き込みは1操作。
    * 書き換える前の本文は行に残らない: 呼び出し側は `before` を日誌へ逐語で残すこと。読めない行は `UnreadableTaskError`。
    */
