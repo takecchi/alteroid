@@ -437,7 +437,7 @@ timeout）で回し、残り36ファイルを別に（例: 2分割程度で）�
 
 ## 検証（この skill を書いた回に通したもの）
 
-- `pnpm lint` / `pnpm format:check` / `pnpm typecheck` / `pnpm check:no-env-passthrough`
+- `pnpm lint` / `pnpm format:check` / `pnpm typecheck`
 - `pnpm test scripts/test-guard-core.test.ts -- --maxWorkers=2 --reporter=dot`
   （新しい歯を含む。生の要約行は PR 本文・依頼者への報告に貼ってある）
 - `node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all`

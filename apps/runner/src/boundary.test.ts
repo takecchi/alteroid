@@ -2,7 +2,6 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import type {
   query as sdkQuery,
@@ -25,8 +24,6 @@ import { appDefaults } from './app-defaults.test-support.js';
 const TOKEN = 'the-daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 const TCP_PORT = 4519;
-
-const run = promisify(execFile);
 
 interface Fake {
   options: Options;
@@ -130,7 +127,12 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
       process.stdout.write(JSON.stringify(results));
     })();
   `;
-  const { stdout } = await run(process.execPath, ['-e', script, socketPath, managerId], { env });
+  // `promisify(execFile)` を経由しない: 別名越しの呼びは `env` を指定したかを lint が見られないため（#1971）
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(process.execPath, ['-e', script, socketPath, managerId], { env }, (error, out) =>
+      error ? reject(error) : resolve(out),
+    );
+  });
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
@@ -226,7 +228,11 @@ describe('制御面の境界', () => {
       req.end();
     `;
     // env を空で明示する: 無指定だと親（このテストプロセス）の本物の秘密を継承するため。
-    const { stdout } = await run(process.execPath, ['-e', script, socketPath, TOKEN], { env: {} });
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(process.execPath, ['-e', script, socketPath, TOKEN], { env: {} }, (error, out) =>
+        error ? reject(error) : resolve(out),
+      );
+    });
 
     expect(stdout).toBe('200');
   });

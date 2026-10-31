@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -20,7 +19,6 @@ import {
   tokenSha256Of,
 } from './index.js';
 
-const run = promisify(execFile);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const TOKEN = 'the-shared-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
@@ -76,10 +74,15 @@ describe('器の起動スクリプト', () => {
   });
 
   async function launch(name: string, env: NodeJS.ProcessEnv) {
-    const { stdout } = await run('/bin/sh', [join(REPO_ROOT, 'docker', name)], {
-      env: { PATH: `${dir}:${process.env.PATH ?? ''}`, ...env },
+    // `promisify(execFile)` を経由しない: 別名越しの呼びは `env` を指定したかを lint が見られないため（#1971）
+    return new Promise<string>((resolve, reject) => {
+      execFile(
+        '/bin/sh',
+        [join(REPO_ROOT, 'docker', name)],
+        { env: { PATH: `${dir}:${process.env.PATH ?? ''}`, ...env } },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
     });
-    return stdout;
   }
 
   function pretendRoot(): void {

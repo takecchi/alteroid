@@ -62,7 +62,6 @@ const ORIGINAL_GATES: { gate: string; needsBuild: boolean }[] = [
   { gate: 'git diff --exit-code -- apps/daemon/openapi.json', needsBuild: true },
   { gate: 'pnpm check:sdk-quotes', needsBuild: false },
   { gate: 'pnpm check:advice-single-source', needsBuild: false },
-  { gate: 'pnpm check:no-env-passthrough', needsBuild: false },
   { gate: 'pnpm typecheck', needsBuild: true },
   { gate: 'pnpm lint', needsBuild: true },
   { gate: 'pnpm format:check', needsBuild: false },

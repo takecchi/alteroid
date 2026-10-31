@@ -1234,7 +1234,7 @@ export function applyMutation(spec) {
  * するか confirmModulesPurge を false にせよ」と案内する）で exit 1 になる。
  * 実測（2026-09-28、ROOT で `env -i PATH=<PATH> pnpm --filter @alteroid/core
  * build` と `env -i PATH=<PATH> pnpm test scripts/check-no-env-passthrough.test.ts
- * --maxWorkers=2` の両方でこの exit 1 を再現し、`CI=true` を足すとどちらも
+ * --maxWorkers=2`（当時の試験。いまは eslint の規則へ移った）の両方でこの exit 1 を再現し、`CI=true` を足すとどちらも
  * 通常どおり成功することを確認した）。
  *
  * **なぜ `HOME` は要らないか**: 同じ実測で `HOME` を足さない状態

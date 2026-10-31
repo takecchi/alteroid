@@ -1,9 +1,6 @@
 import { execFile } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-
-const run = promisify(execFile);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const loader = join(here, 'child-src-loader.test-support.ts');
@@ -19,15 +16,18 @@ export async function runChildAgainstSrc(
   lines: readonly string[],
 ): Promise<ChildSrcFailure | null> {
   const child = lines.join('\n');
-  return run(
-    process.execPath,
-    ['--experimental-strip-types', `--import=${loader}`, '--input-type=module', '-e', child],
-    // 親の process.env を丸ごと継がせない: 子は絶対パスの execPath と loader だけを使うため。PATH だけは node 自身が内部で使う可能性への保険で残す
-    { env: { PATH: process.env.PATH ?? '' } },
-  ).then(
-    () => null,
-    (error: unknown) => error as ChildSrcFailure,
-  );
+  // `promisify(execFile)` を経由しない: 別名越しの呼びは `env` を指定したかを lint が見られないため（#1971）
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      ['--experimental-strip-types', `--import=${loader}`, '--input-type=module', '-e', child],
+      // 親の process.env を丸ごと継がせない: 子は絶対パスの execPath と loader だけを使うため。PATH だけは node 自身が内部で使う可能性への保険で残す
+      { env: { PATH: process.env.PATH ?? '' } },
+      // コールバック形の error は stderr を持たない（`promisify` が足していた分）ので、足して返す
+      (error, _stdout, stderr) =>
+        resolve(error ? (Object.assign(error, { stderr }) as ChildSrcFailure) : null),
+    );
+  });
 }
 
 export function siblingSrcPath(testFileUrl: string, name: string): string {

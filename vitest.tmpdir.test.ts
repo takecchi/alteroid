@@ -91,7 +91,7 @@ describe('beforeAll で作って複数の it が読む形（単体、drain は�
 });
 
 // 実際に子プロセスとして別の vitest 実行を起こし、終わった後に外側から「もう無い」ことを確認する: このファイル自身の `afterAll` は `vitest.setup.ts` の `afterAll` より先に走るため、ファイル内では検証できない。
-// scratch は repo の中の `.scratch/` の下に作る: `os.tmpdir()` の下だと `vitest` の bare import が node_modules を解決できず、根の直下の `.vitest-*` は git に無視されておらず、同時に走る `check-no-env-passthrough` が一時の `.test.ts` を拾って落ちるため。
+// scratch は repo の中の `.scratch/` の下に作る: `os.tmpdir()` の下だと `vitest` の bare import が node_modules を解決できず、根の直下の `.vitest-*` は git に無視されておらず、同時に走る `pnpm lint`（env の規則）が一時の `.test.ts` を拾って落ちるため。
 describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に消えることを確かめる', () => {
   let scratchRoot = '';
 

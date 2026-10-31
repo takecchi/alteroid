@@ -215,7 +215,6 @@ const ONLY_ON_PR_BECAUSE_NEEDS_PR =
   'PR の番号・本文・コミット列を GitHub から読む門で、`STEPS`（offline で走る手元の一式）には置けない。';
 
 const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
-  'check:no-env-passthrough': { routes: ['steps', 'pr'] },
   'check:advice-single-source': { routes: ['steps', 'pr'] },
   'check:sdk-quotes': { routes: ['steps', 'pr'] },
   'check:web-build-output': { routes: ['steps', 'pr'] },
