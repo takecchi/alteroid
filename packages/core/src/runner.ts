@@ -805,13 +805,27 @@ function sameRuleSet(a: readonly string[], b: readonly string[]): boolean {
   return a.every((rule) => seen.has(rule));
 }
 
+/** Host が読まず RunnerSession へそのまま渡す試験用の口。 */
+type RunnerSessionOverrides = Pick<
+  RunnerSessionOptions,
+  | 'queryFn'
+  | 'spawnAgentProcessFn'
+  | 'handOverResumeConfigDirFn'
+  | 'handOverMcpConfigDirFn'
+  | 'contextUsageTimeoutMs'
+  | 'sessionAllowRulesTimeoutMs'
+  | 'rescueMaxWorktrees'
+  | 'readCgroupEventCountersFn'
+  | 'finishUnpushedWorkFn'
+  | 'workerToolWatchClock'
+>;
+
 class Host implements RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
   readonly #codexAuth: CodexAuthMirror;
   #codexAuthTimer: ReturnType<typeof setInterval> | null = null;
   readonly #emit: (event: RunnerEvent) => void;
-  readonly #queryFn: ClaudeQueryFn | undefined;
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
@@ -894,22 +908,14 @@ class Host implements RunnerHost {
   // resume で戻ってくる担当（managerId → 名簿から消えた時刻）。`#sessions` から消えている間も木を守る。
   // 鍵の付け替えで畳んだ担当（#5115）と、failed / lost で閉じた担当（#5168: 枠で落ちた担当は通る鍵で起こし直されるが、それまでの窓に走査が当たる）
   readonly #returnAwaitedSince = new Map<string, number>();
-  readonly #spawnAgentProcessFn:
-    ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #delegationSubreaper: string | undefined;
   readonly #doneTreeReapAfterMs: number | undefined;
-  readonly #handOverResumeConfigDirFn: HandOverResumeConfigDir | undefined;
-  readonly #handOverMcpConfigDirFn: HandOverResumeConfigDir | undefined;
   readonly #mcpConfigTmpRoot: string;
   // 全担当で共有する: 掃きは runner 全体で1本なので、どの担当の委譲が置いたディレクトリも外せる必要があるため
   readonly #liveMcpConfigDirs = new Set<string>();
   // 同じ失敗を周期ごとに note へ出し直さない
   #mcpConfigSweepFailedNotified = new Set<string>();
   #mcpConfigSweeping = false;
-  readonly #contextUsageTimeoutMs: number | undefined;
-  readonly #sessionAllowRulesTimeoutMs: number | undefined;
-  readonly #rescueMaxWorktrees: number | undefined;
-  readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #readPids: (() => Promise<{ current: number; max: number } | undefined>) | undefined;
   // 生ログの退避の本文を、デーモンが取りに来るまで預かる（#4485。`archive-ref.ts`）。捨てた分は stderr に残す（デーモンへの経路が無い時にも起きるため）
   readonly #archiveStash = new ArchiveStash({
@@ -929,20 +935,17 @@ class Host implements RunnerHost {
   // このプロセスが出来事で送り、まだデーモンに取られていない出し箱・預かりのファイル（#4912）。畳み始めに `#pickupsSinceShutdown` へ積む
   // 値は送った時刻（ms）。古いものは畳みの待ちに数えない（#4925）
   readonly #emittedPickups = new Map<string, number>();
-  readonly #finishUnpushedWorkFn:
-    ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
   readonly #cwdExistsFn: (cwd: string) => boolean;
-  readonly #workerToolWatchClock: WorkerToolWatchClock | undefined;
+  /** Host は読まず RunnerSession へそのまま渡す試験用の口（`undefined` の項目はキーごと無い）。 */
+  readonly #sessionOverrides: RunnerSessionOverrides;
 
   constructor(options: RunnerHostOptions) {
-    this.#workerToolWatchClock = options.workerToolWatchClock;
     this.runnerId = options.runnerId;
     this.workspacePath = options.workspacePath;
     this.#emit = (event) => {
       this.#notePickup(event);
       options.emit(event);
     };
-    this.#queryFn = options.queryFn;
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
@@ -961,19 +964,23 @@ class Host implements RunnerHost {
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#bashGuard = resolveBashGuardMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
-    this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
+    this.#sessionOverrides = definedProps({
+      queryFn: options.queryFn,
+      spawnAgentProcessFn: options.spawnAgentProcessFn,
+      handOverResumeConfigDirFn: options.handOverResumeConfigDirFn,
+      handOverMcpConfigDirFn: options.handOverMcpConfigDirFn,
+      contextUsageTimeoutMs: options.contextUsageTimeoutMs,
+      sessionAllowRulesTimeoutMs: options.sessionAllowRulesTimeoutMs,
+      rescueMaxWorktrees: options.rescueMaxWorktrees,
+      readCgroupEventCountersFn: options.readCgroupEventCountersFn,
+      finishUnpushedWorkFn: options.finishUnpushedWorkFn,
+      workerToolWatchClock: options.workerToolWatchClock,
+    });
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#doneTreeReapAfterMs = options.doneTreeReapAfterMs;
-    this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn;
-    this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn;
     this.#mcpConfigTmpRoot = options.mcpConfigTmpRoot ?? tmpdir();
-    this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs;
-    this.#sessionAllowRulesTimeoutMs = options.sessionAllowRulesTimeoutMs;
-    this.#rescueMaxWorktrees = options.rescueMaxWorktrees;
-    this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#readPids =
       options.readPidsFn === undefined ? undefined : cachedPidsReader(options.readPidsFn);
-    this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
     this.#codexAuth = new CodexAuthMirror({
       codexHome: options.codexHome ?? defaultCodexHome(options.childUser),
@@ -1672,21 +1679,12 @@ class Host implements RunnerHost {
       cwd: this.#resolveCwd(cwd),
       emit: (event) => this.#emit(withSessionGeneration(event, sessionGeneration)),
       ...definedProps({
-        queryFn: this.#queryFn,
         childUser: this.#childUser,
         credentials: this.#credentials,
         managerTools: this.#managerTools,
-        spawnAgentProcessFn: this.#spawnAgentProcessFn,
         delegationSubreaper: this.#delegationSubreaper,
-        handOverResumeConfigDirFn: this.#handOverResumeConfigDirFn,
-        handOverMcpConfigDirFn: this.#handOverMcpConfigDirFn,
-        contextUsageTimeoutMs: this.#contextUsageTimeoutMs,
-        sessionAllowRulesTimeoutMs: this.#sessionAllowRulesTimeoutMs,
-        rescueMaxWorktrees: this.#rescueMaxWorktrees,
-        readCgroupEventCountersFn: this.#readCgroupEventCountersFn,
-        finishUnpushedWorkFn: this.#finishUnpushedWorkFn,
-        workerToolWatchClock: this.#workerToolWatchClock,
       }),
+      ...this.#sessionOverrides,
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
       permissionMode: this.#permissionMode,
