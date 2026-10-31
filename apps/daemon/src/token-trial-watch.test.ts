@@ -58,7 +58,7 @@ const RECOVERED: TokenRotationOutcome = {
   kind: 'ignored',
   signal: 'none',
   why: '止まっていた現役が、また通ることを観測できた',
-  recovered: { tokenId: 'a', label: 'a', source: 'turn_success' },
+  recovered: { tokenId: 'a', label: 'a', source: 'trial' },
 };
 
 const ROTATED: TokenRotationOutcome = {
@@ -303,8 +303,11 @@ describe('token-trial-watch: 通ったときの記録と知らせ（実物の回
     const outcome = outcomes[0]!;
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
-    expect(outcome.recovered).toMatchObject({ tokenId: 'a', label: 'a' });
-    expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
+    expect(outcome.recovered).toEqual({ tokenId: 'a', label: 'a', source: 'trial' });
+    expect(outcome.reason).toBe('trial_succeeded');
+    const entry = tokenRotationEntry(outcome);
+    expect(entry?.event).toBe('recovered');
+    expect(entry?.recoveredSource).toBe('trial');
   });
 
   it('現役でない候補が通ると、その鍵の止まった記録を消してから選び直す（現役は回る）', async () => {

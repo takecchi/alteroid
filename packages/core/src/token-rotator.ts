@@ -81,7 +81,9 @@ export type TokenVerdictOrigin =
       source: 'account_probe';
       observedBy?: { tokenId: string; generation: number };
     }
-  | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } };
+  | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } }
+  // 世代を名乗らない: 回し手が自分の直列のキューの中で現役を読んで渡すので、照合する相手が常に今の現役のため
+  | { source: 'trial' };
 
 export type TokenRotationOutcome =
   | {
@@ -877,14 +879,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const active = activeRead.readable ? activeRead.active : null;
         if (active !== null && active.tokenId === input.tokenId) {
           return reconsiderLocked({
-            reason: 'turn_succeeded',
-            current: {
-              verdict: { verdict: 'usable' },
-              origin: {
-                source: 'turn_success',
-                observedBy: { tokenId: active.tokenId, generation: active.generation },
-              },
-            },
+            reason: 'trial_succeeded',
+            current: { verdict: { verdict: 'usable' }, origin: { source: 'trial' } },
           });
         }
         await recordTrialVerdictLocked({ tokenId: input.tokenId, verdict: { verdict: 'usable' } });
@@ -1072,10 +1068,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       const availability = tokenAvailabilityAt(currentRow, now().getTime());
       const hasRejection =
         currentRow.lastRejectedAt !== undefined || currentRow.cooldownUntil !== undefined;
-      const observedHow =
-        current.origin.source === 'turn_success'
-          ? 'ターンが実際に成功した'
-          : 'probe で通ることを観測した';
+      const observedHow = {
+        turn_success: 'ターンが実際に成功した',
+        trial: '試しで通ることを観測した',
+        account_probe: 'probe で通ることを観測した',
+      }[current.origin.source];
       // disabled / invalidated には触らない: 人間の判断を通ったことを理由に覆すことになるため
       if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
         // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
@@ -1112,12 +1109,13 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     }
 
     // current ではなく reason を見る: current を条件にすると、判定を落とした状態で契機だけが届いた場合に素通りするため
-    if (reason === 'turn_succeeded') {
+    // 試しの成功（origin が trial）も同じ扱い: 現役の鍵が通った記録で、選び直す判定ではないため
+    if (reason === 'turn_succeeded' || current?.origin.source === 'trial') {
       return {
         kind: 'ignored' as const,
         signal: 'none' as const,
         reason,
-        why: 'ターンの成功を観測したが、現役の記録に反映できなかった（行がプールに見つからない等）。成功は回す契機にしない',
+        why: `${current?.origin.source === 'trial' ? '試しの成功' : 'ターンの成功'}を観測したが、現役の記録に反映できなかった（行がプールに見つからない等）。成功は回す契機にしない`,
       };
     }
 

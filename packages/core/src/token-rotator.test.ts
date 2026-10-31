@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fingerprintOf } from './credentials.js';
+import { journalEntrySchema } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import {
   createTokenRotator,
@@ -3316,8 +3317,41 @@ describe('recordTrialSuccess（#5989: 試しで通った鍵の扱いを直列の
     expect(await isCooling(h, 'tok-a')).toBe(false);
     expect(await isCooling(h, 'tok-b')).toBe(true);
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 1 });
-    expect(outcome.recovered).toMatchObject({ tokenId: 'tok-a', label: 'first' });
-    expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
+    expect(outcome.reason).toBe('trial_succeeded');
+    expect(outcome.recovered).toEqual({ tokenId: 'tok-a', label: 'first', source: 'trial' });
+    expect(outcome.why).toContain('試しで通ることを観測した');
+    expect(outcome.why).not.toContain('ターン');
+    const entry = tokenRotationEntry(outcome);
+    expect(entry?.event).toBe('recovered');
+    expect(entry?.recoveredSource).toBe('trial');
+  });
+
+  it('試しの成功の記録は、日誌の schema を通る。試しを turn_success と書いていた古い行も通る', () => {
+    const base = {
+      type: 'token_rotation',
+      id: 'j-1',
+      at: AT,
+      event: 'recovered',
+      signal: 'none',
+      tokenId: 'tok-a',
+      label: 'first',
+      text: '止まっていた現役が、また通ることを観測できた',
+    };
+    for (const recoveredSource of ['trial', 'turn_success', 'account_probe']) {
+      expect(journalEntrySchema.safeParse({ ...base, recoveredSource }).success).toBe(true);
+    }
+  });
+
+  it('現役の行が消えていれば、試しの成功でも回さない（ターンの成功と同じ扱い）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-missing', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.recordTrialSuccess({ tokenId: 'tok-missing' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-missing' });
   });
 
   it('現役でない鍵が通ると、その鍵の止まった記録を消してから選び直す（reason は trial_succeeded）', async () => {
