@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+import { cursorCodec } from './cursor-codec.js';
 import type { RunnerOverview } from './manager.js';
 
 /**
@@ -9,18 +9,9 @@ import type { RunnerOverview } from './manager.js';
  */
 const runnerCursorSchema = z.object({ label: z.string().min(1) });
 
-type RunnerCursor = z.infer<typeof runnerCursorSchema>;
-
-export function encodeRunnerCursor(cursor: RunnerCursor): string {
-  return encodeCursor(cursor);
-}
-
-type DecodeRunnerCursorResult = DecodeCursorResult<RunnerCursor>;
-
-/** 実在検査はしない: 「壊れた cursor」と「消えた器」を同じ文言に潰さないため。 */
-export function decodeRunnerCursor(raw: string): DecodeRunnerCursorResult {
-  return decodeCursor(runnerCursorSchema, raw);
-}
+/** decode は実在検査をしない: 「壊れた cursor」と「消えた器」を同じ文言に潰さないため。 */
+export const { encode: encodeRunnerCursor, decode: decodeRunnerCursor } =
+  cursorCodec(runnerCursorSchema);
 
 type ResolvedRunnerCursor =
   { kind: 'ok'; view: RunnerOverview[]; restarted: boolean } | { kind: 'malformed' };

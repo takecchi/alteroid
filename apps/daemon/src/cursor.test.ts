@@ -28,6 +28,20 @@ describe('cursor（keyset paging の共通符号化。issue #432）', () => {
     expect(() => decodeCursor(wrongShape, shape)).toThrow(InvalidCursorError);
   });
 
+  it('出回っている /approvals の継続点（固定値）は、共通化の前後で同じ文字列になり同じ中身に読める', () => {
+    // 共通化（#5987）より前のコードで作った文字列。キーの並び（id → createdAt → order）も文字列の一部。
+    const raw =
+      'eyJpZCI6ImFwLTEiLCJjcmVhdGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJvcmRlciI6ImRlc2MifQ';
+    const payload = { id: 'ap-1', createdAt: '2026-01-01T00:00:00.000Z', order: 'desc' as const };
+    expect(encodeCursor(payload)).toBe(raw);
+    const approvals = z.object({
+      id: z.string().min(1),
+      createdAt: z.string().min(1),
+      order: z.enum(['asc', 'desc']),
+    });
+    expect(decodeCursor(raw, approvals)).toEqual(payload);
+  });
+
   it('encode した文字列は base64url なので +, /, = を含まない', () => {
     const payload = {
       id: '>>>???///+++===   日本語  \u0000￿'.repeat(20),

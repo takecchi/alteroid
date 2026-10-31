@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+import { cursorCodec } from './cursor-codec.js';
 import type { AgentToken } from './token-pool.js';
 
 // order 単体を錨にしない: order は一意ではなく、同値の行を飛ばしうるため。
@@ -10,15 +10,8 @@ const tokenCursorSchema = z.object({ id: z.string().min(1), order: z.number().in
 
 export type TokenCursor = z.infer<typeof tokenCursorSchema>;
 
-export function encodeTokenCursor(cursor: TokenCursor): string {
-  return encodeCursor(cursor);
-}
-
-export type DecodeTokenCursorResult = DecodeCursorResult<TokenCursor>;
-
-export function decodeTokenCursor(raw: string): DecodeTokenCursorResult {
-  return decodeCursor(tokenCursorSchema, raw);
-}
+export const { encode: encodeTokenCursor, decode: decodeTokenCursor } =
+  cursorCodec(tokenCursorSchema);
 
 export function resolveTokenCursor(
   entries: readonly AgentToken[],
