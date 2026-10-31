@@ -215,12 +215,16 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     }
     const since = gapSinceRef.current;
     if (since === undefined) return;
-    refreshNewerAt(since, () => {
-      gapSinceRef.current = undefined;
-      setResync((n) => n + 1);
-    });
+    refreshNewerAt(since, settleGap);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, isLoadingInitial]);
+
+  // 取り直しが通ったときだけ呼ぶ: 失敗したら `gapSinceRef` を残し、再試行も切れた時点の先頭から取り直す。
+  // 失敗中は SSE の新着を積まないが、`newerError` が `loadMoreError` として画面に出て、再試行で埋め直せる
+  function settleGap(): void {
+    gapSinceRef.current = undefined;
+    setResync((n) => n + 1);
+  }
 
   useEffect(() => {
     // 張り直しの取り直しが済むまでは積まない（上の注記）。済んだら `resync` が変わって、たまった新着を取り込み直す
@@ -235,11 +239,11 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     entriesRef.current = applied.entries;
   }, [recent, selected, q, resync]);
 
-  // `since` を渡すと、その時点から取り直す（張り直しの取り直し）。渡さなければ窓の先頭から。`onSettled` は通っても落ちても呼ぶ
-  function refreshNewerAt(since?: string, onSettled?: () => void): void {
+  // `since` を渡すと、その時点から取り直す（張り直しの取り直し）。渡さなければ窓の先頭から。`onSucceeded` は通ったとき（取る行が無いときも）だけ呼ぶ
+  function refreshNewerAt(since?: string, onSucceeded?: () => void): void {
     const query = since === undefined ? newerPageQuery(entriesRef.current) : { since };
     if (query === undefined) {
-      onSettled?.();
+      onSucceeded?.();
       return;
     }
     setLoadingNewer(true);
@@ -271,18 +275,24 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
         setLoadingNewer(false);
-        onSettled?.();
+        onSucceeded?.();
       })
       .catch((caught: unknown) => {
         setNewerError(caught);
         setLoadingNewer(false);
-        onSettled?.();
       });
+  }
+
+  // 張り直しの取り直しが済んでいなければ、手動の取り直しもそこ（切れた時点の先頭）から行う
+  function refreshNewerFromGap(): void {
+    const since = gapSinceRef.current;
+    if (since === undefined) refreshNewerAt();
+    else refreshNewerAt(since, settleGap);
   }
 
   const refreshNewer = useCallback(() => {
     if (isLoadingNewer) return;
-    refreshNewerAt();
+    refreshNewerFromGap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadingNewer]);
 
@@ -291,7 +301,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     if (olderError !== undefined) {
       if (!isLoadingOlder) loadOlderAt();
     } else if (newerError !== undefined) {
-      if (!isLoadingNewer) refreshNewerAt();
+      if (!isLoadingNewer) refreshNewerFromGap();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [olderError, newerError, isLoadingOlder, isLoadingNewer]);
