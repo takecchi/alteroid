@@ -23,21 +23,25 @@ function caller(stores: Stores, name: string) {
 }
 
 describe('配列の要素が NUL だけの呼びは、空文字の要素と同じく入口で断る', () => {
-  it('commitment_close_many: source: ["\\0"] は断り、台帳は1件も変わらない', async () => {
+  it('task_set_status_many: source: ["\\0"] は断り、task は1件も変わらない', async () => {
     const stores = createMemoryStores();
-    await stores.commitments.open({
-      id: 'c-1',
-      at: '2026-01-01T00:00:00.000Z',
+    await stores.tasks.add({
+      id: 't-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'queued',
       origin: 'external',
+      title: '仕事',
       body: '仕事',
       source: 'mgr-1',
     });
-    const call = caller(stores, 'commitment_close_many');
-    const empty = await call({ origin: ['external'], source: [''], reason: 'r', dryRun: false });
-    const nul = await call({ origin: ['external'], source: ['\0'], reason: 'r', dryRun: false });
+    const call = caller(stores, 'task_set_status_many');
+    const args = { origin: ['external'], status: 'done', reason: 'r', dryRun: false };
+    const empty = await call({ ...args, source: [''] });
+    const nul = await call({ ...args, source: ['\0'] });
     expect(empty).toContain('source は使えない');
     expect(nul, `空文字は断るのに NUL だけは通る:\n${nul}`).toContain('source は使えない');
-    expect((await stores.commitments.list()).entries.map((e) => e.id)).toEqual(['c-1']);
+    expect((await stores.tasks.list()).entries.map((e) => e.id)).toEqual(['t-1']);
   });
 
   it('inbox_remove_many: sources: ["\\0"] は断り、未読は1件も変わらない', async () => {
@@ -83,9 +87,14 @@ describe('NUL が混じっても中身が残る要素は、今までどおり入
     expect(out).not.toContain('sessionIds は使えない');
   });
 
-  it('commitment_close_many: source: ["mgr\\0-1"] は要素の断りに当たらない', async () => {
-    const call = caller(createMemoryStores(), 'commitment_close_many');
-    const out = await call({ origin: ['external'], source: ['mgr\0-1'], reason: 'r' });
+  it('task_set_status_many: source: ["mgr\\0-1"] は要素の断りに当たらない', async () => {
+    const call = caller(createMemoryStores(), 'task_set_status_many');
+    const out = await call({
+      origin: ['external'],
+      source: ['mgr\0-1'],
+      status: 'done',
+      reason: 'r',
+    });
     expect(out).not.toContain('source は使えない');
   });
 });

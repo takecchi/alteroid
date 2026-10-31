@@ -191,6 +191,8 @@ export function taskStatusChangeEntry(
   before: Task,
   status: TaskStatus,
   reason: string | undefined,
+  // どの呼びで変えたか（`manager_send` の closes など）。既定は task_set_status 自身
+  via: string = 'task_set_status',
 ): JournalEntryInput {
   return {
     type: 'decision',
@@ -199,8 +201,8 @@ export function taskStatusChangeEntry(
     }`,
     grounds:
       before.closedAt !== undefined
-        ? `自分で task_set_status した。開き直す前の記録: ${describeTaskClosedRecord(before)}`
-        : '自分で task_set_status した',
+        ? `自分で ${via} した。開き直す前の記録: ${describeTaskClosedRecord(before)}`
+        : `自分で ${via} した`,
   };
 }
 

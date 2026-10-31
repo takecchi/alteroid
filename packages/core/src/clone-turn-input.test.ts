@@ -273,10 +273,17 @@ describe('ターンの入力を日誌に残す（#243）— 人間の回答は�
     const stores = createMemoryStores();
     await seedApproval(stores);
 
+    // 以前の版が回答を台帳へ開いていた行（クローンはもう台帳へ書かない。#5923）をアップグレード前の状態として置く
+    await stores.commitments.open({
+      id: 'evt-answer',
+      at: AT,
+      origin: 'human',
+      source: 'apr-243',
+      body: `承認待ち apr-243 への回答: ${ANSWER}`,
+    });
     const dying = bootClone(stores, 'hang');
     dying.clone.post(answerEvent);
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
-    await waitFor(async () => (await stores.commitments.get('evt-answer')) !== null, '台帳の未了');
     expect(await stores.commitments.close('evt-answer', AT, 'もう対応済み', 'clone')).toBe(true);
 
     const reborn = bootClone(stores);

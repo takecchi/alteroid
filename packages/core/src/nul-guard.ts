@@ -48,10 +48,10 @@ export function stripNulDeep<T>(value: T): T {
   if (typeof value === 'string') return stripNul(value) as T;
   if (Array.isArray(value)) return value.map((item) => stripNulDeep(item)) as T;
   if (value !== null && typeof value === 'object') {
-    const source = value as Record<string, unknown>;
-    const mapped: Record<string, unknown> = {};
-    for (const key of Object.keys(source)) mapped[stripNul(key)] = stripNulDeep(source[key]);
-    return mapped as T;
+    // fromEntries で組む: `__proto__` という鍵の代入が、行の持ち主ではなく原型を書き換えるのを避けるため
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [stripNul(key), stripNulDeep(item)]),
+    ) as T;
   }
   return value;
 }

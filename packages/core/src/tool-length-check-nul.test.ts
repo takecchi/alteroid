@@ -25,26 +25,39 @@ function harness() {
 const AT = '2026-10-06T00:00:00.000Z';
 const NUL_ONLY = ['\u0000', '\u0000\u0000'];
 
+function seedTask(id: string, origin: 'self' | 'external') {
+  return {
+    id,
+    createdAt: AT,
+    updatedAt: AT,
+    status: 'queued' as const,
+    origin,
+    title: 'タイトル',
+    body: '本文',
+  };
+}
+
 describe('NUL だけの理由・本文を、道具が空として残す', () => {
-  it('commitment_close: reason が NUL だけなら、空の closedReason で閉じない', async () => {
+  it('task_set_status: reason が NUL だけなら、空の closedReason で閉じない', async () => {
     const h = harness();
-    await h.stores.commitments.open({ id: 'c1', at: AT, origin: 'self', body: '本文' });
-    const out = await h.call('commitment_close', { id: 'c1', reason: '\u0000' });
+    await h.stores.tasks.add(seedTask('t1', 'self'));
+    const out = await h.call('task_set_status', { taskId: 't1', status: 'done', reason: '\u0000' });
     expect(out).toContain('reason は使えない');
-    expect((await h.stores.commitments.get('c1'))?.closedReason).toBeUndefined();
+    expect((await h.stores.tasks.get('t1'))?.closedReason).toBeUndefined();
   });
 
-  it('commitment_close_many: reason が NUL だけなら、空の closedReason で閉じない', async () => {
+  it('task_set_status_many: reason が NUL だけなら、空の closedReason で閉じない', async () => {
     const h = harness();
-    await h.stores.commitments.open({ id: 'c2', at: AT, origin: 'external', body: '本文' });
-    const out = await h.call('commitment_close_many', {
+    await h.stores.tasks.add(seedTask('t2', 'external'));
+    const out = await h.call('task_set_status_many', {
       origin: ['external'],
       until: '2026-12-31T00:00:00.000Z',
+      status: 'done',
       reason: '\u0000',
       dryRun: false,
     });
     expect(out).toContain('reason は使えない');
-    expect((await h.stores.commitments.get('c2'))?.closedReason).toBeUndefined();
+    expect((await h.stores.tasks.get('t2'))?.closedReason).toBeUndefined();
   });
 
   it('approval_withdraw: reason が NUL だけなら、空の withdrawnReason で取り下げない', async () => {
@@ -85,19 +98,24 @@ describe('NUL だけの理由・本文を、道具が空として残す', () => 
 });
 
 describe('NUL が混じっても中身が残る値は今までどおり通る', () => {
-  it('commitment_close: reason "a\\0b" は閉じ、NUL を落とした値が残る', async () => {
+  it('task_set_status: reason "a\\0b" は閉じ、NUL を落とした値が残る', async () => {
     const h = harness();
-    await h.stores.commitments.open({ id: 'c1', at: AT, origin: 'self', body: '本文' });
-    const out = await h.call('commitment_close', { id: 'c1', reason: 'a\u0000b' });
+    await h.stores.tasks.add(seedTask('t1', 'self'));
+    const out = await h.call('task_set_status', {
+      taskId: 't1',
+      status: 'done',
+      reason: 'a\u0000b',
+    });
     expect(out).not.toContain('は使えない');
-    expect((await h.stores.commitments.get('c1'))?.closedReason).toBe('ab');
+    expect((await h.stores.tasks.get('t1'))?.closedReason).toBe('ab');
   });
 
-  it('commitment_close_many: reason は長さ検査を通る', async () => {
+  it('task_set_status_many: reason は長さ検査を通る', async () => {
     const h = harness();
-    const out = await h.call('commitment_close_many', {
+    const out = await h.call('task_set_status_many', {
       origin: ['external'],
       until: '2026-12-31T00:00:00.000Z',
+      status: 'done',
       reason: 'a\u0000',
     });
     expect(out).not.toContain('reason は使えない');

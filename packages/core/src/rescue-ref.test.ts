@@ -167,6 +167,28 @@ describe('退避 ref（#1266）', () => {
     expect(g(bare, 'for-each-ref', RESCUE_REF_PREFIX)).toBe('');
   });
 
+  it('未 push の数が数字として読めなくても、数えられないときと同じく送る側へ倒す（#5976）', async () => {
+    await writeFile(path.join(repo, 'b.txt'), 'unpushed commit\n');
+    g(repo, 'add', 'b.txt');
+    g(repo, 'commit', '-qm', 'second');
+    // 未 push の数（`rev-list --count … HEAD`）だけ、成功で数字以外を出す子に差し替える（3親以上のマージの数は本物のまま）
+    const junkCount: ProcessSpawnFn = (o) =>
+      o.args.includes('rev-list') &&
+      o.args.includes('--count') &&
+      !o.args.includes('--min-parents=3')
+        ? spawn(process.execPath, ['-e', 'process.stdout.write("junk\\n")'], {
+            // 親の process.env を丸ごと継がせない（#1971）: 本物の git の子と同じく、呼び手が組んだ env だけを渡す
+            env: o.env as NodeJS.ProcessEnv,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+        : realSpawn(o);
+
+    const [report] = await run({ spawn: junkCount });
+
+    expect(report?.notPushed).toBeUndefined();
+    expect(g(bare, 'show', `${report?.pushed?.ref as string}:b.txt`)).toBe('unpushed commit\n');
+  });
+
   it('鍵らしい文字列が差分に在れば送らず、ファイル名だけを残す（文字列は残さない）', async () => {
     const fake = `gh${'p'}_${'A1b2'.repeat(9)}`;
     await writeFile(path.join(repo, 'a.txt'), `one\ntoken ${fake}\n`);

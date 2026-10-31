@@ -1,15 +1,15 @@
 import {
-  createCloneTools,
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  describeCloseManyViolation,
 } from '@alteroid/core';
 import type { CloneHost, JournalEntry, Stores } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-// POST /commitments/close-many（#5336）。クローンの道具 `commitment_close_many` と検証・絞り込み・塊ごとの閉じ方を共有し、日誌の順序だけは `POST /commitments/:id/close` と同じ（先に書き、書けなければ閉じない）
+// POST /commitments/close-many（#5336）。検証（`describeCloseManyViolation`。クローンの Task の一括 `task_set_status_many` と共有）・絞り込み・塊ごとの閉じ方を共有し、日誌の順序だけは `POST /commitments/:id/close` と同じ（先に書き、書けなければ閉じない）
 
 const AT = '2026-10-19T00:00:00.000Z';
 const ORIGIN_EXTERNAL = ['external'];
@@ -277,20 +277,10 @@ describe('POST /commitments/close-many: 実行（dryRun: false）', () => {
 });
 
 describe('POST /commitments/close-many: 断る入力は 400 で、1件も閉じない（文言はクローンの道具と同じ）', () => {
-  function toolText(stores: Stores, args: Record<string, unknown>): Promise<string> {
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      conversationId: () => undefined,
-      memoryCause: () => 'clone',
-    });
-    const found = tools.find((entry) => entry.name === 'commitment_close_many');
-    if (!found) throw new Error('commitment_close_many が無い');
-    return found
-      .handler(args as never, {})
-      .then((result) =>
-        (result.content ?? []).map((block) => (block.type === 'text' ? block.text : '')).join(''),
-      );
+  // 検証の本体は `describeCloseManyViolation`（#5923 でクローンの道具 `commitment_close_many` は外れ、同じ検証を Task の `task_set_status_many` と共有する）。
+  // HTTP の断り文が、その関数の断り文と1文字も違わないことを測る
+  function violationText(args: Record<string, unknown>): string {
+    return describeCloseManyViolation(args as never) ?? '';
   }
 
   const base = { origin: ORIGIN_EXTERNAL, reason: '片付いた', dryRun: false };
@@ -325,8 +315,8 @@ describe('POST /commitments/close-many: 断る入力は 400 で、1件も閉じ�
     expect(response.status).toBe(400);
     const { error } = (await response.json()) as { error: string };
     expect(error).toContain(fragment);
-    // 道具が返す断り文と1文字も違わない
-    expect(error).toBe(await toolText(stores, args));
+    // 共有の検証の断り文と1文字も違わない
+    expect(error).toBe(violationText(args));
     expect(await openIds(stores)).toEqual(['a']);
     expect(await decisionRows(stores)).toEqual([]);
   });
