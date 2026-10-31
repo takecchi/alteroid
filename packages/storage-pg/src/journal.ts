@@ -25,7 +25,7 @@ import type {
 import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { rowsOf, stripNulls, toIso, toNumber } from './db.js';
+import { byteLength, rowsOf, stripNulls, toIso, toNumber } from './db.js';
 import { journal } from './schema.js';
 
 // `entry` に `id` / `at` / `type` を書かない: 列から復元できる二重持ちで、日誌は行数が多く heap を食うため。
@@ -642,11 +642,6 @@ const HIDDEN_ENTRY_IDS = sql.raw(
     `UNION ALL SELECT h.entry->>'hiddenEntryIds' WHERE jsonb_typeof(h.entry->'hiddenEntryIds') = 'string'` +
     `) named WHERE h.type = 'conversation_deleted' AND named.hid IS NOT NULL`,
 );
-
-// `JSON.stringify` へ戻して数える: pg の駆動子は渡す時点で JSON を解いてしまい、生の行文字列の長さが取れないため。
-function byteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
-}
 
 // 全文検索（`tsvector`）にしない: 部分一致にならず、日本語を語に割れず、fs / インメモリと答えが揃わないため。
 // 索引を張らない: `pg_trgm` は拡張で権限の要求が強くなり、実データでの遅さを測っていないため。

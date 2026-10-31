@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractRowId, summarizeInvalidFields } from './invalid-row.js';
+import { extractRowField, extractRowId, summarizeInvalidFields } from './invalid-row.js';
 
 describe('summarizeInvalidFields', () => {
   it('欄の頭だけを出す', () => {
@@ -27,6 +27,14 @@ describe('summarizeInvalidFields', () => {
     const issues = [{ path: ['token'], message: 'received "sk-secret-value"' }];
     expect(summarizeInvalidFields(issues)).not.toContain('sk-secret-value');
     expect(summarizeInvalidFields(issues)).toBe('不正な欄: token');
+  });
+});
+
+describe('extractRowField', () => {
+  it('指した欄が文字列のときだけ返す', () => {
+    expect(extractRowField({ kind: 'k', n: 1 }, 'kind')).toBe('k');
+    expect(extractRowField({ kind: 'k', n: 1 }, 'n')).toBeUndefined();
+    expect(extractRowField(null, 'kind')).toBeUndefined();
   });
 });
 

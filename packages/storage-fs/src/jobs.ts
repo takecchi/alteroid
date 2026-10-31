@@ -8,6 +8,7 @@ import {
   pendingApprovalSchema,
   UnreadableApprovalError,
   UnreadableJobError,
+  extractRowField,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -46,12 +47,6 @@ function isSettledRaw(raw: unknown): boolean {
   const row = raw as Record<string, unknown>;
   const set = (v: unknown): boolean => v !== undefined && v !== null;
   return set(row.answeredAt) || set(row.withdrawnAt);
-}
-
-function rawConversationId(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const value = (raw as Record<string, unknown>).conversationId;
-  return typeof value === 'string' ? value : undefined;
 }
 
 function summarizeRawApprovalProblem(raw: unknown): string {
@@ -169,7 +164,8 @@ export class FsJobStore implements JobStore {
       .filter((raw) => options.pendingOnly !== true || !isSettledRaw(raw))
       .filter(
         (raw) =>
-          options.conversationId === undefined || rawConversationId(raw) === options.conversationId,
+          options.conversationId === undefined ||
+          extractRowField(raw, 'conversationId') === options.conversationId,
       )
       .map((raw): UnreadableApproval => {
         const id = extractRowId(raw);

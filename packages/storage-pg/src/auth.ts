@@ -23,26 +23,12 @@ import type {
   UnreadableAccount,
 } from '@alteroid/core';
 import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
-import type { SQL, SQLWrapper } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls, toIso } from './db.js';
+import { byteOrder, optionalDate, optionalIso, stripNulls, toIso } from './db.js';
 import { authAccessTokens, authAccounts, authIdentities, authLoginRequests } from './schema.js';
 
 const LOGIN_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-function optionalDate(value: string | null): Date | null {
-  return value === null ? null : new Date(value);
-}
-
-function optionalIso(value: Date | null): string | null {
-  return value === null ? null : toIso(value);
-}
-
-// 列の既定の照合順に任せない: 本番の pg と PGlite、fs / インメモリとで並びが食い違うため。
-function byteOrder(column: SQLWrapper): SQL {
-  return sql`${column} collate "C"`;
-}
 
 // 素のトークンを入れない: `sha256` だけを持つ。DB のダンプが漏れても再利用できてはいけないため。
 export class PgAuthStore implements AuthStore {
