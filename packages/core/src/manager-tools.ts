@@ -14,13 +14,13 @@ export const RESCUE_RESTORE_TOOL_NAME = 'rescue_restore';
 export const REPORT_ATTACH_TOOL_NAME = 'report_attach';
 
 /** 1回の呼び出しで名指せる個数。取り込みの個数の上限（`ATTACHMENT_MAX_PER_MESSAGE_DEFAULT`）に合わせず、上限を変えた器でも道具の入力は変えない。 */
-export const REPORT_ATTACH_MAX_PATHS = 50;
+const REPORT_ATTACH_MAX_PATHS = 50;
 
-export type ReportAttachResult =
+type ReportAttachResult =
   | { path: string; ok: true; name: string; size: number }
   | { path: string; ok: false; reason: string };
 
-export function renderReportAttachResults(results: readonly ReportAttachResult[]): string {
+function renderReportAttachResults(results: readonly ReportAttachResult[]): string {
   const lines = results.map((r) =>
     r.ok
       ? `写した: ${r.path} → ${r.name}（${String(r.size)} バイト）`
@@ -43,7 +43,7 @@ export interface RescueRestoreInput {
 export const DEFAULT_MANAGER_TOOLS_SOCKET_DIR = '/run/alteroid/manager';
 export const MANAGER_TOOLS_SOCKET_FILENAME = 'manager.sock';
 
-export const MANAGER_TOOLS_TOKEN_TIMEOUT_MS = 30_000;
+const MANAGER_TOOLS_TOKEN_TIMEOUT_MS = 30_000;
 
 export type ManagerToolsSocketHost = CloneToolRelayHost;
 

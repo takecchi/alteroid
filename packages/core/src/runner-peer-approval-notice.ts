@@ -14,7 +14,7 @@ export const PEER_APPROVAL_NOTICE_INTERVAL_MS = 10 * 60_000;
 const APPROVALS_LIMIT = 3;
 
 /** `nowMs` までに `PEER_APPROVAL_STALE_AFTER_MS` 以上待っているもの（待ちが長い順）。 */
-export function staleApprovals(
+function staleApprovals(
   pending: readonly PeerPendingApprovalInfo[],
   nowMs: number,
 ): PeerPendingApprovalInfo[] {
@@ -23,7 +23,7 @@ export function staleApprovals(
     .sort((a, b) => a.since - b.since);
 }
 
-export function describePeerApprovalStale(
+function describePeerApprovalStale(
   stale: readonly PeerPendingApprovalInfo[],
   nowMs: number,
 ): string {

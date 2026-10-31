@@ -108,7 +108,7 @@ export const runnerManagerStateSchema = z.object({
     .optional(),
 });
 
-export type PendingPeerApprovals = NonNullable<
+type PendingPeerApprovals = NonNullable<
   z.infer<typeof runnerManagerStateSchema>['pendingPeerApprovals']
 >;
 
@@ -759,14 +759,14 @@ export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
  * `closed.unpushedWork` と `shutdown_unpushed_work` が共有する形。`kind: 'unavailable'` は取れなかったことそのものを名乗り、
  * 欄が丸ごと無いこととは混ぜない。1箇所にまとめるのは、手で同じ形を2つ書くと片方だけ直る事故が起きるため。
  */
-export const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
+const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ok'), result: unpushedWorkResultSchema }),
   z.object({ kind: z.literal('unavailable'), reason: z.string() }),
 ]);
 export type RunnerUnpushedWorkOutcome = z.infer<typeof runnerUnpushedWorkOutcomeSchema>;
 
 /** 中身（ファイルの内容）は持たない。名前と件数だけ。 */
-export const scratchSweepItemSchema = z.object({
+const scratchSweepItemSchema = z.object({
   name: z.string(),
   kind: z.enum(['directory', 'file', 'symlink', 'node_modules']),
   managerId: z.string().optional(),
@@ -791,7 +791,7 @@ export const scratchSweepItemSchema = z.object({
 });
 export type ScratchSweepItem = z.infer<typeof scratchSweepItemSchema>;
 
-export const scratchSweepEventSchema = z.object({
+const scratchSweepEventSchema = z.object({
   type: z.literal('scratch_sweep'),
   runnerId: z.string(),
   removed: z.array(scratchSweepItemSchema),
@@ -1432,7 +1432,7 @@ export function isRetryableRunnerError(error: unknown): boolean {
 }
 
 /** 409（世代で拒まれた）は含めない（`isFencedRunnerError`）。 */
-export function isInvalidDelegationRefusal(error: unknown): boolean {
+function isInvalidDelegationRefusal(error: unknown): boolean {
   return (
     error instanceof RunnerHttpError &&
     (error.status === 400 || error.status === 415 || error.status === 422)
@@ -1992,7 +1992,7 @@ export interface RunnerRequestStages {
   readonly headersReceived?: boolean;
 }
 
-export interface ProbeLoopObservation {
+interface ProbeLoopObservation {
   readonly elapsedMs: number;
   readonly loopUtilization: number;
 }
@@ -3000,7 +3000,7 @@ export function describeProbeFailure(
  * 期限切れの文に添える、止まった段とスレッドの枠の待ち（#4890）。網・DNS・デーモンの器の I/O の詰まりを、日誌だけで見分けるため。
  * 取れない段は「不明」と書く。判定には使わない（lost の条件は変えない）。
  */
-export function describeProbeDeadlineDiagnosis(
+function describeProbeDeadlineDiagnosis(
   stages: RunnerRequestStages | undefined,
   wait: ThreadpoolWait | undefined,
 ): string {

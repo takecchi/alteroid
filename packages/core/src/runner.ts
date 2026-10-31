@@ -461,14 +461,14 @@ export interface RunnerChildUser {
   home?: string;
 }
 
-export type ManagerPermissionMode = PermissionModeName;
+type ManagerPermissionMode = PermissionModeName;
 
 // 既定を `default` にしない: 層を下りた途端に `Read` や `grep` で止まるのはデグレードのため（north_star 禁止1）
 export { DEFAULT_PERMISSION_MODE };
 
-export const PERMISSION_MODE_ENV_KEY = 'ALTEROID_MANAGER_PERMISSION_MODE';
+const PERMISSION_MODE_ENV_KEY = 'ALTEROID_MANAGER_PERMISSION_MODE';
 
-export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermissionMode {
+function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermissionMode {
   return resolvePermissionModeFor(env, PERMISSION_MODE_ENV_KEY);
 }
 
@@ -476,7 +476,7 @@ export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermission
 // 固定値にしない: 人間が開きたいときに開けなくなるため（north_star 禁止2）
 export const MANAGER_AUTO_MEMORY_ENV_KEY = 'ALTEROID_MANAGER_AUTO_MEMORY';
 
-export function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean {
+function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean {
   const given = env[MANAGER_AUTO_MEMORY_ENV_KEY]?.trim();
   if (given === undefined || given.length === 0) return false;
   if (given === 'true') return true;
@@ -2574,7 +2574,7 @@ export async function closeParkedPeers(
   return [...closed.values()];
 }
 
-export interface ClosedParkedPeer {
+interface ClosedParkedPeer {
   readonly id: string;
   readonly provider: string;
   /** 閉じるとき背景で走っていた（または預かっていた）ターンの止まりどころの抜粋。 */
@@ -2604,7 +2604,7 @@ interface PendingRequest {
 
 type SpawnAgentProcessOptions = AgentSpawnOptions;
 
-export type HandOverResumeConfigDir = (dir: string, uid: number, gid: number) => void;
+type HandOverResumeConfigDir = (dir: string, uid: number, gid: number) => void;
 
 type DelegationProcessHandle = AgentChildProcess;
 
@@ -2676,7 +2676,7 @@ interface RunnerSessionOptions {
 const FINISH_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
 /** 担当の作業場の下に置く、委譲の CLI の一時フォルダの名前（`#prepareClaudeTmpDir`）。 */
-export const DELEGATION_CLAUDE_TMP_DIR_NAME = 'claude-tmp';
+const DELEGATION_CLAUDE_TMP_DIR_NAME = 'claude-tmp';
 
 // `FORCED_EXIT_MS`（SIGTERM から55秒）の内側に収める: 全セッションを並行に畳むので、この観測1本ぶんだけが畳みの合計時間に上乗せされる
 const STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
@@ -6867,7 +6867,7 @@ class RunnerSession {
 
 const HANDOFF_LOG_LIMIT = 12_000;
 
-export function renderSessionLog(
+function renderSessionLog(
   entries: readonly unknown[] | undefined,
   limit = HANDOFF_LOG_LIMIT,
 ): string | null {

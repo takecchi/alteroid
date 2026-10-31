@@ -234,8 +234,6 @@ function isoToEpochMs(value: unknown): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-export { secondsToEpochMs } from './usage-limits.js';
-
 function toExtraUsage(value: unknown): ExtraUsage | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const raw = value as Record<string, unknown>;

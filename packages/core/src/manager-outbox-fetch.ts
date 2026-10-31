@@ -497,7 +497,7 @@ function seconds(ms: number): number {
   return Math.round(ms / 100) / 10;
 }
 
-export interface FetchRescueFileInput {
+interface FetchRescueFileInput {
   readonly runner: RunnerClient;
   readonly managerId: string;
   /** 作業ツリーの中の相対パス（添付の名前にする）。 */
@@ -510,7 +510,7 @@ export interface FetchRescueFileInput {
   readonly timeoutMs?: number;
 }
 
-export type FetchRescueFileOutcome =
+type FetchRescueFileOutcome =
   | { readonly ok: true; readonly ref: AttachmentRef }
   | { readonly ok: false; readonly reason: string };
 
