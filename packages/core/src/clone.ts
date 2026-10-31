@@ -2364,6 +2364,9 @@ class Clone implements CloneHost {
         mergedExternal ??
         mergedSignals ?? [event];
       this.#inFlight = { events: batch, started: false };
+      // 取り出してターンに渡す束の畳み込みの索引は、ここで落とす: 残すと、読まれている最中の代表に同じ本文の後続が畳まれ、二度目の発生がクローンへ届かないため。
+      // まだ受信箱にある代表への畳み込み（#954）は変えない（落とすのは取り出された束だけ）。この下の `await` より前に置く: 間に届いた同文を新しい代表として積むため
+      for (const taken of batch) this.#dropPendingCollapse(taken);
       // 時計は束が決まった時点で作る（#5086）: 順番待ちは束の中でいちばん古い合図の `at` から数える。読めない `at` は取り出した時刻とみなす
       const timer = new TurnTimer({
         now: Date.now,
@@ -2844,6 +2847,8 @@ class Clone implements CloneHost {
       await this.#forget(event);
     } else if (defer) {
       this.#delivery.pushDeferred(event);
+      // 取り出し時に落とした畳み込みの索引を戻す: 保持した合図は読まれておらず未読のままなので、枠が閉じている間の同文の連投は従来どおり畳むため（既に新しい代表が居れば触らない）
+      this.#restorePendingCollapse(event);
       // 保持したことを覚えておく: 保持している間に印を消すと、解除で戻ってきた合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻るため
       this.#heldForUsage.add(event.id);
     } else {
@@ -3180,7 +3185,13 @@ class Clone implements CloneHost {
     return 'folded';
   }
 
-  // 代表の合図が実際に片付いて `#stores.inbox.remove` が確定したときだけ鍵を落とす（`this.#stores.inbox.remove(` を呼ぶのは `#forget` の1箇所だけなので、落とす場所もそこに閉じる）: 早く落とすと次の同文が新しい代表として積まれて畳み込みが二重になり、遅いと片付いた合図の影が残って次の同じ内容の合図が二度と積まれなくなるため
+  #restorePendingCollapse(event: InboxEvent): void {
+    const key = inboxCollapseKey(event);
+    if (key === undefined || this.#delivery.getCollapseEntry(key) !== undefined) return;
+    this.#delivery.registerCollapseRepresentative(key, event.id, event.at);
+  }
+
+  // 鍵を落とすのは、代表がターンへ取り出された時点（`#pump`）か、片付いて `#stores.inbox.remove` が確定したとき（`#forget`）。まだ受信箱にある代表の鍵は落とさない: 早く落とすと次の同文が新しい代表として積まれて畳み込みが二重になり、遅いと片付いた合図の影が残って次の同じ内容の合図が二度と積まれなくなるため
   // `existing.id === event.id` で確かめる: 他の代表の索引を誤って落とさないための防御
   // 要約は件数だけを1行書く: 生の本文は畳んだ回ごとに `#foldIntoPendingCollapse` が残しているため
   #dropPendingCollapse(event: InboxEvent): void {
@@ -4103,7 +4114,16 @@ class Clone implements CloneHost {
           await this.#markAnswerDelivered(approval.id, approval.answeredAt);
         } else {
           await this.#stores.inbox.put(event, event.at);
-          await this.#markAnswerDelivered(approval.id, approval.answeredAt);
+          // 印の失敗は握って跡を残し、配達（`post()`）は止めない: 止めると次の再起動まで人間の回答が配られず、担当が確認待ちのまま止まるため。`'pending'` のまま残れば再起動で同じ回答がもう一度配られうるが、`inbox.put` は同じ id の上書きで、約束は「少なくとも1回」
+          try {
+            await this.#markAnswerDelivered(approval.id, approval.answeredAt);
+          } catch (markError) {
+            noteDroppedRecord(
+              '回答の配達印の確定（拾い直し時）',
+              inboxEventShape(event),
+              markError,
+            );
+          }
           this.post(event);
         }
         reconciled += 1;
