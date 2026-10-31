@@ -2,6 +2,7 @@ import type {
   CanUseTool,
   HookCallback,
   McpServerConfig,
+  Options,
   SDKMessage,
   SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -2328,5 +2329,122 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeGreaterThanOrEqual(100_000);
       expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeLessThanOrEqual(1_000_000);
     });
+  });
+});
+
+describe('観測フックは呼ばれ、投げた例外は握らずに投げ返す', () => {
+  const boom = () => {
+    throw new Error('boom');
+  };
+  const sessionWith = (hooks: {
+    onPreCompact?: () => void;
+    onSubagentStop?: () => void;
+  }): Options =>
+    buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: hooks.onPreCompact ?? (() => {}),
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: hooks.onSubagentStop ?? (() => {}),
+    });
+  const managerWith = (hooks: { onUserPromptSubmit?: () => void; onStop?: () => void }): Options =>
+    buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: hooks.onUserPromptSubmit ?? (() => {}),
+      onSubagentStop: () => ({ kind: 'continue' }),
+      onStop: hooks.onStop ?? (() => {}),
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
+      managerAutoMemoryEnabled: false,
+    });
+  const distillWith = (hooks: {
+    onPostToolUse?: () => void;
+    onPostToolUseFailure?: () => void;
+  }): Options =>
+    buildCloneDistillOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      onPostToolUse: hooks.onPostToolUse ?? (() => {}),
+      onPostToolUseFailure: hooks.onPostToolUseFailure ?? (() => {}),
+    });
+
+  const cases = [
+    ['PreCompact', () => sessionWith({ onPreCompact: boom }).hooks?.PreCompact?.[0]?.hooks[0]],
+    [
+      'SubagentStop（クローン）',
+      () => sessionWith({ onSubagentStop: boom }).hooks?.SubagentStop?.[0]?.hooks[0],
+    ],
+    [
+      'UserPromptSubmit',
+      () => managerWith({ onUserPromptSubmit: boom }).hooks?.UserPromptSubmit?.[0]?.hooks[0],
+    ],
+    ['Stop', () => managerWith({ onStop: boom }).hooks?.Stop?.[0]?.hooks[0]],
+    [
+      'PostToolUse（蒸留）',
+      () => distillWith({ onPostToolUse: boom }).hooks?.PostToolUse?.[0]?.hooks[0],
+    ],
+    [
+      'PostToolUseFailure（蒸留）',
+      () => distillWith({ onPostToolUseFailure: boom }).hooks?.PostToolUseFailure?.[0]?.hooks[0],
+    ],
+  ] as const;
+
+  it.each(cases)('%s: フックが投げたら、そのまま投げ返す', async (_, hookOf) => {
+    await expect(invokeHook(hookOf(), { hook_event_name: 'X', tool_name: 'Bash' })).rejects.toThrow(
+      'boom',
+    );
+  });
+
+  it('PostToolUse（蒸留）・PostToolUseFailure（蒸留）: 例外が無ければ呼ばれて { continue: true } を返す', async () => {
+    let calls = 0;
+    const count = () => {
+      calls += 1;
+    };
+    const options = distillWith({ onPostToolUse: count, onPostToolUseFailure: count });
+    const input = { hook_event_name: 'X', tool_name: 'Bash' };
+    expect(await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], input)).toEqual({
+      continue: true,
+    });
+    expect(await invokeHook(options.hooks?.PostToolUseFailure?.[0]?.hooks[0], input)).toEqual({
+      continue: true,
+    });
+    expect(calls).toBe(2);
+  });
+
+  it('SubagentStop（クローン）・UserPromptSubmit: 例外が無ければ呼ばれて { continue: true } を返す', async () => {
+    let calls = 0;
+    const count = () => {
+      calls += 1;
+    };
+    const session = sessionWith({ onSubagentStop: count });
+    const manager = managerWith({ onUserPromptSubmit: count });
+    expect(await invokeHook(session.hooks?.SubagentStop?.[0]?.hooks[0], {})).toEqual({
+      continue: true,
+    });
+    expect(await invokeHook(manager.hooks?.UserPromptSubmit?.[0]?.hooks[0], {})).toEqual({
+      continue: true,
+    });
+    expect(calls).toBe(2);
   });
 });
