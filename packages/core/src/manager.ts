@@ -3635,8 +3635,18 @@ class Pool implements ManagerPool {
       ['plugins', plugins],
       ['agentToken', agentTokenPushes],
     ] as const) {
-      const unsubscribe = source?.onPushed?.((results) =>
-        this.#recordDirectPushResults(kind, results),
+      const unsubscribe = source?.onPushed?.((results, scope?: { unnamed: true }) =>
+        this.#recordDirectPushResults(
+          kind,
+          // 名指せなかった失敗は、この manager が知っている runner（帳面に載っている runner）全部の失敗として記録する。
+          scope?.unnamed === true
+            ? [...this.#pushHealth.keys()].map((runnerId) => ({
+                runnerId,
+                ok: false,
+                error: results[0]?.error,
+              }))
+            : results,
+        ),
       );
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
@@ -12082,8 +12092,14 @@ class Pool implements ManagerPool {
     const health = this.#pushHealth.get(runnerId);
     if (health === undefined) return;
 
-    const runner = await this.#runnerOrNull(runnerId);
+    // 名簿を引けなかったのは一時障害だが、居ないと答えられたのは別（`#reattach` と同じ区別）: 居ない runner は戻ってこないので諦め、一時障害は予約し直す。
+    let lookupFailed = false;
+    const runner = await this.#runners.get(runnerId).catch(() => {
+      lookupFailed = true;
+      return null;
+    });
     if (runner === null) {
+      if (lookupFailed) this.#settlePushRetry(runnerId);
       return;
     }
 

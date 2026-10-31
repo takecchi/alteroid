@@ -7,6 +7,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createCredentialService } from './credential-service.js';
 import { createCredentialStore } from './credentials.js';
+import { createDelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import { createManagerPool, WITHHELD_ENV_KEYS } from './manager.js';
 import { createMcpServerService } from './mcp-server-service.js';
 import { mcpServersFingerprintOf, type McpServers } from './mcp-servers.js';
@@ -62,6 +63,7 @@ function setup() {
     runners: registry,
     withheldEnvKeys: [...WITHHELD_ENV_KEYS],
   });
+  const permissionRules = createDelegatedPermissionRuleService({ stores, runners: registry });
   const pool = createManagerPool({
     stores,
     post: () => undefined,
@@ -69,8 +71,9 @@ function setup() {
     mcpServers,
     profile,
     credentials,
+    permissionRules,
   });
-  return { stores, runner, pool, mcpServers, profile, credentials };
+  return { stores, runner, registry, pool, mcpServers, profile, credentials, permissionRules };
 }
 
 describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑み直す（#1699 / #1717）', () => {
@@ -167,6 +170,86 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
     await vi.waitFor(() => {
       expect(s.pool.pushHealthOf('runner-test')?.credentials?.status).toBe('ok');
     });
+
+    await s.pool.stop();
+  });
+
+  it('委譲先の許可規則: 許可の一覧を読めなかった回も帳面が failed になり、挑み直されて ok に戻る', async () => {
+    const s = setup();
+    await s.pool.start({ request: '走る' });
+    expect(s.pool.pushHealthOf('runner-test')?.permissionRules?.status).toBe('ok');
+
+    const realList = s.stores.permissionGrants.list.bind(s.stores.permissionGrants);
+    let listCalls = 0;
+    s.stores.permissionGrants.list = async (...args) => {
+      listCalls += 1;
+      if (listCalls === 1) throw new Error('grants list failed (test, transient)');
+      return realList(...args);
+    };
+
+    await s.permissionRules.pushAll('許可が記録された');
+    expect(s.pool.pushHealthOf('runner-test')?.permissionRules?.status).toBe('failed');
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(listCalls).toBeGreaterThan(1);
+    expect(s.pool.pushHealthOf('runner-test')?.permissionRules?.status).toBe('ok');
+
+    await s.pool.stop();
+  });
+
+  it('委譲先の許可規則: runner の名簿を引けなかった回も、知っている runner の帳面が failed になり、挑み直されて ok に戻る', async () => {
+    const s = setup();
+    await s.pool.start({ request: '走る' });
+    expect(s.pool.pushHealthOf('runner-test')?.permissionRules?.status).toBe('ok');
+
+    const realList = s.registry.list.bind(s.registry);
+    let listCalls = 0;
+    s.registry.list = async () => {
+      listCalls += 1;
+      if (listCalls === 1) throw new Error('registry list failed (test, transient)');
+      return realList();
+    };
+
+    await s.permissionRules.pushAll('許可が記録された');
+    expect(s.pool.pushHealthOf('runner-test')?.permissionRules?.status).toBe('failed');
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(s.pool.pushHealthOf('runner-test')?.permissionRules?.status).toBe('ok');
+
+    await s.pool.stop();
+  });
+
+  it('挑み直しの瞬間に名簿の get が一時的に失敗しても、次の挑み直しを予約し直し、ok に戻る', async () => {
+    const s = setup();
+    await s.pool.start({ request: '走る' });
+
+    let broken = true;
+    const real = s.runner.setMcpServers?.bind(s.runner);
+    s.runner.setMcpServers = async (servers) => {
+      if (broken) throw new Error('mcp sync failed (test, transient)');
+      return real?.(servers);
+    };
+    await s.mcpServers.apply(REGISTRATION);
+    expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('failed');
+
+    // 最初の挑み直しの get だけ落とす。
+    const realGet = s.registry.get.bind(s.registry);
+    let getFailed = false;
+    s.registry.get = async (runnerId) => {
+      if (!getFailed) {
+        getFailed = true;
+        throw new Error('registry get failed (test, transient)');
+      }
+      return realGet(runnerId);
+    };
+    broken = false;
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(getFailed).toBe(true);
+    expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
 
     await s.pool.stop();
   });

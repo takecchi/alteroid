@@ -128,7 +128,10 @@ export interface DelegatedPermissionRuleService {
    */
   pushAll(trigger: string): Promise<PermissionRulesRunnerResult[]>;
   // `ManagerPool` が購読して押し込みの帳面に積む（`McpServerService.onPushed` と同じ）。
-  onPushed?(listener: (results: readonly PermissionRulesRunnerResult[]) => void): () => void;
+  // `unnamed` は配る先の名簿を引けず runner を名指せなかった回（`results` の `runnerId` は空）。受け取る側が知っている runner 全部への失敗として扱う。
+  onPushed?(
+    listener: (results: readonly PermissionRulesRunnerResult[], scope?: { unnamed: true }) => void,
+  ): () => void;
 }
 
 export interface DelegatedPermissionRuleServiceOptions {
@@ -140,7 +143,9 @@ export function createDelegatedPermissionRuleService(
   options: DelegatedPermissionRuleServiceOptions,
 ): DelegatedPermissionRuleService {
   const { stores, runners } = options;
-  const pushListeners = new Set<(results: readonly PermissionRulesRunnerResult[]) => void>();
+  const pushListeners = new Set<
+    (results: readonly PermissionRulesRunnerResult[], scope?: { unnamed: true }) => void
+  >();
 
   // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
   const { run: serial } = createSerialQueue();
@@ -173,6 +178,34 @@ export function createDelegatedPermissionRuleService(
     const text = autoModeStrippedText(set);
     if (text === undefined) return;
     await journal(`${runnerId} へ配った許可規則に、${text}`, `${trigger}（#5435）`);
+  }
+
+  function notify(results: readonly PermissionRulesRunnerResult[], unnamed?: true): void {
+    for (const listener of pushListeners) {
+      try {
+        if (unnamed === true) listener(results, { unnamed: true });
+        else listener(results);
+      } catch {
+        // 帳面に積めなかっただけで、配布の結果そのものは返す。
+      }
+    }
+  }
+
+  // 読めなかった回の失敗を、配る先の runner ごとに知らせる。名簿も引けず配る先が分からないときは、名指しなしで知らせる（受け取る側が知っている runner 全部へ記録する）。
+  function notifyFailure(
+    open: readonly RunnerClient[],
+    error: string,
+    rosterUnknown: boolean,
+  ): void {
+    if (rosterUnknown) {
+      notify([{ runnerId: '', ok: false, error }], true);
+      return;
+    }
+    notify(
+      open
+        .filter((runner) => runner.setPermissionRules !== undefined)
+        .map((runner) => ({ runnerId: runner.runnerId, ok: false, error })),
+    );
   }
 
   // 一覧を読む: 載せる許可が読めなければ投げる（空の一覧へ倒さない: 倒すと読めなかった回に全部の規則を外してしまう）。
@@ -211,9 +244,21 @@ export function createDelegatedPermissionRuleService(
             '委譲先の許可規則を配れなかった（許可の一覧を読めなかった）',
             `${trigger}。理由: ${reasonOf(error)}（#4952。各 runner には前の一覧が残っている）`,
           );
+          // 帳面と挑み直しに載せる: 載せないと、runner が古い規則のまま次の hello まで撒き直されない。
+          const listed = await runners.list().catch(() => null);
+          notifyFailure(listed ?? [], reasonOf(error), listed === null);
           return [];
         }
-        const open = await runners.list().catch(() => []);
+        let rosterFailed = false;
+        const open = await runners.list().catch(() => {
+          rosterFailed = true;
+          return [];
+        });
+        if (rosterFailed) {
+          // 配る先が分からない: 知っている runner（ManagerPool の帳面）へ失敗を記録させる。
+          notifyFailure([], '登録済みの runner の名簿を引けなかった', true);
+          return [];
+        }
         const results = await Promise.all(
           open
             .filter((runner) => runner.setPermissionRules !== undefined)
@@ -253,13 +298,7 @@ export function createDelegatedPermissionRuleService(
             );
           }
         }
-        for (const listener of pushListeners) {
-          try {
-            listener(results);
-          } catch {
-            // 帳面に積めなかっただけで、配布の結果そのものは返す。
-          }
-        }
+        notify(results);
         return results;
       }),
 
