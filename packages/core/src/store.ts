@@ -510,54 +510,65 @@ export interface ApprovalList {
   unreadable: UnreadableApproval[];
 }
 
+/** 「読めない行」の1文に添える識別子の一覧（`（id: a, b ほか N 件。id が取れない行が M 件）`）で、並べる数の上限。 */
+const UNREADABLE_LIST_SHOWN = 10;
+
+/**
+ * `describeUnreadable*` 共通の括弧書き。`items` は識別できた行の表示、`total` は読めない行の総数。
+ * 1件も識別できなければ `（<none>）`、一部だけなら末尾に `。<lack>行が N 件` を足す。
+ */
+function unreadableListNote(
+  items: readonly string[],
+  total: number,
+  lead: string,
+  none: string,
+  lack: string,
+): string {
+  if (items.length === 0) return `（${none}）`;
+  const shown = items.slice(0, UNREADABLE_LIST_SHOWN);
+  return (
+    `（${lead}${shown.join(', ')}` +
+    (items.length > shown.length ? ` ほか ${items.length - shown.length} 件` : '') +
+    (items.length < total ? `。${lack}行が ${total - items.length} 件` : '') +
+    '）'
+  );
+}
+
+/** 行ごとに 1 つのキー（id / kind / slug。取れなければ `undefined`）で識別する `describeUnreadable*` の括弧書き。 */
+function unreadableKeyNote(noun: string, keys: readonly (string | undefined)[]): string {
+  return unreadableListNote(
+    keys.flatMap((key) => (key === undefined ? [] : [key])),
+    keys.length,
+    `${noun}: `,
+    `${noun} も取れない`,
+    `${noun} が取れない`,
+  );
+}
+
 /**
  * 読めない承認待ちが在るときの1文（0件なら `null`）。
  * 0件のときは何も出さない: 「読めない承認待ちは 0 件」の行を作らない（AGENTS.md「取れない軸に 0 の行を作る」）。本文は載せない（`unreadableApprovalSchema` の doc）。
  */
 export function describeUnreadableApprovals(
   unreadable: readonly UnreadableApproval[],
-  options: { idLimit?: number } = {},
 ): string | null {
   if (unreadable.length === 0) return null;
-  const idLimit = options.idLimit ?? 10;
-  const ids = unreadable.flatMap((row) => (row.id === undefined ? [] : [row.id]));
-  const shown = ids.slice(0, idLimit);
-  const idNote =
-    ids.length === 0
-      ? '（id も取れない）'
-      : `（id: ${shown.join(', ')}` +
-        (ids.length > shown.length ? ` ほか ${ids.length - shown.length} 件` : '') +
-        (ids.length < unreadable.length
-          ? `。id が取れない行が ${unreadable.length - ids.length} 件`
-          : '') +
-        '）';
   return (
-    `読めない承認待ちが ${unreadable.length} 件ある${idNote}。` +
-    '壊れた行であって、回答済み・取り下げ済みではない。この一覧には載っていない。'
+    `読めない承認待ちが ${unreadable.length} 件ある${unreadableKeyNote(
+      'id',
+      unreadable.map((row) => row.id),
+    )}。` + '壊れた行であって、回答済み・取り下げ済みではない。この一覧には載っていない。'
   );
 }
 
 /** 読めない委譲の行が在るときの1文（0件なら `null`）。本文は載せない（`unreadableJobSchema` の doc）。 */
-export function describeUnreadableJobs(
-  unreadable: readonly UnreadableJob[],
-  options: { idLimit?: number } = {},
-): string | null {
+export function describeUnreadableJobs(unreadable: readonly UnreadableJob[]): string | null {
   if (unreadable.length === 0) return null;
-  const idLimit = options.idLimit ?? 10;
-  const ids = unreadable.flatMap((row) => (row.id === undefined ? [] : [row.id]));
-  const shown = ids.slice(0, idLimit);
-  const idNote =
-    ids.length === 0
-      ? '（id も取れない）'
-      : `（id: ${shown.join(', ')}` +
-        (ids.length > shown.length ? ` ほか ${ids.length - shown.length} 件` : '') +
-        (ids.length < unreadable.length
-          ? `。id が取れない行が ${unreadable.length - ids.length} 件`
-          : '') +
-        '）';
   return (
-    `読めない委譲が ${unreadable.length} 件ある${idNote}。` +
-    '壊れた行であって、居ないのでも、畳まれたのでもない。この一覧には載っていない。'
+    `読めない委譲が ${unreadable.length} 件ある${unreadableKeyNote(
+      'id',
+      unreadable.map((row) => row.id),
+    )}。` + '壊れた行であって、居ないのでも、畳まれたのでもない。この一覧には載っていない。'
   );
 }
 
@@ -788,25 +799,15 @@ export interface ScheduleList {
 /** 読めない継続中の依頼が在るときの1文（0件なら `null`）。本文は載せない（`unreadableScheduleSchema` の doc）。 */
 export function describeUnreadableSchedules(
   unreadable: readonly UnreadableSchedule[],
-  options: { kindLimit?: number } = {},
 ): string | null {
   if (unreadable.length === 0) return null;
-  const kindLimit = options.kindLimit ?? 10;
-  const kinds = unreadable.flatMap((row) => (row.kind === undefined ? [] : [row.kind]));
-  const shown = kinds.slice(0, kindLimit);
-  const kindNote =
-    kinds.length === 0
-      ? '（kind も取れない）'
-      : `（kind: ${shown.join(', ')}` +
-        (kinds.length > shown.length ? ` ほか ${kinds.length - shown.length} 件` : '') +
-        (kinds.length < unreadable.length
-          ? `。kind が取れない行が ${unreadable.length - kinds.length} 件`
-          : '') +
-        '）';
+  const kinds = unreadable.map((row) => row.kind);
   return (
-    `読めない継続中の依頼が ${unreadable.length} 件ある${kindNote}。` +
+    `読めない継続中の依頼が ${unreadable.length} 件ある${unreadableKeyNote('kind', kinds)}。` +
     '壊れた行であって、消された依頼ではない。この一覧には載っていない。' +
-    (kinds.length === 0 ? '' : 'kind が分かるものは schedule_remove kind=<kind> で外せる。')
+    (kinds.every((kind) => kind === undefined)
+      ? ''
+      : 'kind が分かるものは schedule_remove kind=<kind> で外せる。')
   );
 }
 
@@ -1108,23 +1109,13 @@ export interface InboxPeek {
 /** 読めない合図が在るときの1文（0件なら `null`）。本文は載せない。 */
 export function describeUnreadableInboxEvents(
   unreadable: readonly UnreadableInboxEvent[],
-  options: { idLimit?: number } = {},
 ): string | null {
   if (unreadable.length === 0) return null;
-  const idLimit = options.idLimit ?? 10;
-  const ids = unreadable.flatMap((row) => (row.id === undefined ? [] : [row.id]));
-  const shown = ids.slice(0, idLimit);
-  const idNote =
-    ids.length === 0
-      ? '（id も取れない）'
-      : `（id: ${shown.join(', ')}` +
-        (ids.length > shown.length ? ` ほか ${ids.length - shown.length} 件` : '') +
-        (ids.length < unreadable.length
-          ? `。id が取れない行が ${unreadable.length - ids.length} 件`
-          : '') +
-        '）';
   return (
-    `読めない合図が ${unreadable.length} 件ある${idNote}。` +
+    `読めない合図が ${unreadable.length} 件ある${unreadableKeyNote(
+      'id',
+      unreadable.map((row) => row.id),
+    )}。` +
     '壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。'
   );
 }
@@ -1814,34 +1805,19 @@ export interface PracticeList {
 /** 読めないやり方が在るときの1文（0件なら `null`）。本文・題は載せない（`unreadablePracticeSchema`）。 */
 export function describeUnreadablePractices(
   unreadable: readonly UnreadablePractice[],
-  options: { slugLimit?: number } = {},
 ): string | null {
   if (unreadable.length === 0) return null;
-  const slugLimit = options.slugLimit ?? 10;
-  const slugs = unreadable.flatMap((row) => (row.slug === undefined ? [] : [row.slug]));
-  const shown = slugs.slice(0, slugLimit);
-  const slugNote =
-    slugs.length === 0
-      ? '（slug も取れない）'
-      : `（slug: ${shown.join(', ')}` +
-        (slugs.length > shown.length ? ` ほか ${slugs.length - shown.length} 件` : '') +
-        (slugs.length < unreadable.length
-          ? `。slug が取れない行が ${unreadable.length - slugs.length} 件`
-          : '') +
-        '）';
   return (
-    `読めないやり方が ${unreadable.length} 件ある${slugNote}。` +
-    '壊れた行であって、消されたやり方ではない。この一覧には載っていない。'
+    `読めないやり方が ${unreadable.length} 件ある${unreadableKeyNote(
+      'slug',
+      unreadable.map((row) => row.slug),
+    )}。` + '壊れた行であって、消されたやり方ではない。この一覧には載っていない。'
   );
 }
 
 /** 読めない認証トークンの行が在るときの1文（0件なら `null`）。トークンの値は載せない（`unreadableTokenSchema`）。識別は id とラベルだけ。 */
-export function describeUnreadableTokens(
-  unreadable: readonly UnreadableToken[],
-  options: { rowLimit?: number } = {},
-): string | null {
+export function describeUnreadableTokens(unreadable: readonly UnreadableToken[]): string | null {
   if (unreadable.length === 0) return null;
-  const rowLimit = options.rowLimit ?? 10;
   const named = unreadable.flatMap((row) => {
     if (row.id === undefined && row.label === undefined) return [];
     return [
@@ -1853,16 +1829,13 @@ export function describeUnreadableTokens(
         .join(' / '),
     ];
   });
-  const shown = named.slice(0, rowLimit);
-  const note =
-    named.length === 0
-      ? '（id もラベルも取れない）'
-      : `（${shown.join(', ')}` +
-        (named.length > shown.length ? ` ほか ${named.length - shown.length} 件` : '') +
-        (named.length < unreadable.length
-          ? `。id もラベルも取れない行が ${unreadable.length - named.length} 件`
-          : '') +
-        '）';
+  const note = unreadableListNote(
+    named,
+    unreadable.length,
+    '',
+    'id もラベルも取れない',
+    'id もラベルも取れない',
+  );
   return (
     `読めないトークンの行が ${unreadable.length} 件ある${note}。` +
     '壊れた行であって、消されたトークンではない。この一覧には載っていない。' +
