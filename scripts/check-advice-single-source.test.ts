@@ -94,43 +94,6 @@ describe('check-advice-single-source', () => {
   });
 });
 
-describe('check-advice-single-source: listScannableSources（Issue #1817）', () => {
-  async function makeRepoWithUntrackedFiles(): Promise<string> {
-    const dir = await makeTempDir('check-advice-single-source-1817-');
-    const git = (...gitArgs: string[]) =>
-      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
-    git('init', '-q');
-    git('config', 'user.email', 'test@example.invalid');
-    git('config', 'user.name', 'test');
-    await writeFile(join(dir, 'tracked.ts'), 'export const ok = 1;\n');
-    git('add', '-A');
-    git('commit', '-qm', 'init');
-    await writeFile(join(dir, 'new-untracked.ts'), '// new file, not staged yet\n');
-    await writeFile(join(dir, 'new-untracked.md'), '# not scanned\n');
-    return dir;
-  }
-
-  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
-    const dir = await makeRepoWithUntrackedFiles();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: gitChildEnv(),
-    })
-      .split('\0')
-      .filter((p) => p.length > 0);
-    expect(oldForm).not.toContain('new-untracked.ts');
-  });
-
-  it('🟢（直した後）: listScannableSources は同じ新規ファイルを対象に入れる', async () => {
-    const dir = await makeRepoWithUntrackedFiles();
-    const files = listScannableSources(dir) as string[];
-    expect(files).toContain('new-untracked.ts');
-    expect(files).toContain('tracked.ts');
-    expect(files).not.toContain('new-untracked.md');
-  });
-});
-
 describe('check-advice-single-source: apps/web の .tsx を走査する（Issue #1873）', () => {
   const advice = phrases.find((p) => p.id === 'advice');
   const tsxPath = 'apps/web/app/routes/usage.tsx';
@@ -147,6 +110,7 @@ describe('check-advice-single-source: apps/web の .tsx を走査する（Issue 
       join(dir, tsxPath),
       `export const Notice = () => <p>${advice?.text}（新しい鍵で走る）。</p>;\n`,
     );
+    await writeFile(join(dir, 'notes.md'), `${advice?.text}（散文は走査しない）\n`);
     git('add', '-A');
     git('commit', '-qm', 'init');
     return dir;
@@ -170,6 +134,7 @@ describe('check-advice-single-source: apps/web の .tsx を走査する（Issue 
     const dir = await makeRepoWithTsxFile();
     const files = listScannableSources(dir) as string[];
     expect(files).toContain(tsxPath);
+    expect(files).not.toContain('notes.md');
 
     const hits = findAdviceHits(
       files.map((path) => ({ path, content: readFileSync(join(dir, path), 'utf8') })),

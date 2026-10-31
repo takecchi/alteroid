@@ -1,6 +1,4 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,9 +8,6 @@ import {
   RESERVED_SCHEDULE_KIND_ENV_KEYS,
   RESERVED_SCHEDULE_KINDS,
 } from '../packages/core/src/schedule.js';
-import { makeTempDir } from '../vitest.tmpdir.js';
-
-import { gitChildEnv } from './git-child-env.js';
 import {
   listGitScannableFiles,
   // @ts-expect-error -- 素の .mjs
@@ -27,39 +22,11 @@ export function listClaudeScannableFiles(root: string = ROOT): string[] {
   return listGitScannableFiles({ cwd: root, pathspec: ['.claude'] }) as string[];
 }
 
-describe('listClaudeScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
-  async function makeRepoWithUntrackedClaudeFile(): Promise<string> {
-    const dir = await makeTempDir('reserved-schedule-kinds-1817-');
-    const git = (...args: string[]) =>
-      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
-    git('init', '-q');
-    git('config', 'user.email', 'test@example.invalid');
-    git('config', 'user.name', 'test');
-    await mkdir(path.join(dir, '.claude', 'skills', 'example'), { recursive: true });
-    await writeFile(path.join(dir, '.claude', 'skills', 'example', 'SKILL.md'), 'tracked\n');
-    git('add', '-A');
-    git('commit', '-qm', 'init');
-    await writeFile(path.join(dir, '.claude', 'skills', 'example', 'NEW.md'), 'new\n');
-    return dir;
-  }
-
-  it('🔴（直す前の形）: `git ls-files -z -- .claude` は新規ファイルを見落とす', async () => {
-    const dir = await makeRepoWithUntrackedClaudeFile();
-    const oldForm = execFileSync('git', ['ls-files', '-z', '--', '.claude'], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: gitChildEnv(),
-    })
-      .split('\0')
-      .filter((p) => p.length > 0);
-    expect(oldForm).not.toContain('.claude/skills/example/NEW.md');
-  });
-
-  it('🟢（直した後）: listClaudeScannableFiles は同じ新規ファイルを対象に入れる', async () => {
-    const dir = await makeRepoWithUntrackedClaudeFile();
-    const files = listClaudeScannableFiles(dir);
-    expect(files).toContain('.claude/skills/example/NEW.md');
-    expect(files).toContain('.claude/skills/example/SKILL.md');
+describe('listClaudeScannableFiles', () => {
+  it('`.claude` 配下だけを返す（pathspec で絞る）', () => {
+    const files = listClaudeScannableFiles();
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((f) => !f.startsWith('.claude/'))).toEqual([]);
   });
 });
 

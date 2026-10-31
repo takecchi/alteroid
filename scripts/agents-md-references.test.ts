@@ -1,14 +1,9 @@
-import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, statSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { makeTempDir } from '../vitest.tmpdir.js';
-
-import { gitChildEnv } from './git-child-env.js';
 import {
   listGitScannableFiles,
   // @ts-expect-error -- 素の .mjs
@@ -424,41 +419,6 @@ export function excludeCitationScopeSelf(files: readonly string[]): string[] {
 export function listScannableFiles(root: string = ROOT): string[] {
   return listGitScannableFiles({ cwd: root }) as string[];
 }
-
-describe('listScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
-  async function makeRepoWithUntrackedFile(): Promise<string> {
-    const dir = await makeTempDir('agents-md-references-1817-');
-    const git = (...args: string[]) =>
-      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
-    git('init', '-q');
-    git('config', 'user.email', 'test@example.invalid');
-    git('config', 'user.name', 'test');
-    await writeFile(path.join(dir, 'tracked.ts'), 'export const ok = 1;\n');
-    git('add', '-A');
-    git('commit', '-qm', 'init');
-    await writeFile(path.join(dir, 'new-untracked.ts'), '// see clone.ts:505 for the fence rule\n');
-    return dir;
-  }
-
-  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
-    const dir = await makeRepoWithUntrackedFile();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: gitChildEnv(),
-    })
-      .split('\0')
-      .filter((p) => p.length > 0);
-    expect(oldForm).not.toContain('new-untracked.ts');
-  });
-
-  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れる', async () => {
-    const dir = await makeRepoWithUntrackedFile();
-    const files = listScannableFiles(dir);
-    expect(files).toContain('new-untracked.ts');
-    expect(files).toContain('tracked.ts');
-  });
-});
 
 // basename が複数のファイルに一致しても曖昧さは解決しない: 答えるのは「リポジトリのどこかのファイルを指すか」だけで、「どのファイルか」ではないため。
 export function buildBasenameAwareRepoFileResolver(
