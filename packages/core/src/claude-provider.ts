@@ -503,7 +503,8 @@ export function autoCompactWindowSettings(env: NodeJS.ProcessEnv): { autoCompact
   return { autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS };
 }
 
-export interface CloneSessionOptionsRequest {
+// 本セッション（`buildCloneSessionOptions`）と蒸留（`buildCloneDistillOptions`）が共に取る欄
+interface CloneOptionsRequestBase {
   model: string;
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
@@ -515,11 +516,50 @@ export interface CloneSessionOptionsRequest {
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
+  onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
+}
+
+// 本セッションと蒸留で同じ配置にする: 片方だけ道具や設定が違うと、人格の書き手（蒸留）だけが別の頭になるため
+// 違うのは `settings` だけで、引数で受ける。`cwd` 以降は各 builder が足す
+function cloneBaseOptions(
+  request: CloneOptionsRequestBase,
+  settings: Options['settings'],
+): Options {
+  return {
+    model: request.model,
+    // `tools` を渡さない: 明示リストで絞ると能力の削除になるため
+    // [sdk-verbatim Options.allowedTools]
+    // To restrict which tools are available, use the `tools` option instead.
+    allowedTools: CLONE_ALLOWED_TOOLS,
+    // `default` のまま道具を渡さない: このセッションには `canUseTool` が無く、SDK は確認相手が居ないとき `ask` をそのまま拒否で終わらせるため
+    // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
+    permissionMode: request.permissionMode,
+    ...cloneMcpOptions(request.mcpServer, request.externalMcpServers, request.mcpConfigPath),
+    ...clonePluginOptions(request.plugins),
+    systemPrompt: request.systemPrompt,
+    // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
+    settingSources: ['user', 'project', 'local'],
+    settings,
+    // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
+    skills: 'all',
+    env: withCliSessionEnv(request.env),
+  };
+}
+
+// `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 排他に発火するので両方登録しても二重記録にならず、片方だけだと失敗・中断した道具呼び出しが日誌に1件も残らないため
+function postToolUseFailureMatchers(hook: AgentObservationHook<AgentToolAuditFailureRecord>) {
+  return [
+    {
+      hooks: [wrapObservationHook(hook, toAgentToolAuditFailureRecord, 'PostToolUseFailure')],
+    },
+  ];
+}
+
+export interface CloneSessionOptionsRequest extends CloneOptionsRequestBase {
   resume: string | null;
   sessionStore?: SessionStore;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   onPostToolUse: AgentOptionalContextHook<AgentToolAuditRecord>;
-  onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreToolUse: AgentPreToolHook;
   // `buildCloneDistillOptions`（蒸留）には配線しない: 蒸留は `Task` を呼ばない設計で、`SubagentStop` が発火する前提が無いため
   onSubagentStop: AgentObservationHook<AgentSubagentStopRecord>;
@@ -527,14 +567,6 @@ export interface CloneSessionOptionsRequest {
 
 export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): Options {
   const {
-    model,
-    permissionMode,
-    mcpServer,
-    externalMcpServers,
-    mcpConfigPath,
-    plugins,
-    systemPrompt,
-    env,
     cwd,
     resume,
     sessionStore,
@@ -546,23 +578,10 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
   } = request;
 
   return {
-    model,
-    // `tools` を渡さない: 明示リストで絞ると能力の削除になるため
-    // [sdk-verbatim Options.allowedTools]
-    // To restrict which tools are available, use the `tools` option instead.
-    allowedTools: CLONE_ALLOWED_TOOLS,
-    // `default` のまま道具を渡さない: このセッションには `canUseTool` が無く、SDK は確認相手が居ないとき `ask` をそのまま拒否で終わらせるため
-    // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
-    permissionMode,
-    ...cloneMcpOptions(mcpServer, externalMcpServers, mcpConfigPath),
-    ...clonePluginOptions(plugins),
-    systemPrompt,
-    // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
-    settingSources: ['user', 'project', 'local'],
-    settings: { ...NO_ATTRIBUTION_SETTINGS, ...autoCompactWindowSettings(env) },
-    // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
-    skills: 'all',
-    env: withCliSessionEnv(env),
+    ...cloneBaseOptions(request, {
+      ...NO_ATTRIBUTION_SETTINGS,
+      ...autoCompactWindowSettings(request.env),
+    }),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
@@ -592,18 +611,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
           ],
         },
       ],
-      // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 排他に発火するので両方登録しても二重記録にならず、片方だけだと失敗・中断した道具呼び出しが日誌に1件も残らないため
-      PostToolUseFailure: [
-        {
-          hooks: [
-            wrapObservationHook(
-              onPostToolUseFailure,
-              toAgentToolAuditFailureRecord,
-              'PostToolUseFailure',
-            ),
-          ],
-        },
-      ],
+      PostToolUseFailure: postToolUseFailureMatchers(onPostToolUseFailure),
       SubagentStop: [
         {
           hooks: [wrapObservationHook(onSubagentStop, toAgentSubagentStopRecord)],
@@ -613,49 +621,15 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
   };
 }
 
-export interface CloneDistillOptionsRequest {
-  model: string;
-  permissionMode: PermissionModeName;
-  mcpServer: McpServerConfig;
-  externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
-  /** 本セッションと同じもの（`CloneSessionOptionsRequest.mcpConfigPath`）。 */
-  mcpConfigPath?: string;
-  /** 本セッションと同じもの（`CloneSessionOptionsRequest.plugins`）。 */
-  plugins?: readonly ClonePluginRequest[];
-  systemPrompt: string;
-  env: NodeJS.ProcessEnv;
-  cwd?: string;
+export interface CloneDistillOptionsRequest extends CloneOptionsRequestBase {
   onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
-  onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
 }
 
 export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): Options {
-  const {
-    model,
-    permissionMode,
-    mcpServer,
-    externalMcpServers,
-    mcpConfigPath,
-    plugins,
-    systemPrompt,
-    env,
-    cwd,
-    onPostToolUse,
-    onPostToolUseFailure,
-  } = request;
+  const { cwd, onPostToolUse, onPostToolUseFailure } = request;
 
   return {
-    model,
-    // 本セッションと同じ配置にする: 片方だけ道具や設定が違うと、人格の書き手（蒸留）だけが別の頭になるため
-    allowedTools: CLONE_ALLOWED_TOOLS,
-    permissionMode,
-    ...cloneMcpOptions(mcpServer, externalMcpServers, mcpConfigPath),
-    ...clonePluginOptions(plugins),
-    systemPrompt,
-    settingSources: ['user', 'project', 'local'],
-    settings: { ...NO_ATTRIBUTION_SETTINGS },
-    skills: 'all',
-    env: withCliSessionEnv(env),
+    ...cloneBaseOptions(request, { ...NO_ATTRIBUTION_SETTINGS }),
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
     // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため
@@ -664,17 +638,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
         { hooks: [wrapObservationHook(onPostToolUse, toAgentToolAuditRecord, 'PostToolUse')] },
       ],
       // 蒸留の失敗も記録する: 蒸留は `memory_write` を叩く経路で、失敗を記録しないと「記憶が書かれなかった」が静かに落ちるため
-      PostToolUseFailure: [
-        {
-          hooks: [
-            wrapObservationHook(
-              onPostToolUseFailure,
-              toAgentToolAuditFailureRecord,
-              'PostToolUseFailure',
-            ),
-          ],
-        },
-      ],
+      PostToolUseFailure: postToolUseFailureMatchers(onPostToolUseFailure),
     },
   };
 }
@@ -834,17 +798,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
         { hooks: [wrapContextHook('PostToolUse', onPostToolUse, toAgentToolAuditRecord)] },
       ],
       // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 失敗・中断した道具呼び出しが日誌に1件も残らなくなるため
-      PostToolUseFailure: [
-        {
-          hooks: [
-            wrapObservationHook(
-              onPostToolUseFailure,
-              toAgentToolAuditFailureRecord,
-              'PostToolUseFailure',
-            ),
-          ],
-        },
-      ],
+      PostToolUseFailure: postToolUseFailureMatchers(onPostToolUseFailure),
       PreCompact: [{ hooks: [wrapObservationHook(onPreCompact, toAgentPreCompactRecord)] }],
       UserPromptSubmit: [
         { hooks: [wrapObservationHook(onUserPromptSubmit, toAgentUserPromptSubmitRecord)] },

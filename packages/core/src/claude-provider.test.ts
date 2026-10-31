@@ -2548,3 +2548,419 @@ describe('観測フックは呼ばれ、投げた例外は握らずに投げ返�
     expect(calls).toBe(2);
   });
 });
+
+describe('返す options の全体（キーと値・キーの順）を固定する', () => {
+  // 関数は `[fn]` に置き換える（中身は個別の試験が見ている）。JSON.stringify はキーの順を保つので、順も一緒に固定される
+  const shape = (value: unknown): string =>
+    JSON.stringify(value, (_key, v) => (typeof v === 'function' ? '[fn]' : v), 2);
+
+  it('buildCloneSessionOptions', () => {
+    const options = buildCloneSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      cwd: '/work',
+      resume: 'sess-1',
+      sessionStore,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
+    });
+    expect(shape(options)).toMatchInlineSnapshot(`
+      "{
+        "model": "opus",
+        "allowedTools": [
+          "mcp__alteroid__memory_list",
+          "mcp__alteroid__memory_read",
+          "mcp__alteroid__memory_write",
+          "mcp__alteroid__memory_append",
+          "mcp__alteroid__memory_delete",
+          "mcp__alteroid__memory_frontmatter_set",
+          "mcp__alteroid__memory_outline",
+          "mcp__alteroid__memory_section_read",
+          "mcp__alteroid__memory_section_move",
+          "mcp__alteroid__journal_write",
+          "mcp__alteroid__journal_read",
+          "mcp__alteroid__conversation_read",
+          "mcp__alteroid__attachment_fetch",
+          "mcp__alteroid__file_put",
+          "mcp__alteroid__file_list",
+          "mcp__alteroid__file_keep",
+          "mcp__alteroid__file_delete",
+          "mcp__alteroid__reply_attach",
+          "mcp__alteroid__ask_human",
+          "mcp__alteroid__request_permission",
+          "mcp__alteroid__approvals_list",
+          "mcp__alteroid__approval_trace",
+          "mcp__alteroid__approval_withdraw",
+          "mcp__alteroid__daily_report_write",
+          "mcp__alteroid__usage_read",
+          "mcp__alteroid__schedule_list",
+          "mcp__alteroid__schedule_create",
+          "mcp__alteroid__schedule_remove",
+          "mcp__alteroid__task_list",
+          "mcp__alteroid__task_add",
+          "mcp__alteroid__task_move",
+          "mcp__alteroid__task_set_status",
+          "mcp__alteroid__task_set_status_many",
+          "mcp__alteroid__task_keep",
+          "mcp__alteroid__task_say",
+          "mcp__alteroid__progress_read",
+          "mcp__alteroid__github_observation_record",
+          "mcp__alteroid__inbox_remove_many",
+          "mcp__alteroid__profile_read",
+          "mcp__alteroid__profile_write",
+          "mcp__alteroid__profile_remove",
+          "mcp__alteroid__practice_list",
+          "mcp__alteroid__practice_read",
+          "mcp__alteroid__practice_history",
+          "mcp__alteroid__practice_write",
+          "mcp__alteroid__practice_remove",
+          "mcp__alteroid__token_list",
+          "mcp__alteroid__permission_grant_list",
+          "mcp__alteroid__account_list",
+          "mcp__alteroid__self_read",
+          "mcp__alteroid__self_status",
+          "mcp__alteroid__self_dropped",
+          "mcp__alteroid__manager_start",
+          "mcp__alteroid__manager_send",
+          "mcp__alteroid__manager_stop",
+          "mcp__alteroid__manager_list",
+          "mcp__alteroid__manager_report",
+          "mcp__alteroid__manager_transcript",
+          "mcp__alteroid__archive_remove",
+          "mcp__alteroid__archive_remove_many",
+          "mcp__alteroid__runner_list"
+        ],
+        "permissionMode": "auto",
+        "mcpServers": {
+          "alteroid": {
+            "type": "sdk",
+            "name": "test",
+            "instance": {}
+          }
+        },
+        "systemPrompt": "システムプロンプト",
+        "settingSources": [
+          "user",
+          "project",
+          "local"
+        ],
+        "settings": {
+          "attribution": {
+            "commit": "",
+            "pr": ""
+          }
+        },
+        "skills": "all",
+        "env": {
+          "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
+          "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+        },
+        "includePartialMessages": true,
+        "cwd": "/work",
+        "resume": "sess-1",
+        "sessionStore": {},
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PreCompact": [
+            {
+              "timeout": 120,
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PostToolUse": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PostToolUseFailure": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "SubagentStop": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ]
+        }
+      }"
+    `);
+  });
+
+  it('buildCloneDistillOptions', () => {
+    const options = buildCloneDistillOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      cwd: '/work',
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+    });
+    expect(shape(options)).toMatchInlineSnapshot(`
+      "{
+        "model": "opus",
+        "allowedTools": [
+          "mcp__alteroid__memory_list",
+          "mcp__alteroid__memory_read",
+          "mcp__alteroid__memory_write",
+          "mcp__alteroid__memory_append",
+          "mcp__alteroid__memory_delete",
+          "mcp__alteroid__memory_frontmatter_set",
+          "mcp__alteroid__memory_outline",
+          "mcp__alteroid__memory_section_read",
+          "mcp__alteroid__memory_section_move",
+          "mcp__alteroid__journal_write",
+          "mcp__alteroid__journal_read",
+          "mcp__alteroid__conversation_read",
+          "mcp__alteroid__attachment_fetch",
+          "mcp__alteroid__file_put",
+          "mcp__alteroid__file_list",
+          "mcp__alteroid__file_keep",
+          "mcp__alteroid__file_delete",
+          "mcp__alteroid__reply_attach",
+          "mcp__alteroid__ask_human",
+          "mcp__alteroid__request_permission",
+          "mcp__alteroid__approvals_list",
+          "mcp__alteroid__approval_trace",
+          "mcp__alteroid__approval_withdraw",
+          "mcp__alteroid__daily_report_write",
+          "mcp__alteroid__usage_read",
+          "mcp__alteroid__schedule_list",
+          "mcp__alteroid__schedule_create",
+          "mcp__alteroid__schedule_remove",
+          "mcp__alteroid__task_list",
+          "mcp__alteroid__task_add",
+          "mcp__alteroid__task_move",
+          "mcp__alteroid__task_set_status",
+          "mcp__alteroid__task_set_status_many",
+          "mcp__alteroid__task_keep",
+          "mcp__alteroid__task_say",
+          "mcp__alteroid__progress_read",
+          "mcp__alteroid__github_observation_record",
+          "mcp__alteroid__inbox_remove_many",
+          "mcp__alteroid__profile_read",
+          "mcp__alteroid__profile_write",
+          "mcp__alteroid__profile_remove",
+          "mcp__alteroid__practice_list",
+          "mcp__alteroid__practice_read",
+          "mcp__alteroid__practice_history",
+          "mcp__alteroid__practice_write",
+          "mcp__alteroid__practice_remove",
+          "mcp__alteroid__token_list",
+          "mcp__alteroid__permission_grant_list",
+          "mcp__alteroid__account_list",
+          "mcp__alteroid__self_read",
+          "mcp__alteroid__self_status",
+          "mcp__alteroid__self_dropped",
+          "mcp__alteroid__manager_start",
+          "mcp__alteroid__manager_send",
+          "mcp__alteroid__manager_stop",
+          "mcp__alteroid__manager_list",
+          "mcp__alteroid__manager_report",
+          "mcp__alteroid__manager_transcript",
+          "mcp__alteroid__archive_remove",
+          "mcp__alteroid__archive_remove_many",
+          "mcp__alteroid__runner_list"
+        ],
+        "permissionMode": "auto",
+        "mcpServers": {
+          "alteroid": {
+            "type": "sdk",
+            "name": "test",
+            "instance": {}
+          }
+        },
+        "systemPrompt": "システムプロンプト",
+        "settingSources": [
+          "user",
+          "project",
+          "local"
+        ],
+        "settings": {
+          "attribution": {
+            "commit": "",
+            "pr": ""
+          }
+        },
+        "skills": "all",
+        "env": {
+          "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
+          "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+        },
+        "persistSession": false,
+        "cwd": "/work",
+        "hooks": {
+          "PostToolUse": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PostToolUseFailure": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ]
+        }
+      }"
+    `);
+  });
+
+  it('buildManagerSessionOptions', () => {
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      resume: 'sess-1',
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSessionStart: async () => null,
+      onSubagentStop: () => ({ kind: 'continue' }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
+      managerAutoMemoryEnabled: false,
+      reportLanguage: 'ja',
+    });
+    expect(shape(options)).toMatchInlineSnapshot(`
+      "{
+        "model": "opus",
+        "permissionMode": "auto",
+        "systemPrompt": {
+          "type": "preset",
+          "preset": "claude_code",
+          "append": "追記"
+        },
+        "agents": {
+          "worker": {
+            "description": "コストと文脈のために切り出した実作業の担い手。実装に限らず、調査・下読み・外部サービスの確認・レビューの下読み・相談のたたき台づくりまで任せてよい。設計・デザイン・外へ出す文面のように、出力の質そのものが成果の仕事は任せない。",
+            "prompt": "作業者のプロンプト",
+            "model": "sonnet"
+          }
+        },
+        "cwd": "/work",
+        "settingSources": [
+          "user",
+          "project",
+          "local"
+        ],
+        "skills": "all",
+        "env": {
+          "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
+          "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+        },
+        "sessionStore": {},
+        "settings": {
+          "attribution": {
+            "commit": "",
+            "pr": ""
+          },
+          "autoMemoryEnabled": false,
+          "language": "japanese"
+        },
+        "resume": "sess-1",
+        "canUseTool": "[fn]",
+        "hooks": {
+          "PreToolUse": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PermissionDenied": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PostToolUse": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PostToolUseFailure": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "PreCompact": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "UserPromptSubmit": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "SessionStart": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "SubagentStop": [
+            {
+              "timeout": 1920,
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ],
+          "Stop": [
+            {
+              "hooks": [
+                "[fn]"
+              ]
+            }
+          ]
+        }
+      }"
+    `);
+  });
+});
