@@ -29,7 +29,7 @@ import { GoneAfterReadNote } from '~/components/gone-after-read-note';
 import { InvalidSlugNote } from '~/components/invalid-slug-note';
 import { isNotFound } from '~/lib/is-not-found';
 import { isValidSlug } from '~/lib/slug';
-import { useLatest } from '~/lib/use-latest';
+import { useVersionedDraft } from '~/lib/use-versioned-draft';
 
 import type { Route } from './+types/memory-detail';
 
@@ -59,23 +59,39 @@ function MemoryDetailBody({ slug }: { slug: string }) {
 
   // 取得した内容を state へ写さない: SSE の無効化で再取得が走っても書きかけが消えないように。
   const [draft, setDraft] = useState<string | undefined>(undefined);
-  const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
-  // 取得した版へ追従させない: クローンが書いた後に再取得が走っても、人間が見て書き始めた版を前提にし続けないと衝突を検出できない。
-  const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
-  // 再取得が追いつく前に編集を再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
-  const [lastSaved, setLastSaved] = useState<
-    { replaces: string | null; version: string } | undefined
-  >(undefined);
-  const [conflict, setConflict] = useState<MemoryConflictError | undefined>(undefined);
-  const [deleteConflict, setDeleteConflict] = useState<MemoryConflictError | undefined>(undefined);
+  const {
+    busy,
+    failure,
+    savedAt,
+    conflict,
+    deleteConflict,
+    setDeleteConflict,
+    createdWhileDrafting,
+    touch,
+    save,
+    discardDraft,
+    deleteVersion,
+    runDelete,
+  } = useVersionedDraft({
+    read: data,
+    hasDraft: draft !== undefined,
+    fields: draft,
+    sameFields: (a, b) => a === b,
+    canSave: () => draft !== undefined,
+    isConflict: (caught): caught is MemoryConflictError => caught instanceof MemoryConflictError,
+    // 保存の門が下書きの有無を見ているので、ここで undefined にはならない
+    send: (sent, ifMatch) =>
+      saveMemory(slug, sent ?? '', ifMatch).then(({ document, version }) => ({
+        updatedAt: document.updatedAt,
+        version,
+      })),
+    clearFields: () => setDraft(undefined),
+  });
 
   const loaded = data?.document.content ?? '';
   const value = draft ?? loaded;
   const dirty = draft !== undefined && draft !== loaded;
-  const latestDraft = useLatest(draft);
 
   const notFound = isNotFound(error);
   const missing = notFound && data === undefined;
@@ -89,48 +105,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const defaultTab: MarkdownEditorMode = missing || loaded.trim() === '' ? 'edit' : 'preview';
 
   function edit(next: string) {
-    if (draft === undefined) {
-      const fetched = data === undefined ? null : data.version;
-      setBaseVersion(
-        lastSaved !== undefined && lastSaved.replaces === fetched ? lastSaved.version : fetched,
-      );
-    }
+    touch();
     setDraft(next);
-  }
-
-  function save(ifMatch: string | null | undefined = baseVersion) {
-    // ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通るので、保存中の弾きはここに置く。
-    if (busy) return;
-    if (draft === undefined) return;
-    const sent = draft;
-    setBusy(true);
-    setFailure(undefined);
-    saveMemory(slug, sent, ifMatch)
-      .then(({ document, version }) => {
-        setSavedAt(document.updatedAt);
-        setLastSaved({ replaces: data === undefined ? null : data.version, version });
-        if (latestDraft.current === sent) {
-          setDraft(undefined);
-          setBaseVersion(undefined);
-        } else {
-          // 打ち足した分を残すので、保存できた版を前提にする。さもないと次の保存が自分の保存と衝突する。
-          setBaseVersion(version);
-        }
-        setConflict(undefined);
-        // 残すと次の削除が古い版を送る。
-        setDeleteConflict(undefined);
-      })
-      .catch((caught: unknown) => {
-        if (caught instanceof MemoryConflictError) setConflict(caught);
-        else setFailure(caught);
-      })
-      .finally(() => setBusy(false));
-  }
-
-  function discardDraft() {
-    setDraft(undefined);
-    setBaseVersion(undefined);
-    setConflict(undefined);
   }
 
   const releaseLeaveGuard = useReleaseLeaveGuard();
@@ -177,7 +153,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                 onConfirm={() => {
                   setConfirmingDelete(false);
                   // 書き始めた時点に無かった記憶が、いまはある（#4802）: いまの内容は人が見ていないので、送らずに 409 と同じ形で見せる（削除の口の版は文字列だけで「無いはず」を表せないため）。見たうえでもう一度押せば、見せた版で消す
-                  if (draft !== undefined && baseVersion === null && deleteConflict === undefined) {
+                  if (createdWhileDrafting) {
                     setDeleteConflict(
                       new MemoryConflictError(
                         '書き始めた後にこの記憶が作られた（見ていない内容は消していない）',
@@ -189,25 +165,15 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                     );
                     return;
                   }
-                  setBusy(true);
-                  // 書きかけがあるときは、書き始めた時点に読んだ版を前提に消す（保存と同じく、取り直した版へ追従させない）:
-                  // 書きかけの間に取り直した版は画面に出ていないので、それを前提にすると、クローンが書いた見ていない内容を 409 なしで消す
-                  const readVersion =
-                    draft !== undefined && typeof baseVersion === 'string'
-                      ? baseVersion
-                      : data.version;
-                  deleteMemory(slug, deleteConflict?.current?.version ?? readVersion)
-                    .then(() => {
+                  runDelete(
+                    () => deleteMemory(slug, deleteVersion()),
+                    () => {
                       // 応答待ちに別の記憶へ移っていたら、その画面を動かさない。
                       if (!mounted.current) return;
                       releaseLeaveGuard();
                       navigate('/memory');
-                    })
-                    .catch((caught: unknown) => {
-                      if (caught instanceof MemoryConflictError) setDeleteConflict(caught);
-                      else setFailure(caught);
-                    })
-                    .finally(() => setBusy(false));
+                    },
+                  );
                 }}
               />
             </>

@@ -39,7 +39,7 @@ import { GoneAfterReadNote } from '~/components/gone-after-read-note';
 import { InvalidSlugNote } from '~/components/invalid-slug-note';
 import { isNotFound } from '~/lib/is-not-found';
 import { isValidSlug } from '~/lib/slug';
-import { useLatest } from '~/lib/use-latest';
+import { useVersionedDraft } from '~/lib/use-versioned-draft';
 
 import type { Route } from './+types/practice-detail';
 
@@ -93,20 +93,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const [draftKind, setDraftKind] = useState<string | undefined>(undefined);
   const [draftTitle, setDraftTitle] = useState<string | undefined>(undefined);
   const [draftContent, setDraftContent] = useState<string | undefined>(undefined);
-  const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const [savedAt, setSavedAt] = useState<string | undefined>(undefined);
-  // 取得した版へ追従させない: 別の書き手が書いた後に再取得が走っても、人間が見て書き始めた版を前提にし続けないと衝突を検出できない。
-  const [baseVersion, setBaseVersion] = useState<string | null | undefined>(undefined);
-  // 再取得が追いつく前に編集を再開しても、古い `data.version` を前提にして偽の 409 を起こさないために持つ。
-  const [lastSaved, setLastSaved] = useState<
-    { replaces: string | null; version: string } | undefined
-  >(undefined);
-  const [conflict, setConflict] = useState<PracticeConflictError | undefined>(undefined);
-  const [deleteConflict, setDeleteConflict] = useState<PracticeConflictError | undefined>(
-    undefined,
-  );
 
   const loadedKind = data?.practice.kind ?? '';
   const loadedTitle = data?.practice.title ?? '';
@@ -114,18 +101,10 @@ function PracticeDetailBody({ slug }: { slug: string }) {
 
   const hasDraft =
     draftKind !== undefined || draftTitle !== undefined || draftContent !== undefined;
-  function touch() {
-    if (hasDraft) return;
-    const fetched = data === undefined ? null : data.version;
-    setBaseVersion(
-      lastSaved !== undefined && lastSaved.replaces === fetched ? lastSaved.version : fetched,
-    );
-  }
 
   const kind = draftKind ?? loadedKind;
   const title = draftTitle ?? loadedTitle;
   const content = draftContent ?? loadedContent;
-  const latestFields = useLatest({ kind, title, content });
 
   const dirty =
     (draftKind !== undefined && draftKind !== loadedKind) ||
@@ -145,50 +124,46 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   // `kind` が空だと 400 が返るだけなので、ここで弾いて待たせない。
   const canSave = dirty && kind.trim() !== '';
 
+  const {
+    busy,
+    failure,
+    savedAt,
+    conflict,
+    deleteConflict,
+    setDeleteConflict,
+    createdWhileDrafting,
+    touch,
+    save,
+    discardDraft,
+    deleteVersion,
+    runDelete,
+  } = useVersionedDraft({
+    read: data,
+    hasDraft,
+    fields: { kind, title, content },
+    sameFields: (a, b) => a.kind === b.kind && a.title === b.title && a.content === b.content,
+    // 衝突のあとは、再取得で「変更なし」に見えても、人間が選んだ上書きは通す。
+    canSave: (conflicted) => canSave || (conflicted && hasDraft && kind.trim() !== ''),
+    // 読めない形の行へは版を付けない（null も送らない）: pg の実装は行の存在を衝突として 409 にするため。
+    unversioned: unreadable,
+    isConflict: (caught): caught is PracticeConflictError =>
+      caught instanceof PracticeConflictError,
+    send: (sent, ifMatch) =>
+      savePractice(slug, sent.kind, sent.title, sent.content, ifMatch).then(
+        ({ practice, version }) => ({ updatedAt: practice.updatedAt, version }),
+      ),
+    clearFields: () => {
+      setDraftKind(undefined);
+      setDraftTitle(undefined);
+      setDraftContent(undefined);
+    },
+  });
+
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (missing || content.trim() === '' ? 'edit' : 'preview');
 
   const releaseLeaveGuard = useReleaseLeaveGuard();
   useReportDirty('draft', dirty);
-
-  // 読めない形の行へは版を付けない（null も送らない）: pg の実装は行の存在を衝突として 409 にするため。
-  function save(ifMatch: string | null | undefined = unreadable ? undefined : baseVersion) {
-    // ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通るので、保存中の弾きはここに置く。
-    if (busy) return;
-    // 衝突のあとは、再取得で「変更なし」に見えても、人間が選んだ上書きは通す。
-    if (!canSave && !(conflict !== undefined && hasDraft && kind.trim() !== '')) return;
-    setBusy(true);
-    setFailure(undefined);
-    const sent = { kind, title, content };
-    savePractice(slug, sent.kind, sent.title, sent.content, ifMatch)
-      .then(({ practice, version }) => {
-        setSavedAt(practice.updatedAt);
-        setLastSaved({ replaces: data === undefined ? null : data.version, version });
-        // 残すと次の削除が古い版を送る。
-        setDeleteConflict(undefined);
-        const now = latestFields.current;
-        if (now.kind === sent.kind && now.title === sent.title && now.content === sent.content) {
-          discardDraft();
-        } else {
-          // 打ち足した分を残すので、保存できた版を前提にする。さもないと次の保存が自分の保存と衝突する。
-          setBaseVersion(version);
-          setConflict(undefined);
-        }
-      })
-      .catch((caught: unknown) => {
-        if (caught instanceof PracticeConflictError) setConflict(caught);
-        else setFailure(caught);
-      })
-      .finally(() => setBusy(false));
-  }
-
-  function discardDraft() {
-    setDraftKind(undefined);
-    setDraftTitle(undefined);
-    setDraftContent(undefined);
-    setBaseVersion(undefined);
-    setConflict(undefined);
-  }
 
   const description =
     savedAt !== undefined
@@ -235,12 +210,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                 onConfirm={() => {
                   setConfirmingDelete(false);
                   // 書き始めた時点に無かったやり方が、いまはある（#4802。記憶の詳細と同じ）: いまの内容は人が見ていないので、送らずに 409 と同じ形で見せる
-                  if (
-                    data !== undefined &&
-                    hasDraft &&
-                    baseVersion === null &&
-                    deleteConflict === undefined
-                  ) {
+                  if (data !== undefined && createdWhileDrafting) {
                     setDeleteConflict(
                       new PracticeConflictError(
                         '書き始めた後にこのやり方が作られた（見ていない内容は消していない）',
@@ -252,33 +222,15 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                     );
                     return;
                   }
-                  setBusy(true);
-                  // 読めない形の行は版なしで消せる（版を持たない）。
-                  // 書きかけがあるときは、書き始めた時点に読んだ版を前提に消す（保存と同じく、取り直した版へ追従させない）:
-                  // 書きかけの間に取り直した版は画面に出ていないので、それを前提にすると、クローンが書いた見ていない内容を 409 なしで消す
-                  const readVersion =
-                    data === undefined
-                      ? undefined
-                      : hasDraft && typeof baseVersion === 'string'
-                        ? baseVersion
-                        : data.version;
-                  deletePractice(
-                    slug,
-                    data === undefined
-                      ? undefined
-                      : (deleteConflict?.current?.version ?? readVersion),
-                  )
-                    .then(() => {
+                  runDelete(
+                    () => deletePractice(slug, deleteVersion()),
+                    () => {
                       // 応答待ちに別のやり方へ移っていたら、その画面を動かさない。
                       if (!mounted.current) return;
                       releaseLeaveGuard();
                       navigate('/practices');
-                    })
-                    .catch((caught: unknown) => {
-                      if (caught instanceof PracticeConflictError) setDeleteConflict(caught);
-                      else setFailure(caught);
-                    })
-                    .finally(() => setBusy(false));
+                    },
+                  );
                 }}
               />
             </>
