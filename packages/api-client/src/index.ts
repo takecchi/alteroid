@@ -65,16 +65,11 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
-export interface JournalStreamOptions extends StreamOptions {
-  // API 側で絞らない: 見えない層を作らないため。
-  types?: readonly JournalEntry['type'][];
-}
-
 export interface AlteroidClient {
   api: Client<paths>;
   chat(input: ChatInput, options?: StreamOptions): AsyncGenerator<ChatMessage>;
   chatStream(conversationId: string, options?: StreamOptions): AsyncGenerator<ChatStreamMessage>;
-  journalStream(options?: JournalStreamOptions): AsyncGenerator<JournalMessage>;
+  journalStream(options?: StreamOptions): AsyncGenerator<JournalMessage>;
   topologyStream(options?: StreamOptions): AsyncGenerator<TopologyMessage>;
 }
 
@@ -115,6 +110,12 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
     yield* readJsonSse(response.body);
   }
 
+  const getStream = (path: string, streamOptions: StreamOptions | undefined) =>
+    stream(path, {
+      method: 'GET',
+      ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
+    });
+
   return {
     api,
 
@@ -134,35 +135,18 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
     },
 
     async *chatStream(conversationId, streamOptions) {
-      const init: RequestInit = {
-        method: 'GET',
-        ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
-      };
-      yield* stream(
+      yield* getStream(
         `/chat/${encodeURIComponent(conversationId)}/stream`,
-        init,
+        streamOptions,
       ) as AsyncGenerator<ChatStreamMessage>;
     },
 
     async *journalStream(streamOptions) {
-      const types = streamOptions?.types;
-      const query =
-        types === undefined || types.length === 0
-          ? ''
-          : `?type=${encodeURIComponent(types.join(','))}`;
-      const init: RequestInit = {
-        method: 'GET',
-        ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
-      };
-      yield* stream(`/journal/stream${query}`, init) as AsyncGenerator<JournalMessage>;
+      yield* getStream('/journal/stream', streamOptions) as AsyncGenerator<JournalMessage>;
     },
 
     async *topologyStream(streamOptions) {
-      const init: RequestInit = {
-        method: 'GET',
-        ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
-      };
-      yield* stream('/topology/stream', init) as AsyncGenerator<TopologyMessage>;
+      yield* getStream('/topology/stream', streamOptions) as AsyncGenerator<TopologyMessage>;
     },
   };
 }
