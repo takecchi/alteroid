@@ -186,17 +186,8 @@ export async function deriveHumanTouchedAtFromJournal(
   return fold.result;
 }
 
-export async function deriveMemoryCreatedAtFromJournal(
-  journal: Pick<JournalStore, 'listPage'>,
-  options: { pageSize?: number } = {},
-): Promise<Map<string, string>> {
-  const fold = createdAtFold();
-  await foldMemoryUpdates(journal, options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE, [fold]);
-  return fold.result;
-}
-
 // 起動時の2つの補い（人間が触った印・作った時刻）の根拠を1周の走査で組む: 2周に分けると同じ行を2度読むだけで、結果は変わらないため。
-// 結果は `deriveHumanTouchedAtFromJournal` / `deriveMemoryCreatedAtFromJournal` を別々に呼んだものと同じ（突き合わせの試験が押さえる）。
+// 結果は人間が触った印と作った時刻を別々の2周で組んだものと同じ（突き合わせの試験が押さえる）。
 export async function deriveMemoryBootBackfillFromJournal(
   journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
