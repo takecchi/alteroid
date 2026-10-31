@@ -9,6 +9,7 @@ import {
   usageLayerSchema,
   usageSiteSchema,
 } from '@alteroid/core';
+import { summarizeJournalEntry, type JournalEntry } from '@alteroid/logic';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -3745,9 +3746,9 @@ describe('chat の /journal', () => {
 
       const text = read();
       expect(text).toContain(
-        'a/b（観測者 clone） open Issue 12 件 / open PR 0 件（limit に達した。下限）',
+        'a/b: open Issue 12 件 / open PR 0 件（limit に達した。下限）（観測者 clone）',
       );
-      expect(text).toContain('a/c（観測者 mgr-1） 取れなかった: gh: HTTP 502');
+      expect(text).toContain('a/c: 取れなかった（観測者 mgr-1）: gh: HTTP 502');
       expect(text).not.toMatch(/\[github_observation\]\s*\n/);
       const failedLine = text.split('\n').find((l) => l.includes('a/c')) ?? '';
       expect(failedLine).not.toMatch(/open Issue|open PR/);
@@ -3838,7 +3839,7 @@ describe('chat の /journal', () => {
       expect(text).not.toContain(token);
     });
 
-    it('（陰性）escalation の要約は従来どおり素の質問文のまま変わらない', async () => {
+    it('escalation の要約は Web と同じく「確認: 」を前に付ける', async () => {
       const read = captureStdout();
       const { client } = stubClient({
         journalEntries: [
@@ -3855,12 +3856,11 @@ describe('chat の /journal', () => {
       await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
-      expect(text).toContain('進めてよいですか？');
-      expect(text).not.toContain('確認: ');
+      expect(text).toContain('[escalation] 確認: 進めてよいですか？');
       expect(text).not.toContain('回答済: ');
     });
 
-    it('（陰性）decision と tool_use の要約は従来どおり', async () => {
+    it('decision は根拠つき、tool_use は「actor が tool」（Web と同じ要約）', async () => {
       const read = captureStdout();
       const { client } = stubClient({
         journalEntries: [
@@ -3884,9 +3884,45 @@ describe('chat の /journal', () => {
       await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
 
       const text = read();
-      expect(text).toContain('この案で進める');
-      expect(text).not.toContain('費用が見合う');
-      expect(text).toContain('memory_write');
+      expect(text).toContain('[decision] この案で進める（根拠: 費用が見合う）');
+      expect(text).toContain('[tool_use] clone が memory_write');
+    });
+
+    it('各行は @alteroid/logic の summarizeJournalEntry と同じ要約になる（Web と揃う）', async () => {
+      const read = captureStdout();
+      const entries = [
+        {
+          id: 'j-p1',
+          at: '2026-09-01T00:00:00.000Z',
+          type: 'exchange',
+          with: 'human',
+          role: 'inbound',
+          text: 'やあ',
+        },
+        {
+          id: 'j-p2',
+          at: '2026-09-01T00:01:00.000Z',
+          type: 'external_event',
+          source: 'ci.main',
+          summary: 'failure',
+        },
+        {
+          id: 'j-p3',
+          at: '2026-09-01T00:02:00.000Z',
+          type: 'token_rotation',
+          event: 'exhausted',
+          text: '切り替え先が無い',
+        },
+      ];
+      const { client } = stubClient({ journalEntries: entries });
+
+      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
+
+      const text = read();
+      for (const entry of entries) {
+        const expected = summarizeJournalEntry(entry as JournalEntry);
+        expect(text).toContain(`[${entry.type}] ${expected}\n`);
+      }
     });
   });
 });
