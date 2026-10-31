@@ -157,7 +157,8 @@ describe('クローン — interruptTurn の対象指定（#3956）', () => {
 
     await expect(t.clone.interruptTurn!(B)).resolves.toBe('withdrawn');
 
-    const { entries } = await t.stores.tasks.list();
+    expect((await t.stores.tasks.list()).entries.map((task) => task.id)).toEqual(['evt-先客']);
+    const { entries } = await t.stores.tasks.list({ includeClosed: true });
     const withdrawn = entries.find((task) => task.id === 'evt-自分の発言');
     expect(withdrawn).toMatchObject({ status: 'cancelled', closedBy: 'human' });
     expect(withdrawn?.closedReason).toContain('取り下げ');
