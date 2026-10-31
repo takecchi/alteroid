@@ -81,16 +81,24 @@ const parseArchiveQueue = (raw: string): TranscriptGrave[] =>
 const parseLostQueue = (raw: string): LostSessionGrave[] =>
   parseQueue(raw, '再開素材を捨てた回の墓標の列', (v) => parseLostGrave(JSON.stringify(v)));
 
+// `daemon_state` の key を1つ読む。行が無ければ `null`。`forUpdate` なら行をロックする（トランザクションの中でだけ）
+async function readDaemonState(
+  db: Db | Tx,
+  key: string,
+  forUpdate: boolean = false,
+): Promise<string | null> {
+  const query = db
+    .select({ value: daemonState.value })
+    .from(daemonState)
+    .where(eq(daemonState.key, key));
+  const rows = await (forUpdate ? query.for('update').limit(1) : query.limit(1));
+  return rows[0]?.value ?? null;
+}
+
 // 行を先に作ってから `for update` で読む: 行が無いと、ロックの掛けようが無く同時の追加が同じ空の列から始まるため
 async function lockQueue<T>(tx: Tx, key: string, parse: (raw: string) => T[]): Promise<T[]> {
   await tx.insert(daemonState).values({ key, value: '[]' }).onConflictDoNothing();
-  const rows = await tx
-    .select({ value: daemonState.value })
-    .from(daemonState)
-    .where(eq(daemonState.key, key))
-    .for('update')
-    .limit(1);
-  const raw = rows[0]?.value ?? null;
+  const raw = await readDaemonState(tx, key, true);
   return raw === null ? [] : parse(raw);
 }
 
@@ -131,13 +139,7 @@ async function forgetDistillFailures(
 ): Promise<void> {
   if (ids.length === 0) return;
   const key = DISTILL_FAILURES_KEYS[kind];
-  const rows = await tx
-    .select({ value: daemonState.value })
-    .from(daemonState)
-    .where(eq(daemonState.key, key))
-    .for('update')
-    .limit(1);
-  const raw = rows[0]?.value ?? null;
+  const raw = await readDaemonState(tx, key, true);
   const stored = raw === null ? null : parseDistillFailures(raw, key);
   if (stored === null) return;
   const next = forgetDistillFailureCounts(stored, ids);
@@ -154,12 +156,7 @@ export class PgSessionRegistry implements SessionRegistry {
   }
 
   async getCloneSessionId(): Promise<string | null> {
-    const rows = await this.#db
-      .select({ value: daemonState.value })
-      .from(daemonState)
-      .where(eq(daemonState.key, CLONE_SESSION_KEY))
-      .limit(1);
-    return rows[0]?.value ?? null;
+    return readDaemonState(this.#db, CLONE_SESSION_KEY);
   }
 
   async setCloneSessionId(sessionId: string | null): Promise<void> {
@@ -179,12 +176,7 @@ export class PgSessionRegistry implements SessionRegistry {
 
   // 中身を解釈しない（壊れていれば呼び出し側が捨てる）。`daemon_state` は key/value なので migrate は要らない
   async getFoldState(): Promise<string | null> {
-    const rows = await this.#db
-      .select({ value: daemonState.value })
-      .from(daemonState)
-      .where(eq(daemonState.key, CLONE_FOLD_STATE_KEY))
-      .limit(1);
-    return rows[0]?.value ?? null;
+    return readDaemonState(this.#db, CLONE_FOLD_STATE_KEY);
   }
 
   async setFoldState(state: string | null): Promise<void> {
@@ -270,12 +262,7 @@ export class PgSessionRegistry implements SessionRegistry {
     const key = DISTILL_FAILURES_KEYS[kind];
     // 読めなければ 0: 数えられないだけで起動を止める理由が無いため
     try {
-      const rows = await this.#db
-        .select({ value: daemonState.value })
-        .from(daemonState)
-        .where(eq(daemonState.key, key))
-        .limit(1);
-      const raw = rows[0]?.value ?? null;
+      const raw = await readDaemonState(this.#db, key);
       if (raw === null) return 0;
       const stored = parseDistillFailures(raw, key);
       return readDistillFailureCount(stored, graveId);
@@ -292,13 +279,7 @@ export class PgSessionRegistry implements SessionRegistry {
   ): Promise<number> {
     const key = DISTILL_FAILURES_KEYS[kind];
     return this.#db.transaction(async (tx) => {
-      const rows = await tx
-        .select({ value: daemonState.value })
-        .from(daemonState)
-        .where(eq(daemonState.key, key))
-        .for('update')
-        .limit(1);
-      const raw = rows[0]?.value ?? null;
+      const raw = await readDaemonState(tx, key, true);
       const stored = raw === null ? null : parseDistillFailures(raw, key);
       const failures = readDistillFailureCount(stored, graveId) + 1;
       await writeDistillFailures(tx, key, { ...stored, [graveId]: failures });
@@ -307,12 +288,7 @@ export class PgSessionRegistry implements SessionRegistry {
   }
 
   async getProjectKey(): Promise<string | null> {
-    const rows = await this.#db
-      .select({ value: daemonState.value })
-      .from(daemonState)
-      .where(eq(daemonState.key, CLONE_PROJECT_KEY))
-      .limit(1);
-    return rows[0]?.value ?? null;
+    return readDaemonState(this.#db, CLONE_PROJECT_KEY);
   }
 
   async setProjectKey(projectKey: string): Promise<void> {
