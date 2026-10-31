@@ -2,9 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb } from './index.js';
-import { ensureJournalConversationSeqIndex, JOURNAL_CONVERSATION_SEQ_INDEX } from './migrate.js';
+import { ensureDeferredIndex, JOURNAL_CONVERSATION_SEQ_INDEX } from './migrate.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
+
+const ensureJournalConversationSeqIndex = (
+  target: Db,
+  warn: (line: string) => void,
+): Promise<void> => ensureDeferredIndex(target, JOURNAL_CONVERSATION_SEQ_INDEX, warn);
 
 // 会話を名指した日誌の読み（`JournalQuery.conversationId`）の部分索引
 
