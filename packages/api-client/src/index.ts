@@ -27,11 +27,10 @@ export interface ChatStreamPending {
   state: 'running' | 'starting' | 'held' | 'queued';
 }
 
-// `pending` を省けるのは、運ばない古いデーモンのため。
 export type ChatStreamMessage =
   | {
       event: 'open';
-      data: { conversationId: string; inProgress: boolean; pending?: ChatStreamPending[] };
+      data: { conversationId: string; inProgress: boolean; pending: ChatStreamPending[] };
     }
   | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
 

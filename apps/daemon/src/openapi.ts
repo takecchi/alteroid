@@ -385,11 +385,10 @@ export const memoryReadResponseSchema = z.object({
   document: memoryDocumentSchema,
   version: z.string(),
 });
-// PUT の応答だけが持つ: GET は読むだけで「作った」の別が無い。省略可能にして、既存の呼び手と古いデーモンの応答を壊さない。
+// PUT の応答だけが持つ: GET は読むだけで「作った」の別が無い。
 export const memoryWriteResponseSchema = memoryReadResponseSchema.extend({
   created: z
     .boolean()
-    .optional()
     .describe(
       '新規に作ったなら true、既存の記憶を置き換えたなら false（slug の打ち間違いに気づく手掛かり）',
     ),
@@ -416,7 +415,6 @@ export const practiceReadResponseSchema = z.object({
 export const practiceWriteResponseSchema = practiceReadResponseSchema.extend({
   created: z
     .boolean()
-    .optional()
     .describe('新規に作ったなら true、既存（読めない形の行を含む）を置き換えたなら false'),
 });
 export const practiceConflictResponseSchema = z.object({
@@ -494,12 +492,10 @@ export const approvalTraceResponseSchema = z.object({
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });
 
-// `replaced` は省略可能: 古いデーモンは `{ ok: true }` だけを返すので、読み手は欠けていても「分からない」として扱う。
 export const scheduleCreateResponseSchema = z.object({
   ok: z.literal(true),
   replaced: z
     .boolean()
-    .optional()
     .describe(
       '既に在った kind を置き換えたとき true、新しく作ったとき false。置き換えたときは旧本文・旧周期が日誌（decision）に残っている。',
     ),
@@ -965,7 +961,7 @@ export const topologyResponseSchema = z.object({
   managersOmitted: z.number().int().nonnegative().optional(),
   // `managers` が空でも「走っているマネージャーは居ない」とは限らない: 壊れた行は `managers` に数えられないため、第3の状態として別に言う。
   unreadable: z.array(unreadableJobSchema).optional(),
-  // 1件でも在るときだけ載せる: 欄が無いことは「呼ばれていない」ではなく「観測していない」でありうる（古いデーモンも載せない）。
+  // 1件でも在るときだけ載せる: 欄が無いことは「呼ばれていない」ではなく「観測していない」でありうる。
   externals: z.array(topologyExternalSchema).optional(),
   externalsOmitted: z.number().int().positive().optional(),
   links: z.array(topologyLinkSchema),
@@ -1004,8 +1000,7 @@ export const profileEntrySchema = z.object({
   sha256: z.string(),
   bytes: z.number(),
   // 行の版（本文と撒く先から作る）。`PUT` / `DELETE /profile/{name}` の `ifMatch` へそのまま渡す。
-  // このデーモンは必ず返すが任意にしておく: 読み手（CLI・Web）は版を返さない古いデーモンの応答も同じ型で扱うため
-  version: z.string().optional(),
+  version: z.string(),
 });
 
 // 本文は載せない: 値は送った本人が持っており、応答に載せる理由が無い口で鍵を往復させないため。
@@ -1220,7 +1215,7 @@ const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.ex
   scope: credentialScopeSchema,
   secret: z.boolean(),
   value: z.string().optional(),
-  // 古いデーモンの応答には無い欄: 受け手は任意として読む（#4830）。デーモンの再起動まで効かない名前の行だけ true
+  // デーモンの再起動まで効かない名前の行だけ true（無いのは「効いている」の意味。#4830）
   restartRequired: z.literal(true).optional(),
 });
 

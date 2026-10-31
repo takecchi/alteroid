@@ -1316,7 +1316,7 @@ export function ChatPane({
       try {
         for await (const message of getChatStream(api, id, { signal: controller.signal })) {
           if (message.event === 'open') {
-            // `?? []` は型のため: api-client の `pending` は optional のまま（daemon は常に載せる）。空なら pickResumeTarget は null を返す
+            // `?? []` は実行時の防御: 型は必須だが、web の試験の応答は `pending` を載せない。空なら pickResumeTarget は null を返す
             pending = message.data.pending ?? [];
             if (!message.data.inProgress) {
               // 流れが切れた後の張り直しで、ターンが既に終わっていたら、受け取った分と「途中で切れた」をそのまま残す: 確定した本文が履歴に載ったら、切れた返信の後片付けが入れ替える
