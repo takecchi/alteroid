@@ -4,7 +4,6 @@ import { createCredentialService, resolveCredentialRows } from './credential-ser
 import {
   APP_ENV_VAR_DEFAULTS,
   applyAppScopedEnvVars,
-  migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
 } from './env-vars-boot.js';
 import { captureStderr, createMemoryStores } from './testing.js';
@@ -208,101 +207,6 @@ describe('applyAppScopedEnvVars', () => {
     const line = written.join('');
     expect(line).toContain('ALTEROID_CLONE_MODEL');
     expect(line).not.toContain('opus');
-  });
-});
-
-describe('migrateEnvBaseCredentialsOnce', () => {
-  const SNAPSHOT: NodeJS.ProcessEnv = {
-    GH_TOKEN: 'ghp_dummy_gh',
-    GITHUB_TOKEN: 'ghp_dummy_github',
-    CODEX_API_KEY: 'sk-dummy-codex',
-    CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-dummy-pool',
-    NPM_TOKEN: 'npm_dummy',
-  };
-
-  async function quiet<T>(run: () => Promise<T>): Promise<T> {
-    let result: T | undefined;
-    await captureStderr(async () => {
-      result = await run();
-    });
-    return result as T;
-  }
-
-  it('土台だった3つの名前だけを、scope: all / secret: true で写す（プールの名前・任意の名前は写さない）', async () => {
-    const stores = createMemoryStores();
-
-    const written = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-
-    expect([...written].sort()).toEqual(['CODEX_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN']);
-    const rows = await stores.credentials.list();
-    expect(rows.map((row) => row.name)).toEqual(['CODEX_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN']);
-    for (const row of rows)
-      expect(row).toEqual(expect.objectContaining({ scope: 'all', secret: true }));
-    expect(rows.find((row) => row.name === 'GH_TOKEN')?.value).toBe('ghp_dummy_gh');
-  });
-
-  it('1度だけ: 画面で消した後に再起動しても、器の env から蘇らない（印）', async () => {
-    const stores = createMemoryStores();
-    await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-    await stores.credentials.put([{ name: 'GH_TOKEN', value: '' }]);
-
-    const again = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-
-    expect(again).toEqual([]);
-    expect((await stores.credentials.list()).map((row) => row.name)).not.toContain('GH_TOKEN');
-  });
-
-  it('既に正本に在る名前は上書きしない（人間が置いたものが勝つ）。印は立つ', async () => {
-    const stores = createMemoryStores();
-    await stores.credentials.put([{ name: 'GH_TOKEN', value: 'ghp_human_placed', scope: 'app' }]);
-
-    const written = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-
-    expect([...written].sort()).toEqual(['CODEX_API_KEY', 'GITHUB_TOKEN']);
-    expect((await stores.credentials.list()).find((row) => row.name === 'GH_TOKEN')).toEqual(
-      expect.objectContaining({ value: 'ghp_human_placed', scope: 'app' }),
-    );
-  });
-
-  it('空文字・未設定は写さない。**書くものが無くても印は立つ**（後から置かれた器の env を拾わない）', async () => {
-    const stores = createMemoryStores();
-    const first = await quiet(() =>
-      migrateEnvBaseCredentialsOnce(stores, { GH_TOKEN: '', GITHUB_TOKEN: undefined }),
-    );
-    expect(first).toEqual([]);
-
-    const second = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-
-    expect(second).toEqual([]);
-    expect(await stores.credentials.list()).toEqual([]);
-  });
-
-  it('移した名前を stderr と日誌に残し、値は1文字も出さない', async () => {
-    const stores = createMemoryStores();
-    // 値を返す関数をそのまま渡せる（#5012）
-    const written = await captureStderr(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-
-    const stderr = written.join('');
-    expect(stderr).toContain('GH_TOKEN');
-    const journal = JSON.stringify(await stores.journal.list());
-    expect(journal).toContain('GH_TOKEN');
-    // 1回きりの定型の移行: 要約の一覧から外す印が付く
-    const rows = await stores.journal.list({ types: ['decision'] });
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) expect(row).toMatchObject({ routine: true });
-    for (const value of ['ghp_dummy_gh', 'ghp_dummy_github', 'sk-dummy-codex']) {
-      expect(stderr).not.toContain(value);
-      expect(journal).not.toContain(value);
-    }
-  });
-
-  it('正本へ書けなくても投げない（起動を止めない）。失敗は stderr に残る', async () => {
-    const stores = createMemoryStores();
-    stores.credentials.seedOnce = () => Promise.reject(new Error('boom'));
-    const written = await captureStderr(async () => {
-      await expect(migrateEnvBaseCredentialsOnce(stores, SNAPSHOT)).resolves.toEqual([]);
-    });
-    expect(written.join('')).toContain('移せませんでした');
   });
 });
 
