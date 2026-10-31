@@ -94,8 +94,9 @@ describe('resume の応答より先に届いた確認待ちを、resume 受理�
         for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
         return { cwd: command.cwd };
       },
-      async send() {
-        return true;
+      async send(managerId) {
+        // セッションが無ければ届かない（`#send` が resume へ入る）。
+        return sessions.has(managerId);
       },
       async answer(): Promise<RunnerAnswerOutcome> {
         return { delivered: false };
@@ -161,6 +162,26 @@ describe('resume の応答より先に届いた確認待ちを、resume 受理�
     await settle();
     const row = (await pool.list()).find((manager) => manager.managerId === 'mgr-same');
     expect({ status: row?.status, waiting: row?.waiting.length }).toEqual({
+      status: 'waiting_human',
+      waiting: 1,
+    });
+    await pool.stop();
+  });
+
+  it('伝言での起こし直し（#send）: resume の応答より先に ask が届いたら、受理の後も waiting_human のまま待ちが1件残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob());
+    const runner = askingRunner('runner-a');
+    const pool = createManagerPool({
+      stores,
+      post: () => {},
+      runners: createFakeRegistry(runner),
+    });
+    const sent = await pool.send('mgr-same', '続きをお願い');
+    await settle();
+    const row = (await pool.list()).find((manager) => manager.managerId === 'mgr-same');
+    expect({ outcome: sent.outcome, status: row?.status, waiting: row?.waiting.length }).toEqual({
+      outcome: 'delivered',
       status: 'waiting_human',
       waiting: 1,
     });

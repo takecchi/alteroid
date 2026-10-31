@@ -4247,7 +4247,8 @@ class Pool implements ManagerPool {
       };
     }
 
-    record.job.status = 'running';
+    // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ: `running` で上書きすると一覧が確認待ちに見えず、`waiting_human` を前提にした処理が外れる。
+    record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
     record.job.turnStartedAt = laterIso(record.job.turnStartedAt, turnStartedAt);
     // 断り書きは実際に届いた回で下ろす（1回だけ付く）
     // 畳み込んだ分だけ下ろし、送信の途中で積まれた分は次の起こし直しに残す（#4899）
@@ -8148,7 +8149,8 @@ class Pool implements ManagerPool {
           }
           continue;
         }
-        record.job.status = 'running';
+        // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
+        record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
         await this.#persist(record);
         // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
         if (swapNotice !== undefined) {
@@ -8969,7 +8971,8 @@ class Pool implements ManagerPool {
           record.sessionMissingSince = undefined;
           // 由来も一緒に消す: 片方だけ残さない。
           record.sessionMissingKind = undefined;
-          record.job.status = 'running';
+          // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
+          record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
           this.#relocationRefusals.delete(job.id);
           await this.#persist(record);
           // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
