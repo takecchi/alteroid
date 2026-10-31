@@ -89,11 +89,11 @@ function fakeRunner(options: {
     async transcript() {
       return null;
     },
-    async openOutboxFile(_managerId, fileId) {
+    async openPickupFile(_kind, _managerId, fileId) {
       opened.push(fileId);
       return contents.get(fileId)?.();
     },
-    async deleteOutboxFile(_managerId, fileId) {
+    async deletePickupFile(_kind, _managerId, fileId) {
       deleted.push(fileId);
     },
     async credentials() {

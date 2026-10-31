@@ -2,7 +2,12 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
-import type { RunnerEvent, RunnerHost, RunnerManagerPeersAnnouncement } from '@alteroid/core';
+import type {
+  RunnerEvent,
+  RunnerHost,
+  RunnerManagerPeersAnnouncement,
+  RunnerPickupFileKind,
+} from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   isArchiveRefId,
@@ -396,16 +401,10 @@ async function rejectingAttachment<T>(
 
 // 出し箱と rescue-files の退避先の GET / DELETE の共通部分（違うのは host のどのメソッドを呼ぶかだけ）。
 // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
-async function serveSpilledFile(
-  c: Context,
-  open: (
-    managerId: string,
-    fileId: string,
-  ) => Promise<{ stream: Readable; size: number } | undefined>,
-) {
+async function serveSpilledFile(c: Context, host: RunnerHost, kind: RunnerPickupFileKind) {
   const fileId = c.req.param('fileId') ?? '';
   if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
-  const file = await open(c.req.param('id') ?? '', fileId);
+  const file = await host.openPickupFile(kind, c.req.param('id') ?? '', fileId);
   if (file === undefined) return c.json({ error: 'not found' as const }, 404);
   return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
     'content-type': 'application/octet-stream',
@@ -413,13 +412,10 @@ async function serveSpilledFile(
   });
 }
 
-async function deleteSpilledFile(
-  c: Context,
-  remove: (managerId: string, fileId: string) => Promise<boolean>,
-) {
+async function deleteSpilledFile(c: Context, host: RunnerHost, kind: RunnerPickupFileKind) {
   const fileId = c.req.param('fileId') ?? '';
   if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
-  if (!(await remove(c.req.param('id') ?? '', fileId))) {
+  if (!(await host.deletePickupFile(kind, c.req.param('id') ?? '', fileId))) {
     return c.json({ error: 'invalid managerId' as const }, 400);
   }
   return c.body(null, 204);
@@ -966,22 +962,16 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     // 出し箱の退避先。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
     // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
-    .get('/managers/:id/outbox/:fileId', (c) => serveSpilledFile(c, host.openOutboxFile.bind(host)))
+    .get('/managers/:id/outbox/:fileId', (c) => serveSpilledFile(c, host, 'outbox'))
 
     // 無くても 204: 受け取った後に消す呼び出しが再送されても同じ結果になる（冪等）
-    .delete('/managers/:id/outbox/:fileId', (c) =>
-      deleteSpilledFile(c, host.deleteOutboxFile.bind(host)),
-    )
+    .delete('/managers/:id/outbox/:fileId', (c) => deleteSpilledFile(c, host, 'outbox'))
 
     // 未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。出し箱の退避先とは別の dir（予算・掃除を共有しない）。
     // デーモンが取りに来る向きだけ。`fileId` の形を先に検める
-    .get('/managers/:id/rescue-files/:fileId', (c) =>
-      serveSpilledFile(c, host.openRescueFile.bind(host)),
-    )
+    .get('/managers/:id/rescue-files/:fileId', (c) => serveSpilledFile(c, host, 'rescue'))
 
-    .delete('/managers/:id/rescue-files/:fileId', (c) =>
-      deleteSpilledFile(c, host.deleteRescueFile.bind(host)),
-    )
+    .delete('/managers/:id/rescue-files/:fileId', (c) => deleteSpilledFile(c, host, 'rescue'))
 
     // 預けた生ログの退避の本文（#4485）。デーモンが取りに来る向きだけで、SSE には載せない。`archiveId` の形を先に検める
     .get('/managers/:id/archive/:archiveId', (c) => {

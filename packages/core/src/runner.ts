@@ -284,6 +284,7 @@ import type {
   RunnerAttachment,
   RunnerStagedAttachmentMeta,
   RunnerOutboxFile,
+  RunnerPickupFileKind,
   RunnerOutboxRejectedFile,
   RunnerStartCommand,
   UnpushedWorkResult,
@@ -646,12 +647,14 @@ export interface RunnerHost {
   // 末尾 `maxChars + 1` 字だけ（全文を伏せて切った値と同じ。#5160）。無い・読めないは null
   transcriptTail(managerId: string, maxChars: number): Promise<string | null>;
   // 委譲が終わっていても開く（退避先は `closed` では消えず、デーモンの `DELETE` か24時間の掃除まで残る）。形が不正・無ければ `undefined`
-  openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
+  // `rescue` は未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。意味は出し箱と同じで、dir だけが別
+  openPickupFile(
+    kind: RunnerPickupFileKind,
+    managerId: string,
+    fileId: string,
+  ): Promise<StagedOutboxFile | undefined>;
   // 無くても成功（冪等）。形が不正なら `false`
-  deleteOutboxFile(managerId: string, fileId: string): Promise<boolean>;
-  // 未追跡のファイルの預かりの退避先（`rescue_files`。#4863）。意味は出し箱と同じで、dir だけが別
-  openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
-  deleteRescueFile(managerId: string, fileId: string): Promise<boolean>;
+  deletePickupFile(kind: RunnerPickupFileKind, managerId: string, fileId: string): Promise<boolean>;
   /** 預けた退避の本文。無い・期限切れ・別の委譲の id なら `undefined`。 */
   readArchive(managerId: string, archiveId: string): string | undefined;
   /** デーモンが本文を取り終えた印（GET の応答を返し終えた時点）。畳みの待ちと送り直しの対象から外す（#4899）。 */
@@ -1926,9 +1929,18 @@ class Host implements RunnerHost {
     };
   }
 
-  async openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
-    const file = await openStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
-    return this.#releaseWhenRead(file, pickupKey('outbox', managerId, fileId));
+  // 退避先は出し箱と預かりで同じ作り（`fileId` の形・`managerId` の形を検める）で、dir だけが別
+  #pickupRoot(kind: RunnerPickupFileKind): string {
+    return kind === 'outbox' ? this.#outboxStagedRoot : this.#rescueStagedRoot;
+  }
+
+  async openPickupFile(
+    kind: RunnerPickupFileKind,
+    managerId: string,
+    fileId: string,
+  ): Promise<StagedOutboxFile | undefined> {
+    const file = await openStagedOutboxFile(this.#pickupRoot(kind), managerId, fileId);
+    return this.#releaseWhenRead(file, pickupKey(kind, managerId, fileId));
   }
 
   // 読み切られたら待ちから外す（#4912）: DELETE が落ちても、取り終えた分を上限まで待たない
@@ -1939,20 +1951,13 @@ class Host implements RunnerHost {
     return file;
   }
 
-  deleteOutboxFile(managerId: string, fileId: string): Promise<boolean> {
-    this.#notePickedUp(pickupKey('outbox', managerId, fileId));
-    return removeStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
-  }
-
-  // 出し箱の退避先と同じ作り（`fileId` の形・`managerId` の形を検める）で、dir だけが別
-  async openRescueFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
-    const file = await openStagedOutboxFile(this.#rescueStagedRoot, managerId, fileId);
-    return this.#releaseWhenRead(file, pickupKey('rescue', managerId, fileId));
-  }
-
-  deleteRescueFile(managerId: string, fileId: string): Promise<boolean> {
-    this.#notePickedUp(pickupKey('rescue', managerId, fileId));
-    return removeStagedOutboxFile(this.#rescueStagedRoot, managerId, fileId);
+  deletePickupFile(
+    kind: RunnerPickupFileKind,
+    managerId: string,
+    fileId: string,
+  ): Promise<boolean> {
+    this.#notePickedUp(pickupKey(kind, managerId, fileId));
+    return removeStagedOutboxFile(this.#pickupRoot(kind), managerId, fileId);
   }
 
   pendingPickups(): number {

@@ -28,11 +28,11 @@ function clientWith(
 describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', () => {
   it('rescue-files / archive は 404 を undefined にし、500 は投げる', async () => {
     const missing = await clientWith(() => new Response('{}', { status: 404 })).client;
-    expect(await missing.openRescueFile?.('m', ID)).toBeUndefined();
+    expect(await missing.openPickupFile?.('rescue', 'm', ID)).toBeUndefined();
     expect(await missing.fetchArchive?.('m', ID)).toBeUndefined();
 
     const broken = await clientWith(() => new Response('boom', { status: 500 })).client;
-    await expect(broken.openRescueFile?.('m', ID)).rejects.toThrow('500');
+    await expect(broken.openPickupFile?.('rescue', 'm', ID)).rejects.toThrow('500');
     await expect(broken.fetchArchive?.('m', ID)).rejects.toThrow('500');
   });
 
@@ -44,10 +44,10 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
 
   it('本文の無い 200 は、出し箱と預かりで別の文で投げる', async () => {
     const empty = await clientWith(() => new Response(null, { status: 200 })).client;
-    await expect(empty.openOutboxFile?.('m', ID)).rejects.toThrow(
+    await expect(empty.openPickupFile?.('outbox', 'm', ID)).rejects.toThrow(
       'runner の応答に本文が無い（出し箱の取り出し）',
     );
-    await expect(empty.openRescueFile?.('m', ID)).rejects.toThrow(
+    await expect(empty.openPickupFile?.('rescue', 'm', ID)).rejects.toThrow(
       'runner の応答に本文が無い（預かりの取り出し）',
     );
   });
@@ -55,7 +55,7 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
   it('DELETE の3本は経路だけが違い、失敗は投げる', async () => {
     const ok = clientWith(() => new Response(null, { status: 204 }));
     const runner = await ok.client;
-    await runner.deleteRescueFile?.('m', ID);
+    await runner.deletePickupFile?.('rescue', 'm', ID);
     await runner.deleteArchive?.('m', ID);
     expect(ok.calls).toEqual([
       { method: 'DELETE', path: `/managers/m/rescue-files/${ID}` },
@@ -63,7 +63,7 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
     ]);
 
     const bad = await clientWith(() => new Response('{}', { status: 400 })).client;
-    await expect(bad.deleteRescueFile?.('m', ID)).rejects.toThrow('400');
+    await expect(bad.deletePickupFile?.('rescue', 'm', ID)).rejects.toThrow('400');
     await expect(bad.deleteArchive?.('m', ID)).rejects.toThrow('400');
   });
 });

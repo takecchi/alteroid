@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -97,6 +97,67 @@ describe('GET / DELETE /managers/:id/outbox/:fileId', () => {
     const { fileId, call } = await setup();
     expect((await call('GET', `/managers/${MANAGER}/outbox/${fileId}`, null)).status).toBe(401);
     expect((await call('DELETE', `/managers/${MANAGER}/outbox/${fileId}`, 'wrong')).status).toBe(
+      401,
+    );
+  });
+});
+
+describe('GET / DELETE /managers/:id/rescue-files/:fileId', () => {
+  const RESCUE_ID = 'c'.repeat(32);
+
+  async function setupRescue() {
+    const rescueStagedRoot = await makeTempDir('runner-rescue-routes-staged-');
+    await mkdir(join(rescueStagedRoot, MANAGER));
+    await writeFile(join(rescueStagedRoot, MANAGER, RESCUE_ID), 'hello rescue');
+    host = createRunnerHost({
+      runnerId: 'runner-rescue-routes',
+      workspacePath: '/workspace',
+      emit: () => undefined,
+      outboxRoot: await makeTempDir('runner-rescue-routes-outbox-'),
+      outboxStagedRoot: await makeTempDir('runner-rescue-routes-outbox-staged-'),
+      rescueStagedRoot,
+      scratchSweep: false,
+    });
+    const app = createRunnerApp({
+      host,
+      outbox: new Outbox(),
+      tokenSha256: TOKEN_SHA256,
+      ...appDefaults(),
+    });
+    const call = (method: string, path: string, token: string | null = TOKEN) =>
+      app.request(path, {
+        method,
+        headers: token === null ? {} : { authorization: `Bearer ${token}` },
+      });
+    return { rescueStagedRoot, call };
+  }
+
+  it('GET で中身が取れる。無ければ 404、出し箱の経路からは見えない', async () => {
+    const { call } = await setupRescue();
+    const res = await call('GET', `/managers/${MANAGER}/rescue-files/${RESCUE_ID}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-length')).toBe(String('hello rescue'.length));
+    expect(await res.text()).toBe('hello rescue');
+    expect((await call('GET', `/managers/${MANAGER}/rescue-files/${'0'.repeat(32)}`)).status).toBe(
+      404,
+    );
+    expect((await call('GET', `/managers/${MANAGER}/outbox/${RESCUE_ID}`)).status).toBe(404);
+  });
+
+  it('DELETE で消え、もう一度消しても 204。不正な fileId は 400、合鍵が無ければ 401', async () => {
+    const { rescueStagedRoot, call } = await setupRescue();
+    expect((await call('DELETE', `/managers/${MANAGER}/rescue-files/${RESCUE_ID}`)).status).toBe(
+      204,
+    );
+    expect(await readdir(join(rescueStagedRoot, MANAGER))).toEqual([]);
+    expect((await call('DELETE', `/managers/${MANAGER}/rescue-files/${RESCUE_ID}`)).status).toBe(
+      204,
+    );
+    expect((await call('GET', `/managers/${MANAGER}/rescue-files/${RESCUE_ID}`)).status).toBe(404);
+    expect((await call('GET', `/managers/${MANAGER}/rescue-files/ABC`)).status).toBe(400);
+    expect((await call('DELETE', `/managers/${MANAGER}/rescue-files/ABC`)).status).toBe(400);
+    expect((await call('GET', `/managers/${MANAGER}/rescue-files/${RESCUE_ID}`, null)).status).toBe(
       401,
     );
   });

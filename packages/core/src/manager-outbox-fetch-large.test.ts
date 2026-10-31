@@ -68,7 +68,7 @@ function fakeRunner(): { runner: RunnerClient; opened: string[]; deleted: string
   const opened: string[] = [];
   const deleted: string[] = [];
   const runner = {
-    async openOutboxFile(_managerId: string, fileId: string) {
+    async openPickupFile(_kind: string, _managerId: string, fileId: string) {
       opened.push(fileId);
       return {
         size: BIG.length,
@@ -77,7 +77,7 @@ function fakeRunner(): { runner: RunnerClient; opened: string[]; deleted: string
         })(),
       };
     },
-    async deleteOutboxFile(_managerId: string, fileId: string) {
+    async deletePickupFile(_kind: string, _managerId: string, fileId: string) {
       deleted.push(fileId);
     },
   } as unknown as RunnerClient;
