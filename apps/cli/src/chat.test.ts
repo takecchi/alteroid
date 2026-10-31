@@ -6099,6 +6099,106 @@ describe('chat の既読（返答を表示したとき）', () => {
   });
 });
 
+describe('chat の送り直しは同じ clientMessageId を使う（POST /chat の通信そのものが落ちたとき）', () => {
+  const target: Target = {
+    baseUrl: 'http://127.0.0.1:4517',
+    headers: { authorization: 'Bearer token' },
+    remote: false,
+    note: null,
+  };
+  const originalFetch = globalThis.fetch;
+  let posts: { clientMessageId: string; text: string }[];
+
+  const frame = (name: string, data: unknown) =>
+    `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+  const sse = (body: string) =>
+    new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+
+  // responders は POST /chat ごとに順に使う。Error なら fetch 自体を reject する
+  function stubChat(responders: (Error | Response)[]): void {
+    posts = [];
+    let call = 0;
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (!url.endsWith('/chat')) return Promise.resolve(new Response('{}', { status: 404 }));
+      posts.push(JSON.parse(init?.body as string) as { clientMessageId: string; text: string });
+      const next = responders[call++];
+      if (next === undefined) throw new Error('想定外の POST /chat');
+      return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+    }) as typeof fetch;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const done = () => sse(frame('open', { conversationId: 'c1' }) + frame('done', { type: 'done' }));
+
+  it('1回目が TypeError で落ちたあとの同じ発言の送り直しは、同じ clientMessageId で送る', async () => {
+    stubChat([new TypeError('fetch failed'), done()]);
+    captureStdout();
+    await expect(sendMessage(target, '送り直し同じ発言', null)).rejects.toThrow('fetch failed');
+    await sendMessage(target, '送り直し同じ発言', null);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]!.clientMessageId).toBe(posts[0]!.clientMessageId);
+  });
+
+  it('別の発言を打ったときは新しい clientMessageId を作る', async () => {
+    stubChat([new TypeError('fetch failed'), done()]);
+    captureStdout();
+    await expect(sendMessage(target, '落ちる発言', null)).rejects.toThrow('fetch failed');
+    await sendMessage(target, '別の発言', null);
+    expect(posts[1]!.clientMessageId).not.toBe(posts[0]!.clientMessageId);
+  });
+
+  it('届いた（応答が返った）あとの同じ文の発言は新しい clientMessageId を作る', async () => {
+    stubChat([done(), done()]);
+    captureStdout();
+    await sendMessage(target, '同じ文を二度', null);
+    await sendMessage(target, '同じ文を二度', null);
+    expect(posts[1]!.clientMessageId).not.toBe(posts[0]!.clientMessageId);
+  });
+
+  it('落ちたあとに別の発言を挟んだら、元の発言の送り直しは新しい id になる', async () => {
+    stubChat([new TypeError('fetch failed'), done(), done()]);
+    captureStdout();
+    await expect(sendMessage(target, '挟まれる発言', null)).rejects.toThrow('fetch failed');
+    await sendMessage(target, '挟む発言', null);
+    await sendMessage(target, '挟まれる発言', null);
+    expect(posts[2]!.clientMessageId).not.toBe(posts[0]!.clientMessageId);
+  });
+
+  it('送り先の会話が違えば同じ文でも新しい id を作る', async () => {
+    stubChat([new TypeError('fetch failed'), done()]);
+    captureStdout();
+    await expect(sendMessage(target, '宛先違い', null)).rejects.toThrow('fetch failed');
+    await sendMessage(target, '宛先違い', 'c9');
+    expect(posts[1]!.clientMessageId).not.toBe(posts[0]!.clientMessageId);
+  });
+
+  it('daemon が重複として弾いた応答（open の duplicate だけで閉じる）は、成功として扱い、会話 id を返し、失敗にも二重の表示にもしない', async () => {
+    stubChat([
+      new TypeError('fetch failed'),
+      sse(frame('open', { conversationId: 'c1', clientMessageId: 'x', duplicate: true })),
+    ]);
+    const read = captureStdout();
+    const onFailed = vi.fn();
+    const onAccepted = vi.fn();
+    await expect(sendMessage(target, '重複で弾かれる', null)).rejects.toThrow('fetch failed');
+    const id = await sendMessage(target, '重複で弾かれる', null, undefined, {
+      onFailed,
+      onAccepted,
+    });
+    expect(id).toBe('c1');
+    expect(onAccepted).toHaveBeenCalledTimes(1);
+    expect(onFailed).not.toHaveBeenCalled();
+    const text = read();
+    expect(text).toContain('受け取り済み');
+    expect(text).not.toContain('途中で切れ');
+    expect(text).not.toContain('応答が来ないまま');
+  });
+});
+
 describe('chat のスラッシュコマンドは、知らないキー・空の値・使わない語を使い方の誤りとして断る', () => {
   it.each([
     ['/usage mgr=abc', '/usage', 'mgr='],
