@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
-import { noteEnvValueNotUsed } from './env-value-not-used.js';
+import { noteEnvValueNotUsed, readNumberEnv } from './env-value-not-used.js';
 import { clipWithEllipsis } from './excerpt.js';
 import { redactSecretsInBody, secretPatternsInBody, type SecretPatternName } from './redact.js';
 import {
@@ -44,26 +44,22 @@ export const MAX_RESCUE_INTERVAL_MS = 2_147_483_647;
 
 // 置かれた値を既定や範囲の端へ倒したときは黙らせず stderr に1行残す（#5976）
 export function resolveRescueIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[RESCUE_INTERVAL_MS_ENV_KEY]?.trim();
-  if (raw === undefined || raw === '') return DEFAULT_RESCUE_INTERVAL_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    noteEnvValueNotUsed(
-      RESCUE_INTERVAL_MS_ENV_KEY,
-      raw,
-      `正の数として読めないので既定 ${String(DEFAULT_RESCUE_INTERVAL_MS)} を使う`,
-    );
-    return DEFAULT_RESCUE_INTERVAL_MS;
-  }
-  const clamped = Math.min(MAX_RESCUE_INTERVAL_MS, Math.max(MIN_RESCUE_INTERVAL_MS, parsed));
-  if (clamped !== parsed) {
-    noteEnvValueNotUsed(
-      RESCUE_INTERVAL_MS_ENV_KEY,
-      raw,
-      `${String(MIN_RESCUE_INTERVAL_MS)}〜${String(MAX_RESCUE_INTERVAL_MS)} の外なので ${String(clamped)} を使う`,
-    );
-  }
-  return clamped;
+  return readNumberEnv(env[RESCUE_INTERVAL_MS_ENV_KEY], {
+    fallback: DEFAULT_RESCUE_INTERVAL_MS,
+    positive: true,
+    min: MIN_RESCUE_INTERVAL_MS,
+    max: MAX_RESCUE_INTERVAL_MS,
+    clamp: true,
+    onProblem: (problem, raw, used) => {
+      noteEnvValueNotUsed(
+        RESCUE_INTERVAL_MS_ENV_KEY,
+        raw,
+        problem === 'clamped'
+          ? `${String(MIN_RESCUE_INTERVAL_MS)}〜${String(MAX_RESCUE_INTERVAL_MS)} の外なので ${String(used)} を使う`
+          : `正の数として読めないので既定 ${String(DEFAULT_RESCUE_INTERVAL_MS)} を使う`,
+      );
+    },
+  });
 }
 
 /**
