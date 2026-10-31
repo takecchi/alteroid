@@ -2041,7 +2041,7 @@ class Host implements RunnerHost {
   // いつも預けて参照を送る（#4485）: 2026-10-13T16:54Z、デーモンの名乗りを覚えていない回に 155MB の本文が SSE の1行で届き、
   // デーモンのループが 3.8 秒塞がった（ヒープ 1722/1759MB）。本文を載せる道を残すと、いつでも同じことが起きる。
   // そのため名乗りで切り替えず、名乗り自体も消した（#5701）
-  #stashArchive(managerId: string, body: string): { id: string; chars: number } | undefined {
+  #stashArchive(managerId: string, body: string): { id: string; chars: number } {
     return this.#archiveStash.put(managerId, body);
   }
 
@@ -2641,22 +2641,21 @@ interface RunnerSessionOptions {
   cwd: string;
   emit: (event: RunnerEvent) => void;
   queryFn?: ClaudeQueryFn;
-  driver?: AgentManagerDriver;
   env: NodeJS.ProcessEnv;
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
   credentials?: CredentialStore;
   permissionMode: ManagerPermissionMode;
   bashGuard: BashGuardMode;
-  codexAuth?: CodexChatgptAuthHandle;
+  codexAuth: CodexChatgptAuthHandle;
   // 値で渡さない（関数で受ける）: 走行中に差し替わるので、後から起こしたマネージャーだけが古い環境で走るため
   profileEnv: () => Record<string, string>;
   // 値で渡さない（関数で受ける）: セッションを作った後に降りた登録が resume・開き直しに届かないため
   mcpServers: () => McpServers | undefined;
   // 値で渡さない（関数で受ける）: `mcpServers` と同じ理由
   plugins: () => readonly AgentClonePlugin[];
-  // 委譲先の許可規則（#4952）。値で渡さない（関数で受ける）: `mcpServers` と同じ理由。省けば空
-  permissionRules?: () => readonly string[];
+  // 委譲先の許可規則（#4952）。値で渡さない（関数で受ける）: `mcpServers` と同じ理由
+  permissionRules: () => readonly string[];
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
   managerTools?: RunnerManagerToolsOptions;
@@ -2668,15 +2667,15 @@ interface RunnerSessionOptions {
   rescueStagedRoot: string;
   managerScratchRoot: string;
   /** 出し箱の大きいファイルの1つの上限と1報告の合計（hello の `attachmentStageLimit` と同じ値）。 */
-  attachmentStageLimit?: number;
-  onDelegationProcessSpawned?: (pid: number) => void;
-  onDelegationProcessExited?: (pid: number) => void;
+  attachmentStageLimit: number;
+  onDelegationProcessSpawned: (pid: number) => void;
+  onDelegationProcessExited: (pid: number) => void;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   delegationSubreaper?: string;
   handOverResumeConfigDirFn?: HandOverResumeConfigDir;
   handOverMcpConfigDirFn?: HandOverResumeConfigDir;
-  mcpConfigTmpRoot?: string;
-  liveMcpConfigDirs?: Set<string>;
+  mcpConfigTmpRoot: string;
+  liveMcpConfigDirs: Set<string>;
   contextUsageTimeoutMs?: number;
   // 一時規則（#4905）の置き直しを待つ期限。既定は `SESSION_ALLOW_RULES_TIMEOUT_MS`。試験が短くするための口
   sessionAllowRulesTimeoutMs?: number;
@@ -2684,10 +2683,8 @@ interface RunnerSessionOptions {
   rescueMaxWorktrees?: number;
   /** 器の pids と、器の上の担当の本数。渡されたときだけ、上限に近ければ道具の結果へ知らせを添える。 */
   pidsPressureFn?: () => Promise<PidsPressureReading | undefined>;
-  /**
-   * 生ログの退避の本文を runner に預け、参照を返す（#4485）。`undefined` は「預けない」（デーモンが参照を受け取れない・口が無い）で、本文を出来事に載せる。
-   */
-  stashArchive?: (body: string) => { id: string; chars: number } | undefined;
+  /** 生ログの退避の本文を runner に預け、参照を返す（#4485）。 */
+  stashArchive: (body: string) => { id: string; chars: number };
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
 
@@ -2724,7 +2721,7 @@ class RunnerSession {
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
   readonly #managerTools: RunnerManagerToolsOptions | undefined;
-  readonly #codexAuth: CodexChatgptAuthHandle | undefined;
+  readonly #codexAuth: CodexChatgptAuthHandle;
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
   #peerBinding: PeerBinding | undefined;
@@ -2746,7 +2743,7 @@ class RunnerSession {
   readonly #managerScratchRoot: string;
   /** 委譲の CLI に渡す `CLAUDE_CODE_TMPDIR`。用意できた後だけ立つ（`#prepareClaudeTmpDir`）。 */
   #claudeTmpDir: string | undefined;
-  readonly #attachmentStageLimit: number | undefined;
+  readonly #attachmentStageLimit: number;
   //用意できなかったら無し: 出し箱が無くてもマネージャーは動く（成果物を報告に添えられないだけ）
   readonly #outboxDir: string | undefined;
   readonly #onDelegationProcessSpawned: (pid: number) => void;
@@ -2762,7 +2759,7 @@ class RunnerSession {
   readonly #rescueMaxWorktrees: number | undefined;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   readonly #pidsPressureFn: (() => Promise<PidsPressureReading | undefined>) | undefined;
-  readonly #stashArchive: ((body: string) => { id: string; chars: number } | undefined) | undefined;
+  readonly #stashArchive: (body: string) => { id: string; chars: number };
   readonly #pidsPressureNotices = new PidsPressureNotices();
   readonly #staleUntrackedNotices = new StaleUntrackedNotices();
   readonly #peerApprovalNotices = new PeerApprovalNotices();
@@ -2890,9 +2887,9 @@ class RunnerSession {
       options.emit,
       options.workerToolWatchClock,
     );
-    this.#driver =
-      options.driver ??
-      new ClaudeManagerDriver(options.queryFn === undefined ? {} : { queryFn: options.queryFn });
+    this.#driver = new ClaudeManagerDriver(
+      options.queryFn === undefined ? {} : { queryFn: options.queryFn },
+    );
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
@@ -2907,7 +2904,7 @@ class RunnerSession {
     this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
     this.#mcpServers = options.mcpServers;
-    this.#permissionRules = options.permissionRules ?? (() => []);
+    this.#permissionRules = options.permissionRules;
     this.#pluginRefs = options.plugins;
     this.#onClosed = options.onClosed;
     this.#outboxRoot = options.outboxRoot;
@@ -2916,8 +2913,8 @@ class RunnerSession {
     this.#rescueStagedRoot = options.rescueStagedRoot;
     this.#attachmentStageLimit = options.attachmentStageLimit;
     this.#outboxDir = this.#prepareOutbox();
-    this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
-    this.#onDelegationProcessExited = options.onDelegationProcessExited ?? (() => undefined);
+    this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned;
+    this.#onDelegationProcessExited = options.onDelegationProcessExited;
     this.#spawnAgentProcessFn =
       options.spawnAgentProcessFn ??
       ((spawnOptions) =>
@@ -2925,8 +2922,8 @@ class RunnerSession {
     this.#delegationSubreaper = options.delegationSubreaper;
     this.#handOverResumeConfigDirFn = options.handOverResumeConfigDirFn ?? chownTreeSync;
     this.#handOverMcpConfigDirFn = options.handOverMcpConfigDirFn ?? chownTreeSync;
-    this.#mcpConfigTmpRoot = options.mcpConfigTmpRoot ?? tmpdir();
-    this.#liveMcpConfigDirs = options.liveMcpConfigDirs ?? new Set<string>();
+    this.#mcpConfigTmpRoot = options.mcpConfigTmpRoot;
+    this.#liveMcpConfigDirs = options.liveMcpConfigDirs;
     this.#contextUsageTimeoutMs = options.contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#sessionAllowRulesTimeoutMs =
       options.sessionAllowRulesTimeoutMs ?? SESSION_ALLOW_RULES_TIMEOUT_MS;
@@ -3499,11 +3496,7 @@ class RunnerSession {
           : binding.session.#onPermission(request, source),
       driverOf: (provider) =>
         provider === 'codex'
-          ? new CodexManagerDriver(
-              binding.session.#codexAuth === undefined
-                ? {}
-                : { chatgptAuth: binding.session.#codexAuth },
-            )
+          ? new CodexManagerDriver({ chatgptAuth: binding.session.#codexAuth })
           : new ClaudeManagerDriver(
               binding.session.#queryFn === undefined ? {} : { queryFn: binding.session.#queryFn },
             ),
@@ -4060,9 +4053,7 @@ class RunnerSession {
       expectedUid: childUser?.uid ?? process.getuid?.(),
       ...(childUser === undefined ? {} : { chownTo: { uid: childUser.uid, gid: childUser.gid } }),
       limits: readAttachmentLimits().limits,
-      ...(this.#attachmentStageLimit === undefined
-        ? {}
-        : { maxLargeFileBytes: this.#attachmentStageLimit }),
+      maxLargeFileBytes: this.#attachmentStageLimit,
       paths,
     });
   }
@@ -4096,9 +4087,7 @@ class RunnerSession {
         // 子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid
         expectedUid: this.#childUser?.uid ?? process.getuid?.(),
         limits: readAttachmentLimits().limits,
-        ...(this.#attachmentStageLimit === undefined
-          ? {}
-          : { maxLargeFileBytes: this.#attachmentStageLimit }),
+        maxLargeFileBytes: this.#attachmentStageLimit,
       });
       return {
         ...(collected.files.length === 0 ? {} : { files: collected.files }),
@@ -6652,13 +6641,9 @@ class RunnerSession {
       return;
     }
     if (result.body.length === 0) return;
-    // 本文を SSE の1行で運ばない（#4485）: 数十 MB の行を受け取って解析する間、デーモンのループが塞がるため。本文を載せるのは、預ける口（`stashArchive`）を渡されていないときだけ
-    const ref = this.#stashArchive?.(result.body);
-    this.#emit(
-      ref === undefined
-        ? { type: 'archive', managerId: this.#id, body: result.body }
-        : { type: 'archive', managerId: this.#id, ref },
-    );
+    // 本文を SSE の1行で運ばない（#4485）: 数十 MB の行を受け取って解析する間、デーモンのループが塞がるため
+    const ref = this.#stashArchive(result.body);
+    this.#emit({ type: 'archive', managerId: this.#id, ref });
   }
 
   // `withdrawn: true` を渡すのはここだけ: 直後の `query.close()` で答えが CLI に一度も届かないため（`answer()` は `close()` を伴わず届く）
