@@ -60,7 +60,7 @@
 
 ## AGENTS.md「リポジトリの約束」から（#1192 の再編 3/3 で移した）
 
-**これを見ていた門（`pr-title-type`）は 2026-09-22 に takecchi の判断で廃止した**（逐語「『PR title』ワークフロー、これ無駄なので消してください」）。クローンが人間へ (a) 付ける / (b) 付けない を諮り、**クローン自身は (a) を推した**うえで、**人間の回答は (b) だった。 - **CI の門（`pr-closing-keywords`）は 2026-09-24 に takecchi の判断で廃止した**（逐語「テストやビルド以外の無駄なワークフロー消してほしい」）。**⟹ 規約は生きている。機械は見ていないので、書く人が確かめること。判定の関数（`scripts/check-pr-closing-keywords-core.mjs`）は `check-keyword-closed-issues` が使っているので残してある。workflow 本体を読むなら `git show b12852f:.github/workflows/pr-closing-keywords.yml`
+**これを見ていた門（`pr-title-type`）は 2026-09-22 に takecchi の判断で廃止した**（逐語「『PR title』ワークフロー、これ無駄なので消してください」）。クローンが人間へ (a) 付ける / (b) 付けない を諮り、**クローン自身は (a) を推した**うえで、**人間の回答は (b) だった。 - **CI の門（`pr-closing-keywords`）は 2026-09-24 に takecchi の判断で廃止した**（逐語「テストやビルド以外の無駄なワークフロー消してほしい」）。**⟹ 規約は生きている。機械は見ていないので、書く人が確かめること。判定の関数（`scripts/check-pr-closing-keywords-core.mjs`）と、それを使う手で回す報告の道具 `check:keyword-closed-issues` も、2026-10-31 に設計を簡単にする改修で外した（#6000。戻すなら `git checkout eb4abb1b -- scripts/check-pr-closing-keywords-core.mjs scripts/check-pr-closing-keywords.test.ts scripts/check-keyword-closed-issues.mjs scripts/check-keyword-closed-issues-core.mjs scripts/check-keyword-closed-issues.test.ts` と、`package.json` の script・`scripts/check-scripts-wired.test.ts` の免除欄を戻す）。workflow 本体を読むなら `git show b12852f:.github/workflows/pr-closing-keywords.yml`
 
 PR / Issue の本文に層の出自を刻む機構が在ったが、PR #947 が本文に一言も書かずに消し（記録は #971）、#893 がそれを追認して「やめる」を採った。⚠️ **決定の後も慣行は止まらなかった** — 機構が消えた後の Issue のコメントに刻印が付き続けている（#1046 の実測、2026-09-16 観測で4件）。**測っているのは参照の形だけで、内容は測っていない** — (1) リポジトリ内のファイルを `path:行番号` で指していないか (2)「N行目」で指していないか (3) `grep -Fn -- '<逐語>' <path>` の形で書いた出典が現物に当たるか。**フェンスの中は見ない**（直上の証拠の側）。**(3) が落ちたときは「行が動いた」ではない** — 歯は行番号を一切見ていないので、落ちたなら指した文言そのものが変わっている
 
