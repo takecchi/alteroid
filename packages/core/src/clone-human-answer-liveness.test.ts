@@ -48,7 +48,10 @@ async function answerWith(list: () => Promise<ManagerSummary[]>): Promise<string
     requestId: 'r1',
   });
   await clone.answerApproval('ap-1', 'はい');
-  await waitFor(() => inputs.some((input) => input.includes(ANSWER_MARKER)));
+  await waitFor(
+    () => inputs.some((input) => input.includes(ANSWER_MARKER)),
+    '人間の答えのターンの入力',
+  );
   await clone.stop();
   return inputs.find((input) => input.includes(ANSWER_MARKER)) ?? '';
 }
