@@ -8,6 +8,7 @@ import {
   loginRequestSchema,
   UnreadableAccountError,
   assertNoNul,
+  compareCodeUnits,
   hasNul,
   prepareAccessTokenForWrite,
   prepareAccountForWrite,
@@ -134,11 +135,6 @@ function describeSkippedLoginRequestRow(params: {
 // 単独では使わない: `createdAt` が同着の行どうしの相対順を決めないため
 function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): number {
   return Date.parse(a.createdAt) - Date.parse(b.createdAt);
-}
-
-// `localeCompare` を使わない: 大文字小文字や `-` と `_` の前後が C の順と逆になり、pg の `COLLATE "C"` と食い違うため
-function compareCodeUnits(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 // 2次キーに `id` を使う: `putAccount` は既存行を消して末尾へ足すので、`createdAt` 同着の片方だけ更新すると「最後に触られた順」になるため

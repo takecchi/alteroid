@@ -1,3 +1,4 @@
+import { compareCodeUnits } from './code-unit-order.js';
 // MCP の道具をサーバごとに畳む（#5291）。`contextUsage.mcpToolsByServer` と起動の記録の「上位のサーバ」の両方の元になる。
 // 1本ずつ写さない: 日誌の1行が道具の本数だけ伸びるため。
 
@@ -36,7 +37,7 @@ export function foldMcpToolsByServer(
     byServer.set(name, row);
   }
   const sorted = [...byServer.values()].sort(
-    (a, b) => b.tokens - a.tokens || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+    (a, b) => b.tokens - a.tokens || compareCodeUnits(a.name, b.name),
   );
   if (sorted.length <= MCP_TOOLS_BY_SERVER_LIMIT) return sorted;
   const shown = sorted.slice(0, MCP_TOOLS_BY_SERVER_LIMIT - 1);

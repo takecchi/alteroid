@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { RunnerRescueSkipped } from './runner-protocol.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 /**
  * 担当の作業場（`/tmp/mgr-<id の頭>-*`）のうち、git の作業ツリーの外のファイルを列挙する（#5255）。
@@ -76,7 +77,7 @@ export async function listScratchFiles(
       if (dir === root) isWorktree = true;
       return;
     }
-    const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const sorted = [...entries].sort((a, b) => compareCodeUnits(a.name, b.name));
     const subdirs: string[] = [];
     for (const entry of sorted) {
       if (SCRATCH_EXCLUDED_NAMES.has(entry.name)) continue;

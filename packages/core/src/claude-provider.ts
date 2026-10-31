@@ -137,27 +137,20 @@ function toolResponseChars(response: unknown): number | undefined {
   return total;
 }
 
-function wrapToolAuditHook(hook: AgentObservationHook<AgentToolAuditRecord>): HookCallback {
-  return async (input) => {
-    noteHookPhase('PostToolUse', input);
-    try {
-      await hook(toAgentToolAuditRecord(input));
-    } finally {
-      notePhase('sdk-hook-done:PostToolUse');
-    }
-    return { continue: true };
-  };
-}
-
-function wrapToolAuditFailureHook(
-  hook: AgentObservationHook<AgentToolAuditFailureRecord>,
+// 観測フックの共通の形: 中立の記録へ写して渡し、常に `{ continue: true }` を返す。投げた例外は握らない。
+// `await` を保つ: PreCompact は compaction がこのフックの返り値を待つので、退避・蒸留の完了を待ってから返す意味を変えないため
+// `phaseEvent` を渡すと、呼び出しの前後に phase の印を残す（道具の監査だけ）。`signal` は PreCompact の記録だけが使う
+function wrapObservationHook<T>(
+  hook: AgentObservationHook<T>,
+  toRecord: (input: unknown, signal: AbortSignal | undefined) => T,
+  phaseEvent?: string,
 ): HookCallback {
-  return async (input) => {
-    noteHookPhase('PostToolUseFailure', input);
+  return async (input, _toolUseId, options) => {
+    if (phaseEvent !== undefined) noteHookPhase(phaseEvent, input);
     try {
-      await hook(toAgentToolAuditFailureRecord(input));
+      await hook(toRecord(input, options?.signal));
     } finally {
-      notePhase('sdk-hook-done:PostToolUseFailure');
+      if (phaseEvent !== undefined) notePhase(`sdk-hook-done:${phaseEvent}`);
     }
     return { continue: true };
   };
@@ -198,23 +191,6 @@ function toAgentStopRecord(input: unknown): AgentStopRecord {
   }
 }
 
-// `await` を保つ: compaction はこのフックの返り値を待つので、退避・蒸留の完了を待ってから返す意味を変えないため
-function wrapPreCompactHook(hook: AgentObservationHook<AgentPreCompactRecord>): HookCallback {
-  return async (input, _toolUseId, options) => {
-    await hook(toAgentPreCompactRecord(input, options?.signal));
-    return { continue: true };
-  };
-}
-
-function wrapUserPromptSubmitHook(
-  hook: AgentObservationHook<AgentUserPromptSubmitRecord>,
-): HookCallback {
-  return async (input) => {
-    await hook(toAgentUserPromptSubmitRecord(input));
-    return { continue: true };
-  };
-}
-
 function toAgentSessionStartRecord(input: unknown): AgentSessionStartRecord {
   const raw = input as Partial<SessionStartHookInput> | null | undefined;
   return typeof raw?.source === 'string' ? { source: raw.source } : {};
@@ -234,13 +210,6 @@ function wrapSessionStartHook(hook: AgentSessionStartHook): HookCallback {
       noteBackgroundFailure('SessionStart の文脈の追加', '', error);
       return { continue: true };
     }
-  };
-}
-
-function wrapStopHook(hook: AgentObservationHook<AgentStopRecord>): HookCallback {
-  return async (input) => {
-    await hook(toAgentStopRecord(input));
-    return { continue: true };
   };
 }
 
@@ -384,15 +353,6 @@ function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
   }
 }
 
-function wrapSubagentStopObservationHook(
-  hook: AgentObservationHook<AgentSubagentStopRecord>,
-): HookCallback {
-  return async (input) => {
-    await hook(toAgentSubagentStopRecord(input));
-    return { continue: true };
-  };
-}
-
 // `default` 節で投げない: このフックはツール実行・作業者継続の経路に載っており、例外を投げるとそのターン・作業者のターンが壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapContextHook<T>(
   hookEventName: 'PostToolUse' | 'SubagentStop',
@@ -486,11 +446,6 @@ function clonePluginOptions(
  */
 const NO_MODEL_FALLBACK_ENV_KEY = 'CLAUDE_CODE_NO_MODEL_FALLBACK';
 
-export function withNoModelFallbackEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if ((env[NO_MODEL_FALLBACK_ENV_KEY] ?? '').trim() !== '') return { ...env };
-  return { ...env, [NO_MODEL_FALLBACK_ENV_KEY]: '1' };
-}
-
 /**
  * クローン（本セッション・蒸留）とマネージャーの層で、CLI のセッションの題名づけを止める。
  *
@@ -499,13 +454,22 @@ export function withNoModelFallbackEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
  * が真なら出ない）。alteroid はこの題名をどこでも読まないので、出しても枠を焼くだけである（#4269）。
  * 作業者は親と同じプロセスで走るサブエージェントで、題名づけの対象ではない。
  *
- * **既に値が置かれていれば上書きしない**: `withNoModelFallbackEnv` と同じ理由。
+ * **既に値が置かれていれば上書きしない**: モデルの降格を止める分と同じ理由。
  */
 const NO_SESSION_TITLE_ENV_KEY = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 
-export function withNoSessionTitleEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if ((env[NO_SESSION_TITLE_ENV_KEY] ?? '').trim() !== '') return { ...env };
-  return { ...env, [NO_SESSION_TITLE_ENV_KEY]: '1' };
+/** 空文字・空白だけは「置いていない」と読む（器が `${VAR:-}` で空を渡しても効かせる）。 */
+function isEnvSet(env: NodeJS.ProcessEnv, key: string): boolean {
+  return (env[key] ?? '').trim() !== '';
+}
+
+/** モデルの降格止め → 題名づけ止めの順に、置かれていない鍵だけ '1' を足した新しい env（渡された env は書き換えない）。 */
+export function withCliSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const key of [NO_MODEL_FALLBACK_ENV_KEY, NO_SESSION_TITLE_ENV_KEY]) {
+    if (!isEnvSet(env, key)) out[key] = '1';
+  }
+  return out;
 }
 
 /**
@@ -544,7 +508,7 @@ export const DEFAULT_AUTO_COMPACT_WINDOW_TOKENS = 300_000;
 export function autoCompactWindowSettings(env: NodeJS.ProcessEnv): { autoCompactWindow?: number } {
   // 系統4の節約スイッチ（`ALTEROID_TOKEN_SAVING_COMPACTION`）が無効の既定では窓を設定しない＝SDK の既定のまま
   if (!resolveTokenSavingCompaction(env)) return {};
-  if ((env[AUTO_COMPACT_WINDOW_ENV_KEY] ?? '').trim() !== '') return {};
+  if (isEnvSet(env, AUTO_COMPACT_WINDOW_ENV_KEY)) return {};
   return { autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS };
 }
 
@@ -607,7 +571,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     settings: { ...NO_ATTRIBUTION_SETTINGS, ...autoCompactWindowSettings(env) },
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
-    env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
+    env: withCliSessionEnv(env),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
@@ -621,7 +585,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       PreCompact: [
         {
           timeout: PRE_COMPACT_HOOK_TIMEOUT_SECONDS,
-          hooks: [wrapPreCompactHook(onPreCompact)],
+          hooks: [wrapObservationHook(onPreCompact, toAgentPreCompactRecord)],
         },
       ],
       // effort を `PreCompact` で拾わない: `PreCompact` はセッション生涯に対して1本のフックで、`BaseHookInput.effort` はツール実行の文脈で発火するフックにしか付かないため
@@ -640,12 +604,18 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 排他に発火するので両方登録しても二重記録にならず、片方だけだと失敗・中断した道具呼び出しが日誌に1件も残らないため
       PostToolUseFailure: [
         {
-          hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)],
+          hooks: [
+            wrapObservationHook(
+              onPostToolUseFailure,
+              toAgentToolAuditFailureRecord,
+              'PostToolUseFailure',
+            ),
+          ],
         },
       ],
       SubagentStop: [
         {
-          hooks: [wrapSubagentStopObservationHook(onSubagentStop)],
+          hooks: [wrapObservationHook(onSubagentStop, toAgentSubagentStopRecord)],
         },
       ],
     },
@@ -694,14 +664,26 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     settingSources: ['user', 'project', 'local'],
     settings: { ...NO_ATTRIBUTION_SETTINGS },
     skills: 'all',
-    env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
+    env: withCliSessionEnv(env),
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
     // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため
     hooks: {
-      PostToolUse: [{ hooks: [wrapToolAuditHook(onPostToolUse)] }],
+      PostToolUse: [
+        { hooks: [wrapObservationHook(onPostToolUse, toAgentToolAuditRecord, 'PostToolUse')] },
+      ],
       // 蒸留の失敗も記録する: 蒸留は `memory_write` を叩く経路で、失敗を記録しないと「記憶が書かれなかった」が静かに落ちるため
-      PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
+      PostToolUseFailure: [
+        {
+          hooks: [
+            wrapObservationHook(
+              onPostToolUseFailure,
+              toAgentToolAuditFailureRecord,
+              'PostToolUseFailure',
+            ),
+          ],
+        },
+      ],
     },
   };
 }
@@ -835,7 +817,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',
-    env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
+    env: withCliSessionEnv(env),
     // 生ログはデーモンへ預ける: runner は永続化の器を持たず、記憶ストアの鍵を runner に置かないため
     sessionStore,
     // [sdk-verbatim Options.settings]
@@ -861,9 +843,21 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
         { hooks: [wrapContextHook('PostToolUse', onPostToolUse, toAgentToolAuditRecord)] },
       ],
       // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 失敗・中断した道具呼び出しが日誌に1件も残らなくなるため
-      PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
-      PreCompact: [{ hooks: [wrapPreCompactHook(onPreCompact)] }],
-      UserPromptSubmit: [{ hooks: [wrapUserPromptSubmitHook(onUserPromptSubmit)] }],
+      PostToolUseFailure: [
+        {
+          hooks: [
+            wrapObservationHook(
+              onPostToolUseFailure,
+              toAgentToolAuditFailureRecord,
+              'PostToolUseFailure',
+            ),
+          ],
+        },
+      ],
+      PreCompact: [{ hooks: [wrapObservationHook(onPreCompact, toAgentPreCompactRecord)] }],
+      UserPromptSubmit: [
+        { hooks: [wrapObservationHook(onUserPromptSubmit, toAgentUserPromptSubmitRecord)] },
+      ],
       ...(onSessionStart === undefined
         ? {}
         : { SessionStart: [{ hooks: [wrapSessionStartHook(onSessionStart)] }] }),
@@ -873,7 +867,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
           hooks: [wrapContextHook('SubagentStop', onSubagentStop, toAgentSubagentStopRecord)],
         },
       ],
-      Stop: [{ hooks: [wrapStopHook(onStop)] }],
+      Stop: [{ hooks: [wrapObservationHook(onStop, toAgentStopRecord)] }],
     },
   };
 }

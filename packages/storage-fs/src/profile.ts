@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import {
   assertProfileRowWritable,
-  compareProfileEntryNames,
+  compareCodeUnits,
   PROFILE_ENTRY_NAME,
   type EnvProfileEntry,
   type EnvProfileScope,
@@ -67,7 +67,7 @@ export class FsProfileStore implements ProfileStore {
         // 読めない1ファイルで一覧ごと落とさない。
       }
     }
-    return rows.sort((a, b) => compareProfileEntryNames(a.name, b.name));
+    return rows.sort((a, b) => compareCodeUnits(a.name, b.name));
   }
 
   async #readScope(name: string): Promise<EnvProfileScope> {

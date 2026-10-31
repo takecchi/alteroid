@@ -1,6 +1,7 @@
 import { selectArchiveRemovalTargets } from './archive-prune.js';
 import { InvalidArchiveSessionIdError } from './archive-session-id.js';
 import type { TranscriptArchive } from './store.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 // vi.useFakeTimers() を使わず Date だけ差し替える: vitest を持ち込まないため、また setTimeout まで止めると PGlite の内部が止まるため
 // class extends Date にしない: 可変長引数を super へ渡す形が tsup の dts ビルドの TS2556 で拒まれるため
@@ -222,9 +223,7 @@ export async function verifyTranscriptArchiveContract(
 
   const ordered = await archive.sessions();
   const expectedOrder = [...ordered].sort(
-    (a, b) =>
-      b.storedBytes - a.storedBytes ||
-      (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0),
+    (a, b) => b.storedBytes - a.storedBytes || compareCodeUnits(a.sessionId, b.sessionId),
   );
   if (ordered.some((summary, index) => summary.sessionId !== expectedOrder[index]?.sessionId)) {
     fail('sessions()はstoredBytesの降順・同値ならsessionIdの昇順で返る', ordered);

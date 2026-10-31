@@ -1,4 +1,5 @@
 import type { JournalEntry } from './schema.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 /** 日誌から読む `github_observation` の件数の上限（新しい順）。 */
 export const GITHUB_OBSERVATION_SCAN_LIMIT = 500;
@@ -116,7 +117,7 @@ export function summarizeGithubObservations(
   if (byRepo.size === 0) return PROGRESS_GITHUB_NOT_OBSERVED;
   return {
     state: 'observed',
-    repos: [...byRepo.values()].sort((a, b) => (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0)),
+    repos: [...byRepo.values()].sort((a, b) => compareCodeUnits(a.repo, b.repo)),
     scan: { limit: scanLimit, reachedLimit: more },
   };
 }

@@ -15,6 +15,7 @@ import {
   type TokenPoolStore,
   type TokenRotationSettings,
   type UnreadableToken,
+  compareCodeUnits,
   extractRowId,
   summarizeInvalidFields,
   writeStderrLine,
@@ -93,7 +94,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
       file.tokens
         .filter((token): token is AgentToken => token.source !== 'env')
         // 同じ順位は id で並べる（#4843）: pg と同じ並びにして、選ぶ順を置き場で食い違わせないため
-        .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .sort((a, b) => a.order - b.order || compareCodeUnits(a.id, b.id))
     );
   }
 

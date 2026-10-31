@@ -1,3 +1,4 @@
+import { compareCodeUnits } from './code-unit-order.js';
 // 会話の履歴（Messages）の内訳を日誌用に畳む。`contextUsage.messageBreakdown` と人が読む描画の両方の元になる。
 // 依存を持たない: `journal-diagnostics-format.ts`（ブラウザへ入る）からも読むため、zod や schema.ts を import しない。
 // 1本ずつ写さない: 日誌の1行が道具の種類の数だけ伸びるため。
@@ -37,7 +38,7 @@ export interface MessageBreakdownSource {
 }
 
 function compareByResultTokens(a: MessageBreakdownToolRow, b: MessageBreakdownToolRow): number {
-  return b.resultTokens - a.resultTokens || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return b.resultTokens - a.resultTokens || compareCodeUnits(a.name, b.name);
 }
 
 /**

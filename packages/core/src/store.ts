@@ -1321,11 +1321,6 @@ export type EnvProfileScope = (typeof ENV_PROFILE_SCOPES)[number];
  */
 export const PROFILE_ENTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-/** 名前のコード単位順（`<` 比較。ロケールに依存させない。`/etc/profile.d` の辞書順と同じ）。 */
-export function compareProfileEntryNames(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 export interface ProfileStore {
   /** 置かれている全行。名前のコード単位順（つなげる順番そのもの）。 */
   list(): Promise<EnvProfileEntry[]>;

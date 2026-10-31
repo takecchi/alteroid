@@ -168,7 +168,7 @@ function sortKeys(value: unknown): unknown {
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .sort(([a], [b]) => compareCodeUnits(a, b))
         .map(([k, v]) => [k, sortKeys(v)]),
     );
   }

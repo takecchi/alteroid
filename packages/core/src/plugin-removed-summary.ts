@@ -1,4 +1,5 @@
 import type { RemovedItem } from './plugin-extract.js';
+import { compareCodeUnits } from './code-unit-order.js';
 
 export const REMOVED_JOURNAL_MAX_PATHS = 20;
 export const REMOVED_JOURNAL_MAX_PATH_LENGTH = 120;
@@ -17,7 +18,7 @@ export function summarizeRemovedForJournal(removed: readonly RemovedItem[]): str
   const counts = new Map<string, number>();
   for (const item of removed) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
   const byReason = [...counts.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([a], [b]) => compareCodeUnits(a, b))
     .map(([reason, count]) => `${reason} ${count}件`)
     .join(', ');
   const lines = removed
