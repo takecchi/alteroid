@@ -74,6 +74,44 @@ function layerImportRules({ dir, forbidden, why, banUiAlias = false }) {
   ];
 }
 
+// 子プロセスへ親の env を丸ごと渡さない（#1935・#1854・#1971・#2042）: 渡すと、開発者の機械の `GIT_*`・`CLAUDE_*` などが試験へ漏れて、機械ごとに結果が変わり、本物の認証情報を使う試験にもなるため。対象は試験・試験の補助・mutation-testing の `.mjs`。
+const PROCESS_ENV = "MemberExpression[object.name='process'][property.name='env']";
+// `process.env` を、そのまま・型アサーションで包んで（丸括弧は AST に出ない）値に置く形。
+const processEnvAt = (parent) => [`${parent} > ${PROCESS_ENV}`, `${parent} > TSAsExpression > ${PROCESS_ENV}`];
+// `env` というキー: `env:`・`'env':`・`['env']:`・`` [`env`]: ``。
+const ENV_KEYS = ["[key.name='env'][computed=false]", "[key.value='env']", "[key.quasis.0.value.cooked='env']"];
+// env を指定しない子プロセスの呼び（options が無い・options が env もスプレッドも持たないオブジェクト）。import は追わず、素の名前と `cp.` 系の名前空間だけを見る（別名・`promisify` 経由は見ない）。
+const CP_NAMES = '/^(spawn|spawnSync|execFile|execFileSync|exec|execSync|fork)$/';
+const CP_CALLEE = `:matches([callee.name=${CP_NAMES}], [callee.object.name=/^(cp|childProcess|child_process)$/][callee.property.name=${CP_NAMES}])`;
+const ARGS_FAMILY_CALLEE =
+  ":matches([callee.name=/^(spawn|spawnSync|execFile|execFileSync|fork)$/], [callee.property.name=/^(spawn|spawnSync|execFile|execFileSync|fork)$/])";
+const NO_ENV_OBJECT = 'ObjectExpression:not(:has(> Property[key.name="env"])):not(:has(> SpreadElement))';
+const ENV_PASSTHROUGH_MESSAGE =
+  '子プロセスへ親の env を丸ごと渡さない。`{ PATH: process.env.PATH ?? "" }` のように要る変数だけを渡すか、`gitChildEnv()` を使うこと（#1854）。';
+const ENV_MISSING_MESSAGE =
+  '子プロセスの呼びに env を指定すること: 指定しないと親の env を丸ごと継ぐ。`gitChildEnv()` か、要る変数だけの env を渡すこと（#1971）。';
+const ENV_PASSTHROUGH_SELECTORS = [
+  ...processEnvAt('SpreadElement'),
+  ...ENV_KEYS.flatMap((key) => processEnvAt(`Property${key}`)),
+  `CallExpression[callee.object.name='Object'][callee.property.name='assign'] > ${PROCESS_ENV}.arguments`,
+].map((selector) => ({ selector, message: ENV_PASSTHROUGH_MESSAGE }));
+const ENV_MISSING_SELECTORS = [
+  `CallExpression${CP_CALLEE}[arguments.length=1]`,
+  `CallExpression${ARGS_FAMILY_CALLEE}[arguments.length=2][arguments.1.type='ArrayExpression']`,
+  `CallExpression${CP_CALLEE}[arguments.length=2][arguments.1.type=/Function/]`,
+  `CallExpression${ARGS_FAMILY_CALLEE}[arguments.length=3][arguments.1.type='ArrayExpression'][arguments.2.type=/Function/]`,
+  `CallExpression${CP_CALLEE} > ${NO_ENV_OBJECT}.arguments`,
+].map((selector) => ({ selector, message: ENV_MISSING_MESSAGE }));
+
+// 親の env を丸ごと継ぐこと自体が前提の3件だけ `off` にする。
+// - `.github/scripts/update-claude-sdk.test.ts`: `gitIsolatedEnv()` は git の identity（`GIT_AUTHOR_*` / `GIT_COMMITTER_*`）の優先順位を測る歯で、identity 系の鍵だけを落として残りをそのまま通す設計（#1854 の領域 D のコメントが「直さないと決めたもの」とした）。
+// - `apps/daemon/src/runner-client.test.ts`・`vitest.env-scrub.test.ts`: 別担当の領域として #1854 のコメントが触らないと決めたもの。
+const ENV_PASSTHROUGH_ALLOWED_FILES = [
+  '.github/scripts/update-claude-sdk.test.ts',
+  'apps/daemon/src/runner-client.test.ts',
+  'vitest.env-scrub.test.ts',
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -117,5 +155,17 @@ export default tseslint.config(
     },
   },
   ...WEB_UI_LAYERS.flatMap(layerImportRules),
+  {
+    files: [
+      '**/*.test.{ts,tsx}',
+      '**/*.test-support.{ts,tsx}',
+      '**/test-support.{ts,tsx}',
+      '.claude/skills/mutation-testing/*.mjs',
+    ],
+    rules: {
+      'no-restricted-syntax': ['error', ...ENV_PASSTHROUGH_SELECTORS, ...ENV_MISSING_SELECTORS],
+    },
+  },
+  { files: ENV_PASSTHROUGH_ALLOWED_FILES, rules: { 'no-restricted-syntax': 'off' } },
   prettier,
 );

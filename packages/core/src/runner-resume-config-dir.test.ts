@@ -197,30 +197,30 @@ async function startWith(handOver: (dir: string, uid: number, gid: number) => vo
 describe('Host: SDK の resume の一時ディレクトリを、子を起こす前に子へ渡す', () => {
   it('子の env が resume の一時ディレクトリを指していれば、子の uid・gid へ渡してから起こす', async () => {
     const calls: [string, number, number][] = [];
-    const { spawn, spawned } = await startWith((dir, uid, gid) => {
+    const { spawn: launch, spawned } = await startWith((dir, uid, gid) => {
       expect(spawned).toHaveLength(0);
       calls.push([dir, uid, gid]);
     });
     const dir = join((await import('node:os')).tmpdir(), 'claude-resume-0000');
-    spawn({ CLAUDE_CONFIG_DIR: dir });
+    launch({ CLAUDE_CONFIG_DIR: dir });
     expect(calls).toEqual([[dir, 1001, 1002]]);
     expect(spawned).toHaveLength(1);
   });
 
   it('子の設定ディレクトリを指すいつもの起動では何もしない', async () => {
     const calls: string[] = [];
-    const { spawn, spawned } = await startWith((dir) => calls.push(dir));
-    spawn({ CLAUDE_CONFIG_DIR: '/home/worker/.claude' });
-    spawn({});
+    const { spawn: launch, spawned } = await startWith((dir) => calls.push(dir));
+    launch({ CLAUDE_CONFIG_DIR: '/home/worker/.claude' });
+    launch({});
     expect(calls).toEqual([]);
     expect(spawned).toHaveLength(2);
   });
 
   it('渡せなくても起こすのは止めず、理由を note に残す', async () => {
-    const { spawn, spawned, events } = await startWith(() => {
+    const { spawn: launch, spawned, events } = await startWith(() => {
       throw new Error('EPERM（テストの偽物）');
     });
-    spawn({ CLAUDE_CONFIG_DIR: join((await import('node:os')).tmpdir(), 'claude-resume-1111') });
+    launch({ CLAUDE_CONFIG_DIR: join((await import('node:os')).tmpdir(), 'claude-resume-1111') });
     expect(spawned).toHaveLength(1);
     const notes = events
       .map((event) => (event.type === 'note' ? event.text : ''))
