@@ -86,7 +86,14 @@ describe('索引の組み直しが lock の外から走り、人間が触った�
     await rm(join(root, 'memory', '.index.json'), { force: true });
     const reader = persona.protectionStatus('values');
     // lock の中でだけ組み直すなら、組み直しは write の完了まで始まらない（journalReached は来ない）ので、待ちに上限を置く
-    await Promise.race([journalReached.promise, new Promise((r) => setTimeout(r, 200))]);
+    // 実時間の待ちにしない（#2146）: I/O を回すために setImmediate を上限つきで繰り返す
+    let journalReachedFlag = false;
+    void journalReached.promise.then(() => {
+      journalReachedFlag = true;
+    });
+    for (let i = 0; i < 200 && !journalReachedFlag; i += 1) {
+      await new Promise((r) => setImmediate(r));
+    }
 
     // write が索引（印あり）を書き終えてから、組み直しが続きを走る
     release.resolve();
