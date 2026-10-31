@@ -1278,7 +1278,7 @@ describe('PgScheduleStore', () => {
       kind: 'self_initiative',
       lastScheduledRunAt: '2026-08-12T02:00:00.000Z',
     });
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
 
     expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
       '2026-08-12T02:00:00.000Z',
@@ -1403,7 +1403,7 @@ describe('PgScheduleStore', () => {
     ).toBeNull();
 
     await stores.schedules.put(plan);
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
     expect(
       await stores.schedules.claimRun(
         'issue-round',
@@ -1433,7 +1433,7 @@ describe('PgScheduleStore', () => {
 
   it('外せる', async () => {
     await stores.schedules.put(plan);
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
 
     expect((await stores.schedules.list()).entries).toEqual([]);
   });

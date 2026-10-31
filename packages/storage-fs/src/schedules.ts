@@ -163,19 +163,7 @@ export class FsScheduleStore implements ScheduleStore {
     });
   }
 
-  /** `invalidSchedulesRaw` も filter する: 検査を通った行だけを見ると、壊れた kind は `get` が投げるので消せないまま残る。 */
-  async remove(kind: string): Promise<void> {
-    await this.#update((file) => ({
-      next: {
-        ...file,
-        schedules: file.schedules.filter((existing) => existing.kind !== kind),
-        invalidSchedulesRaw: file.invalidSchedulesRaw.filter((raw) => extractKind(raw) !== kind),
-      },
-      result: undefined,
-    }));
-  }
-
-  /** `get()` を先に呼ばない: 読めない行では `remove()` まで届く前に例外が上がる。読みと書きを1回の `#update` に閉じる。 */
+  /** `get()` を先に呼ばない: 読めない行では削除まで届く前に例外が上がる。読みと書きを1回の `#update` に閉じる。 */
   async removeIfPresent(
     kind: string,
     options?: { ifMatch?: string },

@@ -61,7 +61,6 @@ import type {
 import type {
   UsageAccumulation,
   UsageAggregate,
-  UsageBaseline,
   UsageFold,
   UsageRecordRunner,
   UsageLayer,
@@ -804,7 +803,7 @@ export class UnreadableScheduleError extends Error {
 export interface ScheduleList {
   /** 読めた行。kind の昇順。 */
   entries: ScheduledRequest[];
-  /** 読めなかった行。「無い」でも「消された」でもない第3の状態。一覧全体は落とさず、行そのものも消さない（`get(kind)` は投げ、`remove` / `removeIfPresent` で外せる）。 */
+  /** 読めなかった行。「無い」でも「消された」でもない第3の状態。一覧全体は落とさず、行そのものも消さない（`get(kind)` は投げ、`removeIfPresent` で外せる）。 */
   unreadable: UnreadableSchedule[];
 }
 
@@ -866,7 +865,7 @@ export interface ScheduleStore {
   /**
    * 無ければ `null`。読めないは throw（`UnreadableScheduleError`）。
    *
-   * NUL: 読むだけの口（`get`・`remove`・`removeIfPresent`・`editRequest`・`claimRun`・`completeRun`・`getPhase`）は、NUL を含む kind でも断らず「無い」と同じ結果を返す。
+   * NUL: 読むだけの口（`get`・`removeIfPresent`・`editRequest`・`claimRun`・`completeRun`・`getPhase`）は、NUL を含む kind でも断らず「無い」と同じ結果を返す。
    * 書き込みは、依頼の kind を入口のスキーマが弾き、位相の kind（`putPhase`）は `NulNotAllowedError` で断る。`request`（本文）の NUL は落として残す。
    *
    * インメモリ実装は投げない: `put()` が `scheduledRequestSchema.parse` を通すので壊れた行を持てない（テストで再現するときは `stores.schedules.get` を丸ごと差し替える）。
@@ -878,13 +877,12 @@ export interface ScheduleStore {
    * 省略（無条件）は読めない行を置き換える: 壊れた行を直す口を塞がないため。
    */
   put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
-  remove(kind: string): Promise<void>;
 
   /**
    * kind が在れば消す。`get(kind)` と違い、読めない行でも投げない。
    * 戻り値は消す前の状態の3値: 無かった（`null`）／読めた（消した値）／在ったが読めなかった（`'unreadable'`）。
    *
-   * `get` → `remove` の2操作にしない: 読んでから書くまでの隙間が残るうえ、`get` が読めない行で投げて壊れた依頼を片付ける手が無くなる
+   * `get` → 削除の2操作にしない: 読んでから書くまでの隙間が残るうえ、`get` が読めない行で投げて壊れた依頼を片付ける手が無くなる
    * （`editRequest` / `PermissionGrantStore.revoke` と同じ理由）。
    *
    * `options.ifMatch`（人間が見た `updatedAt`）を渡すと、比較を消すのと同じ排他の中で行い、読めた行の版が違えば何も消さず
@@ -1606,12 +1604,6 @@ export interface UsageStore {
    * ここが null のまま `since` だけ載っていると、読む側は「トークンの内訳が空」を「1本のトークンで全部使った」と読みうる。
    */
   aggregate(query: UsageQuery): Promise<UsageAggregate>;
-
-  /**
-   * 累積を持つ主体1つの現在の基準（前回読んだ累積）。無ければ null。
-   * 鍵は「層 × actor」: actor の id だけで引くと、層をまたいで同じ id が来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になる。
-   */
-  baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null>;
 
   /**
    * 台帳（`usage_daily`）に1行でも行が在る managerId の集合（台帳が取りこぼした委譲を見つけるため）。

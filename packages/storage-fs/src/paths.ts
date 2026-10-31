@@ -12,7 +12,6 @@ export interface AlteroidPaths {
   /** `memory/` には置かない: 記憶は人間が手で書き換える場所だが、ここは鍵の材料（トークンの sha256）が入る。 */
   auth: string;
   /** `memory/` には置かない: 記憶ではないので、こちらへ書いたものはクローンのシステムプロンプトに載らない。 */
-  profile: string;
   profileDir: string;
   /** `memory/` には置かない: 増分は `record` を経由してのみ動くべきで、直接編集すると差分の基準がずれる。 */
   usage: string;
@@ -46,7 +45,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     attachments: join(root, 'attachments'),
     state: join(root, 'state'),
     auth: join(root, 'auth'),
-    profile: join(root, 'profile.sh'),
     profileDir: join(root, 'profile.d'),
     usage: join(root, 'usage'),
     tokens: join(root, 'tokens.json'),

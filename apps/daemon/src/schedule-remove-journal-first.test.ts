@@ -115,7 +115,7 @@ describe('DELETE /schedule/:kind は日誌を先に書く（#5234）', () => {
     stores.schedules = {
       ...real,
       async removeIfPresent(kind, options) {
-        await real.remove(kind);
+        await real.removeIfPresent(kind);
         return real.removeIfPresent(kind, options);
       },
     };

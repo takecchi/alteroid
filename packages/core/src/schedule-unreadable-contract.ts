@@ -87,9 +87,6 @@ export async function verifyScheduleUnreadableContract(
   if ((await store.get(bad))?.request !== '直した後')
     fail('ifMatch 省略の put が読めない行を置き換えない');
 
-  await plantUnreadableRow(bad);
-  await store.remove(bad);
-  if ((await store.get(bad)) !== null) fail('remove が読めない行を外さない');
-
-  await store.remove(good);
+  await store.removeIfPresent(bad);
+  await store.removeIfPresent(good);
 }

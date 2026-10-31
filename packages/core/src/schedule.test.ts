@@ -566,7 +566,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     expect(nextOf()).toBe(at(2026, 8, 12, 9, 0).toISOString());
 
     // 次の刻みを待たずに消して、同じ周期で作り直す（クローンの道具は refresh を呼ばない）
-    await s.stores.schedules.remove('watch');
+    await s.stores.schedules.removeIfPresent('watch');
     await s.stores.schedules.put(
       plan(
         'watch',
@@ -1179,7 +1179,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.scheduler.refresh();
     s.scheduler.start();
 
-    await s.stores.schedules.remove('watch');
+    await s.stores.schedules.removeIfPresent('watch');
     await s.scheduler.refresh();
 
     expect(s.scheduler.tick(at(2026, 8, 12, 9, 0))).toEqual([]);
@@ -1280,7 +1280,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 10 }));
 
     const first = s.scheduler.refresh();
-    await s.stores.schedules.remove('watch');
+    await s.stores.schedules.removeIfPresent('watch');
     const second = s.scheduler.refresh();
     await Promise.all([first, second]);
 

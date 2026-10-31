@@ -136,7 +136,6 @@ describe('schedule_create が既存の kind を置き換えるとき（#5348）'
         list: base.schedules.list.bind(base.schedules),
         get: base.schedules.get.bind(base.schedules),
         put: base.schedules.put.bind(base.schedules),
-        remove: base.schedules.remove.bind(base.schedules),
         removeIfPresent: base.schedules.removeIfPresent.bind(base.schedules),
         claimRun: base.schedules.claimRun.bind(base.schedules),
         completeRun: base.schedules.completeRun.bind(base.schedules),

@@ -119,20 +119,27 @@ describe('FsUsageStore.record', () => {
     expect(rows.map((r) => r.model).sort()).toEqual(['opus', 'sonnet']);
   });
 
-  it('基準（baseline）を読み戻せる', async () => {
-    expect(await store.baseline('manager', 'mgr-1')).toBeNull();
-
-    await record({
+  it('基準（baseline）が永続され、次の record の差分の起点になる', async () => {
+    const first = await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
       snapshot: { sessionId: 'sess-1', models: { opus: totals({ costUsd: 1 }) } },
     });
+    expect(first.baseline?.managerId).toBe('mgr-1');
+    expect(first.baseline?.sessionId).toBe('sess-1');
+    expect(first.baseline?.models.opus).toEqual(totals({ costUsd: 1 }));
 
-    const baseline = await store.baseline('manager', 'mgr-1');
-    expect(baseline?.managerId).toBe('mgr-1');
-    expect(baseline?.sessionId).toBe('sess-1');
-    expect(baseline?.models.opus).toEqual(totals({ costUsd: 1 }));
+    const second = await new FsUsageStore(storeDir).record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:05.000Z',
+      snapshot: { sessionId: 'sess-1', models: { opus: totals({ costUsd: 3 }) } },
+    });
+    expect(second.delta.opus?.costUsd).toBe(2);
   });
 
   it('数え直しが起きたら reset を返す（呼び出し側が日誌へ落とす材料）', async () => {
@@ -373,18 +380,23 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
       at: '2026-08-19T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 10 }) }),
     });
-    await record({
+    const clone = await record({
       layer: 'clone',
       managerId: 'same-id',
       date: '2026-08-19',
       at: '2026-08-19T10:00:01.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 4 }) }),
     });
-
-    const clone = await store.baseline('clone', 'same-id');
-    const manager = await store.baseline('manager', 'same-id');
-    expect(clone?.models.opus?.costUsd).toBe(4);
-    expect(manager?.models.opus?.costUsd).toBe(10);
+    expect(clone.delta.opus?.costUsd).toBe(4);
+    expect(clone.baseline?.models.opus?.costUsd).toBe(4);
+    const manager = await record({
+      layer: 'manager',
+      managerId: 'same-id',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:02.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 12 }) }),
+    });
+    expect(manager.delta.opus?.costUsd).toBe(2);
 
     const { rows } = await store.aggregate({ layer: 'clone' });
     expect(rows).toHaveLength(1);
@@ -427,7 +439,15 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
     });
 
     expect(fold.baseline).toBeNull();
-    expect(await store.baseline('clone', 'clone')).toBeNull();
+    const next = await record({
+      layer: 'clone',
+      site: 'distill',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T11:00:00.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.05 }) }),
+    });
+    expect(next.delta.fable?.costUsd).toBe(0.05);
   });
 
   it('layer と site で絞り込める', async () => {
@@ -550,9 +570,6 @@ describe('既にある usage.json の読み込み（層の列が無い状態か�
   });
 
   it('既にある基準がそのまま引ける（次の1回で二重計上しない）', async () => {
-    const baseline = await store.baseline('manager', 'mgr-old');
-    expect(baseline?.models['claude-opus-5']?.costUsd).toBe(12.5);
-
     await record({
       managerId: 'mgr-old',
       date: '2026-08-01',
@@ -1043,13 +1060,12 @@ describe('FsUsageStore.recordedManagerIds', () => {
     expect(result.delta).toEqual({});
     expect(result.baseline).not.toBeNull();
 
-    expect(await store.baseline('manager', 'mgr-baseline-only')).not.toBeNull();
     expect((await store.aggregate({})).rows).toHaveLength(0);
     expect(await store.recordedManagerIds()).toEqual(new Set());
   });
 
   it('行が在って基準が無い managerId は数える（oneshot）', async () => {
-    await store.record({
+    const fold = await store.record({
       layer: 'clone',
       site: 'distill',
       accumulation: 'oneshot',
@@ -1059,7 +1075,7 @@ describe('FsUsageStore.recordedManagerIds', () => {
       snapshot: snapshot({ opus: totals({ costUsd: 0.5 }) }),
     });
 
-    expect(await store.baseline('clone', 'clone')).toBeNull();
+    expect(fold.baseline).toBeNull();
     expect(await store.recordedManagerIds()).toEqual(new Set(['clone']));
   });
 

@@ -150,12 +150,6 @@ export class PgScheduleStore implements ScheduleStore {
     });
   }
 
-  async remove(kind: string): Promise<void> {
-    // NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
-    if (hasNul(kind)) return;
-    await this.#db.delete(schedules).where(eq(schedules.kind, kind));
-  }
-
   /** `get()` を先に呼ばず `DELETE … RETURNING` の1文で済ませる: 読んでから書くまでの隙間を作らない。版つきは `for update` で押さえてから比べて消す。 */
   async removeIfPresent(
     kind: string,

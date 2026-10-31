@@ -25,7 +25,6 @@ import {
   cutMemorySections,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryBootBackfillFromJournal,
-  deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   MEMORY_JOURNAL_SCAN_PAGE_SIZE,
   MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET,
@@ -143,7 +142,12 @@ describe('MemoryCreatedAt の網羅性', () => {
   });
 });
 
-describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠を導出する', () => {
+const createdAtOf = async (
+  journal: Pick<JournalStore, 'listPage'>,
+  options?: { pageSize?: number },
+) => (await deriveMemoryBootBackfillFromJournal(journal, options)).createdAt;
+
+describe('deriveMemoryBootBackfillFromJournal().createdAt — 日誌から createdAt の根拠を導出する', () => {
   it('⭐ 消して作り直した slug は、作り直した書き込みの at を採る（器の remove と同じ。#4773）', async () => {
     const journal = fakeJournal([
       memoryUpdateEntry('notes', '2026-01-03T00:00:00.000Z', 'write', { cause: 'clone' }),
@@ -151,7 +155,7 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
       memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
     ]);
 
-    const result = await deriveMemoryCreatedAtFromJournal(journal);
+    const result = await createdAtOf(journal);
 
     expect(result.get('notes')).toBe('2026-01-03T00:00:00.000Z');
   });
@@ -162,7 +166,7 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
       memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'clone' }),
     ]);
 
-    const result = await deriveMemoryCreatedAtFromJournal(journal);
+    const result = await createdAtOf(journal);
 
     expect(result.has('notes')).toBe(false);
   });
@@ -174,7 +178,7 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
       memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write'),
     ]);
 
-    const result = await deriveMemoryCreatedAtFromJournal(journal);
+    const result = await createdAtOf(journal);
 
     expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');
   });
@@ -186,7 +190,7 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
       memoryUpdateEntry('legacy', '2026-01-01T00:00:00.000Z', undefined),
     ]);
 
-    const result = await deriveMemoryCreatedAtFromJournal(journal);
+    const result = await createdAtOf(journal);
 
     expect(result.has('appended-only')).toBe(false);
     expect(result.has('removed-only')).toBe(false);
@@ -195,7 +199,7 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
   });
 
   it('日誌が空なら空の Map（根拠ゼロ件）', async () => {
-    const result = await deriveMemoryCreatedAtFromJournal(fakeJournal([]));
+    const result = await createdAtOf(fakeJournal([]));
 
     expect(result.size).toBe(0);
   });
@@ -207,7 +211,7 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
       memoryUpdateEntry('b', '2026-01-01T00:00:00.000Z', 'write'),
     ]);
 
-    const result = await deriveMemoryCreatedAtFromJournal(journal);
+    const result = await createdAtOf(journal);
 
     expect(result.get('a')).toBe('2026-01-15T00:00:00.000Z');
     expect(result.get('b')).toBe('2026-01-01T00:00:00.000Z');
@@ -283,7 +287,7 @@ describe('deriveHumanTouchedAtFromJournal — 日誌から human guard の根拠
       memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
     ]);
 
-    const result = await deriveMemoryCreatedAtFromJournal(journal);
+    const result = await createdAtOf(journal);
 
     expect(result.get('notes')).toBe('2026-01-03T00:00:00.000Z');
   });
@@ -328,13 +332,13 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
   }
 
   it.each([0, 1, PAGE_SIZE, PAGE_SIZE + 1])(
-    '件数=%i: deriveMemoryCreatedAtFromJournal が既定ページサイズと同じ値を返す',
+    '件数=%i: createdAt の導出が既定ページサイズと同じ値を返す',
     async (count) => {
       const entries = manyWriteEntries(count);
       const journal = fakeJournal(entries);
 
-      const paged = await deriveMemoryCreatedAtFromJournal(journal, { pageSize: PAGE_SIZE });
-      const unpaged = await deriveMemoryCreatedAtFromJournal(journal, {
+      const paged = await createdAtOf(journal, { pageSize: PAGE_SIZE });
+      const unpaged = await createdAtOf(journal, {
         pageSize: Math.max(count, 1) + 1000,
       });
 
@@ -381,7 +385,7 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
       },
     };
 
-    const created = await deriveMemoryCreatedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
+    const created = await createdAtOf(dropping, { pageSize: PAGE_SIZE });
     const touched = await deriveHumanTouchedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
 
     expect([...created.keys()].sort()).toEqual(
@@ -406,7 +410,7 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
       },
     };
 
-    const created = await deriveMemoryCreatedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
+    const created = await createdAtOf(dropping, { pageSize: PAGE_SIZE });
     expect([...created.keys()].sort()).toEqual(
       ['slug-0', 'slug-1', 'slug-2', 'slug-6', 'slug-7', 'slug-8'].sort(),
     );
@@ -414,7 +418,7 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
 
   it('既定の pageSize（MEMORY_JOURNAL_SCAN_PAGE_SIZE）を省略しても動く（境界の桁だけ確認）', async () => {
     expect(MEMORY_JOURNAL_SCAN_PAGE_SIZE).toBeGreaterThan(0);
-    const result = await deriveMemoryCreatedAtFromJournal(
+    const result = await createdAtOf(
       fakeJournal([memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write')]),
     );
     expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -1646,7 +1646,7 @@ describe('FsScheduleStore', () => {
       'schedule',
     );
     await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
 
     expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
       '2026-08-12T01:00:00.000Z',
@@ -1767,7 +1767,7 @@ describe('FsScheduleStore', () => {
     ).toBeNull();
 
     await stores.schedules.put(plan);
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
     expect(
       await stores.schedules.claimRun(
         'issue-round',
@@ -1794,7 +1794,7 @@ describe('FsScheduleStore', () => {
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
   });
 
-  it('読んでから確定するまでに remove / put が割り込んでも、古い版では確定しない', async () => {
+  it('読んでから確定するまでに removeIfPresent / put が割り込んでも、古い版では確定しない', async () => {
     await stores.schedules.put(plan);
 
     const [claimedAfterRemove] = await Promise.all([
@@ -1804,7 +1804,7 @@ describe('FsScheduleStore', () => {
         '2026-08-13T00:00:00.000Z',
         'schedule',
       ),
-      stores.schedules.remove('issue-round'),
+      stores.schedules.removeIfPresent('issue-round'),
     ]);
     if (claimedAfterRemove !== null) {
       expect(await stores.schedules.get('issue-round')).toBeNull();
@@ -1838,7 +1838,7 @@ describe('FsScheduleStore', () => {
         '2026-08-13T00:00:00.000Z',
         'schedule',
       ),
-      stores.schedules.remove('しらない'),
+      stores.schedules.removeIfPresent('しらない'),
     ]);
 
     const plans = (await stores.schedules.list()).entries;
@@ -1848,7 +1848,7 @@ describe('FsScheduleStore', () => {
 
   it('外せる', async () => {
     await stores.schedules.put(plan);
-    await stores.schedules.remove('issue-round');
+    await stores.schedules.removeIfPresent('issue-round');
 
     expect((await stores.schedules.list()).entries).toEqual([]);
   });
@@ -2313,7 +2313,6 @@ describe('FsTranscriptArchive', () => {
 
 describe('FsProfileStore', () => {
   const dirOf = () => join(root, 'profile.d');
-  const legacyPath = () => join(root, 'profile.sh');
 
   it('器の契約（並び順・撒く先・巻き戻し。3実装で同じことを測る）', async () => {
     await verifyProfileStoreContract(stores.profile);
@@ -2358,53 +2357,6 @@ describe('FsProfileStore', () => {
 
     await stores.profile.set('a', 'export A=2\n', 'all');
     expect((await stores.profile.list())[0]?.scope).toBe('all');
-  });
-
-  describe('旧 profile.sh（1本の時代）の扱い', () => {
-    it('あれば default 行へ移す（本文・更新日時そのまま、撒く先 all）。旧ファイルは消える', async () => {
-      await writeFile(legacyPath(), 'export OLD=1\n');
-      const at = new Date('2026-09-01T00:00:00.000Z');
-      await utimes(legacyPath(), at, at);
-
-      expect(await stores.profile.list()).toEqual([
-        {
-          name: 'default',
-          script: 'export OLD=1\n',
-          scope: 'all',
-          updatedAt: '2026-09-01T00:00:00.000Z',
-        },
-      ]);
-      await expect(stat(legacyPath())).rejects.toThrow();
-      expect(await readFile(join(dirOf(), 'default.sh'), 'utf8')).toBe('export OLD=1\n');
-    });
-
-    it('2回読んでも、移したあとに人間が直した default を旧ファイルで巻き戻さない', async () => {
-      await writeFile(legacyPath(), 'export OLD=1\n');
-      await stores.profile.list();
-      await stores.profile.set('default', 'export NEW=1\n', 'runner');
-      await writeFile(legacyPath(), 'export OLD=again\n');
-
-      expect(await stores.profile.list()).toMatchObject([
-        { name: 'default', script: 'export NEW=1\n', scope: 'runner' },
-      ]);
-      await expect(stat(legacyPath())).rejects.toThrow();
-    });
-
-    it('旧ファイルが空白だけなら行を作らず、旧ファイルだけ消す', async () => {
-      await writeFile(legacyPath(), '  \n');
-
-      expect(await stores.profile.list()).toEqual([]);
-      await expect(stat(legacyPath())).rejects.toThrow();
-    });
-
-    it('clear は旧ファイルも消す（全部外したものが旧形式から蘇らない）', async () => {
-      await writeFile(legacyPath(), 'export OLD=1\n');
-
-      await stores.profile.clear();
-
-      await expect(stat(legacyPath())).rejects.toThrow();
-      expect(await stores.profile.list()).toEqual([]);
-    });
   });
 });
 

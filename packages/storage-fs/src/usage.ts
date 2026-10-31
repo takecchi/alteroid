@@ -3,7 +3,6 @@ import { join } from 'node:path';
 
 import {
   USAGE_ESTIMATE_NOTICE,
-  stripNul,
   stripNulFromUnmeteredRecord,
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
@@ -26,7 +25,6 @@ import type {
   UnreadableUsageRow,
   UsageAccumulation,
   UsageAggregate,
-  UsageBaseline,
   UsageFold,
   UsageRecordRunner,
   UsageLayer,
@@ -495,12 +493,6 @@ export class FsUsageStore implements UsageStore {
       beforeTurns: isBeforeUsageStart(file.turnsAt, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     });
-  }
-
-  async baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null> {
-    managerId = stripNul(managerId);
-    const file = await this.#read();
-    return file.baselines[baselineKey(layer, managerId)] ?? null;
   }
 
   // 引数を持たず全期間から作る: `from` / `to` を渡せる形にすると、絞り込みが「行が在る managerId の集合」へ紛れ込むため

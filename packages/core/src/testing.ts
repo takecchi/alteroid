@@ -714,9 +714,6 @@ export function createMemoryStores(): Stores {
         isolate(scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) })),
       );
     },
-    async remove(kind) {
-      schedules.delete(kind);
-    },
     async removeIfPresent(kind, options) {
       // `'unreadable'` を返さない: `Map` には `parse` を通った値しか入らない。
       const found = schedules.get(kind);
@@ -1749,9 +1746,6 @@ export function createMemoryStores(): Stores {
         turns: (existing?.turns ?? 0) + 1,
         updatedAt: at,
       });
-    },
-    async baseline(layer, managerId) {
-      return usageBaselines.get(usageBaselineKey(layer, stripNul(managerId))) ?? null;
     },
     // 引数を持たず全期間から作る（`store.ts` の `UsageStore.recordedManagerIds` の doc）: 絞り込みを受けると、範囲外の委譲を「記録が無い」と数える事故をこの器だけ検出できない。
     async recordedManagerIds() {

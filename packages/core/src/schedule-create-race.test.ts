@@ -21,7 +21,6 @@ function racingStores(): Stores {
       list: stores.schedules.list.bind(stores.schedules),
       get: stores.schedules.get.bind(stores.schedules),
       put: stores.schedules.put.bind(stores.schedules),
-      remove: stores.schedules.remove.bind(stores.schedules),
       removeIfPresent: stores.schedules.removeIfPresent.bind(stores.schedules),
       claimRun: stores.schedules.claimRun.bind(stores.schedules),
       completeRun: stores.schedules.completeRun.bind(stores.schedules),

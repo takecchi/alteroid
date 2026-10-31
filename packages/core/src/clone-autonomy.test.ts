@@ -1108,7 +1108,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       const found = await read(kind);
       if (removeOnce && found !== null) {
         removeOnce = false;
-        await stores.schedules.remove(kind);
+        await stores.schedules.removeIfPresent(kind);
       }
       return found;
     };

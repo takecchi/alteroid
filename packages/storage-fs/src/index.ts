@@ -73,7 +73,7 @@ export function createFsStores(
     integrationKeys: new FsIntegrationKeyStore(paths.auth),
     eventReceipts: new FsEventReceiptStore(paths.jobs),
     permissionGrants: new FsPermissionGrantStore(paths.jobs),
-    profile: new FsProfileStore(paths.profile, paths.profileDir),
+    profile: new FsProfileStore(paths.profileDir),
     credentials: new FsCredentialVaultStore(paths.credentials),
     mcpServers: new FsMcpServerStore(paths.mcpServers),
     plugins: new FsPluginStore(paths.plugins),
@@ -152,7 +152,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | \`archive/\` | セッションの生ログ（compaction 前に退避したもの） |
 | \`state/\` | デーモンの内部状態（セッション id など。消してもクローンは記憶から戻る） |
 | \`auth/\` | ログインしたアカウントと、alteroid を使ってよいかの許可。**手で編集しない**（許可の付与は \`alteroid access grant\`） |
-| \`profile.sh\` | 実行環境プロファイル（\`.zprofile\` 相当）。ここに \`export\` を書けば、クローンにもマネージャーにも作業者にも届く。器を作り直す必要は無い |
+| \`profile.d/\` | 実行環境プロファイル（\`.zprofile\` 相当）。1行 = \`<名前>.sh\`、撒く先は隣の \`<名前>.scope\`。ここに \`export\` を書けば、クローンにもマネージャーにも作業者にも届く。器を作り直す必要は無い |
 | \`usage/\` | 利用状況の台帳（alteroid 自身が使った Claude のトークン・費用の推定）。**手で編集しない**（差分の基準がずれる） |
 | \`tokens.json\` | 認証トークンのプール（枠に当たったときに回す候補）。**手で編集しない**（\`alteroid token\` / \`PUT /tokens\` を経由する） |
 | \`mcp-servers.json\` | 人間の MCP 連携の登録（\`.mcp.json\` と同じ形）。クローンの次のセッションから効く（マネージャー・作業者へは runner の名乗りのたびにデーモンが降ろし、次に開くセッションから効く。手で編集した場合は次の名乗りまで runner には届かない）。**手で編集してよいが、読めない形だとクローンは外部の連携なしで起きる**（\`PUT /mcp-servers\` を経由すれば置く前に検査される） |
