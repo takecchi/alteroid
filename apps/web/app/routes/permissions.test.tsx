@@ -246,6 +246,56 @@ describe('/permissions 画面 — 取り消し', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it('取り消しが通って行が「取り消し済み」に変わったら、焦点は行へ移る（ボタンが消えて body に落ちない）', async () => {
+    let revoked = false;
+    stubFetch((url) => {
+      if (/\/permission-grants\/grant-a\/revoke$/.test(url)) {
+        revoked = true;
+        return json({ ok: true }, 200);
+      }
+      if (url.includes('/permission-grants')) {
+        return json(
+          {
+            grants: [
+              grant({
+                id: 'grant-a',
+                ...(revoked ? { revokedAt: '2026-09-05T00:00:00.000Z' } : {}),
+              }),
+            ],
+          },
+          200,
+        );
+      }
+      return undefined;
+    });
+    await renderPermissions();
+    fireEvent.click(screen.getByText('取り消し済みも見る'));
+    fireEvent.click(screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' }));
+    const confirm = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を本当に取り消す' });
+    confirm.focus();
+
+    fireEvent.click(confirm);
+
+    await screen.findByText('取り消し済み');
+    const row = screen.getByText('Bash(gh pr merge:*)', { selector: 'span' }).closest('li');
+    await waitFor(() => expect(document.activeElement).toBe(row));
+  });
+
+  it('確認の行で Esc を押したら、「やめる」と同じに行を戻し、焦点を「取り消す」へ戻す', async () => {
+    const stub = stubGrants({ body: { grants: [grant({ id: 'grant-a' })] } });
+    await renderPermissions();
+    fireEvent.click(screen.getByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' }));
+    const confirm = screen.getByRole('button', { name: 'Bash(gh pr merge:*) を本当に取り消す' });
+    confirm.focus();
+
+    fireEvent.keyDown(confirm, { key: 'Escape' });
+
+    const trigger = await screen.findByRole('button', { name: 'Bash(gh pr merge:*) を取り消す' });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.queryByText('本当に取り消す')).toBeNull();
+    expect(stub.calls.some((url) => /\/revoke$/.test(url))).toBe(false);
+  });
+
   it('取り消し済みの行には取り消しボタンが無い', async () => {
     stubGrants({
       body: {

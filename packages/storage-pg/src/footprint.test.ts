@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { measureStorageFootprint, STATEMENT_TIMEOUT_MS, type TableSizeStats } from './footprint.js';
-import { archive, commitments, inboxEvents, jobs, journal, tasks } from './schema.js';
+import { archive, inboxEvents, jobs, journal, tasks } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 // `'x'.repeat(n)` を使わない: 圧縮率が高すぎて、長さを変えても `pg_column_size` がほぼ変わらないため。乱数の16進文字列を使う。
@@ -42,11 +42,10 @@ afterEach(async () => {
 });
 
 describe('measureStorageFootprint（空の DB）', () => {
-  it('6つの表すべてで「実測して0」——nullではない', async () => {
+  it('5つの表すべてで「実測して0」——nullではない', async () => {
     const footprint = await measureStorageFootprint(db);
 
     expect(footprint.jobs).toEqual(emptyStats());
-    expect(footprint.commitments).toEqual({ open: emptyStats(), closed: emptyStats() });
     expect(footprint.tasks).toEqual(emptyStats());
     expect(footprint.inboxEvents).toEqual({ ...emptyStats(), maxDeliveries: 0 });
     expect(footprint.journal).toEqual({
@@ -102,46 +101,6 @@ describe('measureStorageFootprint（積んだぶんだけ増える）', () => {
     );
     expect(afterTwo.jobs.maxTextBytes as number).toBeGreaterThan(
       afterOne.jobs.maxTextBytes as number,
-    );
-  });
-
-  it('commitments: 未了と片付きは独立して数える（storedBytes/textBytes とも）', async () => {
-    const openEntry = {
-      id: 'c-open',
-      at: '2026-09-20T00:00:00.000Z',
-      origin: 'manager',
-      source: 'mgr-1',
-      body: randomBody(1_000),
-    };
-    const closedEntry = {
-      id: 'c-closed',
-      at: '2026-09-19T00:00:00.000Z',
-      origin: 'manager',
-      source: 'mgr-1',
-      body: randomBody(2_000),
-    };
-    await db.insert(commitments).values([
-      { id: openEntry.id, at: new Date(openEntry.at), closedAt: null, commitment: openEntry },
-      {
-        id: closedEntry.id,
-        at: new Date(closedEntry.at),
-        closedAt: new Date('2026-09-19T01:00:00.000Z'),
-        commitment: closedEntry,
-      },
-    ]);
-
-    const footprint = await measureStorageFootprint(db);
-    expect(footprint.commitments.open.rows).toBe(1);
-    expect(footprint.commitments.closed.rows).toBe(1);
-    expect(footprint.commitments.open.storedBytes as number).toBeGreaterThan(900);
-    expect(footprint.commitments.open.textBytes as number).toBeGreaterThan(900);
-    expect(footprint.commitments.closed.storedBytes as number).toBeGreaterThan(1_900);
-    expect(footprint.commitments.closed.textBytes as number).toBeGreaterThan(1_900);
-    expect(footprint.commitments.open.storedBytes as number).toBeLessThan(
-      footprint.commitments.closed.storedBytes as number,
-    );
-    expect(footprint.commitments.open.textBytes as number).toBeLessThan(
-      footprint.commitments.closed.textBytes as number,
     );
   });
 
@@ -291,7 +250,7 @@ describe('measureStorageFootprint（storedBytes と textBytes は別物——圧
 });
 
 describe('measureStorageFootprint（本文は Node のメモリへ載せない）', () => {
-  it('6表分の SELECT は、本文の列を pg_column_size(...) / octet_length(...::text) の中でしか参照しない', async () => {
+  it('5表分の SELECT は、本文の列を pg_column_size(...) / octet_length(...::text) の中でしか参照しない', async () => {
     const queries: string[] = [];
     const loggingDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
 
@@ -299,7 +258,6 @@ describe('measureStorageFootprint（本文は Node のメモリへ載せない�
 
     const bodyColumnOf = (query: string): string | undefined => {
       if (query.includes('from "jobs"')) return 'job';
-      if (query.includes('from "commitments"')) return 'commitment';
       if (query.includes('from "tasks"')) return 'task';
       if (query.includes('from "inbox_events"')) return 'event';
       if (query.includes('from "journal"')) return 'entry';
@@ -308,7 +266,7 @@ describe('measureStorageFootprint（本文は Node のメモリへ載せない�
     };
 
     const selectQueries = queries.filter((q) => bodyColumnOf(q) !== undefined);
-    expect(selectQueries).toHaveLength(6);
+    expect(selectQueries).toHaveLength(5);
 
     const seen = new Set<string>();
     for (const query of selectQueries) {
@@ -320,17 +278,17 @@ describe('measureStorageFootprint（本文は Node のメモリへ載せない�
         .replace(/octet_length\([^)]*\)/gi, '');
       expect(withoutSizeAndLengthCalls, query).not.toContain(`"${column}"`);
     }
-    expect(seen).toEqual(new Set(['job', 'commitment', 'task', 'event', 'entry', 'body']));
+    expect(seen).toEqual(new Set(['job', 'task', 'event', 'entry', 'body']));
   });
 
-  it("6表それぞれの測定が set_config('statement_timeout', …) を撃っている（配線の確認）", async () => {
+  it("5表それぞれの測定が set_config('statement_timeout', …) を撃っている（配線の確認）", async () => {
     const queries: string[] = [];
     const loggingDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
 
     await measureStorageFootprint(loggingDb, STATEMENT_TIMEOUT_MS);
 
     const timeoutQueries = queries.filter((q) => q.includes("set_config('statement_timeout'"));
-    expect(timeoutQueries).toHaveLength(6);
+    expect(timeoutQueries).toHaveLength(5);
   });
 });
 
@@ -345,7 +303,6 @@ describe('measureStorageFootprint（測定は起動を止めない・表ごと�
       recent3d: { rows: null, storedBytes: null, textBytes: null },
     });
     expect(footprint.jobs).toEqual(emptyStats());
-    expect(footprint.commitments).toEqual({ open: emptyStats(), closed: emptyStats() });
     expect(footprint.tasks).toEqual(emptyStats());
     expect(footprint.inboxEvents).toEqual({ ...emptyStats(), maxDeliveries: 0 });
     expect(footprint.archive).toEqual(emptyStats());
@@ -360,7 +317,7 @@ describe('measureStorageFootprint（測定は起動を止めない・表ごと�
     expect(footprint.journal.all.rows).toBeNull();
     expect(footprint.archive.rows).toBeNull();
     expect(footprint.jobs.rows).toBe(0);
-    expect(footprint.commitments.open.rows).toBe(0);
+    expect(footprint.tasks.rows).toBe(0);
     expect(footprint.inboxEvents.rows).toBe(0);
   });
 });
