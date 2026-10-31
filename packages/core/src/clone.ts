@@ -5389,13 +5389,23 @@ class Clone implements CloneHost {
             ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
             : '(不明な質問)');
         // 宛先は managerId と requestId の対で戻す: requestId を落とすと、複数を待っているマネージャーの宛先が決まらず、人間が答えたのに仕事が再開しないため
+        // 決着済みの確認へ requestId 付きで返すと `gone` で弾かれ、答えの中身が担当へ届かない: `manager_message` の枝と同じく、待たれていないと分かるときだけ案内を変える（分からないときは変えない）
+        const answerLiveness: ConfirmationLiveness =
+          approval?.jobId !== undefined && approval.requestId !== undefined
+            ? await confirmationLiveness(this.#managers, approval.jobId, approval.requestId)
+            : 'unknown';
         const waiting =
           approval?.jobId === undefined
             ? ''
-            : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
-              `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
-              `\n宛先: managerId: "${approval.jobId}"` +
-              (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
+            : answerLiveness === 'settled'
+              ? `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
+                `この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。` +
+                `回答の中身を担当へ届けるなら、確認への返答ではなく普通の伝言として \`manager_send\` で送ること（requestId は付けない）。` +
+                `\n宛先: managerId: "${approval.jobId}"`
+              : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
+                `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
+                `\n宛先: managerId: "${approval.jobId}"` +
+                (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
         // 回答経路を添える: `operator` 経由の回答が人間本人とは限らないことを、クローンが判断材料にできるようにするため
         const viaLine =
           event.answeredVia === undefined
