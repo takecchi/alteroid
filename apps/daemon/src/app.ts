@@ -2021,6 +2021,50 @@ export function createApp(deps: AppDeps) {
   if (deps.workerToolEvents !== undefined) {
     topologyActivity.attachWorkerTools(deps.workerToolEvents.subscribe);
   }
+  // `POST /events` と `POST /events/:source` の受け付けの本体（結び付け → 永続化 → 受け付けた印）。値を返すだけで、状態番号は route が決める。
+  async function acceptExternal(spec: {
+    principal: Principal;
+    source: string;
+    payload: unknown;
+    attachmentIds: readonly string[] | undefined;
+    onPersisted?: (id: string, at: string) => Promise<void>;
+  }) {
+    const { principal, source } = spec;
+    const id = randomUUID();
+    const attached = await bindEventAttachments(spec.attachmentIds, id, principal);
+    if (!attached.ok) {
+      return { kind: 'attach-failed' as const, body: attached.body, status: attached.status };
+    }
+    const at = new Date().toISOString();
+    // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
+    const outcome = await postExternalPersisted(
+      {
+        type: 'external',
+        id,
+        at,
+        source,
+        payload: spec.payload,
+        ...(principal.kind === 'integration'
+          ? { via: { keyId: principal.keyId, name: principal.name } }
+          : {}),
+        ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+      },
+      attached.refs,
+    );
+    if (outcome === 'unavailable') return { kind: 'unavailable' as const };
+    await spec.onPersisted?.(id, at);
+    // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
+    if (principal.kind === 'integration') {
+      topologyActivity.recordExternal({
+        keyId: principal.keyId,
+        name: principal.name,
+        source,
+        at,
+      });
+    }
+    return { kind: 'accepted' as const, id };
+  }
+
   const topologyStorage = createStorageHealthTracker({
     label:
       deps.storage === undefined
@@ -5698,37 +5742,16 @@ export function createApp(deps: AppDeps) {
         if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const accept = async (onPersisted?: (id: string, at: string) => Promise<void>) => {
-          const id = randomUUID();
-          const attached = await bindEventAttachments(attachmentIds, id, principal);
-          if (!attached.ok) return c.json(attached.body, attached.status);
-          const at = new Date().toISOString();
-          // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
-          const outcome = await postExternalPersisted(
-            {
-              type: 'external',
-              id,
-              at,
-              source,
-              payload,
-              ...(principal.kind === 'integration'
-                ? { via: { keyId: principal.keyId, name: principal.name } }
-                : {}),
-              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-            },
-            attached.refs,
-          );
-          if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-          await onPersisted?.(id, at);
-          // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
-          if (principal.kind === 'integration') {
-            topologyActivity.recordExternal({
-              keyId: principal.keyId,
-              name: principal.name,
-              source,
-              at,
-            });
-          }
-          return c.json({ ok: true as const, id });
+          const accepted = await acceptExternal({
+            principal,
+            source,
+            payload,
+            attachmentIds,
+            onPersisted,
+          });
+          if (accepted.kind === 'attach-failed') return c.json(accepted.body, accepted.status);
+          if (accepted.kind === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+          return c.json({ ok: true as const, id: accepted.id });
         };
         if (idempotencyKey === undefined) return accept();
         const scope = eventReceiptScopeOf(principal);
@@ -5807,34 +5830,10 @@ export function createApp(deps: AppDeps) {
         } catch {
           // JSON でなければ本文のまま渡す
         }
-        const id = randomUUID();
-        const attached = await bindEventAttachments(attachmentIds, id, principal);
-        if (!attached.ok) return c.json(attached.body, attached.status);
-        const at = new Date().toISOString();
-        const outcome = await postExternalPersisted(
-          {
-            type: 'external',
-            id,
-            at,
-            source,
-            payload,
-            ...(principal.kind === 'integration'
-              ? { via: { keyId: principal.keyId, name: principal.name } }
-              : {}),
-            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-          },
-          attached.refs,
-        );
-        if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
-        if (principal.kind === 'integration') {
-          topologyActivity.recordExternal({
-            keyId: principal.keyId,
-            name: principal.name,
-            source,
-            at,
-          });
-        }
-        return c.json({ ok: true, id });
+        const accepted = await acceptExternal({ principal, source, payload, attachmentIds });
+        if (accepted.kind === 'attach-failed') return c.json(accepted.body, accepted.status);
+        if (accepted.kind === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+        return c.json({ ok: true, id: accepted.id });
       },
     )
 
