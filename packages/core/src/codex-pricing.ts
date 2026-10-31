@@ -88,8 +88,6 @@ export interface CodexUsageForPricing {
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
-  reasoningOutputTokens?: number;
-  totalTokens?: number;
   cacheWriteInputTokens?: number;
 }
 
@@ -146,15 +144,4 @@ export function computeCodexRequestsCostUSD(
     sum += cost;
   }
   return sum;
-}
-
-// 高い単価に寄せない: 閾値はリクエスト単位で、足し込んだ値からは長い側かどうかを決められないため
-export function computeCodexAggregatedCostUSD(
-  model: string | undefined,
-  aggregated: CodexUsageForPricing,
-): number | undefined {
-  if (model === undefined || !Object.hasOwn(CODEX_PRICING, model)) return undefined;
-  const { long } = CODEX_PRICING[model]!;
-  if (long && !(aggregated.inputTokens <= CODEX_LONG_CONTEXT_THRESHOLD_TOKENS)) return undefined;
-  return computeCodexCostUSD(model, aggregated);
 }

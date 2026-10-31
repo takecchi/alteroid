@@ -1,6 +1,7 @@
+import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import type { AgentChildProcess } from './agent-session.js';
+import type { AgentChildProcess, AgentSpawnOptions } from './agent-session.js';
 import { clipWithEllipsis } from './excerpt.js';
 import {
   CODEX_RPC_ERROR_CODES,
@@ -87,6 +88,16 @@ const LOG_LINE_LIMIT = 200;
 
 function clip(line: string): string {
   return clipWithEllipsis(line, LOG_LINE_LIMIT);
+}
+
+/** 駆動役とデバイスログインが app-server の子を起こす既定の形（どちらも試験は `spawnProcess` で差し替える）。 */
+export function defaultSpawnProcess(options: AgentSpawnOptions): AgentChildProcess {
+  return spawn(options.command, options.args, {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    env: options.env as NodeJS.ProcessEnv,
+    signal: options.signal,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 }
 
 function isRequestId(value: unknown): value is CodexRequestId {

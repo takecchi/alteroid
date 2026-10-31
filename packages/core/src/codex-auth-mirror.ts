@@ -1,10 +1,10 @@
 // 値は子の環境変数に置かない。知らせ（出来事）には指紋と版だけを載せ、値はデーモンが制御面で取りに来る: 出来事の流れに秘密を載せないため。
 // runner は値をメモリにだけ持つ: 記憶ストアの鍵を持たない境界のため。
 
-import { createHash } from 'node:crypto';
 import { chown, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { fingerprintOf } from './credentials.js';
 import { createSerialQueue } from './serial-queue.js';
 
 export type CodexAuthPush = { value: string; revision: string } | null;
@@ -54,11 +54,6 @@ const defaultFs: CodexAuthMirrorFs = {
   chown: (path, uid, gid) => chown(path, uid, gid),
   rm: (path) => rm(path, { force: true }),
 };
-
-// `fingerprintOf` を使わずここで計算する: runner の依存を増やさないため。
-export function codexAuthFingerprintOf(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12);
-}
 
 export interface CodexAuthMirrorOptions {
   codexHome: string;
@@ -116,7 +111,7 @@ export class CodexAuthMirror {
         if (had) await this.#fs.rm(this.#path);
         return;
       }
-      const fingerprint = codexAuthFingerprintOf(push.value);
+      const fingerprint = fingerprintOf(push.value);
       const pending = this.#pending;
       if (
         this.#placed?.revision === push.revision &&
@@ -129,7 +124,7 @@ export class CodexAuthMirror {
       this.#placed = { value: push.value, revision: push.revision, fingerprint };
       this.#pending = null;
       const onDisk = await this.#fs.readFile(this.#path);
-      if (onDisk !== null && codexAuthFingerprintOf(onDisk) === fingerprint) {
+      if (onDisk !== null && fingerprintOf(onDisk) === fingerprint) {
         this.#known = fingerprint;
         return;
       }
@@ -179,7 +174,7 @@ export class CodexAuthMirror {
       return;
     }
     if (onDisk === null) return;
-    const fingerprint = codexAuthFingerprintOf(onDisk);
+    const fingerprint = fingerprintOf(onDisk);
     if (fingerprint === this.#known) return;
     this.#known = fingerprint;
     this.#pending = { value: onDisk, baseRevision: placed.revision, fingerprint };

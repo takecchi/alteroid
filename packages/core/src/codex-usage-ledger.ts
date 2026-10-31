@@ -1,5 +1,4 @@
 import {
-  computeCodexAggregatedCostUSD,
   computeCodexRequestsCostUSD,
   isCount,
   type CodexUsageForPricing,
@@ -7,19 +6,11 @@ import {
 import type { UsageTotals } from './usage.js';
 import type { UsageUnreadableCounts } from './usage-format.js';
 
-export type CodexUsageInput =
-  | { kind: 'requests'; requests: readonly CodexUsageForPricing[] }
-  | { kind: 'aggregated'; usage: CodexUsageForPricing };
-
 export function codexUsageToLedgerTotals(
   model: string | undefined,
-  input: CodexUsageInput,
+  requests: readonly CodexUsageForPricing[],
 ): UsageTotals {
-  const requests = input.kind === 'requests' ? input.requests : [input.usage];
-  const costUsd =
-    input.kind === 'requests'
-      ? computeCodexRequestsCostUSD(model, input.requests)
-      : computeCodexAggregatedCostUSD(model, input.usage);
+  const costUsd = computeCodexRequestsCostUSD(model, requests);
 
   let inputTokens = 0;
   let outputTokens = 0;

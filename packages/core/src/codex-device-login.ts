@@ -1,13 +1,12 @@
 // `chatgptAuthTokens`（外から tokens を渡す形）は使わない: 「OPENAI INTERNAL USE ONLY - DO NOT USE」のため。
 // 鍵の値（auth.json の中身）は、戻り値の authJson 以外のどこにも載せない。失敗の理由は伏せ字（redactErrorText）を通す。
 
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { AgentChildProcess, AgentSpawnOptions, AgentSpawnProcess } from './agent-session.js';
-import { CodexAppServerClient } from './codex-app-server-client.js';
+import type { AgentChildProcess, AgentSpawnProcess } from './agent-session.js';
+import { CodexAppServerClient, defaultSpawnProcess } from './codex-app-server-client.js';
 import { checkCodexAuthJson } from './codex-chatgpt-auth.js';
 import type { CodexAccountLoginCompletedNotification } from './codex-protocol.js';
 import { redactErrorText } from './denial-input-head.js';
@@ -56,23 +55,12 @@ const defaultFs: CodexDeviceLoginFs = {
 
 export interface CodexDeviceLoginOptions {
   env: NodeJS.ProcessEnv;
-  command?: string;
   spawnProcess?: AgentSpawnProcess;
   tmpRoot?: string;
   timeoutMs?: number;
   /** 開始の応答を待つ上限（試験が縮めるための口）。既定 {@link CODEX_DEVICE_LOGIN_START_TIMEOUT_MS}。 */
   startTimeoutMs?: number;
   fs?: CodexDeviceLoginFs;
-  clientVersion?: string;
-}
-
-function defaultSpawn(options: AgentSpawnOptions): AgentChildProcess {
-  return spawn(options.command, options.args, {
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    env: options.env as NodeJS.ProcessEnv,
-    signal: options.signal,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
 }
 
 function reasonText(error: unknown, env: NodeJS.ProcessEnv): string {
@@ -91,8 +79,8 @@ export async function startCodexDeviceLogin(
 
   let child: AgentChildProcess;
   try {
-    child = (options.spawnProcess ?? defaultSpawn)({
-      command: options.command ?? 'codex',
+    child = (options.spawnProcess ?? defaultSpawnProcess)({
+      command: 'codex',
       args: ['-c', CODEX_FILE_AUTH_STORE_OVERRIDE, 'app-server', '--listen', 'stdio://'],
       env,
       signal: abort.signal,
@@ -142,7 +130,7 @@ export async function startCodexDeviceLogin(
       {
         name: 'alteroid',
         title: 'alteroid',
-        version: options.clientVersion ?? '0',
+        version: '0',
       },
       undefined,
       { signal: startDeadline },
