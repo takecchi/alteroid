@@ -1356,6 +1356,31 @@ describe('畳むまでの await の間に abort() が終わっても、止めた
     await pool.stop();
   });
 
+  it('畳む間に同じ担当の closed(done) が #retire まで走り切っても、畳んだ報告はクローンへ届く', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const { open, reached, written } = gateFoldDecision(stores);
+
+    const before = inbox.length;
+    fake.report('mgr-withhold', '追い越される報告の本文', 'done', { awaitingBackground: AWAITING });
+    await reached;
+
+    // 報告は畳みの await の中。その間に closed が在庫（まだ空）を見て #retire まで進む
+    fake.closed('mgr-withhold', 'done', '背景処理が終わって畳んだ');
+    await settle();
+
+    open();
+    await written;
+    await settle();
+
+    const texts = inbox
+      .slice(before)
+      .map((event) => (event as { text?: string }).text ?? '')
+      .join('\n----\n');
+    expect(texts).toContain('追い越される報告の本文');
+
+    await pool.stop();
+  });
+
   it('対照: abort していない委譲の畳んだ報告は、同じ待ち方でも期限の後にまとめて配られる', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
     const { open, reached, written } = gateFoldDecision(stores);
