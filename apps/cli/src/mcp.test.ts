@@ -629,19 +629,6 @@ describe('読んだ版を照合して置き換える（#3984）', () => {
     expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({ mcpServers: {}, ifMatch: 'v1' });
   });
 
-  it('古いデーモン（version を返さない）には ifMatch を送らず、従来どおり置き換える', async () => {
-    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
-    setReply('PUT', '/mcp-servers', OK);
-    const path = await oneServerFile();
-    captureStdout();
-
-    await mcpSetCommand(path, { yes: true });
-
-    expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({
-      mcpServers: { only: { command: 'x' } },
-    });
-  });
-
   it('set の 409: 置き換えていないと言い、いまの登録の名前だけを出し（値は出さない）、やり直し方を案内して失敗する', async () => {
     setReply('GET', '/mcp-servers', { status: 200, body: { ...STORED, version: 'v1' } });
     setReply('PUT', '/mcp-servers', {

@@ -34,8 +34,7 @@ type McpServers = Record<string, McpServerEntry>;
 interface McpServersView {
   mcpServers: McpServers;
   updatedAt?: string;
-  // 古いデーモンは返さない: その間は ifMatch を送らず、従来どおり無条件で置き換える
-  version?: string;
+  version: string;
 }
 
 interface McpServersRunnerResult {
@@ -230,13 +229,11 @@ async function put(
   target: Target,
   servers: McpServers,
   beforeNames: string[],
-  ifMatch?: string,
+  ifMatch: string,
 ): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['mcp-servers'].$put({
-    json: (ifMatch === undefined
-      ? { mcpServers: servers }
-      : { mcpServers: servers, ifMatch }) as never,
+    json: { mcpServers: servers, ifMatch } as never,
   });
   // 409 は版の衝突だけ: この口に他の 409 は無いため。current は値を含むので、名前だけを出す
   if (response.status === 409) {

@@ -490,10 +490,9 @@ export interface UsageBucket {
 }
 
 export function renderAttachmentUsage(
-  // byIntegrationKey は別デプロイの古いデーモンの応答に無いことがある（無ければ空と同じ）
   usage: UsageBucket & {
     byFrom: Record<string, UsageBucket>;
-    byIntegrationKey?: Record<string, UsageBucket> | undefined;
+    byIntegrationKey: Record<string, UsageBucket>;
   },
 ) {
   const bucket = (b: UsageBucket): string => `${b.count} 件 ${formatBytes(b.totalBytes)}`;
