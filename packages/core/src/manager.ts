@@ -18,6 +18,7 @@ import {
   runnerEventShape,
 } from './dropped-record.js';
 import { excerptLine, fillListingBudget, renderListing } from './excerpt.js';
+import { PoolNoticeWindows, type PoolNoticeWindow } from './pool-notice-windows.js';
 import {
   QUOTA_SESSION_WINDOW_KEY,
   QUOTA_STOP_MANAGER_IDS_KEY,
@@ -2915,11 +2916,7 @@ interface SynthesizedNoticeFragment {
  * 窓が開いている間に来た**別の担当**の束は、担当ごとには配らずここへ貯める。窓が閉じたとき、貯めた担当が居なければ何も配らない
  * （担当1本だけの回は今までと完全に同じ）。居れば窓を開けた担当も含めた一覧を1通にして配る。
  */
-interface QuotaStopWindow {
-  timer: ReturnType<typeof setTimeout>;
-  openedAt: number;
-  /** 窓を開けた担当。この担当の束は配り済み。 */
-  openerId: string;
+interface QuotaStopWindow extends PoolNoticeWindow {
   /** 担当ごと。同じ担当の束が窓の中で複数来たら断片を足す（到着順のまま）。 */
   entries: Map<
     string,
@@ -2936,10 +2933,7 @@ interface QuotaStopWindow {
  * 「取り戻した」知らせの窓。{@link QuotaStopWindow} と同じ形（1本目はすぐ担当ごとに配り、窓が開いている間の別の担当は貯めて、
  * 閉じたとき1本以上貯まっていれば窓を開けた担当も含めた一覧を1通にする。固定窓で延長しない）。
  */
-interface RestoredWindow {
-  timer: ReturnType<typeof setTimeout>;
-  openedAt: number;
-  openerId: string;
+interface RestoredWindow extends PoolNoticeWindow {
   /** 見出し（`#notifyRestored` の `head`）。cause ごとに決まる。 */
   head: string;
   /** 担当ごとの最新の1行ぶん。 */
@@ -3227,12 +3221,12 @@ class Pool implements ManagerPool {
    * 枠だけの束の、プール全体の窓（{@link QuotaStopWindow}）。**トークンごとに1本**（鍵は `QuotaMark.tokenKey`、分からない担当は1つの「不明」の鍵）:
    * 別のトークンの枠は別の出来事なので同じ窓へまとめない。開いていない鍵は無い。
    */
-  readonly #quotaStopWindows = new Map<string, QuotaStopWindow>();
+  readonly #quotaStopWindows: PoolNoticeWindows<string, QuotaStopWindow>;
   /**
    * 「取り戻した」知らせ（`#notifyRestored`）の窓。**cause ごとに1本**（器が何台続けて作り直されても同じ出来事）。
    * 窓の長さは枠の窓（`#quotaStopWindowMs`）と同じ値を共有する。
    */
-  readonly #restoredWindows = new Map<RestartCause, RestoredWindow>();
+  readonly #restoredWindows: PoolNoticeWindows<RestartCause, RestoredWindow>;
   readonly #resumeConfirmTimeoutMs: number;
   /**
    * resume が前の会話へ戻れたかの確定（#4501）。`#resume` が runner へ出す直前に `pending` で立て、新しいセッションから最初の印
@@ -3240,11 +3234,6 @@ class Pool implements ManagerPool {
    * デーモンの再起動の後の再開（`#notifyRestored`）の回だけである（`restored`）。**プロセス内にしか置かない**。
    */
   readonly #resumeConfirmations = new Map<string, ResumeConfirmation>();
-  /**
-   * 窓を Map から外した後、配り終えるまでの flush。`stop()` はこれも待つ: 窓は読む前に外すので、タイマーが閉じて台帳を読んでいる最中に
-   * `stop()` が来ると Map は空で、待つものが無いまま止まり、一覧が配られない。
-   */
-  readonly #windowFlushesInFlight = new Set<Promise<void>>();
   /** **器の乱数を直に読まない**（テストが衝突を再現できるようにする。`#now` と同じ理由）。 */
   readonly #generateManagerId: () => string;
   /** **`start` のたびに `process.env` を読み直さない**: 起動時に1度だけ解決して保持する。 */
@@ -3648,6 +3637,16 @@ class Pool implements ManagerPool {
     this.#synthesizedNoticeWindowMs =
       synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs();
     this.#quotaStopWindowMs = quotaStopWindowMs ?? QUOTA_STOP_WINDOW_MS;
+    this.#quotaStopWindows = new PoolNoticeWindows(
+      this.#quotaStopWindowMs,
+      this.#now,
+      (windowKey, window) => this.#deliverQuotaStopWindow(windowKey, window),
+    );
+    this.#restoredWindows = new PoolNoticeWindows(
+      this.#quotaStopWindowMs,
+      this.#now,
+      (cause, window) => this.#deliverRestoredWindow(cause, window),
+    );
     this.#resumeConfirmTimeoutMs = resumeConfirmTimeoutMs ?? RESUME_CONFIRM_TIMEOUT_MS;
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
@@ -8475,9 +8474,10 @@ class Pool implements ManagerPool {
   // 担当ごとの窓を先に閉じる: 閉じた束がプール全体の窓へ入るので、順序が逆だとその分が残る。
   async #drainNoticeWindows(): Promise<void> {
     this.#flushSynthesizedNotices();
-    await this.#flushQuotaStopWindows();
-    await this.#flushRestoredWindows();
-    await Promise.allSettled([...this.#windowFlushesInFlight]);
+    await this.#quotaStopWindows.flushAll();
+    await this.#restoredWindows.flushAll();
+    await this.#quotaStopWindows.settle();
+    await this.#restoredWindows.settle();
   }
 
   /** 締切に達したら待つのをやめる（閉じる側に倒す）。runner は互いに独立に待つ: 1台の遅れが他を待たせない。 */
@@ -12640,13 +12640,7 @@ class Pool implements ManagerPool {
     if (cause === 'daemon') {
       // デーモンの再起動（`restore()` の引き取り）はまとめない: 束ねると決めたのは器の作り直しの後の知らせだけで、引き取りの知らせは担当ごとに1通ずつ届く前提の作りが残っているため。
     } else if (open === undefined) {
-      const timer = setTimeout(() => {
-        void this.#flushRestoredWindow(cause);
-      }, this.#quotaStopWindowMs);
-      timer.unref?.();
-      this.#restoredWindows.set(cause, {
-        timer,
-        openedAt: this.#now(),
+      this.#restoredWindows.open(cause, {
         openerId: job.id,
         head,
         entries: new Map([[job.id, entry]]),
@@ -12815,25 +12809,13 @@ class Pool implements ManagerPool {
   }
 
   // 窓が閉じたとき、貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 委譲1本だけの回は今までと完全に同じ。
-  // 状態は枠の1通と同じ読み方（`#flushQuotaStopWindow`）: 像に無いものだけジョブ台帳から読み、読めなければ「不明」と言う。
-  // 窓は読む前に外す。`stop()` はこれを待つ。
-  #flushRestoredWindow(cause: RestartCause): Promise<void> {
-    const window = this.#restoredWindows.get(cause);
-    if (window === undefined) return Promise.resolve();
-    this.#restoredWindows.delete(cause);
-    clearTimeout(window.timer);
-    return this.#trackWindowFlush(this.#deliverRestoredWindow(cause, window));
-  }
-
+  // 状態は枠の1通と同じ読み方（`#ledgerForPoolWindow`）: 像に無いものだけジョブ台帳から読み、読めなければ「不明」と言う。
   async #deliverRestoredWindow(cause: RestartCause, window: RestoredWindow): Promise<void> {
-    if ([...window.entries.keys()].every((id) => id === window.openerId)) return;
-    const missing = [...window.entries.keys()].filter((id) => !this.#records.has(id));
-    const ledger =
-      missing.length === 0
-        ? []
-        : ((await this.#listJobsOrNote(
-            '取り戻した委譲の1通に載せる担当の状態を「不明」として配る',
-          )) ?? []);
+    const ledger = await this.#ledgerForPoolWindow(
+      window,
+      '取り戻した委譲の1通に載せる担当の状態を「不明」として配る',
+    );
+    if (ledger === undefined) return;
     const items: RestoredListItem[] = [...window.entries.values()].map((entry) => ({
       ...entry,
       first: entry.managerId === window.openerId,
@@ -12845,25 +12827,11 @@ class Pool implements ManagerPool {
         : {}),
     }));
     const openedAt = new Date(window.openedAt).toISOString();
-    try {
-      this.#post({
-        type: 'external',
-        id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
-        // `runner-registry` を流用する: 枠の1通と同じ理由（専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要る）。
-        source: DAEMON_RUNNER_REGISTRY_SOURCE,
-        identity: `restored:${cause}:${openedAt}`,
-        payload: {
-          text: renderRestoredNotice(window.head, items, this.#resumeConfirmTimeoutMs),
-        },
-      });
-    } catch (error) {
-      noteDroppedRecord(
-        '受信箱',
-        `restored cause=${cause} managers=${String(items.length)}`,
-        error,
-      );
-    }
+    this.#postPoolNotice(
+      `restored:${cause}:${openedAt}`,
+      { text: renderRestoredNotice(window.head, items, this.#resumeConfirmTimeoutMs) },
+      `restored cause=${cause} managers=${String(items.length)}`,
+    );
     void this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -12872,12 +12840,6 @@ class Pool implements ManagerPool {
         `${EXCHANGE_KIND_THINNING_PREFIX}[プール全体] ${window.head}: ${String(items.length)} 本の委譲の知らせを、` +
         `1通にまとめて配った（内訳: ${items.map((i) => i.managerId).join('、')}。窓の開始 ${openedAt}）。`,
     });
-  }
-
-  async #flushRestoredWindows(): Promise<void> {
-    for (const cause of [...this.#restoredWindows.keys()]) {
-      await this.#flushRestoredWindow(cause);
-    }
   }
 
   // `#records` に無ければ `{}` を返し、既定値を作らない: キー自体が付かないので「取れなかった」と「そういう状態だった」が同じ顔にならない。
@@ -13232,16 +13194,7 @@ class Pool implements ManagerPool {
     arrived: number,
   ): void {
     if (!this.#quotaStopWindows.has(windowKey)) {
-      const timer = setTimeout(() => {
-        void this.#flushQuotaStopWindow(windowKey);
-      }, this.#quotaStopWindowMs);
-      timer.unref?.();
-      this.#quotaStopWindows.set(windowKey, {
-        timer,
-        openedAt: this.#now(),
-        openerId: managerId,
-        entries: new Map(),
-      });
+      this.#quotaStopWindows.open(windowKey, { openerId: managerId, entries: new Map() });
     }
     this.#addToQuotaStopWindow(windowKey, managerId, entry, arrived);
   }
@@ -13268,35 +13221,41 @@ class Pool implements ManagerPool {
   // `identity` に窓の開いた時刻を入れる: 受信箱の畳み込みが同じ本文の別の出来事（次の枠落ち）を同じものと読まないため。
   // 状態は配る時点の台帳から読む。畳まれた委譲は `#retire()` で像が消えるので、像に無いものだけジョブ台帳から読む（読めなければ「不明」と言う。既定値は作らない）。
   // 窓は読む前に外す: 読んでいる間に来た束が、配り終えた窓へ紛れ込まない。`stop()` はこれを待つ。
-  async #flushQuotaStopWindows(): Promise<void> {
-    for (const windowKey of [...this.#quotaStopWindows.keys()]) {
-      await this.#flushQuotaStopWindow(windowKey);
+  // 窓の開閉・flush・`stop()` の待ちは `PoolNoticeWindows` が持つ（窓の長さは枠と取り戻したで同じ値）。
+  // 貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 担当1本だけの回は今までと完全に同じ。
+  // 配るなら、像に無い担当の状態だけジョブ台帳から読む（読めなければ空で返し、呼び手が「不明」と言う）。
+  async #ledgerForPoolWindow(
+    window: PoolNoticeWindow,
+    unreadableNote: string,
+  ): Promise<readonly Job[] | undefined> {
+    if ([...window.entries.keys()].every((id) => id === window.openerId)) return undefined;
+    const missing = [...window.entries.keys()].filter((id) => !this.#records.has(id));
+    if (missing.length === 0) return [];
+    return (await this.#listJobsOrNote(unreadableNote)) ?? [];
+  }
+
+  // `runner-registry` を流用する: 専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要るため（`scratch_sweep` と同じ形で積む）。
+  #postPoolNotice(identity: string, payload: Record<string, unknown>, dropped: string): void {
+    try {
+      this.#post({
+        type: 'external',
+        id: randomUUID(),
+        at: new Date(this.#now()).toISOString(),
+        source: DAEMON_RUNNER_REGISTRY_SOURCE,
+        identity,
+        payload,
+      });
+    } catch (error) {
+      noteDroppedRecord('受信箱', dropped, error);
     }
   }
 
-  #flushQuotaStopWindow(windowKey: string): Promise<void> {
-    const window = this.#quotaStopWindows.get(windowKey);
-    if (window === undefined) return Promise.resolve();
-    this.#quotaStopWindows.delete(windowKey);
-    clearTimeout(window.timer);
-    return this.#trackWindowFlush(this.#deliverQuotaStopWindow(windowKey, window));
-  }
-
-  // Map から外した窓を `#windowFlushesInFlight` に載せる。`stop()` が待つのはこの集合である。
-  #trackWindowFlush(flush: Promise<void>): Promise<void> {
-    this.#windowFlushesInFlight.add(flush);
-    void flush.finally(() => this.#windowFlushesInFlight.delete(flush)).catch(() => undefined);
-    return flush;
-  }
-
   async #deliverQuotaStopWindow(windowKey: string, window: QuotaStopWindow): Promise<void> {
-    // 貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 担当1本だけの回は今までと完全に同じ。
-    if ([...window.entries.keys()].every((id) => id === window.openerId)) return;
-    const missing = [...window.entries.keys()].filter((id) => !this.#records.has(id));
-    const ledger =
-      missing.length === 0
-        ? []
-        : ((await this.#listJobsOrNote('枠の1通に載せる担当の状態を「不明」として配る')) ?? []);
+    const ledger = await this.#ledgerForPoolWindow(
+      window,
+      '枠の1通に載せる担当の状態を「不明」として配る',
+    );
+    if (ledger === undefined) return;
     const entries: QuotaStopEntry[] = [...window.entries].map(([managerId, joined]) => ({
       managerId,
       ...(managerId === window.openerId ? { first: true as const } : {}),
@@ -13311,27 +13270,19 @@ class Pool implements ManagerPool {
     const arrived = [...window.entries.values()].reduce((sum, joined) => sum + joined.arrived, 0);
     const { text, resetGroups } = renderQuotaStopNotice(entries);
     const openedAt = new Date(window.openedAt).toISOString();
-    try {
-      this.#post({
-        type: 'external',
-        id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
-        // `runner-registry` を流用する: 専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要るため（`scratch_sweep` と同じ形で積む）。
-        source: DAEMON_RUNNER_REGISTRY_SOURCE,
-        identity: `quota-stop:${windowKey}:${openedAt}`,
-        // 担当の id を本文とは別に載せる: クローンが配る直前に回復を添えるとき、表示用の本文から読み直さないため（#4497）
-        payload: {
-          text,
-          [QUOTA_STOP_MANAGER_IDS_KEY]: entries.map((e) => e.managerId),
-          // 全員が5時間枠の印を持つときだけ載せる: 1本でも週の上限などが混ざれば、クローンは畳まずに届ける（#4499）
-          ...(entries.every((e) => allSessionWindow(e.fragments))
-            ? { [QUOTA_SESSION_WINDOW_KEY]: true }
-            : {}),
-        },
-      });
-    } catch (error) {
-      noteDroppedRecord('受信箱', `quota_stop managers=${String(entries.length)}`, error);
-    }
+    this.#postPoolNotice(
+      `quota-stop:${windowKey}:${openedAt}`,
+      // 担当の id を本文とは別に載せる: クローンが配る直前に回復を添えるとき、表示用の本文から読み直さないため（#4497）
+      {
+        text,
+        [QUOTA_STOP_MANAGER_IDS_KEY]: entries.map((e) => e.managerId),
+        // 全員が5時間枠の印を持つときだけ載せる: 1本でも週の上限などが混ざれば、クローンは畳まずに届ける（#4499）
+        ...(entries.every((e) => allSessionWindow(e.fragments))
+          ? { [QUOTA_SESSION_WINDOW_KEY]: true }
+          : {}),
+      },
+      `quota_stop managers=${String(entries.length)}`,
+    );
     void this.#journal({
       type: 'exchange',
       with: 'manager',
