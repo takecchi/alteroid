@@ -18,7 +18,6 @@ import {
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   DEFAULT_PERMISSION_MODE,
   applyAppScopedEnvVars,
-  migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
   createClone,
   createLocalRunner,
@@ -413,7 +412,6 @@ export async function main(): Promise<void> {
   await seedDefaultEnvVars(stores);
   // 子へ渡す env の土台は書き写す前のスナップショットにする: 書き写した後の `process.env` だと、正本から外した名前の古い値が子に残り続けるため。
   const bootEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };
-  await migrateEnvBaseCredentialsOnce(stores, bootEnvSnapshot);
   const localRunnerEnv: NodeJS.ProcessEnv = { ...bootEnvSnapshot };
   await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);
   await pruneExtractedPluginsOnBoot({ root: paths.root, store: stores.plugins });
