@@ -769,7 +769,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
           ? ''
           : ` retainedUnread=${entry.retained.unread} ` +
             `retainedRedelivered=${entry.retained.redelivered} ` +
-            `retainedRedeliveredClosed=${entry.retained.redeliveredClosed} ` +
             `retainedPendingCollapse=${entry.retained.pendingCollapse}`)
       );
     // `observedBy` / `repo` / `query` / `reason` は観測した側が名乗る自由文でデーモンは値を確かめられないので出さない。

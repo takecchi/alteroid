@@ -2214,7 +2214,7 @@ function filterMemorySectionsByHeading(
 // 本文は1文字も出さず、frontmatter の行も出さない: 出るのは節id・見出し行・文字数だけ（`memory_delete` が本文を日誌へ写さない線と同じ）
 export function renderMemoryOutline(
   sections: readonly MemorySection[],
-  sideOrOptions: MemoryOutlineSide | MemoryOutlineOptions = 'head',
+  options: MemoryOutlineOptions = {},
 ): string {
   if (sections.length === 0) {
     return (
@@ -2223,8 +2223,6 @@ export function renderMemoryOutline(
     );
   }
 
-  const options: MemoryOutlineOptions =
-    typeof sideOrOptions === 'string' ? { side: sideOrOptions } : sideOrOptions;
   const side = options.side ?? 'head';
   const { q, offset } = options;
   // 絞り込み後の節ではなく文書の全節で測る: 焼き込みが載せるのは文書の全節の目次のため。超えていなければ空で、行ごと出さない

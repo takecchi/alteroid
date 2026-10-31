@@ -290,8 +290,6 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     quotaStop: z.literal(true).optional(),
     // 全断片が5時間枠（session）の印を持つ枠の知らせ。担当が全員戻っていれば、クローンはターンを起こさず日誌にだけ残す（#4499）
     quotaSessionWindow: z.literal(true).optional(),
-    // 書き手も読み手も無い（台帳の撤去で台帳へ開く判定ごと外れた。#5015 の印）。永続化された受信箱の古い行がこの欄を持つので、欄名は変えずに残す
-    commitmentExempt: z.literal(true).optional(),
     // 名指しの担当がいまの鍵で戻っていれば、クローンがターンを起こさず日誌にだけ残してよい知らせの印（#5048）。立っていない回はキーごと書かない。
     // `movedFromGeneration` は積んだ時点の担当の鍵の世代: 在れば、担当がその世代から別の世代へ移って戻ったときだけ畳む（同じ鍵のまま作業者だけが落ちた回を消さないため）
     // `attached: true` は「デーモンの再起動で担当を引き取り直した」知らせ: 鍵の世代を記録しない回なので、世代ではなく「担当が live で running」だけで畳む
@@ -800,7 +798,6 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       .object({
         unread: z.number().int().nonnegative(),
         redelivered: z.number().int().nonnegative(),
-        redeliveredClosed: z.number().int().nonnegative(),
         pendingCollapse: z.number().int().nonnegative(),
       })
       .optional(),

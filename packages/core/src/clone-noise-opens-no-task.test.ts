@@ -86,7 +86,7 @@ function boot(managers: ManagerPool, stores: Stores = createMemoryStores()) {
   return { clone, calls, stores };
 }
 
-function rewokenNotice(id: string, exempt = true): InboxEvent {
+function rewokenNotice(id: string): InboxEvent {
   return {
     type: 'manager_message',
     id,
@@ -95,7 +95,6 @@ function rewokenNotice(id: string, exempt = true): InboxEvent {
     kind: 'report',
     text: `[${MANAGER_ID}] を新しい鍵で起こし直した（枠で落ちていた。status=failed）。REWOKEN-${id}`,
     synthesized: true,
-    ...(exempt ? { commitmentExempt: true as const } : {}),
   };
 }
 
@@ -140,16 +139,15 @@ async function waitForTurnWith(s: ReturnType<typeof boot>, needle: string): Prom
   );
 }
 
-describe('manager_message は印の有無によらず Task を開かない（#5469 P5。commitmentExempt の歯の置き換え）', () => {
-  it('印のある知らせも、印の無い知らせも null（以前は印の無い知らせだけが行になった）', () => {
-    expect(opensHumanTask(rewokenNotice('e-exempt'))).toBe(false);
+describe('manager_message は Task を開かない（#5469 P5）', () => {
+  it('起こし直しの知らせも、ふつうの報告も null', () => {
+    expect(opensHumanTask(rewokenNotice('e-rewoken'))).toBe(false);
     expect(opensHumanTask(plainReport('e-plain'))).toBe(false);
-    expect(opensHumanTask(rewokenNotice('e-rewoken', false))).toBe(false);
     expect(opensHumanTask(weeklyNotice('e-weekly'))).toBe(false);
   });
 });
 
-describe('起こし直しの知らせは Task を開かない（#5015 → #5469 P5 で印の有無によらず開かない）', () => {
+describe('起こし直しの知らせは Task を開かない（#5015 → #5469 P5）', () => {
   it('受信箱には届くが、Task は1件も増えない', async () => {
     const s = boot(stubPool(() => Promise.resolve([summary()])));
 
@@ -162,10 +160,10 @@ describe('起こし直しの知らせは Task を開かない（#5015 → #5469 
     await s.clone.stop();
   });
 
-  it('印の無い同じ知らせ（後継がつながった回・withheld を運んだ回）も Task を開かず、ターンには届く', async () => {
+  it('同じ知らせをもう一度送っても（後継がつながった回・withheld を運んだ回）Task を開かず、ターンには届く', async () => {
     const s = boot(stubPool(() => Promise.resolve([summary()])));
 
-    s.clone.post(rewokenNotice('evt-r2', false));
+    s.clone.post(rewokenNotice('evt-r2'));
     await waitForTurnWith(s, 'REWOKEN-evt-r2');
 
     expect((await s.stores.tasks.list({ includeClosed: true })).entries).toHaveLength(0);

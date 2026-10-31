@@ -1793,8 +1793,6 @@ export interface ManagerPoolOptions {
   codexAuth?: CodexAuthRunnerSync;
   /** 期限は時刻そのものが答えを決めるので、渡せないと「猶予の中では奪わない」を確かめる試験が書けない。 */
   now?: () => number;
-  /** **能力の上限ではない**（二重実行を止めるための期限であって、仕事の回数・ターン数の制限ではない）。 */
-  leaseTtlMs?: number;
   /** `vi.mock('node:crypto')` は使わないので、衝突を再現する試験はここを差し替えるしかない。 */
   generateManagerId?: () => string;
   workspace?: WorkspacePolicy;
@@ -3205,8 +3203,7 @@ class Pool implements ManagerPool {
   readonly #records = new Map<string, ManagerRecord>();
   /** **器の時計を直に読まない**（時計を渡せないと「猶予の中では奪わない」を確かめる試験が書けない）。 */
   readonly #now: () => number;
-  readonly #leaseTtlMs: number;
-  /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない（`#leaseTtlMs` と同じ形）。 */
+  /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない。 */
   readonly #withheldReportFlushMs: number;
   /** 構築時に一度だけ確定する（`ALTEROID_TOKEN_SAVING_EXCERPT`）。偽なら報告を最後の発言だけにせず、畳んだ報告の抜粋の予算を #5414 の前に戻す。 */
   readonly #tokenSavingExcerpt: boolean;
@@ -3616,7 +3613,6 @@ class Pool implements ManagerPool {
     permissionRules,
     codexAuth,
     now,
-    leaseTtlMs,
     withheldReportFlushMs,
     tokenSavingExcerpt,
     synthesizedNoticeWindowMs,
@@ -3657,7 +3653,6 @@ class Pool implements ManagerPool {
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
     this.#now = now ?? (() => Date.now());
-    this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
     this.#tokenSavingExcerpt = tokenSavingExcerpt ?? resolveTokenSavingExcerpt();
     this.#synthesizedNoticeWindowMs =
@@ -3771,7 +3766,7 @@ class Pool implements ManagerPool {
         return seen.instanceId === undefined ? {} : { instanceId: seen.instanceId };
       })(),
       now,
-      ttlMs: this.#leaseTtlMs,
+      ttlMs: LEASE_TTL_MS,
     });
 
     const record: ManagerRecord = {
@@ -9630,7 +9625,7 @@ class Pool implements ManagerPool {
       runnerId: runner.runnerId,
       ...(sighting.instanceId === undefined ? {} : { instanceId: sighting.instanceId }),
       now,
-      ttlMs: this.#leaseTtlMs,
+      ttlMs: LEASE_TTL_MS,
     });
 
     // `#persist` の best-effort に乗せない: 書けないまま走らせると、次の引き取りが「記録が無い＝誰も握っていない」と読んで同じ委譲を無条件で奪える。

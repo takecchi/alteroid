@@ -110,7 +110,7 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
 
 type Activity =
-  | { kind: 'clone'; turn?: TurnHandle }
+  | { kind: 'clone'; turn: TurnHandle }
   | {
       kind: 'local';
       abort: AbortController;
@@ -133,7 +133,7 @@ export interface TurnHandle {
 }
 
 export interface ReplHooks {
-  toTurn?: (turn?: TurnHandle) => void;
+  toTurn?: (turn: TurnHandle) => void;
   toLocal?: (notice: string) => AbortSignal;
 }
 
@@ -419,9 +419,7 @@ export async function chatCommand(): Promise<void> {
   };
   const hooks: ReplHooks = {
     toTurn: (turn) => {
-      // 描く区間の入り直し（`turn` 無し）で、送信が渡した対象を落とさない。
-      if (turn === undefined && activity?.kind === 'clone') return;
-      activity = turn === undefined ? { kind: 'clone' } : { kind: 'clone', turn };
+      activity = { kind: 'clone', turn };
     },
     toLocal: (notice) => enterLocal(notice).abort.signal,
   };
@@ -828,11 +826,11 @@ export async function sendMessage(
 export async function findClientMessage(
   target: Target,
   clientMessageId: string,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<string | undefined> {
   const response = await fetch(
     `${target.baseUrl}/client-messages/${encodeURIComponent(clientMessageId)}`,
-    { headers: target.headers, ...(signal === undefined ? {} : { signal }) },
+    { headers: target.headers, signal },
   );
   if (response.status === 404) return undefined;
   if (!response.ok) {
@@ -858,10 +856,10 @@ async function renderChatEvents(
   target: Target,
   events: AsyncIterable<SSEEvent>,
   conversationId: string | null,
-  onFailed?: (reason: string) => void,
-  resuming = false,
-  hooks?: ReplHooks,
-  turn?: TurnHandle,
+  onFailed: ((reason: string) => void) | undefined,
+  resuming: boolean,
+  hooks: ReplHooks | undefined,
+  turn: TurnHandle,
 ): Promise<string | null> {
   hooks?.toTurn?.(turn);
   let nextConversationId = conversationId;
@@ -905,10 +903,8 @@ async function renderChatEvents(
           const data = event.json<{ conversationId: string; pending?: unknown }>();
           if (data) {
             nextConversationId = data.conversationId;
-            if (turn !== undefined) {
-              turn.conversationId = data.conversationId;
-              if (resuming) turn.clientMessageId = pickResumeTarget(data.pending);
-            }
+            turn.conversationId = data.conversationId;
+            if (resuming) turn.clientMessageId = pickResumeTarget(data.pending);
           }
           break;
         }
@@ -995,7 +991,7 @@ async function renderChatEvents(
     flushPending();
     ended = true;
     const reason = redactError(error instanceof Error ? error.message : String(error));
-    if (turn?.withdrawn === true) {
+    if (turn.withdrawn) {
       // 取り下げて自分で閉じた。切断ではない。
     } else if (resuming) {
       const described = `進行中の応答に戻れませんでした: 接続が切れました（${reason}）`;
@@ -1019,7 +1015,7 @@ async function renderChatEvents(
   flushPending();
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
-  if (!ended && turn?.withdrawn !== true) {
+  if (!ended && !turn.withdrawn) {
     stdout.write(
       !sawEvent
         ? '  ! 応答が来ないまま接続が閉じました。発言が受け取られたかは分かりません\n'
