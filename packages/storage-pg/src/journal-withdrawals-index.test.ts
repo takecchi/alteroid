@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb } from './index.js';
-import { ensureJournalWithdrawalsIndex, JOURNAL_WITHDRAWALS_INDEX } from './migrate.js';
+import { ensureDeferredIndex, JOURNAL_WITHDRAWALS_INDEX } from './migrate.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
+
+const ensureJournalWithdrawalsIndex = (target: Db, warn: (line: string) => void): Promise<void> =>
+  ensureDeferredIndex(target, JOURNAL_WITHDRAWALS_INDEX, warn);
 
 // 取り下げの印の部分索引と、印だけを引く口（#5089）
 

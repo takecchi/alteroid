@@ -17,6 +17,7 @@ import {
   reasonOf,
   runnerEventShape,
 } from './dropped-record.js';
+import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js';
 import { excerptLine, fillListingBudget, renderListing } from './excerpt.js';
 import {
   QUOTA_SESSION_WINDOW_KEY,
@@ -2711,31 +2712,19 @@ const WITHHELD_FLUSH_MS_UNREADABLE_WHAT = '握り潰しの配り直しの期限�
  * 読み出しの失敗の跡が何が起きたかを取り違えさせる。**値そのものは跡に載せない**（env は器の外から来る任意の文字列）。
  */
 export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY];
-  if (raw === undefined) return WITHHELD_REPORT_FLUSH_MS;
-  // **未設定と空は同じ「指定しない」である。** `Number('') === 0` 経由で `parsed <= 0` へ落とすと、
-  // 置かなかっただけの人に向かって「読めなかった」と鳴る。
-  const trimmed = raw.trim();
-  if (trimmed === '') return WITHHELD_REPORT_FLUSH_MS;
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    noteUnreadableRecord(
+  // **未設定と空は同じ「指定しない」である**（`readNumberEnv` が知らせずに既定へ返す）
+  return readNumberEnv(env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY], {
+    fallback: WITHHELD_REPORT_FLUSH_MS,
+    positive: true,
+    onProblem: unreadableEnvRecordNote(
+      WITHHELD_REPORT_FLUSH_MS_ENV_KEY,
       WITHHELD_FLUSH_MS_UNREADABLE_WHAT,
-      `${WITHHELD_REPORT_FLUSH_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`数値として読めない。既定の ${String(WITHHELD_REPORT_FLUSH_MS)}ms で走る`),
-    );
-    return WITHHELD_REPORT_FLUSH_MS;
-  }
-  if (parsed <= 0) {
-    noteUnreadableRecord(
-      WITHHELD_FLUSH_MS_UNREADABLE_WHAT,
-      `${WITHHELD_REPORT_FLUSH_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`0 以下は期限にならない。既定の ${String(WITHHELD_REPORT_FLUSH_MS)}ms で走る`),
-    );
-    return WITHHELD_REPORT_FLUSH_MS;
-  }
-  return parsed;
+      {
+        'not-number': `数値として読めない。既定の ${String(WITHHELD_REPORT_FLUSH_MS)}ms で走る`,
+        'non-positive': `0 以下は期限にならない。既定の ${String(WITHHELD_REPORT_FLUSH_MS)}ms で走る`,
+      },
+    ),
+  });
 }
 
 const WITHHELD_REPORT_EXCERPT = 240;
@@ -3017,31 +3006,22 @@ const SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT = '機構合成の知らせ�
 
 /** `resolveWithheldReportFlushMs` と同じ形（跡の出し方・値そのものを載せないことも同じ理由）。 */
 export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY];
-  if (raw === undefined) return SYNTHESIZED_NOTICE_WINDOW_MS;
-  const trimmed = raw.trim();
-  if (trimmed === '') return SYNTHESIZED_NOTICE_WINDOW_MS;
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    noteUnreadableRecord(
+  return readNumberEnv(env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY], {
+    fallback: SYNTHESIZED_NOTICE_WINDOW_MS,
+    positive: true,
+    // **上限で挟む（黙って）。運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——`setTimeout` は
+    // 2^31-1 ms を超える値を 1ms へ倒し、窓が効かなくなる。
+    max: MAX_RESCUE_INTERVAL_MS,
+    clamp: true,
+    onProblem: unreadableEnvRecordNote(
+      SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY,
       SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT,
-      `${SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`数値として読めない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`),
-    );
-    return SYNTHESIZED_NOTICE_WINDOW_MS;
-  }
-  if (parsed <= 0) {
-    noteUnreadableRecord(
-      SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT,
-      `${SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY} chars=${String(trimmed.length)}`,
-      new Error(`0 以下は期限にならない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`),
-    );
-    return SYNTHESIZED_NOTICE_WINDOW_MS;
-  }
-  // **上限で挟む。運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——`setTimeout` は
-  // 2^31-1 ms を超える値を 1ms へ倒し、窓が効かなくなる。
-  return Math.min(MAX_RESCUE_INTERVAL_MS, parsed);
+      {
+        'not-number': `数値として読めない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`,
+        'non-positive': `0 以下は期限にならない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`,
+      },
+    ),
+  });
 }
 
 /**

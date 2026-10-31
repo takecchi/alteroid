@@ -2,6 +2,7 @@ import { lstat, readdir, realpath, rm, statfs } from 'node:fs/promises';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
+import { readNumberEnv } from './env-value-not-used.js';
 import { clipWithEllipsis } from './excerpt.js';
 import type { ScratchSweepEvent, ScratchSweepItem } from './runner-protocol.js';
 import {
@@ -29,13 +30,9 @@ export const SCRATCH_SWEEP_CONTENT_SCAN_LIMIT = 1000;
 export const SCRATCH_SWEEP_NODE_MODULES_LIMIT = 100;
 export const SCRATCH_SWEEP_GIT_TIMEOUT_MS = 15_000;
 
+// 範囲へ挟まず既定へ戻す（`clamp` を付けない）・知らせも出さない: 猶予は短すぎる値で作業場を早く消す向きに効くため
 function resolveMs(raw: string | undefined, fallback: number, min: number, max: number): number {
-  const trimmed = raw?.trim();
-  if (trimmed === undefined || trimmed === '') return fallback;
-  const parsed = Number(trimmed);
-  // 範囲へ挟まず既定へ戻す: 猶予は短すぎる値で作業場を早く消す向きに効くため
-  if (!Number.isFinite(parsed) || parsed < min || parsed > max) return fallback;
-  return parsed;
+  return readNumberEnv(raw, { fallback, min, max });
 }
 
 export function resolveScratchSweepGraceMs(env: NodeJS.ProcessEnv = process.env): number {

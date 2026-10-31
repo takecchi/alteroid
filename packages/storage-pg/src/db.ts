@@ -13,6 +13,11 @@ export function toNumber(value: number | string): number {
   return typeof value === 'number' ? value : Number(value);
 }
 
+// `execute` の結果は器（node-postgres・PGlite）で形が違う: 配列そのものか、`rows` を持つ形
+export function rowsOf(result: unknown): unknown[] {
+  return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+}
+
 // 型を足して呼ぶ: tsconfig の `lib` は ES2023 で `toWellFormed` の型が無いため。
 function toWellFormed(value: string): string {
   return (value as string & { toWellFormed(): string }).toWellFormed();

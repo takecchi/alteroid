@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb } from './index.js';
-import { ensureJournalHumanRepliesIndex, JOURNAL_HUMAN_REPLIES_INDEX } from './migrate.js';
+import { ensureDeferredIndex, JOURNAL_HUMAN_REPLIES_INDEX } from './migrate.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
+
+const ensureJournalHumanRepliesIndex = (target: Db, warn: (line: string) => void): Promise<void> =>
+  ensureDeferredIndex(target, JOURNAL_HUMAN_REPLIES_INDEX, warn);
 
 // 人間への返答の部分索引（#5089）を、書き込みを止めずに作る
 
