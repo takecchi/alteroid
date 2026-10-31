@@ -221,6 +221,39 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
     await s.pool.stop();
   });
 
+  it('挑み直しの瞬間に名簿の get が一時的に失敗しても、次の挑み直しを予約し直し、ok に戻る', async () => {
+    const s = setup();
+    await s.pool.start({ request: '走る' });
+
+    let broken = true;
+    const real = s.runner.setMcpServers?.bind(s.runner);
+    s.runner.setMcpServers = async (servers) => {
+      if (broken) throw new Error('mcp sync failed (test, transient)');
+      return real?.(servers);
+    };
+    await s.mcpServers.apply(REGISTRATION);
+    expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('failed');
+
+    // 最初の挑み直しの get だけ落とす。
+    const realGet = s.registry.get.bind(s.registry);
+    let getFailed = false;
+    s.registry.get = async (runnerId) => {
+      if (!getFailed) {
+        getFailed = true;
+        throw new Error('registry get failed (test, transient)');
+      }
+      return realGet(runnerId);
+    };
+    broken = false;
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(getFailed).toBe(true);
+    expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
+
+    await s.pool.stop();
+  });
+
   it('止めた後の配布の結果は、帳面にも挑み直しにも積まない（購読を外す）', async () => {
     const s = setup();
     await s.pool.start({ request: '走る' });
