@@ -959,7 +959,7 @@ export interface RunnerPluginLoadObservation {
  * `asked` は中身が0件・値が無しでもこれ。`failed` の理由は `reasonOf` で1行に畳む。
  * `GET /runners`（`runnerProbeSchema`）と意味を揃える。
  */
-export type RunnerFingerprintProbe =
+type RunnerFingerprintProbe =
   { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
 
 /**
@@ -967,13 +967,13 @@ export type RunnerFingerprintProbe =
  * 鍵を配り直せば直る故障と、runner を上げないと直らない故障が同じ文言に見える。
  * `client.mcpServers` は `RunnerClient` の任意メソッド。
  */
-export type RunnerMcpServersProbe = RunnerFingerprintProbe | { status: 'unsupported' };
+type RunnerMcpServersProbe = RunnerFingerprintProbe | { status: 'unsupported' };
 
 /**
  * 疑う先が違うので潰さない: `unheard` は接続、`failed` は器の RPC、`unsupported` は runner の版。
  * `asked` で `resources` が `undefined` のままでも、応答が資源を名乗らなかっただけで失敗ではない。
  */
-export type RunnerResourcesProbe = RunnerMcpServersProbe;
+type RunnerResourcesProbe = RunnerMcpServersProbe;
 
 /**
  * `state` は6値のまま渡し `connected` へ畳まない: `unreachable` / `unusable` / `lost` / `vacating` の
@@ -1509,9 +1509,9 @@ export interface ManagerPool {
  * （以前は 45 秒で、runner の上限より手前だった）。`apps/daemon/src/index.ts` の `RUNNER_FAREWELL_DEADLINE_MS` と同じ値にそろえる。
  * デーモンの `drainingSeconds`（60 秒）は延ばさない: `LEASE_DRAIN_MS` の写しがあり、延ばす向きは二重実行の窓になる。
  */
-export const RUNNER_FAREWELL_WAIT_MS = 52_000;
+const RUNNER_FAREWELL_WAIT_MS = 52_000;
 
-export interface ManagerPoolStopOptions {
+interface ManagerPoolStopOptions {
   /**
    * `shutting_down` を名乗った runner を待つ**絶対の締切**（`now()` と同じ時計の ms）。
    * 省略すると `stop()` の呼び出し時刻から {@link RUNNER_FAREWELL_WAIT_MS}。
@@ -1844,7 +1844,7 @@ const PUSH_RETRY_MAX_MS = 60_000;
 export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
 
 /** 既定（5分）だと60秒間隔の反復は5件ごとに要約が出て、行数が 1/5 にしかならない。 */
-export const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
+const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
 
 /**
  * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS` と同じ値だが共有しない: `tools.ts` が
@@ -1859,7 +1859,7 @@ const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
  * 数で締めるのは、届かない委譲へ周期の送り手が送り続けて台帳の1行が育ち続けないため。字数は1行の jsonb の大きさの歯止め。
  */
 export const HELD_MESSAGES_MAX_COUNT = 20;
-export const HELD_MESSAGES_MAX_CHARS = 200_000;
+const HELD_MESSAGES_MAX_CHARS = 200_000;
 /**
  * 預かりの期限。過ぎたら捨て、本文ごと日誌とクローンへ返す。背景処理が1日を超えて残る委譲は、待つより起こし直すほうがよい（`manager_stop` → `manager_start`）とクローンが判断する材料にする。
  */
@@ -2057,7 +2057,7 @@ export function remainingFoldNotice<
 }
 
 /** 配達に畳み込んだ peer の閉じの知らせを引く。peer は末尾への追加だけなので、畳み込んだ本数を先頭から落とす。 */
-export function remainingPeerCloseNotice<
+function remainingPeerCloseNotice<
   T extends { reason: PeerCloseReason; peers: { reason?: PeerCloseReason | undefined }[] },
 >(current: T | undefined, folded: T | undefined): T | undefined {
   if (current === undefined || folded === undefined)
@@ -2426,7 +2426,7 @@ export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
  * 生ログの値をそのまま写すだけ。`name` は文字列でない形がありうるので `optional`:
  * 「不明」のような文字列を作って埋めない（取れない軸に0の行を作らない）。
  */
-export interface PendingToolUse {
+interface PendingToolUse {
   id: string;
   name?: string;
 }
@@ -2435,7 +2435,7 @@ export interface PendingToolUse {
  * **判定ではない。時刻の閾値も持たない。** 「止まっている」という結論は持たず、読む側
  * （`tools.ts` の `describeToolUseStall`）が `record.waiting` と突き合わせて出す。
  */
-export interface ToolUseStallProbe {
+interface ToolUseStallProbe {
   /** **この値で経過時間を計算しない。** 何分経ったかを判定するのは人間である。 */
   timestamp: string | undefined;
   /** **必ず1件以上**（0件なら `probeToolUseStall` は `undefined` を返す）。 */
@@ -2759,7 +2759,7 @@ function withheldExcerptItem(entry: { at: string; line: string }): string {
  * （直近の報告ほど「次に何をするか」を持つので、末尾から詰める）。落ちた分の全文は日誌に在る。
  * `total` は畳んだ本数（`count`）: 在庫は台帳に写すために予算の内へ詰めてあり、詰めて落とした分は `excerpts` に無いので、本数は件数から数える。
  */
-export function renderWithheldExcerpts(
+function renderWithheldExcerpts(
   excerpts: readonly { at: string; line: string }[],
   total: number = excerpts.length,
   budget: number = WITHHELD_REPORT_LISTING_BUDGET,
@@ -2985,9 +2985,7 @@ interface SynthesizedNoticeStreak {
  * **`count` は入れない。** 入れると「同文が3通の束」と「同文が1通の束」が別物になり、通数が回によって違う枠落ちでは畳めなくなる。
  * 通数は `suppressedArrived` の側で保存する。**正規化も切り詰めもしない**（1バイトでも違えば別のことを言っている側へ倒す）。
  */
-export function synthesizedNoticeSignature(
-  fragments: readonly SynthesizedNoticeFragment[],
-): string {
+function synthesizedNoticeSignature(fragments: readonly SynthesizedNoticeFragment[]): string {
   return JSON.stringify(fragments.map((fragment) => [fragment.label, fragment.text]));
 }
 
@@ -3091,7 +3089,7 @@ export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedN
  * **1件しか無いときは `undefined` を返す**: 合流しなかったことは0件という値ではなく行が無いことで表す（取れない軸に0の行を作らない）。
  * **畳み込みの判定にも配り方にも使わない**（日誌へ書く計器だけの入力）。
  */
-export function synthesizedNoticeArrivalIntervals(
+function synthesizedNoticeArrivalIntervals(
   arrivedAt: readonly number[],
 ): { count: number; maxIntervalMs: number; minIntervalMs: number } | undefined {
   if (arrivedAt.length <= 1) return undefined;
@@ -14144,7 +14142,7 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
 }
 
 // `isLive()` の返り値は読まない独立した集計にする: 数えるのは「`isLive()` が嘘をついている本数」ではなく、それを包む「宛先が名簿からまるごと消えている本数」。
-export function vanishedRunnerBacklog(
+function vanishedRunnerBacklog(
   summaries: readonly ManagerSummary[],
   registeredRunnerIds: ReadonlySet<string>,
 ): ReadonlyMap<string, { count: number; oldestStartedAt: string }> {
@@ -14176,7 +14174,7 @@ function formatVanishedRunnerElapsed(elapsedMs: number): string {
 
 // `[計器]`（`EXCHANGE_KIND_GAUGE_PREFIX`）を含めない: `exchange-kind-coverage.test.ts` の静的検査は呼び出し元の `text:` の式に接頭辞定数が直接在ることを見るので、関数の中に隠すと見えなくなる。
 // 経過が読めない・負のときは経過を捏造せず省く（取れない軸に0の行を作らない）。
-export function describeVanishedRunnerBacklogLine(
+function describeVanishedRunnerBacklogLine(
   runnerId: string,
   backlog: { count: number; oldestStartedAt: string },
   now: number,
@@ -14217,7 +14215,7 @@ interface SummaryContext {
 }
 
 /** 報告の全文（途中の発言を含む）。旧 runner は `fullText` を送らず、`text` が全文。 */
-export function reportFullTextOf(event: { text: string; fullText?: string }): string {
+function reportFullTextOf(event: { text: string; fullText?: string }): string {
   return event.fullText ?? event.text;
 }
 
@@ -14225,7 +14223,7 @@ export function reportFullTextOf(event: { text: string; fullText?: string }): st
  * クローンの受信箱へ配る報告の本文。途中の発言があった回は、最後の発言（結論と質問）に全文の在りかを1行添える。
  * 添える行を省かない: 「途中があった」こと自体が見えないと、クローンは結論だけで足りない回に全文を引く契機を持てないため。
  */
-export function reportDeliveryTextOf(event: {
+function reportDeliveryTextOf(event: {
   managerId: string;
   text: string;
   fullText?: string;

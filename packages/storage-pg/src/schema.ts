@@ -105,31 +105,6 @@ export const schedulePhases = pgTable('schedule_phases', {
   phase: jsonb('phase').notNull(),
 });
 
-// `id` を主キーにする: 「select してから insert」に割ると同じ id の並行 open がすり抜け、片付けた仕事が開き直る。
-export const commitments = pgTable(
-  'commitments',
-  {
-    id: text('id').primaryKey(),
-    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
-    closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
-    commitment: jsonb('commitment').notNull(),
-    // null は migrate が振る前の行で、並びでは最後に来る。書き直し（`jsonb_set`）では動かない。
-    seq: bigint('seq', { mode: 'number' }).default(sql`nextval('commitments_seq_seq')`),
-  },
-  // 部分索引にして片付いた行を載せない: 自動 open で閉じた行がいずれ大半を占める。
-  (table) => [
-    index('commitments_open_idx')
-      .on(table.at)
-      .where(sql`closed_at is null`),
-    // `migrate` が無条件には作らない: 既存の重複行が在ると作成が落ち、`STATEMENTS` に置くとデーモンが上がらなくなる。
-    // `ensureOpenManagerBodyIndex` が数えてから作るので、在る DB と無い DB の両方がありうる。
-    // 鍵が `md5(body)` なのは btree の索引行のサイズ上限のため。
-    uniqueIndex('commitments_open_manager_body_idx')
-      .on(sql`(${table.commitment}->>'source')`, sql`md5(${table.commitment}->>'body')`)
-      .where(sql`closed_at is null and commitment->>'origin' = 'manager'`),
-  ],
-);
-
 // 順序と状態を持つ待ち行列（#5469 P2）。並びは行の欄（`task` jsonb）ではなく専用の列 `rank`（fractional rank）に持つ。
 // `rank` を jsonb の中に入れない: 並びは他の行との関係で決まる値で、`taskSchema` の「行そのもの」に混ぜると、
 // 行を読み書きする経路すべてが rank の整合を意識することになる。索引は張らない（開いている行が一覧の全件で、メモリ上で並べる）。

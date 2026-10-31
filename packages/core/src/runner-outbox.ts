@@ -131,7 +131,7 @@ export function claimRunnerRootDirectorySync(
   return { movedAsideTo };
 }
 
-export interface PrepareManagerOutboxOptions {
+interface PrepareManagerOutboxOptions {
   readonly root: string;
   readonly managerId: string;
   readonly childGid?: number;
@@ -152,7 +152,7 @@ export function prepareManagerOutbox(options: PrepareManagerOutboxOptions): stri
   return dir;
 }
 
-export interface CollectManagerOutboxOptions {
+interface CollectManagerOutboxOptions {
   readonly root: string;
   readonly stagedRoot: string;
   readonly managerId: string;
@@ -469,7 +469,7 @@ export type OutboxContentsRemover = (
 const REMOVE_CHUNK = 200;
 
 /** {@link removeOutboxContentsAsChild} の非同期版（#4906）。定期の掃除（{@link pruneStaleOutboxRoots}）が使い、`rm` の待ちでメインのループを止めない。 */
-export const removeOutboxContentsAsChildAsync: OutboxContentsRemover = async (entries, child) => {
+const removeOutboxContentsAsChildAsync: OutboxContentsRemover = async (entries, child) => {
   for (let i = 0; i < entries.length; i += REMOVE_CHUNK) {
     await new Promise<void>((done) => {
       // 失敗は握る（`spawnSync` も終了コードを見ていない）: 消し残しは次の掃除に任せる

@@ -2,7 +2,8 @@ import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useAction } from '~/lib/use-action';
-import { useState } from 'react';
+import { onEscape, useFocusAfter } from '~/lib/use-focus-after';
+import { useRef, useState } from 'react';
 
 import {
   Page,
@@ -146,15 +147,30 @@ function AccessGrantControl({ account }: { account: AccessAccount }) {
   const { busy, failure, run: runAction } = useAction();
   const [confirming, setConfirming] = useState(false);
 
+  // 「許可する」「許可を取り消す」「本当に取り消す」は互いを差し替えて出すので、押したボタンごと消えて焦点が body に落ちる。切り替えた先の最初のボタンへ移す
+  const controlRef = useRef<HTMLDivElement>(null);
+  const stage = !account.granted ? 'grant' : confirming ? 'confirm' : 'trigger';
+  // busy も dep に入れる: 送信中は移し先のボタンが disabled で、終わった描き直しで移す
+  const focusFirstButtonAfter = useFocusAfter(controlRef, `${stage}-${String(busy)}`);
+
   function run(action: () => Promise<unknown>) {
     return runAction(async () => {
-      await action();
+      await focusFirstButtonAfter('button', action);
       setConfirming(false);
     });
   }
 
+  function cancel() {
+    void focusFirstButtonAfter('button');
+    setConfirming(false);
+  }
+
   return (
-    <div className="mt-2 flex flex-col gap-2">
+    <div
+      ref={controlRef}
+      className="mt-2 flex flex-col gap-2"
+      onKeyDown={confirming && !busy ? onEscape(cancel) : undefined}
+    >
       <div className="flex flex-wrap items-center gap-2">
         {!account.granted ? (
           <Button
@@ -171,7 +187,10 @@ function AccessGrantControl({ account }: { account: AccessAccount }) {
             variant="danger"
             size="sm"
             aria-label={`${accountName(account)} の許可を取り消す`}
-            onClick={() => setConfirming(true)}
+            onClick={() => {
+              void focusFirstButtonAfter('button');
+              setConfirming(true);
+            }}
           >
             許可を取り消す
           </Button>
@@ -189,7 +208,7 @@ function AccessGrantControl({ account }: { account: AccessAccount }) {
             >
               本当に取り消す
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            <Button variant="ghost" size="sm" onClick={cancel}>
               やめる
             </Button>
           </>

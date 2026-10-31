@@ -30,7 +30,7 @@ export {
   type ApprovalPagingKey,
 } from './approval-cursor.js';
 /** 一覧の継続点の共通の符号化。daemon の `/approvals` が使う。 */
-export { encodeCursor, decodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+export { encodeCursor, decodeCursor } from './cursor-codec.js';
 /** 出所は SDK の `result.modelUsage` であって `usage` ではない: 後者はメインループぶんだけで、作業者の消費が落ちる。累積値なので足さずに差分を取る。 */
 export * from './usage.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */
@@ -45,7 +45,6 @@ export {
   hasAccountUsageDetail,
   isNotLoggedIn,
   limitsUnavailableCauseSchema,
-  secondsToEpochMs,
   toAccountUsage,
   usageWindowKindSchema,
   usageWindowSchema,
@@ -240,7 +239,6 @@ export {
   assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionDrift,
   assertNeverMemoryDescriptionFreshness,
-  assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryBootBackfillFromJournal,
@@ -248,11 +246,9 @@ export {
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
   describeMemoryTidyTargets,
-  memoryProtectionAllowsFullReplace,
   memoryProtectionRebuildDecision,
   nextDescribedState,
   parseMemoryFrontmatter,
-  renderMemoryDocument,
   renderMemoryDocuments,
   renderMemoryListing,
   resolveMemoryDescriptionFreshness,
@@ -1290,7 +1286,6 @@ export {
   EXCHANGE_KIND_RECOVERY_PREFIX,
   EXCHANGE_KIND_REPLY_PREFIX,
   EXCHANGE_KIND_THINNING_PREFIX,
-  inferExchangeKindFromText,
   type ExchangeKind,
 } from './exchange-kind.js';
 /** 能力の制限ではなく実行環境の設定である（理由は `permission-mode.ts`）。 */

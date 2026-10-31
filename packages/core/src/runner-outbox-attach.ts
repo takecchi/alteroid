@@ -27,7 +27,7 @@ import { isSafeRunnerSegment } from './runner-attachments.js';
  * パス名で検めてから開く形（`lstat` → `open`）にしない: その隙間に担い手が差し替えられる。開いた fd で検める。
  */
 
-export interface AttachToOutboxOptions {
+interface AttachToOutboxOptions {
   readonly outboxRoot: string;
   readonly managerId: string;
   /** 担当の作業場の置き場（`/tmp`）。`<scratchParent>/<scratchName>` と `<scratchParent>/<scratchName>-*` の下だけを読む。 */

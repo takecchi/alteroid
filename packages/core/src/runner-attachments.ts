@@ -128,7 +128,7 @@ export interface PlacedAttachment {
   readonly imageOverTurnLimit?: { readonly reason: TurnImageOverReason; readonly limit: number };
 }
 
-export interface PlaceAttachmentsOptions {
+interface PlaceAttachmentsOptions {
   readonly root: string;
   readonly managerId: string;
   readonly attachments: readonly RunnerAttachment[];

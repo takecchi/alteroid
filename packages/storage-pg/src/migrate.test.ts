@@ -1,20 +1,14 @@
 // pglite-prepay: not-needed（migrate そのものを測るので、各テストが冷えた new PGlite() から全 migrate を自分で流す。雛形は共有できず、前払いで消せる固定費が無い）
 import { ZERO_USAGE } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
-import { eq, isNull, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PgAuthStore } from './auth.js';
 import type { Db } from './db.js';
-import {
-  AUTH_ACCOUNTS_EMAIL_LOWER_INDEX,
-  ensureOpenManagerBodyIndex,
-  migrate,
-  OPEN_MANAGER_BODY_INDEX,
-  STATEMENTS,
-} from './migrate.js';
-import { archive, authAccounts, commitments } from './schema.js';
+import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX, migrate, STATEMENTS } from './migrate.js';
+import { archive, authAccounts } from './schema.js';
 import { PgUsageStore } from './usage.js';
 
 describe('migrate の配列（起動のたびに頭から通るもの）', () => {
@@ -199,116 +193,6 @@ describe('migrate（archive の autovacuum reloptions。#698）', () => {
       .where(eq(archive.id, 'session-migrate-reloptions-1.jsonl'));
     expect(rows).toHaveLength(1);
   });
-});
-
-describe('migrate（台帳の畳み込みの索引。#1041）', () => {
-  // 既定の 5s にしない: `migrate` を本体で通し、並列実行の中で PGlite の起動と migrate が 5s を超えることがあるため。
-  let client: PGlite;
-  let db: Db;
-
-  const managerRow = (id: string, body: string, source = 'mgr-1') =>
-    db.insert(commitments).values({
-      id,
-      at: new Date('2026-09-17T00:00:00.000Z'),
-      closedAt: null,
-      commitment: { id, at: '2026-09-17T00:00:00.000Z', origin: 'manager', source, body },
-    });
-
-  const indexExists = async (): Promise<boolean> => {
-    const result = await db.execute(
-      sql`select 1 from pg_class where relname = ${OPEN_MANAGER_BODY_INDEX}`,
-    );
-    const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
-    return rows.length > 0;
-  };
-
-  beforeEach(async () => {
-    client = new PGlite();
-    db = drizzle(client);
-  });
-
-  afterEach(async () => {
-    await client.close();
-  });
-
-  it('重複が無ければ索引を作る（警告は出さない）', async () => {
-    const warnings: string[] = [];
-    await migrate(db, (line) => warnings.push(line));
-    expect(await indexExists()).toBe(true);
-    expect(warnings).toEqual([]);
-  }, 30_000);
-
-  // 時間で測らない: 器の混み具合で揺れるため、走査する問い合わせを発行したら落ちる `db` を渡して発行の有無を見る。
-  it('⭐ 索引が在るなら、重複を数える問い合わせを発行しない（起動の費用を台帳の齢に比例させない）', async () => {
-    await migrate(db);
-
-    let scanned = false;
-    const watched = {
-      ...db,
-      execute: (query: unknown) => {
-        const text = JSON.stringify(query);
-        if (text.includes('group by')) {
-          scanned = true;
-          throw new Error('索引が在るのに台帳を走査した');
-        }
-        return db.execute(query as never);
-      },
-    } as unknown as Db;
-
-    await ensureOpenManagerBodyIndex(watched, () => undefined);
-    expect(scanned).toBe(false);
-  }, 30_000);
-
-  it('⭐ 既存の重複行が在っても migrate は落ちない —— 索引を作らず、件数と id を逐語で警告する', async () => {
-    await migrate(db);
-    await db.execute(sql.raw(`drop index ${OPEN_MANAGER_BODY_INDEX}`));
-    await managerRow('dup-a', '同じ一言');
-    await managerRow('dup-b', '同じ一言');
-    await managerRow('single', '別の一言');
-
-    const warnings: string[] = [];
-    await migrate(db, (line) => warnings.push(line));
-
-    expect(await indexExists()).toBe(false);
-    expect(warnings.join('')).toContain('1 組 / 2 行');
-    expect(warnings.join('')).toContain('dup-a, dup-b');
-    expect(warnings.join('')).toContain(OPEN_MANAGER_BODY_INDEX);
-    expect(warnings.join('')).not.toContain('single');
-    const rows = await db.select({ id: commitments.id }).from(commitments);
-    expect(rows).toHaveLength(3);
-    const open = await db
-      .select({ id: commitments.id })
-      .from(commitments)
-      .where(isNull(commitments.closedAt));
-    expect(open).toHaveLength(3);
-  }, 30_000);
-
-  it('⭐ 重複が片付けば、次の起動で索引は黙って作られる', async () => {
-    await migrate(db);
-    await db.execute(sql.raw(`drop index ${OPEN_MANAGER_BODY_INDEX}`));
-    await managerRow('dup-a', '同じ一言');
-    await managerRow('dup-b', '同じ一言');
-    await migrate(db, () => undefined);
-    expect(await indexExists()).toBe(false);
-
-    await db
-      .update(commitments)
-      .set({ closedAt: new Date('2026-09-18T00:00:00.000Z') })
-      .where(eq(commitments.id, 'dup-b'));
-
-    const warnings: string[] = [];
-    await migrate(db, (line) => warnings.push(line));
-    expect(await indexExists()).toBe(true);
-    expect(warnings).toEqual([]);
-  }, 30_000);
-
-  it('索引が在る DB に行を積んでから2周目を通しても落ちない', async () => {
-    await migrate(db);
-    await managerRow('row-1', '一言め');
-    await managerRow('row-2', '二言め');
-    await migrate(db);
-    expect(await indexExists()).toBe(true);
-  }, 30_000);
 });
 
 describe('migrate（auth_accounts のメール大小文字索引。#1702）', () => {

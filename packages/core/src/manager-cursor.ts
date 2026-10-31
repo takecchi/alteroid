@@ -40,7 +40,7 @@ const managerCursorSchema = z.object({
   q: z.string().nullable().default(null),
 });
 
-export type ManagerCursor = z.infer<typeof managerCursorSchema>;
+type ManagerCursor = z.infer<typeof managerCursorSchema>;
 
 // ソートする: 渡す順序の違いで、意味の同じ絞りが別の cursor として食い違い扱いにならないようにするため。
 export function normalizeManagerCursorStatus(

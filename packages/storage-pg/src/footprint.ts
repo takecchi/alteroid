@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { toNumber } from './db.js';
-import { archive, commitments, inboxEvents, jobs, journal, tasks } from './schema.js';
+import { archive, inboxEvents, jobs, journal, tasks } from './schema.js';
 
 export const STATEMENT_TIMEOUT_MS = 3000;
 
@@ -16,11 +16,6 @@ export interface TableSizeStats {
 }
 
 export type JobsFootprint = TableSizeStats;
-
-export interface CommitmentsFootprint {
-  open: TableSizeStats;
-  closed: TableSizeStats;
-}
 
 // tasks は 1 操作ごとに全行を読む（並びの計算が全行を要る）ので、行数と大きさをここで見張る
 export type TasksFootprint = TableSizeStats;
@@ -44,7 +39,6 @@ export type ArchiveFootprint = TableSizeStats;
 
 export interface StorageFootprint {
   jobs: JobsFootprint;
-  commitments: CommitmentsFootprint;
   tasks: TasksFootprint;
   inboxEvents: InboxEventsFootprint;
   journal: JournalFootprint;
@@ -103,72 +97,6 @@ async function measureJobsFootprint(db: Db, statementTimeoutMs: number): Promise
     });
   } catch {
     return { ...UNMEASURABLE };
-  }
-}
-
-async function measureCommitmentsFootprint(
-  db: Db,
-  statementTimeoutMs: number,
-): Promise<CommitmentsFootprint> {
-  try {
-    return await withStatementTimeout(db, statementTimeoutMs, async (tx) => {
-      const [row] = await tx
-        .select({
-          openRows: sql<number | string>`count(*) filter (where ${commitments.closedAt} is null)`,
-          openStoredBytes: sql<
-            number | string | null
-          >`sum(pg_column_size(${commitments.commitment})) filter (where ${commitments.closedAt} is null)`,
-          openTextBytes: sql<
-            number | string | null
-          >`sum(octet_length(${commitments.commitment}::text)) filter (where ${commitments.closedAt} is null)`,
-          openMaxStoredBytes: sql<
-            number | string | null
-          >`max(pg_column_size(${commitments.commitment})) filter (where ${commitments.closedAt} is null)`,
-          openMaxTextBytes: sql<
-            number | string | null
-          >`max(octet_length(${commitments.commitment}::text)) filter (where ${commitments.closedAt} is null)`,
-          closedRows: sql<
-            number | string
-          >`count(*) filter (where ${commitments.closedAt} is not null)`,
-          closedStoredBytes: sql<
-            number | string | null
-          >`sum(pg_column_size(${commitments.commitment})) filter (where ${commitments.closedAt} is not null)`,
-          closedTextBytes: sql<
-            number | string | null
-          >`sum(octet_length(${commitments.commitment}::text)) filter (where ${commitments.closedAt} is not null)`,
-          closedMaxStoredBytes: sql<
-            number | string | null
-          >`max(pg_column_size(${commitments.commitment})) filter (where ${commitments.closedAt} is not null)`,
-          closedMaxTextBytes: sql<
-            number | string | null
-          >`max(octet_length(${commitments.commitment}::text)) filter (where ${commitments.closedAt} is not null)`,
-        })
-        .from(commitments);
-      if (row === undefined) {
-        return {
-          open: { rows: 0, storedBytes: 0, textBytes: 0, maxStoredBytes: 0, maxTextBytes: 0 },
-          closed: { rows: 0, storedBytes: 0, textBytes: 0, maxStoredBytes: 0, maxTextBytes: 0 },
-        };
-      }
-      return {
-        open: {
-          rows: toNumber(row.openRows),
-          storedBytes: zeroIfNull(row.openStoredBytes),
-          textBytes: zeroIfNull(row.openTextBytes),
-          maxStoredBytes: zeroIfNull(row.openMaxStoredBytes),
-          maxTextBytes: zeroIfNull(row.openMaxTextBytes),
-        },
-        closed: {
-          rows: toNumber(row.closedRows),
-          storedBytes: zeroIfNull(row.closedStoredBytes),
-          textBytes: zeroIfNull(row.closedTextBytes),
-          maxStoredBytes: zeroIfNull(row.closedMaxStoredBytes),
-          maxTextBytes: zeroIfNull(row.closedMaxTextBytes),
-        },
-      };
-    });
-  } catch {
-    return { open: { ...UNMEASURABLE }, closed: { ...UNMEASURABLE } };
   }
 }
 
@@ -326,24 +254,16 @@ export async function measureStorageFootprint(
   statementTimeoutMs: number = STATEMENT_TIMEOUT_MS,
 ): Promise<StorageFootprint> {
   const startedAt = Date.now();
-  const [
-    jobsFootprint,
-    commitmentsFootprint,
-    tasksFootprint,
-    inboxEventsFootprint,
-    journalFootprint,
-    archiveFootprint,
-  ] = await Promise.all([
-    measureJobsFootprint(db, statementTimeoutMs),
-    measureCommitmentsFootprint(db, statementTimeoutMs),
-    measureTasksFootprint(db, statementTimeoutMs),
-    measureInboxEventsFootprint(db, statementTimeoutMs),
-    measureJournalFootprint(db, statementTimeoutMs),
-    measureArchiveFootprint(db, statementTimeoutMs),
-  ]);
+  const [jobsFootprint, tasksFootprint, inboxEventsFootprint, journalFootprint, archiveFootprint] =
+    await Promise.all([
+      measureJobsFootprint(db, statementTimeoutMs),
+      measureTasksFootprint(db, statementTimeoutMs),
+      measureInboxEventsFootprint(db, statementTimeoutMs),
+      measureJournalFootprint(db, statementTimeoutMs),
+      measureArchiveFootprint(db, statementTimeoutMs),
+    ]);
   return {
     jobs: jobsFootprint,
-    commitments: commitmentsFootprint,
     tasks: tasksFootprint,
     inboxEvents: inboxEventsFootprint,
     journal: journalFootprint,

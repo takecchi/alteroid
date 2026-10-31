@@ -21,7 +21,7 @@ export interface PidsPressureReading {
 /** 同じ相手へ知らせ直すまでの間隔。逼迫が続く間、道具を使うたびに同じ段落が積まれて文脈を食わないため。 */
 export const PIDS_PRESSURE_NOTICE_INTERVAL_MS = 5 * 60_000;
 
-export function describePidsPressure(reading: PidsPressureReading): string {
+function describePidsPressure(reading: PidsPressureReading): string {
   const percent = Math.round((reading.current / reading.max) * 100);
   return (
     `⚠ alteroid からの知らせ: この器（runner）の pids が ${String(reading.current)}/${String(reading.max)}（${String(percent)}%）で、上限に近い。` +

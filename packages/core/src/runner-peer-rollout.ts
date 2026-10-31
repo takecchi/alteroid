@@ -12,7 +12,7 @@ export interface PeerRolloutKey {
   readonly sessionId: string;
 }
 
-export interface PeerRolloutDeps {
+interface PeerRolloutDeps {
   /** peer の Codex が使う `CODEX_HOME`（peer の spawn と同じ値）。分からなければ `undefined`（預けない）。 */
   readonly codexHome: () => string | undefined;
   /** 担当の主の記録の鍵。まだ分からなければ `undefined`（分かるまでメモリに溜める）。 */

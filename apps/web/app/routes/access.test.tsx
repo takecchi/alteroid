@@ -260,6 +260,85 @@ describe('/access 画面 — grant / revoke', () => {
   });
 });
 
+describe('/access 画面 — 確認と取り消しのあとの焦点（body に落ちない）', () => {
+  const revokeButton = () =>
+    screen.getByRole('button', { name: 'granted@example.com の許可を取り消す' });
+
+  it('「許可を取り消す」を押したら、焦点は確認の行の「本当に取り消す」へ移る', async () => {
+    stubAccess({ body: { accounts: [account()] } });
+    await renderAccess();
+    const trigger = revokeButton();
+    trigger.focus();
+
+    fireEvent.click(trigger);
+
+    const confirm = screen.getByRole('button', {
+      name: 'granted@example.com の許可を本当に取り消す',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(confirm));
+  });
+
+  it('確認の行で「やめる」を押したら、焦点は「許可を取り消す」へ戻る', async () => {
+    stubAccess({ body: { accounts: [account()] } });
+    await renderAccess();
+    fireEvent.click(revokeButton());
+    const cancel = screen.getByRole('button', { name: 'やめる' });
+    cancel.focus();
+
+    fireEvent.click(cancel);
+
+    await waitFor(() => expect(document.activeElement).toBe(revokeButton()));
+  });
+
+  it('確認の行で Esc を押したら、「やめる」と同じに行を戻し、焦点を「許可を取り消す」へ戻す', async () => {
+    const stub = stubAccess({ body: { accounts: [account()] } });
+    await renderAccess();
+    fireEvent.click(revokeButton());
+    const confirm = screen.getByRole('button', {
+      name: 'granted@example.com の許可を本当に取り消す',
+    });
+    confirm.focus();
+
+    fireEvent.keyDown(confirm, { key: 'Escape' });
+
+    await waitFor(() => expect(document.activeElement).toBe(revokeButton()));
+    expect(screen.queryByText('本当に取り消す')).toBeNull();
+    expect(stub.calls.some((url) => /\/revoke$/.test(url))).toBe(false);
+  });
+
+  it('取り消しが通って「許可する」に変わったら、焦点はその「許可する」へ移る', async () => {
+    let granted = true;
+    stubFetch((url) => {
+      if (/\/access\/acct-a\/revoke$/.test(url)) {
+        granted = false;
+        return json({ ok: true }, 200);
+      }
+      if (url.includes('/access')) {
+        return json(
+          {
+            accounts: [
+              account(granted ? {} : { granted: false, grantedAt: null, grantedBy: null }),
+            ],
+          },
+          200,
+        );
+      }
+      return undefined;
+    });
+    await renderAccess();
+    fireEvent.click(revokeButton());
+    const confirm = screen.getByRole('button', {
+      name: 'granted@example.com の許可を本当に取り消す',
+    });
+    confirm.focus();
+
+    fireEvent.click(confirm);
+
+    const grant = await screen.findByRole('button', { name: 'granted@example.com を許可する' });
+    await waitFor(() => expect(document.activeElement).toBe(grant));
+  });
+});
+
 describe('/access 画面 — 送信中・失敗・成功後の表示', () => {
   let grantFails = false;
   let revokeFails = false;

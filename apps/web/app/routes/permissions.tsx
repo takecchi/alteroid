@@ -1,6 +1,7 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useAction } from '~/lib/use-action';
+import { onEscape, useFocusAfter } from '~/lib/use-focus-after';
 import {
   describePermissionRuleBreadth,
   describePermissionRuleBreadthText,
@@ -9,7 +10,7 @@ import {
   assessPermissionGrantStaleness,
   PERMISSION_GRANT_STALE_DAYS,
 } from '@alteroid/core/permission-staleness';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 import {
   Page,
@@ -137,8 +138,16 @@ function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
   // 描く所だけ伏せる: rule と answer は人間かクローンが書いた文で、鍵を貼ってしまうことがあり、CLI の permission list も伏せて出すため
   const shownRule = redactBody(grant.rule);
 
+  // 取り消しが通ると取り消しのボタンが行から無くなって焦点が body に落ちるので、行そのものへ移す（取り消しの前後で行は同じ要素のまま）
+  const rowRef = useRef<HTMLLIElement>(null);
+  const focusRowAfter = useFocusAfter(rowRef, revoked);
+
   return (
-    <li className="border-b border-border px-4 py-3 last:border-b-0">
+    <li
+      ref={rowRef}
+      tabIndex={-1}
+      className="border-b border-border px-4 py-3 outline-none last:border-b-0"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-sm break-all">{shownRule}</span>
         <Badge tone={revoked ? 'neutral' : 'ok'}>{revoked ? '取り消し済み' : '有効'}</Badge>
@@ -174,13 +183,19 @@ function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
         ]}
       />
 
-      {!revoked && <RevokeControl grant={grant} />}
+      {!revoked && <RevokeControl grant={grant} revoke={(revoke) => focusRowAfter('', revoke)} />}
     </li>
   );
 }
 
 // 押しても最初は叩かず確認を挟む: 取り消しはその場で戻せないため
-function RevokeControl({ grant }: { grant: PermissionGrant }) {
+function RevokeControl({
+  grant,
+  revoke,
+}: {
+  grant: PermissionGrant;
+  revoke: (action: () => Promise<unknown>) => Promise<void>;
+}) {
   const revokePermissionGrant = useRevokePermissionGrant();
   const { busy, failure, run: runAction } = useAction();
   const [confirming, setConfirming] = useState(false);
@@ -189,35 +204,35 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
 
   function run() {
     return runAction(async () => {
-      await revokePermissionGrant(grant.id);
+      await revoke(() => revokePermissionGrant(grant.id));
       setConfirming(false);
     });
   }
 
   // 確認の行は「取り消す」を差し替えて出すので、押したボタンごと消えて焦点が body に落ちる。切り替えた先の最初のボタンへ移す:
   // 開いたら「本当に取り消す」へ、やめたら「取り消す」へ
-  // ボタンに ref を渡さず行から引く: 共通の Button は ref を受けない型のため
   const controlRef = useRef<HTMLDivElement>(null);
-  const moveFocusTo = useRef<'confirm' | 'trigger' | undefined>(undefined);
-  useEffect(() => {
-    const target = moveFocusTo.current;
-    if (target === undefined) return;
-    moveFocusTo.current = undefined;
-    const selector = target === 'confirm' ? '[data-revoke-confirm]' : '[data-revoke-trigger]';
-    controlRef.current?.querySelector<HTMLElement>(selector)?.focus();
-  }, [confirming]);
+  const focusFirstButtonAfter = useFocusAfter(controlRef, confirming);
+
+  function cancel() {
+    void focusFirstButtonAfter('button');
+    setConfirming(false);
+  }
 
   return (
-    <div ref={controlRef} className="mt-2 flex flex-col gap-2">
+    <div
+      ref={controlRef}
+      className="mt-2 flex flex-col gap-2"
+      onKeyDown={confirming && !busy ? onEscape(cancel) : undefined}
+    >
       <div className="flex flex-wrap items-center gap-2">
         {!confirming ? (
           <Button
             variant="danger"
             size="sm"
             aria-label={`${shownRule} を取り消す`}
-            data-revoke-trigger
             onClick={() => {
-              moveFocusTo.current = 'confirm';
+              void focusFirstButtonAfter('button');
               setConfirming(true);
             }}
           >
@@ -234,19 +249,11 @@ function RevokeControl({ grant }: { grant: PermissionGrant }) {
               size="sm"
               loading={busy}
               aria-label={`${shownRule} を本当に取り消す`}
-              data-revoke-confirm
               onClick={() => void run()}
             >
               本当に取り消す
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                moveFocusTo.current = 'trigger';
-                setConfirming(false);
-              }}
-            >
+            <Button variant="ghost" size="sm" onClick={cancel}>
               やめる
             </Button>
           </>

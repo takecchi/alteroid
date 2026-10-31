@@ -34,10 +34,3 @@ export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{
   { kind: 'recovery', prefix: EXCHANGE_KIND_RECOVERY_PREFIX },
   { kind: 'gauge', prefix: EXCHANGE_KIND_GAUGE_PREFIX },
 ];
-
-export function inferExchangeKindFromText(text: string): ExchangeKind | undefined {
-  for (const { kind, prefix } of EXCHANGE_KIND_PREFIXES) {
-    if (text.startsWith(prefix)) return kind;
-  }
-  return undefined;
-}

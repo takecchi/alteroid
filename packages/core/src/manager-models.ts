@@ -1,6 +1,6 @@
 import { ANTHROPIC_ROUTE_NONE_LINE } from './anthropic-route-env.js';
 
-export interface ManagerModelSource {
+interface ManagerModelSource {
   runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
 }
 
@@ -29,7 +29,7 @@ export function describeManagerModels(models: ManagerModels): string {
   return `マネージャー ${models.managerModel ?? '不明'} / 作業者 ${models.workerModel ?? '不明'}`;
 }
 
-export interface RunnerModelSource extends ManagerModelSource {
+interface RunnerModelSource extends ManagerModelSource {
   runners(): Promise<{
     runners: readonly { label: string; state: string; runnerId?: string }[];
   }>;
@@ -60,7 +60,7 @@ export async function collectRunnerModelLines(pool: RunnerModelSource): Promise<
   }
 }
 
-export interface RunnerRouteSource {
+interface RunnerRouteSource {
   runnerReportedAnthropicRoute?(runnerId: string): readonly string[] | undefined;
   runners(): Promise<{
     runners: readonly { label: string; state: string; runnerId?: string }[];

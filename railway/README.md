@@ -763,7 +763,7 @@ for s in runner runner-2 runner-3; do railway down -s "$s" -y; done
 # 2. 誰も繋いでいないことを見てから落とす（認証を残す側）
 railway ssh --service Postgres 'psql \
   -c "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid();" \
-  -c "truncate table approvals, archive, attachments, commitments, conversation_outbound_latest, conversation_read, conversation_read_baseline, daemon_state, env_profile, env_profile_entries, event_receipts, inbox_events, jobs, journal, memory, practice_versions, practices, schedule_phases, schedules, session_entries, sessions, tasks, usage_baseline, usage_daily, usage_ledger, usage_turns, usage_unmetered restart identity cascade;"'
+  -c "truncate table approvals, archive, attachments, conversation_outbound_latest, conversation_read, conversation_read_baseline, daemon_state, env_profile, env_profile_entries, event_receipts, inbox_events, jobs, journal, memory, practice_versions, practices, schedule_phases, schedules, session_entries, sessions, tasks, usage_baseline, usage_daily, usage_ledger, usage_turns, usage_unmetered restart identity cascade;"'
 
 # 3. 戻す（runner が先）
 for s in runner runner-2 runner-3; do railway redeploy -s "$s" --from-source -y; done
@@ -789,10 +789,9 @@ railway redeploy -s app --from-source -y
 railway ssh --service Postgres 'psql -c "select tablename from pg_tables where schemaname = current_schema() and tablename not like '"'"'auth_%'"'"' order by tablename;"'
 ```
 
-**消えるもののうち忘れやすいのは5つ。** どれも `memory`（記憶）とは別の軸である。
+**消えるもののうち忘れやすいのは4つ。** どれも `memory`（記憶）とは別の軸である。
 
 - **`daemon_state.clone_session_id`** — クローンが続けているセッションの id。消すとクローンは**新しいセッションから始まる**（会話の続きが切れる。記憶を残しても切れる）
-- **`commitments`** — 引き受けたまま終わっていない仕事。消すと**やり残しを誰も思い出さない**
 - **`env_profile_entries`**（と旧形式の `env_profile`）— 実行環境プロファイル（`.zprofile` 相当。名前付きの行。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile list` で行を数え、`alteroid profile show <名前>` で本文を控える。**`truncate` で `daemon_state` も消えるので、旧 `env_profile` に行が残っていると、次の起動で `default` 行として蘇る**（旧表も一緒に消すこと）
 - **`tasks`** — 引き受けた仕事の待ち行列（順序と状態を持つ。#5470）。消すと**やり残しを誰も思い出さない**（並べた順序と状態ごとなくなる）
 - **`practices`**（と版の履歴 `practice_versions`）— 仕事のやり方（#1282・#1420）。クローンが書くが、**人間が読んで書き換えるもの**でもある。`POST /reset` は消す側（「仕事のやり方」）なのでそれに揃えた。消す前に `alteroid practice list` で slug を数え、`alteroid practice show <slug>` で本文を控える（版の履歴は `alteroid practice history <slug>`）

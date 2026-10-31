@@ -4,7 +4,7 @@
  * 待たずに毎回起こし直す空転が無限に続く。載っていたのを見てからでないと終わりにせず、見られなければ通知か時間の上限に任せる。
  */
 
-export type BackgroundWaitOutcome = 'settled' | 'timeout' | 'released';
+type BackgroundWaitOutcome = 'settled' | 'timeout' | 'released';
 
 const FINISHED_TASK_LIMIT = 500;
 
