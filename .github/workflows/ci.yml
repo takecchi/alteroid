@@ -523,7 +523,7 @@ jobs:
   # 「全シャードを合わせると全テスト」が崩れない。vitest の `--shard=i/n` は i=1..n の
   # 全部で全ファイルを漏れも重なりも無く割り当てる。`fail-fast: false` は、1つ落ちても
   # 他のシャードの結果を最後まで見るため（どのテストが落ちたかを1回で全部出す）。
-  # `scripts/test.mjs` の歯（skip・観測用テストの期限など）は各シャードで走る。
+  # `scripts/test.mjs` の歯（skip など）は各シャードで走る。
   test:
     # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
     # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
