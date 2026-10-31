@@ -839,6 +839,39 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
+  it('⭐ 確認待ちの間に溜めた背景の知らせは、keepPeers の畳みの `#settleAll` で捨てず、起こし直した担当へ届ける', async () => {
+    const sdk = readingQuery();
+    const s = await setupPeerCall([], { sdk });
+    const noticeCount = (): number =>
+      sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length;
+    await s.client.callTool({
+      name: 'peer_approve',
+      arguments: { approval_id: s.approvalId, decision: 'escalate', run_in_background: true },
+    });
+    await waitFor(() => s.asks().length > 0);
+    expect(s.host.list()[0]?.status).toBe('waiting_human');
+    await s.client.callTool({
+      name: 'peer_run',
+      arguments: { provider: 'codex', prompt: 'B', run_in_background: true },
+    });
+    await waitFor(() =>
+      s.events.some((e) => e.type === 'note' && e.text.includes('確認待ちで止まった')),
+    );
+    expect(noticeCount()).toBe(0);
+    // 確認が残ったまま、peer を預ける畳みで止める
+    await s.host.stop('mgr-1', { keepPeers: true });
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-resumed',
+      cwd: '/work',
+      request: 'やって',
+    });
+    await waitFor(() => noticeCount() > 0);
+    expect(sdk.inputs.join('\n')).toMatch(/approval_id=appr-[0-9a-f]+/);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
   it('確認はまず peer_run の応答としてマネージャーへ返り、ask は上がらない', async () => {
     const s = await setupPeerCall();
     expect(s.first.isError).toBeUndefined();

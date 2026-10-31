@@ -2732,7 +2732,8 @@ class RunnerSession {
   readonly #peerSeeds = new Map<string, PeerRolloutSeed & { provider: string }>();
   readonly #peerPlacements = new Map<string, Promise<void>>();
   /** 背景の peer の止まりどころの知らせのうち、まだ届けていないもの（確認待ちの間は溜める）。 */
-  readonly #peerNotices: string[] = [];
+  // `result` も持つ: 預ける畳み（`keepPeers`）では `heldStops` へ戻すため
+  readonly #peerNotices: { result: PeerTurnResult; body: string }[] = [];
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
   readonly #permissionRules: () => readonly string[];
@@ -3201,7 +3202,11 @@ class RunnerSession {
       options.keepPeers === true &&
       this.#peerBroker !== undefined &&
       this.#peerBinding !== undefined;
-    if (parking && this.#peerBinding !== undefined) this.#peerBinding.holdingStops = true;
+    if (parking && this.#peerBinding !== undefined) {
+      this.#peerBinding.holdingStops = true;
+      // 確認待ちの間に溜めた知らせは、下の `#settleAll` → `#deliverPeerNotices` が `stopped` で捨てる前に、預かりへ移す（届け先は起こし直した担当）。溜めた順を保つため先頭へ入れる
+      this.#peerBinding.heldStops.unshift(...this.#peerNotices.splice(0).map((n) => n.result));
+    }
 
     // `#settleAll` より前に状態を控える: 控えずに `#status` を読むと確認が解放された後の `running` を報告が名乗ってしまうため
     const statusAtStop = this.#sdkSession.status;
@@ -4757,18 +4762,23 @@ class RunnerSession {
     this.#note(
       `背景の peer（${result.provider}）[${result.sessionId}] が${where}。マネージャーへ知らせる（#4123）`,
     );
-    this.#peerNotices.push(describePeerTurnResult(result));
+    this.#peerNotices.push({ result, body: describePeerTurnResult(result) });
     this.#deliverPeerNotices();
   }
 
   // `waiting_human` では届けない（`#wakeForFinishedBackgroundTaskOutputs` と同じ理由）。溜めて、報告の区切りで届ける
   #deliverPeerNotices(): void {
     if (this.#sdkSession.stopped) {
+      if (this.#peerNotices.length > 0) {
+        this.#note(
+          `畳まれたので、届けられなかった背景 peer の知らせ ${String(this.#peerNotices.length)} 件を捨てた`,
+        );
+      }
       this.#peerNotices.length = 0;
       return;
     }
     if (this.#peerNotices.length === 0 || this.#sdkSession.status === 'waiting_human') return;
-    const bodies = this.#peerNotices.splice(0);
+    const bodies = this.#peerNotices.splice(0).map((n) => n.body);
     this.push(
       'alteroid が自動で送った知らせである（#4123）。背景へ回した peer（Codex）が止まりどころに来た。' +
         '続けるなら peer_reply、確認待ちなら peer_approve で答えること。\n\n' +
