@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -60,6 +61,8 @@ export class FsPersonaStore implements PersonaStore {
   readonly #journal: JournalStore;
   // 進行中の組み直しをメモ化する: 同時に複数走ると、組み直しを知らせる日誌エントリが複数件になるため。完了したら null に戻し、次に索引が消えたら改めて組み直す
   #rebuildingIndex: Promise<MemoryIndex> | null = null;
+  // いま `#serialize` の区間の中で動いているか: `withPathLock` が再入できないため、中から `#serialize` を取り直すとデッドロックする。外からの読みだけを lock に並べ直すのに使う
+  readonly #lockHeld = new AsyncLocalStorage<true>();
 
   constructor(dir: string, journal: JournalStore) {
     this.#dir = dir;
@@ -69,7 +72,7 @@ export class FsPersonaStore implements PersonaStore {
   // ロック対象は常に `.index.json` 1本にする: `append()` は `.md` と `.index.json` の2ファイルにまたがる1操作で、ファイルごとに別のロックを取ると取得順序の違いでデッドロックしうるため
   // ここで `mkdir` を先に呼ばない: `withPathLock` を呼んだ時点で同期的にプロセス内 FIFO へ並ぶことに依存しているため
   async #serialize<T>(task: () => Promise<T>): Promise<T> {
-    return withPathLock(this.#indexPath(), task);
+    return withPathLock(this.#indexPath(), () => this.#lockHeld.run(true, task));
   }
 
   // `protectionStatus` / `markHumanTouched` / `markCreatedAt` からも直接呼ぶ: `#path` 経由だと、実体が既にある slug には検査が効かない穴があるため
@@ -99,7 +102,10 @@ export class FsPersonaStore implements PersonaStore {
     } catch {
       // 無いか、JSON として読めない: 組み直す
     }
-    return this.#rebuildIndex();
+    // 組み直しは必ず `#serialize` の中で行う: 外から走ると、その間に lock の中の write が書いた索引（`humanTouchedAt`）を、古い日誌の読みで上書きして印を落とすため
+    // 外から来たときは lock に並び直し、中で読み直す（先に並んでいた書き手が索引を作り直していれば、組み直さずにそれを使う）
+    if (this.#lockHeld.getStore() === true) return this.#rebuildIndex();
+    return this.#serialize(() => this.#readIndex());
   }
 
   async #writeIndex(index: MemoryIndex): Promise<void> {
