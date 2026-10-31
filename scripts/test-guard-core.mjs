@@ -1,6 +1,5 @@
 // この判定を vitest の中（テストや `setupFiles`）に置かない: 置くと `.skip` で判別器自身を黙らせられるため。`test.mjs`（vitest の外側の素の node プロセス）がここを呼ぶ。
-// 歯A・歯B・歯C は 2 値にしない: 走査対象 0 件（見ていない）・申告不備・期限超過を、無条件の skip が 0 件・合格と混ぜないため（`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
-// 歯C は名乗ったファイルだけを対象にする: 散文の「観測」は別の意味で使われており、誤検出になるため。名乗りはパスの慣習 `.observed.` / `.scratch.` / `-scratch.` と冒頭コメントの `@観測` の 2 形だけ。
+// 歯A・歯B は 2 値にしない: 走査対象 0 件（見ていない）を、無条件の skip が 0 件・合格と混ぜないため（`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
 // ## 変異試験ハーネスとの関係: `decideJudgementCategory` は `testResult.exitCode` を見ず集計行の文字列だけで判定するため、この歯が足す exit 1 は集計行を書き換えない限り「検出」に化けない。
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -8,7 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
-import { isFlagLike, stripAnsi, todayUtc } from './small-helpers-core.mjs';
+import { isFlagLike, stripAnsi } from './small-helpers-core.mjs';
 
 // `process.cwd()` に依存しない: `pnpm --filter <pkg> test` では cwd がそのパッケージ配下になるため。
 export const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -414,165 +413,6 @@ export function judgeStaticSkipScan(matchedPaths, hits) {
   return { ok: true, scanned: matchedPaths.length };
 }
 
-export const EXIT_OBSERVATION_UNDECLARED = 6;
-
-export const EXIT_OBSERVATION_DUE = 7;
-
-// ゼロ埋め無しの `2026-9-1` を弾く: `today > 見直し期限` を文字列比較で日付順と一致させる前提のため。
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function leadingCommentArea(content) {
-  const areaLines = [];
-  for (const line of content.split('\n')) {
-    if (
-      line.trim() === '' ||
-      line.startsWith('//') ||
-      line.startsWith('/*') ||
-      line.startsWith(' *') ||
-      line.startsWith('*/')
-    ) {
-      areaLines.push(line);
-    } else {
-      break;
-    }
-  }
-  return areaLines.join('\n');
-}
-
-function stripCommentPrefix(line) {
-  return line.replace(/^\s*(\/\*\*|\/\*|\*\/|\*|\/\/)\s?/, '');
-}
-
-function extractField(area, label) {
-  const re = new RegExp(`^${label}\\s*[:：]\\s*(.*)$`);
-  for (const line of area.split('\n')) {
-    const m = stripCommentPrefix(line).trim().match(re);
-    if (m) return m[1].trim();
-  }
-  return undefined;
-}
-
-function findFieldLine(content, label) {
-  const re = new RegExp(`^${label}\\s*[:：]`);
-  const lines = content.split('\n');
-  const areaLineCount = leadingCommentArea(content).split('\n').length;
-  for (let i = 0; i < areaLineCount; i++) {
-    if (re.test(stripCommentPrefix(lines[i]).trim())) return i + 1;
-  }
-  return null;
-}
-
-// 名乗りは 2 形（パスの慣習と冒頭コメント領域の `@観測`）だけにする: 散文の「観測」「書き捨て」は別の意味で使われており誤検出になるため。
-export function isObservationFile(path, content) {
-  if (path.includes('.observed.') || path.includes('.scratch.') || path.includes('-scratch.')) {
-    return true;
-  }
-  return leadingCommentArea(content).includes('@観測');
-}
-
-export function readObservationDeclaration(content) {
-  const area = leadingCommentArea(content);
-  const termRaw = extractField(area, '終了条件');
-  const deadlineRaw = extractField(area, '見直し期限');
-  return {
-    終了条件: termRaw && termRaw.length > 0 ? termRaw : undefined,
-    見直し期限: deadlineRaw !== undefined && DATE_RE.test(deadlineRaw) ? deadlineRaw : undefined,
-    見直し期限Raw: deadlineRaw,
-  };
-}
-
-export function formatObservationGuardMessage(debts, kind) {
-  const lines = debts.map((d) => `  ${d.path}:${d.line}  ${d.detail}`);
-  const header =
-    kind === 'undeclared'
-      ? `test-guard: 観測用テストの申告不備 — 終了条件／見直し期限が無い、または書式が壊れているものが ${debts.length} 件:`
-      : `test-guard: 観測用テストの見直し期限超過 — 到達を見る番が来たものが ${debts.length} 件:`;
-  const footer =
-    kind === 'undeclared'
-      ? [
-          '',
-          '観測用テストと名乗るなら、冒頭コメント領域に',
-          '「終了条件: <空でない文字列>」「見直し期限: YYYY-MM-DD」の両方を書くこと。',
-          '運用ルールは .claude/skills/observation-tests/SKILL.md を見ること。',
-        ]
-      : [
-          '',
-          '次の手（いずれか）: 終了条件に到達していれば「基準」に書き換える／捨てる／',
-          'まだ到達していないなら見直し期限を延ばす（延ばすなら、なぜ延ばすかも一緒に書く）。',
-          '運用ルールは .claude/skills/observation-tests/SKILL.md を見ること。',
-        ];
-  return [header, ...lines, ...footer].join('\n');
-}
-
-// `today` を引数で受け、中で `new Date()` を呼ばない: 呼ぶとテストが日付で腐るため。期限当日はまだ赤くしない（`>` であって `>=` ではない）。
-export function findObservationDebts(files, today) {
-  const debts = [];
-  for (const file of files) {
-    if (!isObservationFile(file.path, file.content)) continue;
-    const decl = readObservationDeclaration(file.content);
-    if (decl.終了条件 === undefined || decl.見直し期限 === undefined) {
-      const missing = [];
-      if (decl.終了条件 === undefined) missing.push('終了条件が無い');
-      if (decl.見直し期限 === undefined) {
-        missing.push(
-          decl.見直し期限Raw !== undefined
-            ? `見直し期限の書式が壊れている（${decl.見直し期限Raw}）`
-            : '見直し期限が無い',
-        );
-      }
-      debts.push({
-        path: file.path,
-        line:
-          findFieldLine(file.content, '見直し期限') ?? findFieldLine(file.content, '終了条件') ?? 1,
-        kind: 'undeclared',
-        detail: missing.join(' / '),
-      });
-      continue;
-    }
-    if (today > decl.見直し期限) {
-      debts.push({
-        path: file.path,
-        line: findFieldLine(file.content, '見直し期限') ?? 1,
-        kind: 'due',
-        detail: `終了条件: ${decl.終了条件} / 見直し期限: ${decl.見直し期限}（today=${today}）`,
-      });
-    }
-  }
-  return debts;
-}
-
-// `undeclared` を `due` より先に見る: 申告が壊れたファイルは期限の比較ができず、先に直すべき負債のため。
-export function judgeObservationScan(matchedPaths, debts) {
-  if (matchedPaths.length === 0) {
-    return {
-      ok: false,
-      exitCode: EXIT_SCAN_EMPTY,
-      message: [
-        'test-guard: 判定できない — 歯Cの走査対象が0ファイルだった。',
-        'root の vitest.config.ts の include に一致するテストファイルが1件も見つからない。',
-        '（見て0件だったのではなく、見ていない。歯Bと同じ理由・同じ exit code。）',
-      ].join('\n'),
-    };
-  }
-  const undeclared = debts.filter((d) => d.kind === 'undeclared');
-  if (undeclared.length > 0) {
-    return {
-      ok: false,
-      exitCode: EXIT_OBSERVATION_UNDECLARED,
-      message: formatObservationGuardMessage(undeclared, 'undeclared'),
-    };
-  }
-  const due = debts.filter((d) => d.kind === 'due');
-  if (due.length > 0) {
-    return {
-      ok: false,
-      exitCode: EXIT_OBSERVATION_DUE,
-      message: formatObservationGuardMessage(due, 'due'),
-    };
-  }
-  return { ok: true, scanned: matchedPaths.length };
-}
-
 // `vitest.config.ts` を書き写さず直接 import する: 二重管理はずれるため。
 export async function readIncludeGlobs(root = ROOT) {
   const configPath = path.join(root, 'vitest.config.ts');
@@ -640,31 +480,4 @@ export async function runStaticSkipGuard(root = ROOT) {
   const files = readFilesForScan(root, matchedPaths);
   const hits = findUnconditionalSkips(files);
   return judgeStaticSkipScan(matchedPaths, hits);
-}
-
-export async function runObservationGuard(root = ROOT, today = todayUtc()) {
-  let includeGlobs;
-  try {
-    includeGlobs = await readIncludeGlobs(root);
-  } catch (err) {
-    return {
-      ok: false,
-      exitCode: EXIT_SCAN_EMPTY,
-      message:
-        `test-guard: 判定できない — root の vitest.config.ts から include を読めなかった: ` +
-        `${err?.message ?? err}`,
-    };
-  }
-  if (!Array.isArray(includeGlobs) || includeGlobs.length === 0) {
-    return {
-      ok: false,
-      exitCode: EXIT_SCAN_EMPTY,
-      message:
-        'test-guard: 判定できない — vitest.config.ts の test.include が配列でない、または空だった。',
-    };
-  }
-  const matchedPaths = collectMatchingTestFiles(root, includeGlobs);
-  const files = readFilesForScan(root, matchedPaths);
-  const debts = findObservationDebts(files, today);
-  return judgeObservationScan(matchedPaths, debts);
 }

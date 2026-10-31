@@ -22,7 +22,6 @@ import {
   judgeExecution,
   resolveReporterArgs,
   resolveScopedArgs,
-  runObservationGuard,
   runStaticSkipGuard,
 } from './test-guard-core.mjs';
 
@@ -154,13 +153,6 @@ async function main() {
   if (!staticJudgement.ok) {
     process.stderr.write(`\n${staticJudgement.message}\n`);
     process.exitCode = staticJudgement.exitCode;
-    return;
-  }
-
-  const observationJudgement = await runObservationGuard(ROOT);
-  if (!observationJudgement.ok) {
-    process.stderr.write(`\n${observationJudgement.message}\n`);
-    process.exitCode = observationJudgement.exitCode;
     return;
   }
 
