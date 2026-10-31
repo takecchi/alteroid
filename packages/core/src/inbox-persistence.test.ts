@@ -1044,16 +1044,47 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     await clone.stop();
   });
 
+  it('⭐ 取り出し済みの代表には畳まない: 代表がターンで読まれている最中に同じ本文が届けば、新しい代表として積まれる（二度目の発生を取りこぼさない）', async () => {
+    const stores = createMemoryStores();
+    // `hang`: 1件目のターンが終わらない間（＝読まれている最中）に2件目を届ける
+    const { clone, inputs } = bootClone(stores, 'hang');
+    await idle();
+
+    const body = '読まれている最中にもう一度届く本文';
+    clone.post(report(body, 'evt-read-1'));
+    await waitFor(() => inputs.length > 0, '1件目（代表）がターンへ渡る');
+
+    clone.post(report(body, 'evt-read-2'));
+
+    await waitForCondition(
+      async () =>
+        (await stores.inbox.peekPending()).entries.some((r) => r.event.id === 'evt-read-2'),
+      '2件目が畳まれず受信箱に積まれる',
+    );
+    expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id).sort()).toEqual([
+      'evt-read-1',
+      'evt-read-2',
+    ]);
+  });
+
   it('器の入れ替えを跨いでも畳む: 未読が残った状態で Clone を作り直しても（#restoreUnread が索引を作り直す）、同じ本文が来れば畳まれる', async () => {
     const stores = createMemoryStores();
     const body = '器の入れ替えを跨ぐ本文';
 
     const dying = bootClone(stores, 'hang');
     await idle();
-    dying.clone.post(report(body, 'evt-cross-1'));
+    // 先頭に別本文の合図を置く: 作り直した側のターンがそれで止まり、代表（evt-cross-1）が取り出されずに受信箱で待つ（取り出された代表の索引は落ちるため）
+    // 人間の発言にする: 同じ担当の報告にすると、まとめ読みで代表と1つの束になり、代表も取り出されてしまうため
+    // 拾い直しは届いた時刻の順: 先頭の発言を代表より古くする
+    dying.clone.post({
+      ...humanMessage('先頭で止める発言'),
+      id: 'evt-cross-0',
+      at: new Date(0).toISOString(),
+    });
+    dying.clone.post({ ...report(body, 'evt-cross-1'), at: new Date(1000).toISOString() });
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).entries.length === 1,
-      '1件目が受信箱に残る',
+      async () => (await stores.inbox.peekPending()).entries.length === 2,
+      '2件が受信箱に残る',
     );
 
     // `hang` で起こす: `reply` だと拾い直した1件目がすぐ片付いて鍵が落ち、索引の再構築ではなく「鍵が落ちる」歯と同じものを測ることになるため
@@ -1064,8 +1095,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     await idle();
 
     const pending = (await stores.inbox.peekPending()).entries;
-    expect(pending).toHaveLength(1);
-    expect(pending[0]?.event.id).toBe('evt-cross-1');
+    expect(pending.map((row) => row.event.id).sort()).toEqual(['evt-cross-0', 'evt-cross-1']);
   });
 
   it('停止中の枝でも畳む: stop() 後に同文が2件届いても、受信箱の行は1件しか増えない', async () => {

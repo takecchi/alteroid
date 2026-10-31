@@ -46,7 +46,7 @@ function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, 
   return { fn: fn as unknown as typeof sdkQuery, options: () => captured };
 }
 
-function readingQuery(): {
+function readingQuery(usageGate?: Promise<void>): {
   fn: typeof sdkQuery;
   options: () => Record<string, unknown>;
   inputs: string[];
@@ -69,6 +69,15 @@ function readingQuery(): {
     return Object.assign(generate(), {
       close: () => close(),
       interrupt: async () => undefined,
+      // `#flushUsage`（`sessionModelUsage`）が待つ読み出し口。gate を渡したときだけ止める（畳みの途中の窓を作る）
+      ...(usageGate === undefined
+        ? {}
+        : {
+            usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => {
+              await usageGate;
+              return {};
+            },
+          }),
     }) as unknown as Query;
   });
   return { fn: fn as unknown as typeof sdkQuery, options: () => captured, inputs };
@@ -530,6 +539,39 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       () =>
         sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length >
         before,
+    );
+    expect(sdk.inputs.at(-1)).toContain('approval_id=');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('⭐ 畳み（keepPeers）の最中（使用量の読み出しの待ち）に背景の peer が止まっても、その知らせを起こし直した担当へ届ける（黙って捨てない）', async () => {
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let releaseUsage = (): void => undefined;
+    const usageGate = new Promise<void>((resolve) => {
+      releaseUsage = resolve;
+    });
+    const sdk = readingQuery(usageGate);
+    const s = await setupPeerCall([], { args: { run_in_background: true }, sdk, gate });
+    expect(s.firstText).toContain('背景で流し始めた');
+    const stopping = s.host.stop('mgr-1', { keepPeers: true });
+    // 畳みは使用量の読み出しで止まっている。その間に背景の peer が確認待ちで止まる
+    await waitFor(() => false);
+    release();
+    await waitFor(() => false);
+    releaseUsage();
+    await stopping;
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-resumed',
+      cwd: '/work',
+      request: 'やって',
+    });
+    await waitFor(() =>
+      sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),
     );
     expect(sdk.inputs.at(-1)).toContain('approval_id=');
     await s.client.close();
