@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-// 人間が API から直接した取り消し・書き換え（台帳を閉じる・やり方の書き直しと削除・記憶の削除）は、
+// 人間が API から直接した取り消し・書き換え（やり方の書き直しと削除・記憶の削除。task を閉じる口は `tasks-write-route.test.ts`）は、
 // 状態を変える前に日誌へ先の行を書く（#5243）。先の行は humanAction を持たず、効いた後の行だけが持つ。
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -50,85 +50,6 @@ function humanActionRows(rows: JournalEntry[]): JournalEntry[] {
 
 beforeEach(() => {
   stores = createMemoryStores();
-});
-
-describe('台帳を閉じる（POST /commitments/:id/close）', () => {
-  async function openOne(): Promise<string> {
-    await stores.commitments.open({
-      id: 'cm-undo-1',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'human',
-      body: '閉じる対象',
-    });
-    return 'cm-undo-1';
-  }
-
-  it('閉じる瞬間には、先の行が日誌に既に在る（順序）', async () => {
-    const id = await openOne();
-    let seenAtClose: string[] = [];
-    const wrapped: Stores = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        close: async (...args: Parameters<Stores['commitments']['close']>) => {
-          seenAtClose = decisionTexts(await journalRows());
-          return stores.commitments.close(...args);
-        },
-      },
-    };
-    const res = await appOver(wrapped).request(`/commitments/${id}/close`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reason: '片付いた' }),
-    });
-    expect(res.status).toBe(200);
-    expect(seenAtClose).toEqual([`人間が引き受けた仕事を片付ける（${id}）: 片付いた`]);
-    // 印は効いた後の行だけ
-    const marked = humanActionRows(await journalRows());
-    expect(marked).toHaveLength(1);
-    expect(marked[0]).toMatchObject({
-      decision: `人間が引き受けた仕事を片付けた（${id}）: 片付いた`,
-    });
-  });
-
-  it('close が false（読んだ後に閉じられた）なら、打ち消しの行を足し、印の付いた行は無い', async () => {
-    const id = await openOne();
-    const wrapped: Stores = {
-      ...stores,
-      commitments: {
-        ...stores.commitments,
-        close: async (...args: Parameters<Stores['commitments']['close']>) => {
-          // 読んだ後・閉じる前に別の手が閉じた
-          await stores.commitments.close(id, '2026-01-02T00:00:00.000Z', '先に閉じた', 'clone');
-          return stores.commitments.close(...args);
-        },
-      },
-    };
-    const res = await appOver(wrapped).request(`/commitments/${id}/close`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reason: '遅れた人間' }),
-    });
-    expect(res.status).toBe(409);
-    const rows = await journalRows();
-    expect(decisionTexts(rows)).toEqual([
-      `人間が引き受けた仕事を片付ける（${id}）: 遅れた人間`,
-      expect.stringContaining('直前の引き受けた仕事を片付けるの行は効いていない'),
-    ]);
-    expect(humanActionRows(rows)).toEqual([]);
-  });
-
-  it('既に閉じている行は、日誌を書かずに 409', async () => {
-    const id = await openOne();
-    await stores.commitments.close(id, '2026-01-02T00:00:00.000Z', '先に閉じた', 'clone');
-    const res = await appOver(stores).request(`/commitments/${id}/close`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reason: '二度目' }),
-    });
-    expect(res.status).toBe(409);
-    expect(await journalRows()).toEqual([]);
-  });
 });
 
 describe('やり方（PUT・DELETE /practices/:slug）', () => {

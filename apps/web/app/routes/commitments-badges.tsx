@@ -147,7 +147,7 @@ export function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
   return <Badge tone="warn">未着手</Badge>;
 }
 
-// この印は自動で閉じる合図ではない: 委譲が終わっても行は消えず閉じない（閉じるのは人間の commitment_close だけ）。
+// この印は自動で閉じる合図ではない: 委譲が終わっても行は消えず閉じない（台帳は読むだけで、書く口は人間にもクローンにも無い）。
 // 同じ会話の別の行にも付きうる（1対1の紐付けではない）。key は id でよい: 同じ会話の配列内に同じ id は2度現れない。
 export function InProgressBadge({ commitment }: { commitment: Commitment }) {
   if (commitment.origin !== 'human') return null;

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 
 // #5469 P7c-1: 人間が task を書く口（POST /tasks・GET /tasks/:id・close・reopen・move・PATCH）。
-// 台帳（/commitments）の同じ働きの口と作法を揃えたことを測る: 先に日誌、効いた後の行だけが humanAction を持つ。
+// 作法を測る: 先に日誌、効いた後の行だけが humanAction を持つ。
 
 const AT = '2026-10-01T00:00:00.000Z';
 const AUTH = { authorization: 'Bearer test-token', 'content-type': 'application/json' };

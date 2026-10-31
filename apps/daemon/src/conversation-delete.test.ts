@@ -332,11 +332,19 @@ describe('DELETE /conversations/:id（#4218）', () => {
     await seedConversation(stores, 'conv-x', `鍵は ${SECRET}`);
     await seedConversation(stores, 'conv-keep', '残る会話');
 
-    const posted = await request(app, 'POST', '/commitments', {
-      body: `鍵 ${SECRET} を確認`,
+    // 台帳へ積む口は外れた（段2b）ので、かつて人間の手で積んだ行とその日誌の行（古い日誌）を直に置く
+    await stores.commitments.open({
+      id: 'human-1',
+      at: new Date().toISOString(),
+      origin: 'human',
       source: 'conv-x',
+      body: `鍵 ${SECRET} を確認`,
     });
-    expect(posted.status).toBeLessThan(300);
+    await stores.journal.append({
+      type: 'decision',
+      decision: `人間が引き受けた仕事を台帳へ積んだ（human-1）: 鍵 ${SECRET} を確認`,
+      grounds: '人間が直接 API から積んだ',
+    });
     // decision の文は道具が書くのと同じ形にする: 外す側は台帳の行の id をこの形から拾うため
     await stores.commitments.open({
       id: 'self-1',
@@ -355,7 +363,18 @@ describe('DELETE /conversations/:id（#4218）', () => {
       decision: `引き受けた仕事の本文を直した（self-1）: 編集前「鍵 ${SECRET}」→ 編集後「鍵を確認」`,
       grounds: '自分で載せた行の本文を自分で直した',
     });
-    await request(app, 'POST', '/commitments', { body: '残る仕事', source: 'conv-keep' });
+    await stores.commitments.open({
+      id: 'human-keep',
+      at: new Date().toISOString(),
+      origin: 'human',
+      source: 'conv-keep',
+      body: '残る仕事',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '人間が引き受けた仕事を台帳へ積んだ（human-keep）: 残る仕事',
+      grounds: '人間が直接 API から積んだ',
+    });
 
     expect((await request(app, 'DELETE', '/conversations/conv-x')).status).toBe(200);
 

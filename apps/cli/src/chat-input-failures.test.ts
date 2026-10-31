@@ -99,24 +99,9 @@ describe('#3683: 本文の改行・インデント・連続した空白を潰さ
   it('rawTail は先頭のトークンと区切りだけを落とす', async () => {
     const { rawTail } = await import('./chat.js');
     expect(rawTail('/msg abc 直して:\n  if x:\n      y', 2)).toBe('直して:\n  if x:\n      y');
-    expect(rawTail('/commit   a  b', 1)).toBe('a  b');
+    expect(rawTail('/msg   a  b', 1)).toBe('a  b');
     expect(rawTail('/stop 1', 2)).toBe('');
-    expect(rawTail('/done 1 末尾の空白  \n', 2)).toBe('末尾の空白');
-  });
-
-  it('/commit の本文がそのまま POST される', async () => {
-    useStdin(true);
-    const calls = recordFetch(() => Response.json({}));
-    const out = captureStdout();
-    await start();
-    rl.emit('line', '/commit 直して:\n  if x:\n      y  z');
-    await flush();
-    rl.close();
-    await flush();
-    out();
-    expect(calls.find((c) => c.path === '/commitments')?.body?.body).toBe(
-      '直して:\n  if x:\n      y  z',
-    );
+    expect(rawTail('/msg 1 末尾の空白  \n', 2)).toBe('末尾の空白');
   });
 
   it('/msg・/edit の本文もそのまま送られる', async () => {
