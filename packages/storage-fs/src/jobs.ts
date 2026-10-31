@@ -11,7 +11,6 @@ import {
   extractRowField,
   extractRowId,
   summarizeInvalidFields,
-  writeStderrLine,
 } from '@alteroid/core';
 import type {
   ApprovalList,
@@ -25,6 +24,7 @@ import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
+import { partitionRows } from './partition-rows.js';
 
 // 行の中身はここで検査しない: `z.array(jobSchema)` / `z.array(pendingApprovalSchema)` にすると、1行の不正が配列全体を道連れにするため
 const fileSchema = z.object({
@@ -57,28 +57,6 @@ function summarizeRawApprovalProblem(raw: unknown): string {
 function summarizeRawJobProblem(raw: unknown): string {
   const result = jobSchema.safeParse(raw);
   return result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
-}
-
-// id 以外の値は載せない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうるため
-function describeSkippedJobRow(params: { index: number; reason: string; id?: string }): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: jobs の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
-}
-
-// id 以外の値は載せない: `question` / `context` には人間の依頼文がそのまま入りうるため
-function describeSkippedApprovalRow(params: {
-  index: number;
-  reason: string;
-  id?: string;
-}): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: approvals の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
 }
 
 export class FsJobStore implements JobStore {
@@ -246,40 +224,14 @@ export class FsJobStore implements JobStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const top = fileSchema.parse(JSON.parse(raw));
-      const jobs: Job[] = [];
-      const invalidJobsRaw: unknown[] = [];
-      top.jobs.forEach((rawJob, index) => {
-        const result = jobSchema.safeParse(rawJob);
-        if (result.success) {
-          jobs.push(result.data);
-          return;
-        }
-        invalidJobsRaw.push(rawJob);
-        writeStderrLine(
-          `${describeSkippedJobRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawJob),
-          })}\n`,
-        );
-      });
-      const approvals: PendingApproval[] = [];
-      const invalidApprovalsRaw: unknown[] = [];
-      top.approvals.forEach((rawApproval, index) => {
-        const result = pendingApprovalSchema.safeParse(rawApproval);
-        if (result.success) {
-          approvals.push(result.data);
-          return;
-        }
-        invalidApprovalsRaw.push(rawApproval);
-        writeStderrLine(
-          `${describeSkippedApprovalRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawApproval),
-          })}\n`,
-        );
-      });
+      // id 以外の値は載せない: job の欄には人間の依頼文・マネージャーの報告がそのまま入りうるため
+      const { valid: jobs, invalid: invalidJobsRaw } = partitionRows(top.jobs, jobSchema, 'jobs');
+      // id 以外の値は載せない: `question` / `context` には人間の依頼文がそのまま入りうるため
+      const { valid: approvals, invalid: invalidApprovalsRaw } = partitionRows(
+        top.approvals,
+        pendingApprovalSchema,
+        'approvals',
+      );
       return { jobs, invalidJobsRaw, approvals, invalidApprovalsRaw };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;

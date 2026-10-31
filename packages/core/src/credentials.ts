@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
+import { describeSkippedRow } from './invalid-row.js';
 
 const CREDENTIAL_BATCH_LIST_EXCERPT = 400;
 
@@ -55,11 +56,11 @@ export function describeSkippedCredentialRow(params: {
   reason: string;
   name?: string;
 }): string {
-  const nameNote = params.name === undefined ? '' : ` name=${JSON.stringify(params.name)}`;
-  return (
-    `alteroid: credentials の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${nameNote}`
-  );
+  return describeSkippedRow('credentials', 'name', {
+    index: params.index,
+    reason: params.reason,
+    key: params.name,
+  });
 }
 
 export function isWithheldCredentialName(name: string, withheld: readonly string[]): boolean {

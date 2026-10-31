@@ -12,7 +12,6 @@ import {
   compareCodeUnits,
   extractRowField,
   summarizeInvalidFields,
-  writeStderrLine,
 } from '@alteroid/core';
 import type {
   SchedulePhase,
@@ -27,6 +26,7 @@ import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
+import { partitionRows } from './partition-rows.js';
 
 /**
  * 各要素をここで `z.array(scheduledRequestSchema)` 等で検査しない: 1行の不正が配列全体
@@ -70,27 +70,6 @@ function throwIfUnreadable(file: ScheduleFile, kind: string): void {
   if (invalidRaw === undefined) return;
   const result = scheduledRequestSchema.safeParse(invalidRaw);
   throw unreadableError(kind, result.success ? '不正な行' : result.error.message);
-}
-
-/** kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。 */
-function describeSkippedScheduleRow(params: {
-  index: number;
-  reason: string;
-  kind?: string;
-}): string {
-  const kindNote = params.kind === undefined ? '' : ` kind=${JSON.stringify(params.kind)}`;
-  return (
-    `alteroid: schedules の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${kindNote}`
-  );
-}
-
-function describeSkippedPhaseRow(params: { index: number; reason: string; kind?: string }): string {
-  const kindNote = params.kind === undefined ? '' : ` kind=${JSON.stringify(params.kind)}`;
-  return (
-    `alteroid: phases の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${kindNote}`
-  );
 }
 
 /** `invalid*Raw` は1本の配列へ合流させる: 分けたまま書くと、次の `#read()` が未知のキーとして黙って捨てる。 */
@@ -327,40 +306,19 @@ export class FsScheduleStore implements ScheduleStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const top = fileSchema.parse(JSON.parse(raw));
-      const schedules: ScheduledRequest[] = [];
-      const invalidSchedulesRaw: unknown[] = [];
-      top.schedules.forEach((rawEntry, index) => {
-        const result = scheduledRequestSchema.safeParse(rawEntry);
-        if (result.success) {
-          schedules.push(result.data);
-          return;
-        }
-        invalidSchedulesRaw.push(rawEntry);
-        writeStderrLine(
-          `${describeSkippedScheduleRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            kind: extractKind(rawEntry),
-          })}\n`,
-        );
-      });
-      const phases: SchedulePhase[] = [];
-      const invalidPhasesRaw: unknown[] = [];
-      top.phases.forEach((rawPhase, index) => {
-        const result = schedulePhaseSchema.safeParse(rawPhase);
-        if (result.success) {
-          phases.push(result.data);
-          return;
-        }
-        invalidPhasesRaw.push(rawPhase);
-        writeStderrLine(
-          `${describeSkippedPhaseRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            kind: extractKind(rawPhase),
-          })}\n`,
-        );
-      });
+      // kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。
+      const { valid: schedules, invalid: invalidSchedulesRaw } = partitionRows(
+        top.schedules,
+        scheduledRequestSchema,
+        'schedules',
+        'kind',
+      );
+      const { valid: phases, invalid: invalidPhasesRaw } = partitionRows(
+        top.phases,
+        schedulePhaseSchema,
+        'phases',
+        'kind',
+      );
       return { schedules, invalidSchedulesRaw, phases, invalidPhasesRaw };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;

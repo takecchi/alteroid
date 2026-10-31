@@ -25,6 +25,7 @@ import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
+import { partitionRows } from './partition-rows.js';
 
 const agentTokenRowSchema = agentTokenSchema.extend({
   // `'env'` も読めるようにする: 過去に書かれた行がファイルに残っており、読めないと `fileSchema.parse` がファイル全体を落とすため
@@ -52,15 +53,6 @@ interface TokenPoolFile {
 }
 
 const EMPTY: TokenPoolFile = { tokens: [], invalidTokensRaw: [] };
-
-// id 以外の値は載せない: `value`（トークン本体）が入りうるため
-function describeSkippedTokenRow(params: { index: number; reason: string; id?: string }): string {
-  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
-  return (
-    `alteroid: tokens の不正な行を読み飛ばしました` +
-    `（${params.index + 1} 行目、${params.reason}）${idNote}`
-  );
-}
 
 function describeUnreadableTokenPoolField(params: {
   field: 'settings' | 'active';
@@ -173,23 +165,12 @@ export class FsTokenPoolStore implements TokenPoolStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const top = fileSchema.parse(JSON.parse(raw));
-      const tokens: AgentTokenRow[] = [];
-      const invalidTokensRaw: unknown[] = [];
-      top.tokens.forEach((rawToken, index) => {
-        const result = agentTokenRowSchema.safeParse(rawToken);
-        if (result.success) {
-          tokens.push(result.data);
-          return;
-        }
-        invalidTokensRaw.push(rawToken);
-        writeStderrLine(
-          `${describeSkippedTokenRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawToken),
-          })}\n`,
-        );
-      });
+      // id 以外の値は載せない: `value`（トークン本体）が入りうるため
+      const { valid: tokens, invalid: invalidTokensRaw } = partitionRows(
+        top.tokens,
+        agentTokenRowSchema,
+        'tokens',
+      );
 
       let settings: TokenRotationSettings | undefined;
       let invalidSettingsRaw: unknown;
