@@ -24,3 +24,16 @@ export function decodeCursor<S extends z.ZodType>(
   if (!parsed.success) return { ok: false };
   return { ok: true, cursor: parsed.data };
 }
+
+// schema を1つ渡すと、その一覧の encode / decode の対が得られる。各 `*-cursor.ts` はキーの形（schema）と比べ方だけを持つ。
+export function cursorCodec<S extends z.ZodType>(
+  schema: S,
+): {
+  encode: (cursor: z.output<S>) => string;
+  decode: (raw: string) => DecodeCursorResult<z.output<S>>;
+} {
+  return {
+    encode: (cursor) => encodeCursor(cursor),
+    decode: (raw) => decodeCursor(schema, raw),
+  };
+}

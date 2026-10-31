@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+import { cursorCodec } from './cursor-codec.js';
 
 // 錨の位置を探索しない: 費用は増える一方なので、値の比較だけで頁を切れるため
 // asOf の比較を `>=` にしない: asOf を作った行自身が呼ぶたびに risen へ載り続けるため。旧形式の cursor（tiedAtAsOf なし）は断らず `>` のみで読む
@@ -14,15 +14,8 @@ const usageCursorSchema = z.object({
 
 export type UsageCursor = z.infer<typeof usageCursorSchema>;
 
-export function encodeUsageCursor(cursor: UsageCursor): string {
-  return encodeCursor(cursor);
-}
-
-export type DecodeUsageCursorResult = DecodeCursorResult<UsageCursor>;
-
-export function decodeUsageCursor(raw: string): DecodeUsageCursorResult {
-  return decodeCursor(usageCursorSchema, raw);
-}
+export const { encode: encodeUsageCursor, decode: decodeUsageCursor } =
+  cursorCodec(usageCursorSchema);
 
 export interface UsageCursorEntry {
   label: string;

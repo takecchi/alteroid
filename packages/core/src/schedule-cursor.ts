@@ -1,21 +1,14 @@
 import { z } from 'zod';
 
-import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+import { cursorCodec } from './cursor-codec.js';
 import type { ScheduledRequest } from './schema.js';
 
 const scheduleCursorSchema = z.object({ kind: z.string().min(1) });
 
 export type ScheduleCursor = z.infer<typeof scheduleCursorSchema>;
 
-export function encodeScheduleCursor(cursor: ScheduleCursor): string {
-  return encodeCursor(cursor);
-}
-
-export type DecodeScheduleCursorResult = DecodeCursorResult<ScheduleCursor>;
-
-export function decodeScheduleCursor(raw: string): DecodeScheduleCursorResult {
-  return decodeCursor(scheduleCursorSchema, raw);
-}
+export const { encode: encodeScheduleCursor, decode: decodeScheduleCursor } =
+  cursorCodec(scheduleCursorSchema);
 
 export function resolveScheduleCursor(
   entries: readonly ScheduledRequest[],

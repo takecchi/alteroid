@@ -29,6 +29,8 @@ export {
   compareApprovalPagingKey,
   type ApprovalPagingKey,
 } from './approval-cursor.js';
+/** 一覧の継続点の共通の符号化。daemon の `/approvals` が使う。 */
+export { encodeCursor, decodeCursor, type DecodeCursorResult } from './cursor-codec.js';
 /** 出所は SDK の `result.modelUsage` であって `usage` ではない: 後者はメインループぶんだけで、作業者の消費が落ちる。累積値なので足さずに差分を取る。 */
 export * from './usage.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */

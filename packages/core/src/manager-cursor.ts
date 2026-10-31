@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { decodeCursor, encodeCursor, type DecodeCursorResult } from './cursor-codec.js';
+import { cursorCodec } from './cursor-codec.js';
 import { jobStatusSchema, type JobStatus } from './schema.js';
 import type { ManagerSummary } from './manager.js';
 
@@ -58,17 +58,15 @@ function sameStatusFilter(a: readonly JobStatus[] | null, b: readonly JobStatus[
   return as.every((value, index) => value === bs[index]);
 }
 
+const managerCodec = cursorCodec(managerCursorSchema);
+
+export const decodeManagerCursor = managerCodec.decode;
+
 // `q` は省略できる: 語で絞らない呼びの cursor は `q: null` と同じで、呼び手に毎回書かせない
 export function encodeManagerCursor(
   cursor: Omit<ManagerCursor, 'q'> & { q?: string | null },
 ): string {
-  return encodeCursor({ ...cursor, q: cursor.q ?? null });
-}
-
-export type DecodeManagerCursorResult = DecodeCursorResult<ManagerCursor>;
-
-export function decodeManagerCursor(raw: string): DecodeManagerCursorResult {
-  return decodeCursor(managerCursorSchema, raw);
+  return managerCodec.encode({ ...cursor, q: cursor.q ?? null });
 }
 
 // 壊れた cursor や `status` の食い違いを、黙って先頭からへ・どちらかへ倒さない。
