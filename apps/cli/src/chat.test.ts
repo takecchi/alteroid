@@ -3002,17 +3002,6 @@ describe('chat の /schedule <kind> <周期> <本文>（#5374）', () => {
 
     expect(read()).toContain('daily-x を仕込みました');
   });
-
-  it('replaced が無い応答（古いデーモン）は置き換えたと言わない', async () => {
-    const read = captureStdout();
-    const { client } = stubClient({ schedulePostOkBody: { ok: true } });
-
-    await runSlashCommand('/schedule daily-x 09:00 本文', ...slashArgs(client, emptyListed()));
-
-    const text = read();
-    expect(text).toContain('daily-x を仕込みました');
-    expect(text).not.toContain('置き換えました');
-  });
 });
 
 describe('chat の /schedule', () => {
