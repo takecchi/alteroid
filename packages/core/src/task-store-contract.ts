@@ -2,7 +2,7 @@ import { UnreadableTaskError } from './store.js';
 import type { TaskStore } from './store.js';
 import type { Task, TaskStatus } from './schema.js';
 
-// vitest に依存しない素の関数にする（`verifyCommitmentReopenContract` と同じ理由）。
+// vitest に依存しない素の関数にする（storage-fs / storage-pg へ vitest を持ち込まないため）。
 // 空のストアを渡すこと。Task の並び・状態遷移・closed の扱い・読めない行の分離の契約を、メモリ・fs・pg の3実装で揃える（#5469 P2）。
 export interface TaskStoreContractOptions {
   /**

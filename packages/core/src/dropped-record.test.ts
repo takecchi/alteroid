@@ -755,7 +755,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       commitmentExempt: {
         emit: 'never',
         why:
-          '台帳に開かない印（機構が「クローンが手を打つことの無い知らせ」と判定した。Issue #5015）で、' +
+          '廃止した台帳へ開かない印（Issue #5015。書き手も読み手も無く、古い受信箱の行を読むために残す）で、' +
           'この関数は参照しない。`quotaStop` と同じ「bool のタグで自由文を運ばない」欄。',
       },
       foldWhenBack: {
