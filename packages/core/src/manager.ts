@@ -3351,6 +3351,10 @@ class Pool implements ManagerPool {
    * 観測だけが身元を失い、それは「回りすぎる」形で出るのでテストでは気づきにくい。
    * 「この委譲が抱えている鍵の世代」の材料にもなるが、env の直接観測ではない（daemon は runner の子プロセスの env を覗けない）。
    * ターンの境界に一度も達しないまま古い鍵で走り続ける委譲はここも古いままで、それは欠陥ではなくこの欄の存在理由そのもの。
+   *
+   * **`#retire()` で消さない（畳んだ委譲の分も残る）**: 畳んだ後も読む所が在る。一覧（`list()` の世代の ⚠）・枠で止まった委譲の起こし直しと周回の掃き・
+   * 像を外した後の `#observeForTokenRotation`・`#queueSynthesizedNotice`（窓の鍵）は、いずれも畳んだ委譲を相手にする。消すと世代が「分からない」に戻り、判定が変わる。
+   * 1件は `{ tokenId, generation }` だけで、増えるのは起こした委譲1本につき1件。消してよい契機（台帳から委譲が消える経路）は今は無い。
    */
   readonly #tokenIdentities = new Map<string, { tokenId: string; generation: number }>();
   /**
@@ -3441,6 +3445,8 @@ class Pool implements ManagerPool {
   /**
    * 委譲ごとの、resume が通った回数（`#resume` が `resumed` を返した回。#5207）。鍵の付け替えの畳み（`#foldStaleTokenSession`）が、
    * 判断を始めてから畳む直前までの間に、別の経路が起こし直していないかを見るためだけに使う。数そのものに意味は無い。
+   * **`#retire()` で消さない**: 判断の最中に担当が畳まれて数が 0 に戻ると、起こし直しが無かったのに「数が変わった」と読んで判定が変わる。
+   * 1件は数1つで、増えるのは resume が通った委譲1本につき1件。
    */
   readonly #resumedCount = new Map<string, number>();
   /**
@@ -3476,11 +3482,16 @@ class Pool implements ManagerPool {
       fromRunnerId: string;
     }[]
   >();
+  /**
+   * 生きていた旧プロセスへ流しただけの resume の印。`send()` の返す文と、`#tokenIdentities` を書かない理由（凍った鍵）に対応する。
+   * `#retire()` で消さない: 畳んだ委譲への次の `send()` が同じ旧プロセスへ流れたとき、返す文が変わる。消えるのは resume で新しい SDK を起こした回と指紋で確かめた回。
+   */
   readonly #resumedIntoLiveProcess = new Set<string>();
   /**
    * `retry` は runner 単位、この判定はジョブ単位: 覚えておかないと「挑み直さない」と決めたジョブが毎回巻き込まれて再送され、
    * 同じ障害通知がクローンの受信箱に積み上がる。
    * 人間とクローンの明示的な経路は塞がない（`manager_send` の resume はここを見ない）。
+   * `#retire()` で消さない: 諦めた委譲は台帳の終端（畳んだ後）から見回りが拾うので、畳んだ後こそ読む。消えるのは resume が通った回とデーモンの停止。
    */
   readonly #unresumable = new Set<string>();
   /**
@@ -3502,6 +3513,10 @@ class Pool implements ManagerPool {
   readonly #pushHealth = new Map<string, RunnerPushHealth>();
   /** 消さない: 器が入れ替わっても次の `session` が上書きし、`at` が観測の古さを名乗る。 */
   readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
+  /**
+   * 委譲ごとの、最後に日誌へ書いたプラグイン読み込みの要約の署名。同じ署名の `session` では書き直さない。
+   * `#retire()` で消さない: 畳んだ委譲を起こし直した `session` が同じ署名でも、日誌へ同じ行を重ねない。1件は署名の文字列1つ。
+   */
   readonly #pluginLoadDigests = new Map<string, string>();
   /** `#reattachTimers` とは別: あちらは繋ぎ直し（`hello` を待つ）で、こちらは繋がったままの runner へ自分から挑み直す。 */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -3515,7 +3530,11 @@ class Pool implements ManagerPool {
   readonly #lastStaleDecline = new Map<string, string>();
   /** 15分届かない預かりを知らせた理由（`blockers` の並び）を委譲ごとに覚える（#5041）: 同じ理由では見回りのたびに知らせない。`#lastStaleDecline` と同じ所で消す。 */
   readonly #lastHeldStuckNotice = new Map<string, string>();
-  /** 費用の門のバックオフにしか使わない: ここに載ったこと自体は「症状である」を意味しない。 */
+  /**
+   * 費用の門のバックオフにしか使わない: ここに載ったこと自体は「症状である」を意味しない。
+   * `#retire()` が消す: 畳んだ担当は見回りの対象（`running`）から外れ、起こし直すと台帳の `updatedAt` が進んで静けさの門（10分）を
+   * 通り直すので、消しても次の見回りの間隔（バックオフは最大5分）は変わらない。
+   */
   readonly #turnEndProbedAt = new Map<string, number>();
   /** 届かなかった報告を生ログから拾って配ったターンの終わり（`turnEndedAt`）を委譲ごとに覚える（#5195）: 同じターンの終わりを見回りのたびに配らない。担当を外しても消さない（起こし直した後に同じ行を配り直さないため） */
   readonly #undeliveredTurnEndRecovered = new Map<string, string>();
@@ -3571,9 +3590,16 @@ class Pool implements ManagerPool {
   #rescueSweeping = false;
   /** 未追跡のファイルの預かり（`rescue_files`）を委譲ごとに直列にする: 読み書きの間に await が挟まるため。 */
   readonly #rescueStashChains = new Map<string, Promise<void>>();
-  /** 日誌へ書いた「預けなかった」の署名（委譲ごと）。運び直しで同じ日誌を積まない。プロセス内だけ。 */
+  /**
+   * 日誌へ書いた「預けなかった」の署名（委譲ごと）。運び直しで同じ日誌を積まない。プロセス内だけ。
+   * `#retire()` で消さない: 畳んだ後の運び直し（周回の掃き）で同じ署名を書き直さないため。1委譲の署名は500件で入れ替える（`#journalRescueSkips`）。
+   */
   readonly #rescueStashJournaled = new Map<string, Set<string>>();
-  /** 見回りの末尾の段（#5160）を日誌へ書いた印（種類と委譲）。プロセス内だけ。 */
+  /**
+   * 見回りの末尾の段（#5160）を日誌へ書いた印（種類と委譲）。プロセス内だけ。
+   * `#retire()` で消さない: 「委譲・種類ごとにプロセスにつき1回」が日誌の約束で、畳んだ委譲を起こし直した後に同じ段へ入っても書き直さない。
+   * 1件は短い文字列で、増えるのは段に入った委譲1本につき高々2件。
+   */
   readonly #transcriptTailJournaled = new Set<string>();
   #rescueSweptAt: number | undefined;
   #autoFoldPeriodicRunning = false;
@@ -12813,7 +12839,7 @@ class Pool implements ManagerPool {
     text: string,
     quotaMark?: QuotaMark,
   ): void {
-    // 抱えているトークンは積む時点で読む: 畳まれた委譲は後で `#tokenIdentities` から外れ、後続の束が別の窓の鍵になってしまう。
+    // 抱えているトークンは積む時点で読む: 畳まれた委譲の分も `#tokenIdentities` には残る（`#retire()` は消さない）ので、畳んだ後に届いた束も同じ窓の鍵になる。
     const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
     const quota =
       quotaMark === undefined || heldTokenId === undefined
@@ -13333,6 +13359,7 @@ class Pool implements ManagerPool {
     this.#autoFoldSkipJournalWritten.delete(managerId);
     // busy の取り直しの数えはここで消す: `#reattach` のループは数えを消さずに `continue` で抜けるので、残すと後の busy で上限（`REATTACH_BUSY_MAX_RETRIES`）を前の分で縮める。
     this.#reattachBusyRetries.delete(managerId);
+    this.#turnEndProbedAt.delete(managerId);
     this.#endResumeConfirmation(managerId);
   }
 
