@@ -2468,6 +2468,15 @@ const LIVE_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
   'paused',
 ]);
 
+// 知らせの組み立てが投げたら何も添えない: 知らせのために道具の結果（PostToolUse の応答）を壊さないため
+function noticeOrNull(build: () => string | null): string | null {
+  try {
+    return build();
+  } catch {
+    return null;
+  }
+}
+
 // 分からない status を `'settled'` へ倒さない: 起こし直しが黙って効かなくなるため
 function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'unknown' {
   if (typeof status !== 'string') return 'unknown';
@@ -5114,13 +5123,39 @@ class RunnerSession {
     // ここで1度だけ取る: 経路ごとに取り直すと、同じ確認が経路によって違う「待ち始めた時刻」を名乗るため
     const askedAt = new Date().toISOString();
 
+    const { result } = this.#queueRequest({
+      id,
+      kind,
+      summary,
+      askedAt,
+      input,
+      source,
+      signal,
+      abortAnswer: { message: 'マネージャー側で中断された。', decision: 'deny', aborted: true },
+    });
+    return result;
+  }
+
+  // `#onPermission` と `#onPermissionDenied` が共有する「確認を積み、`ask` を出し、決着を待つ」形。2箇所に書くと `settle` の後始末や解けた印が黙ってずれるため
+  // `ask` を中断の確かめより先に出す（#4772）: 受けた時点で中断済みだと `settled` が先に出て、デーモンが後から届いた `ask` を答えようの無い確認として積むため
+  // `withdrawn` を型から落とさない: 落とすと畳みで解けた確認が取り下げとして日誌に残らず、`#onPermissionDenied` の deny の note がクローンの判断として書かれるため
+  #queueRequest(spec: {
+    id: string;
+    kind: PendingRequest['kind'];
+    summary: string;
+    askedAt: string;
+    input: Record<string, unknown>;
+    source: PeerApprovalSource | undefined;
+    signal: AbortSignal | undefined;
+    abortAnswer: Parameters<PendingRequest['settle']>[0];
+    onAbort?: () => void;
+  }): {
+    result: Promise<AgentPermissionDecision>;
+    answered: Promise<Parameters<PendingRequest['settle']>[0]>;
+  } {
+    const { id, kind, summary, askedAt, input, source, signal, abortAnswer, onAbort } = spec;
     let settle!: PendingRequest['settle'];
-    const answered = new Promise<{
-      message: string;
-      decision?: 'allow' | 'deny';
-      withdrawn?: true;
-      aborted?: true;
-    }>((resolve) => {
+    const answered = new Promise<Parameters<PendingRequest['settle']>[0]>((resolve) => {
       settle = resolve;
     });
 
@@ -5178,7 +5213,6 @@ class RunnerSession {
     this.#pending.push(request);
     this.#sdkSession.setStatus('waiting_human');
 
-    // `ask` を中断の確かめより先に出す（#4772）: 受けた時点で中断済みだと `settled` が先に出て、デーモンが後から届いた `ask` を答えようの無い確認として積むため
     this.#emit({
       type: 'ask',
       managerId: this.#id,
@@ -5189,20 +5223,20 @@ class RunnerSession {
       ...(source === undefined ? {} : { source: { type: 'peer', provider: source.provider } }),
     });
 
-    const onAbort = () =>
-      request.settle({
-        message: 'マネージャー側で中断された。',
-        decision: 'deny',
-        aborted: true,
-      });
-    if (signal.aborted) {
-      onAbort();
-    } else {
-      signal.addEventListener('abort', onAbort, { once: true });
-      unlisten = () => signal.removeEventListener('abort', onAbort);
+    if (signal !== undefined) {
+      const abort = () => {
+        onAbort?.();
+        request.settle(abortAnswer);
+      };
+      if (signal.aborted) {
+        abort();
+      } else {
+        signal.addEventListener('abort', abort, { once: true });
+        unlisten = () => signal.removeEventListener('abort', abort);
+      }
     }
 
-    return result;
+    return { result, answered };
   }
 
   // `#onPermission` の実装を直接再利用しない: あちらは `PermissionResult` を組み立てる関数で、両方に手を入れると再送や `withdrawn`/`aborted` の挙動を壊しかねないため
@@ -5324,86 +5358,24 @@ class RunnerSession {
       `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
     const askedAt = new Date().toISOString();
 
-    // `withdrawn` を型から落とさない: 落とすと畳みで解けた確認が取り下げとして日誌に残らず、下の deny の note がクローンの判断として書かれるため
-    let settle!: PendingRequest['settle'];
-    const answered = new Promise<{
-      message: string;
-      decision?: 'allow' | 'deny';
-      withdrawn?: true;
-      aborted?: true;
-    }>((resolve) => {
-      settle = resolve;
-    });
-
-    const result = answered.then((answer) => {
-      // `decideAnswer` を `#onPermission` と共有する: 別々に判定を書くと黙ってずれるため
-      const { decision, unreadable } = decideAnswer(kind, answer.decision, answer.message);
-      const teardown = answer.aborted === true || answer.withdrawn === true;
-      const denyMessage =
-        !teardown && unreadable ? unreadableDenyMessage(answer.message) : answer.message;
-      const outcome: AgentPermissionDecision =
-        teardown || decision === 'deny'
-          ? { behavior: 'deny', message: denyMessage }
-          : { behavior: 'allow' };
-      this.#resolved.set(id, outcome);
-      return outcome;
-    });
-
-    let done = false;
-    let unlisten = () => undefined as void;
-
-    const request: PendingRequest = {
+    let timedOut = false;
+    const { result, answered } = this.#queueRequest({
       id,
       kind,
       summary,
       askedAt,
-      result,
-      settle: (value) => {
-        if (done) return;
-        done = true;
-        unlisten();
-        const at = this.#pending.indexOf(request);
-        if (at !== -1) this.#pending.splice(at, 1);
-        if (this.#sdkSession.status === 'waiting_human' && this.#pending.length === 0) {
-          this.#sdkSession.setStatus('running');
-        }
-        this.#emit({
-          type: 'settled',
-          managerId: this.#id,
-          requestId: id,
-          ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
-        });
-        settle(value);
-        // 確認待ちの間に溜めた peer の知らせを届ける: 手すきのマネージャーへ背景の peer が上げた確認だと、
-        // この後に報告の区切りが来ず、溜めたまま残るため
-        this.#deliverPeerNotices();
-      },
-    };
-
-    this.#pending.push(request);
-    this.#sdkSession.setStatus('waiting_human');
-
-    let timedOut = false;
-    const onTimeout = () => {
-      timedOut = true;
-      request.settle({
+      input: {},
+      source: undefined,
+      signal: record.signal,
+      abortAnswer: {
         message: 'フックの持ち時間が尽きたので、安全側でこの1回だけの許可は出さない。',
         decision: 'deny',
         aborted: true,
-      });
-    };
-    // `ask` を持ち時間の確かめより先に出す（#4772。理由は `#onPermission` と同じ）
-    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
-
-    const signal = record.signal;
-    if (signal !== undefined) {
-      if (signal.aborted) {
-        onTimeout();
-      } else {
-        signal.addEventListener('abort', onTimeout, { once: true });
-        unlisten = () => signal.removeEventListener('abort', onTimeout);
-      }
-    }
+      },
+      onAbort: () => {
+        timedOut = true;
+      },
+    });
 
     const answer = await answered;
     const outcome = await result;
@@ -6030,7 +6002,7 @@ class RunnerSession {
    * 相手（担当本人・作業者ごと）に30分に1回まで。担当本人に添えた回は日誌にも1行残す。投げたときは何も添えない。
    */
   #staleUntrackedNotice(agentId: string | undefined): string | null {
-    try {
+    return noticeOrNull(() => {
       const stale = this.#rescueMemory.staleUntracked(UNTRACKED_STALE_AFTER_MS);
       const text = this.#staleUntrackedNotices.next(agentId ?? 'manager', stale, Date.now());
       if (text !== null && agentId === undefined) {
@@ -6043,9 +6015,7 @@ class RunnerSession {
         });
       }
       return text;
-    } catch {
-      return null;
-    }
+    });
   }
 
   /**
@@ -6056,7 +6026,7 @@ class RunnerSession {
   #peerApprovalNotice(agentId: string | undefined): string | null {
     const broker = this.#peerBroker;
     if (broker === undefined) return null;
-    try {
+    return noticeOrNull(() => {
       const notice = this.#peerApprovalNotices.next(
         agentId ?? 'manager',
         broker.pendingApprovals(),
@@ -6072,9 +6042,7 @@ class RunnerSession {
         });
       }
       return notice?.text ?? null;
-    } catch {
-      return null;
-    }
+    });
   }
 
   /**
@@ -6110,11 +6078,7 @@ class RunnerSession {
 
   /** 担当の発言に英語の文が混ざっていた後の最初の道具の結果に、知らせの段落を返す（#4965）。同じ担い手に10分に1回まで。 */
   #reportLanguageNotice(agentId: string | undefined): string | null {
-    try {
-      return this.#reportLanguageNotices.next(agentId ?? 'manager', Date.now());
-    } catch {
-      return null;
-    }
+    return noticeOrNull(() => this.#reportLanguageNotices.next(agentId ?? 'manager', Date.now()));
   }
 
   /**
@@ -6147,7 +6111,7 @@ class RunnerSession {
    * 相手（担当本人・作業者ごと）に10分に1回まで。担当本人に添えた回は日誌にも1行残す。投げたときは何も添えない。
    */
   #workerLimitNotice(agentId: string | undefined): string | null {
-    try {
+    return noticeOrNull(() => {
       const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
       const notice = this.#workerLimitNotices.next(
         agentId ?? 'manager',
@@ -6167,9 +6131,7 @@ class RunnerSession {
         });
       }
       return notice?.text ?? null;
-    } catch {
-      return null;
-    }
+    });
   }
 
   #annotateCutOffWorkers(toolResponse: unknown): string | null {
