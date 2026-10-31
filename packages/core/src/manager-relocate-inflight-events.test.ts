@@ -247,6 +247,7 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
   async function runWindow(
     resume: 'accepted' | 'refused',
     events: RunnerEvent[],
+    failPostOnce?: (event: { text?: string }) => boolean,
   ): Promise<{
     job: Job | undefined;
     toClone: { type?: string; kind?: string; text?: string }[];
@@ -286,9 +287,18 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
     fake.addClient(runnerA.client);
     fake.addClient(runnerB.client);
     const inbox: unknown[] = [];
+    // 窓を閉じる処理に入ってから、条件に合う配りを1回だけ投げさせる（クローンへの配りが投げる）。
+    let armed = false;
+    let failed = false;
     const pool = createManagerPool({
       stores,
-      post: (event) => inbox.push(event),
+      post: (event) => {
+        if (armed && !failed && failPostOnce?.(event as { text?: string }) === true) {
+          failed = true;
+          throw new Error('クローンへの配りの失敗（試験）');
+        }
+        inbox.push(event);
+      },
       runners: fake.registry,
     });
     await pool.abort('mgr-does-not-exist');
@@ -298,6 +308,7 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
     const before = inbox.length;
     for (const event of events) runnerA.emit?.(event);
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    armed = true;
     release();
     await reattach;
     for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
@@ -360,6 +371,30 @@ describe('移送の最中に届く元の runner の report / ask / session（#31
           ['一つ目', '二つ目'].includes(event.text ?? ''),
       ).length,
     }).toEqual({ runnerId: 'runner-a', lastReport: '二つ目', reportsToClone: 2 });
+  });
+
+  it('移送が失敗し、窓を閉じるときに1件目のクローンへの配りが投げても、残りの report はクローンへ配られる', async () => {
+    const report = (reportId: string, text: string): RunnerEvent =>
+      ({
+        type: 'report',
+        managerId: 'mgr-inflight',
+        status: 'running',
+        text,
+        reportId,
+      }) as RunnerEvent;
+    const { toClone } = await runWindow(
+      'refused',
+      [report('f1', '失敗する一つ目'), report('f2', '残りの二つ目')],
+      (event) => (event.text ?? '').includes('失敗する一つ目'),
+    );
+    expect(
+      toClone.filter(
+        (event) =>
+          event.type === 'manager_message' &&
+          event.kind === 'report' &&
+          (event.text ?? '').includes('残りの二つ目'),
+      ).length,
+    ).toBe(1);
   });
 
   it('移送が失敗したなら、窓の間に届いた runner-a の ask は従来どおり待ちへ積まれ、同じ requestId は二度積まれない', async () => {
