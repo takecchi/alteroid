@@ -9848,6 +9848,7 @@ class Pool implements ManagerPool {
       projectKey,
       sessionId,
       label: '作業者',
+      gap: '',
       isSubpath: isSubagentSubpath,
       nameOf: (subpath) => subpath,
       build: (subpath, entries) => ({ subpath, entries }),
@@ -9872,6 +9873,7 @@ class Pool implements ManagerPool {
       projectKey,
       sessionId,
       label: 'peer',
+      gap: ' ',
       isSubpath: isPeerSubpath,
       nameOf: peerIdOfSubpath,
       build: buildPeerTranscript,
@@ -9890,6 +9892,8 @@ class Pool implements ManagerPool {
     projectKey: string;
     sessionId: string;
     label: string;
+    /** 日本語と `label` の間・`label` と「の」の間に入れる空白（英字の `label` だけ空ける） */
+    gap: string;
     isSubpath: (subpath: string) => boolean;
     nameOf: (subpath: string) => string;
     build: (name: string, stored: unknown[]) => T | undefined;
@@ -9898,7 +9902,9 @@ class Pool implements ManagerPool {
     consequence: string;
     unplaceableReason?: string;
   }): Promise<T[]> {
-    const { managerId, projectKey, sessionId, label } = options;
+    const { managerId, projectKey, sessionId, gap } = options;
+    const label = `${gap}${options.label}`;
+    const labelOf = `${options.label}${gap}の`;
     const store = this.#stores.sessionStore;
     if (store?.listSubkeys === undefined) return [];
     const failed: string[] = [];
@@ -9919,7 +9925,7 @@ class Pool implements ManagerPool {
         } catch (error) {
           failed.push(name);
           noteUnreadableRecord(
-            `預かってある${label}の生ログ`,
+            `預かってある${label}${gap}の生ログ`,
             `projectKey=${projectKey} sessionId=${sessionId} subpath=${subpath}`,
             error,
           );
@@ -9927,13 +9933,13 @@ class Pool implements ManagerPool {
       }
     } catch (error) {
       noteUnreadableRecord(
-        `預かってある${label}の生ログの一覧`,
+        `預かってある${label}${gap}の生ログの一覧`,
         `projectKey=${projectKey} sessionId=${sessionId}`,
         error,
       );
       await this.#journal({
         type: 'decision',
-        decision: `[${managerId}] resume で、${label}の生ログの一覧を読めなかったので、${label}の記録は戻さずに起こす`,
+        decision: `[${managerId}] resume で、${labelOf}生ログの一覧を読めなかったので、${labelOf}記録は戻さずに起こす`,
         grounds: `listSubkeys の失敗: ${reasonOf(error)}`,
       });
       return [];
@@ -9951,7 +9957,7 @@ class Pool implements ManagerPool {
     if (parts.length > 0) {
       await this.#journal({
         type: 'decision',
-        decision: `[${managerId}] resume で、${label}の記録の一部を戻さなかった（${options.consequence}）`,
+        decision: `[${managerId}] resume で、${labelOf}記録の一部を戻さなかった（${options.consequence}）`,
         grounds: parts.join('。'),
       });
     }
