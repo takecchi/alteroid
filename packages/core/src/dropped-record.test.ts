@@ -752,12 +752,6 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '5時間枠の印（担当が戻っていればクローンが畳んでよいかの判定材料。Issue #4499）で、' +
           'この関数は参照しない。`quotaStop` と同じ「bool のタグで自由文を運ばない」欄。',
       },
-      commitmentExempt: {
-        emit: 'never',
-        why:
-          '廃止した台帳へ開かない印（Issue #5015。書き手も読み手も無く、古い受信箱の行を読むために残す）で、' +
-          'この関数は参照しない。`quotaStop` と同じ「bool のタグで自由文を運ばない」欄。',
-      },
       foldWhenBack: {
         emit: 'never',
         why:
@@ -855,7 +849,6 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       foldedTurn: true,
       quotaStop: true,
       quotaSessionWindow: true,
-      commitmentExempt: true,
       foldWhenBack: { movedFromGeneration: 1 },
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       rejectedAttachments: [{ name: SECRET, reason: SECRET }],
@@ -1987,7 +1980,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       delivered: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
       settled: { total: 0, byType: [] },
       pending: { count: 2, oldestAt: '2026-09-15T00:00:00.000Z' },
-      retained: { unread: 1, redelivered: 1, redeliveredClosed: 1, pendingCollapse: 1 },
+      retained: { unread: 1, redelivered: 1, pendingCollapse: 1 },
     },
     turn_timing: {
       type: 'turn_timing',
