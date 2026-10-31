@@ -1044,6 +1044,28 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     await clone.stop();
   });
 
+  it('⭐ 取り出し済みの代表には畳まない: 代表がターンで読まれている最中に同じ本文が届けば、新しい代表として積まれる（二度目の発生を取りこぼさない）', async () => {
+    const stores = createMemoryStores();
+    // `hang`: 1件目のターンが終わらない間（＝読まれている最中）に2件目を届ける
+    const { clone, inputs } = bootClone(stores, 'hang');
+    await idle();
+
+    const body = '読まれている最中にもう一度届く本文';
+    clone.post(report(body, 'evt-read-1'));
+    await waitFor(() => inputs.length > 0, '1件目（代表）がターンへ渡る');
+
+    clone.post(report(body, 'evt-read-2'));
+
+    await waitForCondition(
+      async () =>
+        (await stores.inbox.peekPending()).entries.some((r) => r.event.id === 'evt-read-2'),
+      '2件目が畳まれず受信箱に積まれる',
+    );
+    expect(
+      (await stores.inbox.peekPending()).entries.map((r) => r.event.id).sort(),
+    ).toEqual(['evt-read-1', 'evt-read-2']);
+  });
+
   it('器の入れ替えを跨いでも畳む: 未読が残った状態で Clone を作り直しても（#restoreUnread が索引を作り直す）、同じ本文が来れば畳まれる', async () => {
     const stores = createMemoryStores();
     const body = '器の入れ替えを跨ぐ本文';
