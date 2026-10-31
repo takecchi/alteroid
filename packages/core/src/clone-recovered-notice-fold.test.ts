@@ -74,18 +74,6 @@ function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
   };
 }
 
-// #5923: クローンは台帳へ書かない。以前の版は、畳んだ知らせ自身の行を器が閉じていた（#5048/#5235）。アップグレード前に開いた行を直接置いて、
-// 畳んでも台帳の行には触らない（閉じも開きもしない）ことを測る
-async function seedLegacyRow(stores: Stores, id: string, managerId: string = MANAGER_ID) {
-  await stores.commitments.open({
-    id,
-    at: AT,
-    origin: 'manager',
-    source: managerId,
-    body: '[report] （アップグレード前に開いた行）',
-  });
-}
-
 function boot(managers: ManagerPool, stores: Stores = createMemoryStores()) {
   const { fn, calls } = fakeSdk();
   const clone: CloneHost = createClone({
@@ -142,9 +130,8 @@ async function expectDelivered(s: ReturnType<typeof boot>, body: string): Promis
 }
 
 describe('担当が戻っていれば畳んでよい印の付いた知らせを、ターンを起こさず畳む（#5048）', () => {
-  it('⭐ 起こし直し・セッションの落ちの束（世代の条件なし）: 担当が running・世代一致なら畳み、台帳の行には触らない', async () => {
+  it('⭐ 起こし直し・セッションの落ちの束（世代の条件なし）: 担当が running・世代一致なら畳む', async () => {
     const stores = createMemoryStores();
-    await seedLegacyRow(stores, 'evt-rewoken');
     const s = boot(
       stubPool(() => Promise.resolve([summary()])),
       stores,
@@ -152,7 +139,6 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
 
     s.clone.post(notice('evt-rewoken', '新しい鍵で起こし直した REWOKEN-BODY', {}));
     await expectFolded(s, 'evt-rewoken', 'REWOKEN-BODY');
-    expect((await s.stores.commitments.get('evt-rewoken'))?.closedAt).toBeUndefined();
     expect(
       (await s.stores.journal.list({ types: ['decision'] })).some((row) =>
         JSON.stringify(row).includes('自動で閉じる'),
@@ -202,9 +188,8 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
     await s.clone.stop();
   });
 
-  it('⭐ 鍵の入れ替えで背景処理を畳んだ起こし直しの知らせ（usage_rewoken_folded）: 戻っていれば畳み、本文（結果は届かない旨）は日誌に残り、台帳の行には触らない', async () => {
+  it('⭐ 鍵の入れ替えで背景処理を畳んだ起こし直しの知らせ（usage_rewoken_folded）: 戻っていれば畳み、本文（結果は届かない旨）は日誌に残る', async () => {
     const stores = createMemoryStores();
-    await seedLegacyRow(stores, 'evt-folded');
     const s = boot(
       stubPool(() => Promise.resolve([summary()])),
       stores,
@@ -213,7 +198,6 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
 
     s.clone.post(notice('evt-folded', body, {}));
     await expectFolded(s, 'evt-folded', body);
-    expect((await s.stores.commitments.get('evt-folded'))?.closedAt).toBeUndefined();
     // ターンは1回も回らない
     expect(s.calls).toHaveLength(0);
 
@@ -251,10 +235,9 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
     // 引き取り直しは鍵の世代を記録しない: 世代が欠けていても、世代が食い違っていても畳む（基準は live・枠停止の印なし・running）
     const attached = { attached: true as const };
 
-    it('⭐ running かつ live の N 本はターン0で畳み、本文は日誌・台帳の行には触らない', async () => {
+    it('⭐ running かつ live の N 本はターン0で畳み、本文は日誌に残る', async () => {
       const ids = ['mgr-1', 'mgr-2', 'mgr-3'];
       const stores = createMemoryStores();
-      for (const id of ids) await seedLegacyRow(stores, `evt-${id}`, id);
       const s = boot(
         stubPool(() =>
           Promise.resolve(
@@ -278,7 +261,6 @@ describe('担当が戻っていれば畳んでよい印の付いた知らせを�
         expect(
           (await exchangeTexts(s.stores)).some((text) => text.includes(`ATTACHED-${id}`)),
         ).toBe(true);
-        expect((await s.stores.commitments.get(`evt-${id}`))?.closedAt).toBeUndefined();
       }
       // ターン0: モデルへは1文字も渡らない
       expect(allInputs(s.calls)).toEqual([]);

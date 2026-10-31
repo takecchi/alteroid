@@ -8,7 +8,6 @@ import { PgAttachmentStore, type PgAttachmentStoreOptions } from './attachments.
 import { PgAuthStore } from './auth.js';
 import { PgEventReceiptStore } from './event-receipts.js';
 import { PgIntegrationKeyStore } from './integration-keys.js';
-import { PgCommitmentStore } from './commitments.js';
 import { PgPracticeStore } from './practices.js';
 import type { Db } from './db.js';
 import { PgInboxStore } from './inbox.js';
@@ -47,7 +46,6 @@ export { S3AttachmentBlobStore } from './attachment-blobs-s3.js';
 export { PgAuthStore } from './auth.js';
 export { PgEventReceiptStore } from './event-receipts.js';
 export { PgIntegrationKeyStore } from './integration-keys.js';
-export { PgCommitmentStore } from './commitments.js';
 export { PgPracticeStore } from './practices.js';
 export { PgInboxStore } from './inbox.js';
 export { PgConversationReadStore } from './conversation-reads.js';
@@ -138,7 +136,6 @@ const LONG_QUERY_METHODS = {
   sessionStore: ['load', 'append', 'readTail', 'delete', 'clearAll'],
   attachments: ['put', 'open', 'get', 'prune', 'clear'],
   plugins: ['get', 'put'],
-  commitments: ['list', 'removeForConversation', 'clear'],
   // 件数で締めずに表を走査する（全行を読んで並びを作る）。advisory lock の待ちも含めるので、書く口も延ばす
   tasks: ['list', 'add', 'move', 'setStatus', 'removeForConversation', 'clear'],
   inbox: ['claimPending', 'pending', 'peekPending', 'clear'],
@@ -174,7 +171,6 @@ export function createPgStoresFromDb(
     journal,
     jobs: extendLongQueries(new PgJobStore(db), LONG_QUERY_METHODS.jobs),
     schedules: new PgScheduleStore(db),
-    commitments: extendLongQueries(new PgCommitmentStore(db), LONG_QUERY_METHODS.commitments),
     tasks: extendLongQueries(new PgTaskStore(db), LONG_QUERY_METHODS.tasks),
     practices: new PgPracticeStore(db),
     inbox: extendLongQueries(new PgInboxStore(db), LONG_QUERY_METHODS.inbox),

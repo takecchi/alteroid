@@ -8,12 +8,10 @@ import {
   USAGE_ESTIMATE_NOTICE,
   usageLayerSchema,
   usageSiteSchema,
-  type Commitment,
 } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  renderCommitments,
   renderManagerList,
   renderReport,
   renderReportLine,
@@ -1272,18 +1270,6 @@ describe('renderReport / renderReportLine', () => {
   });
 });
 
-const NOW = Date.parse('2026-08-19T12:00:00.000Z');
-
-function commitment(over: Partial<Commitment> = {}): Commitment {
-  return {
-    id: 'cmt-1',
-    at: '2026-08-16T12:00:00.000Z',
-    origin: 'human',
-    body: 'ドキュメントの誤りを直す',
-    ...over,
-  };
-}
-
 interface ConversationSummaryLike {
   conversationId: string;
   startedAt: string;
@@ -1376,8 +1362,6 @@ interface ArchiveSessionSummaryLike {
 
 function stubClient(
   options: {
-    commitments?: Commitment[];
-    commitmentDetailStatus?: number;
     abortStatus?: number;
     abortBody?: unknown;
     conversations?: ConversationSummaryLike[];
@@ -1513,27 +1497,6 @@ function stubClient(
         return Promise.resolve(
           reply(status, status === 200 ? { id: 'evt-1' } : (options.eventsBody ?? {})),
         );
-      },
-    },
-    commitments: {
-      $get: (args: unknown) => {
-        calls.push({ route: 'GET /commitments', args });
-        return Promise.resolve(reply(200, { entries: options.commitments ?? [] }));
-      },
-      ':id': {
-        // 1件を全文で返す口（#5089）。無い id は 404
-        $get: (args: { param: { id: string } }) => {
-          calls.push({ route: 'GET /commitments/:id', args });
-          const found = (options.commitments ?? []).find((entry) => entry.id === args.param.id);
-          if (options.commitmentDetailStatus !== undefined) {
-            return Promise.resolve(
-              reply(options.commitmentDetailStatus, { error: '読めない形で入っている' }),
-            );
-          }
-          return Promise.resolve(
-            found === undefined ? reply(404, { error: 'not found' }) : reply(200, { entry: found }),
-          );
-        },
       },
     },
     conversations: {
@@ -1796,7 +1759,6 @@ function defaultAnswerResults(
 function emptyListed(): Listed {
   return {
     approvals: [],
-    commitments: [],
     conversations: [],
     managers: [],
     managerAnchors: {},
@@ -1812,350 +1774,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('renderCommitments', () => {
-  it('番号と id を同じ順で作る（表示と /commitment が別のものを指さない）', () => {
-    const { text, ids } = renderCommitments(
-      [commitment({ id: 'a' }), commitment({ id: 'b' }), commitment({ id: 'c' })],
-      NOW,
-    );
-
-    expect(ids).toEqual(['a', 'b', 'c']);
-    // 先に `[1]` と `id: a` が在ることを確かめる（無いと `-1 < n` で素通りする）。
-    expect(text).toContain('[1]');
-    expect(text).toContain('id: a');
-    expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
-    expect(text.indexOf('id: a')).toBeLessThan(text.indexOf('id: b'));
-    expect(text.indexOf('id: b')).toBeLessThan(text.indexOf('id: c'));
-  });
-
-  it('起点と齢を出す（急ぎ方を決める材料はこの2つしかない）', () => {
-    const { text } = renderCommitments([commitment({ origin: 'human', source: 'conv-1' })], NOW);
-
-    expect(text).toContain('起点: 人間(conv-1)');
-    expect(text).toContain('2026-08-16T12:00:00.000Z');
-    expect(text).toContain('3日前');
-  });
-
-  it('片付いたものには印と、何をもって閉じたかを添える', () => {
-    const { text } = renderCommitments(
-      [
-        commitment({
-          closedAt: '2026-08-18T12:00:00.000Z',
-          closedReason: 'PR #99 をマージした',
-        }),
-      ],
-      NOW,
-    );
-
-    expect(text).toContain('✓');
-    expect(text).toContain('片付けた: 2026-08-18T12:00:00.000Z');
-    expect(text).toContain('PR #99 をマージした');
-  });
-
-  it('長い本文を畳む（一覧が流れない）', () => {
-    const { text } = renderCommitments([commitment({ body: 'あ'.repeat(4000) })], NOW);
-
-    const [header] = text.split('\n');
-    expect(header).toBeDefined();
-    expect(header?.length).toBeLessThan(200);
-    expect(header).toContain('…');
-  });
-
-  it('未了の1件は作成と更新に同じ受け取り時刻を出す（齢の表示も残る）', () => {
-    const { text } = renderCommitments([commitment({ at: '2026-08-10T00:00:00.000Z' })], NOW);
-
-    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z');
-    expect(text).toContain('更新: 2026-08-10T00:00:00.000Z');
-    expect(text).toMatch(/（\d+日前）/);
-  });
-
-  it('片付いた1件は更新に closedAt を出す（受け取り時刻に取り違えない）', () => {
-    const { text } = renderCommitments(
-      [
-        commitment({
-          at: '2026-08-10T00:00:00.000Z',
-          closedAt: '2026-08-15T00:00:00.000Z',
-          closedReason: 'x',
-        }),
-      ],
-      NOW,
-    );
-
-    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z');
-    expect(text).toContain('更新: 2026-08-15T00:00:00.000Z');
-    expect(text).not.toContain('更新: 2026-08-10T00:00:00.000Z');
-    expect(text).not.toContain(`更新: ${new Date(NOW).toISOString()}`);
-  });
-
-  it('空なら、そう言う（黙って何も出さない形にしない）', () => {
-    const { text, ids } = renderCommitments([], NOW);
-
-    expect(ids).toEqual([]);
-    expect(text).toContain('引き受けたまま終わっていない仕事はありません');
-  });
-
-  it('読めない行が在れば、件数と id を断る（片付いたのではない、と明示する）', () => {
-    const { text, ids } = renderCommitments([commitment({ id: 'a' })], NOW, [
-      { id: 'broken-1', reason: 'origin が読めない' },
-    ]);
-
-    expect(ids).toEqual(['a']);
-    expect(text).toContain('id: a');
-    expect(text).toContain('読めない行が 1 件あります');
-    expect(text).toContain('broken-1');
-    expect(text).toContain('片付いたのではありません');
-  });
-
-  it('読める行が0件でも、読めない行が在れば断りを出す（「ありません」で終わらせない）', () => {
-    const { text } = renderCommitments([], NOW, [{ id: 'broken-1', reason: 'origin が読めない' }]);
-
-    expect(text).toContain('読めない行が 1 件あります');
-    expect(text).not.toContain('引き受けたまま終わっていない仕事はありません');
-  });
-
-  it('id が取れない読めない行は、件数だけに数える', () => {
-    const { text } = renderCommitments([], NOW, [{ reason: 'id ごと読めない' }]);
-
-    expect(text).toContain('読めない行が 1 件あります');
-    expect(text).not.toContain('id: ');
-  });
-
-  it('読めない行が0件なら、断りを足さない', () => {
-    const { text } = renderCommitments([commitment({ id: 'a' })], NOW, []);
-
-    expect(text).not.toContain('読めない行');
-  });
-
-  it('物理削除された片付き行が在れば、累計件数を断る', () => {
-    const { text } = renderCommitments([commitment({ id: 'a' })], NOW, [], 3);
-
-    expect(text).toContain('保持上限を超えて物理削除された片付き行が累計 3 件あります');
-  });
-
-  it('物理削除された片付き行が0件なら、断りを足さない', () => {
-    const { text } = renderCommitments([commitment({ id: 'a' })], NOW, [], 0);
-
-    expect(text).not.toContain('物理削除された');
-  });
-
-  it('読める行が0件でも、物理削除された片付き行が在れば断りを出す', () => {
-    const { text } = renderCommitments([], NOW, [], 5);
-
-    expect(text).toContain('保持上限を超えて物理削除された片付き行が累計 5 件あります');
-    expect(text).not.toContain('引き受けたまま終わっていない仕事はありません');
-  });
-});
-
-describe('chat の台帳コマンド', () => {
-  it('/commitments は既定で未了だけを求め、all のときだけ片付けたものも求める', async () => {
-    const read = captureStdout();
-    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-x' })] });
-
-    await runSlashCommand('/commitments', ...slashArgs(client, emptyListed()));
-    await runSlashCommand('/commitments all', ...slashArgs(client, emptyListed()));
-
-    expect(calls.map((call) => call.route)).toEqual(['GET /commitments', 'GET /commitments']);
-    expect(calls[0]?.args).toEqual({ query: {} });
-    expect(calls[1]?.args).toEqual({ query: { includeClosed: 'true' } });
-    expect(read()).toContain('id: cmt-x');
-  });
-
-  it('/event は本文が JSON ならその値を、読めなければ文字列を、空なら空文字列を送る（#3146）', async () => {
-    captureStdout();
-    const { calls, client } = stubClient();
-
-    await runSlashCommand('/event ci {"a":1}', ...slashArgs(client, emptyListed()));
-    await runSlashCommand('/event ci [1,"x"]', ...slashArgs(client, emptyListed()));
-    await runSlashCommand('/event ci 42', ...slashArgs(client, emptyListed()));
-    await runSlashCommand('/event ci ビルドが  落ちた', ...slashArgs(client, emptyListed()));
-    await runSlashCommand('/event ci {"a":1', ...slashArgs(client, emptyListed()));
-    await runSlashCommand('/event ci', ...slashArgs(client, emptyListed()));
-
-    const sent = calls
-      .filter((call) => call.route === 'POST /events')
-      .map((call) => (call.args as { json: unknown }).json);
-    expect(sent).toEqual([
-      { source: 'ci', payload: { a: 1 } },
-      { source: 'ci', payload: [1, 'x'] },
-      { source: 'ci', payload: 42 },
-      { source: 'ci', payload: 'ビルドが  落ちた' },
-      { source: 'ci', payload: '{"a":1' },
-      { source: 'ci', payload: '' },
-    ]);
-  });
-
-  it('/event は source が無ければ何も送らず、使い方を出す', async () => {
+// 台帳の撤去（段2b で書く命令、段3 で読む命令）: chat に台帳の命令は無い
+describe('chat に台帳の命令は無い', () => {
+  it.each([
+    '/commit 積む本文',
+    '/done 1 片付けた',
+    '/commit-edit 1 直す',
+    '/commit-reopen 1 理由',
+    '/commitments',
+    '/commitments all',
+    '/commitment 1',
+  ])('%s は不明なコマンドで、何も送らず失敗として渡す', async (line) => {
     const out = captureStdout();
     const { calls, client } = stubClient();
+    const failed: string[] = [];
 
-    await runSlashCommand('/event', ...slashArgs(client, emptyListed()));
+    await runSlashCommand(
+      line,
+      ...slashArgs(client, emptyListed(), { onFailed: (reason) => failed.push(reason) }),
+    );
 
-    expect(calls.some((call) => call.route === 'POST /events')).toBe(false);
-    expect(out()).toContain('使い方: /event');
+    expect(calls).toEqual([]);
+    expect(out()).toContain('不明なコマンド');
+    expect(failed).toHaveLength(1);
   });
 
-  describe('/commitment（1件を全文で）', () => {
-    const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
-    const LONG = `長い依頼。${'あ'.repeat(200)}\n2行目の末尾`;
-
-    it('番号で引くと、本文も片付けた理由も切らずに全文で出す。片付けた行も引ける', async () => {
-      const read = captureStdout();
-      const { calls, client } = stubClient({
-        commitments: [
-          commitment({ id: 'cmt-1' }),
-          commitment({
-            id: 'cmt-2',
-            body: LONG,
-            closedAt: '2026-08-17T00:00:00.000Z',
-            closedReason: `${'い'.repeat(200)}\n理由の末尾`,
-            closedBy: 'human',
-          }),
-        ],
-      });
-      const listed = emptyListed();
-
-      await runSlashCommand('/commitments all', ...slashArgs(client, listed));
-      const listing = read();
-      expect(listing).not.toContain('2行目の末尾');
-      await runSlashCommand('/commitment 2', ...slashArgs(client, listed));
-
-      const text = read().slice(listing.length);
-      expect(text).toContain('cmt-2');
-      expect(text).toContain('あ'.repeat(200));
-      expect(text).toContain('2行目の末尾');
-      expect(text).toContain('い'.repeat(200));
-      expect(text).toContain('理由の末尾');
-      expect(text).toContain('closedBy: human');
-      // 全文は詳細の口で取る（#5089。一覧は片付いた行の本文を先頭に切って返すため）
-      expect(calls.at(-1)).toEqual({
-        route: 'GET /commitments/:id',
-        args: { param: { id: 'cmt-2' } },
-      });
-    });
-
-    it('id でも引ける。一覧に無かった行（窓の外の片付けた行）も引く', async () => {
-      const read = captureStdout();
-      const { client } = stubClient({ commitments: [commitment({ id: 'cmt-9', body: LONG })] });
-
-      await runSlashCommand('/commitment cmt-9', ...slashArgs(client, emptyListed()));
-
-      expect(read()).toContain('2行目の末尾');
-    });
-
-    it('伏せ字を一覧と同じく掛ける（本文にも片付けた理由にも）', async () => {
-      const read = captureStdout();
-      const { client } = stubClient({
-        commitments: [
-          commitment({
-            id: 'cmt-s',
-            body: `トークンは ${SECRET} です\n続き`,
-            closedAt: '2026-08-17T00:00:00.000Z',
-            closedReason: `理由 ${SECRET}`,
-          }),
-        ],
-      });
-
-      await runSlashCommand('/commitment cmt-s', ...slashArgs(client, emptyListed()));
-
-      const text = read();
-      expect(text).toContain('続き');
-      expect(text).not.toContain(SECRET);
-    });
-
-    it('在るが読めない行（409）は、無いとは言わず読めない形だと言う（#5089 で詳細の口から取るようにした後も同じ文言）', async () => {
-      const read = captureStdout();
-      const { client } = stubClient({ commitments: [], commitmentDetailStatus: 409 });
-
-      await runSlashCommand('/commitment cmt-bad', ...slashArgs(client, emptyListed()));
-
-      const text = read();
-      expect(text).toContain('台帳に cmt-bad は見つかりません');
-      expect(text).toContain('在るが読めない形で入っている（消されたのではない）');
-    });
-
-    it('無い id は、無いと言う。番号が一覧に無ければ台帳を引かない', async () => {
-      const read = captureStdout();
-      const { calls, client } = stubClient({ commitments: [] });
-
-      await runSlashCommand('/commitment nope', ...slashArgs(client, emptyListed()));
-      expect(read()).toContain('台帳に nope は見つかりません');
-
-      const before = calls.length;
-      await runSlashCommand('/commitment 3', ...slashArgs(client, emptyListed()));
-      expect(read()).toContain('[3] は /commitments の一覧にありません');
-      expect(calls).toHaveLength(before);
-    });
-
-    it('引数が無い・多いときは使い方を言い、/help に載る', async () => {
-      const read = captureStdout();
-      const { calls, client } = stubClient({});
-
-      await runSlashCommand('/commitment', ...slashArgs(client, emptyListed()));
-      await runSlashCommand('/commitment a b', ...slashArgs(client, emptyListed()));
-      expect(read()).toContain('使い方: /commitment <番号|id>');
-      expect(calls).toEqual([]);
-
-      const help = captureStdout();
-      await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
-      expect(help()).toContain('/commitment <番号|id>');
-    });
-  });
-});
-
-// 台帳の撤去の段2b: 人間の側から台帳へ書く命令は無い（読む `/commitments` `/commitment` は段3まで残る）
-describe('chat に台帳へ書く命令は無い', () => {
-  it.each(['/commit 積む本文', '/done 1 片付けた', '/commit-edit 1 直す', '/commit-reopen 1 理由'])(
-    '%s は不明なコマンドで、何も送らず失敗として渡す',
-    async (line) => {
-      const out = captureStdout();
-      const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
-      const failed: string[] = [];
-
-      await runSlashCommand(
-        line,
-        ...slashArgs(
-          client,
-          { ...emptyListed(), commitments: ['cmt-1'] },
-          {
-            onFailed: (reason) => failed.push(reason),
-          },
-        ),
-      );
-
-      expect(calls).toEqual([]);
-      expect(out()).toContain('不明なコマンド');
-      expect(failed).toHaveLength(1);
-    },
-  );
-
-  it('/help に書く命令は載らず、読む命令は載る', async () => {
+  it('/help に台帳の命令は載らない', async () => {
     const read = captureStdout();
     const { client } = stubClient();
 
     await runSlashCommand('/help', ...slashArgs(client, emptyListed()));
 
     const text = read();
-    expect(text).toContain('/commitments');
-    expect(text).toContain('/commitment <番号|id>');
+    expect(text).not.toContain('/commitments');
+    expect(text).not.toContain('/commitment ');
     expect(text).not.toMatch(/^\/commit /m);
     expect(text).not.toMatch(/^\/done /m);
     expect(text).not.toContain('/commit-edit');
-    expect(text).not.toContain('/commit-reopen');
-  });
-
-  it('/commitments の一覧は書く命令を案内しない', async () => {
-    const read = captureStdout();
-    const { client } = stubClient({
-      commitments: [
-        commitment({ id: 'cmt-1' }),
-        commitment({ id: 'cmt-2', closedAt: '2026-08-17T00:00:00.000Z', closedReason: '済' }),
-      ],
-    });
-
-    await runSlashCommand('/commitments all', ...slashArgs(client, emptyListed()));
-
-    const text = read();
-    expect(text).not.toContain('/done');
     expect(text).not.toContain('/commit-reopen');
   });
 });
@@ -4807,13 +4462,12 @@ describe('chat の /conversations と /conversation', () => {
     expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-b' });
   });
 
-  it('/conversation は承認待ち・台帳の番号を掴まない（覚え場所が別であること）', async () => {
+  it('/conversation は承認待ちの番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
     const listed: Listed = {
       ...emptyListed(),
       approvals: ['approval-1'],
-      commitments: ['cmt-1'],
     };
 
     await runSlashCommand('/conversation 1', ...slashArgs(client, listed));

@@ -15,7 +15,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { fakeSdk, waitFor } from './clone-test-harness.js';
 import { createClone } from './clone.js';
-import { seedCommitments, seedJobs, seedJournal, seedMemory } from './context-size-fixtures.js';
+import { seedTasks, seedJobs, seedJournal, seedMemory } from './context-size-fixtures.js';
 import { contextSizeRecorder } from './context-size-recorder.js';
 import type { MemoryFixtureSize } from './context-size-fixtures.js';
 import type { CloneHost } from './host.js';
@@ -65,8 +65,8 @@ export const TURN_KIND_LABELS: Record<TurnKind, string> = {
 
 export interface FixtureConfig {
   memory: MemoryFixtureSize;
-  /** 台帳の未了の件数（最古は 30 日前）。 */
-  commitments: number;
+  /** 待ち行列の未了の件数（最古は 30 日前）。 */
+  tasks: number;
   /** 委譲（Job）の件数。 */
   jobs: number;
   /** 直近 24 時間の日誌の行数（digest の材料）。 */
@@ -79,7 +79,7 @@ export interface FixtureConfig {
 
 export const BASELINE: FixtureConfig = {
   memory: 'cap',
-  commitments: 327,
+  tasks: 327,
   jobs: 40,
   journalRows: 200,
   humanChars: 80,
@@ -184,7 +184,7 @@ function eventFor(kind: TurnKind, index: number, config: FixtureConfig): InboxEv
 async function buildStores(config: FixtureConfig, now: number): Promise<Stores> {
   const stores = createMemoryStores();
   await seedMemory(stores, config.memory);
-  await seedCommitments(stores, config.commitments, now);
+  await seedTasks(stores, config.tasks, now);
   // 発意の門は Task だけで決める（#5910）: 動ける task が無いと、2回目以降の発意 tick は畳まれてターンが回らず測れない
   await stores.tasks.add({
     id: 'task-measure-00001',
@@ -207,7 +207,7 @@ async function buildStores(config: FixtureConfig, now: number): Promise<Stores> 
   return stores;
 }
 
-/** ターンの間に状態を動かす: 日誌 20 行・委譲 5 本の状態・台帳 5 件。何本動くかは仮定（本番の動き方は測っていない）。 */
+/** ターンの間に状態を動かす: 日誌 20 行・委譲 5 本の状態・task 5 件。何本動くかは仮定（本番の動き方は測っていない）。 */
 async function churnState(stores: Stores, now: number): Promise<void> {
   await seedJournal(stores, 20);
   const at = new Date(now + 1_000).toISOString();
@@ -221,7 +221,7 @@ async function churnState(stores: Stores, now: number): Promise<void> {
       lastReportAt: at,
     });
   }
-  await seedCommitments(stores, 5, now, 0, 'churn-');
+  await seedTasks(stores, 5, now, 0, 'churn-');
 }
 
 interface BootedClone {
@@ -425,7 +425,7 @@ export interface ToolResultSample {
 /**
  * 道具の返り値が会話の履歴へ積む量（#5469 P8 前段）。本物の道具サーバ（`createCloneMcpServer`）へ MCP Client から呼んで、返った本文を測る。
  * 偽データ（`FixtureConfig`）の本文は同じ日本語文の繰り返しなので、トークン近似は実文より大きめに出うる。上限は各道具の予算（`tools.ts` の `*_BUDGET`・`*_PAGE` = 8,000 字）で決まる。
- * 呼び出しは 1 回ずつ順に行い、状態を変える道具（commitment_close など）は呼び出しの並びの中で効く。
+ * 呼び出しは 1 回ずつ順に行い、状態を変える道具（task_set_status など）は呼び出しの並びの中で効く。
  */
 export async function measureToolResults(
   config: FixtureConfig,
@@ -474,7 +474,7 @@ export function cell(size: Size): string {
   return `${fmt(size.chars)}字 / ${fmt(size.bytes)}B / 約${fmt(size.tokens)}tok`;
 }
 
-/** 状態（digest / situation / 台帳の断り書き）に数える欄。残りの欄は「その他の断り書き」。 */
+/** 状態（digest / situation / 待ち行列の断り書き）に数える欄。残りの欄は「その他の断り書き」。 */
 const STATE_PARTS = ['commitment', 'situation'] as const;
 
 export function stateOf(sample: TurnSample): Size {
@@ -514,7 +514,7 @@ const ORDINAL_LABELS: Record<number, string> = {
 
 export function renderTurnTable(runs: readonly KindRun[]): string {
   const lines = [
-    '| ターンの種類 | 回 | 入力の合計 | (3) 状態: 台帳の断り書き | (3) 状態: situation | (4) 本文（合図・tick の指示と digest） | その他の断り書き・記憶の差分 | 組んだ digest（畳む前の生の長さ） |',
+    '| ターンの種類 | 回 | 入力の合計 | (3) 状態: 待ち行列の断り書き | (3) 状態: situation | (4) 本文（合図・tick の指示と digest） | その他の断り書き・記憶の差分 | 組んだ digest（畳む前の生の長さ） |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const run of runs) {
@@ -579,9 +579,9 @@ export interface Variant {
 
 /** 基準（`BASELINE`）から 1 つだけ動かした条件。データ量への感度を見るための表。 */
 export const SENSITIVITY_VARIANTS: readonly Variant[] = [
-  { label: '台帳 未了 50 件', config: { ...BASELINE, commitments: 50 } },
-  { label: '台帳 未了 327 件（基準）', config: BASELINE },
-  { label: '台帳 未了 1000 件', config: { ...BASELINE, commitments: 1_000 } },
+  { label: '待ち行列 未了 50 件', config: { ...BASELINE, tasks: 50 } },
+  { label: '待ち行列 未了 327 件（基準）', config: BASELINE },
+  { label: '待ち行列 未了 1000 件', config: { ...BASELINE, tasks: 1_000 } },
   { label: '記憶 小（premise 4 + fact 10）', config: { ...BASELINE, memory: 'small' } },
   { label: '記憶 上限近く（基準。premise 24 + fact 300）', config: BASELINE },
   { label: '委譲 0 本', config: { ...BASELINE, jobs: 0 } },
@@ -600,7 +600,7 @@ export interface VariantRun {
 
 export function renderSensitivity(rows: readonly VariantRun[]): string {
   const lines = [
-    '| 条件 | ターンの種類 | 1本目（全文）の入力 | 3本目（畳み後・状態が動いた）の入力 | 3本目のうち台帳の断り書き | 1本目のうち situation | 1本目に組んだ digest（生） | システムプロンプト合計 |',
+    '| 条件 | ターンの種類 | 1本目（全文）の入力 | 3本目（畳み後・状態が動いた）の入力 | 3本目のうち待ち行列の断り書き | 1本目のうち situation | 1本目に組んだ digest（生） | システムプロンプト合計 |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const row of rows) {

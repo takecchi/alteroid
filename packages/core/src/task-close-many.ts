@@ -3,9 +3,8 @@ import {
   describeOffsetRequiredTimeBoundary,
   isOffsetQualifiedTimeBoundary,
 } from './journal-time.js';
-import { commitmentOriginSchema } from './schema.js';
-import type { CommitmentClosedBy, CommitmentOrigin } from './schema.js';
-import type { CommitmentStore } from './store.js';
+import { taskOriginSchema } from './schema.js';
+import type { TaskClosedBy, TaskOrigin } from './schema.js';
 import {
   describeArrayLengthViolation,
   describeBlankViolation,
@@ -14,7 +13,7 @@ import {
   describeStringLengthViolation,
 } from './tool-arg-checks.js';
 
-// クローンの Task の一括（`task_set_status_many`）が使う、絞り込みの検証（`describeCloseManyViolation`）と塊ごとの閉じ方（`closeManyInChunks`）。台帳の一括（クローンの道具 `commitment_close_many` と人間の `POST /commitments/close-many`）は外れたが、Task の側の実装はここを使う。
+// クローンの Task の一括（`task_set_status_many`）が使う、絞り込みの検証（`describeCloseManyViolation`）と塊ごとの閉じ方（`closeManyInChunks`）。
 // 日誌を書く順序は共有しない: 呼び手の流儀に合わせて差し込み口（`CloseManyChunkHooks`）で渡す。
 
 export const CLOSE_MANY_LIMIT_DEFAULT = 500;
@@ -26,7 +25,7 @@ export const CLOSE_MANY_IDS_SHOWN = 20;
 export const CLOSE_MANY_SOURCES_SHOWN = 8;
 
 export interface CloseManyFilterInput {
-  origin: readonly CommitmentOrigin[];
+  origin: readonly TaskOrigin[];
   source?: readonly string[] | undefined;
   q?: string | undefined;
   until?: string | undefined;
@@ -68,7 +67,7 @@ export function describeCloseManyViolation(
     describeBlankViolation('reason', reason);
   if (reasonError !== null) return reasonError;
   // 絞り込みの無い呼びを断る: 「全部閉じる」が事故で撃てる形を作らないため。確認用の追加の引数は作らない: `dryRun` の既定と2重に問うことになり、どちらが効いたのか読めなくなるため
-  if (commitmentOriginSchema.options.every((known) => origin.includes(known))) {
+  if (taskOriginSchema.options.every((known) => origin.includes(known))) {
     return (
       'origin に在る起点を全部（human / manager / external / self）並べた呼びは断る——' +
       `それは絞り込みが無いのと同じで、1回で${subject}を空にできてしまう。` +
@@ -112,14 +111,24 @@ export interface CloseManyChunkHooks {
   after: (chunk: CloseManyChunk, closed: readonly string[]) => Promise<void>;
 }
 
+/** 塊ごとに閉じる口。実装は `taskStatusManyStore`（Task の `setStatus` を1件ずつ回す）。実際に閉じた id だけを返すこと。 */
+export interface CloseManyStore {
+  closeMany(
+    ids: readonly string[],
+    at: string,
+    reason: string,
+    by: TaskClosedBy,
+  ): Promise<string[]>;
+}
+
 /**
  * 対象の id を文字数の予算で塊に割り、塊ごとに「前 → 閉じる → 後」を交互に回す: まとめて閉じてから日誌を書くと、器が落ちたとき閉じたのに記録が無い行が最大 `CLOSE_MANY_LIMIT_MAX` 件できるため。
  * 閉じた id を全部返す。
  */
 export async function closeManyInChunks(
-  commitments: Pick<CommitmentStore, 'closeMany'>,
+  store: CloseManyStore,
   ids: readonly string[],
-  options: { reason: string; by: CommitmentClosedBy; at: string },
+  options: { reason: string; by: TaskClosedBy; at: string },
   hooks: CloseManyChunkHooks,
 ): Promise<string[]> {
   const chunks = chunkIdsByChars(ids, CLOSE_MANY_JOURNAL_ID_CHARS);
@@ -129,7 +138,7 @@ export async function closeManyInChunks(
     await hooks.before?.(chunk);
     let closed: string[];
     try {
-      closed = await commitments.closeMany(chunkIds, options.at, options.reason, options.by);
+      closed = await store.closeMany(chunkIds, options.at, options.reason, options.by);
     } catch (error) {
       await hooks.closeFailed?.(chunk, error);
       throw error;

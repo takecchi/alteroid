@@ -77,10 +77,10 @@ describe('設定のまとまりの題名（#2844）', () => {
   });
 });
 
-describe('仕事のまとまりの名前', () => {
-  it('左ナビの項目は、開いた先の h1 と同じ「未了の仕事」（見出し「仕事」と同じ語にしない）', () => {
-    expect(NAV_ITEMS.find((i) => i.to === '/commitments')?.label).toBe('未了の仕事');
-    expect(read('routes/commitments.tsx')).toContain('title="未了の仕事"');
+describe('作業のまとまりの名前', () => {
+  it('左ナビの項目は、開いた先の h1 と同じ「待ち行列」（見出し「作業」と同じ語にしない）', () => {
+    expect(NAV_ITEMS.find((i) => i.to === '/tasks')?.label).toBe('待ち行列');
+    expect(read('routes/tasks.tsx')).toContain('title="待ち行列"');
   });
 });
 

@@ -52,9 +52,6 @@ import {
   MCP_SERVER_NAME,
   composedFingerprints,
   composeProfileScript,
-  migrateCommitmentsToTasks,
-  MigrationPlanChangedError,
-  OriginConversationLookupError,
   createPluginPreviewStore,
   describeAttachmentAlreadyGoneRetraction,
   describeAttachmentForJournal,
@@ -89,7 +86,6 @@ import {
   TokenPoolInputError,
   TokenPoolVersionMismatchError,
   UnreadableAccountError,
-  UnreadableCommitmentError,
   UnreadableTaskError,
   TASK_TITLE_MAX,
   describeTaskPlacement,
@@ -105,14 +101,8 @@ import {
   countUnreadConversations,
   effectiveReadThrough,
   loadConversationReadView,
-  commitmentActiveDelegationIds,
-  commitmentPosition,
-  commitmentRespondedAt,
-  commitmentUpdatedAt,
-  describeUnreadableCommitment,
   describeUnreadableScheduleEdit,
   compareApprovalPagingKey,
-  compareCommitmentPosition,
   computeSupersededIds,
   conversationMessages,
   createAuthProviderRegistry,
@@ -177,8 +167,6 @@ import {
   selectArchiveRemovalTargets,
   startSseHeartbeat,
   readProgress,
-  buildCommitmentDerivations,
-  readUnreadableJobsForCommitments,
   DEFAULT_PROGRESS_WINDOW_HOURS,
   approvalSelectionSchema,
   describeSelectionsViolation,
@@ -288,15 +276,10 @@ import {
   attachmentListResponseSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
-  commitmentDetailResponseSchema,
-  commitmentListResponseSchema,
   taskListResponseSchema,
   taskDetailResponseSchema,
   taskAddedResponseSchema,
   taskConflictResponseSchema,
-  taskMigrationPlanResponseSchema,
-  taskMigrateRequestSchema,
-  taskMigrationResultResponseSchema,
   progressResponseSchema,
   conversationDetailResponseSchema,
   conversationReadRequestSchema,
@@ -714,13 +697,6 @@ const scheduleBody = z.object({
 });
 
 // `z.coerce.boolean()` を使わない: `?includeClosed=false` が true になり、一覧が片付いたもので埋まる。
-// `GET /commitments` は既定では上限を持たない: `limit` / `cursor` を明示したときだけ窓が掛かる opt-in で、明示しない既定の呼びは応答が1バイトも変わらない。並べ替え・絞り込みは足さない（判断がクローンから器へ移る）。`limit` に `max` も付けない: この HTTP の口は人間がブラウザで扱う前提で既定は全件。
-const commitmentsQuery = z.object({
-  includeClosed: z.enum(['true', 'false']).default('false'),
-  limit: z.coerce.number().int().min(1).optional(),
-  cursor: z.string().optional(),
-});
-
 // `GET /tasks` は `includeClosed` だけを受ける: 並べ替えは器が持つ並び（store の position）が唯一で、窓や絞り込みは必要が出てから足す。
 const tasksQuery = z.object({
   includeClosed: z.enum(['true', 'false']).default('false'),
@@ -749,7 +725,7 @@ const taskAddBody = z.object({
   // 省くと既定の置き場所（`placeTask`。human 起点は開いている human 起点の最後の直後）
   placement: taskPlacementBody.optional(),
 });
-// 理由は台帳の close と同じく必須: 否定する材料の無い閉じ方を受け付けない
+// 理由は必須: 否定する材料の無い閉じ方を受け付けない
 const taskCloseBody = z.object({ status: z.enum(['done', 'cancelled']), reason: nonBlankString });
 const taskReopenBody = z.object({ reason: nonBlankString });
 const taskMoveBody = z.object({ placement: taskPlacementBody });
@@ -766,16 +742,8 @@ const progressQuery = z.object({
   windowHours: z.string().optional(),
 });
 
-// 2段を跨ぐ錨は作らない: 境界を跨ぐ錨の意味を新しく決めることになりストアの契約（`CommitmentStore`）に手が入るので、錨が自分の段（`segment`）を名乗る。`id` は同時刻の同着を割る補助キー。`includeClosed` が食い違えば 400（錨は刷られた一覧の中でしか意味を持たない）。
-const commitmentsCursorSchema = z.object({
-  segment: z.enum(['open', 'closed']),
-  key: z.string().min(1),
-  id: z.string().min(1),
-  includeClosed: z.enum(['true', 'false']),
-});
-
 // 何も渡さない呼びは応答が1バイトも変わらない（opt-in）: 判定は生のクエリで行う（`c.req.valid('query')` は既定値を埋めるので「渡されたか」を答えない）。
-// カーソルは `/journal` 形（可視の複合キー）で、`/commitments` 形の不透明カーソルは使わない。`order` は足さない（並びは `ManagerPool.list()` が固定している）。`limit` の既定を作らない: 渡していない呼びの応答が変わり、到達できない行が生まれる（north_star 禁止2）。
+// カーソルは `/journal` 形（可視の複合キー）である。`order` は足さない（並びは `ManagerPool.list()` が固定している）。`limit` の既定を作らない: 渡していない呼びの応答が変わり、到達できない行が生まれる（north_star 禁止2）。
 // `max` を 1000 にしたのは窓の形を `/journal` と揃えるためで、資源を守る数値ではない。
 const managersQuery = z.object({
   // 知らない値は 400 で断る（ハンドラで検査）: 黙って無視すると、綴りを間違えた呼びが「0件」として返り、絞り込みが効いていないことに気づけない。
@@ -1098,28 +1066,6 @@ function managerListItem(managers: ManagerPool, summary: ManagerSummary) {
     ...view,
     ...(request === undefined ? {} : { request, requestTruncated: true as const }),
     ...(lastReport === undefined ? {} : { lastReport, lastReportTruncated: true as const }),
-  };
-}
-
-/** 一覧（`GET /commitments`）で片付いた行の本文・閉じた理由を切る長さ（UTF-16 の単位。#5089） */
-export const COMMITMENT_LIST_TEXT_HEAD = 200;
-
-// 台帳の一覧の1行（#5089）。片付いた行だけ、本文と閉じた理由を先頭に切る（全文は `GET /commitments/{id}`）。
-// 未了の行は切らない: 人間が読んで手を打つ対象は未了の行で、全文が要る。
-// 片付いた行は数が多く（台帳の大半）、一覧の大きさのほとんどを占める
-function commitmentListItem<T extends { closedAt?: string; body: string; closedReason?: string }>(
-  entry: T,
-): T & { bodyTruncated?: true; closedReasonTruncated?: true } {
-  if (entry.closedAt === undefined) return entry;
-  const body = textHead(entry.body, COMMITMENT_LIST_TEXT_HEAD);
-  const closedReason =
-    entry.closedReason === undefined
-      ? undefined
-      : textHead(entry.closedReason, COMMITMENT_LIST_TEXT_HEAD);
-  return {
-    ...entry,
-    ...(body === undefined ? {} : { body, bodyTruncated: true as const }),
-    ...(closedReason === undefined ? {} : { closedReason, closedReasonTruncated: true as const }),
   };
 }
 
@@ -2813,7 +2759,7 @@ export function createApp(deps: AppDeps) {
           '**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の' +
           '過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・' +
           '`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける' +
-          '（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は' +
+          '（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・起票した Task——は' +
           '一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは' +
           '**人間の発言だけ**（クローンの応答は指せない）。' +
           '**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** ' +
@@ -3386,7 +3332,7 @@ export function createApp(deps: AppDeps) {
           '**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。' +
           '続きが在る（`hiddenByLimit > 0` か `reachedStart` が偽）ときは `nextCursor` が載り、' +
           '次の呼びの `cursor` へそのまま渡すと、その続き（窓の外も含む）から読める。' +
-          '`/approvals` / `/commitments` と同じ形で、続きが無ければ `nextCursor` は無い。' +
+          '`/approvals` と同じ形で、続きが無ければ `nextCursor` は無い。' +
           '壊れた `cursor`・指す発言が見当たらない `cursor` は 400。',
         responses: {
           200: {
@@ -3695,7 +3641,7 @@ export function createApp(deps: AppDeps) {
           '`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・' +
           'クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。' +
           '**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。' +
-          'その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行（人間の手で積んだ行とクローンが載せた行）と、Task（`task_list`）のその会話を起点とする行（未了・閉じた行とも。件数は `tasksRemoved`）は物理的に消す。台帳の本文を写した日誌の行（積んだ・直した・片付けた `decision`）は、墓標の `hiddenEntryIds` で読む口から外す（行は書き換えない）。' +
+          'その会話の発言に付いた添付と、Task（`task_list`）のその会話を起点とする行（未了・閉じた行とも。件数は `tasksRemoved`）は物理的に消す。その Task の本文を写した日誌の行（Task の id を含む `decision`）は、墓標の `hiddenEntryIds` で読む口から外す（行は書き換えない）。旧台帳（廃止済み。テーブルだけ残っている）の行は、この削除では消さない。' +
           '受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。' +
           '消した会話へは書けない（`POST /chat` は 404）。' +
           '**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。' +
@@ -6643,161 +6589,8 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 資格は `authenticate` だけで `requireOperator` にしない: あちらは実行環境そのものを差し替える資格（`/profile`）で、台帳の読みはそこまでの資格ではない。持ち主だけにすると、許可を通ったアカウントから台帳だけが見えなくなる。
-    // 「やることの一覧」ではない: 器が持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない。並べ替えや絞り込みの引数をここへ足さない（判断がクローンから器へ移る）。窓（`limit`/`cursor`）は固定された並びの上に頁を切るだけなので、この禁止と衝突しない。
-    .get(
-      '/commitments',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けたまま終わっていない仕事の一覧',
-        description:
-          'クローンの `commitment_list` と同じものを人間の側から読む。**台帳へ書く口はクローンにも人間にも無く、これは読むだけの旧台帳**（新しい仕事は task の口で積む）。既定は**未了だけ**で、' +
-          '古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を' +
-          '付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。' +
-          '**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。' +
-          '窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**' +
-          '`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも' +
-          '「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に' +
-          '切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が' +
-          '再び開くため）。' +
-          '`trimmedClosed` は保持上限を超えて物理削除された片付き行の累計件数' +
-          '（issue #416）。`unreadable` と同じく窓では切らない。契約を守れている' +
-          '実装は常に `0`（`CommitmentList` の doc、`packages/core/src/store.ts`）。' +
-          '`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が' +
-          '応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**' +
-          '（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは' +
-          '能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` ' +
-          '昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——' +
-          '窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。' +
-          '各行の `respondedAt` は「放置」と「進行中」を見分けるための導出値（issue ' +
-          '#1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ' +
-          '欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読める' +
-          'ことを1つ増やしただけ）。`packages/core/src/schema.ts` の ' +
-          '`commitmentRespondedAt` を参照。' +
-          '各行の `activeManagerIds` も同じ目的の導出値（issue #1003 段2）——同じ会話の' +
-          '中で、この行より後に始まって、いまも走っている委譲の `managerId` を並べた' +
-          'もので、無ければ欄自体が無い。正確な1対1の紐付けではない（`packages/core' +
-          '/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。' +
-          '`unreadableJobs` は読めなかった委譲の行（issue #2359）。`activeManagerIds` は' +
-          '読めた委譲だけから組むので、読めない委譲に紐づく行は「委譲なし」に見える。' +
-          '**どの行に紐づくかは、行が壊れているので言えない**（推測で紐づけない）。' +
-          '1件でも在るときだけ載り（0件なら鍵が無い）、窓では切らない。`activeManagerIds` の' +
-          '導出の対象になる行（`origin` が `human` で `source` を持つ）が1件も無いときは載らない。' +
-          '**片付いた行（`closedAt` を持つ行）の `body` と `closedReason` は、一覧では先頭 ' +
-          `${String(COMMITMENT_LIST_TEXT_HEAD)} 字（UTF-16 の単位）までに切り、末尾に \`…\` を付ける**（#5089。` +
-          '片付いた行は消えずに溜まり、全文を載せると一覧が太る）。切るときは表示の側と同じ秘密の伏せを掛けてから切る。' +
-          '切った欄には `bodyTruncated` / `closedReasonTruncated` が `true` で付く。全文は `GET /commitments/{id}` で取る。' +
-          '未了の行は切らない（編集できるのは未了の行だけで、画面は一覧の本文を編集の初期値に使う）。',
-        responses: {
-          200: {
-            description: '台帳の中身。',
-            content: { 'application/json': { schema: resolver(commitmentListResponseSchema) } },
-          },
-          400: {
-            description:
-              'クエリが不正（`includeClosed` は `true` / `false` だけ、`limit` は1以上の整数）、' +
-              'または `cursor` が壊れている・`includeClosed` と食い違う。',
-            content: {
-              'application/json': {
-                schema: resolver(errorResponseSchema),
-              },
-            },
-          },
-        },
-      }),
-      queryParams(commitmentsQuery),
-      async (c) => {
-        const { includeClosed, limit, cursor } = c.req.valid('query');
-        // opt-in の判定は生のクエリで行う: `includeClosed` は既定値を持つので `c.req.valid('query')` だけでは「渡されたか」が分からない。`includeClosed` は窓とは別の既存の絞り込みなので opt-in に含めない。
-        const optedIn = c.req.query('limit') !== undefined || c.req.query('cursor') !== undefined;
-
-        const { entries, unreadable, trimmedClosed } = await stores.commitments.list(
-          includeClosed === 'true' ? { includeClosed: true } : undefined,
-        );
-        const total = entries.length;
-
-        const { repliesByConversation, activeManagersByConversation } =
-          await buildCommitmentDerivations(stores, entries);
-        // 読めない委譲に紐づく行は「委譲なし」に見えるが、どの行に紐づくかは行が壊れているので言えない: 行へは紐づけず、1件でも在るときだけ `unreadableJobs` として別に載せる。
-        const unreadableJobs = await readUnreadableJobsForCommitments(stores, entries);
-
-        let cursorPayload: z.infer<typeof commitmentsCursorSchema> | undefined;
-        if (cursor !== undefined) {
-          try {
-            cursorPayload = decodeCursor(cursor, commitmentsCursorSchema);
-          } catch (error) {
-            if (error instanceof InvalidCursorError) {
-              return c.json({ error: error.message }, 400);
-            }
-            throw error;
-          }
-          // 黙って別の一覧の続きを返さない: 錨は刷られた一覧（`includeClosed`）の中でしか意味を持たない。
-          if (cursorPayload.includeClosed !== includeClosed) {
-            return c.json(
-              { error: 'カーソルの includeClosed がリクエストの includeClosed と食い違う' },
-              400,
-            );
-          }
-          // id（行）の実在は検査しない: `(segment, key, id)` の比較で辿るので、指していた行が閉じられて段を移っていても続きは正しく決まる。
-        }
-
-        // 窓は `entries` にだけ当て、`unreadable` は絶対に窓で切らない: 「無い」でも「片付いた」でもない第3の状態なので、切ると2頁目以降から読めない行が消える。opt-in しなければ `compareCommitmentPosition` を通さない: 既定の呼びの応答が opt-in の前後でバイト単位で一致する。
-        let view = entries;
-        if (optedIn) {
-          view = [...entries].sort((a, b) =>
-            compareCommitmentPosition(commitmentPosition(a), commitmentPosition(b)),
-          );
-          if (cursorPayload !== undefined) {
-            const pivot = cursorPayload;
-            view = view.filter(
-              (entry) => compareCommitmentPosition(commitmentPosition(entry), pivot) > 0,
-            );
-          }
-        }
-
-        const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;
-        const hasMore = optedIn && page.length < view.length;
-        const lastOfPage = page[page.length - 1];
-
-        const responseBody: {
-          entries: unknown[];
-          unreadable: unknown[];
-          trimmedClosed: number;
-          unreadableJobs?: unknown[];
-          total?: number;
-          nextCursor?: string;
-        } = {
-          entries: page.map((entry) =>
-            commitmentListItem({
-              ...entry,
-              updatedAt: commitmentUpdatedAt(entry),
-              respondedAt: commitmentRespondedAt(entry, repliesByConversation),
-              activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
-            }),
-          ),
-          unreadable,
-          trimmedClosed,
-        };
-        // 窓では切らない（`unreadable` と同じ）。0件なら鍵ごと無い: 既存の応答は1バイトも変わらない。
-        if (unreadableJobs.length > 0) responseBody.unreadableJobs = unreadableJobs;
-        if (optedIn) {
-          responseBody.total = total;
-          if (hasMore && lastOfPage !== undefined) {
-            const pos = commitmentPosition(lastOfPage);
-            responseBody.nextCursor = encodeCursor({
-              segment: pos.segment,
-              key: pos.key,
-              id: pos.id,
-              includeClosed,
-            });
-          }
-        }
-        return c.json(commitmentListResponseSchema.parse(responseBody));
-      },
-    )
-
     // 読むだけ（書く口は P2 では HTTP に出さない）: 書く経路を増やすと「CLI でできないこと」「クローンの道具と違う規則」が生まれる前に、読み口で並びの見え方を確かめたいため（#5469）。
-    // 資格は `/commitments` と同じ `authenticate` だけ。
+    // 資格は `authenticate` だけ。
     .get(
       '/tasks',
       describeRoute({
@@ -6807,8 +6600,7 @@ export function createApp(deps: AppDeps) {
           'クローンの `task_list` と同じものを人間の側から読む。**`entries` の並びが優先順**（先頭が先にやるもの）で、' +
           '数値の優先度・締切は持たない。既定は開いている行（`queued` / `waiting` / `needs_decision`）だけで、' +
           '`includeClosed=true` を付けると閉じた行（`done` / `cancelled`）が後ろに新しい順で続く。' +
-          '本文は切らずに返す。`unreadable` は読めなかった行で、「無い」でも「終わった」でもない第3の状態（0件でも欄は返る）。' +
-          '引き受けた仕事の台帳（`/commitments`）とは別の器で、台帳から自動では載らない。',
+          '本文は切らずに返す。`unreadable` は読めなかった行で、「無い」でも「終わった」でもない第3の状態（0件でも欄は返る）。',
         responses: {
           200: {
             description: 'task の一覧。',
@@ -6830,111 +6622,7 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 台帳→Task の移行の計画（#5469 P7a）。dryRun 固定で**何も書かない**。実行は同じ時に HTTP と CLI の両方へ出した `POST /tasks/migrate`（P7b）。
-    // `/tasks/:id` が無いので `/tasks` と衝突しない（将来 `:id` を足すときはこの固定のパスを先に置くこと）。
-    .get(
-      '/tasks/migration-plan',
-      describeRoute({
-        tags: ['tasks'],
-        summary: '台帳→task の移行の計画（dry-run。何も書かない）',
-        description:
-          '開いている台帳の行のうち `origin: human` と `origin: self` を `queued` の task にする計画と集計を返す（task の `origin` は台帳の行のまま。並びは human 起点が先、残りは古い順）。' +
-          '`items[].action` は `task`（task を作って台帳を閉じる）・`close-only`（同じ id の task が既に在る。台帳を閉じるだけ）・' +
-          '`retire`（manager・external。task にせず台帳を閉じる）・`skip-closed`（閉じた行。移さない）。' +
-          '`summary.oldestAt` / `newestAt` は `task` の行の最古/最新。本文は載せない（`task` の行はタイトルだけ）。' +
-          '`unreadableCommitments` は読めない台帳の行で、id だけを返し触らない。`unreadableTaskCollisions` は、開いている human・self 行と同じ id の読めない task の行。' +
-          '`task` の行は、台帳の `source`（会話 id か承認の id）から移す task の起点の会話を引く: ' +
-          '`summary.originConversation` が会話から・承認から・引けないの内訳、`unresolvedOriginIds` が引けなかった行の id（付けずに移す）。' +
-          '**`fingerprint` は計画の指紋で、実行（`POST /tasks/migrate`）へそのまま渡す。**',
-        responses: {
-          200: {
-            description: '移行の計画。',
-            content: { 'application/json': { schema: resolver(taskMigrationPlanResponseSchema) } },
-          },
-          500: {
-            description:
-              '起点の会話を引く読みが失敗したので、計画を立てなかった（誤った宛先を付けないため。何も書いていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      async (c) => {
-        try {
-          const report = await migrateCommitmentsToTasks(stores, {
-            dryRun: true,
-            now: new Date().toISOString(),
-          });
-          return c.json(taskMigrationPlanResponseSchema.parse(report));
-        } catch (error) {
-          if (!(error instanceof OriginConversationLookupError)) throw error;
-          return c.json({ error: reasonOf(error) }, 500);
-        }
-      },
-    )
-
-    // 台帳→Task の移行の実行（#5469 P7b）。`GET /tasks/migration-plan` が返した指紋を必須で受け取り、**実行時に計画を組み直して**指紋が違えば何も書かずに 409 で断る
-    // （古い dry-run を見て実行する事故を防ぐ）。CLI（`alteroid tasks migrate --yes`）と同時に出した口で、Web には出さない。起動時にも道具にも繋がない。
-    .post(
-      '/tasks/migrate',
-      describeRoute({
-        tags: ['tasks'],
-        summary: '台帳→task の移行を実行する（dry-run の指紋が必須）',
-        description:
-          '開いている台帳の行のうち `origin: human` と `origin: self` を、`queued` の task（`origin` は台帳の行のまま。human 起点が先、残りは古い順）にして台帳を閉じ、manager・external は task にせず台帳を `daemon` が閉じる（本文は日誌へ逐語で残す）。' +
-          '**`fingerprint` は `GET /tasks/migration-plan` が返した計画の指紋で必須。** 実行時に計画を組み直し、指紋が違えば（台帳・task・会話が dry-run のあとに動いた）何も書かずに 409 で断る。' +
-          'task の id は元の台帳の行の id と同じ。起点の会話は、`source` が実在する会話 id ならそれを、承認の id ならその承認の会話 id を付け、' +
-          'どちらとも引けなければ付けずに移す（`execution.originConversation.unresolvedIds`）。日誌が書けなければ台帳は閉じない。' +
-          '1行の失敗は `execution.failed`（id・段階・例外の型名だけ）に数えて次へ進む。**閉じた台帳の行を開き直す口はもう無い**（台帳へ書く口は人間の側にもクローンの側にも無く、台帳は読むだけ）。',
-        responses: {
-          200: {
-            description:
-              '実行の結果。`failed` が空でなければ、その行は移っていない（再実行で続きから進む）。',
-            content: {
-              'application/json': { schema: resolver(taskMigrationResultResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '本文が JSON として不正、または `fingerprint` が無い・空。何も書いていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '計画が dry-run のときから変わっている（指紋が違う）。何も書いていない。dry-run をやり直すこと。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '起点の会話を引く読みが失敗したので、実行しなかった（誤った宛先を付けないため。何も書いていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(taskMigrateRequestSchema, (where) => ({
-        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const { fingerprint } = c.req.valid('json');
-        try {
-          const report = await migrateCommitmentsToTasks(stores, {
-            dryRun: false,
-            now: new Date().toISOString(),
-            expectedFingerprint: fingerprint,
-          });
-          return c.json(taskMigrationResultResponseSchema.parse(report));
-        } catch (error) {
-          if (error instanceof MigrationPlanChangedError)
-            return c.json({ error: reasonOf(error) }, 409);
-          if (error instanceof OriginConversationLookupError) {
-            return c.json({ error: reasonOf(error) }, 500);
-          }
-          throw error;
-        }
-      },
-    )
-
     // 人間が task を書く口（#5469 P7c-1）。台帳の書く口は撤去済みで、人間が仕事を積む・直す・閉じる口は task だけが持つ。
-    // `GET /tasks/migration-plan` の後に置く: `:id` が固定のパスを食わないように。
     .get(
       '/tasks/:id',
       describeRoute({
@@ -7577,54 +7265,6 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // 一覧が片付いた行の本文を先頭に切るので、全文を取る口（#5089）。導出値（`respondedAt`・`activeManagerIds`）は一覧と同じ作り方
-    .get(
-      '/commitments/:id',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けた仕事を1件、全文で読む',
-        description:
-          '台帳の1行を、`body`・`closedReason` を切らずに返す（一覧の `GET /commitments` は片付いた行のこの2欄を先頭だけに切る）。' +
-          '`updatedAt`・`respondedAt`・`activeManagerIds` は一覧と同じ意味。',
-        responses: {
-          200: {
-            description: '台帳の1行。',
-            content: { 'application/json': { schema: resolver(commitmentDetailResponseSchema) } },
-          },
-          404: {
-            description: '該当する行が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description: '行は在るが、読めない形で入っている（消されたのではない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      async (c) => {
-        let entry;
-        try {
-          entry = await stores.commitments.get(c.req.param('id'));
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          return c.json({ error: describeUnreadableCommitment(error) }, 409);
-        }
-        if (entry === null) return c.json({ error: 'not found' as const }, 404);
-        const { repliesByConversation, activeManagersByConversation } =
-          await buildCommitmentDerivations(stores, [entry]);
-        return c.json(
-          commitmentDetailResponseSchema.parse({
-            entry: {
-              ...entry,
-              updatedAt: commitmentUpdatedAt(entry),
-              respondedAt: commitmentRespondedAt(entry, repliesByConversation),
-              activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
-            },
-          }),
-        );
-      },
-    )
-
     // 応答は返す前に宣言したスキーマを通す（`.parse()`）: `resolver()` は `openapi.json` を作るだけで実際の応答を見ないので、`ManagerSummary` にフィールドが増えた日に spec に書いていないものを黙って外へ出す。`.parse()` なら宣言に無いキーを落とす。
     .get(
       '/managers',
@@ -7650,7 +7290,7 @@ export function createApp(deps: AppDeps) {
           '**封筒（`total` / `nextCursor`）は持たない**——続きが在るかは `limit` 件ちょうど' +
           '返ったかで判る（応答に新しい欄を1つも足さない）。' +
           '当てる順序は **`status` 絞り → 錨 → `limit`** である（先に窓で切ると、次の頁の' +
-          '起点がずれる。issue #418 が `/commitments` で塞いだ穴と同じ形）。' +
+          '起点がずれる。issue #418 が塞いだ穴と同じ形）。' +
           '**窓のクエリ（`status`・`limit`・錨）を1つも渡さない呼びは、窓を足す前と同じく全件を同じ並びで返す**（opt-in）。' +
           'ただし行の欄の切り（下の `request`・`lastReport`）は、窓のクエリの有無に関わらず掛かる。' +
           '**CLI とクローンの `manager_list` はこの窓を使っていない**（別 issue）。' +
@@ -7734,7 +7374,7 @@ export function createApp(deps: AppDeps) {
           view = [...view].sort(compareManagerPagingKey);
           if (afterId !== undefined && afterStartedAt !== undefined) {
             const pivot = { managerId: afterId, startedAt: afterStartedAt };
-            // 実在を確かめる（`/approvals` / `/commitments` と違う）: 台帳の行は消えないので、見当たらないのは「消えた」ではなく「そんな錨は刷っていない」で、黙って先頭から返すと呼ぶ側は同じ頁を無限に読む。
+            // 実在を確かめる（`/approvals` と違う）: 台帳の行は消えないので、見当たらないのは「消えた」ではなく「そんな錨は刷っていない」で、黙って先頭から返すと呼ぶ側は同じ頁を無限に読む。
             // 絞る前の一覧で確かめる（#4801）: `status` で絞った一覧からは、頁の間に状態が変わった担当が消え、その錨が二度と使えなくなるため（続きは錨が一覧に無くても比べて決まる）
             const exists = managers.some(
               (m) => m.managerId === afterId && m.startedAt === afterStartedAt,
@@ -10420,7 +10060,7 @@ export function createApp(deps: AppDeps) {
         tags: ['progress'],
         summary: '作業の進捗（積み上がり・実施中・片付いた速度・見込み）',
         description:
-          'Task（待ち行列の行。`GET /tasks`）と委譲（Job）の行を数え直した集計。台帳（`GET /commitments`）の行は数えない。`windowHours`（既定 ' +
+          'Task（待ち行列の行。`GET /tasks`）と委譲（Job）の行を数え直した集計。`windowHours`（既定 ' +
           `${DEFAULT_PROGRESS_WINDOW_HOURS}）は速度と見込みを数える窓の長さ（時間、有限の正数）。` +
           '**率（%）は出さない**（task に総量が無く、分母が定まらない）。' +
           '`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず ' +

@@ -5,14 +5,13 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
-  commitmentFor,
   createClone,
 } from './clone.js';
 import { EXCHANGE_KIND_THINNING_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type { ChatStreamEvent, Commitment, InboxEvent } from './schema.js';
+import type { ChatStreamEvent, InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage, seedFingerprintlessArchiveRow } from './testing.js';
 import {
@@ -597,7 +596,6 @@ describe('待ちの経路に壁時計が無い（#1220）', () => {
   });
 });
 
-// ⚠️ **`#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` には歯を書いていない。書けない。** stale の合図は #redeliveredClosed に一度も載らないため
 describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue #1264 の続き）', () => {
   it('拾い直した合図を待ち行列から消すと、その合図の3つの索引が外れる（`dropQueuedInboxEvents` の中の3行の固定）', async () => {
     const stores = createMemoryStores();
@@ -606,15 +604,6 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
     const queued = humanMessage('待ち行列で消される拾い直し', 'conv-queued');
     await stores.inbox.put(live, '2026-09-01T00:00:00.000Z');
     await stores.inbox.put(queued, '2026-09-01T00:00:01.000Z');
-    await stores.commitments.open(commitmentFor(queued) as Commitment);
-    expect(
-      await stores.commitments.close(
-        queued.id,
-        '2026-09-01T00:05:00.000Z',
-        'もう対応済み',
-        'clone',
-      ),
-    ).toBe(true);
 
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
@@ -708,26 +697,17 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
 
     const target = humanMessage('拾い直しの最中に消される', 'conv-dropped');
     await stores.inbox.put(target, '2026-09-01T00:00:00.000Z');
-    await stores.commitments.open(commitmentFor(target) as Commitment);
-    expect(
-      await stores.commitments.close(
-        target.id,
-        '2026-09-01T00:05:00.000Z',
-        'もう対応済み',
-        'clone',
-      ),
-    ).toBe(true);
 
-    // 消し込みは commitments.get の await の中で差し込む: 時間で近似せず、#restoringUnread が立っている窓で必ず墓標が残るため
+    // 消し込みは Task の起票（拾い直しの途中で呼ばれる `tasks.add`）の中で差し込む: 時間で近似せず、#restoringUnread が立っている窓で必ず墓標が残るため
     const holder: { clone?: ReturnType<typeof createClone> } = {};
     let droppedDuringRestore: number | undefined;
-    const originalGet = stores.commitments.get.bind(stores.commitments);
-    stores.commitments.get = async (id) => {
-      if (id === target.id && droppedDuringRestore === undefined) {
+    const originalAdd = stores.tasks.add.bind(stores.tasks);
+    stores.tasks.add = async (entry, placement) => {
+      if (entry.id === target.id && droppedDuringRestore === undefined) {
         if (holder.clone === undefined) throw new Error('clone がまだ無い');
         droppedDuringRestore = await holder.clone.dropQueuedInboxEvents([target.id]);
       }
-      return originalGet(id);
+      return originalAdd(entry, placement);
     };
 
     const sdk = fakeSdk();

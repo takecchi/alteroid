@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  commitmentFor,
-  DAEMON_RUNNER_REGISTRY_SOURCE,
-  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
-} from './clone.js';
+import { DAEMON_RUNNER_REGISTRY_SOURCE, DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import { opensHumanTask } from './task-auto-done.js';
 import { completedTimerRoundVerdict, restoredInboxEventVerdict } from './inbox-staleness.js';
 import type { InboxEvent } from './schema.js';
 
@@ -118,7 +115,7 @@ describe('restoredInboxEventVerdict は usageBlocked を受け取らない（門
   });
 });
 
-describe('restoredInboxEventVerdict が stale と言う合図は、必ず commitmentFor が null（Issue #1534 案1）', () => {
+describe('restoredInboxEventVerdict が stale と言う合図は、必ず Task を開かない（opensHumanTask が偽）（Issue #1534 案1）', () => {
   const CANDIDATES: ReadonlyArray<readonly [string, InboxEvent]> = [
     ...(Object.keys(SAMPLE_EVENTS) as InboxEvent['type'][]).map(
       (type) => [type, SAMPLE_EVENTS[type]] as const,
@@ -133,11 +130,11 @@ describe('restoredInboxEventVerdict が stale と言う合図は、必ず commit
     ],
   ];
 
-  it.each(CANDIDATES)('%s: stale なら commitmentFor は null', (_label, event) => {
+  it.each(CANDIDATES)('%s: stale なら Task を開かない', (_label, event) => {
     if (restoredInboxEventVerdict(event) !== 'stale') {
       return;
     }
-    expect(commitmentFor(event)).toBeNull();
+    expect(opensHumanTask(event)).toBe(false);
   });
 
   it('候補のうち少なくとも1件は stale である（この歯が空振りしていないことの対照）', () => {

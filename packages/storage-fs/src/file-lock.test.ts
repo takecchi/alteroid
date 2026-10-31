@@ -3,13 +3,12 @@ import { mkdir, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promi
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { Commitment, Job } from '@alteroid/core';
+import type { Job } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { writeFileAtomic } from './atomic.js';
-import { FsCommitmentStore } from './commitments.js';
 import { LockTimeoutError, withPathLock } from './file-lock.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
@@ -205,31 +204,6 @@ function makeJob(id: string): Job {
 }
 
 describe('ストア越し（#1113 / #1050 が言っている形）', () => {
-  it('同じディレクトリを向いた FsCommitmentStore を2つ作り、同じ manager × 同じ本文で同時に open しても行は1件だけ（#1041 の畳み込みがインスタンスを跨いで効く）', async () => {
-    const storeA = new FsCommitmentStore(root);
-    const storeB = new FsCommitmentStore(root);
-    const entry = (id: string, at: string): Commitment => ({
-      id,
-      at,
-      origin: 'manager',
-      source: 'mgr-cross-instance',
-      body: '同じ一言（インスタンス跨ぎ）',
-    });
-
-    const [resultA, resultB] = await Promise.all([
-      storeA.open(entry('cross-a', '2026-01-01T00:00:00.000Z')),
-      storeB.open(entry('cross-b', '2026-01-01T00:00:01.000Z')),
-    ]);
-
-    const opened = [resultA, resultB].filter((result) => result.opened);
-    expect(opened).toHaveLength(1);
-
-    const rows = (await storeA.list()).entries.filter(
-      (entry) => entry.source === 'mgr-cross-instance',
-    );
-    expect(rows).toHaveLength(1);
-  });
-
   it('同じディレクトリを向いた FsJobStore を2つ作り、並行 putJob しても取りこぼれない（両方が最終ファイルに載る）', async () => {
     const storeA = new FsJobStore(root);
     const storeB = new FsJobStore(root);

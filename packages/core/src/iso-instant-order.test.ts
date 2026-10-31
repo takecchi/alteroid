@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
-import type { Commitment, InboxEvent, PermissionGrant } from './schema.js';
+import type { InboxEvent, PermissionGrant } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 const EARLIER_JST = '2026-09-27T09:00:00+09:00';
 const LATER_Z = '2026-09-27T01:00:00Z';
-const CLOSED_EARLIER_JST = '2026-09-28T09:00:00+09:00';
-const CLOSED_LATER_Z = '2026-09-28T01:00:00Z';
 
 const grant = (id: string, grantedAt: string): PermissionGrant => ({
   id,
@@ -18,13 +16,6 @@ const grant = (id: string, grantedAt: string): PermissionGrant => ({
   answer: '許可します',
   grantedAt,
   route: { principalKind: 'account', accountId: 'acc-1' },
-});
-
-const commitment = (id: string, at: string): Commitment => ({
-  id,
-  at,
-  origin: 'self',
-  body: `依頼 ${id}`,
 });
 
 const event = (id: string, at: string): InboxEvent => ({
@@ -61,28 +52,6 @@ describe('オフセット表記が混ざった時刻の並び（インメモリ�
       'grant-earlier',
       'grant-later',
     ]);
-  });
-
-  it('CommitmentStore.list は未了を at の実時刻の昇順、片付きを closedAt の実時刻の降順で返す', async () => {
-    const stores = createMemoryStores();
-    await stores.commitments.open(commitment('open-later', LATER_Z));
-    await stores.commitments.open(commitment('open-earlier', EARLIER_JST));
-    await stores.commitments.open(commitment('closed-earlier', '2026-09-26T00:00:00Z'));
-    await stores.commitments.open(commitment('closed-later', '2026-09-26T00:00:00Z'));
-    expect(
-      await stores.commitments.close('closed-earlier', CLOSED_EARLIER_JST, '済んだ', 'clone'),
-    ).toBe(true);
-    expect(await stores.commitments.close('closed-later', CLOSED_LATER_Z, '済んだ', 'clone')).toBe(
-      true,
-    );
-
-    expect((await stores.commitments.list()).entries.map((c) => c.id)).toEqual([
-      'open-earlier',
-      'open-later',
-    ]);
-    expect(
-      (await stores.commitments.list({ includeClosed: true })).entries.map((c) => c.id),
-    ).toEqual(['open-earlier', 'open-later', 'closed-later', 'closed-earlier']);
   });
 
   it('InboxStore の peekPending / claimPending は at の実時刻順、pending().oldestAt は実時刻で最古', async () => {

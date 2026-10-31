@@ -7,7 +7,7 @@ import {
   type ProgressTaskRow,
   type ProgressTasks,
 } from './progress.js';
-import { commitmentOriginSchema, jobStatusSchema, type Job } from './schema.js';
+import { taskOriginSchema, jobStatusSchema, type Job } from './schema.js';
 
 const NOW = new Date('2026-09-30T12:00:00.000Z');
 const HOURS = 168;
@@ -135,14 +135,14 @@ describe('summarizeProgress — backlog', () => {
     expect(b.total).toBe(3);
   });
 
-  it('byOrigin は commitmentOriginSchema の全値をキーに持ち、片付いた task は数えない', () => {
+  it('byOrigin は taskOriginSchema の全値をキーに持ち、片付いた task は数えない', () => {
     const b = summarize([
       row('h1', OLD, { origin: 'human' }),
       row('h2', OLD, { origin: 'human' }),
       row('m1', OLD, { origin: 'manager' }),
       row('x', OLD, { origin: 'external', closedAt: '2026-08-02T00:00:00.000Z' }),
     ]).backlog;
-    expect(Object.keys(b.byOrigin).sort()).toEqual([...commitmentOriginSchema.options].sort());
+    expect(Object.keys(b.byOrigin).sort()).toEqual([...taskOriginSchema.options].sort());
     expect(b.byOrigin).toEqual({ human: 2, manager: 1, external: 0, self: 0 });
     expect(b.total).toBe(3);
   });

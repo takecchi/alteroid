@@ -1,5 +1,5 @@
-import { buildCommitmentDerivations, captureStderr } from '@alteroid/core';
-import type { Commitment, JournalStore, Stores } from '@alteroid/core';
+import { captureStderr, readRepliesByConversation } from '@alteroid/core';
+import type { JournalStore, Stores } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
@@ -7,7 +7,7 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-// 台帳の「返答済み」の材料を、人間との往復を本文ごと全部読まずに作る（#5089）。
+// 待ち行列の「返答済み」の材料を、人間との往復を本文ごと全部読まずに作る（#5089）。
 // 器の口（`humanReplies`）から作った材料が、口を持たない器と同じ作り方（`readConversationWindow` で全部読む）と一致することを測る
 
 let client: TestDbHandle;
@@ -34,9 +34,6 @@ function withoutHumanReplies(base: Stores): Stores {
   }) as JournalStore;
   return { ...base, journal: journalWithout };
 }
-
-// 導出の対象になる行が1件あれば、材料は全会話ぶん作られる
-const ENTRIES = [{ origin: 'human', source: 'conv-a' }] as unknown as Commitment[];
 
 describe('JournalStore.humanReplies（pg。#5089）', () => {
   it('⭐ 返答済みの材料は、口を持たない器の作り方と同じ（削除した会話・名指しされた行・人間以外・向き・会話の無い行を外す）', async () => {
@@ -106,17 +103,13 @@ describe('JournalStore.humanReplies（pg。#5089）', () => {
       hiddenEntryIds: [hidden.id],
     });
 
-    const viaStore = await buildCommitmentDerivations(stores, ENTRIES, async () => []);
-    const viaWindow = await buildCommitmentDerivations(
-      withoutHumanReplies(stores),
-      ENTRIES,
-      async () => [],
-    );
+    const viaStore = await readRepliesByConversation(stores);
+    const viaWindow = await readRepliesByConversation(withoutHumanReplies(stores));
 
-    expect(viaStore.repliesByConversation).toEqual(viaWindow.repliesByConversation);
-    expect([...viaStore.repliesByConversation.keys()].sort()).toEqual(['conv-a', 'conv-c']);
-    expect(viaStore.repliesByConversation.get('conv-a')).toHaveLength(2);
-    expect(viaStore.repliesByConversation.get('conv-c')).toHaveLength(1);
+    expect(viaStore).toEqual(viaWindow);
+    expect([...viaStore.keys()].sort()).toEqual(['conv-a', 'conv-c']);
+    expect(viaStore.get('conv-a')).toHaveLength(2);
+    expect(viaStore.get('conv-c')).toHaveLength(1);
   });
 
   it('本文の型が崩れた往復は、list と同じく数えない', async () => {
@@ -133,18 +126,14 @@ describe('JournalStore.humanReplies（pg。#5089）', () => {
       text: '読める',
       conversationId: 'conv-a',
     });
-    let viaStore: Awaited<ReturnType<typeof buildCommitmentDerivations>> | undefined;
-    let viaWindow: Awaited<ReturnType<typeof buildCommitmentDerivations>> | undefined;
+    let viaStore: Awaited<ReturnType<typeof readRepliesByConversation>> | undefined;
+    let viaWindow: Awaited<ReturnType<typeof readRepliesByConversation>> | undefined;
     await captureStderr(async () => {
-      viaStore = await buildCommitmentDerivations(stores, ENTRIES, async () => []);
-      viaWindow = await buildCommitmentDerivations(
-        withoutHumanReplies(stores),
-        ENTRIES,
-        async () => [],
-      );
+      viaStore = await readRepliesByConversation(stores);
+      viaWindow = await readRepliesByConversation(withoutHumanReplies(stores));
     });
-    expect(viaStore?.repliesByConversation).toEqual(viaWindow?.repliesByConversation);
-    expect(viaStore?.repliesByConversation.get('conv-a')).toHaveLength(1);
+    expect(viaStore).toEqual(viaWindow);
+    expect(viaStore?.get('conv-a')).toHaveLength(1);
   });
 
   // 返答の覚え（#5089 の続き）で、墓標の件数を見る軽い問い合わせが1本増えた。返答を読む問い合わせが本文の列を選ばないことを測る

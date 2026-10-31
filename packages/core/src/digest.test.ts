@@ -949,43 +949,6 @@ describe('上限で切ったことを黙らない', () => {
     expect(shownIds.length + 1).toBe(total);
   });
 
-  // #5469 P6b: 台帳の節を消したので、読めない行の id の列（旧: issue #296 / #414）は digest に出さない。
-  // 保証は「id を並べて digest が伸びる」ことを防ぐことだった。件数だけの1行にしたので、壊れた行がいくつあっても1行のまま（id は漏れない）
-  it('旧台帳の読めない行は、件数だけの1行になり、id を並べない（issue #296 / #414 の上限は構造で満たす）', async () => {
-    const stores = createMemoryStores();
-    const now = new Date().toISOString();
-    const unreadable = Array.from({ length: MAX_ITEMS + 1 }, (_, i) => ({
-      id: `cm-unreadable-${i}`,
-      at: now,
-      reason: `台帳の行が壊れている ${i}`,
-    }));
-    const originalList = stores.commitments.list.bind(stores.commitments);
-    stores.commitments.list = async (options) => {
-      const base = await originalList(options);
-      return { ...base, unreadable };
-    };
-
-    const digest = await buildActivityDigest(stores, { since: since() });
-
-    expect(digest).toContain(`読めない行が ${MAX_ITEMS + 1} 件ある（片付いたのではない）`);
-    expect(digest).not.toContain('cm-unreadable-');
-    expect(digest.split('\n').filter((line) => line.includes('旧台帳'))).toHaveLength(1);
-  });
-
-  // 物理削除された片付き行の累計（issue #416）は件数の行から外した（項目 13 を消した）。`commitment_list` の末尾の断りは残る（tools.test.ts）
-  it('物理削除された片付き行の累計は、頭の集計に出さない（件数の行の項目を消した。#5469 P6b）', async () => {
-    const stores = createMemoryStores();
-    const originalList = stores.commitments.list.bind(stores.commitments);
-    stores.commitments.list = async (options) => {
-      const base = await originalList(options);
-      return { ...base, trimmedClosed: 12 };
-    };
-
-    const digest = await buildActivityDigest(stores, { since: since() });
-
-    expect(digest).not.toContain('物理削除された片付き行');
-  });
-
   const journalSections = [
     {
       name: '聞かずに決めたこと',
@@ -1263,36 +1226,6 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
   });
 });
 
-// 「引き受けたまま終わっていない仕事」の節（両端 15 件・省略の断り書き）は #5469 P6b で digest から消えた。
-// 両端の出し分け・MAX_ITEMS の境界・重なりが無いことの歯は、節ごと無くなったので消した（同じ保証を別の形で持つ: 旧台帳は件数の1行だけ、
-// 待ち行列の先頭は `limit` 件で切る。`digest-task-queue.test.ts` の「台帳の節は出ない」「先頭 3 件」）。
-
-describe('台帳の節は digest から消えている（#5469 P6b）', () => {
-  const since = () => new Date(Date.now() - 60_000);
-
-  it('旧台帳に未了が MAX_ITEMS 件を超えて在っても、行も節も出さず、件数の1行だけになる', async () => {
-    const stores = createMemoryStores();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    for (let i = 0; i < MAX_ITEMS + 25; i += 1) {
-      await stores.commitments.open({
-        id: `cm-edge-${i}`,
-        at: new Date(base + i * 1000).toISOString(),
-        origin: 'human',
-        body: `未了 ${i}`,
-      });
-    }
-
-    const digest = await buildActivityDigest(stores, { since: since() });
-
-    expect(digest).not.toContain('## 引き受けたまま終わっていない仕事');
-    expect(digest).not.toContain('cm-edge-');
-    expect(digest).not.toContain('順序はここには無い');
-    expect(digest).toContain(
-      `旧台帳に開いている ${MAX_ITEMS + 25} 件は未了で、Task に同じ id が無い。`,
-    );
-  });
-});
-
 describe('使った分', () => {
   const models = {
     'claude-opus-5': {
@@ -1485,26 +1418,6 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
     const COUNT = MAX_ITEMS + 5;
 
     for (let i = 0; i < COUNT; i += 1) {
-      await stores.commitments.open({
-        id: `cm-open-${i}`,
-        at: now,
-        origin: 'human',
-        body: `未了の依頼 ${i} ${long(300)}`,
-      });
-    }
-
-    for (let i = 0; i < COUNT; i += 1) {
-      const id = `cm-closed-${i}`;
-      await stores.commitments.open({
-        id,
-        at: now,
-        origin: 'human',
-        body: `片付け予定だった依頼 ${i} ${long(300)}`,
-      });
-      await stores.commitments.close(id, now, `片付いたとした理由 ${i} ${long(200)}`, 'clone');
-    }
-
-    for (let i = 0; i < COUNT; i += 1) {
       await stores.tasks.add({
         id: `task-worst-${i}`,
         createdAt: now,
@@ -1515,17 +1428,6 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
         body: `本文 ${i} ${long(300)}`,
       });
     }
-
-    const unreadable = Array.from({ length: COUNT }, (_, i) => ({
-      id: `cm-unreadable-${i}-${long(20)}`,
-      at: now,
-      reason: `台帳の行が壊れている ${i}`,
-    }));
-    const originalList = stores.commitments.list.bind(stores.commitments);
-    stores.commitments.list = async (options) => {
-      const base = await originalList(options);
-      return { ...base, unreadable };
-    };
 
     for (let i = 0; i < COUNT; i += 1) {
       await stores.schedules.put({
@@ -1621,7 +1523,7 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
     };
   }
 
-  // 旧台帳の2節（引き受けたまま終わっていない仕事・この期間に片付けた仕事）は無い。worst case にも旧台帳の行を仕込んだまま、見出しが出ないことを測る
+  // 旧台帳の2節（引き受けたまま終わっていない仕事・この期間に片付けた仕事）は無い（台帳の撤去）
   const DECLARED_SECTIONS = [
     '## 待ち行列の先頭',
     '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）',
@@ -1639,12 +1541,6 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
     const now = new Date().toISOString();
     const at = new Date();
     for (let i = 0; i < MAX_ITEMS; i += 1) {
-      await stores.commitments.open({
-        id: `q-open-${i}`,
-        at: now,
-        origin: 'human',
-        body: `未了 ${i}`,
-      });
       // 先頭の件数（`TASK_QUEUE_HEAD_LIMIT`）までに留める: これを超えると「…ほか」の合図が正しく出る（別の歯）
       if (i < TASK_QUEUE_HEAD_LIMIT) {
         await stores.tasks.add({
@@ -1699,17 +1595,6 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
         snapshot: { models: { [`q-model-${i}`]: totals(10 - i / 100) } },
       });
     }
-    const unreadable = Array.from({ length: MAX_ITEMS }, (_, i) => ({
-      id: `q-unreadable-${i}`,
-      at: now,
-      reason: `壊れている ${i}`,
-    }));
-    const originalList = stores.commitments.list.bind(stores.commitments);
-    stores.commitments.list = async (options) => {
-      const base = await originalList(options);
-      return { ...base, unreadable };
-    };
-
     const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
 
     for (const heading of DECLARED_SECTIONS) expect(digest).toContain(heading);
@@ -2228,7 +2113,7 @@ describe('先頭の件数は1行にまとまる', () => {
     ]) {
       expect(head[0]).toContain(label);
     }
-    // 台帳の4項目（未了・片付けた・読めない未了・物理削除の累計）は消えた（#5469 P6b）。待ち行列と旧台帳の件数は件数の行の外にある
+    // 台帳の4項目（未了・片付けた・読めない未了・物理削除の累計）は消えた（#5469 P6b）。待ち行列の件数は件数の行の外にある
     for (const gone of ['未了の仕事', '片付けた仕事', '読めない未了の行', '物理削除された']) {
       expect(head[0]).not.toContain(gone);
     }

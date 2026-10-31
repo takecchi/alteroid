@@ -45,16 +45,19 @@ describe('孤立サロゲートを含む本文（pg は jsonb が拒む。fs は
     const [claimed] = await stores.inbox.claimPending();
     expect(claimed?.event).toMatchObject({ id: 'e1', text: 'abc\ufffd' });
   });
-  it('commitments.open が落ちず、U+FFFD に置き換えて残る', async () => {
-    const opened = await stores.commitments.open({
-      id: 'c1',
-      at: '2026-01-01T00:00:00.000Z',
+  it('tasks.add が落ちず、U+FFFD に置き換えて残る', async () => {
+    const added = await stores.tasks.add({
+      id: 't1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'queued',
       origin: 'human',
       source: 'c',
+      title: 't',
       body: lone,
     });
-    expect(opened).toBeDefined();
-    const found = (await stores.commitments.list()).entries.find((c) => c.id === 'c1');
+    expect(added).toBeDefined();
+    const found = (await stores.tasks.list()).entries.find((t) => t.id === 't1');
     expect(found?.body).toBe('abc�');
   });
 });

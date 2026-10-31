@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { SectionTabs, type SectionTab } from './section-tabs';
 
 const WORK_TABS: SectionTab[] = [
-  { to: '/commitments', label: '未了の仕事' },
+  { to: '/tasks', label: '待ち行列' },
   { to: '/progress', label: '作業の進捗' },
 ];
 

@@ -158,15 +158,6 @@ const cases: Case[] = [
     valid: 0,
   },
   {
-    label: 'commitment_list.offset（min 0）',
-    tool: 'commitment_list',
-    base: {},
-    field: 'offset',
-    range: { min: 0 },
-    invalid: -1,
-    valid: 0,
-  },
-  {
     label: 'task_set_status_many.limit（min 1）',
     tool: 'task_set_status_many',
     base: { origin: ['self'], status: 'done', reason: 'x' },
@@ -339,7 +330,7 @@ const cases: Case[] = [
   },
 ];
 
-describe('道具の数値引数（20件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1720）', () => {
+describe('道具の数値引数（19件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1720）', () => {
   it.each(cases)('$label', async ({ tool, base, field, invalid, valid }) => {
     const stores = createMemoryStores();
 
@@ -387,7 +378,7 @@ describe('道具の数値引数（20件）— 範囲外は日本語の平文、�
 });
 
 describe('道具の JSON Schema の説明文に、検査と同じ範囲の文字列が入っている（issue #1720 レビュー指摘）', () => {
-  it('20件の欄それぞれで、.describe() の文言に formatIntRangeJa(range) がそのまま含まれる', async () => {
+  it('19件の欄それぞれで、.describe() の文言に formatIntRangeJa(range) がそのまま含まれる', async () => {
     const rpc = await connect(createMemoryStores());
     const response = await rpc.call('tools/list', {});
     const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
@@ -406,7 +397,7 @@ describe('道具の JSON Schema の説明文に、検査と同じ範囲の文字
         formatIntRangeJa(range),
       );
     }
-    expect(seen.size).toBe(20);
+    expect(seen.size).toBe(19);
   });
 
   it('schedule_create.everyMinutes（PR #1689 対応済み。同じレビュー指摘の対象）', async () => {

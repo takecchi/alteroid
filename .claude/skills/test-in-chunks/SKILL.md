@@ -235,7 +235,7 @@ done
 # `resolveScopedArgs` が「範囲内に一致なし」の exit 8 で断る。実測 2026-09-29T04:2xZ）。
 cd packages/storage-pg && pnpm test -- index.persona --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 cd packages/storage-pg && pnpm test -- index.journal-jobs-schedule --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && pnpm test -- index.commitments-inbox-archive --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && pnpm test -- index.inbox-archive --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 cd packages/storage-pg && pnpm test -- index.sessions-tokens-credentials --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 cd packages/storage-pg && pnpm test -- index.auth --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
 cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=1/2 --deadline-seconds=590 --maxWorkers=2 --reporter=dot | grep -E 'Test Files|Tests |Duration|FAIL|test-guard'; echo "EXIT:${PIPESTATUS[0]}"
@@ -425,7 +425,7 @@ timeout）で回し、残り36ファイルを別に（例: 2分割程度で）�
 | --------------------------------------------------- | ---------- | ----- | -------- | ------------------------------------------------------------------------------- |
 | `index.persona`                                     | 1          | 42    | 101.90s  | 作業者の実測（04:0x 頃）                                                        |
 | `index.journal-jobs-schedule`                       | 1          | 64    | 213.97s  | 04:17:06Z〜04:20:43Z（#2087 の契約テスト1本を足した後。足す前は 63本・162.57s） |
-| `index.commitments-inbox-archive`                   | 1          | 57    | 128.71s  | 作業者の実測                                                                    |
+| `index.inbox-archive`                               | 1          | 57    | 128.71s  | 作業者の実測                                                                    |
 | `index.sessions-tokens-credentials`                 | 1          | 60    | 139.25s  | 作業者の実測                                                                    |
 | `index.auth`                                        | 1          | 40    | 95.54s   | 作業者の実測                                                                    |
 | 残り38本 `--exclude=**/index.*.test.ts --shard=1/2` | 19         | 114   | 167.43s  | 04:11:40Z〜04:14:30Z                                                            |

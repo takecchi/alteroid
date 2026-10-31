@@ -53,16 +53,14 @@ function human(id: string, text: string): InboxEvent {
   };
 }
 
-describe('クローンは台帳へ書かない', () => {
-  it('人間の発言は同じ id の Task だけを開き、台帳の行は開かない', async () => {
+describe('クローンは Task だけに書く', () => {
+  it('人間の発言は同じ id の Task を開く', async () => {
     const s = boot();
     s.clone.post(human('evt-a', '調べてほしい'));
     await waitFor(async () => (await s.stores.tasks.get('evt-a')) !== null, 'Task が積まれる');
     await waitForTerminal(s.events);
 
     expect((await s.stores.tasks.get('evt-a'))?.origin).toBe('human');
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
-    expect(await s.stores.commitments.get('evt-a')).toBeNull();
     await s.clone.stop();
   });
 
@@ -77,7 +75,7 @@ describe('クローンは台帳へ書かない', () => {
     await s.clone.stop();
   });
 
-  it('回答（human_answer）は台帳にも Task にも何も開かない', async () => {
+  it('回答（human_answer）は Task に何も開かない', async () => {
     const s = boot(() => say('承認の回答を受けた'));
     s.clone.post({
       type: 'human_answer',
@@ -89,7 +87,6 @@ describe('クローンは台帳へ書かない', () => {
     });
     await waitForTerminal(s.events);
 
-    expect((await s.stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
     expect((await s.stores.tasks.list({ includeClosed: true })).entries).toEqual([]);
     await s.clone.stop();
   });
@@ -107,12 +104,12 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     expect(prompt).toContain('task_set_status_many');
   });
 
-  it.each(['prompt.ts', 'digest.ts', 'superseded.ts', 'clone.ts', 'tools.ts', 'manager.ts'])(
+  it.each(['prompt.ts', 'digest.ts', 'clone.ts', 'tools.ts', 'manager.ts'])(
     '%s に、消した道具の名前が残っていない',
     (file) => {
       const source = readFileSync(`${root}${file}`, 'utf8');
-      // 許す2種: 日誌に残っている人間の操作の種別ラベル（`HUMAN_ACTION_LABEL`。古い日誌の行を読むために残す）と、古い台帳の閉じた主体を読む側の文言（読みは段3で外す）
-      const historical = /^\s+commitment_(close|reopen): '|片付けた時刻（commitment_close）/;
+      // 許す1種: 日誌に残っている人間の操作の種別ラベル（`HUMAN_ACTION_LABEL`。古い日誌の行を読むために残す）
+      const historical = /^\s+commitment_(close|reopen): '/;
       const hits = source
         .split('\n')
         .filter((line) => removed.test(line) && !historical.test(line));

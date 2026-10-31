@@ -230,128 +230,30 @@ describe('digest の待ち行列の先頭の節（full 形）', () => {
   });
 });
 
-describe('digest から台帳の節・注記・件数の4項目が消えている', () => {
-  async function ledgerStores(): Promise<Stores> {
+describe('digest に旧台帳の節・件数の行は出ない（台帳の撤去。待ち行列だけを数える）', () => {
+  it('task を積んだ digest にも counts 形にも「旧台帳」「commitment_list」が出ない', async () => {
     const stores = createMemoryStores();
-    const now = new Date().toISOString();
-    await stores.commitments.open({
-      id: 'cm-open',
-      at: now,
-      origin: 'human',
-      body: '開いている台帳の行',
-    });
-    await stores.commitments.open({
-      id: 'cm-done',
-      at: now,
-      origin: 'human',
-      body: '片付けた台帳の行',
-    });
-    await stores.commitments.close('cm-done', now, '済んだ理由', 'clone');
-    return stores;
-  }
-
-  it('節（引き受けたまま終わっていない仕事・この期間に片付けた仕事）も、順序の固定注記も出ない', async () => {
-    const digest = await buildActivityDigest(await ledgerStores(), { since: since() });
-    expect(digest).not.toContain('## 引き受けたまま終わっていない仕事');
-    expect(digest).not.toContain('## この期間に片付けた仕事');
-    expect(digest).not.toContain('順序はここには無い');
-    expect(digest).not.toContain('開いている台帳の行');
-    expect(digest).not.toContain('片付けた台帳の行');
-    expect(digest).not.toContain('済んだ理由');
-    expect(digest).not.toMatch(/未了の仕事|片付けた仕事|読めない未了の行|物理削除された/u);
-  });
-
-  const LEGACY_HEAD = '- 旧台帳に開いている ';
-  const legacyLines = (digest: string): string[] =>
-    digest.split('\n').filter((line) => line.startsWith(LEGACY_HEAD));
-
-  it('旧台帳に開いている行があるとき: 件数の1行だけが出る（節ではない）', async () => {
-    const digest = await buildActivityDigest(await ledgerStores(), { since: since() });
-    expect(legacyLines(digest)).toEqual([
-      '- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
-    ]);
-  });
-
-  it('旧台帳に開いている行も読めない行も無いとき: 1行も出ない', async () => {
-    const stores = createMemoryStores();
-    await stores.commitments.open({
-      id: 'c',
-      at: new Date().toISOString(),
-      origin: 'human',
-      body: 'x',
-    });
-    await stores.commitments.close('c', new Date().toISOString(), 'y', 'clone');
-    expect(await buildActivityDigest(stores, { since: since() })).not.toContain('旧台帳');
-    expect(await buildActivityDigest(createMemoryStores(), { since: since() })).not.toContain(
-      '旧台帳',
-    );
-  });
-
-  it('⭐ 人間の依頼が台帳と Task に同じ id で載るとき、task が done でも数えない。task の無い台帳の行は数える', async () => {
-    const stores = createMemoryStores();
-    const now = new Date().toISOString();
-    // 返答で task だけが done になり、台帳の行は開いたまま
-    await stores.commitments.open({
-      id: 'h-done',
-      at: now,
-      origin: 'human',
-      body: '返答済みの依頼',
-    });
-    await stores.tasks.add(makeTask('h-done', { origin: 'human', status: 'done', closedAt: now }));
-    // task がまだ開いている人間の依頼
-    await stores.commitments.open({ id: 'h-open', at: now, origin: 'human', body: '続く依頼' });
-    await stores.tasks.add(makeTask('h-open', { origin: 'human' }));
-    // task の無い行（人間の回答・自分の記帳など）は数える
-    await stores.commitments.open({
-      id: 'only-ledger',
-      at: now,
-      origin: 'human',
-      body: '台帳だけ',
-    });
+    await seedTasks(stores, [makeTask('t1', { origin: 'human' })]);
 
     const digest = await buildActivityDigest(stores, { since: since() });
-    expect(legacyLines(digest)).toHaveLength(1);
-    expect(legacyLines(digest)[0]).toContain(
-      '- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。',
-    );
-  });
-
-  it('台帳の開いている行がすべて同じ id の task を持つなら、1行も出ない', async () => {
-    const stores = createMemoryStores();
-    const now = new Date().toISOString();
-    await stores.commitments.open({ id: 'h1', at: now, origin: 'human', body: '依頼' });
-    await stores.tasks.add(makeTask('h1', { origin: 'human', status: 'done', closedAt: now }));
-    expect(await buildActivityDigest(stores, { since: since() })).not.toContain('旧台帳');
-  });
-
-  it('読めない行だけのとき: 0件で丸めず、読めない件数を断って出る', async () => {
-    const stores = createMemoryStores();
-    const original = stores.commitments.list.bind(stores.commitments);
-    stores.commitments.list = async (options) => ({
-      ...(await original(options)),
-      unreadable: [{ id: 'cm-broken', at: new Date().toISOString(), reason: '壊れている' }],
+    const counts = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
+      shape: 'counts',
     });
-    const digest = await buildActivityDigest(stores, { since: since() });
-    expect(legacyLines(digest)).toEqual([
-      '- 旧台帳に開いている 0 件は未了で、Task に同じ id が無い。読めない行が 1 件ある（片付いたのではない）。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）',
-    ]);
-    expect(digest).not.toContain('cm-broken');
+
+    for (const text of [digest, counts]) {
+      expect(text).not.toContain('旧台帳');
+      expect(text).not.toContain('commitment_list');
+    }
   });
 });
 
 describe('counts 形（定期の依頼の tick・日報以外の件数の形）は、待ち行列の件数の1行だけ', () => {
-  it('先頭の描画（task の行・案内・節）は出さず、旧台帳は件数の1行', async () => {
+  it('先頭の描画（task の行・案内・節）は出さず、件数の1行だけ', async () => {
     const stores = createMemoryStores();
     await seedTasks(stores, [
       makeTask('t1', { status: 'needs_decision', origin: 'human' }),
       makeTask('t2'),
     ]);
-    await stores.commitments.open({
-      id: 'cm-1',
-      at: new Date().toISOString(),
-      origin: 'human',
-      body: '台帳の本文',
-    });
 
     const counts = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
       shape: 'counts',
@@ -363,12 +265,10 @@ describe('counts 形（定期の依頼の tick・日報以外の件数の形）�
     expect(counts).not.toContain('- t1（');
     expect(counts).not.toContain('先頭が先にやるもの');
     expect(counts).not.toContain('## 待ち行列');
-    expect(counts).toContain('- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。');
-    expect(counts).not.toContain('台帳の本文');
     expect(counts).not.toMatch(/引き受けた仕事 \d|片付けた仕事/u);
   });
 
-  it('読めない task の行は、件数の形の「読めない行」の行に載る。旧台帳の読めない行は旧台帳の1行が持つ', async () => {
+  it('読めない task の行は、件数の形の「読めない行」の行に載る', async () => {
     const stores = createMemoryStores();
     const original = stores.tasks.list.bind(stores.tasks);
     stores.tasks.list = async (options) => ({
@@ -457,9 +357,9 @@ describe('発意 tick の固定の指示（SELF_INITIATIVE_INSTRUCTIONS）', () 
     expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('何もしないという結論でよい');
   });
 
-  it('⭐ 旧台帳に開いている行の扱い（commitment_list で読む）と、先頭が待ちばかりのときの添え書きを言う', () => {
-    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('旧台帳に開いている');
-    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('`commitment_list`');
+  it('⭐ 先頭が待ちばかりのときの添え書きを言い、旧台帳の扱いは言わない', () => {
+    expect(SELF_INITIATIVE_INSTRUCTIONS).not.toContain('旧台帳');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).not.toContain('commitment_list');
     expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('離れた所の動ける task');
   });
 
@@ -470,7 +370,7 @@ describe('発意 tick の固定の指示（SELF_INITIATIVE_INSTRUCTIONS）', () 
   });
 
   it('長さは前の版（約 400 字）と同程度に保つ', () => {
-    // 旧台帳の行の扱い・離れた task の添え書き・taskId を渡す指示（各1行）を足したぶん広げた
+    // 離れた task の添え書き・taskId を渡す指示（各1行）を足したぶん広げた
     expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(900);
   });
 });

@@ -236,9 +236,8 @@ describe('実際のテストファイルの走査', () => {
         judgePglitePrepay(breakPrepay(src), file) === 'uses-without-prepay',
     );
 
-    it('#3034 で直した apps/daemon の4本は、前払いを外すとそれぞれ拾われる', () => {
+    it('#3034 で直した apps/daemon の3本は、前払いを外すとそれぞれ拾われる', () => {
       for (const name of [
-        'commitment-unreadable-recovery-2148',
         'practice-unreadable-recovery-2011',
         'practice-version-unreadable-2177',
         'practice-versions-slug-pg-1670',

@@ -65,14 +65,6 @@ async function seed(stores: Stores): Promise<void> {
       lastReport: `担当 ${i} の途中経過。${'報告の本文が続く。'.repeat(10)}`,
     });
   }
-  for (let i = 0; i < 14; i += 1) {
-    await stores.commitments.open({
-      id: `cm-${i}`,
-      at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
-      origin: 'human',
-      body: `引き受けた仕事 ${i}。${'本文が続く。'.repeat(20)}`,
-    });
-  }
   // 待ち行列（#5469 P6b）: 開いている 4 件。先頭の3件が自発の tick の入力に載る
   for (let i = 0; i < 4; i += 1) {
     await stores.tasks.add({
@@ -263,7 +255,6 @@ function expectLeanFull(text: string, options: { withMemory?: boolean } = {}): v
   expect(text).toContain('届いた出来事 19');
   // 先頭の件数行は節の外で、省いた節の件数も残る
   expect(text).toContain('外部イベント（日誌の行数）20');
-  expect(text).toContain('旧台帳に開いている 14 件は未了で、Task に同じ id が無い。');
   // 省く
   expect(text).toContain('## 使った分\n（この節は省いた。`usage_read` で引ける）');
   expect(text).toContain(
@@ -313,8 +304,6 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     // 節の名前は1行にまとめた参照に残る（節の件数の行はまえがきに残る）
     expect(second).toMatch(/変わらない節: .*届いた外部イベント/u);
     expect(second).toContain('外部イベント（日誌の行数）20 /');
-    // 旧台帳の件数の1行は毎回出る（件数の行の外。数字は毎回出す）
-    expect(second).toContain('旧台帳に開いている 14 件は未了で、Task に同じ id が無い。');
     // 待ち行列の先頭は「前回と同じ」と畳まず、2回目も全文で出る（先頭の3件は tick の入力から消えない）
     expect(first).toContain('- task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0');
     expect(second).toContain('- task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0');
@@ -777,11 +766,10 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     expect(timer).toContain(`- ${TIMER_KIND}（`);
     // 他の節は件数の行だけ。重なる数（担当の status 別・継続中の依頼の数）は件数の行に載らない
     expect(timer).toContain(COUNTS_LINE);
-    // 待ち行列は件数の1行だけ。先頭の描画（task の行・案内・節）は出さない。旧台帳は件数の1行（節ではない）
-    // #5469 P6c: ターン頭の断り書きの待ち行列の節にも同じ件数・先頭・旧台帳の行が出る。ここで見たいのは要約（digest）の側なので、節を落としてから見る
+    // 待ち行列は件数の1行だけ。先頭の描画（task の行・案内・節）は出さない
+    // #5469 P6c: ターン頭の断り書きの待ち行列の節にも同じ件数・先頭の行が出る。ここで見たいのは要約（digest）の側なので、節を落としてから見る
     const digestOnly = withoutQueueNotice(timer);
     expect(digestOnly).toContain(QUEUE_COUNT_LINE);
-    expect(digestOnly).toContain(LEGACY_LEDGER_LINE);
     expect(digestOnly).not.toContain('待ち行列の仕事 0');
     expect(digestOnly).not.toContain('先頭が先にやるもの');
     expect(digestOnly).not.toContain('## 待ち行列');
@@ -847,10 +835,10 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
 // 定期の tick（件数の形）の固定の説明文（#5392）。全文と参照は全文一致で固定する
 const COUNTS_TOOLS_NOTE_FULL =
   '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
-  '待ち行列は `task_list`、旧台帳は `commitment_list`、回答待ちは `approvals_list`、' +
+  '待ち行列は `task_list`、回答待ちは `approvals_list`、' +
   '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
 const COUNTS_TOOLS_NOTE_REF =
-  '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`commitment_list`・`approvals_list`・`journal_read`・`usage_read`）';
+  '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`approvals_list`・`journal_read`・`usage_read`）';
 const IDLE_MANAGERS_NOTE_FULL =
   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
 const IDLE_MANAGERS_NOTE_REF =
@@ -858,10 +846,8 @@ const IDLE_MANAGERS_NOTE_REF =
 const COUNTS_LINE =
   '- 回答待ち 4 / エスカレーション 0 / 聞かずに決めたこと 6 / 記憶の更新 0' +
   ' / 外部イベント 20 / 人間からの発言 0';
-// 待ち行列と旧台帳の件数の1行（#5469 P6b）。件数の形は先頭の描画を出さない
+// 待ち行列の件数の1行（#5469 P6b）。件数の形は先頭の描画を出さない
 const QUEUE_COUNT_LINE = '- 待ち行列: 開いている 4 件（queued 4 / waiting 0 / needs_decision 0）';
-const LEGACY_LEDGER_LINE =
-  '- 旧台帳に開いている 14 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む（人間の依頼は同じ id で Task にも載り、返答で task が done になっても台帳の行は開いたままなので、数えない。数えるのは task の無い行: 人間の回答・自分の記帳・蒸留の未了の問いなど）';
 const IDLE_LINE = '- 手が止まっている担当（done・stopped）1 本: mgr-done';
 
 async function seedIdleManager(stores: Stores): Promise<void> {
@@ -1648,8 +1634,6 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
   const digest = [
     '期間: x',
     '',
-    '- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。中身は `commitment_list` で読む',
-    '',
     '## 待ち行列の先頭',
     '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
     '- t1（状態: queued（待ち行列） / origin: human）仕事T',
@@ -1680,7 +1664,6 @@ describe('DigestSessionDelta（軽い全文。要約が走りうる／走った�
     delta.reset('compaction');
     expect(delta.isLean()).toBe(true);
     const out = delta.renderDigest(digest, at).text;
-    expect(out).toContain('- 旧台帳に開いている 1 件は未了で、Task に同じ id が無い。');
     // 待ち行列の先頭は判断の節: 軽い全文でも省かない
     expect(out).toContain('## 待ち行列の先頭\n- 待ち行列: 開いている 1 件');
     expect(out).toContain('仕事T');

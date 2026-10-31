@@ -8,7 +8,6 @@ const SCREENS = [
   'memory-detail',
   'practices',
   'practice-detail',
-  'commitments',
   'schedule',
   'approvals',
   'approvals-answered',

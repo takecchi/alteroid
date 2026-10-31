@@ -60,7 +60,6 @@ const DELETED = {
   deletedAt: '2026-10-08T00:00:00.000Z',
   hiddenCount: 12,
   attachmentsRemoved: 2,
-  commitmentsRemoved: 1,
   queuedDropped: 0,
   approvalsLinked: 0,
   incomplete: [],
@@ -132,7 +131,7 @@ describe('「会話を削除」ボタン', () => {
     const text = notice.closest('[role="status"]')?.textContent ?? '';
     expect(text).toContain('発言 12 件');
     expect(text).toContain('添付 2 件');
-    expect(text).toContain('台帳の約束 1 件');
+    expect(text).not.toContain('台帳の約束');
     expect(text).toContain('クローンの SDK セッションの生ログ');
     expect(text).toContain('蒸留済みの記憶・日報');
     expect(text).not.toContain('終わっていません');

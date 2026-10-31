@@ -42,12 +42,6 @@ describe('resetWorkspaceState', () => {
       },
       '2026-01-01T00:00:00.000Z',
     );
-    await stores.commitments.open({
-      id: 'commit-1',
-      at: '2026-01-01T00:00:00.000Z',
-      body: 'b',
-      origin: 'self',
-    });
     await stores.tasks.add({
       id: 'task-1',
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -112,7 +106,6 @@ describe('resetWorkspaceState', () => {
       schedules: 1,
       schedulePhases: 1,
       inbox: 1,
-      commitments: 1,
       tasks: 1,
       practices: 1,
       archive: 1,
@@ -137,7 +130,6 @@ describe('resetWorkspaceState', () => {
     expect((await stores.schedules.list()).entries).toEqual([]);
     expect(await stores.schedules.getPhase('daily_report')).toBeNull();
     expect((await stores.inbox.peekPending()).entries.length).toBe(0);
-    expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
     expect((await stores.tasks.list({ includeClosed: true })).entries).toEqual([]);
     expect((await stores.practices.list()).entries).toEqual([]);
     expect(await stores.archive.list()).toEqual([]);
@@ -184,7 +176,6 @@ describe('resetWorkspaceState', () => {
       schedules: 0,
       schedulePhases: 0,
       inbox: 0,
-      commitments: 0,
       tasks: 0,
       practices: 0,
       archive: 0,
