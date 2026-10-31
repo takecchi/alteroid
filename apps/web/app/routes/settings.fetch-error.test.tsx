@@ -25,7 +25,6 @@ function stubRunners(respond: () => Response | Promise<Response>): void {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const pathname = new URL(url).pathname;
     if (pathname === '/runners') return respond();
-    if (pathname === '/auth/providers') return json({ providers: [] });
     if (pathname === '/me') return json({ status: 'open' });
     if (pathname === '/health') return json({ ok: true });
     return json({});

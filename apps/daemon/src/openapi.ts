@@ -200,11 +200,6 @@ const accountViewSchema = z.object({
   grantedBy: z.string().nullable(),
 });
 
-export const authProvidersResponseSchema = z.object({
-  enabled: z.boolean(),
-  providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
-});
-
 export const loginStartResponseSchema = z.object({
   requestId: z.string(),
   authorizationUrl: z.string(),

@@ -268,7 +268,6 @@ import {
   attachmentListQuery,
   attachmentListResponseSchema,
   attachmentMetaSchema,
-  authProvidersResponseSchema,
   taskListResponseSchema,
   taskDetailResponseSchema,
   taskAddedResponseSchema,
@@ -9010,24 +9009,6 @@ export function createApp(deps: AppDeps) {
     )
 
     // 宣言された成功応答（200/202）はすべて宣言スキーマの `.parse()` を通す（エラー応答はその場のリテラルなので通さない）: `resolver()` は spec を作るだけでハンドラの戻り値を検査しないので、通していない経路では宣言に無いフィールドが黙って外へ出る。応答スキーマ（`accountViewSchema` 系）は core の永続化スキーマから独立させてあり、account の行が増えても外へは載らない。
-    .get(
-      '/auth/providers',
-      describeRoute({
-        tags: ['auth'],
-        summary: '使えるログイン手段の一覧',
-        description:
-          '設定されているログイン手段を返す。`enabled` が false なら認証を要求していない。',
-        security: [],
-        responses: {
-          200: jsonResponse('ログイン手段の一覧。', authProvidersResponseSchema),
-        },
-      }),
-      (c) =>
-        c.json(
-          authProvidersResponseSchema.parse({ enabled: authPlan.enabled, providers: providerList }),
-        ),
-    )
-
     .post(
       '/auth/login',
       describeRoute({

@@ -35771,53 +35771,6 @@
         }
       }
     },
-    "/auth/providers": {
-      "get": {
-        "operationId": "getAuthProviders",
-        "tags": ["auth"],
-        "summary": "使えるログイン手段の一覧",
-        "description": "設定されているログイン手段を返す。`enabled` が false なら認証を要求していない。",
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "ログイン手段の一覧。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "enabled": {
-                      "type": "boolean"
-                    },
-                    "providers": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "label": {
-                            "type": "string"
-                          },
-                          "kind": {
-                            "type": "string"
-                          }
-                        },
-                        "required": ["id", "label", "kind"],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": ["enabled", "providers"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/auth/login": {
       "post": {
         "operationId": "postAuthLogin",
