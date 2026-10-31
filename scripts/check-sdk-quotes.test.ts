@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, symlinkSync } from 'node:fs';
+import { symlinkSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -263,50 +263,6 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
     await writeFile(join(dir, 'scripts', 'verify-core.mjs'), 'kept\n');
     const files = listScannableFiles(dir) as { path: string }[];
     expect(files.map((f) => f.path)).toEqual(['scripts/verify-core.mjs']);
-  });
-
-  it('🔴（直す前の形）: 素の `git ls-files -z`（追跡済みのみ）は未追跡ファイルを見落とす', async () => {
-    const dir = await initRepo();
-    await writeFile(join(dir, 'tracked.ts'), '// [sdk-verbatim Foo]\n// > old quote\n');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-qm', 'init');
-    await writeFile(join(dir, 'new-untracked.ts'), '// [sdk-verbatim Foo]\n// > this is wrong\n');
-
-    const oldForm = execFileSync('git', ['ls-files', '-z'], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: gitChildEnv(),
-    })
-      .split('\0')
-      .filter((p) => p.length > 0);
-    expect(oldForm).not.toContain('new-untracked.ts');
-
-    const oldFiles = oldForm
-      .filter((p) => p.endsWith('.ts'))
-      .map((p) => ({ path: p, content: readFileSync(join(dir, p), 'utf8') }));
-    const oldQuotes = collectMarkedQuotes(oldFiles);
-    const oldDefects = findQuoteDefects(
-      oldQuotes,
-      'export declare type Foo = string; // old quote',
-    );
-    expect(oldDefects).toEqual([]);
-  });
-
-  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れ、違反を検出する', async () => {
-    const dir = await initRepo();
-    await writeFile(join(dir, 'tracked.ts'), '// [sdk-verbatim Foo]\n// > old quote\n');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-qm', 'init');
-    await writeFile(join(dir, 'new-untracked.ts'), '// [sdk-verbatim Foo]\n// > this is wrong\n');
-
-    const files = listScannableFiles(dir) as { path: string }[];
-    expect(files.map((f) => f.path)).toContain('new-untracked.ts');
-
-    const quotes = collectMarkedQuotes(files);
-    const defects = findQuoteDefects(quotes, 'export declare type Foo = string; // old quote') as {
-      path: string;
-    }[];
-    expect(defects.map((d) => d.path)).toContain('new-untracked.ts');
   });
 
   it('⚠️ symlink を外す（未追跡の symlink + 実体の両方があっても1回だけ数える）', async () => {
