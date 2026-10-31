@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import type {
   query as sdkQuery,
@@ -2038,11 +2037,18 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('unpushedWork は同一プロセスでも実際の git の答えを運ぶ（#1039）', async () => {
-    const run = promisify(execFile);
     const dir = await makeTempDir('alteroid-manager-unpushed-');
     const git = (args: string[]) =>
-      // 器の秘密を継承させない: `gitChildEnv()` は `git` を解決する `PATH` と偽 `HOME` だけを渡す。
-      run('git', args, { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } });
+      new Promise<void>((resolve, reject) => {
+        // 器の秘密を継承させない: `gitChildEnv()` は `git` を解決する `PATH` と偽 `HOME` だけを渡す。
+        // `promisify(execFile)` を経由しない: 別名越しの呼びは `env` を指定したかを lint が見られないため（#1971）
+        execFile(
+          'git',
+          args,
+          { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } },
+          (error) => (error ? reject(error) : resolve()),
+        );
+      });
     await git(['init', '-q', '-b', 'main']);
     await git(['config', 'user.email', 'test@example.com']);
     await git(['config', 'user.name', 'Test']);
@@ -2071,11 +2077,17 @@ describe('デーモン再起動後（M4）', () => {
 
 describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', () => {
   it('manager_stop が呼ぶ unpushedWork の枝名は、器を落とした後も台帳から引ける', async () => {
-    const run = promisify(execFile);
     const dir = await makeTempDir('alteroid-manager-unpushed-ledger-');
     const git = (args: string[]) =>
-      // 器の秘密を継承させない: `gitChildEnv()` は `git` を解決する `PATH` と偽 `HOME` だけを渡す。
-      run('git', args, { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } });
+      new Promise<void>((resolve, reject) => {
+        // 器の秘密を継承させない: `gitChildEnv()` は `git` を解決する `PATH` と偽 `HOME` だけを渡す。
+        execFile(
+          'git',
+          args,
+          { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } },
+          (error) => (error ? reject(error) : resolve()),
+        );
+      });
     await git(['init', '-q', '-b', 'fix/1228-worktree-branch-into-ledger']);
     await git(['config', 'user.email', 'test@example.com']);
     await git(['config', 'user.name', 'Test']);

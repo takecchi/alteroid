@@ -217,7 +217,11 @@ describe('Host: SDK の resume の一時ディレクトリを、子を起こす�
   });
 
   it('渡せなくても起こすのは止めず、理由を note に残す', async () => {
-    const { spawn: launch, spawned, events } = await startWith(() => {
+    const {
+      spawn: launch,
+      spawned,
+      events,
+    } = await startWith(() => {
       throw new Error('EPERM（テストの偽物）');
     });
     launch({ CLAUDE_CONFIG_DIR: join((await import('node:os')).tmpdir(), 'claude-resume-1111') });

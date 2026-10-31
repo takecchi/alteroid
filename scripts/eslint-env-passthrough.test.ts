@@ -25,9 +25,18 @@ describe('env の丸渡し: 捕まえる', () => {
       '`env: (process.env as NodeJS.ProcessEnv)`',
       "spawn('a', [], { env: (process.env as NodeJS.ProcessEnv) });",
     ],
-    ['`Object.assign({}, process.env, …)`', "const env = Object.assign({}, process.env, { X: '1' });"],
-    ['複数行の `Object.assign`', 'const env = Object.assign(\n  {},\n  process.env,\n  { X: "1" },\n);'],
-    ['`Object.assign(getBase(), process.env)`', 'const env = Object.assign(getBase(), process.env);'],
+    [
+      '`Object.assign({}, process.env, …)`',
+      "const env = Object.assign({}, process.env, { X: '1' });",
+    ],
+    [
+      '複数行の `Object.assign`',
+      'const env = Object.assign(\n  {},\n  process.env,\n  { X: "1" },\n);',
+    ],
+    [
+      '`Object.assign(getBase(), process.env)`',
+      'const env = Object.assign(getBase(), process.env);',
+    ],
     ["`'env': process.env`", "spawn('a', [], { 'env': process.env });"],
     ['`"env": process.env`', 'spawn(\'a\', [], { "env": process.env });'],
     ["`['env']: process.env`", "const o = { ['env']: process.env };"],
@@ -51,7 +60,10 @@ describe('env の丸渡し: 捕まえない', () => {
     ["`['env2']: process.env`", "const o = { ['env2']: process.env };"],
     ["`'foo': process.env.X`", "const o = { 'foo': process.env.X };"],
     ['行コメントの解説文', '// { ...process.env, X }\nexpect(process.env.PATH).toBeDefined();'],
-    ['ブロックコメントの引用', '/**\n * let{env:c={...process.env}}=this.options\n */\nconst x = 1;'],
+    [
+      'ブロックコメントの引用',
+      '/**\n * let{env:c={...process.env}}=this.options\n */\nconst x = 1;',
+    ],
     ["コメント中の `['env']: process.env`", "/** { ['env']: process.env } */\nconst x = 1;"],
     ["コメント中の `'env': process.env`", "/** { 'env': process.env } */\nconst x = 1;"],
     ['文字列の中', "const t = 'env を渡すと { ...process.env, X } になる';"],
@@ -78,6 +90,13 @@ describe('env 無しの子プロセスの呼び: 捕まえる', () => {
     ['cp.spawn(cmd)（名前空間）', `${CP}cp.spawn('x');`],
     ['childProcess.exec(cmd)', "childProcess.exec('x');"],
     ['cp.spawn(cmd, args, { cwd })', `${CP}cp.spawn('x', [], { cwd });`],
+    [
+      'new Promise で包んだ execFile から env を外した形（promisify の置き換え先）',
+      "new Promise((res, rej) => { execFile('git', args, { cwd: dir }, (e) => (e ? rej(e) : res())); });",
+    ],
+    ['promisify(execFile)', "const run = promisify(execFile);\nrun('node', ['-e', 'x'], { env });"],
+    ['promisify(cp.execFile)', `${CP}const run = promisify(cp.execFile);`],
+    ['util.promisify(exec)', 'const run = util.promisify(exec);'],
   ];
   for (const [name, code] of cases) {
     it(name, async () => {
@@ -90,10 +109,21 @@ describe('env 無しの子プロセスの呼び: 捕まえない', () => {
   const cases: Array<[string, string]> = [
     ['env: gitChildEnv()', "execFileSync('git', ['status'], { cwd: '.', env: gitChildEnv() });"],
     ['env の shorthand', "spawnSync('git', ['status'], { env });"],
-    ['options を変数で渡す（判定できない）', "const opts = buildOpts();\nexecFileSync('git', ['status'], opts);"],
-    ['options が spread だけ（判定できない）', "spawnSync('git', ['status'], { ...baseOpts, cwd });"],
+    [
+      'options を変数で渡す（判定できない）',
+      "const opts = buildOpts();\nexecFileSync('git', ['status'], opts);",
+    ],
+    [
+      'options が spread だけ（判定できない）',
+      "spawnSync('git', ['status'], { ...baseOpts, cwd });",
+    ],
     ['名前空間でも env を渡す', `${CP}cp.spawn('x', [], { env: gitChildEnv() });`],
     ['options 2引数目に env', "spawn('x', { env: gitChildEnv() });"],
+    [
+      'new Promise で包んだ execFile に env がある形',
+      "new Promise((res, rej) => { execFile('git', args, { cwd: dir, env: gitChildEnv() }, (e) => (e ? rej(e) : res())); });",
+    ],
+    ['promisify(別の関数)', 'const run = promisify(readFile);'],
     ['コメント中の呼び', '// 例: execFileSync("git", ["status"]) は env を継ぐ\nconst x = 1;'],
     ['`cp` が別のオブジェクトのメソッド', "const cp = { run: () => {} };\ncp.run('x');"],
     ['正規表現の `exec`（メンバー呼び）', 'const m = /a/.exec(s);'],
