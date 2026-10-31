@@ -12,8 +12,7 @@ vi.mock('./target.js', async () => {
   };
 });
 
-const { reopenCommand, describeReopenResult, buildReopenConfirmMessage } =
-  await import('./reopen.js');
+const { reopenCommand, buildReopenConfirmMessage } = await import('./reopen.js');
 const target = await import('./target.js');
 
 interface Sent {
@@ -73,30 +72,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
   vi.clearAllMocks();
-});
-
-describe('describeReopenResult', () => {
-  it('3値をそれぞれ言い分ける', () => {
-    expect(describeReopenResult({ outcome: 'deferred' })).toContain('境界で');
-    expect(describeReopenResult({ outcome: 'now' })).toContain('次の合図から新しいセッション');
-    expect(describeReopenResult({ outcome: 'unsupported' })).toContain('持っていない');
-  });
-
-  it('走っているマネージャーがいれば止めていないと言う。0 本や取れなかったときは言わない', () => {
-    expect(describeReopenResult({ outcome: 'deferred', runningManagers: 2 })).toContain(
-      'マネージャーは止めていない',
-    );
-    expect(describeReopenResult({ outcome: 'deferred', runningManagers: 0 })).not.toContain(
-      'マネージャー',
-    );
-    expect(describeReopenResult({ outcome: 'deferred' })).not.toContain('マネージャー');
-  });
-
-  it('古いセッション id を出す', () => {
-    expect(describeReopenResult({ outcome: 'now', previousSessionId: 'sess-1' })).toContain(
-      'sess-1',
-    );
-  });
 });
 
 describe('buildReopenConfirmMessage', () => {

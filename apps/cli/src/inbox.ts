@@ -6,6 +6,7 @@ import {
   describeNoReadableInboxEvents,
   type InboxBacklogBreakdown,
 } from '@alteroid/core';
+import { splitList } from '@alteroid/logic';
 
 import { createClient } from './client.js';
 import { withErrorReason, describeFailedResponse } from './format.js';
@@ -71,13 +72,6 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
   // 失敗を握り潰さない: stdout へ書いて正常 return すると終了コードが 0 になり、「消えたのか消えなかったのか」を読めないため
   const result = await post(target, body);
   report(result, dryRun, options, startedAt);
-}
-
-function splitList(value: string): string[] {
-  return value
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
 }
 
 async function post(target: Target, body: Record<string, unknown>): Promise<InboxRemoveManyResult> {

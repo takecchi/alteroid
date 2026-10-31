@@ -22,7 +22,7 @@ import {
   useAccess,
   useRemoveUnreadableAccounts,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { describeGrantedBy, formatDateTime } from '@alteroid/logic';
 import type { AccessAccount } from '@alteroid/logic';
 
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
@@ -217,11 +217,4 @@ function AccessGrantControl({ account }: { account: AccessAccount }) {
       <ErrorNote error={failure} />
     </div>
   );
-}
-
-// id を名前へ解決しない: そのアカウントが一覧から既に消えていることがありうるため
-function describeGrantedBy(grantedBy: string | null): string {
-  if (grantedBy === null) return '不明';
-  if (grantedBy === 'operator') return '実行環境の持ち主';
-  return grantedBy;
 }
