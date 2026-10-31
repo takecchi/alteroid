@@ -138,6 +138,8 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
         void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
         // 一覧だけでなく本文も落とす: 開いた会話の画面が一度読んだ履歴のまま止まるため
         void mutate((key) => isKeyOfType(key, 'conversation'));
+        // 人間の発言は受理のとき同じ id の task を積む（日誌には「積んだ」行を書かない）ので、会話の動きに合わせて task も読み直す
+        void mutate((key) => isKeyOfType(key, 'tasks'));
       }
       break;
     case 'external_event':
@@ -148,6 +150,15 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
         void mutate(KEY.practices);
         void mutate(KEY.practice(entry.target.slug));
         void mutate(KEY.practiceVersions(entry.target.slug));
+      }
+      if (entry.target?.kind === 'task') {
+        // 一覧は開閉どちらの束も取り直す。詳細（`byId`）は、指された id のものだけ（id を省いた一括の行では全部）
+        const taskId = entry.target.id;
+        void mutate((key) => {
+          if (!isKeyOfType(key, 'tasks')) return false;
+          const byId = (key as { byId?: unknown }).byId;
+          return byId === undefined || taskId === undefined || byId === taskId;
+        });
       }
       break;
     case 'worker_wait':

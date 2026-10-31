@@ -163,6 +163,16 @@ describe('クローン — interruptTurn の対象指定（#3956）', () => {
     expect(withdrawn).toMatchObject({ status: 'cancelled', closedBy: 'human' });
     expect(withdrawn?.closedReason).toContain('取り下げ');
     expect(entries.find((task) => task.id === 'evt-先客')?.status).toBe('queued');
+    // 取り下げで閉じた task を指す decision が積まれる（Web が task の一覧を取り直す手がかり）
+    const decisions = await t.stores.journal.list({ types: ['decision'] });
+    expect(
+      decisions.some(
+        (entry) =>
+          entry.type === 'decision' &&
+          entry.target?.kind === 'task' &&
+          entry.target.id === 'evt-自分の発言',
+      ),
+    ).toBe(true);
 
     t.openAll();
     await t.clone.stop();

@@ -13310,6 +13310,7 @@ class Pool implements ManagerPool {
     if (result.kind !== 'changed') return;
     await this.#journal({
       type: 'decision',
+      target: { kind: 'task', id: taskId },
       decision: `[${jobId}] task ${taskId} を ${result.before.status} から ${to} にした（${why}）`,
       grounds: '委譲の状態に結び付いた task を追わせる（#5469 P3）',
     });

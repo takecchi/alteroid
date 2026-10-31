@@ -75,6 +75,7 @@ export function taskStatusLine(task: Pick<Task, 'status' | 'closedAt' | 'keep'>)
 export function taskKeepChangeEntry(taskId: string, task: Task, keep: boolean): JournalEntryInput {
   return {
     type: 'decision',
+    target: { kind: 'task', id: taskId },
     decision: `task の「続く」の印を${keep ? '立てた' : '外した'}（${taskId}: ${task.title}）`,
     grounds: keep
       ? '自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）'
@@ -196,6 +197,7 @@ export function taskStatusChangeEntry(
 ): JournalEntryInput {
   return {
     type: 'decision',
+    target: { kind: 'task', id: taskId },
     decision: `task の状態を変えた（${taskId}）: ${before.status} → ${status}${
       reason === undefined ? '' : `（${reason}）`
     }`,

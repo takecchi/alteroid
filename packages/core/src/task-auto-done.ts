@@ -181,6 +181,7 @@ export async function autoCloseRepliedTasks(
     try {
       await stores.journal.append({
         type: 'decision',
+        target: { kind: 'task', id: task.id },
         decision: `task を自動で done にした（${task.id}: ${task.title}）: 起点の会話 ${conversationId} へ返答したターンが終わった`,
         grounds:
           `返答の経路: ${via === 'turn_reply' ? 'そのターン自身の返答' : 'task_say'}。` +

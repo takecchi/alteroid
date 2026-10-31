@@ -6235,6 +6235,7 @@ export function createApp(deps: AppDeps) {
           stores,
           {
             type: 'decision',
+            target: { kind: 'task', id: entry.id },
             decision: `人間が task を積んだ（${entry.id}）: ${title}`,
             grounds: `人間が直接 API から積んだ。置き場所: ${describeTaskPlacement(taskPlacement)}。本文: ${body}`,
           },
@@ -6293,11 +6294,13 @@ export function createApp(deps: AppDeps) {
         const label = status === 'done' ? '終わった' : '取りやめた';
         const entryBefore: JournalEntryInput = {
           type: 'decision',
+          target: { kind: 'task', id },
           decision: `人間が task を ${status}（${label}）にする（${id}）: ${reason}`,
           grounds: '人間が直接 API から閉じようとしている',
         };
         const entryAfter: JournalEntryInput = {
           type: 'decision',
+          target: { kind: 'task', id },
           decision: `人間が task を ${status}（${label}）にした（${id}）: ${reason}`,
           grounds: '人間が直接 API から閉じた',
           ...humanActionOf(c.get('principal'), 'task_close', id),
@@ -6391,6 +6394,7 @@ export function createApp(deps: AppDeps) {
         }
         const entryBefore: JournalEntryInput = {
           type: 'decision',
+          target: { kind: 'task', id },
           decision: `人間が閉じた task を開き直す（${id}）: ${reason}`,
           grounds: `人間が直接 API から開き直そうとしている。開き直す前の記録: ${describeClosedTask(read.task)}`,
         };
@@ -6426,6 +6430,7 @@ export function createApp(deps: AppDeps) {
           stores,
           {
             type: 'decision',
+            target: { kind: 'task', id },
             decision: `人間が閉じた task を開き直した（${id}）: ${reason}`,
             grounds: `人間が直接 API から開き直した。開き直す前の記録: ${describeClosedTask(result.before)}`,
             ...humanActionOf(c.get('principal'), 'task_reopen', id),
@@ -6481,6 +6486,7 @@ export function createApp(deps: AppDeps) {
         const positionBefore = await openPositionOf(stores, id);
         const entryBefore: JournalEntryInput = {
           type: 'decision',
+          target: { kind: 'task', id },
           decision: `人間が task を並べ替える（${id}）: ${read.task.title} を ${describeTaskPlacement(placement)} へ`,
           grounds: '人間が直接 API から並べ替えようとしている',
         };
@@ -6524,6 +6530,7 @@ export function createApp(deps: AppDeps) {
           stores,
           {
             type: 'decision',
+            target: { kind: 'task', id },
             decision: `人間が task を並べ替えた（${id}）: ${read.task.title} を ${describeTaskPlacement(placement)} へ`,
             grounds: `人間が直接 API から並べ替えた。並び: ${positionBefore} → ${await openPositionOf(stores, id)}`,
             ...humanActionOf(c.get('principal'), 'task_move', id),
@@ -6613,6 +6620,7 @@ export function createApp(deps: AppDeps) {
         ].join(' / ');
         const entry: JournalEntryInput = {
           type: 'decision',
+          target: { kind: 'task', id },
           decision: `人間が task を直した（${id}）: ${changes}`,
           grounds: '人間が直接 API から編集した',
         };
