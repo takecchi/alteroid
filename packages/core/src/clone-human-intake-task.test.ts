@@ -588,6 +588,97 @@ describe('ask_human を呼んだターンでは、その会話の task を閉じ
   });
 });
 
+describe('回答・task_say の返答は、答えた相手の task だけ閉じる（失敗で落ちた発言の task を巻き添えにしない）', () => {
+  it('発言 M1 のターンが失敗して task が queued で残ったあと、同じ会話の承認への回答のターンが返答しても、M1 の task は閉じない', async () => {
+    const s = boot(() => say('回答を受けた。進める'), {
+      resultFor: (turnIndex) =>
+        turnIndex === 0 ? { subtype: 'error_during_execution', text: 'boom' } : undefined,
+    });
+    s.clone.post(human('m1-failed', '失敗で落ちる発言'));
+    await waitForTerminal(s.events);
+    expect(await statusOf(s.stores, 'm1-failed')).toBe('queued');
+
+    // 別の話題の承認（M1 とは無関係。M1 のターンは問いを出していない）を同じ会話に置き、答える
+    await s.stores.jobs.putApproval({
+      id: 'appr-other',
+      createdAt: new Date().toISOString(),
+      question: '別件の確認',
+      conversationId: 'conv-1',
+    });
+    s.events.length = 0;
+    await s.clone.answerApproval('appr-other', 'はい');
+    await waitForTerminal(s.events);
+    await waitFor(
+      async () => (await s.stores.journal.list({ types: ['turn_timing'] })).length >= 2,
+      '回答のターンが終わる',
+    );
+
+    expect(await statusOf(s.stores, 'm1-failed')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('ask_human を出した発言の task は、別の発言の task が残っていても、その回答のターンでだけ閉じる', async () => {
+    const s = boot(
+      (_turn, input, tool) =>
+        input.includes('承認待ちにしていた質問に人間が答えた')
+          ? say('回答を受けた。進める')
+          : input.includes('どちらかを選んでほしい')
+            ? [
+                ...say('確認します'),
+                { run: () => tool('ask_human')({ question: 'どちらにしますか' }) },
+              ]
+            : say('落ちる'),
+      {
+        resultFor: (turnIndex) =>
+          turnIndex === 0 ? { subtype: 'error_during_execution', text: 'boom' } : undefined,
+      },
+    );
+    s.clone.post(human('m1-failed', '失敗で落ちる発言'));
+    await waitForTerminal(s.events);
+    expect(await statusOf(s.stores, 'm1-failed')).toBe('queued');
+
+    s.events.length = 0;
+    s.clone.post(human('asker', 'どちらかを選んでほしい'));
+    await waitForTerminal(s.events);
+    const approvals = (await s.stores.jobs.listApprovals({ pendingOnly: true })).entries;
+    expect(approvals).toHaveLength(1);
+    expect(await statusOf(s.stores, 'asker')).toBe('queued');
+
+    await s.clone.answerApproval(approvals[0]!.id, 'A案で');
+    await waitFor(async () => (await statusOf(s.stores, 'asker')) === 'done', '回答で閉じる');
+    expect(await statusOf(s.stores, 'm1-failed')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('task_say は、書いた先の task だけ閉じる。同じ起点の会話の別の queued の task は閉じない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の依頼',
+      conversationId: 'conv-x',
+    });
+    await stores.tasks.add(seeded('task-a', { originConversationId: 'conv-x' }));
+    await stores.tasks.add(seeded('task-b', { originConversationId: 'conv-x' }));
+    const s = boot(
+      (_turn, input, tool) =>
+        input.includes('POST-REPORT')
+          ? [
+              ...say('読んだ'),
+              { run: () => tool('task_say')({ taskId: 'task-a', text: 'A の報告です' }) },
+            ]
+          : say('読んだ'),
+      { stores },
+    );
+
+    s.clone.post(managerReport('rep-post', 'POST-REPORT'));
+    await waitFor(async () => (await statusOf(stores, 'task-a')) === 'done', 'A が閉じる');
+    expect(await statusOf(stores, 'task-b')).toBe('queued');
+    await s.clone.stop();
+  });
+});
+
 describe('閉じるのは、そのターンが読んだ発言の task だけ（まだ読んでいない同じ会話の発言は閉じない）', () => {
   it('束ねる数の上限で束から外れた残りは、先のターンの返答で閉じない', async () => {
     const g = gate();
