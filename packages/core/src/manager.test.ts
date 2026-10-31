@@ -8007,6 +8007,41 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     await registry.stop();
   });
 
+  it('未pushの確認の往復の間に依頼が届いたら、止めずに取りやめる（担当を running のまま残し、session_missing にしない）', async () => {
+    const { id, fake, pool, registry, stores, posted } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+    const original = pool.unpushedWork.bind(pool);
+    let sendResult: Awaited<ReturnType<typeof pool.send>> | undefined;
+    vi.spyOn(pool, 'unpushedWork').mockImplementation(async (managerId, options) => {
+      // 自動の畳みの最初の確認の往復の中で、新しい依頼が届く。
+      if (options?.source === 'auto-fold' && sendResult === undefined) {
+        sendResult = await pool.send(id, '新しい依頼');
+      }
+      return original(managerId, options);
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    expect(sendResult?.outcome).toBe('delivered');
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.outcome).not.toBe('folded');
+    // 依頼を受けた担当のセッションは生きたまま
+    expect(fake.state.alive.some((s) => s.managerId === id)).toBe(true);
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('running');
+    expect(posted.some((event) => JSON.stringify(event).includes('停止させました'))).toBe(false);
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(
+      decisions.some((entry) => 'decision' in entry && entry.decision.includes('取りやめ')),
+    ).toBe(true);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
   it('runnerId が違う委譲は、その runner が逼迫していても対象にしない', async () => {
     // 委譲の `runnerId` を逼迫側と別名（`runner-c`）にする: 同じ名前だと「対象にしない」ことの検算にならないため。
     const pressured = new FakePoolRunner('runner-a', {
