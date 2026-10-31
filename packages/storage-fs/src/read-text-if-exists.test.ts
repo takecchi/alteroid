@@ -1,20 +1,16 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { readTextIfExists } from './atomic.js';
 
 describe('readTextIfExists', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'read-text-if-exists-'));
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    dir = await makeTempDir('alteroid-read-text-if-exists-');
   });
 
   it('ファイルがあれば中身を返す', async () => {
