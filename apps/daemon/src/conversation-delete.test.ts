@@ -276,8 +276,9 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(joined).toContain('記憶');
     expect(joined).toContain('承認');
     expect(joined).toContain(
-      '旧台帳（廃止した。どの読む口からも読めないが、データベースにはテーブルが残っている）のこの会話の行は消していない',
+      'この会話の Task（旧台帳から移した行を含む）の本文を写した日誌の行は読む口から外したが、Task へ移さなかった旧台帳の行の本文を写した日誌の行と、クローンが自分の言葉で言い換えて日誌に書いた行は、会話との結び付きが分からないので残りうる',
     );
+    expect(joined).not.toContain('データベースにはテーブルが残っている');
   });
 
   it('remainsIn は画面にそのまま出るので、内部の名前（表名・道具名・SDK・Issue 番号）を言わない（#5905）', async () => {

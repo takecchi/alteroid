@@ -21,9 +21,7 @@ import {
   assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionDrift,
   assertNeverMemoryDescriptionFreshness,
-  assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
-  containsMemoryFrontmatterLineBreak,
   cutMemorySections,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryBootBackfillFromJournal,
@@ -47,11 +45,9 @@ import {
   measureMemoryFloor,
   measurePremiseOutlineFit,
   memoryBodyStart,
-  memoryProtectionAllowsFullReplace,
   memorySectionId,
   nextDescribedState,
   parseMemoryFrontmatter,
-  renderMemoryDocument,
   renderMemoryDocuments,
   renderMemoryListing,
   renderMemoryOutline,
@@ -69,19 +65,6 @@ import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalQuery, JournalStore } from './store.js';
 
 describe('記憶の載せ方', () => {
-  it('人間が開くファイル名と同じ見出しを付ける', () => {
-    expect(renderMemoryDocument({ slug: 'values', content: '# 価値観\n\nあ' })).toBe(
-      '<!-- memory: values.md -->\n# 価値観\n\nあ',
-    );
-  });
-
-  it('末尾の空白だけを落とす（先頭と本文には触らない）', () => {
-    const rendered = renderMemoryDocument({ slug: 'a', content: '\n  先頭は残す\n\n\n' });
-
-    expect(rendered).toBe('<!-- memory: a.md -->\n\n  先頭は残す');
-    expect(rendered.endsWith('先頭は残す')).toBe(true);
-  });
-
   it('文書のあいだは空行1つで、渡された順序のまま並ぶ', () => {
     const rendered = renderMemoryDocuments([
       { slug: 'b', content: '# に\n' },
@@ -107,17 +90,10 @@ describe('MemoryProtectionStatus の網羅性', () => {
     { kind: 'unknown' },
   ];
 
-  it('3状態それぞれで判定・描画が例外を投げずに返る', () => {
+  it('3状態それぞれで描画が例外を投げずに返る', () => {
     for (const status of ALL_STATUSES) {
-      expect(() => memoryProtectionAllowsFullReplace(status)).not.toThrow();
       expect(() => describeMemoryProtectionStatus(status)).not.toThrow();
     }
-  });
-
-  it('human / unknown は distill からの全文置換を許さず、clone-only だけ許す', () => {
-    expect(memoryProtectionAllowsFullReplace({ kind: 'human' })).toBe(false);
-    expect(memoryProtectionAllowsFullReplace({ kind: 'unknown' })).toBe(false);
-    expect(memoryProtectionAllowsFullReplace({ kind: 'clone-only' })).toBe(true);
   });
 
   it('3状態それぞれが異なる一言を返す（unknown を human や clone-only に読み替えない）', () => {
@@ -128,7 +104,6 @@ describe('MemoryProtectionStatus の網羅性', () => {
   it('未知の状態（型では弾かれるはずの値）が来たら、黙って倒れず例外を投げる', () => {
     const unknownVariant = { kind: 'new-kind' } as unknown as MemoryProtectionStatus;
 
-    expect(() => memoryProtectionAllowsFullReplace(unknownVariant)).toThrow();
     expect(() => describeMemoryProtectionStatus(unknownVariant)).toThrow();
   });
 
@@ -917,22 +892,7 @@ describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () 
   });
 });
 
-describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', () => {
-  it('\\n を含めば true', () => {
-    expect(containsMemoryFrontmatterLineBreak('a\nb')).toBe(true);
-  });
-
-  it('\\r を含めば true（\\r\\n だけでなく単独の \\r も）', () => {
-    expect(containsMemoryFrontmatterLineBreak('a\rb')).toBe(true);
-    expect(containsMemoryFrontmatterLineBreak('a\r\nb')).toBe(true);
-  });
-
-  it('改行を含まなければ false（--- を含む1行の値はここでは問題ない）', () => {
-    expect(containsMemoryFrontmatterLineBreak('a')).toBe(false);
-    expect(containsMemoryFrontmatterLineBreak('a---b')).toBe(false);
-    expect(containsMemoryFrontmatterLineBreak('')).toBe(false);
-  });
-
+describe('findMemoryFrontmatterLineBreak — 断りに名乗る証拠（位置・種類・抜粋）', () => {
   it('検査を挟まないまま渡すと、値の続きが本文の先頭へ紛れ込む（再現）', () => {
     const original = '---\ndescription: 古\n---\n# 見出し\n\n本文である';
     const injected = applyMemoryFrontmatterPatch(original, {
@@ -942,12 +902,10 @@ describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', (
     expect(parseMemoryFrontmatter(injected)).toEqual({ kind: 'parsed', description: 'a' });
     expect(injected.endsWith('本文である')).toBe(true);
     expect(injected).toContain('b\ntype: fact\n---\n# 見出し');
-    expect(containsMemoryFrontmatterLineBreak('a\n---\nb')).toBe(true);
+    expect(findMemoryFrontmatterLineBreak('a\n---\nb')).not.toBeNull();
   });
-});
 
-describe('findMemoryFrontmatterLineBreak — 断りに名乗る証拠（位置・種類・抜粋）', () => {
-  it('改行が無ければ null（containsMemoryFrontmatterLineBreak が false を返す値と同じ）', () => {
+  it('改行が無ければ null', () => {
     expect(findMemoryFrontmatterLineBreak('a')).toBeNull();
     expect(findMemoryFrontmatterLineBreak('a---b')).toBeNull();
     expect(findMemoryFrontmatterLineBreak('')).toBeNull();
@@ -1103,11 +1061,6 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
   it('assertNeverMemoryDescriptionFreshness は未知の状態を投げる', () => {
     const bogus = { kind: 'bogus' } as never;
     expect(() => assertNeverMemoryDescriptionFreshness(bogus)).toThrow(/bogus/);
-  });
-
-  it('assertNeverMemoryFrontmatterState は未知の状態を投げる', () => {
-    const bogus = { kind: 'bogus' } as never;
-    expect(() => assertNeverMemoryFrontmatterState(bogus)).toThrow(/bogus/);
   });
 });
 
@@ -1401,7 +1354,6 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).toContain('<!-- memory: b.md（premise');
     expect(rendered).toContain('<!-- memory: a.md（premise');
     expect(rendered).not.toContain('## 記憶の目次');
-    expect(rendered).not.toBe(docs.map(renderMemoryDocument).join('\n\n'));
   });
 
   it('premise（区分無し）はカード（要旨＋節の目次）が載り、本文は1文字も載らない', () => {

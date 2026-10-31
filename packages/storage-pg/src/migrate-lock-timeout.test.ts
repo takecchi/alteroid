@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import {
-  AUTH_ACCOUNTS_EMAIL_LOWER_INDEX,
-  migrate,
-  OPEN_MANAGER_BODY_INDEX,
-  STATEMENTS,
-} from './migrate.js';
+import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX, migrate, STATEMENTS } from './migrate.js';
 import { createEmptyTestDb } from './test-db.test-support.js';
 
 // マイグレーションの文ごとにロックの待ちへ上限を掛け、取れなければ挑み直す（#4747）
@@ -104,17 +99,16 @@ describe('migrate のロックの待ちと挑み直し（#4747）', () => {
     );
   });
 
-  // 索引づくりの2関数の文も同じ道を通す（#4768）: 外に残すと、同時の初回で catalog の一意違反が出て起動が落ちるため
-  for (const index of [AUTH_ACCOUNTS_EMAIL_LOWER_INDEX, OPEN_MANAGER_BODY_INDEX]) {
-    it(`⭐ ${index} の作成が同時の初回の競合（23505）で落ちても挑み直す（#4768）`, async () => {
-      const { db } = await createEmptyTestDb();
-      const probe = failingOnceWhere(
-        db,
-        (text) => text.startsWith(`create unique index if not exists ${index}`),
-        '23505',
-      );
-      await migrate(probe.db, () => undefined, { retryDelayMs: 1 });
-      expect(probe.failed()).toBe(1);
-    });
-  }
+  // 索引づくりの関数の文も同じ道を通す（#4768）: 外に残すと、同時の初回で catalog の一意違反が出て起動が落ちるため
+  it(`⭐ ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX} の作成が同時の初回の競合（23505）で落ちても挑み直す（#4768）`, async () => {
+    const { db } = await createEmptyTestDb();
+    const probe = failingOnceWhere(
+      db,
+      (text) =>
+        text.startsWith(`create unique index if not exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`),
+      '23505',
+    );
+    await migrate(probe.db, () => undefined, { retryDelayMs: 1 });
+    expect(probe.failed()).toBe(1);
+  });
 });

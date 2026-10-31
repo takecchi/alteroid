@@ -72,20 +72,6 @@ export function assertNeverMemoryProtectionStatus(status: never): never {
   return assertNever('未知の記憶保護状態', status);
 }
 
-// 量で判定しない: 蒸留は正当な運用として大きく畳むことがあるため
-export function memoryProtectionAllowsFullReplace(status: MemoryProtectionStatus): boolean {
-  switch (status.kind) {
-    case 'human':
-      return false;
-    case 'unknown':
-      return false;
-    case 'clone-only':
-      return true;
-    default:
-      return assertNeverMemoryProtectionStatus(status);
-  }
-}
-
 export function describeMemoryProtectionStatus(status: MemoryProtectionStatus): string {
   switch (status.kind) {
     case 'human':
@@ -256,12 +242,6 @@ export function memoryProtectionRebuildDecision(counts: {
   };
 }
 
-// frontmatter を意識しない: 区分の判定・malformed の印づけ・目次への振り分けは呼び手（`renderMemoryDocuments`）の責務で、ここで分岐させると単文書を固定している既存のテストの意味が変わるため
-// 先頭や本文には触らない: 人間の手書きの記述を整形の都合で書き換えないため
-export function renderMemoryDocument({ slug, content }: MemoryPart): string {
-  return `<!-- memory: ${slug}.md -->\n${content.trimEnd()}`;
-}
-
 const FRONTMATTER_DELIMITER = '---';
 
 const KNOWN_FRONTMATTER_KEYS = new Set(['description', 'type', 'parent']);
@@ -288,10 +268,6 @@ export function parseMemoryFrontmatter(content: string): MemoryFrontmatterState 
     else if (key === 'parent') fields.parent = value;
   }
   return { kind: 'parsed', ...fields };
-}
-
-export function assertNeverMemoryFrontmatterState(state: never): never {
-  return assertNever('未知の frontmatter 解釈状態', state);
 }
 
 function frontmatterBody(content: string): string {
@@ -344,10 +320,6 @@ function escapeMemoryLineBreaksForDisplay(value: string): string {
 }
 
 // `\r` も検査する: 単独の `\r` は目次の1行にそのまま残り、読めない行を作るため
-export function containsMemoryFrontmatterLineBreak(value: string): boolean {
-  return findMemoryFrontmatterLineBreak(value) !== null;
-}
-
 export function findMemoryFrontmatterLineBreak(value: string): MemoryFrontmatterLineBreak | null {
   const match = /[\r\n]/.exec(value);
   if (match === null) return null;

@@ -16,7 +16,7 @@ function isPlainSegment(name: string): boolean {
  * `mkdir -p` と `writeFile` はそれを辿り、root が子の選んだ場所にファイルを作って子へ渡してしまう（`wx` は最後の段の symlink しか断らない）。
  * 無い段は飛ばす（これから `mkdir` が作る）。作った後にもう一度呼んで、作る間の差し替えも拾う。
  */
-export function assertNoSymlinkDirs(base: string, dir: string): void {
+function assertNoSymlinkDirs(base: string, dir: string): void {
   const root = resolve(base);
   const target = resolve(dir);
   if (target !== root && !target.startsWith(`${root}${sep}`)) {
@@ -270,7 +270,7 @@ export function safePeerRolloutRelPath(
 }
 
 /** `ordinal` で重複を落として並べる。`ordinal` を持たない行は rollout の行ではないので捨てる（数を `dropped` に返す）。 */
-export function orderRolloutEntries(entries: readonly unknown[]): {
+function orderRolloutEntries(entries: readonly unknown[]): {
   lines: Record<string, unknown>[];
   dropped: number;
 } {

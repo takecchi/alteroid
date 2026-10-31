@@ -30,7 +30,7 @@ export interface AutoFoldUnpushedWorkProbe {
   };
 }
 
-export type AutoFoldUnpushedWorkVerdict = 'clear' | 'blocked';
+type AutoFoldUnpushedWorkVerdict = 'clear' | 'blocked';
 
 // `'clear'` はすべての作業ツリーで未 push も未コミットも無いと確かめられたときだけ。確かめられなかったものは全部 `'blocked'`（畳まない）に吸収し、「取れない」を「無かった」へ倒さない。
 // `manager_stop`（force なし）が `done` の委譲に行う判断より厳しい: あちらは人間・クローンが明示的に呼ぶ操作だが、こちらは人が見ていない自動操作なので追加の安全弁として重ねる。

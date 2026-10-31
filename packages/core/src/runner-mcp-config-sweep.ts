@@ -10,7 +10,7 @@ export const RUNNER_MCP_CONFIG_DIR_PREFIX = 'alteroid-runner-mcp-config-';
 // 長くしすぎると落ちた runner の資格入りファイルが残る時間が延びるので、競合を避けられる最小の桁に留める
 export const RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS = 5 * 60_000;
 
-export interface RunnerMcpConfigSweepOptions {
+interface RunnerMcpConfigSweepOptions {
   tmpRoot: string;
   // 今の runner が起こしていて、まだ終わっていない委譲のディレクトリ（絶対パス）
   liveDirs: ReadonlySet<string>;

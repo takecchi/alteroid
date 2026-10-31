@@ -1,4 +1,4 @@
-export interface WorkerWaitClosed {
+interface WorkerWaitClosed {
   readonly openedAt: string;
   readonly tasks: number;
   readonly turns: number;
