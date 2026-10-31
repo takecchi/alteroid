@@ -3974,7 +3974,7 @@ class Pool implements ManagerPool {
         question: pending.summary,
         approvalId: pending.requestId,
         managerId,
-        answeredAt: new Date(this.#now()).toISOString(),
+        answeredAt: this.#nowIso(),
         /*
          * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
          * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
@@ -4013,7 +4013,7 @@ class Pool implements ManagerPool {
     let fingerprintMatched = false;
     let staleDelivery: { generation: number; blockers: string[] } | undefined;
     // 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
-    const turnStartedAt = new Date(this.#now()).toISOString();
+    const turnStartedAt = this.#nowIso();
     let outgoing = message;
     if (record.job.status === 'done') {
       const oldestHeldAt = record.job.heldMessages?.[0]?.heldAt;
@@ -4090,7 +4090,7 @@ class Pool implements ManagerPool {
                   ...(folded.foldedBackgroundCommands ?? []),
                 ].slice(0, FOLD_NOTICE_COMMANDS_MAX),
               }),
-          at: new Date(this.#now()).toISOString(),
+          at: this.#nowIso(),
         };
         // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
         await this.#persist(record).catch(() => undefined);
@@ -4125,7 +4125,7 @@ class Pool implements ManagerPool {
       );
       if (missing) {
         record.attached = false;
-        record.sessionMissingSince ??= new Date(this.#now()).toISOString();
+        record.sessionMissingSince ??= this.#nowIso();
         // 由来は上書きする（生存確認が先に置いた `unlisted` より強い観測）が、時刻は `??=` のまま: 最初に気づいた時刻を動かさない。
         record.sessionMissingKind = 'resume-failed';
         await this.#persist(record);
@@ -4637,7 +4637,7 @@ class Pool implements ManagerPool {
    * そちらが先に畳めば、この時刻より早く届くだけである。
    */
   #heldFoldDueAt(oldestHeldAt: string | undefined, awaitingSince: string | undefined): number {
-    const starts = [oldestHeldAt ?? new Date(this.#now()).toISOString(), awaitingSince]
+    const starts = [oldestHeldAt ?? this.#nowIso(), awaitingSince]
       .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
       .filter((at) => !Number.isNaN(at));
     return Math.min(...starts) + HELD_FORCE_FOLD_AFTER_MS;
@@ -4662,7 +4662,7 @@ class Pool implements ManagerPool {
           'この伝言は預からなかった。送ってもいない。',
       };
     }
-    const heldAt = new Date(this.#now()).toISOString();
+    const heldAt = this.#nowIso();
     const previous = record.job.heldMessages;
     record.job.heldMessages = [...held, { text: message, heldAt, reason }];
     try {
@@ -5196,12 +5196,10 @@ class Pool implements ManagerPool {
       }
       for (const [runnerId, entry] of backlog) {
         if (this.#vanishedRunnerGaugeLastCount.get(runnerId) === entry.count) continue;
-        void this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text: `${EXCHANGE_KIND_GAUGE_PREFIX}${describeVanishedRunnerBacklogLine(runnerId, entry, this.#now())}`,
-        });
+        void this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_GAUGE_PREFIX}${describeVanishedRunnerBacklogLine(runnerId, entry, this.#now())}`,
+        );
         this.#vanishedRunnerGaugeLastCount.set(runnerId, entry.count);
       }
     } catch (error) {
@@ -5280,9 +5278,7 @@ class Pool implements ManagerPool {
     // 指紋・資源は明示的に頼まれたときだけ聞きに行く。同じ `open` を材料にして往復を増やさない。
     const open =
       options.fingerprints || options.resources
-        ? new Map(
-            (await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]),
-          )
+        ? new Map((await this.#runnersOrEmpty()).map((runner) => [runner.runnerId, runner]))
         : undefined;
 
     const placed = await Promise.all(
@@ -5311,7 +5307,7 @@ class Pool implements ManagerPool {
             ...(resources.oldestPendingAt === undefined
               ? {}
               : { oldestPendingAt: resources.oldestPendingAt }),
-            observedAt: new Date(this.#now()).toISOString(),
+            observedAt: this.#nowIso(),
             // `resources()` は instanceId を運ばないので、名簿がいま知っている値を観測時点のものとして凍結する。
             ...(entry.instanceId === undefined
               ? {}
@@ -5922,7 +5918,7 @@ class Pool implements ManagerPool {
       return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
     }
     // 観測の時刻は問い合わせる前に取る: 後で取ると遅れて返った観測がいつも新しくなり、上書きガードが働かない。
-    const observedAt = new Date(this.#now()).toISOString();
+    const observedAt = this.#nowIso();
     const { outcome, observerInstanceId } = await this.#probeUnpushedWork(
       managerId,
       record,
@@ -5995,7 +5991,7 @@ class Pool implements ManagerPool {
     observedAt?: string,
     observerInstanceId?: string,
   ): Promise<void> {
-    const at = observedAt ?? new Date(this.#now()).toISOString();
+    const at = observedAt ?? this.#nowIso();
     const observation = unpushedWorkObservationOf(outcome, at, source);
     if (
       !isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
@@ -6672,7 +6668,7 @@ class Pool implements ManagerPool {
       ...event.skipped,
     ];
     const instanceBefore = this.#sighting(fromRunnerId).instanceId;
-    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(fromRunnerId);
     const named =
       runner !== null && this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_RESCUE_FILES);
     const removeStaged = async (fileId: string): Promise<void> => {
@@ -6731,7 +6727,7 @@ class Pool implements ManagerPool {
         skipped.push({ path: file.path, reason: `fetch-failed: ${outcome.reason}` });
         continue;
       }
-      const at = new Date(this.#now()).toISOString();
+      const at = this.#nowIso();
       const entry: RescueStashEntry = {
         worktree: event.worktree,
         path: file.path,
@@ -7069,7 +7065,7 @@ class Pool implements ManagerPool {
     let rescue = job.lastRescue;
     if (rescue === undefined) return;
     // 終端を初めて見た時刻を台帳に残す（猶予の起点。`rescue-cleanup.ts`）。変わらなければ書かない。
-    const nowIso = new Date(this.#now()).toISOString();
+    const nowIso = this.#nowIso();
     const marked = syncTerminalMark(job.status, rescue, nowIso);
     if (marked !== null) {
       const wrote = await this.#updateRescueLedger(
@@ -7090,7 +7086,7 @@ class Pool implements ManagerPool {
       if (reason === undefined || pushed === undefined) continue;
       budget.deletesLeft -= 1;
       const outcome = await this.#deleteRescueRefVia(job, pushed);
-      const at = new Date(this.#now()).toISOString();
+      const at = this.#nowIso();
       const attempts = outcome.ok
         ? undefined
         : (pushed.removal?.failureKind === undefined ? 0 : (pushed.removal.attempts ?? 1)) + 1;
@@ -7211,7 +7207,7 @@ class Pool implements ManagerPool {
   ): Promise<{ ok: true; alreadyGone: boolean } | { ok: false; kind: RescueRemovalFailureKind }> {
     if (pushed.remote === undefined) return { ok: false, kind: 'no-remote' };
     const primary = await this.#runnerOf({ job, waiting: [], attached: false });
-    const open = await this.#runners.list().catch(() => []);
+    const open = await this.#runnersOrEmpty();
     const seen = new Set<string>();
     const candidates = [primary, ...open].filter((candidate): candidate is RunnerClient => {
       if (candidate === null || candidate.deleteRescueRef === undefined) return false;
@@ -7319,14 +7315,11 @@ class Pool implements ManagerPool {
     );
 
     if (nextStage === DENIAL_RENOTIFY_DELAYS_MS.length) {
-      void this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] ${tool} の拒否（${actorLabel}）の知らせ直しを` +
+      void this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] ${tool} の拒否（${actorLabel}）の知らせ直しを` +
           `${String(nextStage)}回とも出したので、これ以上は黙る（issue #1105 C）。`,
-      });
+      );
     }
   }
 
@@ -7417,17 +7410,14 @@ class Pool implements ManagerPool {
         },
       );
       if (result.outcome === 'delivered' || result.outcome === 'answered') {
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] 枠で止まっていた委譲を、通る鍵で続きから起こし直した` +
+        await this.#journalExchange(
+          'outbound',
+          `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] 枠で止まっていた委譲を、通る鍵で続きから起こし直した` +
             (options?.workerLimit === undefined
               ? ''
               : `（理由: 作業者の落ち${options.workerLimit.generation === undefined ? '' : `, 現役の世代 ${String(options.workerLimit.generation)}`}）`) +
             `（status=${status}, outcome=${result.outcome}）`,
-        });
+        );
         // failed / lost だけクローンへ知らせる（#4861）: 終わっていたはずの担当が起き上がるので、後継を立てていたなら二重になる。
         // done は生きていて続きを促しただけ（いつもの続き）なので積まない。作業者の落ちからの起こし直しは、文言が「枠で落ちていた」と食い違うので積まない（#5030）。
         if (options?.workerLimit === undefined && (status === 'failed' || status === 'lost')) {
@@ -7451,24 +7441,18 @@ class Pool implements ManagerPool {
         }
         return 'nudged';
       }
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
+      await this.#journalExchange(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
           `（outcome=${result.outcome}）: ${result.detail}`,
-      });
+      );
       return 'skipped';
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
+      await this.#journalExchange(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
           reasonOf(error),
-      });
+      );
       return 'skipped';
     }
   }
@@ -8153,14 +8137,11 @@ class Pool implements ManagerPool {
         if (swapNotice !== undefined) {
           await runner.send(job.id, swapNotice).catch(() => undefined);
         }
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
+        await this.#journalExchange(
+          'outbound',
+          `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
             (swapNotice === undefined ? '' : ` ${swapNotice}`),
-        });
+        );
         this.#notifyRestored(record, 'resumed', 'runner');
         resumed.push(
           summaryOf(
@@ -8201,7 +8182,7 @@ class Pool implements ManagerPool {
           this.#post({
             type: 'manager_message',
             id: randomUUID(),
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
             managerId: job.id,
             kind: 'report',
             text:
@@ -8306,7 +8287,7 @@ class Pool implements ManagerPool {
     }
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
-    record.stopConfirmedAt = new Date(this.#now()).toISOString();
+    record.stopConfirmedAt = this.#nowIso();
     // await の前の宛先を覚えておく: await の後にこれと食い違えば、委譲は別の runner へ移っている。
     const runnerIdBeforeConfirm = record.job.runnerId;
 
@@ -8400,7 +8381,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'manager_message',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         managerId,
         kind: 'report',
         text: messageText,
@@ -8439,7 +8420,7 @@ class Pool implements ManagerPool {
     // 吐き出さないと、その窓のタイマーはデーモンと一緒に消え、器の入れ替えで届いた知らせ（`turn_failed` 等）が配られない。
     await this.#drainNoticeWindows();
     // runner のマネージャーは止めない: デーモンの都合で人の仕事を殺さない。
-    for (const runner of await this.#runners.list().catch(() => [])) {
+    for (const runner of await this.#runnersOrEmpty()) {
       await runner.close().catch(() => undefined);
     }
     // 閉じた後にもう一度吐き出す: 2回目の吐き出しの台帳読みの間と、runner を閉じ終えるまでに届いた出来事も担当ごとの窓へ積まれ、
@@ -8466,7 +8447,7 @@ class Pool implements ManagerPool {
     // 待ち終えた runner は二度待たない。
     const waited = new Set<string>();
     for (;;) {
-      const runners = (await this.#runners.list().catch(() => [])).filter(
+      const runners = (await this.#runnersOrEmpty()).filter(
         (runner) =>
           this.#farewellRunners.has(runner.runnerId) &&
           runner.awaitStreamEnd !== undefined &&
@@ -8673,7 +8654,7 @@ class Pool implements ManagerPool {
    */
   async #ensureConnected(): Promise<void> {
     if (this.#stopped) return;
-    const runners = await this.#runners.list().catch(() => []);
+    const runners = await this.#runnersOrEmpty();
     await Promise.all(runners.map((runner) => this.#connectTo(runner).catch(() => undefined)));
   }
 
@@ -8854,7 +8835,7 @@ class Pool implements ManagerPool {
         if (known && !relocating) known.attached = false;
 
         // 印は resume を挑む直前に置き、戻れたときに消す: `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ resume が成功しなかった、が成り立つ。
-        const missingAt = new Date(this.#now()).toISOString();
+        const missingAt = this.#nowIso();
 
         // 手を動かしている最中だったものだけ戻す: `done` は死ではなく待機で、起こすと開いたままの窓を勝手に閉じる。判定より前に `#records` へ載せない: 終わった仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
         // 古い写し（ループ先頭の `job`）で判定しない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。`known` が無いときは読み直した `fresh` で判定し、record も同じ行から作る。
@@ -9009,14 +8990,11 @@ class Pool implements ManagerPool {
           if (swapNotice !== undefined) {
             await runner.send(job.id, swapNotice).catch(() => undefined);
           }
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
+          await this.#journalExchange(
+            'outbound',
+            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
               (swapNotice === undefined ? '' : ` ${swapNotice}`),
-          });
+          );
           this.#notifyRestored(record, 'resumed', cause);
           if (windowOpen) {
             windowOpen = false;
@@ -9039,7 +9017,7 @@ class Pool implements ManagerPool {
             this.#post({
               type: 'manager_message',
               id: randomUUID(),
-              at: new Date(this.#now()).toISOString(),
+              at: this.#nowIso(),
               managerId: job.id,
               kind: 'report',
               text:
@@ -9118,17 +9096,14 @@ class Pool implements ManagerPool {
   ): void {
     const { job } = record;
     // 日誌は呼び出し元に委ねない: 経路ごとに呼び出し元の事前の書き込みが違い、「日誌に無い＝この経路を通っていない」を判別器にするには、経路によらず必ず1本書く必要がある。
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_FAILURE_PREFIX}[${job.id}] （戻せなかった）` +
+    void this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}[${job.id}] （戻せなかった）` +
         (cause === 'session'
           ? '前のセッションから戻せなかった（SDK に会話が残っていない）。'
           : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
         ` 理由: ${reasonOf(error)}`,
-    });
+    );
     // 即配らず合流窓へ積む: 委譲が器と一緒に失われた族は `resume_fallback` / `resume_failed` / `closed_failed` の3通で構成され、「一枠落ち一合図」に揃える。
     this.#queueSynthesizedNotice(
       job.id,
@@ -9169,12 +9144,10 @@ class Pool implements ManagerPool {
       .filter((line) => line !== '')
       .join('\n');
     // 日誌は呼び出し元にも合流窓の flush にも委ねない: 呼び出し元は理由までしか書かず、flush の1行は内訳（族と通数）だけで、ここで組み立てた拡張文言はどこにも残らない。
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （生ログから作り直して続けた）${body}`,
-    });
+    void this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （生ログから作り直して続けた）${body}`,
+    );
     // 上の `#journal` と同じ `body` を渡す: 同じ文字列を2回組み立てると片方だけ直る事故が起きる。
     this.#queueSynthesizedNotice(job.id, 'resume_fallback', body);
   }
@@ -9207,7 +9180,7 @@ class Pool implements ManagerPool {
     const runnerId = record.job.runnerId;
     // `select` を呼ばない: 繋がるまで待つので、起動時の引き取りや `manager_send` の下で台帳を読むだけの操作が固まる。開いている runner が無いなら「宛先が居ない」と答えるのが正しい。
     if (runnerId === undefined) {
-      const open = await this.#runners.list().catch(() => []);
+      const open = await this.#runnersOrEmpty();
       return open[0] ?? null;
     }
     return this.#runners.get(runnerId);
@@ -9477,7 +9450,7 @@ class Pool implements ManagerPool {
     }
     const managerId = event.managerId;
     record.job.lastReport = event.text;
-    record.job.lastReportAt = new Date(this.#now()).toISOString();
+    record.job.lastReportAt = this.#nowIso();
     record.job.lastReportStatus = event.status;
     delete record.job.lastFoldedTurn;
     await this.#persist(record);
@@ -9488,12 +9461,10 @@ class Pool implements ManagerPool {
         `いま追っている世代=${tracked} この報告の世代=${event.sessionGeneration ?? '不明'} ` +
         `runnerId=${fromRunnerId} 報告が名乗った status=${event.status} 台帳の status=${record.job.status}（書き換えない）`,
     });
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${event.text}`,
-    });
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${event.text}`,
+    );
     const reportFiles =
       (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
         ? await this.#fetchReportFiles(event, fromRunnerId)
@@ -9599,16 +9570,14 @@ class Pool implements ManagerPool {
     if (managerId === undefined) return;
     this.#ambiguousRunnersNotified.add(runnerId);
     // 日誌は呼び出し元に委ねない: どちらの呼び出し元も `#post` の前に `#journal` していないので、経路によらず「知らせた」の跡を必ず1本残す。
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] ${describeAmbiguousSighting(runnerId, duplicates)}`,
-    });
+    void this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] ${describeAmbiguousSighting(runnerId, duplicates)}`,
+    );
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId,
       kind: 'report',
       text:
@@ -9627,16 +9596,14 @@ class Pool implements ManagerPool {
     if (managerId === undefined) return;
     this.#ambiguousRunnersNotified.delete(runnerId);
     // 日誌は呼び出し元に委ねない: どちらの呼び出し元も `#post` の前に `#journal` していないので、経路によらず「知らせた」の跡を必ず1本残す。
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。`,
-    });
+    void this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。`,
+    );
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId,
       kind: 'report',
       text: `runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。以後は自動で引き取ります。`,
@@ -10137,15 +10104,12 @@ class Pool implements ManagerPool {
         if (delayMs === undefined || this.#stopped) {
           // 止めないが黙って消さない: 預かり損ねたことすら残らないと、後から「無い」のか「預かれなかった」のかが分からない。
           noteDroppedRecord('生ログのミラー', `${detail} attempts=${String(attempt + 1)}`, error);
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 生ログの写し ${String(event.entries.length)} 件を PG へ預けられなかった` +
+          await this.#journalExchange(
+            'outbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 生ログの写し ${String(event.entries.length)} 件を PG へ預けられなかった` +
               `（${String(attempt + 1)} 回試した。sessionId=${event.key.sessionId}）。` +
               `この会話を resume すると、この区間が欠けたまま戻る: ${reasonOf(error)}`,
-          });
+          );
           return;
         }
         noteDroppedRecord(
@@ -10226,7 +10190,7 @@ class Pool implements ManagerPool {
       return;
     }
     if (targets.length === 0) return;
-    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(fromRunnerId);
     if (runner === null) return;
     await Promise.allSettled(
       targets.map(async ({ fileId, kind }) => {
@@ -10248,7 +10212,7 @@ class Pool implements ManagerPool {
     const rejectedFiles = event.rejectedFiles ?? [];
     if (files.length === 0) return { attachments: [], rejected: rejectedFiles.map(rejectedFileOf) };
     const instanceBefore = this.#sighting(fromRunnerId).instanceId;
-    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(fromRunnerId);
     const fallbackReason = (reason: string): ManagerReportFiles => ({
       attachments: [],
       rejected: [
@@ -10340,7 +10304,7 @@ class Pool implements ManagerPool {
 
     if (event.type === 'codex_auth') {
       if (this.#codexAuth === undefined) return;
-      const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+      const runner = await this.#runnerOrNull(fromRunnerId);
       await this.#codexAuth.onRunnerNotice(event, fromRunnerId, runner);
       return;
     }
@@ -10415,19 +10379,17 @@ class Pool implements ManagerPool {
         // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
         if (event.pluginLoad !== undefined) {
           this.#pluginLoad.set(fromRunnerId, {
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
             managerId: event.managerId,
             pluginLoad: event.pluginLoad,
           });
           const described = describePluginLoadForJournal(event.pluginLoad);
           if (this.#pluginLoadDigests.get(event.managerId) !== described.digest) {
             this.#pluginLoadDigests.set(event.managerId, described.digest);
-            await this.#journal({
-              type: 'exchange',
-              with: 'manager',
-              role: 'inbound',
-              text: `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
-            });
+            await this.#journalExchange(
+              'inbound',
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
+            );
           }
         }
         record.job.sessionId = event.sessionId;
@@ -10466,7 +10428,7 @@ class Pool implements ManagerPool {
           // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
           record.job.lastFoldedTurn = {
             text: reportFullTextOf(event),
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
           await this.#persist(record);
           return;
@@ -10484,7 +10446,7 @@ class Pool implements ManagerPool {
         // 台帳と日誌には全文を残す: `manager_report` と画面の「最後の報告」は `lastReport` を読むので、途中の発言を見たいときはそこから引ける
         record.job.lastReport = reportFullTextOf(event);
         // `#noteRunnerSessionSince` と同じ時計（`this.#now()`）で書く: `reportSeenInSession` が前後を比べるので、別の時計だと注入した時計の試験で崩れる。
-        record.job.lastReportAt = new Date(this.#now()).toISOString();
+        record.job.lastReportAt = this.#nowIso();
         // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
         // `isTerminalJobStatus` は使わない: `done` を含むが、`done` は idle を兼ね再び走り出せる。managerId ごとの直列化は配達順に効くので採らない。
         const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
@@ -10521,13 +10483,13 @@ class Pool implements ManagerPool {
           record.job.lastFailure = {
             code: event.failure.code,
             via: event.failure.via,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
           // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
           // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
           if (isQuotaFailure(event.failure) && !this.#usageStopped.has(event.managerId)) {
             this.#usageStopped.add(event.managerId);
-            record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+            record.job.usageStoppedAt ??= this.#nowIso();
             markedByFailure = true;
           }
         }
@@ -10537,16 +10499,14 @@ class Pool implements ManagerPool {
         } else {
           record.job.lastUnreported = {
             ...event.unreported,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
         }
         await this.#persist(record);
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${reportFullTextOf(event)}`,
-        });
+        await this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${reportFullTextOf(event)}`,
+        );
         // 待たない: 完了を待つと、報告を受けてからクローンのターンが起きるまでに runner への往復が乗る。`contentless` / `awaitingBackground` の早い `return` より手前に置く（後ろだと中身の無い報告・背景待ちの報告で観測が取られない）。停止済みの早期 return は通らないので、止めた委譲へ往復を起こさない。
         this.#observeUnpushedWorkOnce(event.managerId, 'report');
         // `contentless` / `awaitingBackground` の早い `return` より手前に置く: 後ろだと中身の無い報告で終わった回だけ起こされないまま残る。
@@ -10710,7 +10670,7 @@ class Pool implements ManagerPool {
             question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
             approvalId: event.requestId,
             managerId: event.managerId,
-            withdrawnAt: new Date(this.#now()).toISOString(),
+            withdrawnAt: this.#nowIso(),
             withdrawnReason:
               `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
               `理由: ${event.withdrawn.reason}`,
@@ -10736,12 +10696,10 @@ class Pool implements ManagerPool {
         // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
         // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
         if (event.stall === undefined) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
-          });
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
+          );
         } else {
           await this.#journal({
             type: 'subagent_stall',
@@ -10792,7 +10750,7 @@ class Pool implements ManagerPool {
       }
 
       case 'tool_use': {
-        record.lastToolSettledAt = new Date(this.#now()).toISOString();
+        record.lastToolSettledAt = this.#nowIso();
         await this.#journal({
           type: 'tool_use',
           actor: event.actor,
@@ -10826,7 +10784,7 @@ class Pool implements ManagerPool {
         const key = denialKey(event.tool, actorLayer);
         const count = (denied.get(key) ?? 0) + 1;
         denied.set(key, count);
-        (record.deniedLastAt ??= new Map()).set(key, new Date(this.#now()).toISOString());
+        (record.deniedLastAt ??= new Map()).set(key, this.#nowIso());
         // この回に無ければ前回分を消す: 「最新1件」の像なので古い理由を持ち越さない。
         const reasonSnapshot = denialReasonSnapshotOf(event);
         if (reasonSnapshot === undefined) {
@@ -10861,16 +10819,13 @@ class Pool implements ManagerPool {
               ? '作業者'
               : 'どちらの層か不明';
 
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
+        await this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
             `（${actorLabel} / このマネージャーのこの組で ${count} 件目 / ` +
             `${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
             `${inputText}${denialSuffix}`,
-        });
+        );
 
         // 止めた委譲の拒否は受信箱へ回さない: クローンの判断材料にならず、`DENIED_ESCALATE_AT = 1` で1件目から `#emit` してしまう。日誌と数え上げは済んでいる。
         if (record.job.status === 'stopped') return;
@@ -10969,12 +10924,10 @@ class Pool implements ManagerPool {
         } catch (error) {
           usageTicket?.release();
           // 台帳に積めないことで仕事は止めない。ただし黙って消さない。理由を本文に添える: 無いと後から原因を辿れない。
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
-          });
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
+          );
           return;
         }
 
@@ -11000,15 +10953,12 @@ class Pool implements ManagerPool {
 
         // 数え直しを黙って通さない: 累積が 0 に戻るのは正常だが、記録が無いと後から「なぜ集計が飛んでいるか」を誰も辿れない。
         if (fold.reset !== undefined) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 消費の累積が数え直された` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 消費の累積が数え直された` +
               `（$${fold.reset.fromCostUsd.toFixed(4)} → $${fold.reset.toCostUsd.toFixed(4)}）。` +
               'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
-          });
+          );
         }
         return;
       }
@@ -11053,7 +11003,7 @@ class Pool implements ManagerPool {
             })),
             ...event.peers.map((peer) => ({ ...peer, reason })),
           ],
-          at: new Date(this.#now()).toISOString(),
+          at: this.#nowIso(),
         };
         await this.#persist(record).catch(() => undefined);
         return;
@@ -11098,12 +11048,10 @@ class Pool implements ManagerPool {
             });
           }
         } catch (error) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] peer（${event.provider}）の消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
-          });
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] peer（${event.provider}）の消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
+          );
         }
         return;
       }
@@ -11131,7 +11079,7 @@ class Pool implements ManagerPool {
           // 台帳にも写す: `Set` はデーモンの作り直しで消え、入れ替わりを跨いだ委譲が二度と起こされない。代入は `Set.add` と同じ同期の位置に置く（`await` を挟むと並行の `report` に先を越され、片方だけ遅れて真になる窓ができる）。
           // 欄が既に立っていれば persist しない（通知は何度も届く）。書き込みの失敗で下を巻き添えにしない: 下の回し手への受け渡しが鍵を回す契機そのもので、投げると鍵が回らないまま全員が止まる。
           if (record.job.usageStoppedAt === undefined) {
-            record.job.usageStoppedAt = new Date(this.#now()).toISOString();
+            record.job.usageStoppedAt = this.#nowIso();
             try {
               await this.#persist(record);
             } catch (error) {
@@ -11157,14 +11105,11 @@ class Pool implements ManagerPool {
           memory.folded += 1;
           // 件数だけでは「何本の異なるマネージャーが当たっているか」に戻せないので集合も持つ。
           memory.foldedManagers.add(event.managerId);
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_THINNING_PREFIX}[${event.managerId}] （配達済みの知らせなので受信箱へは回さない。` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}[${event.managerId}] （配達済みの知らせなので受信箱へは回さない。` +
               `この種類で ${memory.folded} 件目）${text}`,
-          });
+          );
           // 畳んだ回も計器は回す（配達しないだけで枠に当たった事実は同じ）。
           await this.#rememberResetTimeSkew(event);
           return;
@@ -11174,12 +11119,10 @@ class Pool implements ManagerPool {
         memory.folded = 0;
         const foldedManagers = memory.foldedManagers;
         memory.foldedManagers = new Set();
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text: `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] ${text}`,
-        });
+        await this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] ${text}`,
+        );
         // 畳んだ件数を配る1本に必ず載せる: 受信箱しか見ていない読み手には日誌の行が見えず、「畳んだ」が観測から消える。
         this.#queueSynthesizedNotice(
           event.managerId,
@@ -11245,15 +11188,12 @@ class Pool implements ManagerPool {
         // 畳むたびに書かず、遷移が定まったこの回にだけ束ねて書く: 日誌の肥大化をマネージャーの数という軸で作り直さない。溜まっていない回は1行も増やさない。
         const crossFold = this.#rateLimitCrossFold.get(memoryKey);
         if (crossFold !== undefined && crossFold.folded.size > 0) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 同じ壁を跨いで畳んだ報告に、` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 同じ壁を跨いで畳んだ報告に、` +
               `${crossFold.folded.size} 本の異なるマネージャーが当たっている` +
               '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
-          });
+          );
         }
         this.#rateLimitCrossFold.set(memoryKey, {
           lastManagerId: event.managerId,
@@ -11281,20 +11221,13 @@ class Pool implements ManagerPool {
           this.#now(),
         );
         if (folded.flush !== undefined) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(folded.flush)}`,
-          });
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(folded.flush)}`,
+          );
         }
         if (folded.write) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text: `${EXCHANGE_KIND_GAUGE_PREFIX}${journalText}`,
-          });
+          await this.#journalExchange('inbound', `${EXCHANGE_KIND_GAUGE_PREFIX}${journalText}`);
         }
         // `rate_limit` は枠の事実そのもの（遷移が立った回だけここへ来る）: 印を付ける。リセット時刻は facts の構造化された値だけ。
         this.#queueSynthesizedNotice(
@@ -11408,12 +11341,10 @@ class Pool implements ManagerPool {
             bodyChars: body.length,
           });
           if (continuityText !== null) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'manager',
-              role: 'outbound',
-              text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`,
-            });
+            await this.#journalExchange(
+              'outbound',
+              `${EXCHANGE_KIND_FAILURE_PREFIX}${continuityText}`,
+            );
           }
         } catch (error) {
           settleStored?.(false);
@@ -11431,14 +11362,11 @@ class Pool implements ManagerPool {
         // 止めた後に遅れて届いた resume_failed で status を巻き戻さず、クローンも起こさない: 無条件に処理すると `running` / `'lost'` へ書き換えて `#post()` し、終端が甦る。日誌には残す。
         // 明示的な `manager_send` の起こし直しは塞がない: `send()` が先に `'running'` を書くので、遅れて届く頃には `'stopped'` ではない。
         if (record.job.status === 'stopped') {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （停止済みのため無視）前のセッション` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （停止済みのため無視）前のセッション` +
               `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
-          });
+          );
           return;
         }
         // 移った後に古い runner から遅れて届いた resume_failed で巻き戻さない。ただし「不一致」だけで「移った」と言わない: `job.runnerId` に既定値 `'runner-primary'` が焼かれたままだと、同じ runner からでも不一致になり、本当に終わった事実を捨ててしまう（`#resume` だけが書き直す）。
@@ -11450,26 +11378,20 @@ class Pool implements ManagerPool {
           registeredRunnerIdsForResumeFailed !== null &&
           registeredRunnerIdsForResumeFailed.has(record.job.runnerId)
         ) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
               `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）前のセッション` +
               `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
-          });
+          );
           return;
         }
         // 「resume を投げた」は「戻れた」ではない: SDK が会話を見つけられなかったので、台帳と受信箱を実際に起きたことへ揃え直す。
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
+        await this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
             event.reason,
-        });
+        );
         if (event.recovered) {
           // 終端を `running` で書き戻さない: 待つ間に `closed(failed / lost)` が書いていると台帳が非終端へ戻る。
           if (record.job.status !== 'failed' && record.job.status !== 'lost') {
@@ -11497,7 +11419,7 @@ class Pool implements ManagerPool {
         this.#usageWakeOwed.delete(event.managerId);
         if (quotaReason) {
           this.#usageStopped.add(event.managerId);
-          record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+          record.job.usageStoppedAt ??= this.#nowIso();
           // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
           await this.#persist(record).catch((error: unknown) => {
             noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
@@ -11522,14 +11444,11 @@ class Pool implements ManagerPool {
       case 'closed': {
         // 止めた後の `closed` で status を巻き戻さない: 無条件に `event.status` へ上書きすると終端が甦り、`failed` の枝がクローンへ `#emit()` する。日誌には残す。`#retire()` は `abort()` が済ませているので呼ばない。
         if (record.job.status === 'stopped') {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
               `（status=${event.status}）を受け取った: ${event.reason}`,
-          });
+          );
           return;
         }
         // 移った後に古い runner から届いた closed で巻き戻さない: 無条件に処理すると `status` を書き換え、`releaseLease` でいま使われている新しい runner の貸し出しを解放して他の器が奪える状態になる。判定の理由は `case 'resume_failed'` の同じ判定を見る。
@@ -11554,15 +11473,12 @@ class Pool implements ManagerPool {
           registeredRunnerIdsForClosed !== null &&
           registeredRunnerIdsForClosed.has(record.job.runnerId)
         ) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
               `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
               `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
-          });
+          );
           return;
         }
         // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
@@ -11581,21 +11497,18 @@ class Pool implements ManagerPool {
                 `closed の reason: ${event.reason}`,
               ].join('\n')
             : undefined;
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
               `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
               (notice !== undefined
                 ? `。done なのでクローンへ知らせる: ${notice}`
                 : event.status === 'done'
                   ? '。done は既に知らせてあるので重ねて知らせない'
                   : '。受信箱へは出さない'),
-          });
+          );
           if (notice !== undefined) {
-            record.job.lateDoneNotifiedAt = new Date(this.#now()).toISOString();
+            record.job.lateDoneNotifiedAt = this.#nowIso();
             await this.#persist(record);
             this.#emit(event.managerId, 'report', notice);
           }
@@ -11609,15 +11522,12 @@ class Pool implements ManagerPool {
           event.status === 'failed' &&
           !this.#resuming.has(event.managerId)
         ) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
               `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
               event.reason,
-          });
+          );
           this.#retire(event.managerId);
           return;
         }
@@ -11631,14 +11541,11 @@ class Pool implements ManagerPool {
             record.job.lease = releaseLease(record.job.lease, this.#now());
           }
           await this.#persist(record);
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
               `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
-          });
+          );
           // クローンへも知らせる: 黙って止まったように見えるのが一番まずい。末尾の `event.reason` は包まない: 既に完成した1つの prose 文（runner の定型文）で、この層に包む材料が無い。包むなら `runner.ts` 側。
           this.#emit(
             event.managerId,
@@ -11664,7 +11571,7 @@ class Pool implements ManagerPool {
         if (event.status === 'failed' && event.systemError !== undefined) {
           record.job.lastSystemError = {
             ...event.systemError,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
         }
         // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
@@ -11672,13 +11579,13 @@ class Pool implements ManagerPool {
         if (event.status === 'failed' && event.cgroupEvents !== undefined) {
           record.job.lastCgroupEvents = {
             ...event.cgroupEvents,
-            at: new Date(this.#now()).toISOString(),
+            at: this.#nowIso(),
           };
         }
         // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
         // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
         if (event.unpushedWork !== undefined) {
-          const at = new Date(this.#now()).toISOString();
+          const at = this.#nowIso();
           const observation = unpushedWorkObservationOf(event.unpushedWork, at, 'closed');
           if (
             isUnpushedWorkObservationAtLeastAsNewAs(
@@ -11714,12 +11621,10 @@ class Pool implements ManagerPool {
             withSystemErrorNote(event.reason, event.systemError),
             event.cgroupEvents,
           );
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${body}`,
-          });
+          await this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${body}`,
+          );
           // 枠の印は落ちた理由を既存の分類（`classifyUsageNotice`）に通して付ける: `reached` / `transition` のときだけ。分類できない落ち方（SDK のクラッシュ等）は印を付けず、担当ごとに配る。
           const reasonNotice = classifyUsageNotice(event.reason);
           // 枠の文言で落ちた回にも、`usage_notice` を待たずに枠の印を立てる（#4850）: セッションの例外で落ちた回は runner が通知を出さず、印が無いと回転の起こし直しの対象に入らない。`reached` だけ（`usage_notice` と同じ）。分類できない落ち方（SDK のクラッシュ等）には立てない。
@@ -11727,7 +11632,7 @@ class Pool implements ManagerPool {
           const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
           if (quotaReason && !this.#usageStopped.has(event.managerId)) {
             this.#usageStopped.add(event.managerId);
-            record.job.usageStoppedAt ??= new Date(this.#now()).toISOString();
+            record.job.usageStoppedAt ??= this.#nowIso();
             markedByClosed = reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason;
             // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
             await this.#persist(record).catch((error: unknown) => {
@@ -11762,15 +11667,12 @@ class Pool implements ManagerPool {
             laterIso(record.job.runnerSessionSince, record.job.turnStartedAt) ?? '';
           const alreadyNotified = record.job.silentDoneNotifiedFor === sessionKey;
           if (seen !== 'seen' && alreadyNotified) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'manager',
-              role: 'inbound',
-              text:
-                `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)。` +
+            await this.#journalExchange(
+              'inbound',
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)。` +
                 `同じセッション（${sessionKey === '' ? '開始時刻は不明' : sessionKey}）については知らせ済みなので重ねて知らせない: ` +
                 event.reason,
-            });
+            );
           } else if (seen !== 'seen') {
             const body = [
               `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
@@ -11785,15 +11687,12 @@ class Pool implements ManagerPool {
                 : []),
               `closed の reason: ${event.reason}`,
             ].join('\n');
-            await this.#journal({
-              type: 'exchange',
-              with: 'manager',
-              role: 'inbound',
-              text:
-                `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)` +
+            await this.#journalExchange(
+              'inbound',
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)` +
                 `（${seen === 'none' ? 'report は一度も受け取っていない' : '判定できないので知らせる側へ倒した'}）。` +
                 `クローンへ知らせる: ${body}`,
-            });
+            );
             // 印を先に台帳へ書く（`lateDoneNotifiedAt` と同じ）。
             record.job.silentDoneNotifiedFor = sessionKey;
             await this.#persist(record);
@@ -11873,7 +11772,7 @@ class Pool implements ManagerPool {
 
       case 'rescue_ref': {
         // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
-        const at = new Date(this.#now()).toISOString();
+        const at = this.#nowIso();
         const previousRescue = record.job.lastRescue;
         // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
         const instanceId = this.#sighting(fromRunnerId).instanceId;
@@ -11912,7 +11811,7 @@ class Pool implements ManagerPool {
       case 'rescue_files': {
         // #4924: 移った後の古い器からは取り込まない。退避先は、捨てる回も消させる（器の退避先と待ちの集合に積み残さない）
         if (this.#movedAwayFrom(record, fromRunnerId)) {
-          const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+          const runner = await this.#runnerOrNull(fromRunnerId);
           if (runner !== null && runner.deleteRescueFile !== undefined) {
             for (const file of event.files) {
               await runner
@@ -11990,15 +11889,12 @@ class Pool implements ManagerPool {
     const asked = createRecentMap<true>({
       limit: ASKED_MEMORY_LIMIT,
       onForget: (ids) => {
-        void this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 配り終えた確認の記憶が上限（${ASKED_MEMORY_LIMIT}件）に達したので、` +
+        void this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 配り終えた確認の記憶が上限（${ASKED_MEMORY_LIMIT}件）に達したので、` +
             `古い ${ids.length} 件を忘れた: ${excerptLine(ids.join(', '), ASKED_FORGOTTEN_EXCERPT)}。` +
             'この id の確認が再送されると、新しい確認としてもう一度回る。',
-        });
+        );
       },
     });
     record.asked = asked;
@@ -12019,15 +11915,12 @@ class Pool implements ManagerPool {
           omitted: ({ rest, shown, total }) =>
             `…ほか ${rest} 件省略（${total} 件中、古い順に ${shown} 件だけ出した）`,
         });
-        void this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 処理済みの報告の記憶が上限（${REPORTED_MEMORY_LIMIT}件）に達したので、` +
+        void this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 処理済みの報告の記憶が上限（${REPORTED_MEMORY_LIMIT}件）に達したので、` +
             `古い ${ids.length} 件を忘れた: ${listing}。` +
             'この id の報告が再送されると、新しい報告としてもう一度回る。',
-        });
+        );
       },
     });
     record.reported = reported;
@@ -12056,15 +11949,12 @@ class Pool implements ManagerPool {
           const { tool, actor } = decodeDenialKey(key);
           return actor === undefined ? tool : `${tool}（${actor}）`;
         });
-        void this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 拒否の件数を覚えている道具×層の組が上限（${DENIED_TOOL_LIMIT}種）に` +
+        void this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 拒否の件数を覚えている道具×層の組が上限（${DENIED_TOOL_LIMIT}種）に` +
             `達したので、古い ${keys.length} 件を忘れた: ${labels.join(', ')}。` +
             'この組が次に止められたら 1 件目から数え直す（日誌には全件残っている）。',
-        });
+        );
       },
     });
     record.denied = denied;
@@ -12137,6 +12027,15 @@ class Pool implements ManagerPool {
     this.#pushFailureFolds.clear();
   }
 
+  // 一時障害は「居ない」「空」に倒す（呼び出し側が個別に握り直す必要が無い口）。async にせず元の Promise をそのまま返す: await の回数・順を変えない。
+  #runnerOrNull(runnerId: string) {
+    return this.#runners.get(runnerId).catch(() => null);
+  }
+
+  #runnersOrEmpty() {
+    return this.#runners.list().catch(() => []);
+  }
+
   #nowIso(): string {
     return new Date(this.#now()).toISOString();
   }
@@ -12205,7 +12104,7 @@ class Pool implements ManagerPool {
     const health = this.#pushHealth.get(runnerId);
     if (health === undefined) return;
 
-    const runner = await this.#runners.get(runnerId).catch(() => null);
+    const runner = await this.#runnerOrNull(runnerId);
     if (runner === null) {
       return;
     }
@@ -12338,12 +12237,10 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
   ): Promise<void> {
     const note = async (text: string): Promise<void> => {
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text: `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 移った後に ${fromRunnerId} から届いた消費の累積（いまの宛先は ${record.job.runnerId ?? '不明'}）: ${text}`,
-      });
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 移った後に ${fromRunnerId} から届いた消費の累積（いまの宛先は ${record.job.runnerId ?? '不明'}）: ${text}`,
+      );
     };
     const at = new Date(this.#now());
     let fold;
@@ -12359,12 +12256,10 @@ class Pool implements ManagerPool {
         runner: { id: fromRunnerId, superseded: true },
       });
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 移った後に届いた消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
-      });
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 移った後に届いた消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
+      );
       return;
     }
     const total = Object.values(event.models).reduce((sum, m) => sum + m.costUsd, 0);
@@ -12386,15 +12281,12 @@ class Pool implements ManagerPool {
       delivered: createRecentMap<true>({
         limit: USAGE_NOTICE_MEMORY_LIMIT,
         onForget: (texts) => {
-          void this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_THINNING_PREFIX}配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
+          void this.#journalExchange(
+            'inbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
               `達したので、古い ${texts.length} 件を忘れた。この文言が次に届いたら` +
               'もう一度クローンへ配る。',
-          });
+          );
         },
       }),
       folded: 0,
@@ -12410,7 +12302,7 @@ class Pool implements ManagerPool {
     text: string,
     awaitingBackground: { count: number; breakdown: string },
   ): void {
-    const now = new Date(this.#now()).toISOString();
+    const now = this.#nowIso();
     const existing = this.#withheldReports.get(managerId);
     this.#setWithheld(managerId, {
       count: (existing?.count ?? 0) + 1,
@@ -12570,11 +12462,9 @@ class Pool implements ManagerPool {
     // 知らせる前に期限を数え始める。知らせる時点で既に印が届いていれば、確定として書く。
     const confirmed = how === 'resumed' && this.#armResumeConfirmation(job.id) === 'confirmed';
     // 日誌は呼び出し元に委ねない: `attached` の呼び出し元は書かず、`resumed` 側が書くのは別の事実（再開の指示）で、この知らせ自体の跡ではない。
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${
+    void this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}${
         how === 'attached'
           ? `[${job.id}] （走行中を確認）${head}。runner の中で走り続けている。`
           : confirmed
@@ -12582,7 +12472,7 @@ class Pool implements ManagerPool {
             : `[${job.id}] （再開の指示を知らせた）${head}。前のセッションからの再開を指示した（受理まで。会話が戻ったかは確定待ち）。` +
               (withoutLog ? ` ${RESUMED_WITHOUT_LOG_CLAUSE}` : '')
       }`,
-    });
+    );
     // 「1本目はすぐ・同じ出来事の残りは1通」（枠の窓 `QuotaStopWindow` と同じ考え方）。鍵は cause: 器が何台続けて作り直されても同じ出来事。
     // 窓が開いていて別の担当なら、担当ごとには配らず窓へ貯める（日誌の上の行は担当ごとに書いた）。窓が無ければ今までどおり配って窓を開ける。
     const entry: RestoredEntry = {
@@ -12605,14 +12495,11 @@ class Pool implements ManagerPool {
     const open = cause === 'daemon' ? undefined : this.#restoredWindows.get(cause);
     if (open !== undefined && open.openerId !== job.id) {
       open.entries.set(job.id, entry);
-      void this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}[${job.id}] ${head}の知らせは、この担当だけの知らせとしては受信箱へ行かず、` +
+      void this.#journalExchange(
+        'outbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}[${job.id}] ${head}の知らせは、この担当だけの知らせとしては受信箱へ行かず、` +
           '同じ出来事の1通（「N 本の委譲に当たった」）へ回した。',
-      });
+      );
       return;
     }
     if (cause === 'daemon') {
@@ -12635,7 +12522,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId: job.id,
       kind: 'report',
       text: [
@@ -12735,15 +12622,12 @@ class Pool implements ManagerPool {
     entry.state = 'confirmed';
     if (!entry.restored) return;
     const seconds = Math.max(0, Math.round((this.#now() - entry.requestedAt) / 1000));
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] （戻れたことを確かめた）前のセッションからの再開が効いた: ` +
+    void this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] （戻れたことを確かめた）前のセッションからの再開が効いた: ` +
         `新しいセッションから最初の印（${via}）が、resume を出してから ${String(seconds)} 秒で届いた。` +
         (wasUnconfirmed ? '期限の後に届いた（期限の知らせは先に出してある）。' : ''),
-    });
+    );
   }
 
   /**
@@ -12766,14 +12650,11 @@ class Pool implements ManagerPool {
       return;
     }
     const minutes = resumeConfirmMinutes(this.#resumeConfirmTimeoutMs);
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] （戻れたか確かめられないまま）前のセッションからの再開を指示してから ${minutes} 分、` +
+    await this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] （戻れたか確かめられないまま）前のセッションからの再開を指示してから ${minutes} 分、` +
         `新しいセッションから戻れた印（${RESUME_EVIDENCE_DESCRIPTION}）が1つも届いていない。止めず、lost とも決めていない（状態 ${job.status}）。`,
-    });
+    );
     // 「戻せなかった」の語を使わない: 失敗の知らせを見分ける語で、ここでは失敗を観測していない。
     this.#queueSynthesizedNotice(
       managerId,
@@ -12827,7 +12708,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'external',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         // `runner-registry` を流用する: 枠の1通と同じ理由（専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要る）。
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `restored:${cause}:${openedAt}`,
@@ -12842,14 +12723,11 @@ class Pool implements ManagerPool {
         error,
       );
     }
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}[プール全体] ${window.head}: ${String(items.length)} 本の委譲の知らせを、` +
+    void this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}[プール全体] ${window.head}: ${String(items.length)} 本の委譲の知らせを、` +
         `1通にまとめて配った（内訳: ${items.map((i) => i.managerId).join('、')}。窓の開始 ${openedAt}）。`,
-    });
+    );
   }
 
   async #flushRestoredWindows(): Promise<void> {
@@ -12925,7 +12803,7 @@ class Pool implements ManagerPool {
           count: 0,
           // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
           excerpts: [],
-          flushedAt: new Date(this.#now()).toISOString(),
+          flushedAt: this.#nowIso(),
         });
       } else {
         this.#setWithheld(managerId, undefined);
@@ -12958,7 +12836,7 @@ class Pool implements ManagerPool {
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
       managerId,
       kind,
       text: outgoing,
@@ -13046,16 +12924,13 @@ class Pool implements ManagerPool {
     // 合流しなかった窓（`undefined`）は行を書かない: 取れない軸に 0 の行を作らない。
     const arrivalIntervals = synthesizedNoticeArrivalIntervals(entry.arrivedAt);
     if (arrivalIntervals !== undefined) {
-      void this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_GAUGE_PREFIX}[${managerId}] 合流窓に続けて畳まれた合図は ` +
+      void this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_GAUGE_PREFIX}[${managerId}] 合流窓に続けて畳まれた合図は ` +
           `${String(arrivalIntervals.count)} 件、間隔は最大 ${String(arrivalIntervals.maxIntervalMs)}ms・` +
           `最小 ${String(arrivalIntervals.minIntervalMs)}ms だった` +
           `（窓の長さ ${String(this.#synthesizedNoticeWindowMs)}ms）。`,
-      });
+      );
     }
 
     // 全断片に枠の印が付いた束だけが対象。1つでも印の無い断片が混ざれば今どおり担当ごとに配る（畳み間違いのほうが重い）。
@@ -13085,20 +12960,17 @@ class Pool implements ManagerPool {
       }
     }
     if (suppressed && streak !== undefined) {
-      const at = new Date(this.#now()).toISOString();
+      const at = this.#nowIso();
       streak.suppressed += 1;
       streak.suppressedArrived += arrived;
       streak.firstAt ??= at;
       streak.lastAt = at;
-      void this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
+      void this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
           `${String(arrived)} 件届いたので、受信箱へは回さず数だけ残した` +
           `（この連鎖で ${String(streak.suppressed)} 束目 / 通数 ${String(streak.suppressedArrived)} 件）。`,
-      });
+      );
       return;
     }
     // 本文の文言ではなく `label` で判定する。
@@ -13143,14 +13015,11 @@ class Pool implements ManagerPool {
       });
     }
     // 消えてよいのはクローンを起こすことだけで、記録ではない: 個々の知らせは積んだ時点で既に日誌に書かれており、ここで足すのは「まとめた」1行だけ。
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
+    void this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
         `1件にまとめて配った（内訳: ${breakdown}）。`,
-    });
+    );
   }
 
   #flushSynthesizedNotices(): void {
@@ -13167,15 +13036,12 @@ class Pool implements ManagerPool {
     breakdown: string,
     arrived: number,
   ): void {
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
+    void this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
         `1件にまとめた（内訳: ${breakdown}）。枠だけが理由の知らせなので、この担当だけの知らせとしては受信箱へ行かず、` +
         'プール全体の1通（「枠に当たって N 本の担当が止まった」）へ回した。',
-    });
+    );
     this.#addToQuotaStopWindow(windowKey, managerId, entry, arrived);
     // 窓へ移した在庫は、ここで一覧の行へ運んだものとして外す（担当ごとの `#deliver` は通らないので、残すと失われる）。
     const carried = this.#withheldCarriedToWindow.get(managerId);
@@ -13282,7 +13148,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'external',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         // `runner-registry` を流用する: 専用の source は予約語の一覧・入口の拒否・OpenAPI の説明を一緒に直す別の変更が要るため（`scratch_sweep` と同じ形で積む）。
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         identity: `quota-stop:${windowKey}:${openedAt}`,
@@ -13299,19 +13165,16 @@ class Pool implements ManagerPool {
     } catch (error) {
       noteDroppedRecord('受信箱', `quota_stop managers=${String(entries.length)}`, error);
     }
-    void this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}[プール全体] 枠に当たった ${String(entries.length)} 本の担当の知らせ ` +
+    void this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}[プール全体] 枠に当たった ${String(entries.length)} 本の担当の知らせ ` +
         `${String(arrived)} 件を、1件にまとめて配った（内訳: ${entries.map((e) => e.managerId).join('、')}。` +
         `リセット時刻 ${String(resetGroups)} 通り、窓の開始 ${openedAt}）。`,
-    });
+    );
   }
 
   async #persist(record: ManagerRecord): Promise<void> {
-    record.job.updatedAt = new Date(this.#now()).toISOString();
+    record.job.updatedAt = this.#nowIso();
     // 生存の時刻は別のタイマーで進めず、書くついでに進める: 委譲ごとにタイマーが増え、進める条件を2箇所で判定することになる。
     // 応えているプロセスが違うなら進めない: 入れ替わった器の貸し出しが生き続け、引き取れる時刻が来ない。
     const lease = record.job.lease;
@@ -13345,7 +13208,7 @@ class Pool implements ManagerPool {
       if (taskStatusForJob(record.job.status) === 'waiting') {
         if (!wasActive) delete record.job.endedAt;
       } else if (before === null || wasActive) {
-        record.job.endedAt = new Date(this.#now()).toISOString();
+        record.job.endedAt = this.#nowIso();
       }
     }
     try {
@@ -13422,7 +13285,7 @@ class Pool implements ManagerPool {
   async #moveTask(taskId: string, to: TaskStatus, jobId: string, why: string): Promise<void> {
     const result = await this.#stores.tasks.setStatus(taskId, to, {
       by: 'daemon',
-      at: new Date(this.#now()).toISOString(),
+      at: this.#nowIso(),
     });
     if (result.kind !== 'changed') return;
     await this.#journal({
@@ -13482,7 +13345,7 @@ class Pool implements ManagerPool {
 
   // 像（`ManagerRecord.runnerSessionSince`）はプロセス内にしか置かない: 生存確認と未 push 観測の判定は「再起動後は欄が無い」前提で倒れ先を決めている。
   #noteRunnerSessionSince(record: ManagerRecord): void {
-    const at = new Date(this.#now()).toISOString();
+    const at = this.#nowIso();
     record.runnerSessionSince = at;
     record.job.runnerSessionSince = at;
     // start / resume は新しいターンの始まりでもある。`send()` が先に書いた値より後ろへだけ進める。
@@ -13516,12 +13379,10 @@ class Pool implements ManagerPool {
     // 日誌の畳み込みは外す前に畳み残しを吐く: 畳んだ2件目以降はまだ日誌のどこにも書かれておらず、黙って捨てると件数が失われる。
     const foldedAtRetire = this.#rateLimitJournalFolds.get(managerId)?.flush();
     if (foldedAtRetire !== undefined) {
-      void this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(foldedAtRetire)}`,
-      });
+      void this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(foldedAtRetire)}`,
+      );
     }
     this.#rateLimitJournalFolds.delete(managerId);
     this.#lastStaleDecline.delete(managerId);
@@ -13546,12 +13407,10 @@ class Pool implements ManagerPool {
     for (const fold of this.#rateLimitJournalFolds.values()) {
       const flushed = fold.flush();
       if (flushed === undefined) continue;
-      void this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
-      });
+      void this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
+      );
     }
     this.#rateLimitJournalFolds.clear();
   }
@@ -13605,7 +13464,7 @@ class Pool implements ManagerPool {
       this.#post({
         type: 'external',
         id: randomUUID(),
-        at: new Date(this.#now()).toISOString(),
+        at: this.#nowIso(),
         source: DAEMON_RUNNER_REGISTRY_SOURCE,
         payload: {
           text:
@@ -13641,7 +13500,7 @@ class Pool implements ManagerPool {
       question: item.summary,
       approvalId: item.requestId,
       managerId: record.job.id,
-      withdrawnAt: new Date(this.#now()).toISOString(),
+      withdrawnAt: this.#nowIso(),
       withdrawnReason:
         'この確認への答えは届かない（答えを送ったが、runner はこの確認をもう持っていなかった）',
     });
@@ -13652,7 +13511,7 @@ class Pool implements ManagerPool {
     const dropped = record.waiting;
     record.waiting = [];
     if (dropped.length === 0) return;
-    const at = new Date(this.#now()).toISOString();
+    const at = this.#nowIso();
     for (const item of dropped) {
       void this.#journal({
         type: 'escalation',
@@ -13663,6 +13522,12 @@ class Pool implements ManagerPool {
         withdrawnReason: `この確認への答えは届かない（${reason}）`,
       });
     }
+  }
+
+  // `with: 'manager'` の exchange を書く。async にせず `#journal` の Promise をそのまま返す: `await` / `void` の呼び出し側のタイミングを変えない。
+  // 接頭辞（EXCHANGE_KIND_*_PREFIX）は呼び出し箇所の text に字面で置く（exchange-kind-coverage.test.ts が第2引数を走査する）。
+  #journalExchange(role: 'inbound' | 'outbound', text: string): Promise<void> {
+    return this.#journal({ type: 'exchange', with: 'manager', role, text });
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {
