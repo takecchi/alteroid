@@ -888,12 +888,11 @@ function eventBadRequestResponse() {
 
 function eventAttachmentResponses() {
   return {
-    413: {
-      description:
-        '連携の鍵の本文の上限（既定 1 MiB。連携の鍵でだけ。`POST /attachments` には掛からない）を超えた。' +
+    413: jsonResponse(
+      '連携の鍵の本文の上限（既定 1 MiB。連携の鍵でだけ。`POST /attachments` には掛からない）を超えた。' +
         'または添付の合計の上限超え（`code`: `total_too_large`）。',
-      content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
-    },
+      attachmentErrorResponseSchema,
+    ),
   };
 }
 
@@ -921,19 +920,11 @@ const RESERVED_SOURCE_KEY_BODY = {
 
 function integrationKeyEventResponses() {
   return {
-    401: {
-      description: '連携の鍵が無効か期限切れ（未知・失効・期限切れ）。',
-      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-    },
-    413: {
-      description: '連携の鍵の本文の上限（既定 1 MiB）を超えた。',
-      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-    },
-    429: {
-      description:
-        '連携の鍵の回数の上限（既定 60 回/分）を超えた。`Retry-After`（秒）の後でやり直す。',
-      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-    },
+    401: errorResponse('連携の鍵が無効か期限切れ（未知・失効・期限切れ）。'),
+    413: errorResponse('連携の鍵の本文の上限（既定 1 MiB）を超えた。'),
+    429: errorResponse(
+      '連携の鍵の回数の上限（既定 60 回/分）を超えた。`Retry-After`（秒）の後でやり直す。',
+    ),
   };
 }
 
@@ -956,13 +947,41 @@ function eventNotPersistedBody() {
 // 定数ではなく関数にする: `app.ts` と `openapi.ts` は互いを import するので、モジュールの初期化順によってはトップレベルで即座に評価する定数がまだ空の相手の export を読んでしまう。
 function noBodyPostResponses() {
   return {
-    415: {
-      description:
-        'content-type が application/json ではない（ブラウザの単純リクエスト対策 — ' +
+    415: errorResponse(
+      'content-type が application/json ではない（ブラウザの単純リクエスト対策 — ' +
         '状態を変える POST は必ずここを通す）。',
-      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-    },
+    ),
   } as const;
+}
+
+// 複数の route の応答宣言で同じ文になる説明（`describeRoute` の `description`）。
+const NO_ACCESS_GRANT_DESCRIPTION = '許可（`access grant`）の無いアカウント。';
+const LOGGED_IN_WITHOUT_GRANT_DESCRIPTION =
+  'alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。';
+const CANONICAL_STORE_MISSING_DESCRIPTION = '正本の器が無い。';
+const GONE_OR_EXPIRED_DESCRIPTION = '無い（消えた・期限切れ）。';
+const JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION =
+  '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。';
+const TASK_ID_NOT_FOUND_DESCRIPTION = 'その id は task に無い。';
+const INVALID_QUERY_DESCRIPTION = 'クエリが不正。';
+const NO_PENDING_APPROVAL_DESCRIPTION = '該当する承認待ちが無い。';
+const REMOVED_IDS_AND_COUNT_DESCRIPTION = '消した id と件数。';
+const INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION = '入力の形が不正（何も消していない）。';
+const UNREADABLE_IDS_MISSING_DESCRIPTION =
+  '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。';
+
+// `describeRoute` の `responses` に並べる「application/json の応答 1 件」の写し。**状態番号のキーは含めない**: 各 route が `404: errorResponse(…)` と直に書く（`responses` の数値キーと、ハンドラの `c.json(…, 数値)` を突き合わせる試験の歯がリテラルを読む）。
+// 定数ではなく関数にする理由は `noBodyPostResponses` の上の注と同じ（`resolver()` を import 時に評価しない）。
+function jsonResponse(description: string, schema: Parameters<typeof resolver>[0]) {
+  return { description, content: { 'application/json': { schema: resolver(schema) } } };
+}
+
+function errorResponse(description: string) {
+  return jsonResponse(description, errorResponseSchema);
+}
+
+function journalWriteFailedResponse(description: string) {
+  return jsonResponse(description, journalWriteFailedResponseSchema);
 }
 
 const SSE_CREDENTIAL_LOST_MESSAGE =
@@ -2329,10 +2348,7 @@ export function createApp(deps: AppDeps) {
           '無認証で読める応答には置けない。',
         security: [],
         responses: {
-          200: {
-            description: '応答している。',
-            content: { 'application/json': { schema: resolver(healthResponseSchema) } },
-          },
+          200: jsonResponse('応答している。', healthResponseSchema),
         },
       }),
       (c) =>
@@ -2355,14 +2371,8 @@ export function createApp(deps: AppDeps) {
           '接続情報（パスワード等）は含めない。無認証の `GET /health` は置き場を返さないので、' +
           '置き場を知りたい呼び出し元はログインの後ろのここから取る。',
         responses: {
-          200: {
-            description: '認証を通った相手への説明。',
-            content: { 'application/json': { schema: resolver(statusResponseSchema) } },
-          },
-          401: {
-            description: '資格が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('認証を通った相手への説明。', statusResponseSchema),
+          401: errorResponse('資格が無い。'),
         },
       }),
       (c) => {
@@ -2403,27 +2413,14 @@ export function createApp(deps: AppDeps) {
           },
         },
         responses: {
-          200: {
-            description: '預かった。控え（中身を含まない）を返す。',
-            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
-          },
-          400: {
-            description:
-              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。',
-            content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
-          },
-          413: {
-            description: '大きすぎる（`code`: `too_large`）。',
-            content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
-          },
-          403: {
-            description: '連携の鍵が `keep` を付けた（鍵は保存の印を付けられない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          415: {
-            description: 'content-type が application/octet-stream ではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('預かった。控え（中身を含まない）を返す。', attachmentMetaSchema),
+          400: jsonResponse(
+            'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。',
+            attachmentErrorResponseSchema,
+          ),
+          413: jsonResponse('大きすぎる（`code`: `too_large`）。', attachmentErrorResponseSchema),
+          403: errorResponse('連携の鍵が `keep` を付けた（鍵は保存の印を付けられない）。'),
+          415: errorResponse('content-type が application/octet-stream ではない。'),
         },
       }),
       octetStreamClient,
@@ -2492,14 +2489,8 @@ export function createApp(deps: AppDeps) {
           '**保存した添付に期限は無く、全体の容量の上限も置かない**——使用量を見て、不要なものを消すのは人間とクローンの判断である。' +
           '連携の鍵は 403（鍵は上げるだけで、預かったものを見られない）。',
         responses: {
-          200: {
-            description: '控えの一覧と使用量。',
-            content: { 'application/json': { schema: resolver(attachmentListResponseSchema) } },
-          },
-          400: {
-            description: 'クエリが不正（`cursor` が読めない、`limit` が範囲外など）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('控えの一覧と使用量。', attachmentListResponseSchema),
+          400: errorResponse('クエリが不正（`cursor` が読めない、`limit` が範囲外など）。'),
         },
       }),
       queryParams(attachmentListQuery),
@@ -2537,10 +2528,7 @@ export function createApp(deps: AppDeps) {
           '実際に使っている上限を返す。CLI・TUI・Web が送る前の検査に使う（最終判定はこのデーモン）。' +
           '認証は他の経路と同じ（連携の鍵は 403）。',
         responses: {
-          200: {
-            description: '上限。',
-            content: { 'application/json': { schema: resolver(attachmentLimitsSchema) } },
-          },
+          200: jsonResponse('上限。', attachmentLimitsSchema),
         },
       }),
       (c) => c.json(attachmentLimitsSchema.parse(attachmentLimits)),
@@ -2553,14 +2541,8 @@ export function createApp(deps: AppDeps) {
         summary: '添付の控え（メタデータだけ）',
         description: '中身を読まずに、名前・MIME・大きさ・sha256・結び付き・期限を返す。',
         responses: {
-          200: {
-            description: '控え。',
-            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
-          },
-          404: {
-            description: '無い（消えた・期限切れ）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('控え。', attachmentMetaSchema),
+          404: errorResponse(GONE_OR_EXPIRED_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -2586,10 +2568,7 @@ export function createApp(deps: AppDeps) {
               'application/octet-stream': { schema: { type: 'string', format: 'binary' } },
             },
           },
-          404: {
-            description: '無い（消えた・期限切れ）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          404: errorResponse(GONE_OR_EXPIRED_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -2617,18 +2596,9 @@ export function createApp(deps: AppDeps) {
           '`kept: false` で外す（外した時刻から保持日数後が期限になる）。すでにその状態なら何も変えない。' +
           '更新後の控えを返す。連携の鍵は 403。',
         responses: {
-          200: {
-            description: '更新後の控え。',
-            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
-          },
-          400: {
-            description: '本文が不正（`kept` は真偽値）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '無い（消えた・期限切れ）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('更新後の控え。', attachmentMetaSchema),
+          400: errorResponse('本文が不正（`kept` は真偽値）。'),
+          404: errorResponse(GONE_OR_EXPIRED_DESCRIPTION),
         },
       }),
       jsonBody(attachmentKeptBodySchema),
@@ -2653,19 +2623,13 @@ export function createApp(deps: AppDeps) {
           '外部の置き場に預けた中身は先に消す: 消せなかったとき（置き場の障害・設定が無い）は、消さずに 503 で断り（控えも残す）、理由を返す。もう一度消すと再試行する。',
         responses: {
           204: { description: '消した（中身が消えたときだけ）。' },
-          404: {
-            description: '無い（消えた・期限切れ）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかった（**消していない**。中身も控えも残っている）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
-          503: {
-            description:
-              '中身を置き場から消せなかったので、消していない（控えも残した）。本文の `error` に理由。もう一度消すと再試行する。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          404: errorResponse(GONE_OR_EXPIRED_DESCRIPTION),
+          500: journalWriteFailedResponse(
+            '日誌が書けなかった（**消していない**。中身も控えも残っている）。',
+          ),
+          503: errorResponse(
+            '中身を置き場から消せなかったので、消していない（控えも残した）。本文の `error` に理由。もう一度消すと再試行する。',
+          ),
         },
       }),
       async (c) => {
@@ -2776,33 +2740,27 @@ export function createApp(deps: AppDeps) {
               'text/event-stream': { schema: resolver(chatStreamEventSchema) },
             },
           },
-          400: {
-            description:
-              '`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に' +
+          400: errorResponse(
+            '`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に' +
               '落ちた——`conversationId` が無いのに `supersedes` がある、指した id が' +
               '見つからない・この会話のものではない、クローンの応答（outbound）を指して' +
               'いる、既に別の編集に置き換えられている、のいずれか。' +
               '`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）のときも 400。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              '`conversationId` を渡したが、その会話が無い（`code: conversation_not_found`。日誌の人間との往復を' +
+          ),
+          404: errorResponse(
+            '`conversationId` を渡したが、その会話が無い（`code: conversation_not_found`。日誌の人間との往復を' +
               '最後まで読んで見つからなかった）。**その文字列で新しい会話は始めない**——新しい会話を始めるなら' +
               '`conversationId` を省く。略記・前方一致では受けない（一意に当たる会話が在れば、`error` に完全な id を出す）。' +
               '何も積まず、添付も結び付けない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。' +
+          ),
+          409: errorResponse(
+            '`clientMessageId` が、**別の会話**の発言として既に受け取られている（`code: client_message_id_conflict`）。' +
               'または、**同じ会話**で受け取り済みだが**中身が違う**（`code: client_message_id_mismatch`。' +
               '本文・添付の id の集合・`supersedes` のどれかが1回目と違う。2回目の中身は積まず、添付も結び付けない）。' +
               '中身が同じ再送は 409 ではなく、二重に受けずに 200（下の説明）。' +
               'または、`supersedes` が指す発言が日誌に**在るが読めない**（`code` は無い。400 の「見つからない」とは別。' +
               '何も積まない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(chatBody, (where) => ({
@@ -3050,20 +3008,9 @@ export function createApp(deps: AppDeps) {
           '引き方は `POST /chat` の重複の確認と同じ（直近の日誌の人間との往復200件と、受け取り直後の記憶）。' +
           '受け取っていない（検査に落ちて取り下げられた分を含む）・遡れる範囲に無いときは 404。',
         responses: {
-          200: {
-            description: '受け取り済み。その会話の id。',
-            content: {
-              'application/json': { schema: resolver(clientMessageLookupResponseSchema) },
-            },
-          },
-          400: {
-            description: '`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '受け取っていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('受け取り済み。その会話の id。', clientMessageLookupResponseSchema),
+          400: errorResponse('`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）。'),
+          404: errorResponse('受け取っていない。'),
         },
       }),
       async (c) => {
@@ -3108,15 +3055,10 @@ export function createApp(deps: AppDeps) {
               'text/event-stream': { schema: resolver(chatStreamEventSchema) },
             },
           },
-          404: {
-            description:
-              'この会話は削除されている（`code: conversation_deleted`。#4218）。走り続けているターンの途中経過も見せない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: 'この器は途中経過を持たない（能力を落とさず、黙って隠さない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          404: errorResponse(
+            'この会話は削除されている（`code: conversation_deleted`。#4218）。走り続けているターンの途中経過も見せない。',
+          ),
+          503: errorResponse('この器は途中経過を持たない（能力を落とさず、黙って隠さない）。'),
         },
       }),
       async (c) => {
@@ -3172,10 +3114,7 @@ export function createApp(deps: AppDeps) {
             '起こされないため）。',
         ),
         responses: {
-          200: {
-            description: '蒸留を促した。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
+          200: jsonResponse('蒸留を促した。', okResponseSchema),
           ...noBodyPostResponses(),
         },
       }),
@@ -3208,15 +3147,11 @@ export function createApp(deps: AppDeps) {
           content: { 'application/json': { schema: resolver(cloneInterruptRequestSchema) } },
         },
         responses: {
-          200: {
-            description:
-              '止めた・取り下げた・別のターンなので止めなかった・止めるものが無かった・この器では止められない、のどれか。',
-            content: { 'application/json': { schema: resolver(cloneInterruptResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正。または対象が片方しか無い・形が不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '止めた・取り下げた・別のターンなので止めなかった・止めるものが無かった・この器では止められない、のどれか。',
+            cloneInterruptResponseSchema,
+          ),
+          400: errorResponse('本文が JSON として不正。または対象が片方しか無い・形が不正。'),
           ...noBodyPostResponses(),
         },
       }),
@@ -3282,21 +3217,12 @@ export function createApp(deps: AppDeps) {
           content: { 'application/json': { schema: resolver(cloneSessionReopenRequestSchema) } },
         },
         responses: {
-          200: {
-            description:
-              '開き直す印を立てた（now / deferred）。この器では開き直せないなら unsupported。',
-            content: {
-              'application/json': { schema: resolver(cloneSessionReopenResponseSchema) },
-            },
-          },
-          400: {
-            description: '`confirm: true` を伴っていない、または形が不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '開き直す印を立てた（now / deferred）。この器では開き直せないなら unsupported。',
+            cloneSessionReopenResponseSchema,
+          ),
+          400: errorResponse('`confirm: true` を伴っていない、または形が不正。'),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
         },
       }),
       jsonBody(cloneSessionReopenRequestSchema, (where) => ({
@@ -3335,14 +3261,10 @@ export function createApp(deps: AppDeps) {
           '`/approvals` と同じ形で、続きが無ければ `nextCursor` は無い。' +
           '壊れた `cursor`・指す発言が見当たらない `cursor` は 400。',
         responses: {
-          200: {
-            description: '会話の一覧（新しい順）。',
-            content: { 'application/json': { schema: resolver(conversationsResponseSchema) } },
-          },
-          400: {
-            description: 'クエリが不正、または `cursor` が壊れている・指す発言が見当たらない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('会話の一覧（新しい順）。', conversationsResponseSchema),
+          400: errorResponse(
+            'クエリが不正、または `cursor` が壊れている・指す発言が見当たらない。',
+          ),
         },
       }),
       queryParams(conversationsQuery),
@@ -3408,12 +3330,7 @@ export function createApp(deps: AppDeps) {
           '一覧の `unreadCount` との差が出うるのは、編集で畳まれた返答が会話の最後のクローン側発言のとき' +
           '（その会話を開いて既読にすれば揃う）。既読の記録が読めないときは `readStateUnreadable` が載る。',
         responses: {
-          200: {
-            description: '未読のある会話の数。',
-            content: {
-              'application/json': { schema: resolver(unreadConversationCountResponseSchema) },
-            },
-          },
+          200: jsonResponse('未読のある会話の数。', unreadConversationCountResponseSchema),
         },
       }),
       async (c) => {
@@ -3442,24 +3359,16 @@ export function createApp(deps: AppDeps) {
           '常に含める（0件でも含める）。`includeSuperseded=true` を渡すと畳まれた分も' +
           '含めて返し、各発言に編集の関係（`supersedes` / `supersededBy`）が付く。',
         responses: {
-          200: {
-            description:
-              '会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。' +
+          200: jsonResponse(
+            '会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。' +
               '`messages` が空でこれが偽の場合は「無い」ではなく**判定できない**。',
-            content: {
-              'application/json': { schema: resolver(conversationDetailResponseSchema) },
-            },
-          },
-          400: {
-            description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              '該当する会話が無い（内部ターン `self` は含まれない）。**遡り切れた場合だけ** — ' +
+            conversationDetailResponseSchema,
+          ),
+          400: errorResponse(INVALID_QUERY_DESCRIPTION),
+          404: errorResponse(
+            '該当する会話が無い（内部ターン `self` は含まれない）。**遡り切れた場合だけ** — ' +
               '窓の外かもしれないときは 200 で `reachedStart: false` を返す。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       queryParams(conversationQuery),
@@ -3563,24 +3472,13 @@ export function createApp(deps: AppDeps) {
           '位置を返す。発言が無い・人間との往復でないときは 404、別の会話の発言のときは 400。' +
           '応答は進めた後の実効の位置と未読数（一覧・詳細と同じ数え方。窓は既定の `scan`）。',
         responses: {
-          200: {
-            description: '進めた後の実効の既読の位置と未読数。',
-            content: { 'application/json': { schema: resolver(conversationReadResponseSchema) } },
-          },
-          400: {
-            description: '本文が不正、または `through` の発言がこの会話のものでない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '`through` の発言が日誌に無い（人間との往復でない場合を含む）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`through` の発言は日誌に**在るが読めない**（形が合わない壊れた行。404 の「無い」とは別。' +
+          200: jsonResponse('進めた後の実効の既読の位置と未読数。', conversationReadResponseSchema),
+          400: errorResponse('本文が不正、または `through` の発言がこの会話のものでない。'),
+          404: errorResponse('`through` の発言が日誌に無い（人間との往復でない場合を含む）。'),
+          409: errorResponse(
+            '`through` の発言は日誌に**在るが読めない**（形が合わない壊れた行。404 の「無い」とは別。' +
               '既読の位置は動かしていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(conversationReadRequestSchema),
@@ -3647,21 +3545,11 @@ export function createApp(deps: AppDeps) {
           '**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。' +
           '墓標の後の手当てが落ちたら、会話は外れたまま `incomplete` にそれを返す（200）。',
         responses: {
-          200: {
-            description: '削除した。',
-            content: {
-              'application/json': { schema: resolver(conversationDeleteResponseSchema) },
-            },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント、または連携の鍵。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              'その会話は無い（既に削除済みを含む。`code: conversation_not_found`）。前方一致では消さない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('削除した。', conversationDeleteResponseSchema),
+          403: errorResponse('許可（`access grant`）の無いアカウント、または連携の鍵。'),
+          404: errorResponse(
+            'その会話は無い（既に削除済みを含む。`code: conversation_not_found`）。前方一致では消さない。',
+          ),
         },
       }),
       async (c) => {
@@ -3716,14 +3604,8 @@ export function createApp(deps: AppDeps) {
             description: 'SSE ストリーム。',
             content: { 'text/event-stream': { schema: resolver(journalEntrySchema) } },
           },
-          400: {
-            description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '出来事の流れが配線されていない（能力を落とさず、黙って隠さない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          400: errorResponse(INVALID_QUERY_DESCRIPTION),
+          503: errorResponse('出来事の流れが配線されていない（能力を落とさず、黙って隠さない）。'),
         },
       }),
       queryParams(journalStreamQuery),
@@ -3828,10 +3710,7 @@ export function createApp(deps: AppDeps) {
           '`unreadable` と同じ形。issue #2705）を載せる——`managers` が空でも「居ない」とは限らない。' +
           '0件なら鍵ごと無い。',
         responses: {
-          200: {
-            description: '稼働の地図。',
-            content: { 'application/json': { schema: resolver(topologyResponseSchema) } },
-          },
+          200: jsonResponse('稼働の地図。', topologyResponseSchema),
         },
       }),
       async (c) => c.json(topologyResponseSchema.parse(await topology.snapshot())),
@@ -3951,10 +3830,7 @@ export function createApp(deps: AppDeps) {
         summary: '記憶文書の一覧',
         description: '記憶（PersonaStore）の文書一覧。本文は含まない（メタ情報だけ）。',
         responses: {
-          200: {
-            description: '記憶文書のメタ情報一覧。',
-            content: { 'application/json': { schema: resolver(memoryListResponseSchema) } },
-          },
+          200: jsonResponse('記憶文書のメタ情報一覧。', memoryListResponseSchema),
         },
       }),
       async (c) => c.json({ documents: await stores.persona.list() }),
@@ -3966,18 +3842,9 @@ export function createApp(deps: AppDeps) {
         tags: ['memory'],
         summary: '記憶文書を1つ読む',
         responses: {
-          200: {
-            description: '記憶文書。',
-            content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
-          },
-          400: {
-            description: '記憶のスラッグが不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当する記憶が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('記憶文書。', memoryReadResponseSchema),
+          400: errorResponse('記憶のスラッグが不正。'),
+          404: errorResponse('該当する記憶が無い。'),
         },
       }),
       async (c) => {
@@ -4002,24 +3869,17 @@ export function createApp(deps: AppDeps) {
           '日誌を先に書き、書けなければ本文を書かずに 500 を返す（印の付かない保存を起こさない）。' +
           '本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。',
         responses: {
-          200: {
-            description: '書き換え後の記憶文書。`created` は新規なら true、置換なら false。',
-            content: { 'application/json': { schema: resolver(memoryWriteResponseSchema) } },
-          },
-          400: {
-            description: '記憶のスラッグが不正、または本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
+          200: jsonResponse(
+            '書き換え後の記憶文書。`created` は新規なら true、置換なら false。',
+            memoryWriteResponseSchema,
+          ),
+          400: errorResponse('記憶のスラッグが不正、または本文が JSON として不正。'),
+          409: jsonResponse(
+            '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
               '書いた、または消した）。**何も書いていない。** `current` にいまの版を返す。',
-            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかった（**本文を書いていない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+            memoryConflictResponseSchema,
+          ),
+          500: journalWriteFailedResponse('日誌が書けなかった（**本文を書いていない**）。'),
         },
       }),
       jsonBody(memoryBody, (where) => ({
@@ -4132,34 +3992,20 @@ export function createApp(deps: AppDeps) {
           'いまの版を `current` に返す（読み直して、その `version` を付けて打ち直す）。' +
           'スラッグが不正なら 400、記憶が無ければ 404 を先に返す。',
         responses: {
-          200: {
-            description: '消した。',
-            content: { 'application/json': { schema: resolver(memoryDeleteResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
+          200: jsonResponse('消した。', memoryDeleteResponseSchema),
+          409: jsonResponse(
+            '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
               '書いた）。**何も消していない。** `current` にいまの版を返す。',
-            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
-          },
-          428: {
-            description:
-              '`ifMatch`（読んだ時の版）が無い。**何も消していない。** `current` にいまの版を返す' +
+            memoryConflictResponseSchema,
+          ),
+          428: jsonResponse(
+            '`ifMatch`（読んだ時の版）が無い。**何も消していない。** `current` にいまの版を返す' +
               '（409 と同じ形）。',
-            content: { 'application/json': { schema: resolver(memoryConflictResponseSchema) } },
-          },
-          400: {
-            description: '記憶のスラッグが名前として成立しない（「無い」とは区別する）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当する記憶が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '消す前の日誌が書けなかった（**消していない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+            memoryConflictResponseSchema,
+          ),
+          400: errorResponse('記憶のスラッグが名前として成立しない（「無い」とは区別する）。'),
+          404: errorResponse('該当する記憶が無い。'),
+          500: journalWriteFailedResponse('消す前の日誌が書けなかった（**消していない**）。'),
         },
       }),
       queryParams(memoryDeleteQuery),
@@ -4269,10 +4115,7 @@ export function createApp(deps: AppDeps) {
           '（slug が取れれば slug と不正な欄名）が載る。**壊れた行であって、消されたやり方ではない。**' +
           '0件なら鍵ごと無い（issue #2346）。',
         responses: {
-          200: {
-            description: 'やり方のメタ情報一覧（slug の昇順）。',
-            content: { 'application/json': { schema: resolver(practiceListResponseSchema) } },
-          },
+          200: jsonResponse('やり方のメタ情報一覧（slug の昇順）。', practiceListResponseSchema),
         },
       }),
       async (c) => {
@@ -4291,25 +4134,14 @@ export function createApp(deps: AppDeps) {
         tags: ['practices'],
         summary: 'やり方を1つ読む',
         responses: {
-          200: {
-            description: 'やり方（本文まで）。',
-            content: { 'application/json': { schema: resolver(practiceReadResponseSchema) } },
-          },
-          400: {
-            description: 'やり方のスラッグが不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するやり方が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する行は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。' +
+          200: jsonResponse('やり方（本文まで）。', practiceReadResponseSchema),
+          400: errorResponse('やり方のスラッグが不正。'),
+          404: errorResponse('該当するやり方が無い。'),
+          409: errorResponse(
+            '該当する行は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。' +
               'issue #2011）。' +
               'PUT /practices/:slug で書き直すか、DELETE /practices/:slug で外せる。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       async (c) => {
@@ -4345,27 +4177,18 @@ export function createApp(deps: AppDeps) {
           '人間が API からやり方を書き換える口。`kind` は仕事の種類の自由文字列（列挙ではない——' +
           '`practiceKindSchema` の doc）。書き換えは日誌に残る（`type: decision`）。',
         responses: {
-          200: {
-            description: '書き換え後のやり方。',
-            content: { 'application/json': { schema: resolver(practiceWriteResponseSchema) } },
-          },
-          400: {
-            description: 'やり方のスラッグが不正、または本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
+          200: jsonResponse('書き換え後のやり方。', practiceWriteResponseSchema),
+          400: errorResponse('やり方のスラッグが不正、または本文が JSON として不正。'),
+          409: jsonResponse(
+            '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
               '書いた、または消した）。**何も書いていない**（版の履歴にも足していない）。' +
               '`current` にいまの版を返す。',
-            content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
-          },
-          500: {
-            description:
-              '既に在るやり方を書き直す前の日誌が書けなかった（**書き直していない**）。' +
+            practiceConflictResponseSchema,
+          ),
+          500: journalWriteFailedResponse(
+            '既に在るやり方を書き直す前の日誌が書けなかった（**書き直していない**）。' +
               '新しく置く回は日誌を後に書くので、これを返さない。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(practiceBody, (where) => ({
@@ -4486,34 +4309,20 @@ export function createApp(deps: AppDeps) {
           'スラッグが不正なら 400、やり方が無ければ 404 を先に返す。' +
           '**読めない形で入っている行には版が無い**ので、版なしで消せる（回復手段を塞がない）。',
         responses: {
-          200: {
-            description: '消した。',
-            content: { 'application/json': { schema: resolver(practiceDeleteResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
+          200: jsonResponse('消した。', practiceDeleteResponseSchema),
+          409: jsonResponse(
+            '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
               '書いた）。**何も消していない。** `current` にいまの版を返す。',
-            content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
-          },
-          428: {
-            description:
-              '`ifMatch`（読んだ時の版）が無い。**何も消していない。** `current` にいまの版を返す' +
+            practiceConflictResponseSchema,
+          ),
+          428: jsonResponse(
+            '`ifMatch`（読んだ時の版）が無い。**何も消していない。** `current` にいまの版を返す' +
               '（409 と同じ形）。読めない形で入っている行は、版なしで消せるのでこれを返さない。',
-            content: { 'application/json': { schema: resolver(practiceConflictResponseSchema) } },
-          },
-          400: {
-            description: 'やり方のスラッグが名前として成立しない（「無い」とは区別する）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するやり方が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '消す前の日誌が書けなかった（**消していない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+            practiceConflictResponseSchema,
+          ),
+          400: errorResponse('やり方のスラッグが名前として成立しない（「無い」とは区別する）。'),
+          404: errorResponse('該当するやり方が無い。'),
+          500: journalWriteFailedResponse('消す前の日誌が書けなかった（**消していない**）。'),
         },
       }),
       queryParams(practiceDeleteQuery),
@@ -4624,16 +4433,11 @@ export function createApp(deps: AppDeps) {
           '追記専用の版の履歴——write のたびに増え、remove しても消えない（#1309）。' +
           '版番号の昇順。本文は含まない（個別に読むには GET /practices/:slug/versions/:version）。',
         responses: {
-          200: {
-            description: '版のメタ情報一覧（版番号の昇順）。無い slug には空配列を返す。',
-            content: {
-              'application/json': { schema: resolver(practiceVersionListResponseSchema) },
-            },
-          },
-          400: {
-            description: 'やり方のスラッグが不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '版のメタ情報一覧（版番号の昇順）。無い slug には空配列を返す。',
+            practiceVersionListResponseSchema,
+          ),
+          400: errorResponse('やり方のスラッグが不正。'),
         },
       }),
       async (c) => {
@@ -4652,26 +4456,13 @@ export function createApp(deps: AppDeps) {
         tags: ['practices'],
         summary: 'やり方の版を1つ読む（本文まで）',
         responses: {
-          200: {
-            description: '版（本文まで）。',
-            content: {
-              'application/json': { schema: resolver(practiceVersionReadResponseSchema) },
-            },
-          },
-          400: {
-            description: 'やり方のスラッグが不正、または版番号が正の整数として成立しない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当する版が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する版は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。' +
+          200: jsonResponse('版（本文まで）。', practiceVersionReadResponseSchema),
+          400: errorResponse('やり方のスラッグが不正、または版番号が正の整数として成立しない。'),
+          404: errorResponse('該当する版が無い。'),
+          409: errorResponse(
+            '該当する版は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。' +
               'issue #2177）。この版を書き直す口は無い——本文はここでは取れない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       async (c) => {
@@ -4735,27 +4526,20 @@ export function createApp(deps: AppDeps) {
           '付く（issue #1530）——窓は絞らないまま、地平の情報だけを明示に求める口。' +
           '`horizon` を渡さない呼びの応答は1バイトも変わらない。',
         responses: {
-          200: {
-            description:
-              '日誌エントリの一覧。`since`/`until` のどちらかを指定した呼び、' +
+          200: jsonResponse(
+            '日誌エントリの一覧。`since`/`until` のどちらかを指定した呼び、' +
               'または `horizon=true` を渡した呼びには `oldestAt`/`crossesHorizon` ' +
               'が付く（どちらも渡さない呼びには付かない）。' +
               '`next` は次の頁の継続点（`afterId` / `afterAt` へそのまま渡せる）で、' +
               '`null` のときだけ本当の終端。`entries` が `limit` 未満でも空でも、' +
               '`null` でなければ先に行が在る（読めない行は `limit` の後で捨てられる）。',
-            content: { 'application/json': { schema: resolver(journalListResponseSchema) } },
-          },
-          400: {
-            description:
-              'クエリが不正、`type` に知らない値が入っている、または `since` / `until` が日時として読めない・' +
+            journalListResponseSchema,
+          ),
+          400: errorResponse(
+            'クエリが不正、`type` に知らない値が入っている、または `since` / `until` が日時として読めない・' +
               '`afterId` / `afterAt` の片方だけが渡された・' +
               '`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。',
-            content: {
-              'application/json': {
-                schema: resolver(errorResponseSchema),
-              },
-            },
-          },
+          ),
         },
       }),
       queryParams(journalQuery),
@@ -4852,19 +4636,11 @@ export function createApp(deps: AppDeps) {
           '日誌の1件を全文で返す（`GET /journal` の `entries` の1行と同じ形。封筒は持たない）。' +
           '一覧の窓の外の記録もここで引ける。',
         responses: {
-          200: {
-            description: '日誌エントリ1件。',
-            content: { 'application/json': { schema: resolver(journalEntrySchema) } },
-          },
-          404: {
-            description: '該当する日誌が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '日誌の行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('日誌エントリ1件。', journalEntrySchema),
+          404: errorResponse('該当する日誌が無い。'),
+          409: errorResponse(
+            '日誌の行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+          ),
         },
       }),
       async (c) => {
@@ -4908,14 +4684,8 @@ export function createApp(deps: AppDeps) {
           '`layer` / `managerId` だけで絞る。判定は推定で、誤って数え直しとみなす・拾えない、のどちらもありうる' +
           '（回数が増え続けていないかを見張る口）。',
         responses: {
-          200: {
-            description: '台帳の集計。',
-            content: { 'application/json': { schema: resolver(usageResponseSchema) } },
-          },
-          400: {
-            description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('台帳の集計。', usageResponseSchema),
+          400: errorResponse(INVALID_QUERY_DESCRIPTION),
         },
       }),
       queryParams(usageQuery),
@@ -4963,19 +4733,10 @@ export function createApp(deps: AppDeps) {
           'のでそこから組み立てる）。**封筒は持たない** — 続きが在るかは `limit` 件' +
           'ちょうど返ったかで判る。',
         responses: {
-          200: {
-            description: '日報の一覧（日付の新しい順）。',
-            content: { 'application/json': { schema: resolver(reportsResponseSchema) } },
-          },
-          400: {
-            description:
-              'クエリが不正、または `beforeDate` / `beforeAt` の片方だけが渡された・形式が不正。',
-            content: {
-              'application/json': {
-                schema: resolver(errorResponseSchema),
-              },
-            },
-          },
+          200: jsonResponse('日報の一覧（日付の新しい順）。', reportsResponseSchema),
+          400: errorResponse(
+            'クエリが不正、または `beforeDate` / `beforeAt` の片方だけが渡された・形式が不正。',
+          ),
         },
       }),
       queryParams(reportsQuery),
@@ -5019,18 +4780,9 @@ export function createApp(deps: AppDeps) {
         tags: ['reports'],
         summary: '1日分の日報',
         responses: {
-          200: {
-            description: 'その日の日報。',
-            content: { 'application/json': { schema: resolver(reportsResponseSchema) } },
-          },
-          400: {
-            description: '日付が `YYYY-MM-DD` 形式ではない（黙って別の日にずらさない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その日の日報が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('その日の日報。', reportsResponseSchema),
+          400: errorResponse('日付が `YYYY-MM-DD` 形式ではない（黙って別の日にずらさない）。'),
+          404: errorResponse('その日の日報が無い。'),
         },
       }),
       async (c) => {
@@ -5078,18 +4830,8 @@ export function createApp(deps: AppDeps) {
           '取り下げ済みが画面から見えなくなる）。日付の形が不正（2月30日など）、`pending=true` の' +
           '明示、`order`/`limit`/`cursor` との併用は 400。この指定では `unreadable` は載せない。',
         responses: {
-          200: {
-            description: '承認待ちの一覧。',
-            content: { 'application/json': { schema: resolver(approvalsResponseSchema) } },
-          },
-          400: {
-            description: 'クエリが不正、または `cursor` が壊れている・`order` と食い違う。',
-            content: {
-              'application/json': {
-                schema: resolver(errorResponseSchema),
-              },
-            },
-          },
+          200: jsonResponse('承認待ちの一覧。', approvalsResponseSchema),
+          400: errorResponse('クエリが不正、または `cursor` が壊れている・`order` と食い違う。'),
         },
       }),
       queryParams(approvalsQuery),
@@ -5213,16 +4955,11 @@ export function createApp(deps: AppDeps) {
           '`beforeDate`（前の頁の最後の日。**それより古い日**を返す）で続きを取る。**封筒は持たない**' +
           ' — 続きが在るかは `limit` 件ちょうど返ったかで判る。',
         responses: {
-          200: {
-            description: '決着のあった日と件数（日付の新しい順）。',
-            content: {
-              'application/json': { schema: resolver(approvalsAnsweredDatesResponseSchema) },
-            },
-          },
-          400: {
-            description: 'クエリが不正、または `beforeDate` が `YYYY-MM-DD` 形式ではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '決着のあった日と件数（日付の新しい順）。',
+            approvalsAnsweredDatesResponseSchema,
+          ),
+          400: errorResponse('クエリが不正、または `beforeDate` が `YYYY-MM-DD` 形式ではない。'),
         },
       }),
       queryParams(approvalsAnsweredDatesQuery),
@@ -5257,19 +4994,11 @@ export function createApp(deps: AppDeps) {
           '未回答・未取り下げなら `settledOn` は `null`。回答済みの詳細（`/approvals/answered/<日>/<id>`）へ' +
           '移るために、一覧を引かずに日を知る口。',
         responses: {
-          200: {
-            description: '承認と決着した日。',
-            content: { 'application/json': { schema: resolver(approvalByIdResponseSchema) } },
-          },
-          404: {
-            description: '該当する承認待ちが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('承認と決着した日。', approvalByIdResponseSchema),
+          404: errorResponse(NO_PENDING_APPROVAL_DESCRIPTION),
+          409: errorResponse(
+            '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+          ),
         },
       }),
       async (c) => {
@@ -5304,19 +5033,11 @@ export function createApp(deps: AppDeps) {
           '`unstamped_actions`＝記録が動いていない疑い / `no_actions`）。' +
           '一般化した基準は返さない（issue #847）。',
         responses: {
-          200: {
-            description: '対（無ければ理由つき）。',
-            content: { 'application/json': { schema: resolver(approvalTraceResponseSchema) } },
-          },
-          404: {
-            description: '該当する承認待ちが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('対（無ければ理由つき）。', approvalTraceResponseSchema),
+          404: errorResponse(NO_PENDING_APPROVAL_DESCRIPTION),
+          409: errorResponse(
+            '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+          ),
         },
       }),
       async (c) => {
@@ -5349,18 +5070,11 @@ export function createApp(deps: AppDeps) {
           '単一選択で2つ以上、`allowOther: false` なのに `other`、同じ設問が2回、`questions` を持たない' +
           '承認待ちへの `selections`）。',
         responses: {
-          200: {
-            description: '各件の結果（1件ごとの成否）。',
-            content: {
-              'application/json': { schema: resolver(approvalsAnswerResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '本文が JSON として不正。または `answer` も `selections` も無い件・`selections` が' +
+          200: jsonResponse('各件の結果（1件ごとの成否）。', approvalsAnswerResponseSchema),
+          400: errorResponse(
+            '本文が JSON として不正。または `answer` も `selections` も無い件・`selections` が' +
               '`questions` と突き合わない件がある（この場合、どの件も答えていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(answersBody, (where) => ({
@@ -5463,28 +5177,18 @@ export function createApp(deps: AppDeps) {
           '未回答の設問があってもよい）。',
         requestBody: REQUIRED_JSON_BODY,
         responses: {
-          200: {
-            description: '答えた。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description:
-              '本文が JSON として不正。または `answer` も `selections` も無い・`selections` が' +
+          200: jsonResponse('答えた。', okResponseSchema),
+          400: errorResponse(
+            '本文が JSON として不正。または `answer` も `selections` も無い・`selections` が' +
               '`questions` と突き合わない（知らない設問・選択肢の id、単一選択で2つ以上、' +
               '`allowOther: false` なのに `other`、同じ設問が2回、`questions` を持たない承認待ちへの' +
               '`selections`）。回答は書いていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当する承認待ちが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '既に回答済み・取り下げ済み。または承認待ちの行は在るが読めない形で入っている' +
+          ),
+          404: errorResponse(NO_PENDING_APPROVAL_DESCRIPTION),
+          409: errorResponse(
+            '既に回答済み・取り下げ済み。または承認待ちの行は在るが読めない形で入っている' +
               '（版ずれ・手編集。消されたのではない。回答は書いていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(answerBody, (where) => ({
@@ -5557,13 +5261,12 @@ export function createApp(deps: AppDeps) {
           '`revokedAt` が付いていない行だけが、クローン本セッションの Bash 呼び出しで自動的に' +
           '通る（`clone.ts` の `#onPreToolUse`）。並びは `grantedAt` 昇順。',
         responses: {
-          200: {
-            description:
-              '許可の一覧。読めない行（型に合わない形で入っている許可）が1件でも在るときだけ ' +
+          200: jsonResponse(
+            '許可の一覧。読めない行（型に合わない形で入っている許可）が1件でも在るときだけ ' +
               '`rowsUnreadable`（件数と id・不正な欄名。本文は載せない）が付く。読めない行しか無いと ' +
               '`grants` は空だが「許可が無い」とは限らない。id を `POST /permission-grants/unreadable/remove` に渡して消せる。',
-            content: { 'application/json': { schema: resolver(permissionGrantsResponseSchema) } },
-          },
+            permissionGrantsResponseSchema,
+          ),
         },
       }),
       async (c) => {
@@ -5595,22 +5298,14 @@ export function createApp(deps: AppDeps) {
             '落とされないため）。',
         ),
         responses: {
-          200: {
-            description: '取り消した（既に取り消し済みでも 200）。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          404: {
-            description: '該当する許可が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
+          200: jsonResponse('取り消した（既に取り消し済みでも 200）。', okResponseSchema),
+          404: errorResponse('該当する許可が無い。'),
+          409: errorResponse(
+            '該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
               '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
               '読めない許可は「許可が無い」ものとして扱われる（通らない）。消すには ' +
               '`POST /permission-grants/unreadable/remove`（issue #2440）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
           ...noBodyPostResponses(),
         },
       }),
@@ -5674,26 +5369,12 @@ export function createApp(deps: AppDeps) {
           '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
           '（行の中身は残さない）。',
         responses: {
-          200: {
-            description: '消した id と件数。',
-            content: {
-              'application/json': { schema: resolver(unreadableRowsRemoveResponseSchema) },
-            },
-          },
-          400: {
-            description: '入力の形が不正（何も消していない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない。pg で日誌の後の再確認で倒れた回だけは、日誌に打ち消しの行を足す）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
+          400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
+          404: errorResponse(
+            '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない。pg で日誌の後の再確認で倒れた回だけは、日誌に打ち消しの行を足す）。',
+          ),
+          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
         },
       }),
       jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
@@ -5745,12 +5426,7 @@ export function createApp(deps: AppDeps) {
           '読めない行しか無いと `keys` は空だが「鍵が無い」とは限らない（読めない行の鍵は使えない）。' +
           'id を `POST /integration-keys/unreadable/remove` に渡して消せる。',
         responses: {
-          200: {
-            description: '連携の鍵の一覧。',
-            content: {
-              'application/json': { schema: resolver(integrationKeysListResponseSchema) },
-            },
-          },
+          200: jsonResponse('連携の鍵の一覧。', integrationKeysListResponseSchema),
         },
       }),
       humanOnly,
@@ -5779,26 +5455,10 @@ export function createApp(deps: AppDeps) {
           'id が取れない行はこの口では消せない（`auth/integration-keys.json` を手で直す）。1つでも読めない行に' +
           '無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
         responses: {
-          200: {
-            description: '消した id と件数。',
-            content: {
-              'application/json': { schema: resolver(unreadableRowsRemoveResponseSchema) },
-            },
-          },
-          400: {
-            description: '入力の形が不正（何も消していない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
+          400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
+          404: errorResponse(UNREADABLE_IDS_MISSING_DESCRIPTION),
+          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
         },
       }),
       humanOnly,
@@ -5853,24 +5513,16 @@ export function createApp(deps: AppDeps) {
           'まで（鍵ごとに上書きできる。この上限は連携の鍵にだけ掛かる）。**値（`altk_...`）はこの応答で' +
           '1度だけ返し、後からは取り出せない**（保存は sha256 だけ）。',
         responses: {
-          200: {
-            description: '発行した。`value` はこの応答でだけ見える。',
-            content: {
-              'application/json': { schema: resolver(integrationKeyCreateResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '入力の形が不正、または source が daemon 自身の予約語（`code`: `reserved_source`＝' +
+          200: jsonResponse(
+            '発行した。`value` はこの応答でだけ見える。',
+            integrationKeyCreateResponseSchema,
+          ),
+          400: jsonResponse(
+            '入力の形が不正、または source が daemon 自身の予約語（`code`: `reserved_source`＝' +
               '`token-pool`・`runner-registry`）（何も作っていない）。',
-            content: {
-              'application/json': { schema: resolver(integrationKeyCreateErrorResponseSchema) },
-            },
-          },
-          500: {
-            description: '日誌が書けなかった（**状態を変えていない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+            integrationKeyCreateErrorResponseSchema,
+          ),
+          500: journalWriteFailedResponse('日誌が書けなかった（**状態を変えていない**）。'),
         },
       }),
       humanOnly,
@@ -5952,23 +5604,12 @@ export function createApp(deps: AppDeps) {
             '`content-type: application/json` が要る（ブラウザの単純リクエストで失効させられないため）。',
         ),
         responses: {
-          200: {
-            description: '失効した（既に失効済みでも 200）。',
-            content: { 'application/json': { schema: resolver(integrationKeyResponseSchema) } },
-          },
-          404: {
-            description: '該当する鍵が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '鍵の行が読めない形で入っている（失効できない）。`POST /integration-keys/unreadable/remove` で消す。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかった（**状態を変えていない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          200: jsonResponse('失効した（既に失効済みでも 200）。', integrationKeyResponseSchema),
+          404: errorResponse('該当する鍵が無い。'),
+          409: errorResponse(
+            '鍵の行が読めない形で入っている（失効できない）。`POST /integration-keys/unreadable/remove` で消す。',
+          ),
+          500: journalWriteFailedResponse('日誌が書けなかった（**状態を変えていない**）。'),
           ...noBodyPostResponses(),
         },
       }),
@@ -6061,18 +5702,15 @@ export function createApp(deps: AppDeps) {
           '同じ source・同じ目印の2件目は、積まずに1件目と同じ `id` を `duplicate: true` 付きの 200 で返す。' +
           '覚えておくのは受けてから7日。2件目の本文と添付は見ない（目印が同じなら同じ出来事として扱う）。',
         responses: {
-          200: {
-            description:
-              '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**' +
+          200: jsonResponse(
+            '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**' +
               '（`idempotencyKey` を付けていなければ二重に届く）。`duplicate: true` は、同じ目印の出来事を既に受けていて、今回は積まなかったことを表す。',
-            content: { 'application/json': { schema: resolver(eventPostAcceptedResponseSchema) } },
-          },
+            eventPostAcceptedResponseSchema,
+          ),
           503: eventNotPersistedResponse(),
-          403: {
-            description:
-              '連携の鍵の source と、本文の source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          403: errorResponse(
+            '連携の鍵の source と、本文の source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
+          ),
           400: eventBadRequestResponse(),
           ...integrationKeyEventResponses(),
           ...eventAttachmentResponses(),
@@ -6160,17 +5798,14 @@ export function createApp(deps: AppDeps) {
             'クライアントに content-type を必ず付けさせるため（運ぶものが無いなら `{}`）。',
         ),
         responses: {
-          200: {
-            description:
-              '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。',
-            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
-          },
+          200: jsonResponse(
+            '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。',
+            eventAcceptedResponseSchema,
+          ),
           503: eventNotPersistedResponse(),
-          403: {
-            description:
-              '連携の鍵の source と、パスの source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          403: errorResponse(
+            '連携の鍵の source と、パスの source が違う（連携の鍵でだけ起きる。人間・operator は任意の source を名乗れる）。',
+          ),
           400: eventBadRequestResponse(),
           ...noBodyPostResponses(),
           ...integrationKeyEventResponses(),
@@ -6246,10 +5881,7 @@ export function createApp(deps: AppDeps) {
           'kind と不正な欄名）が載る。**壊れた行であって、消された依頼ではない。**' +
           '0件なら鍵ごと無い（issue #2343）。',
         responses: {
-          200: {
-            description: '定期ジョブの一覧。',
-            content: { 'application/json': { schema: resolver(scheduleListResponseSchema) } },
-          },
+          200: jsonResponse('定期ジョブの一覧。', scheduleListResponseSchema),
         },
       }),
       (c) => {
@@ -6282,15 +5914,11 @@ export function createApp(deps: AppDeps) {
           // 一覧を数え直さず `RESERVED_SCHEDULE_KINDS` から導出する: この description は `openapi.json` へ焼かれるので、数え直すと生成物も同じ嘘を持つ。
           `既定の定期ジョブ（${RESERVED_SCHEDULE_KINDS.join(' / ')}）の名前は奪えない（→ 409）。`,
         responses: {
-          200: {
-            description:
-              '仕込んだ。次の発火は `GET /schedule` で見える。`replaced` は既存の kind を置き換えたとき true。',
-            content: { 'application/json': { schema: resolver(scheduleCreateResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（kind の形・時刻の範囲もここで弾く）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '仕込んだ。次の発火は `GET /schedule` で見える。`replaced` は既存の kind を置き換えたとき true。',
+            scheduleCreateResponseSchema,
+          ),
+          400: errorResponse('本文が JSON として不正（kind の形・時刻の範囲もここで弾く）。'),
           409: {
             description:
               '次の3つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 =' +
@@ -6452,29 +6080,17 @@ export function createApp(deps: AppDeps) {
           content: { 'application/json': { schema: resolver(scheduleRemoveRequestSchema) } },
         },
         responses: {
-          200: {
-            description: '外した。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description: '本文の形が不正（`ifMatch` が空文字など）。外していない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その kind の継続中の依頼が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch` がいまの依頼の版と違う（見た後に書き換えられた・読めない形になった）。外していない。' +
+          200: jsonResponse('外した。', okResponseSchema),
+          400: errorResponse('本文の形が不正（`ifMatch` が空文字など）。外していない。'),
+          404: errorResponse('その kind の継続中の依頼が無い。'),
+          409: jsonResponse(
+            '`ifMatch` がいまの依頼の版と違う（見た後に書き換えられた・読めない形になった）。外していない。' +
               '`current` はいまの依頼（読めないときは `null`）。',
-            content: { 'application/json': { schema: resolver(scheduleConflictResponseSchema) } },
-          },
-          500: {
-            description:
-              '外す前の日誌が書けなかったので外していない（`code` は `journal_write_failed`）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+            scheduleConflictResponseSchema,
+          ),
+          500: journalWriteFailedResponse(
+            '外す前の日誌が書けなかったので外していない（`code` は `journal_write_failed`）。',
+          ),
           ...noBodyPostResponses(),
         },
       }),
@@ -6570,14 +6186,8 @@ export function createApp(deps: AppDeps) {
             '起こされないため）。',
         ),
         responses: {
-          200: {
-            description: '起こした。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          404: {
-            description: '知らない kind。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('起こした。', okResponseSchema),
+          404: errorResponse('知らない kind。'),
           ...noBodyPostResponses(),
         },
       }),
@@ -6602,14 +6212,8 @@ export function createApp(deps: AppDeps) {
           '`includeClosed=true` を付けると閉じた行（`done` / `cancelled`）が後ろに新しい順で続く。' +
           '本文は切らずに返す。`unreadable` は読めなかった行で、「無い」でも「終わった」でもない第3の状態（0件でも欄は返る）。',
         responses: {
-          200: {
-            description: 'task の一覧。',
-            content: { 'application/json': { schema: resolver(taskListResponseSchema) } },
-          },
-          400: {
-            description: 'クエリが不正（`includeClosed` は `true` / `false` だけ）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('task の一覧。', taskListResponseSchema),
+          400: errorResponse('クエリが不正（`includeClosed` は `true` / `false` だけ）。'),
         },
       }),
       queryParams(tasksQuery),
@@ -6631,18 +6235,9 @@ export function createApp(deps: AppDeps) {
         description:
           'task の1行を、`title`・`body` を切らずに返す（`GET /tasks` と同じ形の行）。並びの位置は一覧の `entries` の順で見る。',
         responses: {
-          200: {
-            description: 'task の1行。',
-            content: { 'application/json': { schema: resolver(taskDetailResponseSchema) } },
-          },
-          404: {
-            description: '該当する行が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description: '行は在るが、読めない形で入っている（消されたのではない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('task の1行。', taskDetailResponseSchema),
+          404: errorResponse('該当する行が無い。'),
+          409: errorResponse('行は在るが、読めない形で入っている（消されたのではない）。'),
         },
       }),
       async (c) => {
@@ -6665,15 +6260,13 @@ export function createApp(deps: AppDeps) {
           '指すなら `{ kind: front | back | before | after, anchorId? }`（before / after は開いている task の id が要る）。' +
           '`source` を渡すと起点の会話の id として `source` と `originConversationId` の両方に入る（無ければ付けない）。',
         responses: {
-          200: {
-            description: '積んだ。返る id が閉じる・動かすときの宛先になる。',
-            content: { 'application/json': { schema: resolver(taskAddedResponseSchema) } },
-          },
-          400: {
-            description:
-              '本文が JSON として不正（`title` は一行・200字まで・空白だけは不可、`body` は空にできない）、または `placement` の基準が開いている task に無い（何も積んでいない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '積んだ。返る id が閉じる・動かすときの宛先になる。',
+            taskAddedResponseSchema,
+          ),
+          400: errorResponse(
+            '本文が JSON として不正（`title` は一行・200字まで・空白だけは不可、`body` は空にできない）、または `placement` の基準が開いている task に無い（何も積んでいない）。',
+          ),
         },
       }),
       jsonBody(taskAddBody, (where) => ({
@@ -6731,29 +6324,16 @@ export function createApp(deps: AppDeps) {
           '人間はこれを読んで後から否定する。`closedBy` は `human`。行は消さない（閉じた行は `GET /tasks?includeClosed=true` で見える）。' +
           '日誌を先に書き、書けなければ閉じずに 500 を返す。効いた後に、人間の操作の印（`humanAction.kind = task_close`）を持つ行を足す。',
         responses: {
-          200: {
-            description: '閉じた。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description:
-              '本文が JSON として不正（`status` は done か cancelled、`reason` は空にできない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は task に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '既に閉じている（いつ・どう閉じたかを本文に入れて返す。done と cancelled の付け替えもここで断る）。行が読めない形で入っている（書き直さない）。' +
+          200: jsonResponse('閉じた。', okResponseSchema),
+          400: errorResponse(
+            '本文が JSON として不正（`status` は done か cancelled、`reason` は空にできない）。',
+          ),
+          404: errorResponse(TASK_ID_NOT_FOUND_DESCRIPTION),
+          409: errorResponse(
+            '既に閉じている（いつ・どう閉じたかを本文に入れて返す。done と cancelled の付け替えもここで断る）。行が読めない形で入っている（書き直さない）。' +
               'または閉じる直前に状態が変わって閉じられなかった。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '閉じる前の日誌が書けなかった（**閉じていない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          ),
+          500: journalWriteFailedResponse('閉じる前の日誌が書けなかった（**閉じていない**）。'),
         },
       }),
       jsonBody(taskCloseBody, (where) => ({
@@ -6864,27 +6444,15 @@ export function createApp(deps: AppDeps) {
           '開いている human 起点の最後の直後（既定の置き場所）に並び直す。`reason` は必須で、開き直す前の閉じた記録とともに日誌（`decision`）へ逐語で残る。' +
           '日誌を先に書き、書けなければ開き直さずに 500。効いた後に、人間の操作の印（`humanAction.kind = task_reopen`）を持つ行を足す。',
         responses: {
-          200: {
-            description: '開き直した。開いている一覧に戻る。',
-            content: { 'application/json': { schema: resolver(taskDetailResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`reason` は空にできない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は task に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              'まだ閉じていない（何もしない）。行が読めない形で入っている（書き直さない）。または開き直す直前に状態が変わった。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかった（**開き直していない**。行は閉じたまま）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          200: jsonResponse('開き直した。開いている一覧に戻る。', taskDetailResponseSchema),
+          400: errorResponse('本文が JSON として不正（`reason` は空にできない）。'),
+          404: errorResponse(TASK_ID_NOT_FOUND_DESCRIPTION),
+          409: errorResponse(
+            'まだ閉じていない（何もしない）。行が読めない形で入っている（書き直さない）。または開き直す直前に状態が変わった。',
+          ),
+          500: journalWriteFailedResponse(
+            '日誌が書けなかった（**開き直していない**。行は閉じたまま）。',
+          ),
         },
       }),
       jsonBody(taskReopenBody, (where) => ({
@@ -6989,27 +6557,13 @@ export function createApp(deps: AppDeps) {
           '閉じた task は並びから外れているので動かせない（開き直すなら `POST /tasks/{id}/reopen`）。優先度・締切の数値は持たない。' +
           '日誌を先に書き、動かせなければ打ち消す。効いた後に、人間の操作の印（`humanAction.kind = task_move`）を持つ行を足す。',
         responses: {
-          200: {
-            description: '動かした。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description:
-              '本文が JSON として不正、または基準（`anchorId`）が開いている task に無い・自分自身を基準にした（何も動かしていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は task に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description: '閉じていて動かせない。行が読めない形で入っている。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '動かす前の日誌が書けなかった（**動かしていない**）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          200: jsonResponse('動かした。', okResponseSchema),
+          400: errorResponse(
+            '本文が JSON として不正、または基準（`anchorId`）が開いている task に無い・自分自身を基準にした（何も動かしていない）。',
+          ),
+          404: errorResponse(TASK_ID_NOT_FOUND_DESCRIPTION),
+          409: errorResponse('閉じていて動かせない。行が読めない形で入っている。'),
+          500: journalWriteFailedResponse('動かす前の日誌が書けなかった（**動かしていない**）。'),
         },
       }),
       jsonBody(taskMoveBody, (where) => ({
@@ -7126,24 +6680,14 @@ export function createApp(deps: AppDeps) {
           '編集の前後の本文は日誌（`decision`）へ逐語で残る。日誌を先に書き、書けなければ書き直さずに 500。' +
           '任意の `ifMatch`（`GET /tasks` で読んだ行の `editedAt ?? createdAt`）を付けると、版が違うときは書かずに 409。省略は後勝ち。',
         responses: {
-          200: {
-            description: '直した。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description:
-              '本文が JSON として不正（`title` は一行・200字まで・空白だけは不可、`body` は空にできない、どちらも無いのも不可）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description:
-              'origin が human ではない——クローン・マネージャー・外部が立てた行は人間からは直せない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は task に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('直した。', okResponseSchema),
+          400: errorResponse(
+            '本文が JSON として不正（`title` は一行・200字まで・空白だけは不可、`body` は空にできない、どちらも無いのも不可）。',
+          ),
+          403: errorResponse(
+            'origin が human ではない——クローン・マネージャー・外部が立てた行は人間からは直せない。',
+          ),
+          404: errorResponse(TASK_ID_NOT_FOUND_DESCRIPTION),
           409: {
             description:
               '次の3つ。(1) 既に閉じている。(2) 行が読めない形で入っている（書き直さない）。(3) `ifMatch` がいまの版と違う（何も書いていない。`current` にいまの行を返す。(3) だけが `current` の鍵を持つ）。',
@@ -7153,10 +6697,9 @@ export function createApp(deps: AppDeps) {
               },
             },
           },
-          500: {
-            description: '日誌が書けなかった（**書き直していない**。行の本文は元のまま）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          500: journalWriteFailedResponse(
+            '日誌が書けなかった（**書き直していない**。行の本文は元のまま）。',
+          ),
         },
       }),
       jsonBody(taskEditBody, (where) => ({
@@ -7303,21 +6846,12 @@ export function createApp(deps: AppDeps) {
           '（切れ目をまたいだ鍵の頭が残らないように）。切った欄には `requestTruncated` / `lastReportTruncated` が `true` で付く。' +
           '全文は `GET /managers/{id}` で取る。欄の有無は変えない（報告が無い委譲は、一覧でも `lastReport` を持たない）。',
         responses: {
-          200: {
-            description: 'マネージャーの一覧と状態。',
-            content: { 'application/json': { schema: resolver(managersListResponseSchema) } },
-          },
-          400: {
-            description:
-              'クエリが不正（`limit` は1以上1000以下の整数）、`status` に知らない値が入っている、' +
+          200: jsonResponse('マネージャーの一覧と状態。', managersListResponseSchema),
+          400: errorResponse(
+            'クエリが不正（`limit` は1以上1000以下の整数）、`status` に知らない値が入っている、' +
               '`afterId` / `afterStartedAt` の片方だけが渡された、`afterStartedAt` の形式が不正、' +
               'または錨が指す行が見当たらない。',
-            content: {
-              'application/json': {
-                schema: resolver(errorResponseSchema),
-              },
-            },
-          },
+          ),
         },
       }),
       queryParams(managersQuery),
@@ -7413,20 +6947,12 @@ export function createApp(deps: AppDeps) {
         tags: ['managers'],
         summary: '1本のマネージャーの状態',
         responses: {
-          200: {
-            description: 'マネージャーの状態。',
-            content: { 'application/json': { schema: resolver(managerDetailResponseSchema) } },
-          },
-          404: {
-            description: '該当するマネージャーが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
+          200: jsonResponse('マネージャーの状態。', managerDetailResponseSchema),
+          404: errorResponse('該当するマネージャーが無い。'),
+          409: errorResponse(
+            '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
               'issue #2359）。本文は載せず、理由は不正な欄名だけ。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       async (c) => {
@@ -7472,22 +6998,16 @@ export function createApp(deps: AppDeps) {
             description: '生ログ（JSONL の生テキスト）。',
             content: { 'text/plain': { schema: resolver(z.string()) } },
           },
-          404: {
-            description: '該当するマネージャーの生ログが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
+          404: errorResponse('該当するマネージャーの生ログが無い。'),
+          409: errorResponse(
+            '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
               'issue #2359）。本文は載せず、理由は不正な欄名だけ。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          410: {
-            description:
-              '退避はあったが、本文は `DELETE /archive/:id` で消されている（#698）。' +
+          ),
+          410: jsonResponse(
+            '退避はあったが、本文は `DELETE /archive/:id` で消されている（#698）。' +
               'いつ・何バイト落としたか、どの archive id だったかを返す。',
-            content: { 'application/json': { schema: resolver(archiveRemovedResponseSchema) } },
-          },
+            archiveRemovedResponseSchema,
+          ),
         },
       }),
       async (c) => {
@@ -7525,9 +7045,8 @@ export function createApp(deps: AppDeps) {
           '超える・確認への回答（`requestId` / `decision`）に添える、のいずれかなら 400 で、何も送らない。' +
           '`text` は添付があっても必須。添付は会話・報告には結び付けない（他の入口が上げた添付も渡せる）。',
         responses: {
-          200: {
-            description:
-              '`outcome` を読むこと。`answered` = 止まっていた確認を解いた。' +
+          200: jsonResponse(
+            '`outcome` を読むこと。`answered` = 止まっていた確認を解いた。' +
               '`delivered` = 追加指示として届けた（runner にセッションが無く resume から' +
               '入り直した回も含む。`detail` がそう言う）。' +
               '`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも' +
@@ -7543,31 +7062,23 @@ export function createApp(deps: AppDeps) {
               '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。' +
               '⚠️ `requestId` 無しで `decision` を付け、待っている確認に当たらず `delivered` / `held` になった回は、' +
               '`detail` の末尾に「回答としては使っていない」警告が付く（クローンの道具 `manager_send` と同じ文）。',
-            content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
-          },
-          400: {
-            description:
-              '本文が JSON として不正、または `attachments` の検証に失敗した（見つからない id・上限超過・' +
+            managerActionResponseSchema,
+          ),
+          400: jsonResponse(
+            '本文が JSON として不正、または `attachments` の検証に失敗した（見つからない id・上限超過・' +
               '確認への回答への添付）。何も送っていない。' +
               '`attachments` の検証失敗には `code` が付く（見つからない・期限切れは `attachment_missing`、個数・サイズの上限超過は `too_many` / `total_too_large` / `too_large` など。`POST /chat` と同じ綴り）。',
-            content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
-          },
-          404: {
-            description: '該当するマネージャーが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
+            attachmentErrorResponseSchema,
+          ),
+          404: errorResponse('該当するマネージャーが無い。'),
+          409: errorResponse(
+            '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
               'issue #2359）。送っていない。本文は載せず、理由は不正な欄名だけ。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '確認への答えを届ける前の日誌が書けなかった（**答えていない**。担当は確認待ちのまま）。' +
+          ),
+          500: journalWriteFailedResponse(
+            '確認への答えを届ける前の日誌が書けなかった（**答えていない**。担当は確認待ちのまま）。' +
               '日誌を先に書き、書けなければ答えを届けない。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(managerMessageBody, (where) => ({
@@ -7699,27 +7210,18 @@ export function createApp(deps: AppDeps) {
           '暴走を止める手段が「器ごと落とす」しか無いと、関係の無い仕事まで道連れになる。' +
           'この口は1本だけを止める。止めた事実は日誌に残る。',
         responses: {
-          200: {
-            description:
-              '止める指示は処理できた。`outcome` を読むこと — `stopped`（止まったと確かめた）/ ' +
+          200: jsonResponse(
+            '止める指示は処理できた。`outcome` を読むこと — `stopped`（止まったと確かめた）/ ' +
               '`not_stopped`（止まっていないと確かめた）/ `unknown`（確かめられなかった）のどれかで、' +
               '止まったと機械可読に言えるのは `stopped` のときだけである。',
-            content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するマネージャー（`absent`）が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（`unreadable`。居ないのとは' +
+            managerActionResponseSchema,
+          ),
+          400: errorResponse('本文が JSON として不正。'),
+          404: errorResponse('該当するマネージャー（`absent`）が無い。'),
+          409: errorResponse(
+            '該当する委譲の行は在るが、型に合わない形で入っていて読めない（`unreadable`。居ないのとは' +
               '区別する。issue #2359）。止めておらず、行も書き換えていない。本文は載せず、理由は不正な欄名だけ。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(abortBody, (where) => ({
@@ -7749,10 +7251,7 @@ export function createApp(deps: AppDeps) {
           '指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを確かめる' +
           '手段が他に無いからである。**値は返らない。**',
         responses: {
-          200: {
-            description: 'runner の一覧。',
-            content: { 'application/json': { schema: resolver(runnersListResponseSchema) } },
-          },
+          200: jsonResponse('runner の一覧。', runnersListResponseSchema),
         },
       }),
       async (c) => {
@@ -7838,9 +7337,8 @@ export function createApp(deps: AppDeps) {
           '——進捗は GET /runners（state: vacating）と GET /managers（runnerId が' +
           '動いたか）で追う。',
         responses: {
-          200: {
-            description:
-              '空けると立てた。名簿に無い runnerId でも同じ 200 を返す' +
+          200: jsonResponse(
+            '空けると立てた。名簿に無い runnerId でも同じ 200 を返す' +
               '（`RunnerRegistry#unregister` と同じ作法——名乗ってすらいない' +
               '宛先を「無かった」と取り立てて言うほどの情報ではない）。' +
               '**握手を飛ばした回は `handshakeSkipped` が載る**（状態は 200 のまま）。' +
@@ -7848,14 +7346,12 @@ export function createApp(deps: AppDeps) {
               '読めなかった（`jobs_unreadable`）回で、載っている委譲への確かめた停止の' +
               '握手をしておらず、貸し出しも返していない。**呼び直せば握手をやり直す。**' +
               '飛ばさなかった回は欄が無い（`{ ok: true }` のまま）。',
-            content: { 'application/json': { schema: resolver(runnersVacateResponseSchema) } },
-          },
-          400: {
-            description:
-              '`runnerId` が無い、または文字列として不正（`jsonBody` の hook が断る。' +
+            runnersVacateResponseSchema,
+          ),
+          400: errorResponse(
+            '`runnerId` が無い、または文字列として不正（`jsonBody` の hook が断る。' +
               'PR #1747 が揃えた形——送られた値は1文字も含めない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(runnersVacateCommandSchema, (where) => ({
@@ -7885,14 +7381,11 @@ export function createApp(deps: AppDeps) {
           '行ごとに撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=runner だけ）を持ち、' +
           '名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。',
         responses: {
-          200: {
-            description: 'プロファイルの行（本文つき）と、合成後の指紋。置かれていなければ行は空。',
-            content: { 'application/json': { schema: resolver(profileResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            'プロファイルの行（本文つき）と、合成後の指紋。置かれていなければ行は空。',
+            profileResponseSchema,
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -7914,26 +7407,21 @@ export function createApp(deps: AppDeps) {
           '`ifMatch`（`GET /profile` の各行の `version`）を渡すと、読んだ後にその行が変わっていたとき何も変えずに 409。' +
           '`ifMatch: null` は「行が無いときだけ作る」。省けば今までどおり比べない。',
         responses: {
-          200: {
-            description: '行を置いた後の全行と、クローンと各 runner への反映結果。',
-            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
-          },
-          400: {
-            description:
-              'プロファイルが読めなかった（保存していない）、または名前・本文・撒く先の形が不正。' +
+          200: jsonResponse(
+            '行を置いた後の全行と、クローンと各 runner への反映結果。',
+            profileUpdateResponseSchema,
+          ),
+          400: jsonResponse(
+            'プロファイルが読めなかった（保存していない）、または名前・本文・撒く先の形が不正。' +
               '送られてきた本文は返さない。',
-            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch` がいまの行と食い違う（読んだ後に変わった・作られた・消された。何も変えていない）。' +
+            profileErrorResponseSchema,
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          409: jsonResponse(
+            '`ifMatch` がいまの行と食い違う（読んだ後に変わった・作られた・消された。何も変えていない）。' +
               '`current` にいまの行（本文は載せない。無ければ `null`）を添える。',
-            content: { 'application/json': { schema: resolver(profileConflictResponseSchema) } },
-          },
+            profileConflictResponseSchema,
+          ),
         },
       }),
       jsonBody(profileEntryUpdateRequestSchema, (where) => ({
@@ -7975,28 +7463,18 @@ export function createApp(deps: AppDeps) {
           'クエリの `ifMatch`（`GET /profile` の各行の `version`）を渡すと、読んだ後にその行が変わっていたとき外さずに 409。' +
           '省けば今までどおり比べない。',
         responses: {
-          200: {
-            description: '行を外した後の全行と、クローンと各 runner への反映結果。',
-            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
-          },
-          400: {
-            description: '名前の形が不正、または反映に失敗した。',
-            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その名前の行は無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch` がいまの行と食い違う（読んだ後に変わった。外していない）。' +
+          200: jsonResponse(
+            '行を外した後の全行と、クローンと各 runner への反映結果。',
+            profileUpdateResponseSchema,
+          ),
+          400: jsonResponse('名前の形が不正、または反映に失敗した。', profileErrorResponseSchema),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          404: errorResponse('その名前の行は無い。'),
+          409: jsonResponse(
+            '`ifMatch` がいまの行と食い違う（読んだ後に変わった。外していない）。' +
               '`current` にいまの行（本文は載せない）を添える。',
-            content: { 'application/json': { schema: resolver(profileConflictResponseSchema) } },
-          },
+            profileConflictResponseSchema,
+          ),
         },
       }),
       queryParams(profileEntryDeleteQuery, (where) => ({
@@ -8044,16 +7522,12 @@ export function createApp(deps: AppDeps) {
           '（次のセッションから）、マネージャー・作業者に（runner へ降ろしたうえで、次に開く' +
           'セッションから）効く。',
         responses: {
-          200: {
-            description:
-              '登録そのもの（値を含む）と、その版（`version`。`PUT` の `ifMatch` へ渡す）。' +
+          200: jsonResponse(
+            '登録そのもの（値を含む）と、その版（`version`。`PUT` の `ifMatch` へ渡す）。' +
               '置かれていなければ空の `mcpServers`。',
-            content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+            mcpServersResponseSchema,
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8075,30 +7549,20 @@ export function createApp(deps: AppDeps) {
           '`version`）が省略でなく、いまの版と違えば何も書かず 409（`current` がいまの登録）。' +
           `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
         responses: {
-          200: {
-            description: '差し替えた後の登録の名前と指紋、runner ごとの配布結果（値は返さない）。',
-            content: {
-              'application/json': { schema: resolver(mcpServersUpdateResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '形が不正（保存していない）。**送られてきた値は応答に載せない**' +
+          200: jsonResponse(
+            '差し替えた後の登録の名前と指紋、runner ごとの配布結果（値は返さない）。',
+            mcpServersUpdateResponseSchema,
+          ),
+          400: errorResponse(
+            '形が不正（保存していない）。**送られてきた値は応答に載せない**' +
               '（どの欄が不正かだけを返す）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch` が読んだ後に変わっていた（書いていない）。`current` がいまの登録' +
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          409: jsonResponse(
+            '`ifMatch` が読んだ後に変わっていた（書いていない）。`current` がいまの登録' +
               '（`GET` と同じ形。値を含むので `GET` と同じ門の内側にだけ返す）。',
-            content: {
-              'application/json': { schema: resolver(mcpServersConflictResponseSchema) },
-            },
-          },
+            mcpServersConflictResponseSchema,
+          ),
         },
       }),
       // 既定の 400 を使わない（`PUT /profile/:name` と同じ理由）: 本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで `env` / `headers` の鍵が応答へ載る。
@@ -8226,14 +7690,8 @@ export function createApp(deps: AppDeps) {
         tags: ['plugins'],
         summary: '入れてある plugin の一覧（files は含まない）',
         responses: {
-          200: {
-            description: '入れてある plugin の要約。',
-            content: { 'application/json': { schema: resolver(pluginsListResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('入れてある plugin の要約。', pluginsListResponseSchema),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
         },
       }),
       async (c) =>
@@ -8247,26 +7705,16 @@ export function createApp(deps: AppDeps) {
         tags: ['plugins'],
         summary: 'plugin を取って中身の要約を返す（まだ入れない）',
         responses: {
-          200: {
-            description: '要約と、確定に使う previewId（期限つき）。',
-            content: { 'application/json': { schema: resolver(pluginPreviewResponseSchema) } },
-          },
-          400: {
-            description: '入力・取り元の中身が不正（上限超過・path が無い・名前が使えない など）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          502: {
-            description: '取り元から取れなかった（接続・時間・サイズの上限）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '取得の口が無い、または公式 marketplace の URL が未設定。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '要約と、確定に使う previewId（期限つき）。',
+            pluginPreviewResponseSchema,
+          ),
+          400: errorResponse(
+            '入力・取り元の中身が不正（上限超過・path が無い・名前が使えない など）。',
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          502: errorResponse('取り元から取れなかった（接続・時間・サイズの上限）。'),
+          503: errorResponse('取得の口が無い、または公式 marketplace の URL が未設定。'),
         },
       }),
       jsonBody(pluginPreviewRequestSchema, (where) => ({
@@ -8326,33 +7774,17 @@ export function createApp(deps: AppDeps) {
         tags: ['plugins'],
         summary: 'プレビューした plugin を入れる（確定）',
         responses: {
-          200: {
-            description: '入れた plugin と、runner ごとの配布結果。',
-            content: { 'application/json': { schema: resolver(pluginInstallResponseSchema) } },
-          },
-          400: {
-            description: '入力が不正、または保存できない形（何も保存していない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'previewId が無い（期限切れ・確定済み・別のデーモン）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '名前が既存の名前と大文字小文字だけ違う、または、プレビューの後に同じ名前の plugin が変わった（入った・消えた・入れ替わった）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかったので入れていない。',
-            content: {
-              'application/json': { schema: resolver(journalWriteFailedResponseSchema) },
-            },
-          },
+          200: jsonResponse(
+            '入れた plugin と、runner ごとの配布結果。',
+            pluginInstallResponseSchema,
+          ),
+          400: errorResponse('入力が不正、または保存できない形（何も保存していない）。'),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          404: errorResponse('previewId が無い（期限切れ・確定済み・別のデーモン）。'),
+          409: errorResponse(
+            '名前が既存の名前と大文字小文字だけ違う、または、プレビューの後に同じ名前の plugin が変わった（入った・消えた・入れ替わった）。',
+          ),
+          500: journalWriteFailedResponse('日誌が書けなかったので入れていない。'),
         },
       }),
       jsonBody(pluginInstallRequestSchema, (where) => ({
@@ -8478,24 +7910,13 @@ export function createApp(deps: AppDeps) {
         tags: ['plugins'],
         summary: 'plugin を外す',
         responses: {
-          200: {
-            description: '外した plugin の名前と、runner ごとの配布結果。',
-            content: { 'application/json': { schema: resolver(pluginRemoveResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その名前の plugin は入っていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description: '日誌が書けなかったので外していない。',
-            content: {
-              'application/json': { schema: resolver(journalWriteFailedResponseSchema) },
-            },
-          },
+          200: jsonResponse(
+            '外した plugin の名前と、runner ごとの配布結果。',
+            pluginRemoveResponseSchema,
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          404: errorResponse('その名前の plugin は入っていない。'),
+          500: journalWriteFailedResponse('日誌が書けなかったので外していない。'),
         },
       }),
       async (c) => {
@@ -8584,14 +8005,8 @@ export function createApp(deps: AppDeps) {
           '正本に在る名前と指紋を返す。**値は返さない。** 届いているかは ' +
           'GET /runners の credentials（runner 側の指紋）と突き合わせる。',
         responses: {
-          200: {
-            description: '正本に在る鍵の指紋。',
-            content: { 'application/json': { schema: resolver(credentialsResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('正本に在る鍵の指紋。', credentialsResponseSchema),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8615,27 +8030,17 @@ export function createApp(deps: AppDeps) {
           '**部分更新**（入力に無い名前は触らない）。空文字は「その名前を外す」。' +
           '正本へ置いてから全 runner へ降ろす。器を作り直しても hello のときに降り直す。',
         responses: {
-          200: {
-            description: '正本の指紋と、各 runner への配布結果。',
-            content: {
-              'application/json': { schema: resolver(credentialsUpdateResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。' +
+          200: jsonResponse(
+            '正本の指紋と、各 runner への配布結果。',
+            credentialsUpdateResponseSchema,
+          ),
+          400: errorResponse(
+            '本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。' +
               '**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、' +
               '既定の 400 の形は使えない（下の `jsonBody` の hook の doc）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       // 既定の 400 を使わない: `hook` を渡さないと `@hono/standard-validator` が本文そのものを `data` に載せて返し（`RESTRICTED_DATA_FIELDS` は cookie だけで `json` は素通し）、`name` の形式ミス1つでその回に送った全部の鍵の値が応答へ載る。返すのは `path` だけ。
@@ -8738,14 +8143,8 @@ export function createApp(deps: AppDeps) {
         description:
           'ログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗を返す。**値は返さない。**',
         responses: {
-          200: {
-            description: 'いまの状態。',
-            content: { 'application/json': { schema: resolver(codexAuthStatusResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('いまの状態。', codexAuthStatusResponseSchema),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8764,18 +8163,9 @@ export function createApp(deps: AppDeps) {
         summary: 'Codex の ChatGPT ログインを消す（ログアウト）',
         description: '正本から消し、全 runner の CODEX_HOME から外す。',
         responses: {
-          200: {
-            description: '消したか（無かったなら false）。',
-            content: { 'application/json': { schema: resolver(codexLogoutResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('消したか（無かったなら false）。', codexLogoutResponseSchema),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8796,22 +8186,10 @@ export function createApp(deps: AppDeps) {
           'デーモンの器で codex app-server を一時的な CODEX_HOME で起こし、デバイスコードを回す。' +
           '返った verificationUrl を開いて userCode を入力すると完了する。',
         responses: {
-          200: {
-            description: '始めたログイン（または進行中のログイン）。',
-            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          502: {
-            description: 'codex app-server を起こせなかった・デバイスコードを取れなかった。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('始めたログイン（または進行中のログイン）。', codexLoginResponseSchema),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          502: errorResponse('codex app-server を起こせなかった・デバイスコードを取れなかった。'),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8837,18 +8215,9 @@ export function createApp(deps: AppDeps) {
         tags: ['codex'],
         summary: 'Codex の ChatGPT ログインの進み具合を読む',
         responses: {
-          200: {
-            description: 'ログイン1本の状態。',
-            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
-          },
-          404: {
-            description: '知らない id（デーモンが入れ替わった・古くて忘れた）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('ログイン1本の状態。', codexLoginResponseSchema),
+          404: errorResponse('知らない id（デーモンが入れ替わった・古くて忘れた）。'),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       (c) => {
@@ -8867,22 +8236,13 @@ export function createApp(deps: AppDeps) {
         tags: ['codex'],
         summary: 'Codex の ChatGPT ログインを取り消す',
         responses: {
-          200: {
-            description: '取り消した後の状態（既に決着していればその状態）。',
-            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '知らない id。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description: '正本の器が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '取り消した後の状態（既に決着していればその状態）。',
+            codexLoginResponseSchema,
+          ),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          404: errorResponse('知らない id。'),
+          503: errorResponse(CANONICAL_STORE_MISSING_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8915,20 +8275,14 @@ export function createApp(deps: AppDeps) {
           ' `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない' +
           '古いデーモン。読めなくても一覧は道連れにしない。',
         responses: {
-          200: {
-            description:
-              'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
+          200: jsonResponse(
+            'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
               '`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。' +
               '行が読めないものが在るときは `rowsUnreadable` も載る。' +
               '現役の指名は `active` / `activeNever` / `activeUnreadable` のどれか1つが載る。',
-            content: { 'application/json': { schema: resolver(tokensListResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+            tokensListResponseSchema,
+          ),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -8971,27 +8325,22 @@ export function createApp(deps: AppDeps) {
           '（ほかで足した・消した・改名した・無効化した・順を変えた）何も変えずに 409 を返す。' +
           '省けば今までどおり比べない（回し手の冷却の書き戻しでは版は変わらない）。',
         responses: {
-          200: {
-            description:
-              '置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の' +
+          200: jsonResponse(
+            '置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の' +
               '代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。' +
               'issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——' +
               '**読めない行は捨てずに持ち越した**（issue #2354）。消すには ' +
               '`POST /tokens/unreadable/remove`。**保存した後の表示の読み直しに失敗したときも ' +
               '200**（保存したので「保存できなかった」とは言わない）: `viewUnavailable` だけを' +
               '返し、プールの欄（`tokens` など）は載せない。',
-            content: { 'application/json': { schema: resolver(tokensReplaceResponseSchema) } },
-          },
-          400: {
-            description: '入力が壊れている（保存していない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '`ifMatch` がいまのプールの版と食い違う（読んだ後に変わった。何も変えていない）。' +
+            tokensReplaceResponseSchema,
+          ),
+          400: errorResponse('入力が壊れている（保存していない）。'),
+          409: jsonResponse(
+            '`ifMatch` がいまのプールの版と食い違う（読んだ後に変わった。何も変えていない）。' +
               '`current` にいまのプール（値は出さない）を添える。読み直して、やり直す。',
-            content: { 'application/json': { schema: resolver(tokensConflictResponseSchema) } },
-          },
+            tokensConflictResponseSchema,
+          ),
           500: {
             description:
               '保存に失敗した、または**広げる側の変更（追加・有効化・値の差し替え・試す順の入れ替え）で' +
@@ -9007,12 +8356,7 @@ export function createApp(deps: AppDeps) {
               },
             },
           },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
       // 既定の 400 を使わない: `hook` を渡さないと `@hono/standard-validator` が本文そのものを `data` に載せて返し（`RESTRICTED_DATA_FIELDS` は cookie だけで `json` は素通し。`@hono/standard-validator@0.4.0` で観測）、`label` を1つ書き忘れただけでその回に送った全部の値が応答へ載る。返すのは `path` だけ。
@@ -9172,36 +8516,18 @@ export function createApp(deps: AppDeps) {
           '設定には触れない。id が取れない行はこの口では消せない。1つでも読めない行に無い id が' +
           'あれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
         responses: {
-          200: {
-            description:
-              '消した後のプール（値は出さない）と、消した id。**消した後の表示の読み直しに' +
+          200: jsonResponse(
+            '消した後のプール（値は出さない）と、消した id。**消した後の表示の読み直しに' +
               '失敗したときも 200**（消したので「消せなかった」とは言わない）: `removedIds` と ' +
               '`viewUnavailable` だけを返し、プールの欄は載せない。',
-            content: {
-              'application/json': { schema: resolver(tokensUnreadableRemoveResponseSchema) },
-            },
-          },
-          400: {
-            description: 'トークンのプールの器が無い、または入力の形が不正（何も消していない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。' +
-              '理由の本文は返さない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+            tokensUnreadableRemoveResponseSchema,
+          ),
+          400: errorResponse(
+            'トークンのプールの器が無い、または入力の形が不正（何も消していない）。',
+          ),
+          404: errorResponse(UNREADABLE_IDS_MISSING_DESCRIPTION),
+          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
       jsonBody(tokensUnreadableRemoveRequestSchema, (where) => ({
@@ -9313,26 +8639,13 @@ export function createApp(deps: AppDeps) {
           '変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。' +
           '`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。',
         responses: {
-          200: {
-            description: '更新後の設定。',
-            content: { 'application/json': { schema: resolver(tokenRotationSettingsSchema) } },
-          },
-          500: {
-            description:
-              '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は ' +
+          200: jsonResponse('更新後の設定。', tokenRotationSettingsSchema),
+          500: journalWriteFailedResponse(
+            '日誌が書けなかった（**保存していない**。広げる側の変更のとき）。本文は ' +
               '`{ error: "記録（日誌）が書けなかったので、変更していません", code: "journal_write_failed" }`。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
-          400: {
-            description: 'トークンのプールの器が配線されていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
+          400: errorResponse('トークンのプールの器が配線されていない。'),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
       jsonBody(tokensPolicyUpdateRequestSchema, (where) => ({
@@ -9425,10 +8738,7 @@ export function createApp(deps: AppDeps) {
           'sessionId・時刻・実使用バイト数（storedBytes）を返す——大きさや時刻を ' +
           '知るために本文（GET /archive/:id）を全文落とす必要が無い。',
         responses: {
-          200: {
-            description: 'アーカイブの一覧。新しい順。',
-            content: { 'application/json': { schema: resolver(archiveListResponseSchema) } },
-          },
+          200: jsonResponse('アーカイブの一覧。新しい順。', archiveListResponseSchema),
         },
       }),
       async (c) =>
@@ -9446,10 +8756,7 @@ export function createApp(deps: AppDeps) {
           '時刻（#698）。rows は tombstone 済みの行も数える——「同じセッションの ' +
           '生ログが何度も積まれている」という重複を見つけるための経路。',
         responses: {
-          200: {
-            description: 'sessionId ごとの集計の一覧。',
-            content: { 'application/json': { schema: resolver(archiveSessionsResponseSchema) } },
-          },
+          200: jsonResponse('sessionId ごとの集計の一覧。', archiveSessionsResponseSchema),
         },
       }),
       async (c) =>
@@ -9466,16 +8773,12 @@ export function createApp(deps: AppDeps) {
             description: '生ログ（JSONL の生テキスト）。',
             content: { 'text/plain': { schema: resolver(z.string()) } },
           },
-          404: {
-            description: '該当するアーカイブが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          410: {
-            description:
-              '本文は `DELETE /archive/:id` で消されている（#698）。行そのものは残る——' +
+          404: errorResponse('該当するアーカイブが無い。'),
+          410: jsonResponse(
+            '本文は `DELETE /archive/:id` で消されている（#698）。行そのものは残る——' +
               'この id は `/archive` の一覧には引き続き出る。いつ・何バイト落としたかを返す。',
-            content: { 'application/json': { schema: resolver(archiveRemovedResponseSchema) } },
-          },
+            archiveRemovedResponseSchema,
+          ),
         },
       }),
       async (c) => {
@@ -9510,30 +8813,18 @@ export function createApp(deps: AppDeps) {
           '既定拒否は能力の一律な削除ではなく方針である）。override したときは' +
           '理由と対象のマネージャー id を日誌に残す。',
         responses: {
-          200: {
-            description: '消した（または前から消されていた）。',
-            content: { 'application/json': { schema: resolver(archiveRemoveResponseSchema) } },
-          },
-          400: {
-            description:
-              'クエリ引数 `overrideReason` の形が不正（`queryParams` の hook が断る。' +
+          200: jsonResponse('消した（または前から消されていた）。', archiveRemoveResponseSchema),
+          400: errorResponse(
+            'クエリ引数 `overrideReason` の形が不正（`queryParams` の hook が断る。' +
               'PR #1747 が揃えた形——送られた値は1文字も含めない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するアーカイブが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '走行中のマネージャーの退避なので消せない。`overrideReason` クエリ引数で開ける。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '消す前の日誌が書けなかったので消していない（`code` は `journal_write_failed`。本文は戻せないので、日誌を先に書く）。',
-            content: { 'application/json': { schema: resolver(journalWriteFailedResponseSchema) } },
-          },
+          ),
+          404: errorResponse('該当するアーカイブが無い。'),
+          409: errorResponse(
+            '走行中のマネージャーの退避なので消せない。`overrideReason` クエリ引数で開ける。',
+          ),
+          500: journalWriteFailedResponse(
+            '消す前の日誌が書けなかったので消していない（`code` は `journal_write_failed`。本文は戻せないので、日誌を先に書く）。',
+          ),
         },
       }),
       queryParams(archiveRemoveQuery),
@@ -9633,20 +8924,12 @@ export function createApp(deps: AppDeps) {
           '**塊ごとに、日誌の先の行を書いてから消す。** 書けなかったらその塊は消さずに' +
           'そこで止め（後ろの塊も消さない）、500 でそれまでに消した分を返す。',
         responses: {
-          200: {
-            description: '試算、または実際に消した結果。',
-            content: {
-              'application/json': { schema: resolver(archiveRemoveManyResponseSchema) },
-            },
-          },
-          500: {
-            description:
-              '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
+          200: jsonResponse('試算、または実際に消した結果。', archiveRemoveManyResponseSchema),
+          500: jsonResponse(
+            '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
               '止める前の塊は消えている——`removedIds` / `removedBytes` / `raced` がどこまでかを言う。',
-            content: {
-              'application/json': { schema: resolver(archiveRemoveManyStoppedResponseSchema) },
-            },
-          },
+            archiveRemoveManyStoppedResponseSchema,
+          ),
           400: {
             description:
               '絞り込みが1つも無い、`before` が ISO8601 として読めない、`limit` が' +
@@ -9846,24 +9129,16 @@ export function createApp(deps: AppDeps) {
           '事実だけを持つ器で、片付いた後の記録を残す場所ではない。' +
           '**消す id は塊ごとに、消す前に日誌へ残す**（書けなかったらその塊は消さずに止める）。',
         responses: {
-          200: {
-            description: '試算、または実際に消した結果。',
-            content: { 'application/json': { schema: resolver(inboxRemoveManyResponseSchema) } },
-          },
-          500: {
-            description:
-              '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
+          200: jsonResponse('試算、または実際に消した結果。', inboxRemoveManyResponseSchema),
+          500: jsonResponse(
+            '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
               '止める前の塊は消えている——`removedIds` / `droppedFromDelivery` がどこまでかを言う。',
-            content: {
-              'application/json': { schema: resolver(inboxRemoveManyStoppedResponseSchema) },
-            },
-          },
-          400: {
-            description:
-              '本文が不正、または `types` が在る7種類を全部並べている（絞り込みが無いのと同じ）、' +
+            inboxRemoveManyStoppedResponseSchema,
+          ),
+          400: errorResponse(
+            '本文が不正、または `types` が在る7種類を全部並べている（絞り込みが無いのと同じ）、' +
               'または `before` が ISO8601 として読めない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
         },
       }),
       jsonBody(inboxRemoveManyRequestSchema),
@@ -10000,14 +9275,13 @@ export function createApp(deps: AppDeps) {
           '呼んでも `deliveries`（器の入れ替え回数）は1つも進まない。集計は' +
           '`@alteroid/core` の同じ関数を通すので、クローンの道具と違う数を返すことは無い。',
         responses: {
-          200: {
-            description:
-              '受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く' +
+          200: jsonResponse(
+            '受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く' +
               '（値を作らない。`InboxStore.pending` と同じ作法）。読めない行が1件でも在るときだけ' +
               '`unreadable`（id・受信時刻・不正な欄名。本文は載せない）が載る。`total` は読めた行の数で、' +
               '読めない行は入っていない。**`total: 0` で `unreadable` が無いときだけ「未処理の合図は無い」。**',
-            content: { 'application/json': { schema: resolver(inboxBacklogResponseSchema) } },
-          },
+            inboxBacklogResponseSchema,
+          ),
         },
       }),
       async (c) => {
@@ -10033,10 +9307,7 @@ export function createApp(deps: AppDeps) {
           '記憶で、再起動・デプロイの入れ替えで消える）。`limit` のクエリ引数は ' +
           '無い（帳面自体が `limit` 件で上限を持つので、常に全件を返す）。',
         responses: {
-          200: {
-            description: '帳面の全件（古い順、末尾が最新）。',
-            content: { 'application/json': { schema: resolver(droppedResponseSchema) } },
-          },
+          200: jsonResponse('帳面の全件（古い順、末尾が最新）。', droppedResponseSchema),
         },
       }),
       async (c) => {
@@ -10069,14 +9340,8 @@ export function createApp(deps: AppDeps) {
           '記録が無ければ `not_observed`（0 件ではない）。' +
           '中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。',
         responses: {
-          200: {
-            description: '進捗の集計。',
-            content: { 'application/json': { schema: resolver(progressResponseSchema) } },
-          },
-          400: {
-            description: '`windowHours` が有限の正数でない（空文字・非数・0以下・非有限）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('進捗の集計。', progressResponseSchema),
+          400: errorResponse('`windowHours` が有限の正数でない（空文字・非数・0以下・非有限）。'),
         },
       }),
       queryParams(progressQuery),
@@ -10118,14 +9383,8 @@ export function createApp(deps: AppDeps) {
           '見に行かない**（値は申告で、確かめていない）。`result.status` が `failed` の回は数を' +
           '持てない（取れなかったことを理由付きで残す）。日誌へ書けなければ何も残さず 500。',
         responses: {
-          200: {
-            description: '記録した。',
-            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
-          },
-          400: {
-            description: '本文の形が不正。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('記録した。', eventAcceptedResponseSchema),
+          400: errorResponse('本文の形が不正。'),
         },
       }),
       jsonBody(githubObservationRequestSchema, (where) => ({
@@ -10148,10 +9407,7 @@ export function createApp(deps: AppDeps) {
           '設定されているログイン手段を返す。`enabled` が false なら認証を要求していない。',
         security: [],
         responses: {
-          200: {
-            description: 'ログイン手段の一覧。',
-            content: { 'application/json': { schema: resolver(authProvidersResponseSchema) } },
-          },
+          200: jsonResponse('ログイン手段の一覧。', authProvidersResponseSchema),
         },
       }),
       (c) =>
@@ -10172,14 +9428,8 @@ export function createApp(deps: AppDeps) {
           '使う許可は別に人間が与える（`alteroid access grant`）。',
         security: [],
         responses: {
-          200: {
-            description: 'ログインを開始した。',
-            content: { 'application/json': { schema: resolver(loginStartResponseSchema) } },
-          },
-          400: {
-            description: '未知のログイン手段、または手段が1つも設定されていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('ログインを開始した。', loginStartResponseSchema),
+          400: errorResponse('未知のログイン手段、または手段が1つも設定されていない。'),
         },
       }),
       jsonBody(loginBody, (where) => ({
@@ -10272,18 +9522,12 @@ export function createApp(deps: AppDeps) {
           'ストアには sha256 しか残らない。まだ終わっていなければ 202 と `pending`。',
         security: [],
         responses: {
-          200: {
-            description: 'トークンを発行した。',
-            content: { 'application/json': { schema: resolver(loginClaimResponseSchema) } },
-          },
-          202: {
-            description: 'まだブラウザ側が終わっていない。少し待って再試行する。',
-            content: { 'application/json': { schema: resolver(loginClaimResponseSchema) } },
-          },
-          400: {
-            description: '秘密が違う、期限切れ、または既に引き取り済み。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('トークンを発行した。', loginClaimResponseSchema),
+          202: jsonResponse(
+            'まだブラウザ側が終わっていない。少し待って再試行する。',
+            loginClaimResponseSchema,
+          ),
+          400: errorResponse('秘密が違う、期限切れ、または既に引き取り済み。'),
         },
       }),
       jsonBody(claimBody, (where) => ({
@@ -10316,19 +9560,11 @@ export function createApp(deps: AppDeps) {
         tags: ['auth'],
         summary: 'いま自分が誰として認識されているか',
         responses: {
-          200: {
-            description: '認証を通った相手。',
-            content: { 'application/json': { schema: resolver(meResponseSchema) } },
-          },
-          401: {
-            description: '資格が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description:
-              '連携の鍵（`altk_`）では呼べない（連携の鍵は外部イベントの口にしか入れない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('認証を通った相手。', meResponseSchema),
+          401: errorResponse('資格が無い。'),
+          403: errorResponse(
+            '連携の鍵（`altk_`）では呼べない（連携の鍵は外部イベントの口にしか入れない）。',
+          ),
         },
       }),
       (c) => {
@@ -10365,18 +9601,9 @@ export function createApp(deps: AppDeps) {
             'ログアウトさせられないため）。',
         ),
         responses: {
-          200: {
-            description: '失効させた（既に失効済みだった場合を含む）。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description: 'operator の資格では失効させられない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          401: {
-            description: '資格が無い、またはトークンが既に無効。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('失効させた（既に失効済みだった場合を含む）。', okResponseSchema),
+          400: errorResponse('operator の資格では失効させられない。'),
+          401: errorResponse('資格が無い、またはトークンが既に無効。'),
           ...noBodyPostResponses(),
         },
       }),
@@ -10416,19 +9643,13 @@ export function createApp(deps: AppDeps) {
           'alteroid を使う許可があれば読める（実行環境の持ち主と同格。2026-09-06 の' +
           'オーナー決定）。メールと identity が並ぶ一覧である点は変わらない。',
         responses: {
-          200: {
-            description:
-              'アカウントの一覧。読めない行（型に合わない形で入っているアカウント）が1件でも在るときだけ ' +
+          200: jsonResponse(
+            'アカウントの一覧。読めない行（型に合わない形で入っているアカウント）が1件でも在るときだけ ' +
               '`rowsUnreadable`（件数と id・不正な欄名。email などの中身は載せない）が付く。id を ' +
               '`POST /access/unreadable/remove` に渡して消せる。',
-            content: { 'application/json': { schema: resolver(accessListResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+            accessListResponseSchema,
+          ),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
         },
       }),
       async (c) => {
@@ -10466,21 +9687,12 @@ export function createApp(deps: AppDeps) {
             '足されないため）。',
         ),
         responses: {
-          200: {
-            description:
-              '許可した（既に許可済みでも 200。その場合、日誌には「付与していない（既に許可済みだった）」の打ち消しが残り、`grantedBy` は先の許可者のまま）。',
-            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するアカウントが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(
+            '許可した（既に許可済みでも 200。その場合、日誌には「付与していない（既に許可済みだった）」の打ち消しが残り、`grantedBy` は先の許可者のまま）。',
+            accessAccountResponseSchema,
+          ),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
+          404: errorResponse('該当するアカウントが無い。'),
           ...noBodyPostResponses(),
         },
       }),
@@ -10569,29 +9781,18 @@ export function createApp(deps: AppDeps) {
             '許可を落とされないため）。',
         ),
         responses: {
-          200: {
-            description:
-              '取り消した（既に未許可でも 200。その場合、日誌には「アクセス許可の取り消し（読んだ時点で既に未許可だった）」と残る）。',
-            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: '該当するアカウントが無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
+          200: jsonResponse(
+            '取り消した（既に未許可でも 200。その場合、日誌には「アクセス許可の取り消し（読んだ時点で既に未許可だった）」と残る）。',
+            accessAccountResponseSchema,
+          ),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
+          404: errorResponse('該当するアカウントが無い。'),
+          409: errorResponse(
+            '該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
               '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
               '読めないアカウントは認可を通らない。消すには ' +
               '`POST /access/unreadable/remove`（issue #2440）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          ),
           ...noBodyPostResponses(),
         },
       }),
@@ -10648,32 +9849,11 @@ export function createApp(deps: AppDeps) {
           '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
           '（行の中身は残さない）。pg はアカウントを列で持つので読めない行が無く、常に 404。',
         responses: {
-          200: {
-            description: '消した id と件数。',
-            content: {
-              'application/json': { schema: resolver(unreadableRowsRemoveResponseSchema) },
-            },
-          },
-          400: {
-            description: '入力の形が不正（何も消していない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description:
-              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
-              'いない）。資格そのものが無い場合は 401。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description:
-              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          500: {
-            description:
-              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
+          400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
+          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
+          404: errorResponse(UNREADABLE_IDS_MISSING_DESCRIPTION),
+          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
         },
       }),
       jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
@@ -10725,10 +9905,7 @@ export function createApp(deps: AppDeps) {
             '止められないため）。',
         ),
         responses: {
-          200: {
-            description: '停止を受け付けた（実際の停止は少し遅れる）。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
+          200: jsonResponse('停止を受け付けた（実際の停止は少し遅れる）。', okResponseSchema),
           ...noBodyPostResponses(),
         },
       }),
@@ -10751,23 +9928,12 @@ export function createApp(deps: AppDeps) {
           '**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の' +
           'ログインアカウントは消さない。** 取り消せない。',
         responses: {
-          200: {
-            description: '消した件数の内訳。',
-            content: { 'application/json': { schema: resolver(resetResponseSchema) } },
-          },
-          400: {
-            description: '`confirm: true` を伴っていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          403: {
-            description: '許可（`access grant`）の無いアカウント。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          503: {
-            description:
-              '添付の中身を置き場から消せなかったので、添付は消していない（添付より前の順に消すものは消えている。#4814）。本文の `error` に理由。もう一度リセットすると再試行する。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
+          200: jsonResponse('消した件数の内訳。', resetResponseSchema),
+          400: errorResponse('`confirm: true` を伴っていない。'),
+          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
+          503: errorResponse(
+            '添付の中身を置き場から消せなかったので、添付は消していない（添付より前の順に消すものは消えている。#4814）。本文の `error` に理由。もう一度リセットすると再試行する。',
+          ),
         },
       }),
       jsonBody(resetRequestSchema, () => ({
