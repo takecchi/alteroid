@@ -1,7 +1,4 @@
-import {
-  JOURNAL_SEARCH_UNCOVERED_LIST,
-  JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
-} from '@alteroid/core/journal-search';
+import { JOURNAL_SEARCH_UNSEARCHABLE_TYPES } from '@alteroid/core/journal-search';
 
 import type { JournalEntryType } from './types.js';
 
@@ -33,8 +30,6 @@ export const JOURNAL_TONE = {
 } satisfies Record<JournalEntryType, JournalTone>;
 
 export const JOURNAL_TYPES = Object.keys(JOURNAL_TONE) as [JournalEntryType, ...JournalEntryType[]];
-
-export const SEARCH_SCOPE_NOTE = `${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていない（そこにだけ書かれている語は当たらない）。`;
 
 export const JOURNAL_PAGE = 100;
 

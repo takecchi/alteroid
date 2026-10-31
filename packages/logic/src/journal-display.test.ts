@@ -6,7 +6,6 @@ import {
   JOURNAL_TONE,
   JOURNAL_TYPES,
   journalTypeLabel,
-  SEARCH_SCOPE_NOTE,
   SEARCH_SCOPE_NOTE_JA,
 } from './journal-display.js';
 
@@ -44,12 +43,6 @@ describe('日誌の表示の定数', () => {
 
   it('種別の集合は core の JOURNAL_ENTRY_TYPES と同じ（並びは違ってよい）', () => {
     expect([...JOURNAL_TYPES].sort()).toEqual([...JOURNAL_ENTRY_TYPES].sort());
-  });
-
-  it('検索の断りは移す前と同じ文言', () => {
-    expect(SEARCH_SCOPE_NOTE).toBe(
-      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・http_timing・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
-    );
   });
 
   it('頁の大きさは移す前と同じ 100', () => {
