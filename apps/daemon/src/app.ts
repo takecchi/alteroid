@@ -12,7 +12,6 @@ import type {
   PluginDistributionService,
   PluginFetcher,
   EnvProfileEntry,
-  ArchiveEntry,
   ChatStreamEvent,
   CloneHost,
   CredentialService,
@@ -70,9 +69,6 @@ import {
   RESERVED_SCHEDULE_KINDS,
   isReservedEventSource,
   DAEMON_ATTACHMENT_USAGE_SOURCE,
-  ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
-  ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
-  ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   classifyTokenPolicyChange,
@@ -124,7 +120,6 @@ import {
   localDayRange,
   matchesInboxRemoveManyFilter,
   normalizeJournalTimeBoundary,
-  removeArchiveChunkJournalFirst,
   removeArchiveJournalFirst,
   removeInboxChunkJournalFirst,
   summarizeInboxBacklog,
@@ -165,7 +160,6 @@ import {
   scheduleKindSchema,
   SCHEDULE_EVERY_MINUTES_MAX_MESSAGE,
   scheduleSpecSchema,
-  selectArchiveRemovalTargets,
   startSseHeartbeat,
   readProgress,
   DEFAULT_PROGRESS_WINDOW_HOURS,
@@ -194,7 +188,6 @@ import {
   type HumanActionKind,
   type ApprovalPagingKey,
   type IntegrationKeyRecord,
-  type ArchiveRemoveManyFilter,
   type AuthAccount,
   type AuthService,
   NulNotAllowedError,
@@ -264,9 +257,6 @@ import {
   approvalsResponseSchema,
   approvalTraceResponseSchema,
   archiveListResponseSchema,
-  archiveRemoveManyRequestSchema,
-  archiveRemoveManyResponseSchema,
-  archiveRemoveManyStoppedResponseSchema,
   archiveRemovedResponseSchema,
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
@@ -8768,226 +8758,6 @@ export function createApp(deps: AppDeps) {
             ...(guard.kind === 'allowed-with-override'
               ? { override: { managerId: guard.managerId, reason: guard.reason } }
               : {}),
-          }),
-        );
-      },
-    )
-
-    // 墓標（`TranscriptGrave`）を守る: `#pickUpTranscriptGrave` が次の起動時にこの id から蒸留を拾い直すので、本文を一括で落とすとまだ記憶へ移せていない区間が永久に失われる。`isNewest` は「セッションの最新行」を守るだけで意味が違うので、`protectedIds` という別経路で独立に渡す。
-    // 走行中の委譲の行は一括では開けない（`overrideReason` はこの入力に無い）: 一括で複数件を無条件に開ける形は事故の芽が大きい。実行は `stores.archive.remove(id)` を1件ずつ（一括 UPDATE にしない: 1行1トランザクション・`WHERE removed_at IS NULL` で冪等・再開可能）。
-    .post(
-      '/archive/remove',
-      describeRoute({
-        tags: ['archive'],
-        summary: 'アーカイブ済み生ログを絞り込んでまとめて tombstone する',
-        description:
-          'クローン専用の口（クローンの道具 `archive_remove_many` と同じ関数。' +
-          'CLI・Web UI には出さない）。アーカイブ済み生ログの本文を絞り込んで' +
-          'まとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も' +
-          '消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも' +
-          '渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを' +
-          '空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）と' +
-          'セッションの最新行（`skipped.newest`）は一括では開けない——開放が' +
-          '要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の' +
-          '`overrideReason` を使うこと。含有が証明できない行' +
-          '（`skipped.notContained`）は `requireContainment: false` を明示' +
-          'しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は' +
-          '`requireContainment` に関わらず常に守る（`skipped.protected`）。' +
-          '本文だけを落とす（tombstone）——行そのものは消えない。' +
-          '**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /' +
-          '`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの' +
-          '事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。' +
-          '`remove()` 自体を呼ばないので測れない）だけである。' +
-          '**実行時の `raced` は、選定と走行中チェックを通った行が、実際に' +
-          'tombstone する瞬間には他経路（別の一括呼び出し・自動の畳み・' +
-          '単発の `DELETE /archive/:id` など）にすでに tombstone されて' +
-          'いた件数である。** この行はこの呼びが消したことにしない——' +
-          '`removedIds` にも `removedBytes` にも載らず、`raced` だけで' +
-          '数える（日誌には塊の先の行へ書いたうえで、消せなかった id の打ち消しの行を足す）。' +
-          '**塊ごとに、日誌の先の行を書いてから消す。** 書けなかったらその塊は消さずに' +
-          'そこで止め（後ろの塊も消さない）、500 でそれまでに消した分を返す。',
-        responses: {
-          200: jsonResponse('試算、または実際に消した結果。', archiveRemoveManyResponseSchema),
-          500: jsonResponse(
-            '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
-              '止める前の塊は消えている——`removedIds` / `removedBytes` / `raced` がどこまでかを言う。',
-            archiveRemoveManyStoppedResponseSchema,
-          ),
-          400: {
-            description:
-              '絞り込みが1つも無い、`before` が ISO8601 として読めない、`limit` が' +
-              `${ARCHIVE_REMOVE_MANY_LIMIT_MAX} を超える、または requireContainment: ` +
-              'false なのに sessionIds が無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(archiveRemoveManyRequestSchema),
-      async (c) => {
-        const { sessionIds, before, minStoredBytes, requireContainment, dryRun, limit, reason } =
-          c.req.valid('json');
-
-        // 絞り込みの無い呼びを断る: 1回でアーカイブを空にできてしまう。
-        if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
-          return c.json(
-            {
-              error:
-                'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
-                '——それは絞り込みが無いのと同じで、1回でアーカイブを空にできて' +
-                'しまう。**1件も消していない。**',
-            },
-            400,
-          );
-        }
-        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
-          // 存在しない日付・日付でない文字列を別の時刻として読んで消さず、時差の無い時刻をデーモンの地方時刻として読んで消さない: 元に戻せない一括削除なので時差を必須にする（道具 `inbox_remove_many` と同じ門・同じ文言）。
-          return c.json(
-            {
-              error:
-                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
-                '**1件も消していない。**',
-            },
-            400,
-          );
-        }
-        if (limit !== undefined && limit > ARCHIVE_REMOVE_MANY_LIMIT_MAX) {
-          return c.json(
-            {
-              error: `limit は ${ARCHIVE_REMOVE_MANY_LIMIT_MAX} 件までである。**1件も消していない。**`,
-            },
-            400,
-          );
-        }
-        if (requireContainment === false && sessionIds === undefined) {
-          return c.json(
-            {
-              error:
-                'requireContainment: false は sessionIds を名指ししたときだけ渡せる' +
-                '——含有の証明を外した状態で全セッションを対象にすると、事故で' +
-                '内容が失われる範囲が際限なく広がる。**1件も消していない。**',
-            },
-            400,
-          );
-        }
-
-        // 順番待ちの墓標も守る（#4884）
-        const protectedIds = (await stores.sessions.listTranscriptGraves()).map((g) => g.archiveId);
-
-        const filter: ArchiveRemoveManyFilter = {
-          ...(sessionIds === undefined ? {} : { sessionIds }),
-          ...(before === undefined ? {} : { before }),
-          ...(minStoredBytes === undefined ? {} : { minStoredBytes }),
-        };
-        // 絞りと選定は `selectArchiveRemovalTargets` に閉じる: SQL 側に同じ判定を複製しない。
-        const allRows = await stores.archive.list();
-        const selection = selectArchiveRemovalTargets(allRows, filter, {
-          requireContainment,
-          limit: limit ?? ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
-          protectedIds,
-        });
-
-        // `denied` / `unknown` はどちらも安全側に倒して飛ばす。この guard ループは dryRun 分岐より前で回す: `guardArchiveRemoval` はプロセス内の像を読むだけで安く、後ろに置くと下見が「guard で減る前」の数を返して実行と `targeted` / `skipped.inUse` が食い違い、下見が実行の予告にならない（この口は「下見を既定にして、見てから押す」のが設計の中心）。
-        // 第4引数には `selectArchiveRemovalTargets` へ渡したのと同じ実効値を渡す: `false`（`sessionIds` を名指ししたときだけ開ける道）は含有の証明が無いので、ここでも狭めてはいけない。値をそのまま転送して選定側と guard 側の条件を揃える。
-        const effectiveRequireContainment = requireContainment ?? true;
-        const removableTargets: ArchiveEntry[] = [];
-        let skippedInUse = 0;
-        for (const target of selection.targets) {
-          const guard = guardArchiveRemoval(
-            clone.managers,
-            target.id,
-            undefined,
-            effectiveRequireContainment,
-          );
-          if (guard.kind === 'denied' || guard.kind === 'unknown') {
-            skippedInUse += 1;
-            continue;
-          }
-          removableTargets.push(target);
-        }
-
-        // `targeted` は guard を通った後の件数にする: guard 前の件数だと、飛ばした行が `targeted` と `skipped.inUse` の両方に数えられて `matched === targeted + remaining + skipped の総和` が破れる。`removedIds` も guard 通過後だけ。`limit` は guard より前に効くので、`targeted` が `limit` に届かないのに `remaining` が残ることはバグではない。
-        const targeted = removableTargets.length;
-
-        if (dryRun !== false) {
-          return c.json(
-            archiveRemoveManyResponseSchema.parse({
-              ok: true,
-              dryRun: true,
-              totalRows: selection.totalRows,
-              matched: selection.matched,
-              targeted,
-              removedIds: removableTargets.map((row) => row.id),
-              removedBytes: 0,
-              remaining: selection.remaining,
-              skipped: { ...selection.skipped, inUse: skippedInUse },
-              // dryRun は `remove()` を呼ばないので raced は測れない: 欄を省くと「測っていない」と区別がつかなくなるので常に0で出す。
-              raced: 0,
-            }),
-          );
-        }
-
-        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeArchiveChunkJournalFirst`）: 本文は戻らないので、消してから書くと日誌が落ちた回に何を消したかが残らない。
-        // 塊の先の行が書けなければ、その塊は消さずにそこで止める（後ろの塊も消さない）。止める前の塊は消えているので、どこまで消したかを 500 の本文で返す。
-        const chunks = chunkIdsByChars(
-          removableTargets.map((row) => row.id),
-          ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
-        );
-        const filterText = [
-          ...(sessionIds === undefined ? [] : [`sessionIds=[${sessionIds.join(', ')}]`]),
-          ...(before === undefined ? [] : [`before=${before}`]),
-          ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
-        ].join(' / ');
-        const removedIds: string[] = [];
-        let removedBytes = 0;
-        let raced = 0;
-        for (const [index, chunk] of chunks.entries()) {
-          const chunkIds = new Set(chunk);
-          const chunkTargetIds = removableTargets
-            .filter((row) => chunkIds.has(row.id))
-            .map((row) => row.id);
-          const outcome = await removeArchiveChunkJournalFirst(stores, chunkTargetIds, () => ({
-            type: 'decision',
-            decision:
-              '人間がアーカイブ済み生ログの本文を絞り込みで一括して tombstone する' +
-              `（${index + 1}/${chunks.length} 塊目、この塊は ${chunkTargetIds.length} 件）: ${reason}\n` +
-              `絞り込み: ${filterText}\n` +
-              `消す id: ${chunkTargetIds.join(' ')}`,
-            grounds: '人間が直接 API から操作した',
-          }));
-          if (outcome.kind === 'journal-failed') {
-            noteDroppedRecord(
-              'アーカイブ一括 tombstone の日誌（この塊は消していない）',
-              `chunk=${index + 1}/${chunks.length} count=${chunkTargetIds.length}`,
-              kindOfError(outcome.error),
-            );
-            return c.json(
-              archiveRemoveManyStoppedResponseSchema.parse({
-                ...journalWriteFailedBody(),
-                removedIds,
-                removedBytes,
-                raced,
-              }),
-              500,
-            );
-          }
-          // 他経路が先に消していた id（`already` も同じ競合）はこの呼びが消したことにしない: `targeted` には数えているので、黙って落とすと `targeted === removedIds.length + raced` が破れる。隠さず `raced` へ数える。
-          removedIds.push(...outcome.removedIds);
-          removedBytes += outcome.removedBytes;
-          raced += outcome.racedIds.length;
-        }
-
-        return c.json(
-          archiveRemoveManyResponseSchema.parse({
-            ok: true,
-            dryRun: false,
-            totalRows: selection.totalRows,
-            matched: selection.matched,
-            targeted,
-            removedIds,
-            removedBytes,
-            remaining: selection.remaining,
-            skipped: { ...selection.skipped, inUse: skippedInUse },
-            raced,
           }),
         );
       },

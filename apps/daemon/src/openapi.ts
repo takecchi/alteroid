@@ -1546,50 +1546,6 @@ const nulOnlyRejectedString = z
     message: 'NUL だけの値は空として断る',
   });
 
-// 絞り込みを1つも渡さない呼びはハンドラ側（`app.ts`）が 400 で断る: このスキーマ自身は「絞り込みが無い」を特別扱いしない。
-export const archiveRemoveManyRequestSchema = z.object({
-  sessionIds: z.array(nulOnlyRejectedString).min(1).optional(),
-  before: z.string().min(1).optional(),
-  minStoredBytes: z.number().int().min(0).optional(),
-  requireContainment: z.boolean().optional(),
-  dryRun: z.boolean().optional(),
-  limit: z.number().int().min(1).optional(),
-  reason: nonBlankString,
-});
-
-// `targeted` は guard を通った後の件数: guard で飛ばした行を `targeted` と `skipped.inUse` の両方に数えると1行を2回数え、`matched` との等式が壊れるため。
-export const archiveRemoveManyResponseSchema = z.object({
-  ok: z.literal(true),
-  dryRun: z.boolean(),
-  totalRows: z.number().int(),
-  matched: z.number().int(),
-  targeted: z.number().int(),
-  removedIds: z.array(z.string()),
-  removedBytes: z
-    .number()
-    .int()
-    .describe(
-      '消した本文の素の UTF-8 バイト数の合計。`storedBytes`/`minStoredBytes` とは単位が' +
-        '違い、置き場で解放した量ではない（#2074）。',
-    ),
-  remaining: z.number().int(),
-  skipped: z.object({
-    newest: z.number().int(),
-    alreadyRemoved: z.number().int(),
-    notContained: z.number().int(),
-    protected: z.number().int(),
-    inUse: z.number().int(),
-  }),
-  raced: z.number().int(),
-});
-
-// 塊の先の日誌が書けなかったので、そこで止めた回の応答（500）。止める前の塊は消えているので、どこまで消したかを返す（`journalWriteFailedResponseSchema` に足した形）。
-export const archiveRemoveManyStoppedResponseSchema = journalWriteFailedResponseSchema.extend({
-  removedIds: z.array(z.string()),
-  removedBytes: z.number().int(),
-  raced: z.number().int(),
-});
-
 // ここでは集計しない: 複製するとクローンの道具（`manager_list`）とこの口が違う数を見るため。
 export const inboxBacklogResponseSchema = z.object({
   total: z.number().int(),

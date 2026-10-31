@@ -119,21 +119,4 @@ describe('NUL だけの理由・ラベルを HTTP の入口が断る（nonBlankS
     );
     expect(res.status).toBe(200);
   });
-
-  it.each(NUL_ONLY)('POST /archive/remove の reason %j は 400', async (reason) => {
-    const res = await app.request(
-      '/archive/remove',
-      send('POST', { sessionIds: ['s1'], reason, dryRun: false }),
-    );
-    expect(res.status).toBe(400);
-    expectNoEcho(await res.text());
-  });
-
-  it('POST /archive/remove の reason は NUL が混じっても中身が残れば通る', async () => {
-    const res = await app.request(
-      '/archive/remove',
-      send('POST', { sessionIds: ['s1'], reason: 'a\u0000b', dryRun: true }),
-    );
-    expect(res.status).toBe(200);
-  });
 });

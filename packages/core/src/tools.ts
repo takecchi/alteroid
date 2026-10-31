@@ -1262,7 +1262,7 @@ import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-
 export { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX };
 export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 const REMOVE_MANY_IDS_SHOWN = 20;
-// HTTP 層と共有しない: `POST /archive/remove` は `removedIds` を全件返し、間引きはテキスト応答だけの関心事のため
+// 道具の応答だけの関心事: 一括削除の口は道具だけ（HTTP の口は無い）なので、`removedIds` の間引きはテキスト応答の側で持つ
 const ARCHIVE_REMOVE_MANY_IDS_SHOWN = 20;
 const PROFILE_DISTRIBUTION_EXCERPT = 400;
 
