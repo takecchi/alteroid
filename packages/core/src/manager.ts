@@ -8279,6 +8279,7 @@ class Pool implements ManagerPool {
     }
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
+    const lastReportAtAtStart = record.job.lastReportAt;
     record.stopConfirmedAt = this.#nowIso();
     // await の前の宛先を覚えておく: await の後にこれと食い違えば、委譲は別の runner へ移っている。
     const runnerIdBeforeConfirm = record.job.runnerId;
@@ -8288,6 +8289,24 @@ class Pool implements ManagerPool {
       signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
       source: 'stop',
     }).catch(() => undefined);
+
+    // 自動の畳みだけ、止める直前にもう一度「手が空いたまま」かを読み直す: 候補の判定からここまでに未pushの確認（最大5秒×2）と日誌の書き込みの往復を挟み、その間に届いた依頼（`send()` / 預かりの届け直し）が `status` を `running` へ、新しい報告が `lastReportAt` を動かす。止めると依頼を受けた担当を畳み、送り直しで二重になる。人間・クローンの明示の停止は読み直さない（意思が先）。
+    if (
+      by === 'auto-fold' &&
+      (record.job.status !== 'done' || record.job.lastReportAt !== lastReportAtAtStart)
+    ) {
+      delete record.stopConfirmedAt;
+      const detail =
+        `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
+        `（status=${record.job.status}）ので取りやめた。止めていない。`;
+      await this.#journal({
+        type: 'decision',
+        decision: `[auto-fold] ${managerId} の自動の畳みを取りやめた（直前に依頼が入った）: ${detail}`,
+        grounds:
+          'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
+      });
+      return { outcome: 'not_stopped', detail };
+    }
 
     // `runner.stop()` が投げても abort() ごと reject させない: 日誌もクローンへの通知も状態の更新も残らず 500 になり、「止めた事実は日誌に残る」約束がいちばん要る場面で消える。権威は `sessionGone` の探りに置く（stop の RPC が返らなくても止まっていることがある）。
     let { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
