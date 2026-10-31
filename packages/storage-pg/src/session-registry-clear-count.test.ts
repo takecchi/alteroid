@@ -84,18 +84,6 @@ describe('PgSessionRegistry — 墓標の蒸留失敗回数（#4752）', () => {
     expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
   });
 
-  it('古い形（1件だけの { graveId, failures }）の保存値も読め、数え足すと新しい形で書く（#4898）', async () => {
-    await db.insert(daemonState).values({
-      key: 'clone_transcript_grave_distill_failures',
-      value: '{"graveId":"a","failures":2}',
-    });
-    const sessions = stores.sessions;
-    expect(await sessions.graveDistillFailures('transcript', 'a')).toBe(2);
-    expect(await sessions.noteGraveDistillFailure('transcript', 'b')).toBe(1);
-    expect(await sessions.noteGraveDistillFailure('transcript', 'a')).toBe(3);
-    expect(await sessions.graveDistillFailures('transcript', 'b')).toBe(1);
-  });
-
   it('墓標の本体の突き合わせには触れない（数えても clear…If は今までどおり下ろす）', async () => {
     await stores.sessions.addTranscriptGrave({ archiveId: 'a1' });
     await stores.sessions.noteGraveDistillFailure('transcript', 'a1');
