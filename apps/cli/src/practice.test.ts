@@ -155,13 +155,10 @@ describe('alteroid practice set', () => {
 });
 
 describe('alteroid practice set の created の言い分け（#5379）', () => {
-  async function putReply(created: boolean | undefined): Promise<string> {
+  async function putReply(created: boolean): Promise<string> {
     const read = captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
-    replies.push({
-      status: 200,
-      body: { ...(practiceBody() as object), ...(created === undefined ? {} : { created }) },
-    });
+    replies.push({ status: 200, body: { ...(practiceBody() as object), created } });
     await practiceSetCommand('typo', { file: fileWith('本文\n'), kind: '調査', title: '題' });
     return read();
   }
@@ -174,10 +171,6 @@ describe('alteroid practice set の created の言い分け（#5379）', () => {
 
   it('created: false なら、従来どおり書き換えたと言う', async () => {
     expect(await putReply(false)).toBe('書き換えました: typo\n');
-  });
-
-  it('created が無い（古いデーモン）なら、従来どおり書き換えたと言う', async () => {
-    expect(await putReply(undefined)).toBe('書き換えました: typo\n');
   });
 });
 

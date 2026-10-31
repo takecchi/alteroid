@@ -1435,11 +1435,10 @@ export async function runSlashCommand(
           json: { kind: kind ?? '', request: parsed.request, spec: parsed.spec },
         });
         if (created.ok) {
-          // `replaced` は省略可能（古いデーモンは返さない）: 欠けていたら「置き換えた」と言わず、従来どおり仕込んだと言う。
           // 旧本文は応答に載らない: 長い本文を応答へ載せ直さず、置き換える前に日誌（decision）へ逐語で残してあるので、その取り方を言う。
           const replaced = await created
             .json()
-            .then((body) => body.replaced === true)
+            .then((body) => body.replaced)
             .catch(() => false);
           stdout.write(
             replaced
