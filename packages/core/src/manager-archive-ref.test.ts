@@ -295,6 +295,120 @@ describe('送り直しの本文と参照の取り寄せが同じ id で競って
   });
 });
 
+describe('置き場への書き込みの失敗と後始末（切り出しで崩れうる順序）', () => {
+  const BODY = '同じ退避の本文';
+
+  async function setupWith(
+    stored: Map<string, string>,
+    wrap: (stores: Stores) => Stores,
+  ): Promise<{ stores: Stores; fake: Fake }> {
+    const stores = wrap(createMemoryStores());
+    await stores.jobs.putJob(job);
+    const fake = fakeRunner(stored);
+    pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: createRunnerRegistry([fake.runner]),
+    });
+    await pool.restore();
+    return { stores, fake };
+  }
+
+  // 終わりの印にする別の退避: 先に流した出来事の処理が済んだことを、実時間の待ちなしで確かめる
+  async function settleWith(stores: Stores, fake: Fake, count: number): Promise<readonly string[]> {
+    fake.emit({ type: 'archive', managerId: job.id, body: '終わりの印' });
+    let ids: readonly string[] = [];
+    await vi.waitFor(async () => {
+      ids = await archiveIdsOf(stores);
+      expect(ids).toHaveLength(count);
+      expect(await stores.archive.read(ids.at(-1)!)).toEqual({ kind: 'body', body: '終わりの印' });
+    });
+    return ids;
+  }
+
+  it('置き場への書き込みが落ちたら、runner に消させず、台帳に id を足さず、跡を残す。続けて同じ id の本文が届けば、落とした扱いにせず入れる', async () => {
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => lines.push(line));
+    try {
+      let writes = 0;
+      const { stores, fake } = await setupWith(new Map([[ARCHIVE_ID, BODY]]), (base) => ({
+        ...base,
+        archive: {
+          ...base.archive,
+          archive: async (sessionId, transcript) => {
+            writes += 1;
+            if (writes === 1) throw new Error('置き場への書き込みが落ちた');
+            return base.archive.archive(sessionId, transcript);
+          },
+        },
+      }));
+      fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 6 } });
+      await vi.waitFor(() =>
+        expect(
+          lines.some(
+            (line) =>
+              line.includes('トランスクリプトの退避') &&
+              line.includes(`managerId=${job.id}`) &&
+              line.includes('置き場への書き込みが落ちた'),
+          ),
+        ).toBe(true),
+      );
+      expect(await archiveIdsOf(stores)).toEqual([]);
+      expect(fake.deletes).toEqual([]);
+
+      // 取り寄せの結果は「入れられなかった」になっているので、本文は捨てずに入れる
+      fake.emit({ type: 'archive', managerId: job.id, id: ARCHIVE_ID, body: BODY });
+      await vi.waitFor(async () => expect(await archiveIdsOf(stores)).toHaveLength(1));
+      const [archiveId] = await archiveIdsOf(stores);
+      expect(await stores.archive.read(archiveId!)).toEqual({ kind: 'body', body: BODY });
+      expect(writes).toBe(2);
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+  });
+
+  it('runner への「消して」が落ちても、入れた退避を取り消さず、落とした跡も残さない', async () => {
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => lines.push(line));
+    try {
+      const { stores, fake } = await setup(new Map([[ARCHIVE_ID, BODY]]));
+      fake.runner.deleteArchive = async (managerId, archiveId) => {
+        fake.deletes.push(`${managerId}/${archiveId}`);
+        throw new Error('runner が消せなかった');
+      };
+      fake.emit({ type: 'archive', managerId: job.id, ref: { id: ARCHIVE_ID, chars: 6 } });
+      await vi.waitFor(() => expect(fake.deletes).toEqual([`${job.id}/${ARCHIVE_ID}`]));
+      const ids = await settleWith(stores, fake, 2);
+      expect(await stores.archive.read(ids[0]!)).toEqual({ kind: 'body', body: BODY });
+      expect(lines.join('')).not.toContain('トランスクリプトの退避');
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+  });
+
+  it('本文も参照も無い退避の出来事は、置き場へ入れず、跡を残す', async () => {
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => lines.push(line));
+    try {
+      const { stores, fake } = await setup(new Map());
+      fake.emit({ type: 'archive', managerId: job.id } as RunnerEvent);
+      await vi.waitFor(() =>
+        expect(
+          lines.some(
+            (line) =>
+              line.includes('トランスクリプトの退避') &&
+              line.includes('本文も参照も無い退避の出来事が届いた'),
+          ),
+        ).toBe(true),
+      );
+      expect(await archiveIdsOf(stores)).toEqual([]);
+      expect(fake.fetches).toEqual([]);
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+  });
+});
+
 describe('預けた退避を取りに行く呼び出しが落ちても、やり直して本文を置き場へ入れる', () => {
   it('⭐ fetchArchive() が2回投げても、3回目で取れた本文を置き場へ入れ、runner に消させる', async () => {
     const stores = createMemoryStores();
