@@ -686,7 +686,7 @@ function settleWaitFor(
   return { ms: externalMs, interruptWhen: isHumanOriginated };
 }
 
-// 失敗のたびに後退する: 毎分1ターンにしないため
+// 失敗のたびに後退する: 毎分1ターンにしないため。末尾を超えたら末尾の間隔で配り直し続ける（回数で打ち切らない: 打ち切ると週次の回は次の週まで走らず、「時刻が来たら必ずクローンに届く」に反するため）
 const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].map(
   (minutes) => minutes * 60_000,
 );
@@ -5608,7 +5608,7 @@ class Clone implements CloneHost {
         const outcome = await this.#runInternal(timerPrompt);
 
         // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
-        // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば次の起動の `#firstDue` と次の周期の刻みで元の発火として配り直される）
+        // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば、成功するまで最後の間隔で元の発火として配り直され、再起動でも `#firstDue` が配り直す）
         // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
         if (plan !== null) {
           if (outcome.status === 'failed' && !outcome.heldForUsage) {
@@ -5625,11 +5625,12 @@ class Clone implements CloneHost {
             if (cause !== 'manual') {
               const prior = this.#timerTurnRetries.get(event.kind);
               const attempts = prior?.at === event.at ? prior.attempts : 0;
-              const delayMs = FAILED_TURN_RETRY_DELAYS_MS[attempts];
-              if (delayMs !== undefined) {
-                this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
-                this.#onScheduledRunNotStarted?.(event.kind, delayMs);
-              }
+              const delayMs =
+                FAILED_TURN_RETRY_DELAYS_MS[
+                  Math.min(attempts, FAILED_TURN_RETRY_DELAYS_MS.length - 1)
+                ];
+              this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
+              this.#onScheduledRunNotStarted?.(event.kind, delayMs);
             }
           } else {
             this.#timerTurnRetries.delete(event.kind);
