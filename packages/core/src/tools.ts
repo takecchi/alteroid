@@ -169,7 +169,8 @@ import {
 } from './archive-prune.js';
 import type { ArchiveRemoveManyFilter } from './archive-prune.js';
 import { denialActorTag, describeDenialFollowUp } from './denial-format.js';
-import { decisionUnusedNote, guardArchiveRemoval, HELD_MESSAGE_TTL_MS } from './manager.js';
+import { HELD_MESSAGE_TTL_MS } from './held-messages.js';
+import { decisionUnusedNote, guardArchiveRemoval } from './manager.js';
 import { tokenGenerationMismatched } from './manager-summary.js';
 import { describeTokenDiff } from './token-diff.js';
 import type { ManagerDenial } from './denial-key.js';
