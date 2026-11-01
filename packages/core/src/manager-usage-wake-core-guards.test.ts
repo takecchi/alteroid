@@ -216,6 +216,53 @@ async function stoppedByQuota(s: Setup): Promise<void> {
   s.key.availability = 'ready';
 }
 
+describe('作業者の落ちの起こし直し（#5030）は、起こす前に印を下ろし、届かなかったときだけ戻す', () => {
+  it('⭐ 届かなかった（skipped）回は印を台帳ごと戻し、次の回転で起こす', async () => {
+    const s = await setup();
+    s.fake.push(workerLimitNote(false));
+    s.fake.push(doneReport());
+    await settle();
+    expect((await firstJob(s))?.workerLimitStopped).toBeDefined();
+    s.fake.control.failDelivery = true;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(1);
+    // 起こす前に下ろした印が、届かなかったので戻っている（メモリだけでなく台帳にも）
+    expect((await firstJob(s))?.workerLimitStopped).toEqual(
+      expect.objectContaining({ preRotationKey: false }),
+    );
+
+    s.fake.control.failDelivery = false;
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    expect((await firstJob(s))?.workerLimitStopped).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('⭐ 届かない間に別の印へ置き換わっていたら、古い印で上書きして戻さない', async () => {
+    const s = await setup();
+    s.fake.push(workerLimitNote(false));
+    s.fake.push(doneReport());
+    await settle();
+    const gate = deferred();
+    s.fake.control.failDelivery = true;
+    s.fake.control.resumeGate = gate.promise;
+
+    const wake = s.pool.resumeStoppedByUsage();
+    await settle();
+    expect(s.fake.resumes).toHaveLength(1);
+    // 起こし直しの途中で、別の落ちの印（回転前の鍵）が立つ
+    s.fake.push(workerLimitNote(true));
+    await settle();
+    gate.release();
+
+    expect(await wake).toEqual([]);
+    expect((await firstJob(s))?.workerLimitStopped).toEqual(
+      expect.objectContaining({ preRotationKey: true }),
+    );
+    await s.pool.stop();
+  });
+});
+
 describe('枠の起こし直しの合流（#5205）は、印に触らない', () => {
   it('⭐ 走っている1本目が届かなかった（skipped）回に重なった2本目は、印を下ろさない。印は次の回転で拾われる', async () => {
     const s = await setup();
