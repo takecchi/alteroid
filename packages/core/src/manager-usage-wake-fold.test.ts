@@ -351,13 +351,13 @@ describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景�
     expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
 
     const message = s.fake.resumes[0]?.message ?? '';
-    expect(message).toContain('預けていた peer 2 本を閉じた');
+    expect(message).toContain('peer 2 本を閉じた');
     expect(message).toContain('codex[peer-aaa]');
     expect(message).toContain(
       '走っていた背景ターンは途中で終わった: codex[peer-aaa] 調査の途中で止まった',
     );
     expect(message).toContain('peer_run で新しく頼むこと');
-    expect(message.indexOf('預けていた peer')).toBeLessThan(message.indexOf('認証トークン'));
+    expect(message.indexOf('peer 2 本を閉じた')).toBeLessThan(message.indexOf('認証トークン'));
     // 届いた回で下ろす: 二度添えない
     expect((await s.stores.jobs.listJobs())[0]?.pendingPeerCloseNotice).toBeUndefined();
     await s.pool.stop();
@@ -376,8 +376,29 @@ describe('鍵の回転の起こし直しは、待ちの上限を過ぎた背景�
     expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
 
     const message = s.fake.resumes[0]?.message ?? '';
-    expect(message).toContain('預けていた peer 1 本を閉じた');
+    expect(message).toContain('peer 1 本を閉じた');
     expect(message).not.toContain('途中で終わった');
+    await s.pool.stop();
+  });
+
+  it('⭐ (a6b) 担当のセッションの終わりで閉じた peer（reason=failed）の途中で終わった背景ターンも、起こし直しの先頭へ添える（#6123）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.push({
+      type: 'parked_peers_closed',
+      managerId: 'mgr-fold',
+      reason: 'failed',
+      peers: [{ id: 'peer-ddd', provider: 'codex', interrupted: '調査の途中で止まった' }],
+    });
+    await settle();
+    expect((await s.stores.jobs.listJobs())[0]?.pendingPeerCloseNotice?.reason).toBe('failed');
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+
+    const message = s.fake.resumes[0]?.message ?? '';
+    expect(message).toContain('担当のセッションが終わった（落ちた・失効した）');
+    expect(message).toContain(
+      '走っていた背景ターンは途中で終わった: codex[peer-ddd] 調査の途中で止まった',
+    );
     await s.pool.stop();
   });
 
