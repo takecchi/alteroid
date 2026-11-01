@@ -360,7 +360,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#nudgeForUsageRotationOnce': 'failure,recovery',
     '#reattach': 'recovery',
     '#recordStaleRunnerUsage': 'failure,gauge',
-    '#renotifyStalledDenial': 'thinning',
     '#reportedOf': 'thinning',
     '#restoreJobs': 'recovery',
     '#retire': 'thinning',
@@ -368,6 +367,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#startAfterSupersedeCheck': 'reply',
     '#usageNoticeMemoryOf': 'thinning',
     abort: 'reply',
+  },
+  // 止まった拒否の知らせ直しの出し切りの日誌（旧 `Pool#renotifyStalledDenial`）。同じ検査をここへ移した。
+  'denial-renotify.ts': {
+    '#renotifyOne': 'thinning',
   },
   // 押し込みの帳面の失敗の日誌（旧 `Pool#journalPushFailure` / `#flushPushFailureFold(s)`）。同じ検査をここへ移した。
   'push-ledger.ts': {
@@ -454,6 +457,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
   for (const file of [
     'clone.ts',
+    'denial-renotify.ts',
     'manager.ts',
     'push-ledger.ts',
     'restored-windows.ts',

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { AutoFold } from './auto-fold.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
+import { DenialRenotifier } from './denial-renotify.js';
 import { shouldEscalateDenial } from './denial-escalation.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
@@ -18,10 +19,10 @@ import {
   runnerEventShape,
 } from './dropped-record.js';
 import { NOTIFY_REPORT_EXCERPT, excerptLine, renderListing } from './excerpt.js';
+import { laterIso } from './later-iso.js';
 import { HELD_FORCE_FOLD_AFTER_MS, HeldMessages, type StaleHoldStuck } from './held-messages.js';
 import {
   WITHHELD_REPORT_EXCERPT,
-  WITHHELD_REPORT_FLUSH_MS,
   WITHHELD_REPORT_LISTING_BUDGET,
   WITHHELD_REPORT_LISTING_BUDGET_BEFORE_SAVING,
   describeBackgroundWaitElapsed,
@@ -36,6 +37,7 @@ import {
 } from './bash-git-command.js';
 import {
   decodeDenialKey,
+  DENIAL_REPLY_ROUTE,
   denialActorLayerOf,
   denialKey,
   denialReasonSnapshotOf,
@@ -185,7 +187,7 @@ import {
   type RunnerMcpServersProbe,
   type RunnerResourcesProbe,
 } from './runner-probe.js';
-import { brief, ONE_SHOT_ALLOW_TTL_MS } from './runner.js';
+import { brief } from './runner.js';
 import type {
   InboxEvent,
   Job,
@@ -1684,15 +1686,6 @@ function askDeliveryOf(
   return { text, markup };
 }
 
-const DENIAL_REPLY_ROUTE =
-  '\n答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、' +
-  'その `requestId` と `decision` を付けて `manager_send` で答える（allow しても自動では撃ち直されず、撃ち直しても分類器にまた止められうる。#4904）。' +
-  'その確認が届いていなければ、この拒否には `requestId` が無く、許可として答える口は無い。' +
-  'そのときは `manager_send` に `decision` を付けて送らないこと' +
-  '（`requestId` 無しの `decision` は、このマネージャーが別に待っている確認へ回答として当たりうる）。' +
-  '別の形でやり直させるなら、`decision` 無しの追加指示として送る。' +
-  '作業者の拒否なら、その作業者へ伝えるようマネージャーに頼む（`manager_send` の届け先はマネージャーである）。';
-
 /**
  * 疑わしい側（上書き）を止める: 引き直しを打ち切って例外にしても `start()` を呼び直せば済むが、
  * 誤って上書きすると走行中の別の委譲の記録が黙って消える（`lease.ts` の `mayClaim` と同じ非対称）。
@@ -1739,27 +1732,6 @@ type WithheldReportMemory = NonNullable<Job['withheldReports']>;
 //   `'flush'` で配った分は `count` と一緒に空へ戻す。積むときに配るときと同じ予算の内へ詰める（`trimWithheldExcerpts`）。
 // - `taskCount`: **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。
 // - `flushedAt`: 経過時間の出所にしない（いつから待っているかは `firstAt` だけが持つ）。`#withholdBackgroundReport` はこの欄を持ち越す: 持ち越さないと印が消えて「エピソードにつき1本だけ」が壊れる。
-
-/**
- * **配列の長さがそのまま知らせ直しの上限回数（2回）を兼ねる。**
- * 1回目は `ONE_SHOT_ALLOW_TTL_MS`（1回だけの許可の寿命と同じ桁）、2回目は `WITHHELD_REPORT_FLUSH_MS` と同じ値だが、
- * 参照で結びつけない: 別の関心事の期限なので、あちらの env を差し替えてもこちらは動かさない。
- * ここが数えるのは新設した通知の回数であって、道具の実行回数でもターン数でもない（暴走を機械的に止めるものではない）。
- */
-const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
-  ONE_SHOT_ALLOW_TTL_MS,
-  WITHHELD_REPORT_FLUSH_MS,
-];
-
-/**
- * `renotifyStalledDenials` の「進んだか」の判定専用。同じ精度・同じタイムゾーン（`toISOString()`）で書かれた
- * 値どうしなので文字列比較が時刻の比較と一致する（`describeDenialFollowUp` と同じ前提）。
- */
-function laterIso(a: string | undefined, b: string | undefined): string | undefined {
-  if (a === undefined) return b;
-  if (b === undefined) return a;
-  return a > b ? a : b;
-}
 
 /**
  * - `'seen'` — `closed(done)` は報告の後の idle の終わりで、知らせない
@@ -2020,6 +1992,7 @@ class Pool implements ManagerPool {
    */
   readonly #rateLimitJournalFolds = new Map<string, JournalFoldWindow>();
   readonly #autoFold: AutoFold;
+  readonly #denialRenotifier: DenialRenotifier;
   /**
    * 担当ごとの「新しい入力を生きたセッションへ渡しに行った回数」。`#send` が渡す直前に進め、自動の畳み（`abort()` の `by === 'auto-fold'`）が
    * 止める直前に控えと見比べる。時刻にしない: 同じ時刻に2回入っても、回数なら違いが消えない。
@@ -2259,6 +2232,15 @@ class Pool implements ManagerPool {
         }),
       abort: (managerId, reason, by) => this.abort(managerId, reason, by),
       journal: (entry) => this.#journal(entry),
+    });
+    this.#denialRenotifier = new DenialRenotifier({
+      records: this.#records,
+      now: () => this.#now(),
+      stopped: () => this.#stopped,
+      emitReport: (managerId, text) => {
+        this.#emit(managerId, 'report', text);
+      },
+      journalExchange: this.#journalExchange.bind(this),
     });
     this.#held = new HeldMessages({
       records: this.#records,
@@ -5088,89 +5070,7 @@ class Pool implements ManagerPool {
   }
 
   async renotifyStalledDenials(): Promise<void> {
-    if (this.#stopped) return;
-    const now = this.#now();
-    for (const [managerId, record] of [...this.#records]) {
-      if (this.#stopped) break;
-      // `waiting_human` を丸ごと弾かない: 無関係な未決の確認が1件あるだけで無関係な拒否まで巻き添えになるため、判定は拒否1件ごとに行う。
-      const deniedLastAt = record.deniedLastAt;
-      if (deniedLastAt === undefined || deniedLastAt.size === 0) continue;
-      for (const [key, deniedAt] of [...deniedLastAt]) {
-        try {
-          this.#renotifyStalledDenial(managerId, record, key, deniedAt, now);
-        } catch (error) {
-          noteDroppedRecord('止まった拒否の知らせ直し', `managerId=${managerId}・鍵=${key}`, error);
-        }
-      }
-    }
-  }
-
-  #renotifyStalledDenial(
-    managerId: string,
-    record: ManagerRecord,
-    key: string,
-    deniedAt: string,
-    now: number,
-  ): void {
-    const deniedAtMs = Date.parse(deniedAt);
-    // 読めない時刻は症状として扱わない（判定できないという3つ目の状態）。
-    if (Number.isNaN(deniedAtMs)) return;
-
-    // `job.status === 'waiting_human'` を代理指標にしない: この拒否自身の `requestId` を持つ未決の確認があるときだけ見送る。無関係な確認が未決でも知らせ直しを止める理由にならない。
-    const ownRequestId = record.deniedLastRequestId?.get(key);
-    if (
-      ownRequestId !== undefined &&
-      record.waiting.some((item) => item.requestId === ownRequestId)
-    ) {
-      return;
-    }
-
-    const progressedAt = laterIso(record.job.lastReportAt, record.lastToolSettledAt);
-    if (progressedAt !== undefined && progressedAt > deniedAt) {
-      record.deniedRenotify?.delete(key);
-      return;
-    }
-
-    // 同じ鍵に新しい拒否が来ていたら古いエピソードの帳面は使わない: 新しい拒否は新しい注意に値する。
-    const existing = record.deniedRenotify?.get(key);
-    const stage = existing?.deniedAt === deniedAt ? existing.stage : 0;
-    const delayMs = DENIAL_RENOTIFY_DELAYS_MS[stage];
-    if (delayMs === undefined) return; // 出し切って黙っている（stage が上限に達した）
-
-    const dueAt = deniedAtMs + delayMs;
-    if (now < dueAt) return; // まだこの段の時間に達していない
-
-    const nextStage = stage + 1;
-    (record.deniedRenotify ??= new Map()).set(key, { deniedAt, stage: nextStage });
-    // 実際に配る直前に更新する: `#choosePending` が読むのは届いた知らせ直しであって、知らせ直そうとした事実ではない。
-    record.lastDenialRenotify = { at: new Date(now).toISOString(), key };
-
-    const { tool, actor } = decodeDenialKey(key);
-    const actorLabel =
-      actor === 'manager' ? 'マネージャー自身' : actor === 'worker' ? '作業者' : 'どちらの層か不明';
-    const reason = record.deniedLastReason?.get(key);
-    const elapsedMinutes = Math.round((now - deniedAtMs) / 60_000);
-
-    this.#emit(
-      managerId,
-      'report',
-      `[${managerId}] ${codeSpan(tool)} の拒否（${actorLabel}）から${String(elapsedMinutes)}分、` +
-        `動きが無い（知らせ直し ${String(nextStage)}/${String(DENIAL_RENOTIFY_DELAYS_MS.length)} 回目。` +
-        'issue #1105 C）。' +
-        (reason?.inputHead === undefined
-          ? ''
-          : `\n拒否より前に見た入力の先頭（伏せ字・最大160字）: ${codeSpan(reason.inputHead)}`) +
-        DENIAL_REPLY_ROUTE +
-        '\n全件は日誌に残っている（`journal_read` で辿れる）。',
-    );
-
-    if (nextStage === DENIAL_RENOTIFY_DELAYS_MS.length) {
-      void this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] ${tool} の拒否（${actorLabel}）の知らせ直しを` +
-          `${String(nextStage)}回とも出したので、これ以上は黙る（issue #1105 C）。`,
-      );
-    }
+    this.#denialRenotifier.renotifyStalled();
   }
 
   /**
