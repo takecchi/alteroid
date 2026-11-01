@@ -3482,6 +3482,11 @@ class Pool implements ManagerPool {
    */
   readonly #unresumable = new Set<string>();
   /**
+   * `closed(failed / lost)` でクローンへ知らせた peer の閉じの知らせの `at`（担当ごと）。同じ知らせを閉じのたびに重ねて出さないための印。
+   * 台帳の `pendingPeerCloseNotice` は担当が起こされるまで残すので、これで「知らせ済み」を分ける（プロセス内だけ: 閉じは再起動を跨いで届き直さない）。
+   */
+  readonly #peerCloseReportedAt = new Map<string, string>();
+  /**
    * 預かった伝言（`Job.heldMessages`）を持つ委譲。台帳が正で、これは周期の見回りで全件の台帳を読まないための索引。
    * 起動時の `#restoreJobs` が台帳から組み直す。
    */
@@ -11678,6 +11683,21 @@ class Pool implements ManagerPool {
           if (record.job.runnerId !== undefined) {
             this.#runners.noteManagerFailed(record.job.runnerId);
           }
+        }
+        // 担当が終端で終わったとき、台帳に残る peer の閉じの知らせをクローンへも知らせる: `parked_peers_closed(failed)` は `closed` より前に届き、その時点の job はまだ running なので台帳へ積まれる。以後起こされないと誰にも届かない。
+        // 台帳の知らせは消さない（あとで起こし直されれば担当の先頭にも添う。宛先が違うので二重にならない）。同じ知らせは1回だけ（`#peerCloseReportedAt`）。
+        const pendingPeerClose = record.job.pendingPeerCloseNotice;
+        if (
+          (event.status === 'failed' || event.status === 'lost') &&
+          pendingPeerClose !== undefined &&
+          this.#peerCloseReportedAt.get(event.managerId) !== pendingPeerClose.at
+        ) {
+          this.#peerCloseReportedAt.set(event.managerId, pendingPeerClose.at);
+          this.#emit(
+            event.managerId,
+            'report',
+            `[${event.managerId}] ${composePeerCloseNotices(pendingPeerClose)}`,
+          );
         }
         // report が無いまま `closed(done)` だけが届いたらクローンへ知らせる: 台帳は `done` になるが受信箱には何も出ず、成果が出ているかを誰も確かめないまま終わる。報告の後の idle としての `closed(done)` は無音。判定できないときは知らせる側へ倒す（`reportSeenInSession`）。
         // 背景処理の積み（`#withheldReports`）が在るときは重ねない: 直下の分岐が「この委譲は終わった」を配るので二重になる。本文を先に日誌へ書く（flush の前に落ちても辿れるように）。
