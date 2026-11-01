@@ -215,10 +215,7 @@ import {
   unpushedWorkObservationOf,
   type ManagerUnpushedWork,
 } from './unpushed-work-observation.js';
-import {
-  markRescueGoneWhileAlive,
-  mergeRescue,
-} from './rescue-cleanup.js';
+import { markRescueGoneWhileAlive, mergeRescue } from './rescue-cleanup.js';
 import { RescueSweeper } from './rescue-sweeper.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
