@@ -276,3 +276,52 @@ describe('同じ委譲の rescue_files は直列に取り込む（鎖）', () =>
     await pool.stop();
   });
 });
+
+async function decisionsMentioning(
+  stores: ReturnType<typeof createMemoryStores>,
+  needle: string,
+): Promise<number> {
+  const rows = await stores.journal.list({ types: ['decision'] });
+  return rows.filter((row) => JSON.stringify(row).includes(needle)).length;
+}
+
+describe('預けなかったものの日誌の印（1回だけ書く）は、約500件で入れ替わる', () => {
+  it('同じ飛ばしは繰り返さないが、印が500件を超えた後の次の取り込みで古い印が外れ、同じ飛ばしがまた日誌に書かれる', async () => {
+    const { pool, stores, fake } = await setup([jobOf('mgr-s')]);
+    const skipOnly = (paths: readonly string[]) =>
+      fake.send({
+        type: 'rescue_files',
+        managerId: 'mgr-s',
+        worktree: 'wt',
+        files: [],
+        skipped: paths.map((path) => ({ path, reason: 'not-regular' })),
+      });
+    const bulk = (round: number) =>
+      skipOnly(Array.from({ length: 100 }, (_, i) => `bulk-${String(round)}-${String(i)}.txt`));
+    /** 同じ委譲の取り込みは直列なので、後ろに流した印が日誌に出たら、それまでの分は処理済み（実時間で待たない）。 */
+    const flushedThrough = async (marker: string) => {
+      skipOnly([marker]);
+      await vi.waitFor(async () => expect(await decisionsMentioning(stores, marker)).toBe(1));
+    };
+
+    skipOnly(['only-here.txt']);
+    await flushedThrough('marker-0.txt');
+    expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(1);
+
+    // 約400件まで印が溜まった状態で同じ飛ばしが来ても、書かない
+    for (let round = 0; round < 4; round += 1) bulk(round);
+    skipOnly(['only-here.txt']);
+    await flushedThrough('marker-1.txt');
+    expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(1);
+
+    // 500件を超えるまで溜める。超えた後の次の取り込みで印の集まりが作り直される
+    for (let round = 4; round < 6; round += 1) bulk(round);
+    skipOnly(['only-here.txt']);
+    await vi.waitFor(async () => expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(2));
+    // 作り直した後は、また同じ飛ばしは1回だけ
+    skipOnly(['only-here.txt']);
+    await flushedThrough('marker-2.txt');
+    expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(2);
+    await pool.stop();
+  });
+});
