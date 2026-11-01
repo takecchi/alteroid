@@ -343,7 +343,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   },
   'manager.ts': {
     '#askedOf': 'thinning',
-    '#deliverQuotaStopWindow': 'thinning',
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
@@ -351,7 +350,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#flushSynthesizedNoticeFor': 'gauge,thinning',
     '#handleEvent': 'decision,failure,gauge,recovery,reply,thinning',
     '#ignoreIfMovedAway': 'decision',
-    '#joinQuotaStopWindow': 'thinning',
     '#noteAmbiguousResolved': 'recovery',
     '#noteAmbiguousSighting': 'failure',
     '#noteVanishedRunnerGauge': 'gauge',
@@ -377,6 +375,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#flushFailureFold': 'thinning',
     '#flushFailureFolds': 'thinning',
     '#journalFailure': 'failure,thinning',
+  },
+  // 枠の窓の日誌（旧 `Pool#joinQuotaStopWindow` / `#deliverQuotaStopWindow`）。同じ検査をここへ移した。
+  'quota-stop-windows.ts': {
+    '#deliver': 'thinning',
+    join: 'thinning',
   },
   // 「取り戻した」窓と resume 確認の日誌（旧 `Pool#notifyRestored` / `#observeResumeConfirmation` ほか）。同じ検査をここへ移した。
   'restored-windows.ts': {
@@ -460,6 +463,7 @@ describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（i
     'denial-renotify.ts',
     'manager.ts',
     'push-ledger.ts',
+    'quota-stop-windows.ts',
     'restored-windows.ts',
     'session-loaders.ts',
   ]) {
