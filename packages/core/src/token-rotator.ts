@@ -383,7 +383,21 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   // 並列に回さない: 同じ文言が2本同時に届くとプールを一気に食うため
   const { run: serial } = createSerialQueue();
 
-  // 呼び出し元から一覧を受け取らない: 周の先頭で読んだ一覧を書き戻すと、直前に完了した PUT /tokens を踏み消すため
+  // 呼び出し元から一覧を受け取らない: 周の先頭で読んだ一覧を書き戻すと、直前に完了した PUT /tokens を踏み消すため。行が無ければ書かない（`wrote: false`）
+  async function patchToken(
+    id: string,
+    mutate: (token: AgentToken) => AgentToken,
+  ): Promise<{ wrote: boolean; tokens: AgentToken[] }> {
+    return writeLock.run(async () => {
+      const latest = await stores.tokens.list();
+      if (!latest.some((token) => token.id === id)) return { wrote: false, tokens: latest };
+      const tokens = await stores.tokens.replace(
+        latest.map((token) => (token.id === id ? mutate(token) : token)),
+      );
+      return { wrote: true, tokens };
+    });
+  }
+
   async function coolDown(
     outgoingId: string,
     settings: TokenRotationSettings,
@@ -408,13 +422,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ...(noticeResetsAt === undefined ? {} : { noticeResetsAt }),
         fallbackCooldownMs: settings.cooldownMs,
       });
-    return writeLock.run(async () => {
-      const latest = await stores.tokens.list();
-      if (!latest.some((token) => token.id === outgoingId)) return latest;
-      return stores.tokens.replace(
-        latest.map((token) => (token.id === outgoingId ? mutate(token) : token)),
-      );
-    });
+    return (await patchToken(outgoingId, mutate)).tokens;
   }
 
   async function sweepCandidates(
@@ -928,14 +936,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     } else {
       return 'unchanged' as const;
     }
-    const wrote = await writeLock.run(async () => {
-      const latest = await stores.tokens.list();
-      if (!latest.some((token) => token.id === input.tokenId)) return false;
-      await stores.tokens.replace(
-        latest.map((token) => (token.id === input.tokenId ? mutate(token) : token)),
-      );
-      return true;
-    });
+    const { wrote } = await patchToken(input.tokenId, mutate);
     return wrote ? ('written' as const) : ('unchanged' as const);
   }
 
@@ -1086,16 +1087,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
         // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
         const recoveredAt = now().toISOString();
-        const currentRowId = currentRow.id;
-        await writeLock.run(async () => {
-          const latest = await stores.tokens.list();
-          if (!latest.some((token) => token.id === currentRowId)) return;
-          await stores.tokens.replace(
-            latest.map((token) =>
-              token.id === currentRowId ? markTokenUsable(token, recoveredAt) : token,
-            ),
-          );
-        });
+        await patchToken(currentRow.id, (token) => markTokenUsable(token, recoveredAt));
         return {
           kind: 'ignored' as const,
           signal: 'none' as const,
@@ -1139,28 +1131,21 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       // 既定値へすり替えない: 設定が読めず resets も無ければ書かない
       if (resets !== undefined || settingsRead.readable) {
         const at = now().toISOString();
-        const currentRowId = currentRow.id;
         const reason = currentVerdict.reason;
         const fallbackCooldownMs = settingsRead.readable
           ? settingsRead.settings.cooldownMs
           : undefined;
         // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
-        pool = await writeLock.run(async () => {
-          const latest = await stores.tokens.list();
-          if (!latest.some((token) => token.id === currentRowId)) return latest;
-          return stores.tokens.replace(
-            latest.map((token) =>
-              token.id === currentRowId
-                ? markTokenUnusable(token, {
-                    at,
-                    message: reason,
-                    ...(resets === undefined ? {} : { resets }),
-                    ...(fallbackCooldownMs === undefined ? {} : { fallbackCooldownMs }),
-                  })
-                : token,
-            ),
-          );
-        });
+        pool = (
+          await patchToken(currentRow.id, (token) =>
+            markTokenUnusable(token, {
+              at,
+              message: reason,
+              ...(resets === undefined ? {} : { resets }),
+              ...(fallbackCooldownMs === undefined ? {} : { fallbackCooldownMs }),
+            }),
+          )
+        ).tokens;
         blockedByProbe = true;
       } else {
         probeUnusableUnrecorded = currentVerdict.reason;
