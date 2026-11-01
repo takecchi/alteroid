@@ -11477,11 +11477,16 @@ describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => 
     const github = { name: 'ext-github', status: 'failed' };
     const notion = { name: 'ext-notion', status: 'needs-auth' };
 
+    // pending（まだつながっていないだけ）・disabled（人が切った）は異常ではなく、つながっているのと同じ扱い（書かず、署名も消す）
+    const pending = { name: 'ext-slow', status: 'pending' };
+    const disabled = { name: 'ext-off', status: 'disabled' };
+
     for (const [id, mcpServers] of [
-      ['sess-1', [connected, github]],
-      ['sess-2', [connected, github]],
+      ['sess-0', [connected, pending, disabled]],
+      ['sess-1', [connected, github, pending]],
+      ['sess-2', [connected, github, disabled]],
       ['sess-3', [connected, github, notion]],
-      ['sess-4', [connected]],
+      ['sess-4', [connected, pending, disabled]],
       ['sess-5', [connected, github]],
     ] as const) {
       s.a.onEvent?.({
@@ -11500,6 +11505,7 @@ describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => 
     expect(texts[0]).toContain(`[${s.managerId}] init が知らせた MCP サーバのうち`);
     expect(texts[0]).toContain('ext-github（failed）');
     expect(texts[0]).not.toContain('alteroid');
+    expect(texts.join('\n')).not.toMatch(/pending|disabled|ext-slow|ext-off/);
     expect(texts[1]).toContain('ext-notion（needs-auth）');
 
     await s.pool.stop();

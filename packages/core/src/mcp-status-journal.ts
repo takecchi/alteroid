@@ -9,15 +9,18 @@ export interface McpServerStatus {
 const JOURNAL_SERVERS_MAX = 20;
 const JOURNAL_FIELD_LIMIT = 120;
 
+// `pending`（まだつながっていないだけ）と `disabled`（人が切った）は異常ではないので数えない: セッションを開くたびに障害の行が出るため。
+const FAILED_STATUSES: ReadonlySet<string> = new Set(['failed', 'needs-auth']);
+
 /**
- * init が知らせた MCP サーバのうち `connected` 以外だけを文にする（名前と状態だけで、設定・鍵は載せない）。
- * 全部 `connected` なら `null`（日誌に残さない）。`digest` が同じなら同じ状態の組。
+ * init が知らせた MCP サーバのうち `failed` / `needs-auth` だけを文にする（名前と状態だけで、設定・鍵は載せない）。
+ * 該当が無ければ `null`（日誌に残さない）。`digest` が同じなら同じ状態の組。
  */
 export function describeMcpStatusForJournal(
   servers: readonly McpServerStatus[],
 ): { text: string; digest: string } | null {
   const bad = servers
-    .filter((server) => server.status !== 'connected')
+    .filter((server) => FAILED_STATUSES.has(server.status))
     .map(
       (server) =>
         `${excerptLine(server.name, JOURNAL_FIELD_LIMIT)}（${excerptLine(server.status, JOURNAL_FIELD_LIMIT)}）`,
@@ -30,7 +33,7 @@ export function describeMcpStatusForJournal(
     text:
       `init が知らせた MCP サーバのうち、接続できていないもの: ${shown.join(', ')}` +
       `${omitted > 0 ? `（ほか ${omitted} 件）` : ''}。` +
-      'この担当ではそのサーバの道具が使えない（認証が切れた・落ちた・起動が間に合わなかったなど）。',
+      'この担当ではそのサーバの道具が使えない（認証が切れた・落ちた）。',
     digest: JSON.stringify([shown, omitted]),
   };
 }
