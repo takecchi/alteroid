@@ -283,7 +283,7 @@ export type SessionMissingKind = 'resume-failed' | 'unlisted';
  * `awaitingBackground` の分岐より前に実行するので、`status` は必ず `'done'` へ潰れ、
  * 「手が空いた」と「待って畳んだ」が台帳の軸で同じ顔になる。だから状態に添える。
  * `undefined` は「背景処理は無い」ではなく「そう名乗られていない」（古い runner）。
- * 在庫（`#withheldReports`）の写しで、デーモンを作り直すと消える。
+ * 在庫（`#withheldReports`）の写し。在庫は台帳（`Job.withheldReports`）にも写してあり、デーモンを作り直すと起動時に組み直される。
  */
 export interface ManagerAwaitingBackground {
   /** `withheldReports` と畳まない: 待っているタスクの数と握り潰した報告の本数は別の観測。 */
