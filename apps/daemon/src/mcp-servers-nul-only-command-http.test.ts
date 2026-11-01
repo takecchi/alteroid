@@ -1,4 +1,9 @@
-import { createMemoryStores, type CloneHost, type Stores } from '@alteroid/core';
+import {
+  createMcpServerService,
+  createMemoryStores,
+  type CloneHost,
+  type Stores,
+} from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { describe, expect, it } from 'vitest';
 
@@ -84,6 +89,7 @@ describe.each([
       stores,
       token: 'test-token',
       shutdown: () => undefined,
+      mcpServers: createMcpServerService({ stores }),
     });
     const put = await app.request('/mcp-servers', {
       method: 'PUT',

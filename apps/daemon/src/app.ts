@@ -65,7 +65,6 @@ import {
   PluginNameConflictError,
   summarizeFetchedPlugin,
   PROFILE_ENTRY_NAME,
-  mcpServersFingerprintOf,
   McpServersConflictError,
   mcpServersVersionOf,
   RESERVED_SCHEDULE_KINDS,
@@ -7455,25 +7454,13 @@ export function createApp(deps: AppDeps) {
             '値は書かない（鍵が入りうる）。',
         });
 
-        // 渡されていない構成（テストや配布先を持たない器）では保存だけして配らない: 配らなかったことは `runners: []` で見える。
+        // 本番の配線（`index.ts`）は必ず渡す。渡されていない構成は、保存だけして配らない道を黙って作らず、配線の誤りとして落とす（打ち消しの日誌を書いて 500）。
         let applied: ApplyMcpServersResult;
         try {
-          applied =
-            deps.mcpServers === undefined
-              ? await (async () => {
-                  const stored = await deps.stores.mcpServers.write(servers, writeOptions);
-                  const storedNames = mcpServerNames(stored.mcpServers);
-                  return {
-                    updatedAt: stored.updatedAt,
-                    version: mcpServersVersionOf(stored),
-                    names: storedNames,
-                    ...(storedNames.length === 0
-                      ? {}
-                      : { sha256: mcpServersFingerprintOf(stored.mcpServers) }),
-                    runners: [],
-                  };
-                })()
-              : await deps.mcpServers.apply(servers, writeOptions);
+          if (deps.mcpServers === undefined) {
+            throw new Error('McpServerService が渡されていない（createApp の mcpServers）');
+          }
+          applied = await deps.mcpServers.apply(servers, writeOptions);
         } catch (error) {
           await appendJournalOrDrop(
             deps.stores,

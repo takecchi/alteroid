@@ -386,6 +386,7 @@ beforeEach(() => {
     shutdown: () => (shutdowns += 1),
     scheduler: schedule.scheduler,
     journalEvents: journalBus,
+    mcpServers: createMcpServerService({ stores }),
   });
 });
 
@@ -11050,6 +11051,7 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
       stores: throwingStores,
       token: 'test-token',
       shutdown: () => undefined,
+      mcpServers: createMcpServerService({ stores: throwingStores }),
     });
 
     const response = await withThrowingMcpServers.request('/mcp-servers', {
@@ -11114,6 +11116,7 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
         stores: brokenStores,
         token: 'test-token',
         shutdown: () => undefined,
+        mcpServers: createMcpServerService({ stores: brokenStores }),
       });
     };
     const decisionsOf = async () =>
@@ -11241,15 +11244,20 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
     expect(serialized).not.toContain('gh-mcp');
   });
 
-  it('1本道を渡していない構成では保存だけして、配らなかったことを runners: [] で返す', async () => {
-    const response = await app.request('/mcp-servers', {
+  // 反転: 以前は 1本道を渡していない構成では保存だけして `runners: []` を返していた。本番は必ず渡すので、その道を消し、配線の誤りとして 500 にする。保存はしない。
+  it('1本道を渡していない構成は配線の誤りとして 500 で、保存しない', async () => {
+    const bare = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    const response = await bare.request('/mcp-servers', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mcpServers: REGISTRATION }),
     });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { runners: unknown[]; sha256?: string };
-    expect(body.runners).toEqual([]);
-    expect(body.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+    expect(response.status).toBe(500);
+    expect(await stores.mcpServers.read()).toBeNull();
   });
 });
