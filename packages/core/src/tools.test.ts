@@ -13,8 +13,8 @@ import {
   recentDroppedTraces,
   setStderrSinkForTesting,
 } from './dropped-record.js';
+import type { ManagerDenial } from './denial-key.js';
 import type {
-  ManagerDenial,
   ManagerPool,
   ManagerSendResult,
   ManagerSummary,

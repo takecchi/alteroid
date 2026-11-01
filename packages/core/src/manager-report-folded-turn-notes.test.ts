@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ManagerDenial, ManagerPool, ManagerSendResult, ManagerSummary } from './manager.js';
+import type { ManagerDenial } from './denial-key.js';
+import type { ManagerPool, ManagerSendResult, ManagerSummary } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 import { createMemoryStores } from './testing.js';

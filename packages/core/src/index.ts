@@ -324,7 +324,6 @@ export {
   WORKER_AGENT_NAME,
   WITHHELD_ENV_KEYS,
   createManagerPool,
-  type ManagerDenial,
   type ManagerPool,
   type VacateResult,
   type ManagerSendResult,
@@ -336,6 +335,7 @@ export {
   type RunnerPushOutcome,
   type WorkerToolEvent,
 } from './manager.js';
+export type { ManagerDenial } from './denial-key.js';
 export { DAEMON_FORCED_EXIT_MS } from './shutdown-grace.js';
 
 /** 「落ちた」は停止の証明ではない: 引き取ってよいかは lease の期限で判定する。 */

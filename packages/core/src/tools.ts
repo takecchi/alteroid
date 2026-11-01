@@ -176,8 +176,8 @@ import {
   tokenGenerationMismatched,
 } from './manager.js';
 import { describeTokenDiff } from './token-diff.js';
+import type { ManagerDenial } from './denial-key.js';
 import type {
-  ManagerDenial,
   ManagerPool,
   ManagerSendResult,
   ManagerSummary,
