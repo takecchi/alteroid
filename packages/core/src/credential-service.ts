@@ -1,4 +1,4 @@
-import { reasonOf, writeStderrLine } from './dropped-record.js';
+import { writeStderrLine } from './dropped-record.js';
 import { DAEMON_RESTART_REQUIRED_ENV_NAMES } from './app-env-var-defaults.js';
 import {
   CREDENTIAL_NAME,
@@ -15,7 +15,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerRegistry,
 } from './runner-protocol.js';
-import { createSerialQueue } from './serial-queue.js';
+import { createPushChannel, pushToRunners } from './push-channel.js';
 import type { StoredCredential, Stores } from './store.js';
 
 export interface CredentialService {
@@ -23,7 +23,7 @@ export interface CredentialService {
   fingerprints(): Promise<CredentialFingerprint[]>;
   // 外す指示も配る: 配らないと runner の器に古い鍵が残り続けるため
   apply(entries: readonly CredentialEntry[]): Promise<ApplyCredentialsResult>;
-  onPushed?(listener: (results: ApplyCredentialsResult['runners']) => void): () => void;
+  onPushed?(listener: (results: Readonly<ApplyCredentialsResult['runners']>) => void): () => void;
   // 差があるものだけを降ろす: 全部だと再接続のたびに `recycleForToken` を無意味に叩きうるため
   syncRunner(runner: RunnerClient): Promise<RunnerCredentialFingerprint[] | null>;
   vaultSnapshot(): readonly StoredCredential[];
@@ -221,9 +221,8 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     .catch(() => undefined);
 
   // 直列にする: 同時に2つ更新が入ると、層ごとに違う値が残るため
-  const { run: serial } = createSerialQueue();
-
-  const pushListeners = new Set<(results: ApplyCredentialsResult['runners']) => void>();
+  const { serial, onPushed, notify } =
+    createPushChannel<ApplyCredentialsResult['runners'][number]>();
   return {
     vaultSnapshot: () => cachedVaultRows,
 
@@ -278,13 +277,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
         const payload = [...upserted.map(({ name, value }) => ({ name, value })), ...removed];
 
         const pushed = await pushAll(payload);
-        for (const listener of pushListeners) {
-          try {
-            listener(pushed);
-          } catch {
-            // 帳面に積めなかっただけで、配布の結果そのものは下で返す。
-          }
-        }
+        notify(pushed);
 
         // 配布が失敗してもクローンへは知らせる: クローンは正本の写しを直に読むため
         if (changedForClone.length > 0) {
@@ -303,10 +296,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
         return { fingerprints: fingerprintsOf(rows), runners: pushed, restartRequired };
       }),
 
-    onPushed: (listener) => {
-      pushListeners.add(listener);
-      return () => pushListeners.delete(listener);
-    },
+    onPushed,
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
@@ -342,22 +332,13 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     return rows.map((row) => fingerprintOfRow(row));
   }
 
-  async function pushAll(
+  function pushAll(
     payload: readonly CredentialEntry[],
   ): Promise<ApplyCredentialsResult['runners']> {
-    if (runners === undefined) return [];
-    return Promise.all(
-      (await runners.list()).map(async (runner) => {
-        try {
-          return {
-            runnerId: runner.runnerId,
-            ok: true as const,
-            credentials: await runner.setCredentials([...payload]),
-          };
-        } catch (error) {
-          return { runnerId: runner.runnerId, ok: false as const, error: reasonOf(error) };
-        }
-      }),
+    return pushToRunners<ApplyCredentialsResult['runners'][number]>(
+      runners,
+      () => true,
+      async (runner) => ({ credentials: await runner.setCredentials([...payload]) }),
     );
   }
 }

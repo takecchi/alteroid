@@ -1,4 +1,3 @@
-import { reasonOf } from './dropped-record.js';
 import {
   isPluginScopeForRunner,
   pluginsFingerprintOf,
@@ -10,7 +9,7 @@ import {
   type RunnerPluginsFingerprint,
   type RunnerRegistry,
 } from './runner-protocol.js';
-import { createSerialQueue } from './serial-queue.js';
+import { createPushChannel, pushToRunners } from './push-channel.js';
 import type { Stores } from './store.js';
 
 /**
@@ -46,9 +45,7 @@ export function createPluginDistributionService(
   options: PluginDistributionServiceOptions,
 ): PluginDistributionService {
   const { stores, runners } = options;
-  const pushListeners = new Set<(results: readonly PluginsRunnerResult[]) => void>();
-
-  const { run: serial } = createSerialQueue();
+  const { serial, onPushed, notify } = createPushChannel<PluginsRunnerResult>();
 
   async function wanted(): Promise<PluginSummary[]> {
     return (await stores.plugins.list()).filter((summary) => isPluginScopeForRunner(summary.scope));
@@ -127,43 +124,19 @@ export function createPluginDistributionService(
     return placed === undefined ? {} : { plugins: placed };
   }
 
-  async function pushAll(): Promise<PluginsRunnerResult[]> {
-    if (runners === undefined) return [];
-    const open = await runners.list();
-    return Promise.all(
-      open
-        .filter((runner) => runner.setPlugin !== undefined && runner.retainPlugins !== undefined)
-        .map(async (runner): Promise<PluginsRunnerResult> => {
-          try {
-            const placed = await syncOne(runner);
-            return {
-              runnerId: runner.runnerId,
-              ok: true,
-              ...(placed?.plugins === undefined ? {} : { plugins: placed.plugins }),
-            };
-          } catch (error) {
-            return {
-              runnerId: runner.runnerId,
-              ok: false,
-              error: reasonOf(error),
-            };
-          }
-        }),
+  const pushAll = (): Promise<PluginsRunnerResult[]> =>
+    pushToRunners<PluginsRunnerResult>(
+      runners,
+      (runner) => runner.setPlugin !== undefined && runner.retainPlugins !== undefined,
+      async (runner) => (await syncOne(runner)) ?? undefined,
     );
-  }
 
   return {
     apply: () =>
       serial(async () => {
         const summaries = await wanted();
         const pushed = await pushAll();
-        for (const listener of pushListeners) {
-          try {
-            listener(pushed);
-          } catch {
-            // 帳面に積めなかっただけで、配布の結果そのものは下で返す。
-          }
-        }
+        notify(pushed);
         return {
           names: summaries.map((s) => s.name),
           ...(summaries.length === 0
@@ -175,9 +148,6 @@ export function createPluginDistributionService(
 
     syncRunner: (runner) => serial(() => syncOne(runner)),
 
-    onPushed: (listener) => {
-      pushListeners.add(listener);
-      return () => pushListeners.delete(listener);
-    },
+    onPushed,
   };
 }
