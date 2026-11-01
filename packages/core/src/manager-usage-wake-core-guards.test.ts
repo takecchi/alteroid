@@ -263,6 +263,39 @@ describe('作業者の落ちの起こし直し（#5030）は、起こす前に�
   });
 });
 
+function failedReport(): RunnerEvent {
+  return {
+    type: 'report',
+    managerId: ID,
+    text: `[failed] ${LIMIT_TEXT}`,
+    status: 'done',
+    failure: { code: 'rate_limit', via: 'assistant', status: 429 },
+  } as RunnerEvent;
+}
+
+describe('枠で落ちた報告・closed の両方で、鍵の回転の依頼 → 古い鍵の起こし直しの順で走る（#4980）', () => {
+  it.each([
+    ['report（failure 付きの報告）', failedReport],
+    ['closed（セッションごと落ちた）', closedBy429],
+  ])('⭐ %s', async (_name, event) => {
+    const s = await setup();
+    // 担当は世代 1 の鍵で走っている。回転の後（世代 2・ready）に枠へ当たる
+    s.key.generation = 2;
+
+    s.fake.push(event());
+    await settle();
+
+    const rotationRequest = s.log.findIndex((line) => line.startsWith('observation:reached'));
+    const staleWake = s.log.findIndex((line) => line.includes('通る鍵に戻った'));
+    expect(rotationRequest).toBeGreaterThanOrEqual(0);
+    expect(staleWake).toBeGreaterThanOrEqual(0);
+    expect(rotationRequest).toBeLessThan(staleWake);
+    expect(await decisionTexts(s, '回転の出来事を待たずに起こし直す')).toHaveLength(1);
+    expect((await firstJob(s))?.usageStoppedAt).toBeUndefined();
+    await s.pool.stop();
+  });
+});
+
 describe('枠の起こし直しの合流（#5205）は、印に触らない', () => {
   it('⭐ 走っている1本目が届かなかった（skipped）回に重なった2本目は、印を下ろさない。印は次の回転で拾われる', async () => {
     const s = await setup();
