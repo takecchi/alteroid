@@ -179,6 +179,75 @@ async function harness(fake: Fake) {
   };
 }
 
+describe('押す順と、失敗したときの後始末', () => {
+  it('複数のファイルは1つずつ順に押し、途中で失敗したら残りは押さず、命令も送らず、台帳にも跡を残さない（start）', async () => {
+    const bodies: Readable[] = [];
+    const fake = fakeRunner({
+      capabilities: CAPABLE,
+      stageLimit: 1000,
+      stage: async (index, _meta, body) => {
+        bodies.push(body as Readable);
+        if (index === 1) throw new Error('2 本目で壊れた');
+        for await (const chunk of body) void chunk;
+      },
+    });
+    const { put, call, pool, stop } = await harness(fake);
+    const a = await put('a.bin', BIG);
+    const b = await put('b.bin', Buffer.alloc(501, 1));
+    const c = await put('c.bin', Buffer.alloc(502, 2));
+    const out = await call('manager_start', { request: '調べて', attachments: [a.id, b.id, c.id] });
+    expect(out).toContain('2 本目で壊れた');
+    expect(out).toContain('マネージャーは起こしていない');
+    // 1 本目が終わってから 2 本目に入り、3 本目には進まない
+    expect(fake.log).toEqual(['stage:0:begin', 'stage:0:end', 'stage:1:begin']);
+    expect(fake.starts).toEqual([]);
+    expect(await pool.list()).toEqual([]);
+    // 読み切らずに断られた回に、置き場の読みを残さない
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.destroyed).toBe(true);
+    await stop();
+  });
+
+  it('押す失敗でも、置き場の読みは閉じる（send）。大きくない添付は押さず、命令に載る', async () => {
+    const bodies: Readable[] = [];
+    const fake = fakeRunner({
+      capabilities: CAPABLE,
+      stageLimit: 1000,
+      stage: async (_index, _meta, body) => {
+        bodies.push(body as Readable);
+        throw new Error('壊れた');
+      },
+    });
+    const { put, call, startManager, stop } = await harness(fake);
+    const managerId = await startManager();
+    const big = await put('big.bin', BIG);
+    const out = await call('manager_send', { managerId, message: '続き', attachments: [big.id] });
+    expect(out).toContain('壊れた');
+    expect(bodies[0]?.destroyed).toBe(true);
+    await stop();
+  });
+
+  it('send が届かず resume で入り直す回も、押してから resume の命令を出す', async () => {
+    const fake = fakeRunner({ capabilities: CAPABLE, stageLimit: 1000, sendDelivers: false });
+    const { put, call, startManager, stop } = await harness(fake);
+    const managerId = await startManager();
+    fake.emit({ type: 'session', managerId, sessionId: 'sess-1' });
+    const big = await put('big.bin', BIG);
+    const small = await put('small.bin', SMALL);
+    fake.log.length = 0;
+    await call('manager_send', { managerId, message: '続きを', attachments: [small.id, big.id] });
+    expect(fake.log.slice(0, 2)).toEqual(['stage:0:begin', 'stage:0:end']);
+    expect(fake.log).toContain('resume');
+    expect(fake.log.indexOf('resume')).toBeGreaterThan(fake.log.indexOf('stage:0:end'));
+    expect(fake.resumes[0]?.attachments).toEqual([
+      expect.objectContaining({ id: small.id, data: SMALL.toString('base64') }),
+      expect.objectContaining({ id: big.id, staged: true }),
+    ]);
+    expect(fake.resumes[0]?.attachments?.[1]?.data).toBeUndefined();
+    await stop();
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
