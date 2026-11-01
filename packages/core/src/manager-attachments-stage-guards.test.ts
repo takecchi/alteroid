@@ -248,6 +248,114 @@ describe('押す順と、失敗したときの後始末', () => {
   });
 });
 
+describe('hello が書いた上限は、下ろしの判定にそのまま効く（hello の再送）', () => {
+  it('下ろしの上限: 後の hello が上書きし、上限を名乗らない hello は前の値を持ち越さない', async () => {
+    const fake = fakeRunner({ capabilities: CAPABLE, stageLimit: 499 });
+    const { put, call, stop } = await harness(fake);
+    const big = await put('big.bin', BIG);
+    const start = () => call('manager_start', { request: '調べて', attachments: [big.id] });
+
+    expect(await start()).toContain('上限 499 バイト');
+    expect(fake.starts).toHaveLength(0);
+
+    fake.hello({ capabilities: CAPABLE, stageLimit: 500 });
+    expect(await start()).toContain('を起こした');
+    expect(fake.starts).toHaveLength(1);
+
+    fake.hello({ capabilities: CAPABLE });
+    expect(await start()).toContain('上限を名乗っていない');
+    expect(fake.starts).toHaveLength(1);
+
+    fake.hello({ capabilities: CAPABLE, stageLimit: 1000 });
+    expect(await start()).toContain('を起こした');
+    expect(fake.starts).toHaveLength(2);
+
+    // 能力を名乗らなくなった器（版が下がった）には、上限が残っていても押さない
+    fake.hello({ capabilities: [RUNNER_CAPABILITY_MANAGER_ATTACHMENTS], stageLimit: 1000 });
+    expect(await start()).toContain(RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE);
+    expect(fake.starts).toHaveLength(2);
+    await stop();
+  });
+
+  it('本文の上限: 見積もりちょうどは通り、1 バイト足りなければ断る。上限を名乗らない hello は前の値を持ち越さない', async () => {
+    const fake = fakeRunner({ capabilities: CAPABLE });
+    const { put, call, startManager, stop } = await harness(fake);
+    const small = await put('small.bin', SMALL);
+    const estimate = estimateAttachmentBodyBytes(
+      [
+        {
+          id: small.id,
+          name: 'small.bin',
+          mediaType: 'application/octet-stream',
+          size: SMALL.length,
+          sha256: small.sha256,
+          data: SMALL.toString('base64'),
+        },
+      ],
+      '調べて',
+    );
+    const start = () => call('manager_start', { request: '調べて', attachments: [small.id] });
+
+    await startManager(); // 接続して初めの hello を受けさせる（以降の hello がそれを上書きする）
+    fake.starts.length = 0;
+    fake.hello({ capabilities: CAPABLE, bodyLimit: estimate - 1 });
+    const refused = await start();
+    expect(refused).toContain(`見積もり ${estimate} バイト`);
+    expect(refused).toContain(`上限 ${estimate - 1} バイトを超える`);
+    expect(refused).toContain('runner が名乗った値');
+    expect(fake.starts).toHaveLength(0);
+
+    fake.hello({ capabilities: CAPABLE, bodyLimit: estimate });
+    expect(await start()).toContain('を起こした');
+    expect(fake.starts).toHaveLength(1);
+
+    fake.hello({ capabilities: CAPABLE, bodyLimit: estimate - 1 });
+    expect(await start()).toContain('見積もり');
+    expect(fake.starts).toHaveLength(1);
+
+    // 名乗らなくなったら、デーモン側の既定値で検める（前の小さい上限は残らない）
+    fake.hello({ capabilities: CAPABLE });
+    expect(await start()).toContain('を起こした');
+    expect(fake.starts).toHaveLength(2);
+    await stop();
+  });
+
+  it('本文の上限は、大きいファイル（staged）の中身を数えず、名前と本文だけを数える。先に下ろしの判定が走る', async () => {
+    const fake = fakeRunner({ capabilities: CAPABLE, stageLimit: 1000 });
+    const { put, call, startManager, stop } = await harness(fake);
+    const big = await put('big.bin', BIG);
+    await startManager();
+    fake.starts.length = 0;
+    const estimate = estimateAttachmentBodyBytes(
+      [
+        {
+          id: big.id,
+          name: 'big.bin',
+          mediaType: 'application/octet-stream',
+          size: BIG.length,
+          sha256: big.sha256,
+          staged: true,
+        },
+      ],
+      '調べて',
+    );
+    fake.hello({ capabilities: CAPABLE, stageLimit: 1000, bodyLimit: estimate });
+    expect(await call('manager_start', { request: '調べて', attachments: [big.id] })).toContain(
+      'を起こした',
+    );
+    fake.hello({ capabilities: CAPABLE, stageLimit: 1000, bodyLimit: estimate - 1 });
+    expect(await call('manager_start', { request: '調べて', attachments: [big.id] })).toContain(
+      '見積もり',
+    );
+    // 下ろしの上限（押す側）の断りは、本文の上限より先に言う
+    fake.hello({ capabilities: CAPABLE, stageLimit: 499, bodyLimit: estimate - 1 });
+    const both = await call('manager_start', { request: '調べて', attachments: [big.id] });
+    expect(both).toContain('上限 499 バイト');
+    expect(both).not.toContain('見積もり');
+    await stop();
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
