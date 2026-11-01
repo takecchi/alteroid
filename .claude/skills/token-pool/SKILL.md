@@ -288,7 +288,7 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 
 **⟹ 2026-09-15（#914 提案1）から、`manager_list` / `runner_list` に「その委譲が抱えている鍵の世代」が出る。** 現役の世代と食い違っていれば ⚠ が立つ（`manager_list` は詳しい文、`runner_list` は `⚠世代N≠現役M` の短い印）。**材料は daemon 側の記録（`ManagerPool` の `#tokenIdentities`）であって、runner の子プロセスの env を直接覗いてはいない**——daemon がこの委譲へ向けて最後に撒いた／撒いたと確認できた世代である。ターンの境界に達して自動で畳み直した回（`#reopenForTokenRotation` が立てる `note.tokenRotation`）はこの記録も追いつくので、境界に達しないまま古い鍵で走り続けている委譲だけに ⚠ が残る——**まさに人間が2026-09-15 に手で「3箇所の時刻を突き合わせて」確かめていたものを、機械が名指しする形である。**
 
-**⟹ 2026-10-05（#2851）から、done の委譲へ `manager_send` すると、世代が食い違っていれば畳んで新しい鍵で起こし直す。** それまでは done（台帳 `attached` が true のまま runner に旧プロセスが生きている）へ送ると `runner.send()` で旧プロセスへ追加指示を積むだけで、鍵が回っても古い鍵で走り、また枠（429）に当たり、⚠ も消えなかった（failed は `attached` が false なので resume に落ちて新しい鍵になる）。いまは `ManagerPool#send` が `#foldStaleTokenSession`（`packages/core/src/manager.ts`）を通る。
+**⟹ 2026-10-05（#2851）から、done の委譲へ `manager_send` すると、世代が食い違っていれば畳んで新しい鍵で起こし直す。** それまでは done（台帳 `attached` が true のまま runner に旧プロセスが生きている）へ送ると `runner.send()` で旧プロセスへ追加指示を積むだけで、鍵が回っても古い鍵で走り、また枠（429）に当たり、⚠ も消えなかった（failed は `attached` が false なので resume に落ちて新しい鍵になる）。いまは `ManagerPool#send` が `StaleTokenFold#fold`（`packages/core/src/stale-token-fold.ts`）を通る。
 
 - **起こし直すのは「世代が食い違う（`manager_list` の ⚠ と同じ `tokenGenerationMismatched`）・done・`attached`」の3つが揃い、かつ runner の `GET /managers` が返す `liveBackgroundTasks` が 0 本・確認待ちが無い・`sessionId` が在るときだけ。** 順序は 未 push の観測 → `runner.stop()`（runner が生ログの送り出しと未報告の flush を済ませて閉じる）→ 一覧から消えたことの確認 → 既存の `#resumeOnce`。貸し出しは握ったまま。確かめられなければ resume しない。
 - **残っていれば畳まず、旧セッションへも送らず `outcome: 'declined'` で断る。** detail が何が残っているかと取れる手を言う。**`liveBackgroundTasks` は runner が必ず返す。欄の無い応答（古い runner）はスキーマが落とし、読めない委譲として断る側に数える**（0 と読まない。#5763）。**force は無い。**

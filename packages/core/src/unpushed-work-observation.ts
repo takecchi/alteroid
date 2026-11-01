@@ -3,6 +3,14 @@ import type { LastUnpushedWorkObservation, UnpushedWorkObservationSource } from 
 import type { UnpushedWorkResult } from './runner-protocol.js';
 
 /**
+ * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS` と同じ値だが共有しない: `tools.ts` が
+ * `manager.ts` を import する向きを逆にしないため。実測に基づく値ではない。
+ * 待たない（fire-and-forget）のに上限を置くのは、応答が永久に返らないと
+ * `#unpushedWorkObservationInFlight` の印が残り、その委譲について以降1本も投げられなくなるため。
+ */
+export const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
+
+/**
  * `undefined` へ畳まない: `unavailable` は「確かめられなかった」ことそのもので、
  * 0 と混ぜない（取れない軸に0の行を作らない）。`reason` は人間・クローンが読む文言に
  * 直接使うので、機微を含まない範囲で短く書く。
