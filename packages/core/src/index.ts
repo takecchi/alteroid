@@ -330,11 +330,10 @@ export {
   type ManagerSummary,
   decisionUnusedNote,
   guardArchiveRemoval,
-  type RunnerPushHealth,
   type RunnerPluginLoadObservation,
-  type RunnerPushOutcome,
   type WorkerToolEvent,
 } from './manager.js';
+export type { RunnerPushHealth, RunnerPushOutcome } from './push-ledger.js';
 export type { ManagerDenial } from './denial-key.js';
 export { DAEMON_FORCED_EXIT_MS } from './shutdown-grace.js';
 

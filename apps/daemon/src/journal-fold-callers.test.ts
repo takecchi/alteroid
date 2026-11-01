@@ -16,6 +16,7 @@ const ALLOWED = [
   'packages/core/src/index.ts',
   'packages/core/src/journal-fold.ts',
   'packages/core/src/manager.ts',
+  'packages/core/src/push-ledger.ts',
 ];
 
 function sourceFiles(dir: string): string[] {
