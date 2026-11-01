@@ -50,12 +50,12 @@ export interface RestoredWindowsDeps {
   queueNotice: (managerId: string, label: SynthesizedNoticeLabel, text: string) => void;
   notifyExcerptLines: (job: Job) => string[];
   listJobsOrNote: (skipped: string) => Promise<Job[] | null>;
-  /** Map から外した窓の flush を `Pool#windowFlushesInFlight`（枠の窓と共有。`stop()` が待つ）へ載せる。 */
+  /** Map から外した窓の flush を `QuotaStopWindows#trackFlush`（枠の窓と共有。`stop()` が待つ）へ載せる。 */
   trackFlush: (flush: Promise<void>) => Promise<void>;
   now: () => number;
   nowIso: () => string;
   stopped: () => boolean;
-  /** 窓の長さ。枠の窓（`Pool#quotaStopWindowMs`）と同じ値を共有する。 */
+  /** 窓の長さ。枠の窓（`QuotaStopWindows`）と同じ値を共有する。 */
   windowMs: number;
   /** resume が戻れたかの確定を待つ時間。 */
   confirmTimeoutMs: number;
@@ -63,7 +63,7 @@ export interface RestoredWindowsDeps {
 
 /**
  * 「取り戻した」知らせ（`notify`）の窓と、resume が前の会話へ戻れたかの確認（#4501）。
- * 共有の欄（`Pool#windowFlushesInFlight`）は `Pool` に残し、口（`trackFlush`）で渡す。
+ * 共有の欄（flush の集合）は `QuotaStopWindows` が持ち、口（`trackFlush`）で渡す。
  */
 export class RestoredWindows {
   /**
@@ -329,7 +329,7 @@ export class RestoredWindows {
   }
 
   // 窓が閉じたとき、貯めた担当（窓を開けた担当以外）が居なければ何も配らない: 委譲1本だけの回は今までと完全に同じ。
-  // 状態は枠の1通と同じ読み方（`Pool#flushQuotaStopWindow`）: 像に無いものだけジョブ台帳から読み、読めなければ「不明」と言う。
+  // 状態は枠の1通と同じ読み方（`QuotaStopWindows` の `#deliver`）: 像に無いものだけジョブ台帳から読み、読めなければ「不明」と言う。
   // 窓は読む前に外す。`stop()` はこれを待つ。
   #flush(cause: RestartCause): Promise<void> {
     const window = this.#windows.get(cause);
