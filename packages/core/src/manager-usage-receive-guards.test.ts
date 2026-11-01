@@ -359,3 +359,94 @@ describe('usage_notice の計器（resets 時刻の突き合わせ）は配達�
     await s.pool.stop();
   });
 });
+
+const REJECTED = { status: 'rejected', kind: 'five_hour' } as const;
+const ALLOWED = { status: 'allowed', kind: 'five_hour' } as const;
+const BOUNCED = '枠から追い返された';
+const CROSS_FOLD = '同じ壁を跨いで畳んだ報告';
+const RUN_FOLD = '同じ合図が続いたので畳んだ';
+
+function rateLimit(managerId: string, facts: { status: string; kind: string }): RunnerEvent {
+  return { type: 'rate_limit', managerId, facts } as RunnerEvent;
+}
+
+function closedDone(managerId: string): RunnerEvent {
+  return { type: 'closed', managerId, status: 'done', reason: '終えた' } as RunnerEvent;
+}
+
+describe('rate_limit の跨ぎの畳みと日誌の畳み', () => {
+  it('⭐ 同じマネージャーの連打（遷移が立たない回）は「跨いだ」に数えず、本数の行を書かない', async () => {
+    const s = await setup(['mgr-a']);
+
+    s.fake.push(rateLimit('mgr-a', REJECTED));
+    await settle();
+    s.fake.push(rateLimit('mgr-a', REJECTED));
+    await settle();
+    s.fake.push(rateLimit('mgr-a', ALLOWED));
+    await settle();
+    s.fake.push(rateLimit('mgr-a', REJECTED));
+    await settle();
+
+    // 最後の `rejected` は遷移が立つ回で、そこで溜まった集合が吐かれる。同じ managerId を数えていれば1行出る。
+    expect(await journalTexts(s.stores, CROSS_FOLD)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('⭐ 委譲が終端して像を外すと、畳み残しの要約がその場で1行残る（stop() を待たない）', async () => {
+    const s = await setup(['mgr-a']);
+
+    s.fake.push(rateLimit('mgr-a', REJECTED));
+    await settle();
+    s.fake.push(rateLimit('mgr-a', ALLOWED));
+    await settle();
+    s.fake.push(rateLimit('mgr-a', REJECTED));
+    await settle();
+    // 同じ本文の2本目は日誌へ書かず数えるだけなので、この時点では要約が無い。
+    expect(await journalTexts(s.stores, BOUNCED)).toHaveLength(1);
+    expect(await journalTexts(s.stores, RUN_FOLD)).toHaveLength(0);
+
+    s.fake.push(closedDone('mgr-a'));
+    await settle();
+
+    expect(await journalTexts(s.stores, RUN_FOLD)).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+});
+
+describe('像を外した後（#retire）も残る使用量の記憶', () => {
+  it('⭐ 終端した委譲が配った上限の文言は、別の委譲が同じ文言で当たっても配り直さない', async () => {
+    const s = await setup(['mgr-a', 'mgr-b']);
+
+    s.fake.push(reached('mgr-a'));
+    await settle();
+    s.fake.push(closedDone('mgr-a'));
+    await settle();
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(0);
+
+    s.fake.push(reached('mgr-b'));
+    await settle();
+
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+
+  it('⭐ 終端した委譲が知らせた枠の状態は、別の委譲が同じ状態を報告しても遷移にならない', async () => {
+    const s = await setup(['mgr-a', 'mgr-b']);
+
+    s.fake.push(rateLimit('mgr-a', REJECTED));
+    await settle();
+    s.fake.push(closedDone('mgr-a'));
+    await settle();
+    expect(await journalTexts(s.stores, BOUNCED)).toHaveLength(1);
+
+    s.fake.push(rateLimit('mgr-b', REJECTED));
+    await settle();
+
+    expect(await journalTexts(s.stores, BOUNCED)).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+});
