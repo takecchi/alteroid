@@ -1,4 +1,4 @@
-import { fetchAccountUsage } from '@alteroid/core';
+import { fetchAccountUsage, setStderrSinkForTesting } from '@alteroid/core';
 import type { UsageProbeHandle, UsageProbeQuery } from '@alteroid/core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -491,6 +491,49 @@ describe('usage-poller — 現役のトークンで測る', () => {
     poller.stop();
 
     expect(calls()).toBe(2);
+  });
+});
+
+describe('測る準備（env・identity）が投げても、次の回は予約される', () => {
+  it('env() が投げた回の後も、受けられない拒否にならず stderr に残し、次の間隔で測り直す', async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => {
+      lines.push(line);
+    });
+    try {
+      let envCalls = 0;
+      const { queryFn, calls } = probe(() => LOGGED_IN);
+      const poller = startUsagePolling({
+        ...REQUIRED,
+        queryFn,
+        cwd: '/work',
+        intervalMs: 1_000,
+        env: () => {
+          envCalls += 1;
+          if (envCalls === 1) throw new Error('鍵の箱が読めない（模擬）');
+          return {};
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(calls()).toBe(1);
+      expect(unhandled).toEqual([]);
+      expect(lines.some((line) => line.includes('鍵の箱が読めない（模擬）'))).toBe(true);
+
+      poller.stop();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      setStderrSinkForTesting(null);
+      vi.useRealTimers();
+    }
   });
 });
 
