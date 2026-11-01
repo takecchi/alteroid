@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { createManagerPool, mergeRescue } from './manager.js';
+import { createManagerPool } from './manager.js';
+import { mergeRescue } from './rescue-cleanup.js';
 import {
   createRunnerRegistry,
   type RunnerClient,

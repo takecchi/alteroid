@@ -14,11 +14,11 @@ import {
   setStderrSinkForTesting,
 } from './dropped-record.js';
 import type { ManagerDenial } from './denial-key.js';
+import type { ManagerUnpushedWork } from './unpushed-work-observation.js';
 import type {
   ManagerPool,
   ManagerSendResult,
   ManagerSummary,
-  ManagerUnpushedWork,
   RunnerBacklogSnapshot,
   RunnerFleetOverview,
 } from './manager.js';
