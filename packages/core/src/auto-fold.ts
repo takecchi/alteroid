@@ -65,7 +65,7 @@ export interface AutoFoldDeps {
 export class AutoFold {
   readonly #deps: AutoFoldDeps;
   /**
-   * `JournalFoldWindow`（時間窓）は使わない: 契機の間隔に保証が無く、時間窓に意味のある長さを与えられない。
+   * 日誌の時間窓の畳み込み（`journal-fold.ts`）は使わない: 契機の間隔に保証が無く、時間窓に意味のある長さを与えられない。
    * **`Job.updatedAt` ではなく `lastReportAt` を使う**: 安全弁自身が呼ぶ `unpushedWork()` → `#persist()` が
    * `updatedAt` を進めるので、2回目の評価で必ず「変わった」と誤判定する。
    */
@@ -177,7 +177,7 @@ export class AutoFold {
    *   動き、かつ経過時間の起点も一緒に動くので段⑤の候補判定自体が2回目には
    *   落ちる——`manager.test.ts` の変異観測で見つかった）。**`lastReportAt`
    *   は `case 'report'`（本物の新しいターン）でしか書き換わらない**
-   *   （書き込み箇所は1つだけ。`grep -Fn -- 'record.job.lastReportAt = new Date' packages/core/src/manager.ts`）
+   *   （書き込み箇所は `grep -Fn -- 'record.job.lastReportAt = this.#nowIso()' packages/core/src/manager.ts`）
    *   ので、この安全弁の実行そのものには汚染されない。
    */
   async #foldOne(
