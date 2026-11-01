@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  composeHeldDelivery,
   createManagerPool,
   HELD_MESSAGE_TTL_MS,
   HELD_FORCE_FOLD_AFTER_MS,
   HELD_MESSAGES_MAX_COUNT,
   type ManagerSummary,
 } from './manager.js';
+import { composeHeldDelivery } from './manager-notices.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
