@@ -133,7 +133,7 @@ export class HeldMessages {
     this.#resuming = deps.resuming;
   }
 
-  /** 預かりを持つ委譲の索引。呼び手は読むだけ（`Pool#autoFoldBeforeWakes` が起こし直しの対象から外す）。 */
+  /** 預かりを持つ委譲の索引。呼び手は読むだけ（`AutoFold#beforeWakes` が起こし直しの対象から外す）。 */
   jobIds(): Iterable<string> {
     return this.#jobs;
   }
