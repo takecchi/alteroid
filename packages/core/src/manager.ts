@@ -77,6 +77,7 @@ import {
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import type { AgentPluginLoad } from './agent-events.js';
+import { describeMcpStatusForJournal } from './mcp-status-journal.js';
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
@@ -3510,6 +3511,8 @@ class Pool implements ManagerPool {
    * `#retire()` で消さない: 畳んだ委譲を起こし直した `session` が同じ署名でも、日誌へ同じ行を重ねない。1件は署名の文字列1つ。
    */
   readonly #pluginLoadDigests = new Map<string, string>();
+  /** `#pluginLoadDigests` と同じ形・同じ理由で、接続できていない MCP サーバの組の署名を持つ。全部つながったら消す（次の失敗は書き直す）。 */
+  readonly #mcpStatusDigests = new Map<string, string>();
   /** `#reattachTimers` とは別: あちらは繋ぎ直し（`hello` を待つ）で、こちらは繋がったままの runner へ自分から挑み直す。 */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
@@ -10447,11 +10450,26 @@ class Pool implements ManagerPool {
             pluginLoad: event.pluginLoad,
           });
           const described = describePluginLoadForJournal(event.pluginLoad);
-          if (this.#pluginLoadDigests.get(event.managerId) !== described.digest) {
-            this.#pluginLoadDigests.set(event.managerId, described.digest);
+          if (
+            this.#initFindingChanged(this.#pluginLoadDigests, event.managerId, described.digest)
+          ) {
             await this.#journalExchange(
               'inbound',
               `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
+            );
+          }
+        }
+        // 外部 MCP サーバの接続の失敗は担当の道具が欠けることなので、plugin の読み込み結果と同じ経路（日誌→クローン）で知らせる。欄が無い session は上書きしない
+        if (event.mcpServers !== undefined) {
+          const described = describeMcpStatusForJournal(event.mcpServers);
+          if (described === null) {
+            this.#mcpStatusDigests.delete(event.managerId);
+          } else if (
+            this.#initFindingChanged(this.#mcpStatusDigests, event.managerId, described.digest)
+          ) {
+            await this.#journalExchange(
+              'inbound',
+              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${described.text}`,
             );
           }
         }
@@ -13648,6 +13666,13 @@ class Pool implements ManagerPool {
         withdrawnReason: `この確認への答えは届かない（${reason}）`,
       });
     }
+  }
+
+  // 署名が前回と同じなら false（日誌に重ねない）。違えば覚えて true。接頭辞は呼び出し箇所に字面で置くため、書くのは呼び手（`#journalExchange` の注を参照）。
+  #initFindingChanged(digests: Map<string, string>, managerId: string, digest: string): boolean {
+    if (digests.get(managerId) === digest) return false;
+    digests.set(managerId, digest);
+    return true;
   }
 
   // `with: 'manager'` の exchange を書く。async にせず `#journal` の Promise をそのまま返す: `await` / `void` の呼び出し側のタイミングを変えない。

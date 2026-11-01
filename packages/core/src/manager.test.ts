@@ -11464,6 +11464,47 @@ describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => 
     await s.pool.stop();
     await s.real.stop();
   });
+
+  it('接続できていない MCP サーバがあると日誌へ1行（名前と状態だけ）。同じ組の再送は重ねず、変われば書き、全部つながれば書かない', async () => {
+    const s = await setupPoolWithRunner();
+    const mcpTexts = async () =>
+      (await s.stores.journal.list({ types: ['exchange'] })).flatMap((entry) =>
+        entry.type === 'exchange' && entry.text.includes('接続できていないもの')
+          ? [entry.text]
+          : [],
+      );
+    const connected = { name: 'alteroid', status: 'connected' };
+    const github = { name: 'ext-github', status: 'failed' };
+    const notion = { name: 'ext-notion', status: 'needs-auth' };
+
+    for (const [id, mcpServers] of [
+      ['sess-1', [connected, github]],
+      ['sess-2', [connected, github]],
+      ['sess-3', [connected, github, notion]],
+      ['sess-4', [connected]],
+      ['sess-5', [connected, github]],
+    ] as const) {
+      s.a.onEvent?.({
+        type: 'session',
+        managerId: s.managerId,
+        sessionId: id,
+        mcpServers: [...mcpServers],
+      });
+      await expect
+        .poll(async () => (await s.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+        .toBe(id);
+    }
+
+    const texts = await mcpTexts();
+    expect(texts).toHaveLength(3);
+    expect(texts[0]).toContain(`[${s.managerId}] init が知らせた MCP サーバのうち`);
+    expect(texts[0]).toContain('ext-github（failed）');
+    expect(texts[0]).not.toContain('alteroid');
+    expect(texts[1]).toContain('ext-notion（needs-auth）');
+
+    await s.pool.stop();
+    await s.real.stop();
+  });
 });
 
 describe('押し込みに失敗した runner へ、諦めずに挑み直す', () => {
