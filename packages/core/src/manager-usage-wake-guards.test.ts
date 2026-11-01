@@ -379,6 +379,95 @@ describe('掃きの最中に担当の状態が変わったら、掃きは古い�
   });
 });
 
+// `#retire`（終端で像から外す）は、使用量の8つの欄のどれも消さない。畳んだ後こそ読む所が在るため
+// （枠で止まった担当の起こし直しと掃き・一覧・作業者の上限の掃き）。公開の口から、残っていることを欄ごとに見る。
+describe('像から外れた（終端した）後も、使用量の欄は残る', () => {
+  it('⭐ 枠で止まった印（usageStopped）と resets 時刻の突き合わせ（resetTimeSkewMatch）は、一覧（像が無いときは台帳から作る行）にそのまま出る', async () => {
+    const s = await setup();
+    const resetTarget = Date.parse('2026-10-26T12:00:00.000Z');
+    await s.stores.tokens.replace([
+      {
+        id: 'tok-old',
+        label: 'old',
+        order: 0,
+        cooldownUntil: resetTarget,
+        cooldownSource: 'quota_reset',
+      },
+      { id: 'tok-a', label: 'a', order: 1 },
+    ]);
+    await s.stores.tokens.writeActive({
+      tokenId: 'tok-a',
+      generation: 2,
+      rotatedAt: '2026-10-25T00:00:00.000Z',
+    });
+    s.key.availability = 'cooling';
+    s.fake.push({
+      type: 'usage_notice',
+      managerId: ID,
+      notice: {
+        kind: 'reached',
+        text: "You've hit your session limit · resets 9:00pm (Asia/Tokyo)",
+      },
+    } as RunnerEvent);
+    await settle();
+    const live = (await s.pool.list()).find((m) => m.managerId === ID);
+    expect(live?.resetTimeSkewMatch).toBe('stale');
+    expect(live?.usageStoppedAt).toBeDefined();
+
+    s.fake.push(closedBy429());
+    await settle();
+
+    // 像から外れた（終端）後の行は台帳から作る
+    const retired = (await s.pool.list()).find((m) => m.managerId === ID);
+    expect(retired?.status).toBe('failed');
+    expect(retired?.usageStoppedAt).toBeDefined();
+    expect(retired?.resetTimeSkewMatch).toBe('stale');
+    await s.pool.stop();
+  });
+
+  it('⭐ 作業者の上限の印（workerLimitStopped）は残り、done で終端した担当を次の掃きが起こす', async () => {
+    const s = await setup();
+    s.key.availability = 'cooling';
+    s.fake.push(workerLimitNote(true));
+    s.fake.push(doneReport());
+    await settle();
+    s.fake.push(closedDone());
+    await settle();
+    expect((await s.stores.jobs.listJobs())[0]?.workerLimitStopped).toBeDefined();
+    expect(s.log).toEqual([]);
+
+    s.key.availability = 'ready';
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([ID]);
+    expect(s.log.filter((line) => line.includes('作業者が上限で落ちた鍵は回った'))).not.toEqual([]);
+    expect((await s.stores.jobs.listJobs())[0]?.workerLimitStopped).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('⭐ 挑み直しの状態（usageWakeRetry）は残り、掃きが起こしに失敗した担当は、終端して像から外れても次の挑み直しまで再挑戦しない', async () => {
+    const s = await setup();
+    await retiredByQuota(s);
+    s.fake.control.failDelivery = true;
+    // 1回目: 届かない（挑み直しの状態に乗る。担当は像へ載る）
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(1);
+    expect(await decisionTexts(s, SWEEP_DECISION)).toHaveLength(1);
+    // 人が止めて像から外れる（終端）。印と挑み直しの状態は残る
+    await s.pool.abort(ID);
+    s.fake.control.failDelivery = false;
+    s.fake.resumes.length = 0;
+    s.fake.sends.length = 0;
+
+    // 次の挑み直しの時刻（1分後）より前: 像が無くても、挑み直しの状態が残っているので、像から外れた担当の掃き（#5166）の候補にならない。
+    // 状態が消えていれば、掃きは起こし直すと判断した跡（日誌）を新しく書く
+    s.clock.now += 30_000;
+    expect(await s.pool.settleStalledUsageWakes()).toEqual([]);
+    expect(s.fake.resumes).toEqual([]);
+    expect(s.fake.sends).toEqual([]);
+    expect(await decisionTexts(s, SWEEP_DECISION)).toHaveLength(1);
+    await s.pool.stop();
+  });
+});
+
 describe('使用量の印の変化は、預かった伝言の届け直しがそのまま見る', () => {
   it('⭐ 動いている間に枠で止まった担当の預かりは、届けずに預かったまま。印が外れる（起こし直される）と届く', async () => {
     const s = await setup({ keyPerGeneration: true });
