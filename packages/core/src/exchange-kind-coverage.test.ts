@@ -342,7 +342,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     dropQueuedInboxEvents: 'thinning',
   },
   'manager.ts': {
-    '#appendMirrorRetrying': 'failure',
     '#askedOf': 'thinning',
     '#deliverQuotaStopWindow': 'thinning',
     '#deliverReportFromUnreplacedSession': 'reply',
@@ -379,6 +378,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#flushFailureFold': 'thinning',
     '#flushFailureFolds': 'thinning',
     '#journalFailure': 'failure,thinning',
+  },
+  // 生ログの写しの預けの失敗の日誌（旧 `Pool#appendMirrorRetrying`）。同じ検査をここへ移した。
+  'session-loaders.ts': {
+    appendMirrorRetrying: 'failure',
   },
 };
 
@@ -446,7 +449,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 }
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
-  for (const file of ['clone.ts', 'manager.ts', 'push-ledger.ts']) {
+  for (const file of ['clone.ts', 'manager.ts', 'push-ledger.ts', 'session-loaders.ts']) {
     const sites = findJournalCallObjects(file);
 
     it(`${file}: 走査が書き込み箇所を1つも見つけられない状態（走査の故障）を通さない`, () => {
