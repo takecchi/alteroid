@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { describeDenialStreakForManager } from './classifier-denial-streak.js';
-import { composePeerCloseNotices, rescueStashClause } from './manager.js';
+import { composePeerCloseNotices, rescueStashClause } from './manager-notices.js';
 import { buildManagerSystemPrompt } from './prompt.js';
 import { formatWorkspaceCloneHintLines, type WorkspaceCloneHint } from './workspace-swap-hints.js';
 
