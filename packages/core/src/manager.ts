@@ -1819,6 +1819,16 @@ const REATTACH_RETRY_MAX_MS = 30_000;
  */
 const REATTACH_BUSY_MAX_RETRIES = 5;
 
+/** 移った後の古い runner から届いたら、台帳・受信箱に触れず日誌にだけ残して捨てる出来事（#4924）。 */
+const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'session',
+  'report',
+  'ask',
+  'settled',
+  'parked_peers_closed',
+  'rescue_restore_request',
+]);
+
 /**
  * runner に預けた退避を取りに行って失敗したとき、やり直すまでの待ち（回数はこの長さ）。
  * 取りに行くのは出来事を受けた1回だけなので、やり直さないと本文は預かりの期限（`ARCHIVE_STASH_TTL_MS`、1時間）で消える。合計はその期限より十分短い。
@@ -10380,9 +10390,18 @@ class Pool implements ManagerPool {
       }
     }
 
+    // 移った後の古い runner の出来事は、この種類なら入口で捨てる（個別の判定は `closed` / `resume_failed` / `usage` / `rescue_files`: 捨て方が違う）。
+    // `report` / `ask` は停止済みの扱い（日誌へ残す）が先: 停止済みなら下の case が受ける。
+    if (
+      MOVED_AWAY_IGNORED_EVENT_TYPES.has(event.type) &&
+      !(record.job.status === 'stopped' && (event.type === 'report' || event.type === 'ask')) &&
+      (await this.#ignoreIfMovedAway(record, fromRunnerId, event))
+    ) {
+      return;
+    }
+
     switch (event.type) {
       case 'session': {
-        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'session')) return;
         // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
         if (event.pluginLoad !== undefined) {
           this.#pluginLoad.set(fromRunnerId, {
@@ -10438,9 +10457,6 @@ class Pool implements ManagerPool {
             at: this.#nowIso(),
           };
           await this.#persist(record);
-          return;
-        }
-        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'report', event)) {
           return;
         }
         // `reportId` で冪等にする（`ask` の `requestId` と同型）。
@@ -10648,7 +10664,6 @@ class Pool implements ManagerPool {
           });
           return;
         }
-        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'ask')) return;
         // `requestId` で冪等にする: 二度配ると、答えたはずの確認がクローンへもう一度届き、答えても runner 側は中断済みで「待っていない」と返る。
         const asked = this.#askedOf(record);
         if (asked.has(event.requestId)) return;
@@ -10678,7 +10693,6 @@ class Pool implements ManagerPool {
       }
 
       case 'settled': {
-        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'settled')) return;
         // 外す前に `summary` を控える: `withdrawn` の journal に「何の確認だったか」を残すのに要る（`abort()` が既に空にしていれば拾えず、その旨も書く）。
         const pendingSummary = record.waiting.find(
           (item) => item.requestId === event.requestId,
@@ -10996,17 +11010,6 @@ class Pool implements ManagerPool {
       }
 
       case 'parked_peers_closed': {
-        // #4924: 移った後の古い器からの知らせは積まない
-        if (
-          await this.#ignoreIfMovedAway(
-            record,
-            fromRunnerId,
-            event.managerId,
-            'parked_peers_closed',
-          )
-        ) {
-          return;
-        }
         const notice: PeerCloseNotice = { reason: event.reason, peers: event.peers };
         const status = record.job.status;
         // 担当が起こされない（人が止めた・もう終端している）なら、クローンへの知らせだけにする。起こされるなら次の起こし直しの先頭へ添える（二重にしない）
@@ -11856,7 +11859,7 @@ class Pool implements ManagerPool {
                 .catch(() => undefined);
             }
           }
-          await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'rescue_files');
+          await this.#ignoreIfMovedAway(record, fromRunnerId, event);
           return;
         }
         // 同じ委譲の預かりは直列にする（job.rescueStash の読み書きの間に await が挟まる）
@@ -11876,17 +11879,6 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_restore_request': {
-        // #4924: 移った後の古い器からの依頼は、添付つきの入力を積まない
-        if (
-          await this.#ignoreIfMovedAway(
-            record,
-            fromRunnerId,
-            event.managerId,
-            'rescue_restore_request',
-          )
-        ) {
-          return;
-        }
         // 届けは待たない: 担当が畳まれていれば resume を挟み、出来事の処理を長く塞ぐため。失敗は日誌に残す
         void this.#restoreRescue(record, event).catch((error: unknown) => {
           noteDroppedRecord('預かりの取り戻し', `managerId=${event.managerId}`, error);
@@ -12225,23 +12217,18 @@ class Pool implements ManagerPool {
   async #ignoreIfMovedAway(
     record: ManagerRecord,
     fromRunnerId: string,
-    managerId: string,
-    kind: string,
-    report?: Extract<RunnerEvent, { type: 'report' }>,
+    event: RunnerEvent,
   ): Promise<boolean> {
     if (!this.#movedAwayFrom(record, fromRunnerId)) return false;
-    const dropped =
-      report === undefined
-        ? NO_DROPPED_FILES
-        : await this.#droppedReportFiles(report, fromRunnerId);
+    const dropped = await this.#droppedReportFiles(event, fromRunnerId);
     await this.#journal({
       type: 'exchange',
       with: 'manager',
       role: 'inbound',
       text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （runner-id 不一致のため無視。` +
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
         `いまの宛先は ${record.job.runnerId ?? '不明'}、この出来事は ${fromRunnerId} から）` +
-        `移った後に届いた古い runner の ${kind} を無視した` +
+        `移った後に届いた古い runner の ${event.type} を無視した` +
         dropped.text,
       ...dropped.attachments,
     });
