@@ -5612,25 +5612,33 @@ class Clone implements CloneHost {
         // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
         if (plan !== null) {
           if (outcome.status === 'failed' && !outcome.heldForUsage) {
+            // 手で起こした1回は再試行しない
+            const prior = this.#timerTurnRetries.get(event.kind);
+            const attempts = prior?.at === event.at ? prior.attempts : 0;
+            const retryDelayMs =
+              cause === 'manual'
+                ? undefined
+                : FAILED_TURN_RETRY_DELAYS_MS[
+                    Math.min(attempts, FAILED_TURN_RETRY_DELAYS_MS.length - 1)
+                  ];
+            // 次にいつ配り直すかを書く（#6139）: 再試行は回数で打ち切らないので、読み手が「止まった」のか「待っている」のかを取り違えないため
+            const retryClause =
+              retryDelayMs === undefined
+                ? '手で起こした回なので再試行せず、次の起動か次の定刻で配り直される'
+                : `${String(retryDelayMs / 60_000)} 分後に配り直す。成功するまで最長 ` +
+                  `${String(FAILED_TURN_RETRY_DELAYS_MS.at(-1)! / 60_000)} 分ごとに配り直し続ける`;
             await this.#journal({
               type: 'exchange',
               with: 'self',
               role: 'outbound',
               text:
                 `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
-                `ので「終わった」とは記録しない（引き受けた印が残り、次の起動か次の周期の刻みで配り直される）: ` +
+                `ので「終わった」とは記録しない（引き受けた印は残る。${retryClause}）: ` +
                 outcome.reason,
             });
-            // 手で起こした1回は再試行しない
-            if (cause !== 'manual') {
-              const prior = this.#timerTurnRetries.get(event.kind);
-              const attempts = prior?.at === event.at ? prior.attempts : 0;
-              const delayMs =
-                FAILED_TURN_RETRY_DELAYS_MS[
-                  Math.min(attempts, FAILED_TURN_RETRY_DELAYS_MS.length - 1)
-                ];
+            if (retryDelayMs !== undefined) {
               this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
-              this.#onScheduledRunNotStarted?.(event.kind, delayMs);
+              this.#onScheduledRunNotStarted?.(event.kind, retryDelayMs);
             }
           } else {
             this.#timerTurnRetries.delete(event.kind);

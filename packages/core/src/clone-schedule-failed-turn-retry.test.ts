@@ -82,6 +82,12 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
     expect(await t.tick(DUE + 10 * MIN)).toEqual(['weekly-check']);
     await waitFor(async () => (await failureLines(t.stores)).length === 2, '2本目の失敗');
     expect((await t.stores.schedules.get('weekly-check'))?.pendingRun).toEqual(first);
+    // 失敗の行は、次にいつ配り直すかを言う（回数で打ち切らないので「止まった」と読ませない。#6139）
+    const texts = (await failureLines(t.stores)).map((entry) => entry.text);
+    expect(texts.some((text) => text.includes('10 分後に配り直す'))).toBe(true);
+    expect(texts.some((text) => text.includes('30 分後に配り直す'))).toBe(true);
+    expect(texts.every((text) => text.includes('最長 720 分ごとに配り直し続ける'))).toBe(true);
+    expect(texts.some((text) => text.includes('次の周期の刻み'))).toBe(false);
 
     expect(await t.tick(DUE + 10 * MIN + 29 * MIN)).toEqual([]);
     t.state.failing = false;
