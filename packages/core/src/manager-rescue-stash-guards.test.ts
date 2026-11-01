@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { sha256Hex } from './auth.js';
+import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import { createManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
@@ -322,6 +323,128 @@ describe('預けなかったものの日誌の印（1回だけ書く）は、約
     skipOnly(['only-here.txt']);
     await flushedThrough('marker-2.txt');
     expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(2);
+    await pool.stop();
+  });
+});
+
+describe('rescue_restore_request は待たずに投げっぱなし（出来事の処理を塞がない）', () => {
+  async function withStash() {
+    const stores = createMemoryStores();
+    const meta = await stores.attachments.put({
+      name: 'a.txt',
+      mediaType: 'application/octet-stream',
+      bytes: bytesOf('alpha'),
+      kept: true,
+      uploadedBy: 'manager:mgr-s',
+    });
+    const entry: RescueStashEntry = {
+      worktree: '.',
+      path: 'a.txt',
+      attachmentId: meta.id,
+      size: 5,
+      sha256: sha256Hex(bytesOf('alpha')),
+      at: '2026-10-01T00:00:00.000Z',
+    };
+    await stores.jobs.putJob(jobOf('mgr-s', { rescueStash: [entry] }));
+    const fake = fakeRunner(['mgr-s']);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: createRunnerRegistry([fake.runner]),
+      now: () => NOW,
+    });
+    await pool.restore();
+    return { pool, stores, fake, meta };
+  }
+
+  it('取り戻しの中の store の読みが止まっていても、次の出来事（rescue_files）は処理され、読みを放すと取り戻しが届く', async () => {
+    const { pool, stores, fake } = await withStash();
+    const read = gate();
+    const original = stores.attachments.getMeta.bind(stores.attachments);
+    let held = false;
+    stores.attachments.getMeta = async (id: string) => {
+      if (!held) {
+        held = true;
+        await read.wait;
+      }
+      return original(id);
+    };
+
+    fake.send({ type: 'rescue_restore_request', managerId: 'mgr-s' });
+    await settle();
+    // 取り戻しは読みで止まっていて、まだ何も送っていない
+    expect(held).toBe(true);
+    expect(fake.sent).toEqual([]);
+
+    // 止まったままでも、同じ委譲の次の出来事は処理される（出来事の処理は取り戻しを待たない）
+    fake.send({
+      type: 'rescue_files',
+      managerId: 'mgr-s',
+      worktree: 'wt',
+      files: [],
+      skipped: [{ path: 'next.txt', reason: 'not-regular' }],
+    });
+    await vi.waitFor(async () => expect(await decisionsMentioning(stores, 'next.txt')).toBe(1));
+    expect(fake.sent).toEqual([]);
+
+    read.open();
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    expect(fake.sent[0]!.attachments).toHaveLength(1);
+    await pool.stop();
+  });
+
+  it('取り戻しの中の store の読みが止まっていても、その出来事の処理自体は終わっている（stop() は処理中の出来事の終わりを待つので、止まらずに返る）', async () => {
+    const { pool, stores, fake } = await withStash();
+    const read = gate();
+    const original = stores.attachments.getMeta.bind(stores.attachments);
+    let held = false;
+    stores.attachments.getMeta = async (id: string) => {
+      held = true;
+      await read.wait;
+      return original(id);
+    };
+
+    fake.send({ type: 'rescue_restore_request', managerId: 'mgr-s' });
+    await settle();
+    expect(held).toBe(true);
+
+    const outcome = await Promise.race([
+      pool.stop().then(() => 'stopped' as const),
+      settle().then(() => 'blocked' as const),
+    ]);
+    expect(outcome).toBe('stopped');
+    read.open();
+    await settle();
+  });
+
+  it('取り戻しが失敗しても出来事の処理は落ちず、失敗は握り潰さず跡（dropped の帳面）に残る。何も送らない', async () => {
+    const { pool, stores, fake } = await withStash();
+    const getJob = stores.jobs.getJob.bind(stores.jobs);
+    // from で名指しした前任の読み出しが落ちる
+    stores.jobs.getJob = async (id: string) => {
+      if (id === 'mgr-gone') throw new Error('台帳が読めない');
+      return getJob(id);
+    };
+    clearRecentTracesForTesting();
+
+    fake.send({ type: 'rescue_restore_request', managerId: 'mgr-s', from: 'mgr-gone' });
+    await vi.waitFor(() =>
+      expect(recentDroppedTraces().join('\n')).toContain(
+        '預かりの取り戻しを記録できませんでした（managerId=mgr-s）',
+      ),
+    );
+    expect(recentDroppedTraces().join('\n')).toContain('台帳が読めない');
+    expect(fake.sent).toEqual([]);
+
+    // 失敗の後も、同じ委譲の出来事は処理される
+    fake.send({
+      type: 'rescue_files',
+      managerId: 'mgr-s',
+      worktree: 'wt',
+      files: [],
+      skipped: [{ path: 'after.txt', reason: 'not-regular' }],
+    });
+    await vi.waitFor(async () => expect(await decisionsMentioning(stores, 'after.txt')).toBe(1));
     await pool.stop();
   });
 });
