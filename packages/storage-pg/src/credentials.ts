@@ -1,5 +1,6 @@
 import {
   assertValidCredentialEntries,
+  assertValidCredentialNames,
   CREDENTIAL_NAME,
   describeSkippedCredentialRow,
   type CredentialEntry,
@@ -11,7 +12,7 @@ import { asc, inArray } from 'drizzle-orm';
 
 import { byteOrder } from './db.js';
 import type { Db } from './db.js';
-import { managerCredentials } from './schema.js';
+import { managerCredentialRemovals, managerCredentials } from './schema.js';
 
 // この表を runner から読ませない: runner に記憶ストアの鍵があることになるため。
 export class PgCredentialVaultStore implements CredentialVaultStore {
@@ -70,5 +71,36 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
       }
     });
     return this.list();
+  }
+
+  async listPendingRemovals(): Promise<string[]> {
+    const rows = await this.#db
+      .select()
+      .from(managerCredentialRemovals)
+      .orderBy(asc(byteOrder(managerCredentialRemovals.name)));
+    return rows.map((row) => row.name);
+  }
+
+  async updatePendingRemovals(change: {
+    add: readonly string[];
+    forget: readonly string[];
+  }): Promise<void> {
+    assertValidCredentialNames([...change.add, ...change.forget]);
+    // 忘れる側が勝つ: 同じ名前が両方にあれば、先に足してから消す
+    const forget = new Set(change.forget);
+    const add = [...new Set(change.add)].filter((name) => !forget.has(name));
+    await this.#db.transaction(async (tx) => {
+      if (add.length > 0) {
+        await tx
+          .insert(managerCredentialRemovals)
+          .values(add.map((name) => ({ name })))
+          .onConflictDoNothing();
+      }
+      if (forget.size > 0) {
+        await tx
+          .delete(managerCredentialRemovals)
+          .where(inArray(managerCredentialRemovals.name, [...forget]));
+      }
+    });
   }
 }

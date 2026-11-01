@@ -153,7 +153,7 @@ import {
   setTaskRowStatus,
   type TaskRow,
 } from './task.js';
-import { assertValidCredentialEntries } from './credential-input.js';
+import { assertValidCredentialEntries, assertValidCredentialNames } from './credential-input.js';
 import {
   stripNulFromUnmeteredRecord,
   stripNulFromUsageQuery,
@@ -1503,6 +1503,7 @@ export function createMemoryStores(): Stores {
 
   // `put` は全文置換にしない: 空文字は「外す」で、入力に無い名前は触らない。ここだけ全文置換だと本物で他の鍵が消える。
   const credentialRows = new Map<string, StoredCredential>();
+  const pendingRemovalNames = new Set<string>();
 
   const credentials: CredentialVaultStore = {
     async list() {
@@ -1526,6 +1527,14 @@ export function createMemoryStores(): Stores {
         });
       }
       return credentials.list();
+    },
+    async listPendingRemovals() {
+      return [...pendingRemovalNames].sort(compareCodeUnits);
+    },
+    async updatePendingRemovals({ add, forget }) {
+      assertValidCredentialNames([...add, ...forget]);
+      for (const name of add) pendingRemovalNames.add(name);
+      for (const name of forget) pendingRemovalNames.delete(name);
     },
   };
 

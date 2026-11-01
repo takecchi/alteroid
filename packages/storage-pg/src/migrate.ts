@@ -571,6 +571,10 @@ export const STATEMENTS = [
   `create index if not exists archive_session_at_idx on archive (session_id, at)`,
   // 孤児の掃除（`sweepOrphanBlobs`）が `blob_key in (…)` で引くので、無いと束ごとに全走査になる（#5140）。中身を DB に持つ行は `blob_key` を持たないので外す
   `create index if not exists attachments_blob_key_idx on attachments (blob_key) where blob_key is not null`,
+  // 外した名前は `manager_credentials` の行に残らないので、別の表に持つ（#6126）。
+  `create table if not exists manager_credential_removals (
+     name text primary key
+   )`,
 ] as const;
 
 /** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */

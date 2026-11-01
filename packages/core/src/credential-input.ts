@@ -17,3 +17,11 @@ export function assertValidCredentialEntries(entries: readonly CredentialEntry[]
     assertNoNul('credential.value', entry.value);
   }
 }
+
+// `updatePendingRemovals` の入口。`put` と同じ検査・同じ例外にそろえる
+export function assertValidCredentialNames(names: readonly string[]): void {
+  for (const name of names) {
+    assertNoNul('credential.name', name);
+    if (!CREDENTIAL_NAME.test(name)) throw new InvalidCredentialNameError();
+  }
+}

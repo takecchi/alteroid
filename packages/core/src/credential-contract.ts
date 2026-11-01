@@ -99,4 +99,50 @@ export async function verifyCredentialVaultContract(store: CredentialVaultStore)
       '空文字で外れて空に戻る',
       cleaned.map((row) => row.name),
     );
+
+  // 外した名前の控え（#6126）
+  const pending = async (): Promise<string[]> => store.listPendingRemovals();
+  const expectPending = async (label: string, expected: string[]): Promise<void> => {
+    const actual = await pending();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(label, { expected, actual });
+  };
+
+  await expectPending('前提: 外した名前の控えが空', []);
+  await store.updatePendingRemovals({
+    add: ['CONTRACT_B', 'CONTRACT_A', 'CONTRACT_B'],
+    forget: [],
+  });
+  await expectPending('足した名前を昇順で返す（重複は1つ）', ['CONTRACT_A', 'CONTRACT_B']);
+  await store.updatePendingRemovals({ add: ['CONTRACT_C'], forget: ['CONTRACT_A'] });
+  await expectPending('足す・忘れるを一度に渡せる。入力に無い名前は触らない', [
+    'CONTRACT_B',
+    'CONTRACT_C',
+  ]);
+  await store.updatePendingRemovals({ add: ['CONTRACT_D'], forget: ['CONTRACT_D'] });
+  await expectPending('同じ名前が両方にあれば忘れる側が勝つ', ['CONTRACT_B', 'CONTRACT_C']);
+  await store.updatePendingRemovals({ add: [], forget: ['CONTRACT_NEVER_ADDED'] });
+  await expectPending('覚えていない名前を忘れても何も起きない', ['CONTRACT_B', 'CONTRACT_C']);
+
+  await store.put([{ name: 'CONTRACT_OK', value: 'ok' }]);
+  await expectPending('行の書き込みで控えを消さない', ['CONTRACT_B', 'CONTRACT_C']);
+  await store.put([{ name: 'CONTRACT_OK', value: '' }]);
+
+  for (const bad of ['', 'lower_case', '../../etc/x', 'CONTRACT_\u0000NAME']) {
+    let thrown: unknown;
+    try {
+      await store.updatePendingRemovals({ add: ['CONTRACT_E', bad], forget: [] });
+    } catch (error) {
+      thrown = error;
+    }
+    const expected = bad.includes('\u0000') ? NulNotAllowedError : InvalidCredentialNameError;
+    if (!(thrown instanceof expected)) {
+      fail(`外した名前の控えは不正な名前(${JSON.stringify(bad)})を${expected.name}で断る`, {
+        thrown: thrown === undefined ? '(投げなかった)' : String(thrown),
+      });
+    }
+    await expectPending('不正な名前が1件でもあれば何も書かない', ['CONTRACT_B', 'CONTRACT_C']);
+  }
+
+  await store.updatePendingRemovals({ add: [], forget: ['CONTRACT_B', 'CONTRACT_C'] });
+  await expectPending('忘れて空に戻る', []);
 }
