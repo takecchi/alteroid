@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import {
   assertValidCredentialEntries,
+  assertValidCredentialNames,
   CREDENTIAL_NAME,
   type CredentialEntry,
   type StoredCredential,
@@ -28,15 +29,19 @@ const rowSchema = z.object({
 // 行の中身はここで検査しない: `z.array(rowSchema)` にすると、1行の不正が配列全体を道連れにするため
 const topLevelSchema = z.object({
   credentials: z.array(z.unknown()).default([]),
+  // 名前の形の検査は `#read` で行う: 1つの不正が配列全体を道連れにしないため
+  pendingRemovals: z.array(z.unknown()).default([]),
 });
 
 interface CredentialFile {
   credentials: StoredCredential[];
   // 消さずに持ち回る: 書き戻しに入れないと、人間が手で書いた不正な行が黙って消えるため
   invalidRaw: unknown[];
+  // 行と同じファイルに置く: 同じ lock・同じアトミックな書き込みで、`put` の書き戻しに消されない
+  pendingRemovals: string[];
 }
 
-const EMPTY: CredentialFile = { credentials: [], invalidRaw: [] };
+const EMPTY: CredentialFile = { credentials: [], invalidRaw: [], pendingRemovals: [] };
 
 // `memory/` には置かない: 鍵そのものを持つ場所で、人間が手で書き換える前提ではないため
 export class FsCredentialVaultStore implements CredentialVaultStore {
@@ -79,9 +84,27 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
         const name = extractRowField(raw, 'name');
         return name === undefined || !writtenNames.has(name);
       });
-      return { credentials: [...rows.values()], invalidRaw };
+      return { ...file, credentials: [...rows.values()], invalidRaw };
     });
     return [...written.credentials].sort((a, b) => compareCodeUnits(a.name, b.name));
+  }
+
+  async listPendingRemovals(): Promise<string[]> {
+    const file = await this.#read();
+    return [...file.pendingRemovals].sort(compareCodeUnits);
+  }
+
+  async updatePendingRemovals(change: {
+    add: readonly string[];
+    forget: readonly string[];
+  }): Promise<void> {
+    assertValidCredentialNames([...change.add, ...change.forget]);
+    await this.#update((file) => {
+      const names = new Set(file.pendingRemovals);
+      for (const name of change.add) names.add(name);
+      for (const name of change.forget) names.delete(name);
+      return { ...file, pendingRemovals: [...names] };
+    });
   }
 
   async #read(): Promise<CredentialFile> {
@@ -95,7 +118,11 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       'credentials',
       'name',
     );
-    return { credentials, invalidRaw };
+    // 形に合わない名前は読み飛ばす: ファイルは手で書き換えられ、`../../x` のような名前を runner への外す合図に載せないため
+    const pendingRemovals = top.pendingRemovals.filter(
+      (name): name is string => typeof name === 'string' && CREDENTIAL_NAME.test(name),
+    );
+    return { credentials, invalidRaw, pendingRemovals };
   }
 
   // 書き込んだ `CredentialFile` を返す: `put()` が書き込み直後に `#read()` し直すと、読み飛ばしの跡が二重に出るため
@@ -104,7 +131,10 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       const next = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
       // 不正な行も一緒に書き戻す: 入れないと、人間が手で書いた不正な行が次の書き込みで黙って消えるため
-      const serialized = { credentials: [...next.credentials, ...next.invalidRaw] };
+      const serialized = {
+        credentials: [...next.credentials, ...next.invalidRaw],
+        pendingRemovals: next.pendingRemovals,
+      };
       // rename 後に絞らず、一時ファイルを 0600 で作る: 隙間で他人が読めるため
       await writeFileAtomic(this.#path, `${JSON.stringify(serialized, null, 2)}\n`, {
         mode: 0o600,

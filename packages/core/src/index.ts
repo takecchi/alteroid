@@ -741,7 +741,11 @@ export { parsePeerActor, PEER_MCP_SERVER_NAME } from './peer-broker.js';
 /** 鍵・環境変数になる値の NUL は {@link NulNotAllowedError} で断り、それ以外の本文は {@link stripNul} で落として残す。 */
 export { NulNotAllowedError, assertNoNul, hasNul, stripNul } from './nul-guard.js';
 export { stripNulDeep, stripNulWellFormed } from './nul-guard.js';
-export { InvalidCredentialNameError, assertValidCredentialEntries } from './credential-input.js';
+export {
+  InvalidCredentialNameError,
+  assertValidCredentialEntries,
+  assertValidCredentialNames,
+} from './credential-input.js';
 export { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 export { verifyCredentialVaultContract } from './credential-contract.js';
 export { verifyTokenPoolContract } from './token-pool-contract.js';

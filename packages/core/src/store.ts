@@ -1452,6 +1452,21 @@ export interface CredentialVaultStore {
    * 入口で断る（3実装とも同じ型付きの例外）: 名前・値に NUL があれば `NulNotAllowedError`、`CREDENTIAL_NAME` に合わない名前（空文字を含む）は `InvalidCredentialNameError`。1件でも断れば何も書かない。
    */
   put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]>;
+  /**
+   * 正本から消した（または runner に配らない範囲へ狭めた）名前のうち、runner から外し終えたと言えないもの。`name` 昇順（#6126）。
+   * `list()` の行とは別に持つ: 外した名前は行に残らず、runner は起動時の環境の鍵も同じ一覧に持つので、正本との差分からは組み直せない。
+   * プロセスのメモリに置かない: デーモンの再起動で消えると、送りが届かなかった runner に外したはずの鍵が残り続ける。
+   */
+  listPendingRemovals(): Promise<string[]>;
+  /**
+   * `add` を覚え、`forget` を忘れる（同じ名前が両方にあれば忘れる側が勝つ）。覚えている名前を全文で置き換えない。
+   * 書けなかったら投げる: 黙って捨てると、外したつもりの鍵が runner に残る。
+   * 入口で断る（3実装とも同じ型付きの例外）: 名前に NUL があれば `NulNotAllowedError`、`CREDENTIAL_NAME` に合わない名前は `InvalidCredentialNameError`。1件でも断れば何も書かない。
+   */
+  updatePendingRemovals(change: {
+    add: readonly string[];
+    forget: readonly string[];
+  }): Promise<void>;
 }
 
 /**

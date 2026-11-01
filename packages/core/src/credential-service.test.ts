@@ -875,6 +875,17 @@ describe('runner から外した鍵は、範囲を狭めても配り損ねても
     expect(runner.held.has('GH_TOKEN')).toBe(false);
   });
 
+  it('外した名前を store に書けなかったら、apply ごと失敗させる（黙って捨てると外したつもりの鍵が残る）', async () => {
+    const runner = fakeRunner();
+    const { stores, service } = serviceOf([runner]);
+    await service.apply([{ name: 'GH_TOKEN', value: 'ghp_old' }]);
+    stores.credentials.updatePendingRemovals = () => Promise.reject(new Error('書けない（試験）'));
+
+    await expect(service.apply([{ name: 'GH_TOKEN', value: '' }])).rejects.toThrow(
+      '書けない（試験）',
+    );
+  });
+
   it('対照: 正本に無い名前を runner が自分で持っていても（起動時の環境の鍵）、追いつかせる道では外さない', async () => {
     const runner = fakeRunner();
     runner.held.set('CLAUDE_CODE_OAUTH_TOKEN', 'boot-env-token');

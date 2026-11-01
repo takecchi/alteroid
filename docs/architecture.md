@@ -481,7 +481,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | PracticeStore | 仕事のやり方（slug・種類・題・本文。#1055 段3） | `practices.json`（1枚） | PostgreSQL（列に切って保存） |
 | ProfileStore | 実行環境プロファイル（`.zprofile` 相当。名前付きのシェルスクリプトの行ごとに撒く先を持つ） | `profile.d/<name>.sh`（0600）＋`<name>.scope` | PostgreSQL（1名前1行。旧 `env_profile` は消さず `default` 行へ1度だけ写す） |
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
-| CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
+| CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ）と、外したが runner から外し終えていない名前 | `credentials.json`（0600。外した名前は同じファイルの `pendingRemovals`） | PostgreSQL（1名前1行。外した名前は `manager_credential_removals`） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
 | AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`。**pg の構成で S3 互換のストレージが設定されていれば、中身は S3 互換に置き、pg は控えと key（`blob_key`）だけを持つ**。#4128） |
 

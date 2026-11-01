@@ -786,6 +786,7 @@ railway redeploy -s app --from-source -y
 - `auth_*` — ログインのアカウント・身元・アクセストークン・ログインの要求（`auth_accounts` ほか4表）。消すと再ログインが要る
 - `agent_tokens`・`agent_token_settings`・`agent_token_active` — 認証トークンのプール（#393）。消すと器が Claude に繋がらなくなる
 - `manager_credentials` — マネージャーへ渡す環境（名前→値。#825）。`POST /reset` も触らない
+- `manager_credential_removals` — 外した鍵の名前で、runner から外し終えていないもの（#6126）。`manager_credentials` と対で残す。消すと、外す送りが届かなかった runner に鍵が残る
 - `codex_chatgpt_auth` — Codex の ChatGPT ログイン（#3982）。消すとデバイスコードのやり直し
 - `integration_keys` — 外のサービスに渡した連携の鍵（sha256 だけを持つ。#3126）。消すと渡した鍵が全部効かなくなる
 - `mcp_servers` — MCP サーバの登録（#1484。人間が書いたもの。`POST /reset` も触らない）

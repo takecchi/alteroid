@@ -194,6 +194,11 @@ export const managerCredentials = pgTable('manager_credentials', {
   secret: boolean('secret').notNull().default(true),
 });
 
+// 外した名前の控え（#6126）。`manager_credentials` の行とは別に持つ: 外した名前は行に残らない。
+export const managerCredentialRemovals = pgTable('manager_credential_removals', {
+  name: text('name').primaryKey(),
+});
+
 export const sessionEntries = pgTable(
   'session_entries',
   {
