@@ -202,7 +202,7 @@ async function setup(tokenAvailability: ManagerPoolOptions['tokenAvailability'])
   await settle();
   active.tokenId = 'tok-b';
   active.generation = 60;
-  return { pool, fake, stores, clock, inbox };
+  return { pool, fake, stores, clock, inbox, active };
 }
 
 const SECRET = 'sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF';
@@ -807,6 +807,71 @@ describe('畳む直前に読み直す（#5207）', () => {
     expect(s.fake.resumes).toHaveLength(1);
     const decisions = await s.stores.journal.list({ types: ['decision'] });
     expect(JSON.stringify(decisions)).not.toContain('畳む直前に、別の経路が');
+    await s.pool.stop();
+  });
+
+  it('⭐ resume が走っていなくても、判断の間に現役の鍵が抱えている世代へ追いついたら、畳まずにいまのセッションへ届ける', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 0;
+    const originalList = s.fake.runner.list.bind(s.fake.runner);
+    // 判断が runner の一覧を待っている間に、現役の世代が抱えている世代（59）へ戻る
+    s.fake.runner.list = async () => {
+      s.active.generation = 59;
+      return originalList();
+    };
+
+    const result = await s.pool.send('mgr-fold', '追いついた後の送り');
+    await settle();
+
+    expect(result.outcome).toBe('delivered');
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+    expect(s.fake.sends.map((send) => send.text)).toContain('追いついた後の送り');
+    const decisions = await s.stores.journal.list({ types: ['decision'] });
+    const text = JSON.stringify(decisions);
+    expect(text).toContain('畳む直前に、別の経路が新しい鍵で起こし直していたので');
+    expect(text).toContain('resume の回数=0→0');
+    expect(text).toContain('抱えている鍵の世代=59 現役=59');
+    await s.pool.stop();
+  });
+
+  it('既に1回起こし直した担当でも、鍵がもう一度回れば、resume の回数が変わっていない判断は畳んで起こし直す', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 0;
+    await s.pool.send('mgr-fold', '1回目の送り');
+    await settle();
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    expect(s.fake.resumes).toHaveLength(1);
+
+    // 起こし直しの後、鍵がもう一度回る（担当が抱えているのは世代 60、現役は 61）
+    s.active.tokenId = 'tok-c';
+    s.active.generation = 61;
+    await s.pool.send('mgr-fold', '2回目の送り');
+    await settle();
+
+    expect(s.fake.stops).toEqual(['mgr-fold', 'mgr-fold']);
+    expect(s.fake.resumes).toHaveLength(2);
+    const decisions = await s.stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(decisions)).not.toContain('畳む直前に、別の経路が');
+    await s.pool.stop();
+  });
+
+  it('畳んで起こし直すときの日誌は、畳んだ理由（世代の食い違い）と、残っているものが無いことを書く', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 0;
+
+    await s.pool.send('mgr-fold', '畳む送り');
+    await settle();
+
+    const folded = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('畳んで新しい鍵で起こし直す'),
+    );
+    expect(folded).toHaveLength(1);
+    const text = JSON.stringify(folded[0]);
+    expect(text).toContain('mgr-fold');
+    expect(text).toContain('世代 59 を抱えたまま、現役は世代 60');
+    expect(text).toContain('liveBackgroundTasks=0 確認待ち=0');
+    expect(text).toContain('#2851');
     await s.pool.stop();
   });
 });
