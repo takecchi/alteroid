@@ -50,7 +50,7 @@ interface UsageNoticeMemory {
 
 /**
  * `Pool` が口として渡すもの。欄は参照で渡す（ここで別に持たない）: `usageStopped` は `case 'usage_notice'` が同期で立てる印で、
- * 起こし直しの側（`UsageWakeSweeper` など）が同じ参照を読む。`tokenIdentities` は呼ぶたびに引く（読み直さずに1回だけ引く所は本体に注釈がある）。
+ * 起こし直しの側（`UsageWake` など）が同じ参照を読む。`tokenIdentities` は呼ぶたびに引く（読み直さずに1回だけ引く所は本体に注釈がある）。
  * 関数の口は async の皮で包まずに渡す（`await` の数と順を変えないため）。
  */
 export interface UsageReceiverPorts {
