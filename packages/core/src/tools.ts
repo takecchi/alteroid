@@ -1847,7 +1847,7 @@ function describeManagerFailure(
       ? opening +
         'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
         '停止させ、確かめたうえで既に終端している（`abort()` が runner の一覧を探って' +
-        'セッションが消えたことを確かめた事実。`manager.ts` の `isLive()` の doc）。' +
+        'セッションが消えたことを確かめた事実。`manager-liveness.ts` の `isLive()` の doc）。' +
         '「セッションが生きていて原因が解ければ進められる」という前提はここでは成り立たない' +
         '——起こし直すには manager_send で resume を試みるしかなく、届く保証は無い' +
         '（届いた事実の判定は `systemErrorLine` 等の別の行を見ること）。'
@@ -1899,7 +1899,7 @@ function describeUsageStopped(manager: ManagerSummary): string | null {
       `⚠ 枠(利用上限)で止まっている（${manager.usageStoppedAt} から）。` +
       'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
       '停止させ、確かめたうえで既に終端している（`abort()` が runner の一覧を探って' +
-      'セッションが消えたことを確かめた事実。`manager.ts` の `isLive()` の doc）。' +
+      'セッションが消えたことを確かめた事実。`manager-liveness.ts` の `isLive()` の doc）。' +
       '「セッションは生きているので鍵が回ればこの委譲は続く」はここでは成り立たない' +
       '——起こし直すには manager_send で resume を試みるしかなく、届く保証は無い' +
       '（届いた事実の判定は `systemErrorLine` 等の別の行を見ること）。'
