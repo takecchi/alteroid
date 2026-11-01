@@ -6,6 +6,7 @@ import { DEFAULT_ATTACHMENT_LIMITS, type AttachmentLimits } from './attachment.j
 import { MemoryAttachmentStore } from './attachment-memory.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { estimateAttachmentBodyBytes } from './manager-attachments.js';
+import { OUTBOX_FETCH_FILE_TIMEOUT_MS, outboxFetchDeadlineMs } from './manager-outbox-fetch.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -352,6 +353,105 @@ describe('hello が書いた上限は、下ろしの判定にそのまま効く�
     const both = await call('manager_start', { request: '調べて', attachments: [big.id] });
     expect(both).toContain('上限 499 バイト');
     expect(both).not.toContain('見積もり');
+    await stop();
+  });
+});
+
+describe('hello を待つ（connect は hello を待たずに返る）', () => {
+  it('hello が少し遅れても、待ってからその上限で判定する', async () => {
+    vi.useFakeTimers();
+    const fake = fakeRunner({ capabilities: CAPABLE, stageLimit: 499, helloAfterMs: 120 });
+    const { put, call, stop } = await harness(fake);
+    const big = await put('big.bin', BIG);
+    const calling = call('manager_start', { request: '調べて', attachments: [big.id] });
+    await vi.advanceTimersByTimeAsync(300);
+    const out = await calling;
+    expect(out).toContain('上限 499 バイト');
+    expect(fake.log).toEqual([]);
+    expect(fake.starts).toEqual([]);
+    await stop();
+  });
+
+  it('hello が待ち時間（5 秒）を過ぎても来なければ、名乗っていないものとして断る', async () => {
+    vi.useFakeTimers();
+    const fake = fakeRunner({ capabilities: CAPABLE, stageLimit: 1000, helloAfterMs: 60_000 });
+    const { put, call, stop } = await harness(fake);
+    const small = await put('small.bin', SMALL);
+    const calling = call('manager_start', { request: '調べて', attachments: [small.id] });
+    await vi.advanceTimersByTimeAsync(5_100);
+    const out = await calling;
+    expect(out).toContain('担い手への添付の受け渡しを名乗っていない');
+    expect(fake.starts).toEqual([]);
+    await stop();
+  });
+});
+
+describe('押す処理の期限（send と、ファイルごとの期限）', () => {
+  function spyTimeout() {
+    const requested: number[] = [];
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      requested.push(ms);
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort(
+          new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        );
+      }, ms);
+      return controller.signal;
+    });
+    return requested;
+  }
+
+  it('manager_send: 応答しない runner は期限で断られ、send も resume も出ない', async () => {
+    vi.useFakeTimers();
+    const requested = spyTimeout();
+    const fake = fakeRunner({
+      capabilities: CAPABLE,
+      stageLimit: 1000,
+      stage: () => new Promise<void>(() => undefined),
+    });
+    const { put, call, startManager, stop } = await harness(fake);
+    const managerId = await startManager();
+    const big = await put('big.bin', BIG);
+    fake.log.length = 0;
+    const calling = call('manager_send', { managerId, message: '続き', attachments: [big.id] });
+    await vi.advanceTimersByTimeAsync(OUTBOX_FETCH_FILE_TIMEOUT_MS);
+    const out = await calling;
+    expect(out).toContain('時間の上限');
+    expect(out).toContain('何も送っていない');
+    expect(fake.log).toEqual(['stage:0:begin']);
+    expect(requested).toEqual([outboxFetchDeadlineMs(500)]);
+    await stop();
+  });
+
+  it('期限は1つずつのファイルに掛かる: 1 本目が終われば、2 本目は自分の期限をまるごと持つ', async () => {
+    vi.useFakeTimers();
+    const requested = spyTimeout();
+    const fake = fakeRunner({
+      capabilities: CAPABLE,
+      stageLimit: 1000,
+      stage: async (index, _meta, body) => {
+        if (index === 0) {
+          for await (const chunk of body) void chunk;
+          return;
+        }
+        await new Promise<void>(() => undefined);
+      },
+    });
+    const { put, call, stop } = await harness(fake);
+    const a = await put('a.bin', BIG);
+    const b = await put('b.bin', Buffer.alloc(501, 1));
+    const calling = call('manager_start', { request: '調べて', attachments: [a.id, b.id] });
+    let settled = false;
+    void calling.finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(OUTBOX_FETCH_FILE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const out = await calling;
+    expect(out).toContain('時間の上限');
+    expect(out).toContain('b.bin');
+    expect(requested).toEqual([outboxFetchDeadlineMs(500), outboxFetchDeadlineMs(501)]);
+    expect(fake.starts).toEqual([]);
     await stop();
   });
 });
