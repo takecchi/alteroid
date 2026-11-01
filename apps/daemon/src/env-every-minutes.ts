@@ -1,7 +1,4 @@
-import { placedEnvValue } from '@alteroid/core';
-
-// 止める綴りを1か所に置く: 綴りが割れると人間が覚えることが増えるため。
-export const OFF_SPELLINGS: ReadonlySet<string> = new Set(['off', 'none', 'false', '0']);
+import { isEnvOffSpelling, placedEnvValue } from '@alteroid/core';
 
 // 上限は 2^31-1 ms: `setTimeout` はそれを超える遅延を 1ms へ倒し、周期の処理が休みなく回ってしまうため。
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -18,17 +15,28 @@ export interface EveryMinutesConfig {
 
 /**
  * 「何分ごと／off」の環境変数を読む。止める綴りなら `null`。読めない値と下限を下回る値は、切り上げて採らずに既定へ倒し、注意を残す。
- * 上限はここで見ない: 呼び手が `setTimeout` へ渡す遅延の側で頭打ちにする（`clampedIntervalMs`）。
+ * 上限は既定では見ない: 呼び手が `setTimeout` へ渡す遅延の側で頭打ちにする（`clampedIntervalMs`）。
+ * 呼び手が下流で値を切り捨てるときは `max`（超えたら既定へ倒す）と `noteNonInteger`（切り捨てた値を注意で言う）を渡す。
  */
 export function readEveryMinutes(
   env: NodeJS.ProcessEnv,
   key: string,
-  { defaultMinutes, minMinutes }: { defaultMinutes: number; minMinutes: number },
+  {
+    defaultMinutes,
+    minMinutes,
+    max,
+    noteNonInteger = false,
+  }: {
+    defaultMinutes: number;
+    minMinutes: number;
+    max?: { minutes: number; text: string };
+    noteNonInteger?: boolean;
+  },
 ): EveryMinutesConfig {
   const notes: string[] = [];
   const raw = placedEnvValue(env, key);
   if (raw === null) return { everyMinutes: defaultMinutes, notes };
-  if (OFF_SPELLINGS.has(raw.toLowerCase())) return { everyMinutes: null, notes };
+  if (isEnvOffSpelling(raw)) return { everyMinutes: null, notes };
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     notes.push(`${key}="${raw}" は分数として読めないので既定 ${defaultMinutes} を使う`);
@@ -39,6 +47,13 @@ export function readEveryMinutes(
       `${key}="${raw}" は下限 ${minMinutes} 分を下回っているので既定 ${defaultMinutes} を使う`,
     );
     return { everyMinutes: defaultMinutes, notes };
+  }
+  if (max !== undefined && parsed > max.minutes) {
+    notes.push(`${key}="${raw}" は上限 ${max.text} を超えているので既定 ${defaultMinutes} を使う`);
+    return { everyMinutes: defaultMinutes, notes };
+  }
+  if (noteNonInteger && !Number.isInteger(parsed)) {
+    notes.push(`${key}="${raw}" は整数でないので ${Math.floor(parsed)} 分として扱う`);
   }
   return { everyMinutes: parsed, notes };
 }

@@ -1,11 +1,8 @@
-import { lstat, readdir, rm } from 'node:fs/promises';
-import path from 'node:path';
-
 import { CLONE_MCP_CONFIG_DIR_PREFIX } from './clone-mcp-config-file.js';
-import { reasonOf } from './dropped-record.js';
 import {
   RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS,
   type RunnerMcpConfigSweepResult,
+  sweepMcpConfigDirs,
 } from './runner-mcp-config-sweep.js';
 
 // runner の掃きと同じ下限（5 分）を共有する: 起こす側が mkdtemp してから生きた集合へ入れるまでの隙間が同じ形のため。
@@ -44,36 +41,17 @@ function pidOfName(name: string): number | undefined {
   return Number.isSafeInteger(pid) && pid >= 1 ? pid : undefined;
 }
 
-export async function sweepCloneMcpConfigDirs(
+export function sweepCloneMcpConfigDirs(
   options: CloneMcpConfigSweepOptions,
 ): Promise<CloneMcpConfigSweepResult> {
-  const result: CloneMcpConfigSweepResult = { removed: [], failed: [] };
-  const minAgeMs = options.minAgeMs ?? CLONE_MCP_CONFIG_SWEEP_MIN_AGE_MS;
   const isPidAlive = options.isPidAlive ?? isPidAliveBySignal;
-  const removeFn = options.rmFn ?? ((target) => rm(target, { recursive: true, force: true }));
-  let names: string[];
-  try {
-    names = await readdir(options.tmpRoot);
-  } catch (error) {
-    result.scanError = `${options.tmpRoot} を読めなかった: ${reasonOf(error)}`;
-    return result;
-  }
-  for (const name of names) {
-    if (!name.startsWith(CLONE_MCP_CONFIG_DIR_PREFIX)) continue;
-    const target = path.join(options.tmpRoot, name);
-    try {
+  return sweepMcpConfigDirs({
+    ...options,
+    prefix: CLONE_MCP_CONFIG_DIR_PREFIX,
+    keep: (name, target) => {
       const pid = pidOfName(name);
-      if (pid === options.ownPid && options.liveDirs.has(target)) continue;
-      if (pid !== undefined && pid !== options.ownPid && isPidAlive(pid)) continue;
-      const info = await lstat(target);
-      // symlink は辿らない: 付け替えられた先をデーモンの権限で再帰削除しないため
-      if (!info.isDirectory()) continue;
-      if (options.now - info.mtimeMs < minAgeMs) continue;
-      await removeFn(target);
-      result.removed.push(name);
-    } catch (error) {
-      result.failed.push({ name, reason: reasonOf(error) });
-    }
-  }
-  return result;
+      if (pid === options.ownPid && options.liveDirs.has(target)) return true;
+      return pid !== undefined && pid !== options.ownPid && isPidAlive(pid);
+    },
+  });
 }

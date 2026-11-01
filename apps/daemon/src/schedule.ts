@@ -1,5 +1,6 @@
 import {
   dailyReportEntry,
+  isEnvOffSpelling,
   memoryTidyEntry,
   parseTimeOfDay,
   placedEnvValue,
@@ -9,7 +10,7 @@ import {
   type TimeOfDay,
 } from '@alteroid/core';
 
-import { OFF_SPELLINGS } from './env-every-minutes.js';
+import { readEveryMinutes } from './env-every-minutes.js';
 
 export interface ScheduleConfig {
   dailyReportAt: TimeOfDay | null;
@@ -45,7 +46,7 @@ function readTimeOfDayEnv(
 ): TimeOfDay | null {
   const raw = placedEnvValue(env, name);
   if (raw === null) return parseTimeOfDay(defaultAt);
-  if (OFF_SPELLINGS.has(raw.toLowerCase())) return null;
+  if (isEnvOffSpelling(raw)) return null;
   const parsed = parseTimeOfDay(raw);
   if (parsed === null) {
     notes.push(`${name}="${raw}" は HH:MM として読めないので既定 ${defaultAt} を使う`);
@@ -70,37 +71,16 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     notes,
   );
 
-  const rawEvery = placedEnvValue(env, 'ALTEROID_INITIATIVE_EVERY');
-  let initiativeEveryMinutes: number | null = DEFAULT_INITIATIVE_EVERY_MINUTES;
-  if (rawEvery !== null) {
-    if (OFF_SPELLINGS.has(rawEvery.toLowerCase())) {
-      initiativeEveryMinutes = null;
-    } else {
-      const parsed = Number(rawEvery);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        notes.push(
-          `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は分数として読めないので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
-        );
-      } else if (parsed < MIN_INITIATIVE_EVERY_MINUTES) {
-        notes.push(
-          `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は下限 ${MIN_INITIATIVE_EVERY_MINUTES} 分を下回っているので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
-        );
-      } else if (parsed > SCHEDULE_EVERY_MINUTES_MAX) {
-        // 上限はクローンの道具の `every` と揃える（#4723）: 上限が無いと次の発火時刻が Invalid Date になり、tick が約1ms周期で連射されるため
-        notes.push(
-          `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は上限 ${SCHEDULE_EVERY_MINUTES_MAX} 分（1年）を超えているので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
-        );
-      } else {
-        initiativeEveryMinutes = parsed;
-        // 整数でない値は起動側（`selfInitiativeEntry`）が切り捨てる: 黙って別の周期で動かさず、実際に使う値を言う。
-        if (!Number.isInteger(parsed)) {
-          notes.push(
-            `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は整数でないので ${Math.floor(parsed)} 分として扱う`,
-          );
-        }
-      }
-    }
-  }
+  // 上限はクローンの道具の `every` と揃える（#4723）: 上限が無いと次の発火時刻が Invalid Date になり、tick が約1ms周期で連射されるため。
+  // 整数でない値は起動側（`selfInitiativeEntry`）が切り捨てる: 黙って別の周期で動かさず、実際に使う値を言う。
+  const initiative = readEveryMinutes(env, 'ALTEROID_INITIATIVE_EVERY', {
+    defaultMinutes: DEFAULT_INITIATIVE_EVERY_MINUTES,
+    minMinutes: MIN_INITIATIVE_EVERY_MINUTES,
+    max: { minutes: SCHEDULE_EVERY_MINUTES_MAX, text: `${SCHEDULE_EVERY_MINUTES_MAX} 分（1年）` },
+    noteNonInteger: true,
+  });
+  notes.push(...initiative.notes);
+  const initiativeEveryMinutes = initiative.everyMinutes;
 
   const rawLookback = placedEnvValue(env, 'ALTEROID_REPORT_LOOKBACK_DAYS');
   let reportLookbackDays = DEFAULT_REPORT_LOOKBACK_DAYS;
