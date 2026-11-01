@@ -123,6 +123,7 @@ import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import { PushLedger, type RunnerPushHealth } from './push-ledger.js';
+import { SessionLoaders } from './session-loaders.js';
 import type { CredentialService } from './credential-service.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { McpServerService } from './mcp-server-service.js';
@@ -175,20 +176,6 @@ import {
   type ManagerReportFiles,
 } from './manager-outbox-fetch.js';
 import { runnerAttachmentBodyLimit } from './runner-attachments.js';
-import {
-  RESUME_SUBAGENT_BUDGET_CHARS,
-  isSubagentSubpath,
-  selectSubagentsWithinBudget,
-  type ResumeSubagentTranscript,
-} from './resume-subagents.js';
-import {
-  RESUME_PEER_BUDGET_CHARS,
-  buildPeerTranscript,
-  isPeerSubpath,
-  peerIdOfSubpath,
-  selectPeersWithinBudget,
-  type ResumePeerTranscript,
-} from './resume-peers.js';
 import type {
   RunnerAttachment,
   RunnerClient,
@@ -280,7 +267,6 @@ import {
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { UsageRecordOrder, type UsageRecordTicket, usageDate } from './usage.js';
 import { notePhase } from './loop-stall.js';
-import { jsonLinesYielding } from './loop-yield.js';
 import {
   FOLD_NOTICE_COMMANDS_MAX,
   cloneWorkspaceAfterSwapLine,
@@ -1425,19 +1411,6 @@ const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * runner に預けた退避を取りに行って失敗したとき、やり直すまでの待ち（回数はこの長さ）。
- * 取りに行くのは出来事を受けた1回だけなので、やり直さないと本文は預かりの期限（`ARCHIVE_STASH_TTL_MS`、1時間）で消える。合計はその期限より十分短い。
- */
-const ARCHIVE_FETCH_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000];
-
-/**
- * 生ログの写し（`mirror`）を PG へ預けるのが落ちたとき、やり直すまでの待ち（回数はこの長さ。#4657）。
- * runner は預けたかを待たず送り直しもしないので、やり直さないとその塊は抜け、後の resume が欠けた会話から再開する。
- * 待つ間、同じ会話の後ろの塊は順番待ちで溜まるので、合計は短めにする。
- */
-const MIRROR_APPEND_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000];
-
-/**
  * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS` と同じ値だが共有しない: `tools.ts` が
  * `manager.ts` を import する向きを逆にしないため。実測に基づく値ではない。
  * 待たない（fire-and-forget）のに上限を置くのは、応答が永久に返らないと
@@ -1555,17 +1528,6 @@ function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
 }
 
 /**
- * **`unknown[] | null` にしない。** `null` だと「預かっていない」と「読みに行って失敗した」が同じ値になり、
- * 一時的に読めなかっただけの委譲が `lost` で終端して、クローンに存在の否定が届く。
- */
-type SessionMaterial =
-  | { kind: 'loaded'; entries: unknown[] }
-  /** 預かっていない（store が無い / `projectKey` が無い / 引いたが空だった）。 */
-  | { kind: 'absent' }
-  /** **引きに行って失敗した。** 待てば直りうるので、恒久の結論に変えない。 */
-  | { kind: 'unreadable' };
-
-/**
  * **`boolean` にしない。** `false` は「戻る先が無い」の意味で使われ、`send()` はそれを「新しく起こし直すこと」と
  * 報告する。読めなかっただけのときに同じ言葉を出すと、一時を恒久として報告し、起こし直すという誤った行動まで
  * 指示する（続きが失われる）。
@@ -1626,7 +1588,7 @@ export interface ManagerRecord {
    */
   observedSessionGenerations?: Set<string>;
   /**
-   * 直近の resume を、預かった生ログ無しで（`#loadSession` が `absent`）新しいプロセスへ出したか（#4501）。
+   * 直近の resume を、預かった生ログ無しで（`SessionLoaders#loadSession` が `absent`）新しいプロセスへ出したか（#4501）。
    * 器が作り直された・別の器へ移った後なら、新しい CLI に会話は無いので、戻れない見込みが高い。その旨を受理の知らせに添えるためだけに使う。
    * **プロセス内の像にしか置かない**。`#resume` が resume を出すたびに書き直す。
    */
@@ -2306,6 +2268,7 @@ class Pool implements ManagerPool {
   /** 弱参照なのは、名簿から外れた runner をここが握り続けないため。 */
   readonly #connections = new WeakMap<RunnerClient, Promise<void>>();
   readonly #pushLedger: PushLedger;
+  readonly #sessionLoaders: SessionLoaders;
   /** 消さない: 器が入れ替わっても次の `session` が上書きし、`at` が観測の古さを名乗る。 */
   readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
   /**
@@ -2431,6 +2394,16 @@ class Pool implements ManagerPool {
     this.#runners = runners;
     this.#codexAuth = codexAuth;
     this.#now = now ?? (() => Date.now());
+    this.#sessionLoaders = new SessionLoaders({
+      stores,
+      runners,
+      journal: (entry) => this.#journal(entry),
+      // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
+      journalExchange: this.#journalExchange.bind(this),
+      stopped: () => this.#stopped,
+      sighting: (runnerId) => this.#sighting(runnerId),
+      swapNote: (runnerId, before) => this.#swapNote(runnerId, before),
+    });
     this.#pushLedger = new PushLedger({
       services: {
         profile,
@@ -4748,7 +4721,7 @@ class Pool implements ManagerPool {
       }
     }
 
-    const fromSessionStore = await this.#fromSessionStore(job);
+    const fromSessionStore = await this.#sessionLoaders.fromSessionStore(job);
     if (fromSessionStore !== null) return { kind: 'body', body: fromSessionStore };
 
     // 本文が残る他の経路のほうが有用なので、`removed` は最後まで返さない。
@@ -5132,7 +5105,7 @@ class Pool implements ManagerPool {
    * 生ログの末尾だけを取る。`transcript()`（全文）と同じ3段を、末尾を読む口で回す（#4628 / #4638）:
    * pg の生ログの預かりの末尾 → runner の末尾の口（`transcript-tail`。#5160）→ 退避の末尾（`archive.readTail`）。
    * 返す量は `readTail` と同じ契約（本文が `maxChars` より長ければ、それを厳密に上回る量）。読み手は先頭の欠けた1行を捨てる。
-   * 預かりを全件読む `#fromSessionStore` には落ちない: 1段目が同じ預かりの末尾を読むため。
+   * 預かりを全件読む `SessionLoaders#fromSessionStore` には落ちない: 1段目が同じ預かりの末尾を読むため。
    */
   async #transcriptTailOf(
     job: Job,
@@ -8408,14 +8381,14 @@ class Pool implements ManagerPool {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return 'no-session';
 
-    // `#claimForResume` / `#loadSession` より前に断る: 後段（貸し出し・生ログ取得）が空振りする前に分かる条件。
+    // `#claimForResume` / `SessionLoaders#loadSession` より前に断る: 後段（貸し出し・生ログ取得）が空振りする前に分かる条件。
     if (cwd === undefined && !runner.workspacePathKnown) return 'workspace-path-unknown';
 
     if (!(await this.#claimForResume(record, runner))) return 'held-by-lease';
     onClaimed?.();
 
     // runner のディスクに生ログが残っている前提を置かない: 器は作り直される。
-    const material = await this.#loadSession(projectKey, sessionId);
+    const material = await this.#sessionLoaders.loadSession(projectKey, sessionId);
 
     // 引けなかったものを「無い」として進めない: 材料無しで resume すると `resume_failed` の `recovered: false` が `lost` に確定し、一時的に DB が読めなかっただけで委譲が恒久に終端する。
     if (material.kind === 'unreadable') return 'unreadable';
@@ -8423,12 +8396,12 @@ class Pool implements ManagerPool {
     // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
     const subagents =
       material.kind === 'loaded' && projectKey !== undefined
-        ? await this.#loadSubagents(record.job.id, projectKey, sessionId)
+        ? await this.#sessionLoaders.loadSubagents(record.job.id, projectKey, sessionId)
         : [];
     // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
     const peers =
       material.kind === 'loaded' && projectKey !== undefined
-        ? await this.#loadPeers(record.job.id, projectKey, sessionId)
+        ? await this.#sessionLoaders.loadPeers(record.job.id, projectKey, sessionId)
         : [];
 
     // チェックポイント1: `#claimForResume` の後・`runner.resume()` の直前に置く。前に置くと確認から呼び出しまでの窓が開くだけで得が無く、呼ぶ前に見送れる回は実 I/O を減らす。
@@ -8547,171 +8520,7 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 「無い」と「読めなかった」を分けて返す: `null` に畳むと下流が恒久の結論へ変える（`#resume` 参照）。本文は stderr に出さない（`noteDroppedRecord` と同じ）。
-   */
-  async #loadSession(projectKey: string | undefined, sessionId: string): Promise<SessionMaterial> {
-    const store = this.#stores.sessionStore;
-    if (store === undefined || projectKey === undefined) return { kind: 'absent' };
-    try {
-      const entries = await store.load({ projectKey, sessionId });
-      // 空と不在を分けない: どちらも引けてはいて、待っても変わらない。
-      if (entries === null || entries.length === 0) return { kind: 'absent' };
-      return { kind: 'loaded', entries };
-    } catch (error) {
-      noteUnreadableRecord(
-        '預かってある生ログ',
-        `projectKey=${projectKey} sessionId=${sessionId}`,
-        error,
-      );
-      return { kind: 'unreadable' };
-    }
-  }
-
-  /**
-   * 作業者（`subagents/…`）の記録を預かり先から引く。引けなくても resume は止めない（主の記録だけで続けられる）が、
-   * 戻せなかった作業者と上限で入らなかった作業者は日誌へ残す: 黙って落とすと、`SendMessage` が「記録が無い」で失敗する理由が追えない。
-   * `listSubkeys` を持たない預かり先は、作業者の分が無いものとして空を返す。
-   */
-  async #loadSubagents(
-    managerId: string,
-    projectKey: string,
-    sessionId: string,
-  ): Promise<ResumeSubagentTranscript[]> {
-    const store = this.#stores.sessionStore;
-    if (store?.listSubkeys === undefined) return [];
-    const failed: string[] = [];
-    const candidates: ResumeSubagentTranscript[] = [];
-    try {
-      const subpaths = (await store.listSubkeys({ projectKey, sessionId })).filter(
-        isSubagentSubpath,
-      );
-      for (const subpath of subpaths) {
-        try {
-          const entries = await store.load({ projectKey, sessionId, subpath });
-          if (entries !== null && entries.length > 0) candidates.push({ subpath, entries });
-        } catch (error) {
-          failed.push(subpath);
-          noteUnreadableRecord(
-            '預かってある作業者の生ログ',
-            `projectKey=${projectKey} sessionId=${sessionId} subpath=${subpath}`,
-            error,
-          );
-        }
-      }
-    } catch (error) {
-      noteUnreadableRecord(
-        '預かってある作業者の生ログの一覧',
-        `projectKey=${projectKey} sessionId=${sessionId}`,
-        error,
-      );
-      await this.#journal({
-        type: 'decision',
-        decision: `[${managerId}] resume で、作業者の生ログの一覧を読めなかったので、作業者の記録は戻さずに起こす`,
-        grounds: `listSubkeys の失敗: ${reasonOf(error)}`,
-      });
-      return [];
-    }
-    const { included, omitted } = selectSubagentsWithinBudget(candidates);
-    if (omitted.length > 0 || failed.length > 0) {
-      const parts = [
-        omitted.length === 0
-          ? undefined
-          : `合計の上限（${String(RESUME_SUBAGENT_BUDGET_CHARS)} 文字）に入らず戻さなかった作業者 ${String(omitted.length)} 件: ${omitted.join(', ')}`,
-        failed.length === 0
-          ? undefined
-          : `読めずに戻さなかった作業者 ${String(failed.length)} 件: ${failed.join(', ')}`,
-      ].filter((part) => part !== undefined);
-      await this.#journal({
-        type: 'decision',
-        decision: `[${managerId}] resume で、作業者の記録の一部を戻さなかった（その作業者への SendMessage は記録が無く失敗する）`,
-        grounds: parts.join('。'),
-      });
-    }
-    return included;
-  }
-
-  /**
-   * peer（`peers/<peerId>`）の記録を預かり先から引く。引けなくても resume は止めない（担当は peer を新しく頼み直せる）が、
-   * 戻せなかった・上限で入らなかった・置き場の印が無い peer は日誌へ残す: 黙って落とすと、`peer_reply` が「無い」で断られる理由が追えない。
-   * `listSubkeys` を持たない預かり先は、peer の分が無いものとして空を返す。
-   */
-  async #loadPeers(
-    managerId: string,
-    projectKey: string,
-    sessionId: string,
-  ): Promise<ResumePeerTranscript[]> {
-    const store = this.#stores.sessionStore;
-    if (store?.listSubkeys === undefined) return [];
-    const failed: string[] = [];
-    const unplaceable: string[] = [];
-    const candidates: ResumePeerTranscript[] = [];
-    try {
-      const subpaths = (await store.listSubkeys({ projectKey, sessionId })).filter(isPeerSubpath);
-      for (const subpath of subpaths) {
-        const peerId = peerIdOfSubpath(subpath);
-        try {
-          const stored = await store.load({ projectKey, sessionId, subpath });
-          if (stored === null || stored.length === 0) continue;
-          const peer = buildPeerTranscript(peerId, stored);
-          if (peer === undefined) unplaceable.push(peerId);
-          else candidates.push(peer);
-        } catch (error) {
-          failed.push(peerId);
-          noteUnreadableRecord(
-            '預かってある peer の生ログ',
-            `projectKey=${projectKey} sessionId=${sessionId} subpath=${subpath}`,
-            error,
-          );
-        }
-      }
-    } catch (error) {
-      noteUnreadableRecord(
-        '預かってある peer の生ログの一覧',
-        `projectKey=${projectKey} sessionId=${sessionId}`,
-        error,
-      );
-      await this.#journal({
-        type: 'decision',
-        decision: `[${managerId}] resume で、peer の生ログの一覧を読めなかったので、peer の記録は戻さずに起こす`,
-        grounds: `listSubkeys の失敗: ${reasonOf(error)}`,
-      });
-      return [];
-    }
-    const { included, omitted } = selectPeersWithinBudget(candidates);
-    if (omitted.length > 0 || failed.length > 0 || unplaceable.length > 0) {
-      const parts = [
-        omitted.length === 0
-          ? undefined
-          : `合計の上限（${String(RESUME_PEER_BUDGET_CHARS)} 文字）に入らず戻さなかった peer ${String(omitted.length)} 件: ${omitted.join(', ')}`,
-        failed.length === 0
-          ? undefined
-          : `読めずに戻さなかった peer ${String(failed.length)} 件: ${failed.join(', ')}`,
-        unplaceable.length === 0
-          ? undefined
-          : `置き場の印（${'alteroid_peer_meta'}）が無く戻せなかった peer ${String(unplaceable.length)} 件: ${unplaceable.join(', ')}`,
-      ].filter((part) => part !== undefined);
-      await this.#journal({
-        type: 'decision',
-        decision: `[${managerId}] resume で、peer の記録の一部を戻さなかった（その peer への peer_reply は続きから起こせず、新しく頼み直すことになる）`,
-        grounds: parts.join('。'),
-      });
-    }
-    return included;
-  }
-
-  async #fromSessionStore(job: Job): Promise<string | null> {
-    const material = await this.#loadSession(job.projectKey, job.sessionId ?? '');
-    if (material.kind !== 'loaded') return null;
-    // 1回の `map` と `join` で作らない: 預かりは数百 MB になり、全件の直列化の間ループを塞ぐため（#4659）
-    return jsonLinesYielding(material.entries);
-  }
-
-  /**
    * `fromRunnerId` を見るのは `case 'closed'` / `case 'resume_failed'` だけ: 古い runner から遅れて届いた出来事が、別の runner へ移った後の委譲の台帳・貸し出しを巻き戻すのを防ぐ。`RunnerEvent` 自身は `runnerId` を運ばない。
-   */
-  /**
-   * runner に預けた退避の本文を取りに行く。器が名簿に居ない・取りに行く呼び出しが落ちた回は、`ARCHIVE_FETCH_RETRY_DELAYS_MS` の間を置いてやり直す。
-   * やり直すのは、そのうち取れる見込みのある失敗だけ: 本文が無い（期限切れ・既に消された）・口を持たない器は、何度聞いても同じ答えなので、すぐ投げる。
    */
   #swapNote(runnerId: string, before: string | undefined): string {
     const after = this.#sighting(runnerId).instanceId;
@@ -8721,97 +8530,6 @@ class Pool implements ManagerPool {
     return before === after
       ? `runner の器は入れ替わっていない（instanceId=${after}）`
       : `runner の器が入れ替わっていた（参照を受けた時の instanceId=${before}、取りに行った時=${after}）。預けたプロセスは既に居ない`;
-  }
-
-  async #fetchArchiveRetrying(
-    managerId: string,
-    archiveId: string,
-    fromRunnerId: string,
-  ): Promise<{ body: string; runner: RunnerClient }> {
-    const delays = ARCHIVE_FETCH_RETRY_DELAYS_MS;
-    const instanceBefore = this.#sighting(fromRunnerId).instanceId;
-    for (let attempt = 0; ; attempt += 1) {
-      let failure: unknown;
-      const runner = await this.#runners.get(fromRunnerId);
-      if (runner === null) {
-        failure = new Error(`退避を預けた器（${fromRunnerId}）が名簿に居ない`);
-      } else {
-        if (runner.fetchArchive === undefined) {
-          throw new Error('この器のクライアントは、預けた退避を取りに行く口を持たない');
-        }
-        let fetched: string | undefined;
-        try {
-          fetched = await runner.fetchArchive(managerId, archiveId);
-        } catch (error) {
-          failure = error;
-        }
-        if (failure === undefined) {
-          if (fetched === undefined) {
-            // 入れ替わりの前後かを日誌から読めるようにする（#4896）: 参照を受けた時と取りに行った時の instanceId が違えば、預けたプロセスはもう居ない
-            const swapNote = this.#swapNote(fromRunnerId, instanceBefore);
-            throw new Error(
-              `runner に預けた退避（${archiveId}）が無かった（期限切れで捨てられたか、既に消された）。${swapNote}`,
-            );
-          }
-          return { body: fetched, runner };
-        }
-      }
-      const delayMs = delays[attempt];
-      if (delayMs === undefined || this.#stopped) throw failure;
-      noteDroppedRecord(
-        'トランスクリプトの退避の取り寄せ（やり直す）',
-        `managerId=${managerId} ref=${archiveId} attempt=${String(attempt + 1)}`,
-        failure,
-      );
-      // `unref` する: 待ちが止めたはずのデーモンの終了を引き延ばさないため
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs).unref?.();
-      });
-    }
-  }
-
-  /**
-   * 生ログの写しを PG へ預ける。落ちたら `MIRROR_APPEND_RETRY_DELAYS_MS` の間を置いてやり直す（#4657）。
-   * 順番は崩れない: 同じ会話の後ろの塊は、この預けが終わるのを `#mirrorTurns` で待っている。
-   * やり直しで二重に積まれうるのは uuid の無い行だけ（`append` は1つのトランザクションで、uuid の有る行は衝突を無視する）。抜けるより害が小さい。
-   * やり直し切れなかったら日誌にも残す: 標準エラーだけだと、resume した会話のどこが抜けたかを後から辿れないため。
-   */
-  async #appendMirrorRetrying(
-    store: NonNullable<Stores['sessionStore']>,
-    event: Extract<RunnerEvent, { type: 'mirror' }>,
-  ): Promise<void> {
-    const delays = MIRROR_APPEND_RETRY_DELAYS_MS;
-    const detail =
-      `managerId=${event.managerId} projectKey=${event.key.projectKey} ` +
-      `sessionId=${event.key.sessionId} entries=${event.entries.length}`;
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await store.append(event.key, event.entries as never);
-        return;
-      } catch (error) {
-        const delayMs = delays[attempt];
-        if (delayMs === undefined || this.#stopped) {
-          // 止めないが黙って消さない: 預かり損ねたことすら残らないと、後から「無い」のか「預かれなかった」のかが分からない。
-          noteDroppedRecord('生ログのミラー', `${detail} attempts=${String(attempt + 1)}`, error);
-          await this.#journalExchange(
-            'outbound',
-            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 生ログの写し ${String(event.entries.length)} 件を PG へ預けられなかった` +
-              `（${String(attempt + 1)} 回試した。sessionId=${event.key.sessionId}）。` +
-              `この会話を resume すると、この区間が欠けたまま戻る: ${reasonOf(error)}`,
-          );
-          return;
-        }
-        noteDroppedRecord(
-          '生ログのミラー（やり直す）',
-          `${detail} attempt=${String(attempt + 1)}`,
-          error,
-        );
-        // `unref` する: 待ちが止めたはずのデーモンの終了を引き延ばさないため
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs).unref?.();
-        });
-      }
-    }
   }
 
   async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
@@ -9971,7 +9689,7 @@ class Pool implements ManagerPool {
         if (store === undefined) return;
         // 同じ生ログへの先の預けが終わるのを待つ（`#mirrorTails`）
         await this.#mirrorTurns.get(event);
-        await this.#appendMirrorRetrying(store, event);
+        await this.#sessionLoaders.appendMirrorRetrying(store, event);
         return;
       }
 
@@ -10014,7 +9732,7 @@ class Pool implements ManagerPool {
           if (event.body !== undefined) {
             body = event.body;
           } else if (event.ref !== undefined) {
-            const fetched = await this.#fetchArchiveRetrying(
+            const fetched = await this.#sessionLoaders.fetchArchiveRetrying(
               event.managerId,
               event.ref.id,
               fromRunnerId,
