@@ -125,25 +125,18 @@ import {
   isRetryableRunnerError,
   isRunnerSpecificRefusal,
   listRunnerManagers,
-  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
-  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   RunnerHttpError,
 } from './runner-protocol.js';
-import {
-  attachmentRefsOf,
-  estimateAttachmentBodyBytes,
-  ManagerAttachmentsRefusedError,
-} from './manager-attachments.js';
-import { readAttachmentLimits, type AttachmentLimits, type AttachmentStore } from './attachment.js';
+import { attachmentRefsOf, ManagerAttachmentsRefusedError } from './manager-attachments.js';
+import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
+import { AttachmentStager } from './attachment-stager.js';
 import {
   fetchManagerOutbox,
-  outboxFetchDeadlineMs,
   rejectedFileOf,
   type ManagerReportFiles,
 } from './manager-outbox-fetch.js';
-import { runnerAttachmentBodyLimit } from './runner-attachments.js';
 import type {
   RunnerAttachment,
   RunnerClient,
@@ -1793,10 +1786,7 @@ class Pool implements ManagerPool {
   readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
   /** 名乗らない旧い runner は持たない。 */
   readonly #runnerAnthropicRoutes = new Map<string, readonly string[]>();
-  /** 名乗らない器は持たない。 */
-  readonly #runnerAttachmentBodyLimits = new Map<string, number>();
-  /** 名乗らない器は持たない。 */
-  readonly #runnerAttachmentStageLimits = new Map<string, number>();
+  readonly #attachmentStager: AttachmentStager;
   /** 名乗らない器は持たない。 */
   readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
   /** 名乗らない器は持たない。 */
@@ -2182,6 +2172,11 @@ class Pool implements ManagerPool {
       runnerOf: (record) => this.#runnerOf(record),
       runnersOrEmpty: () => this.#runnersOrEmpty(),
     });
+    this.#attachmentStager = new AttachmentStager({
+      awaitHello: (runnerId) => this.#awaitHello(runnerId),
+      hasCapability: (runnerId, capability) => this.runnerHasCapability(runnerId, capability),
+      openAttachment: (id) => this.#stores.attachments.open(id),
+    });
     this.#rescueStash = new ManagerRescueStash({
       stores,
       attachmentLimits,
@@ -2365,7 +2360,7 @@ class Pool implements ManagerPool {
     await this.#connectTo(runner);
     const startAttachments = input.attachments ?? [];
     if (startAttachments.length > 0) {
-      const refused = await this.#attachmentsRefusal(runner, startAttachments, input.request);
+      const refused = await this.#attachmentStager.refusal(runner, startAttachments, input.request);
       if (refused !== undefined) throw new ManagerAttachmentsRefusedError(refused);
     }
     // `cwd` を省いて `workspacePath` が未取得のまま `input.cwd ?? runner.workspacePath` へ通すと、既定値 `''` が
@@ -2381,7 +2376,7 @@ class Pool implements ManagerPool {
     // 大きいファイルは、貸し出しの時刻（`now`）を取る前に別口へ押す（押す間に貸し出しの猶予を食わないため）。
     // 押せなければ起こさない（台帳にも跡を残さない）。
     if (startAttachments.some((item) => item.staged === true)) {
-      const failed = await this.#stageAttachments(runner, managerId, startAttachments);
+      const failed = await this.#attachmentStager.stage(runner, managerId, startAttachments);
       if (failed !== undefined) throw new ManagerAttachmentsRefusedError(failed);
     }
     const cwd = input.cwd ?? runner.workspacePath;
@@ -2615,11 +2610,11 @@ class Pool implements ManagerPool {
       };
     }
     if (!pending && sendAttachments.length > 0) {
-      const refused = await this.#attachmentsRefusal(runner, sendAttachments, message);
+      const refused = await this.#attachmentStager.refusal(runner, sendAttachments, message);
       if (refused !== undefined)
         return { outcome: 'unknown', detail: `${refused}（何も送っていない）` };
       // 大きいファイルは、命令（`send` でも resume でも）を出す前に別口へ押す。押せなければ命令を送らない。
-      const stageFailed = await this.#stageAttachments(runner, managerId, sendAttachments);
+      const stageFailed = await this.#attachmentStager.stage(runner, managerId, sendAttachments);
       if (stageFailed !== undefined)
         return { outcome: 'unknown', detail: `${stageFailed}（何も送っていない）` };
     }
@@ -3820,108 +3815,6 @@ class Pool implements ManagerPool {
         };
       })
       .sort((a, b) => a.runnerId.localeCompare(b.runnerId));
-  }
-
-  /** 名乗らない版（旧い runner）は `attachments` 欄を黙って捨てて 200 を返すので、送らずに断る。 */
-  async #attachmentsRefusal(
-    runner: RunnerClient,
-    attachments: readonly RunnerAttachment[],
-    text: string,
-  ): Promise<string | undefined> {
-    await this.#awaitHello(runner.runnerId);
-    if (this.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS)) {
-      // 大きいファイルを黙って落とさない: 受け手が名乗っていない・上限を超える・押す口が無いときは、理由を言って何も送らない。
-      for (const item of attachments) {
-        if (item.staged !== true) continue;
-        const label = `${item.id}（${item.name}, ${item.size} バイト）`;
-        if (
-          !this.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE)
-        ) {
-          return (
-            `大きいファイル ${label} は、runner（runnerId=${runner.runnerId}）が大きいファイルの受け取り` +
-            `（${RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE}）を名乗っていない（旧い版か、名乗りをまだ受けていない）ので下ろせない`
-          );
-        }
-        const stageLimit = this.#runnerAttachmentStageLimits.get(runner.runnerId);
-        if (stageLimit === undefined || item.size > stageLimit) {
-          return (
-            `大きいファイル ${label} は、runner（runnerId=${runner.runnerId}）が受けられる大きさ` +
-            `（${stageLimit === undefined ? '上限を名乗っていない' : `上限 ${stageLimit} バイト`}）を超えるので下ろせない`
-          );
-        }
-        if (runner.stageAttachment === undefined) {
-          return `大きいファイル ${label} を押す口を、この runner への接続（runnerId=${runner.runnerId}）が持っていない`;
-        }
-      }
-      const named = this.#runnerAttachmentBodyLimits.get(runner.runnerId);
-      const limit = named ?? runnerAttachmentBodyLimit(readAttachmentLimits().limits);
-      const estimate = estimateAttachmentBodyBytes(attachments, text);
-      if (estimate > limit) {
-        return (
-          `添付を載せた本文の見積もり ${estimate} バイトが、runner（runnerId=${runner.runnerId}）の上限 ` +
-          `${limit} バイトを超える（${named === undefined ? '上限を名乗らない版なので、デーモン側の既定値' : 'runner が名乗った値'}）。` +
-          '添付を減らすか、小さくして送り直すこと'
-        );
-      }
-      return undefined;
-    }
-    return (
-      `runner（runnerId=${runner.runnerId}）は担い手への添付の受け渡しを名乗っていない` +
-      '（旧い版か、名乗りをまだ受けていない）。添付は黙って捨てられるので送らない'
-    );
-  }
-
-  /** 押す向きの経路だけにする: runner からデーモンへ取りに行く経路は作らない。失敗したら命令を送らずに断る理由を返す。 */
-  async #stageAttachments(
-    runner: RunnerClient,
-    managerId: string,
-    attachments: readonly RunnerAttachment[],
-  ): Promise<string | undefined> {
-    for (const item of attachments) {
-      if (item.staged !== true) continue;
-      const label = `${item.id}（${item.name}, ${item.size} バイト）`;
-      const stage = runner.stageAttachment?.bind(runner);
-      if (stage === undefined) return `大きいファイル ${label} を押す口が無い`;
-      // 期限は1つずつのファイルに掛ける。応答しない runner を最長1時間（runner 側の持ち時間）待たない
-      const deadlineMs = outboxFetchDeadlineMs(item.size);
-      const signal = AbortSignal.timeout(deadlineMs);
-      const timedOut = `大きいファイル ${label} を runner へ下ろせなかった: 時間の上限（${Math.round(deadlineMs / 100) / 10} 秒）を超えた`;
-      let opened: Awaited<ReturnType<AttachmentStore['open']>>;
-      try {
-        opened = await this.#stores.attachments.open(item.id);
-        if (opened === undefined) {
-          return `大きいファイル ${label} は読む間に置き場から消えた（保持期限）`;
-        }
-        const pushing = stage(
-          managerId,
-          {
-            id: item.id,
-            name: item.name,
-            mediaType: item.mediaType,
-            size: item.size,
-            sha256: item.sha256,
-          },
-          opened.stream,
-          { signal },
-        );
-        // `signal` を見ない実装でも期限で抜ける（遅れた拒否は握る）
-        pushing.catch(() => undefined);
-        const aborted = new Promise<'aborted'>((resolve) => {
-          signal.addEventListener('abort', () => resolve('aborted'), { once: true });
-        });
-        if ((await Promise.race([pushing.then(() => 'done' as const), aborted])) === 'aborted') {
-          return timedOut;
-        }
-      } catch (error) {
-        // `signal` を見る実装（`fetch`）は期限で拒否する。理由は時間切れとして言う
-        if (signal.aborted) return timedOut;
-        return `大きいファイル ${label} を runner へ下ろせなかった: ${reasonOf(error)}`;
-      } finally {
-        // 読み切らずに断られた回に、置き場の読みを残さない。
-        opened?.stream.destroy();
-      }
-    }
-    return undefined;
   }
 
   /** {@link RunnerOverview.managerPeers}。名乗りの記憶を読むだけで、runner へは訊きに行かない。 */
@@ -6771,16 +6664,11 @@ class Pool implements ManagerPool {
       if (this.#stopped) return;
       // 前の名乗りを持ち越さない: 同じ runnerId の器が入れ替わって版が下がりうる。
       this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
-      if (event.attachmentBodyLimit === undefined) {
-        this.#runnerAttachmentBodyLimits.delete(event.runnerId);
-      } else {
-        this.#runnerAttachmentBodyLimits.set(event.runnerId, event.attachmentBodyLimit);
-      }
-      if (event.attachmentStageLimit === undefined) {
-        this.#runnerAttachmentStageLimits.delete(event.runnerId);
-      } else {
-        this.#runnerAttachmentStageLimits.set(event.runnerId, event.attachmentStageLimit);
-      }
+      this.#attachmentStager.noteHello(
+        event.runnerId,
+        event.attachmentBodyLimit,
+        event.attachmentStageLimit,
+      );
       if (event.managerModel === undefined && event.workerModel === undefined) {
         this.#runnerModels.delete(event.runnerId);
       } else {
