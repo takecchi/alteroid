@@ -756,6 +756,28 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
+  it('⭐ 背景の peer が走っている担当を畳んで（keepPeers 無し・器の畳み）peer を閉じたら、途中で終わった背景ターンを誰かに見える形（note か出来事）で残す', async () => {
+    // 開かないゲート: 背景ターンは走ったまま、止まりどころに来ない
+    const gate = new Promise<void>(() => undefined);
+    const s = await setupPeerCall([], {
+      args: { run_in_background: true },
+      sdk: readingQuery(),
+      gate,
+    });
+    expect(s.firstText).toContain('背景で流し始めた');
+    const peerId = /session_id: (peer-[0-9a-f]+)/.exec(s.firstText)?.[1];
+    expect(peerId).toBeDefined();
+    const before = s.events.length;
+    // 器の畳み（runner shutdown）は keepPeers 無しの停止で、背景の peer を閉じる
+    await s.host.shutdown();
+    const mentions = s.events
+      .slice(before)
+      .filter((e) => e.type !== 'tool_end' && e.type !== 'peer_usage')
+      .filter((e) => JSON.stringify(e).includes(peerId ?? 'unreachable'));
+    expect(mentions).not.toEqual([]);
+    await s.client.close();
+  });
+
   it('背景の peer_run はすぐ返り、確認待ち・ターンの終わりを知らせとしてマネージャーへ入れて起こす（#4123）', async () => {
     const sdk = readingQuery();
     const s = await setupPeerCall([], { args: { run_in_background: true }, sdk });
