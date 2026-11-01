@@ -2411,7 +2411,7 @@ class Clone implements CloneHost {
         await timer
           .time('prepare.taskQueue', () => this.#taskQueueNoticeFor(batch))
           .catch((error: unknown) => {
-            noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
+            noteDroppedRecord('待ち行列の断り書きの組み立て', inboxEventShape(event), error);
             return '';
           }),
       );
@@ -3708,7 +3708,7 @@ class Clone implements CloneHost {
 
   /**
    * 断り書きのうち、システムが全文を組んだ3本（配り直し・前提の変化・束の打ち切り）の長い段落を、同じ会話の2回目から短い参照にする（#4943）。
-   * 掛けないもの: 待ち行列の断り（欄名は `commitment` のまま。固定の1文は #4937 の仕組みで既に参照にしている）・`situation`（#4489 の説明の控えが持つ）。どちらも二重に掛けない。
+   * 掛けないもの: 待ち行列の断り（欄名は `commitment` のまま。理由は `TurnInputText.commitment` の注釈。固定の1文は #4937 の仕組みで既に参照にしている）・`situation`（#4489 の説明の控えが持つ）。どちらも二重に掛けない。
    * 日誌・SDK からの文言（人間・担当・外部の言葉）はこの3本には入らない。
    */
   #foldNoticeParagraphs(
