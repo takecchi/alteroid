@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveSynthesizedNoticeWindowMs,
   SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY,
-} from './manager.js';
+} from './synthesized-notice.js';
 import {
   MAX_RESCUE_INTERVAL_MS,
   RESCUE_INTERVAL_MS_ENV_KEY,
