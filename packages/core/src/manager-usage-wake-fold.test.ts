@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { HELD_FORCE_FOLD_AFTER_MS, createManagerPool, type ManagerPoolOptions } from './manager.js';
+import { HELD_FORCE_FOLD_AFTER_MS } from './held-messages.js';
+import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { composePeerCloseNotices, remainingFoldNotice } from './manager-notices.js';
 import { createProfileService } from './profile-service.js';
 import {
