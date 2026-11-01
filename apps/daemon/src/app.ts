@@ -242,7 +242,7 @@ import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
-import { createMiddleware } from 'hono/factory';
+import { createFactory, createMiddleware } from 'hono/factory';
 import { streamSSE as honoStreamSSE } from 'hono/streaming';
 import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi';
 import { z } from 'zod';
@@ -1458,6 +1458,61 @@ function unreadableRowsMissingBody(count: number, noun: string, hint: string): {
 
 function unreadableRowsRemovedBody(ids: readonly string[]) {
   return unreadableRowsRemoveResponseSchema.parse({ removedIds: ids, count: ids.length });
+}
+
+// 読めない行を id で消す口（permission-grants・integration-keys・access）の `describeRoute`・本文検査・ハンドラ。口ごとの違いは説明文・消す対象の言い方・消す関数だけ。`subject` は日誌と 500 の本文の対象名、`noun` は 404 の本文の「読めない○○の行」の○○、`hint` は読めない行の id を確かめる口の言い方。
+function unreadableRowsRemoveHandlers(params: {
+  stores: Stores;
+  tag: string;
+  summary: string;
+  description: string;
+  path: string;
+  subject: string;
+  noun: string;
+  hint: string;
+  extraResponses?: Record<number, ReturnType<typeof errorResponse>>;
+  notFoundDescription?: string;
+  remove: (
+    ids: readonly string[],
+    options: RemoveUnreadableRowsOptions,
+  ) => Promise<RemoveUnreadableRowsResult>;
+}) {
+  const { stores, subject, noun, hint } = params;
+  return createFactory<{ Variables: AuthVariables }>().createHandlers(
+    describeRoute({
+      tags: [params.tag],
+      summary: params.summary,
+      description: params.description,
+      responses: {
+        200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
+        400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
+        ...params.extraResponses,
+        404: errorResponse(params.notFoundDescription ?? UNREADABLE_IDS_MISSING_DESCRIPTION),
+        500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
+      },
+    }),
+    jsonBody(
+      unreadableRowsRemoveRequestSchema,
+      invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
+    ),
+    async (c) => {
+      const result = await removeUnreadableRowsWithJournal({
+        stores,
+        subject,
+        actor: describeActor(c.get('principal')),
+        route: `POST ${params.path}`,
+        requested: c.req.valid('json').ids,
+        remove: params.remove,
+      });
+      if (result.kind === 'unknown') {
+        return c.json(unreadableRowsMissingBody(result.count, noun, hint), 404);
+      }
+      if (result.kind === 'failed') {
+        return c.json({ error: `${subject}を保存できなかった` }, 500);
+      }
+      return c.json(unreadableRowsRemovedBody(result.ids));
+    },
+  );
 }
 
 // `message` を含めない: ストアのエラー文には行の中身（トークンの値）が載りうる。
@@ -5360,51 +5415,23 @@ export function createApp(deps: AppDeps) {
     // `:id` の下に置かない: 読めた行の id と名前空間が重なりうるので、別の語（`unreadable`）の下に置く。
     .post(
       '/permission-grants/unreadable/remove',
-      describeRoute({
-        tags: ['permission-grants'],
+      ...unreadableRowsRemoveHandlers({
+        stores,
+        path: '/permission-grants/unreadable/remove',
+        tag: 'permission-grants',
         summary: '読めない許可の行を、id を指して消す',
         description:
           '読めない（型に合わない形で入っている）許可の行だけを、id を指して消す。読める許可には' +
           '触れない。id が取れない行はこの口では消せない（`permission-grants.json` を手で直す）。' +
           '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
           '（行の中身は残さない）。',
-        responses: {
-          200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
-          400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
-          404: errorResponse(
-            '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない。pg で日誌の後の再確認で倒れた回だけは、日誌に打ち消しの行を足す）。',
-          ),
-          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
-        },
+        notFoundDescription:
+          '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない。pg で日誌の後の再確認で倒れた回だけは、日誌に打ち消しの行を足す）。',
+        subject: '許可の記録',
+        noun: '許可',
+        hint: '`GET /permission-grants` の `rowsUnreadable.rows[].id`（alteroid permission list）',
+        remove: (ids, options) => stores.permissionGrants.removeUnreadable(ids, options),
       }),
-      jsonBody(
-        unreadableRowsRemoveRequestSchema,
-        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
-      ),
-      async (c) => {
-        const result = await removeUnreadableRowsWithJournal({
-          stores,
-          subject: '許可の記録',
-          actor: describeActor(c.get('principal')),
-          route: 'POST /permission-grants/unreadable/remove',
-          requested: c.req.valid('json').ids,
-          remove: (ids, options) => stores.permissionGrants.removeUnreadable(ids, options),
-        });
-        if (result.kind === 'unknown') {
-          return c.json(
-            unreadableRowsMissingBody(
-              result.count,
-              '許可',
-              '`GET /permission-grants` の `rowsUnreadable.rows[].id`（alteroid permission list）',
-            ),
-            404,
-          );
-        }
-        if (result.kind === 'failed') {
-          return c.json({ error: '許可の記録を保存できなかった' as const }, 500);
-        }
-        return c.json(unreadableRowsRemovedBody(result.ids));
-      },
     )
 
     // 値（`altk_...`）も sha256 の全体も返さない（見分けるための先頭12桁だけ）。連携の鍵そのものは資格に入れない（`humanOnly` は二重の門）。
@@ -5441,50 +5468,22 @@ export function createApp(deps: AppDeps) {
     // `:id` と取り違えないよう別の語（`unreadable`）の下に置く。
     .post(
       '/integration-keys/unreadable/remove',
-      describeRoute({
-        tags: ['integration-keys'],
+      humanOnly,
+      ...unreadableRowsRemoveHandlers({
+        stores,
+        path: '/integration-keys/unreadable/remove',
+        tag: 'integration-keys',
         summary: '読めない連携の鍵の行を、id を指して消す',
         description:
           '読めない（型に合わない形で入っている）連携の鍵の行だけを、id を指して消す。読める鍵には触れない。' +
           'id が取れない行はこの口では消せない（`auth/integration-keys.json` を手で直す）。1つでも読めない行に' +
           '無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
-        responses: {
-          200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
-          400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
-          404: errorResponse(UNREADABLE_IDS_MISSING_DESCRIPTION),
-          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
-        },
+        subject: '連携の鍵',
+        noun: '連携の鍵',
+        hint: '`GET /integration-keys` の `rowsUnreadable.rows[].id`（alteroid integration list）',
+        remove: (ids, options) =>
+          stores.integrationKeys.removeUnreadableIntegrationKeys(ids, options),
       }),
-      humanOnly,
-      jsonBody(
-        unreadableRowsRemoveRequestSchema,
-        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
-      ),
-      async (c) => {
-        const result = await removeUnreadableRowsWithJournal({
-          stores,
-          subject: '連携の鍵',
-          actor: describeActor(c.get('principal')),
-          route: 'POST /integration-keys/unreadable/remove',
-          requested: c.req.valid('json').ids,
-          remove: (ids, options) =>
-            stores.integrationKeys.removeUnreadableIntegrationKeys(ids, options),
-        });
-        if (result.kind === 'unknown') {
-          return c.json(
-            unreadableRowsMissingBody(
-              result.count,
-              '連携の鍵',
-              '`GET /integration-keys` の `rowsUnreadable.rows[].id`（alteroid integration list）',
-            ),
-            404,
-          );
-        }
-        if (result.kind === 'failed') {
-          return c.json({ error: '連携の鍵を保存できなかった' as const }, 500);
-        }
-        return c.json(unreadableRowsRemovedBody(result.ids));
-      },
     )
 
     // 日誌を先に書き、書けなければ状態を変えずに 500: 能力を広げる口は記録の無い変更を作らない。日誌に鍵の値は書かない。
@@ -9394,50 +9393,22 @@ export function createApp(deps: AppDeps) {
     // `:accountId` と取り違えないよう別の語（`unreadable`）の下に置く。
     .post(
       '/access/unreadable/remove',
-      describeRoute({
-        tags: ['access'],
+      ...unreadableRowsRemoveHandlers({
+        stores,
+        path: '/access/unreadable/remove',
+        tag: 'access',
         summary: '読めないアカウントの行を、id を指して消す',
         description:
           '読めない（型に合わない形で入っている）アカウントの行だけを、id を指して消す。読める' +
           'アカウントには触れない。id が取れない行はこの口では消せない（`auth.json` を手で直す）。' +
           '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
           '（行の中身は残さない）。pg はアカウントを列で持つので読めない行が無く、常に 404。',
-        responses: {
-          200: jsonResponse(REMOVED_IDS_AND_COUNT_DESCRIPTION, unreadableRowsRemoveResponseSchema),
-          400: errorResponse(INVALID_INPUT_NOTHING_REMOVED_DESCRIPTION),
-          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
-          404: errorResponse(UNREADABLE_IDS_MISSING_DESCRIPTION),
-          500: errorResponse(JOURNAL_FAILED_OR_REMOVE_FAILED_DESCRIPTION),
-        },
+        extraResponses: { 403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION) },
+        subject: 'アカウント',
+        noun: 'アカウント',
+        hint: '`GET /access` の `rowsUnreadable.rows[].id`（alteroid access list）',
+        remove: (ids, options) => authService.removeUnreadableAccounts(ids, options),
       }),
-      jsonBody(
-        unreadableRowsRemoveRequestSchema,
-        invalidWith('読めない行の id の入力の形が不正（何も消していない）'),
-      ),
-      async (c) => {
-        const result = await removeUnreadableRowsWithJournal({
-          stores,
-          subject: 'アカウント',
-          actor: describeActor(c.get('principal')),
-          route: 'POST /access/unreadable/remove',
-          requested: c.req.valid('json').ids,
-          remove: (ids, options) => authService.removeUnreadableAccounts(ids, options),
-        });
-        if (result.kind === 'unknown') {
-          return c.json(
-            unreadableRowsMissingBody(
-              result.count,
-              'アカウント',
-              '`GET /access` の `rowsUnreadable.rows[].id`（alteroid access list）',
-            ),
-            404,
-          );
-        }
-        if (result.kind === 'failed') {
-          return c.json({ error: 'アカウントを保存できなかった' as const }, 500);
-        }
-        return c.json(unreadableRowsRemovedBody(result.ids));
-      },
     )
 
     // 資格は `authenticate` だけで `requireOperator` は付けない: 基準は「壊すかどうか」ではなく、鍵そのものを扱う口だけが一段上の強さを持つ。ここは鍵を扱わず記憶も台帳も消さず、止めた後に起動し直せば元に戻る（`POST /reset` とは取り返しのつき方が違う）。`deliberateClient` は資格の門ではない（ブラウザの単純リクエストを止めるもの）ので、資格の門が見当たらないのを「付け忘れ」と読まないこと。
