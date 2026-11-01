@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createManagerPool, mergeSynthesizedNoticeFragments, type ManagerPool } from './manager.js';
+import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
   type RunnerAnswerOutcome,
@@ -9,6 +9,7 @@ import {
   type RunnerManagerState,
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus } from './schema.js';
+import { mergeSynthesizedNoticeFragments } from './synthesized-notice.js';
 import { createMemoryStores } from './testing.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { Stores } from './store.js';
