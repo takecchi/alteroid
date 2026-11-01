@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createManagerPool, type WorkspacePolicy } from './manager.js';
+import { createManagerPool } from './manager.js';
 import type {
   RunnerAnswerOutcome,
   RunnerClient,
@@ -15,6 +15,7 @@ import type {
 } from './runner-protocol.js';
 import type { InboxEvent, Job, WorkspaceLocator } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import type { WorkspacePolicy } from './workspace-policy.js';
 
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {

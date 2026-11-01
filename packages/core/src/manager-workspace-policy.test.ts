@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  createManagerPool,
-  resolveWorkspacePolicy,
-  WORKSPACE_KIND_ENV_KEY,
-  WORKSPACE_REF_ENV_KEY,
-  WORKSPACE_REPOSITORY_ENV_KEY,
-  type WorkspacePolicy,
-} from './manager.js';
+import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
@@ -17,6 +10,13 @@ import {
 } from './runner-protocol.js';
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import {
+  resolveWorkspacePolicy,
+  WORKSPACE_KIND_ENV_KEY,
+  WORKSPACE_REF_ENV_KEY,
+  WORKSPACE_REPOSITORY_ENV_KEY,
+  type WorkspacePolicy,
+} from './workspace-policy.js';
 
 const UNVERIFIED_WORKSPACE_REASON =
   '器の workspace がボリュームかどうかを runner が名乗らないので、' +
