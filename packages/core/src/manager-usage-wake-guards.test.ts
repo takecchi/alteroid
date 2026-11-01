@@ -142,7 +142,12 @@ async function setup(
   const registry = createRunnerRegistry([fake.runner]);
   const inbox: InboxEvent[] = [];
   const clock = { now: Date.parse('2026-10-26T00:00:00.000Z') };
-  const key = { generation: 1, availability: 'ready' as Availability };
+  // `hold`: 立てると、鍵の通る状態の問い合わせ（tokenAvailability）が外から外すまで返らない（掃きの途中の await に割り込むため）
+  const key = {
+    generation: 1,
+    availability: 'ready' as Availability,
+    hold: undefined as Promise<void> | undefined,
+  };
   const pool = createManagerPool({
     stores,
     post: (event) => inbox.push(event),
@@ -151,7 +156,12 @@ async function setup(
     now: () => clock.now,
     tokenIdentity:
       options.tokenIdentity ?? (() => ({ tokenId: 'tok-a', generation: key.generation })),
-    tokenAvailability: options.availability ?? (async () => key.availability),
+    tokenAvailability:
+      options.availability ??
+      (async () => {
+        await key.hold;
+        return key.availability;
+      }),
     onUsageObservation: async (observation) => {
       log.push(`observation:${observation.notice.kind}`);
     },
@@ -183,6 +193,187 @@ function workerLimitNote(preRotationKey: boolean): RunnerEvent {
     workerLimit: { raw: "You've hit your weekly limit", preRotationKey },
   } as RunnerEvent;
 }
+
+function closedBy429(): RunnerEvent {
+  return {
+    type: 'closed',
+    managerId: ID,
+    status: 'failed',
+    reason:
+      "マネージャーのセッションが落ちた: You've hit your individual spend limit for this account.",
+  } as RunnerEvent;
+}
+
+function closedDone(): RunnerEvent {
+  return { type: 'closed', managerId: ID, status: 'done' } as RunnerEvent;
+}
+
+function doneReport(): RunnerEvent {
+  return { type: 'report', managerId: ID, text: '終わった', status: 'done' } as RunnerEvent;
+}
+
+// 鍵が通らない間に枠で failed になり、像から外れた担当（`manager-usage-retired-sweep.test.ts` と同じ状態）を用意する
+async function retiredByQuota(s: Setup): Promise<void> {
+  s.key.availability = 'cooling';
+  s.fake.push(closedBy429());
+  await settle();
+  const job = (await s.stores.jobs.listJobs())[0];
+  expect(job?.status).toBe('failed');
+  expect(job?.usageStoppedAt).toBeDefined();
+  expect(s.fake.resumes).toHaveLength(0);
+  s.key.generation = 2;
+  s.key.availability = 'ready';
+  // 「止まった後に戻った」と言える材料を、世代の食い違いとは別にも置く: 別の経路が起こして抱える世代が現役と揃っても、掃きの判定そのものは「戻った」のままになる
+  // （この材料が無いと、判定が偽になって読み直しの歯に届く前に止まる）
+  await s.stores.tokens.replace([
+    {
+      id: 'tok-a',
+      label: 'a',
+      order: 0,
+      updatedAt: new Date(s.clock.now + 60_000).toISOString(),
+    },
+  ]);
+  s.clock.now += 120_000;
+}
+
+function deferred(): { promise: Promise<void>; release: () => void } {
+  let release = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+// 台帳の読み（getJob）のうち、仕掛けた後の最初の1回だけを外から外すまで返さない（掃きの `#findJob` / `#load` の await に割り込むため）
+function holdNextJobRead(s: Setup): () => void {
+  const gate = deferred();
+  const original = s.stores.jobs.getJob.bind(s.stores.jobs);
+  let armed = true;
+  s.stores.jobs.getJob = async (id) => {
+    if (!armed) return original(id);
+    armed = false;
+    const job = await original(id);
+    await gate.promise;
+    return job;
+  };
+  return gate.release;
+}
+
+async function decisionTexts(s: Setup, needle: string): Promise<string[]> {
+  return (await s.stores.journal.list({ types: ['decision'] }))
+    .map((entry) => JSON.stringify(entry))
+    .filter((text) => text.includes(needle));
+}
+
+const SWEEP_DECISION = '枠で落ちて像から外れた担当を、掃きで起こし直す';
+
+describe('掃きの最中に担当の状態が変わったら、掃きは古い状態で起こし直さない（await のあとの読み直し）', () => {
+  it('⭐ 像から外れた担当の掃きが鍵の状態の問い合わせで待っている間に、回し手が起こして印を下ろしたら、掃きは重ねて起こさない', async () => {
+    const s = await setup();
+    await retiredByQuota(s);
+    const hold = deferred();
+    s.key.hold = hold.promise;
+
+    const sweep = s.pool.settleStalledUsageWakes();
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    expect(s.fake.resumes).toHaveLength(1);
+    hold.release();
+
+    expect(await sweep).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(1);
+    expect(await decisionTexts(s, SWEEP_DECISION)).toEqual([]);
+    expect((await s.stores.jobs.listJobs())[0]?.usageStoppedAt).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('⭐ 掃きが台帳を読んでいる間に、回し手が起こして印を下ろしたら、掃きは重ねて起こさない', async () => {
+    const s = await setup();
+    await retiredByQuota(s);
+    const release = holdNextJobRead(s);
+
+    const sweep = s.pool.settleStalledUsageWakes();
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    expect(s.fake.resumes).toHaveLength(1);
+    release();
+
+    expect(await sweep).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(1);
+    expect(await decisionTexts(s, SWEEP_DECISION)).toEqual([]);
+    await s.pool.stop();
+  });
+
+  it('掃きが台帳を読んでいる間に、人が止めた（stopped）担当は、掃きでは起こされず stopped のまま', async () => {
+    const s = await setup();
+    await retiredByQuota(s);
+    const release = holdNextJobRead(s);
+
+    const sweep = s.pool.settleStalledUsageWakes();
+    await settle();
+    await s.pool.abort(ID);
+    release();
+
+    expect(await sweep).toEqual([]);
+    expect(s.fake.resumes).toHaveLength(0);
+    expect((await s.stores.jobs.listJobs())[0]?.status).toBe('stopped');
+    await s.pool.stop();
+  });
+
+  it('⭐ 作業者の上限の掃きが鍵の状態の問い合わせで待っている間に、回し手が担当を起こしたら、掃きは二度目を送らない', async () => {
+    const s = await setup();
+    s.key.availability = 'cooling';
+    s.fake.push(workerLimitNote(true));
+    s.fake.push(doneReport());
+    await settle();
+    expect(s.log).toEqual([]);
+    s.key.availability = 'ready';
+    const hold = deferred();
+    s.key.hold = hold.promise;
+
+    const sweep = s.pool.settleStalledUsageWakes();
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    const nudges = (): string[] =>
+      s.log.filter((line) => line.includes('作業者が上限で落ちた鍵は回った'));
+    expect(nudges()).toHaveLength(1);
+    hold.release();
+
+    expect(await sweep).toEqual([]);
+    expect(nudges()).toHaveLength(1);
+    // 掃きが「起こし直す」と判断した跡（日誌）も、回し手の1回きり
+    expect(
+      await decisionTexts(s, '作業者が上限で落ちた鍵は回ったので、担当を起こし直す'),
+    ).toHaveLength(1);
+    await s.pool.stop();
+  });
+
+  it('⭐ 作業者の上限の掃きが台帳を読んでいる間に、担当が新しいターンを始めたら、掃きは起こさず印を下ろす', async () => {
+    const s = await setup();
+    s.key.availability = 'cooling';
+    s.fake.push(workerLimitNote(true));
+    s.fake.push(doneReport());
+    await settle();
+    s.fake.push(closedDone());
+    await settle();
+    expect((await s.stores.jobs.listJobs())[0]?.workerLimitStopped).toBeDefined();
+    s.key.availability = 'ready';
+    const release = holdNextJobRead(s);
+
+    const sweep = s.pool.settleStalledUsageWakes();
+    await settle();
+    // 時計は進める: ターンの開始時刻が同じ値のままだと「新しいターン」と読まれない
+    s.clock.now += 60_000;
+    await s.pool.send(ID, '新しい指示');
+    await settle();
+    release();
+
+    expect(await sweep).toEqual([]);
+    expect(s.log.filter((line) => line.includes('作業者が上限で落ちた鍵は回った'))).toEqual([]);
+    expect((await s.stores.jobs.listJobs())[0]?.workerLimitStopped).toBeUndefined();
+    await s.pool.stop();
+  });
+});
 
 describe('1つの報告で使用量・作業者の上限・鍵の回転の3条件が全部立ったときの呼ぶ順', () => {
   it('⭐ 失敗の報告 1 つに対し、使用量の起こし直し → 作業者の上限の起こし直し → 鍵の回転の依頼の順で走る（case report の枝）', async () => {
