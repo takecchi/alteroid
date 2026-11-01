@@ -1,7 +1,7 @@
 // 楽観更新はしない: 拒否された操作が成功したように見える瞬間ができるため。
 // 例外は useRecordOwnMessage だけ: POST /chat は拒否が無く、SSE の往復を待つと送信のたびに一覧の反映が遅れる
 import { useCallback } from 'react';
-import { useSWRConfig } from 'swr';
+import { type Arguments, useSWRConfig } from 'swr';
 
 import { ApiError, expectOk, unwrap, uploadAttachment, useApi } from '../api';
 import type {
@@ -827,20 +827,32 @@ export function useAddToken() {
   );
 }
 
-export function useRemoveUnreadableTokens() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (ids: readonly string[]) => {
-      const result = await api.api
-        .POST('/tokens/unreadable/remove', { body: { ids: [...ids] } })
-        .then(unwrap);
-      await mutate(KEY.tokens);
-      return result;
-    },
-    [api, mutate],
-  );
+// 「読めない行を消す」4本の共通の形。経路ごとに応答の型が違うので、POST は呼び手が型付きで書く（openapi-fetch は経路の文字列から型を引く）。
+// フックを返す工場にしているのは、post と key をモジュールの定数に閉じ込めて、返す関数の同一性を保つため（useCallback の依存は [api, mutate] のまま）
+function removeUnreadableHook<T>(
+  key: Arguments,
+  post: (
+    client: ReturnType<typeof useApi>['api'],
+    body: { ids: string[] },
+  ) => Promise<{ data?: T; error?: unknown; response: Response }>,
+) {
+  return function useRemoveUnreadable() {
+    const api = useApi();
+    const { mutate } = useSWRConfig();
+    return useCallback(
+      async (ids: readonly string[]) => {
+        const result = await post(api.api, { ids: [...ids] }).then(unwrap);
+        await mutate(key);
+        return result;
+      },
+      [api, mutate],
+    );
+  };
 }
+
+export const useRemoveUnreadableTokens = removeUnreadableHook(KEY.tokens, (client, body) =>
+  client.POST('/tokens/unreadable/remove', { body }),
+);
 
 export class TokenNotFoundError extends ApiError {
   readonly tokenId: string;
@@ -1229,50 +1241,19 @@ export function useRevokeIntegrationKey() {
   );
 }
 
-export function useRemoveUnreadableIntegrationKeys() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (ids: readonly string[]) => {
-      const result = await api.api
-        .POST('/integration-keys/unreadable/remove', { body: { ids: [...ids] } })
-        .then(unwrap);
-      await mutate(KEY.integrationKeys);
-      return result;
-    },
-    [api, mutate],
-  );
-}
+export const useRemoveUnreadableIntegrationKeys = removeUnreadableHook(
+  KEY.integrationKeys,
+  (client, body) => client.POST('/integration-keys/unreadable/remove', { body }),
+);
 
-export function useRemoveUnreadablePermissionGrants() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (ids: readonly string[]) => {
-      const result = await api.api
-        .POST('/permission-grants/unreadable/remove', { body: { ids: [...ids] } })
-        .then(unwrap);
-      await mutate(KEY.permissionGrants);
-      return result;
-    },
-    [api, mutate],
-  );
-}
+export const useRemoveUnreadablePermissionGrants = removeUnreadableHook(
+  KEY.permissionGrants,
+  (client, body) => client.POST('/permission-grants/unreadable/remove', { body }),
+);
 
-export function useRemoveUnreadableAccounts() {
-  const api = useApi();
-  const { mutate } = useSWRConfig();
-  return useCallback(
-    async (ids: readonly string[]) => {
-      const result = await api.api
-        .POST('/access/unreadable/remove', { body: { ids: [...ids] } })
-        .then(unwrap);
-      await mutate(KEY.access);
-      return result;
-    },
-    [api, mutate],
-  );
-}
+export const useRemoveUnreadableAccounts = removeUnreadableHook(KEY.access, (client, body) =>
+  client.POST('/access/unreadable/remove', { body }),
+);
 
 // 保存の付け外しは楽観更新しない: 応答（更新後の控え）で、キャッシュ中の同じ id の行だけを差し替える。
 // 一覧を取り直さない（使用量も並びも変わらず、絞り込み中の行が応答の前に消えないため）。404（期限切れ・削除済み）は ApiError のまま投げ、一覧は取り直す
