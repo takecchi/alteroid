@@ -346,9 +346,8 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
-    '#flushRateLimitJournalFolds': 'thinning',
     '#flushSynthesizedNoticeFor': 'gauge,thinning',
-    '#handleEvent': 'decision,failure,gauge,recovery,reply,thinning',
+    '#handleEvent': 'decision,failure,recovery,reply',
     '#ignoreIfMovedAway': 'decision',
     '#noteAmbiguousResolved': 'recovery',
     '#noteAmbiguousSighting': 'failure',
@@ -357,13 +356,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#notifyUnresumable': 'failure',
     '#nudgeForUsageRotationOnce': 'failure,recovery',
     '#reattach': 'recovery',
-    '#recordStaleRunnerUsage': 'failure,gauge',
     '#reportedOf': 'thinning',
     '#restoreJobs': 'recovery',
-    '#retire': 'thinning',
     '#send': 'reply',
     '#startAfterSupersedeCheck': 'reply',
-    '#usageNoticeMemoryOf': 'thinning',
     abort: 'reply',
   },
   // 止まった拒否の知らせ直しの出し切りの日誌（旧 `Pool#renotifyStalledDenial`）。同じ検査をここへ移した。
@@ -391,6 +387,17 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // 生ログの写しの預けの失敗の日誌（旧 `Pool#appendMirrorRetrying`）。同じ検査をここへ移した。
   'session-loaders.ts': {
     appendMirrorRetrying: 'failure',
+  },
+  // 使用量を受け取る出来事の日誌（旧 `Pool#handleEvent` の usage 系の case・`#recordStaleRunnerUsage`・`#usageNoticeMemoryOf`・`#retire` の畳み残し・`#flushRateLimitJournalFolds`）。同じ検査をここへ移した。
+  'usage-receiver.ts': {
+    '#recordStaleRunnerUsage': 'failure,gauge',
+    '#usageNoticeMemoryOf': 'thinning',
+    flushJournalFolds: 'thinning',
+    onPeerUsage: 'failure',
+    onRateLimit: 'gauge,thinning',
+    onUsage: 'failure,gauge',
+    onUsageNotice: 'gauge,thinning',
+    retire: 'thinning',
   },
 };
 
@@ -466,6 +473,7 @@ describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（i
     'quota-stop-windows.ts',
     'restored-windows.ts',
     'session-loaders.ts',
+    'usage-receiver.ts',
   ]) {
     const sites = findJournalCallObjects(file);
 
