@@ -101,7 +101,9 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
     await t.clone.stop();
   });
 
-  it('後退を使い切ったら、印を残したまま止まる（次の周期か再起動に任せる）', async () => {
+  // 元は「使い切ったら止まる（次の周期か再起動に任せる）」を固定していた。それが「必ずクローンに届く」に反する欠陥だったので、
+  // 使い切ったあとは最後の間隔（12時間）まで印を残して待つ形に直した（配り直しそのものは次の it が確かめる）
+  it('後退を使い切っても、次の配り直し（最後の間隔）の前は印を残したまま待つ', async () => {
     const t = await build();
     let now = DUE;
     expect(await t.tick(now)).toEqual(['weekly-check']);
@@ -116,10 +118,38 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
         `失敗 ${index + 2}`,
       );
     }
-    expect(await t.tick(now + 24 * 60 * MIN)).toEqual([]);
+    expect(await t.tick(now + 720 * MIN - MIN)).toEqual([]);
     const left = await t.stores.schedules.get('weekly-check');
     expect(left?.pendingRun?.at).toBe(new Date(DUE).toISOString());
     expect(left?.lastScheduledRunAt).toBeUndefined();
+    await t.clone.stop();
+  });
+
+  it('後退を使い切っても、最後の間隔（12時間）で同じ回を配り直し続け、動けば元の回として完了する', async () => {
+    const t = await build();
+    let now = DUE;
+    expect(await t.tick(now)).toEqual(['weekly-check']);
+    await waitFor(async () => (await failureLines(t.stores)).length === 1, '失敗 1');
+    const delays = [10, 30, 120, 360, 720];
+    for (const [index, minutes] of delays.entries()) {
+      now += minutes * MIN;
+      expect(await t.tick(now)).toEqual(['weekly-check']);
+      await waitFor(
+        async () => (await failureLines(t.stores)).length === index + 2,
+        `失敗 ${index + 2}`,
+      );
+    }
+    // 使い切った後も、次の周期（1週間後）を待たずに最後の間隔で配り直される
+    now += 720 * MIN;
+    expect(await t.tick(now - MIN)).toEqual([]);
+    t.state.failing = false;
+    expect(await t.tick(now)).toEqual(['weekly-check']);
+    await waitFor(
+      async () => (await t.stores.schedules.get('weekly-check'))?.pendingRun === undefined,
+      '成功して印が消える',
+    );
+    const done = await t.stores.schedules.get('weekly-check');
+    expect(done?.lastScheduledRunAt).toBe(new Date(DUE).toISOString());
     await t.clone.stop();
   });
 });
