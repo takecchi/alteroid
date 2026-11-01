@@ -17,7 +17,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
-import { createSerialQueue } from './serial-queue.js';
+import { createPushChannel } from './push-channel.js';
 import {
   PROFILE_ENTRY_NAME,
   type EnvProfileEntry,
@@ -213,12 +213,9 @@ export interface ApplyProfileResult {
 
 export function createProfileService(options: ProfileServiceOptions): ProfileService {
   const { stores, applier, runners } = options;
-  const pushListeners = new Set<
-    (results: readonly (RunnerProfileResult & { runnerId: string })[]) => void
+  const { serial, onPushed, notify } = createPushChannel<
+    RunnerProfileResult & { runnerId: string }
   >();
-
-  // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
-  const { run: serial } = createSerialQueue();
 
   interface Plan {
     rows: EnvProfileEntry[];
@@ -298,13 +295,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
     }
 
     const results = await pushAll(runnerScript);
-    for (const listener of pushListeners) {
-      try {
-        listener(results);
-      } catch {
-        // 購読者の例外で応答を落とさない。
-      }
-    }
+    notify(results);
 
     const entries = await stores.profile.list();
     return {
@@ -415,10 +406,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         return applier.apply(script);
       }),
 
-    onPushed: (listener) => {
-      pushListeners.add(listener);
-      return () => pushListeners.delete(listener);
-    },
+    onPushed,
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {

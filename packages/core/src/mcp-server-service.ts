@@ -1,4 +1,3 @@
-import { reasonOf } from './dropped-record.js';
 import {
   mcpServerNames,
   mcpServersFingerprintOf,
@@ -12,7 +11,7 @@ import {
   type RunnerMcpServersFingerprint,
   type RunnerRegistry,
 } from './runner-protocol.js';
-import { createSerialQueue } from './serial-queue.js';
+import { createPushChannel, pushToRunners } from './push-channel.js';
 import type { Stores } from './store.js';
 
 // インスタンスは1つだけ作って全経路へ渡す: 人間の口と runner の降ろし直しを同じ列に入れて直列化するので、
@@ -50,10 +49,7 @@ export interface ApplyMcpServersResult {
 
 export function createMcpServerService(options: McpServerServiceOptions): McpServerService {
   const { stores, runners } = options;
-  const pushListeners = new Set<(results: readonly McpServersRunnerResult[]) => void>();
-
-  // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
-  const { run: serial } = createSerialQueue();
+  const { serial, onPushed, notify } = createPushChannel<McpServersRunnerResult>();
 
   return {
     read: () => stores.mcpServers.read(),
@@ -64,13 +60,7 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
         const stored = await stores.mcpServers.write(servers, writeOptions);
         const names = mcpServerNames(stored.mcpServers);
         const pushed = await pushAll(stored.mcpServers);
-        for (const listener of pushListeners) {
-          try {
-            listener(pushed);
-          } catch {
-            // 帳面に積めなかっただけで、配布の結果そのものは下で返す。
-          }
-        }
+        notify(pushed);
         return {
           updatedAt: stored.updatedAt,
           version: mcpServersVersionOf(stored),
@@ -80,10 +70,7 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
         };
       }),
 
-    onPushed: (listener) => {
-      pushListeners.add(listener);
-      return () => pushListeners.delete(listener);
-    },
+    onPushed,
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
@@ -111,28 +98,14 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
       }),
   };
 
-  async function pushAll(servers: McpServers): Promise<McpServersRunnerResult[]> {
-    if (runners === undefined) return [];
-    const open = await runners.list();
-    return Promise.all(
-      open
-        .filter((runner) => runner.setMcpServers !== undefined)
-        .map(async (runner): Promise<McpServersRunnerResult> => {
-          try {
-            const placed = await runner.setMcpServers?.(servers);
-            return {
-              runnerId: runner.runnerId,
-              ok: true,
-              ...(placed === undefined ? {} : { mcpServers: placed }),
-            };
-          } catch (error) {
-            return {
-              runnerId: runner.runnerId,
-              ok: false,
-              error: reasonOf(error),
-            };
-          }
-        }),
+  function pushAll(servers: McpServers): Promise<McpServersRunnerResult[]> {
+    return pushToRunners<McpServersRunnerResult>(
+      runners,
+      (runner) => runner.setMcpServers !== undefined,
+      async (runner) => {
+        const placed = await runner.setMcpServers?.(servers);
+        return placed === undefined ? undefined : { mcpServers: placed };
+      },
     );
   }
 }
