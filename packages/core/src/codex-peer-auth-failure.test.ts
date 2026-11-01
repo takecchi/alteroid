@@ -3,11 +3,7 @@ import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  AgentChildProcess,
-  AgentManagerSessionSpec,
-  AgentSpawnOptions,
-} from './agent-session.js';
+import type { AgentChildProcess, AgentManagerSessionSpec } from './agent-session.js';
 import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
 import { CodexManagerDriver, type CodexChatgptAuthHandle } from './codex-manager-driver.js';
 import { createPeerBroker, describePeerTurnResult, type PeerTurnResult } from './peer-broker.js';
@@ -113,8 +109,7 @@ async function peerRunFailing(turnError: Json, account?: Json | null): Promise<P
         env: { PATH: '/bin' },
         managerAutoMemoryEnabled: false,
         sessionLog: { append: async () => undefined, load: async () => null },
-        spawnProcess: (_options: AgentSpawnOptions) =>
-          new FakeAppServer(turnError, account) as unknown as AgentChildProcess,
+        spawnProcess: () => new FakeAppServer(turnError, account) as unknown as AgentChildProcess,
         onPreToolUse: vi.fn(),
         onPermissionDenied: vi.fn(),
         onPostToolUse: () => ({ kind: 'continue' }),
