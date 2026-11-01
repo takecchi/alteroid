@@ -273,7 +273,9 @@ describe('usage_notice は同期の位置で印を立て、配達の可否を決
     await settle();
 
     // 「配った」の記憶を `await` の後ろへ回すと、2本とも「まだ配っていない」と読む。
-    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(1);
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(
+      1,
+    );
     const delivered = (await journalTexts(s.stores, REACHED_TEXT)).filter(
       (text) => !text.includes('配達済みの知らせなので'),
     );
@@ -351,7 +353,9 @@ describe('usage_notice の計器（resets 時刻の突き合わせ）は配達�
     s.fake.push(reached('mgr-a'));
     await settle();
 
-    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(1);
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(
+      1,
+    );
     expect((await s.pool.list()).find((m) => m.managerId === 'mgr-a')?.resetTimeSkewMatch).toBe(
       'stale',
     );
@@ -423,12 +427,16 @@ describe('像を外した後（#retire）も残る使用量の記憶', () => {
     await settle();
     s.fake.push(closedDone('mgr-a'));
     await settle();
-    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(0);
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(
+      0,
+    );
 
     s.fake.push(reached('mgr-b'));
     await settle();
 
-    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(1);
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(
+      1,
+    );
 
     await s.pool.stop();
   });
