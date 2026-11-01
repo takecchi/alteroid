@@ -318,7 +318,9 @@ describe('預けなかったものの日誌の印（1回だけ書く）は、約
     // 500件を超えるまで溜める。超えた後の次の取り込みで印の集まりが作り直される
     for (let round = 4; round < 6; round += 1) bulk(round);
     skipOnly(['only-here.txt']);
-    await vi.waitFor(async () => expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(2));
+    await vi.waitFor(async () =>
+      expect(await decisionsMentioning(stores, 'only-here.txt')).toBe(2),
+    );
     // 作り直した後は、また同じ飛ばしは1回だけ
     skipOnly(['only-here.txt']);
     await flushedThrough('marker-2.txt');
