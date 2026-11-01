@@ -345,7 +345,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#askedOf': 'thinning',
     '#deliverQuotaStopWindow': 'thinning',
     '#deliverReportFromUnreplacedSession': 'reply',
-    '#deliverRestoredWindow': 'thinning',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
     '#flushRateLimitJournalFolds': 'thinning',
@@ -356,12 +355,9 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteAmbiguousResolved': 'recovery',
     '#noteAmbiguousSighting': 'failure',
     '#noteVanishedRunnerGauge': 'gauge',
-    '#notifyRestored': 'recovery,thinning',
     '#notifyResumeFallback': 'recovery',
     '#notifyUnresumable': 'failure',
     '#nudgeForUsageRotationOnce': 'failure,recovery',
-    '#observeResumeConfirmation': 'recovery',
-    '#onResumeConfirmTimeout': 'recovery',
     '#reattach': 'recovery',
     '#recordStaleRunnerUsage': 'failure,gauge',
     '#renotifyStalledDenial': 'thinning',
@@ -378,6 +374,13 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#flushFailureFold': 'thinning',
     '#flushFailureFolds': 'thinning',
     '#journalFailure': 'failure,thinning',
+  },
+  // 「取り戻した」窓と resume 確認の日誌（旧 `Pool#notifyRestored` / `#observeResumeConfirmation` ほか）。同じ検査をここへ移した。
+  'restored-windows.ts': {
+    '#deliverWindow': 'thinning',
+    '#onTimeout': 'recovery',
+    notify: 'recovery,thinning',
+    observe: 'recovery',
   },
   // 生ログの写しの預けの失敗の日誌（旧 `Pool#appendMirrorRetrying`）。同じ検査をここへ移した。
   'session-loaders.ts': {
@@ -449,7 +452,13 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 }
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
-  for (const file of ['clone.ts', 'manager.ts', 'push-ledger.ts', 'session-loaders.ts']) {
+  for (const file of [
+    'clone.ts',
+    'manager.ts',
+    'push-ledger.ts',
+    'restored-windows.ts',
+    'session-loaders.ts',
+  ]) {
     const sites = findJournalCallObjects(file);
 
     it(`${file}: 走査が書き込み箇所を1つも見つけられない状態（走査の故障）を通さない`, () => {
