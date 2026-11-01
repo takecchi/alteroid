@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mergeRescue } from './manager.js';
+import { mergeRescue } from './rescue-cleanup.js';
 import type { LastRescue, RescueWorktree } from './schema.js';
 import { describeRescue } from './tools.js';
 

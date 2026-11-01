@@ -12,7 +12,7 @@ export function isPidsUnderPressure(pids: {
   return pids.current / pids.max >= AUTO_FOLD_PIDS_PRESSURE_RATIO;
 }
 
-// `manager.ts` の `ManagerUnpushedWork` を import せず構造的に写す: `manager.ts` がこのファイルを呼ぶ側なので、import すると型だけの循環参照ができる。
+// `ManagerUnpushedWork`（`unpushed-work-observation.ts`）を import せず、判定に要る欄だけを構造的に写す: 判定が読まない欄まで引き受けると、観測の型に欄が増えるたびにこの判定の入力が黙って広がるため。
 export interface AutoFoldUnpushedWorkProbe {
   readonly kind: 'ok' | 'unavailable';
   readonly result?: {

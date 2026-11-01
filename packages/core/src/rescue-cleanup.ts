@@ -145,6 +145,58 @@ export function markRescueGoneWhileAlive(
   return changed ? { ...rescue, worktrees } : null;
 }
 
+export function mergeRescue(
+  previous: LastRescue | undefined,
+  incoming: LastRescue['worktrees'],
+  at: string,
+): LastRescue {
+  const byPath = new Map((previous?.worktrees ?? []).map((w) => [w.relativePath, w]));
+  for (const tree of incoming) {
+    const before = byPath.get(tree.relativePath);
+    // `pushed.removal` はデーモンが書くので runner の `pushed` には無い。同じ退避 commit の
+    // あいだだけ引き継ぐ（commit が変われば新しい退避で、消した印を新しい ref に付けない）。
+    const carried: Partial<NonNullable<RescueWorktree['pushed']>> =
+      tree.pushed !== undefined &&
+      before?.pushed !== undefined &&
+      before.pushed.commit === tree.pushed.commit &&
+      before.pushed.ref === tree.pushed.ref &&
+      tree.pushed.removal === undefined &&
+      before.pushed.removal !== undefined
+        ? { removal: before.pushed.removal }
+        : {};
+    // 枝名を null で上書きしない: pids が尽きて git を起こせない回は枝名だけが取れず、前の回の枝名を消すため（`carryKnownBranches` と同じ考え方）
+    const carriedBranch =
+      tree.branch === null && before !== undefined && before.branch !== null
+        ? { branch: before.branch, branchCarriedFromAt: before.branchCarriedFromAt ?? before.at }
+        : {};
+    // 器が替われば起点を引き継がない: 作り直した作業ツリーの「送れない」は、前の器の分とは別の出来事のため
+    const notPushedSince =
+      tree.notPushed === undefined
+        ? undefined
+        : before?.notPushed?.reason === tree.notPushed.reason &&
+            before.instanceId === tree.instanceId
+          ? (before.notPushed.since ?? before.at)
+          : tree.at;
+    byPath.set(tree.relativePath, {
+      ...tree,
+      ...(tree.notPushed === undefined || notPushedSince === undefined
+        ? {}
+        : { notPushed: { ...tree.notPushed, since: notPushedSince } }),
+      ...carriedBranch,
+      ...(tree.pushed === undefined && before?.pushed !== undefined
+        ? { pushed: before.pushed }
+        : tree.pushed === undefined
+          ? {}
+          : { pushed: { ...tree.pushed, ...carried } }),
+    });
+  }
+  return {
+    at,
+    worktrees: [...byPath.values()],
+    ...(previous?.terminal === undefined ? {} : { terminal: previous.terminal }),
+  };
+}
+
 // ref は触らない: 消すのは `rescueRemovalDue` の判定を通った後始末だけ。
 export function pruneRescueLedger(
   status: Job['status'],

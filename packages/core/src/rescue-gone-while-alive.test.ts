@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { markRescueGoneWhileAlive } from './rescue-cleanup.js';
-import { mergeRescue } from './manager.js';
+import { markRescueGoneWhileAlive, mergeRescue } from './rescue-cleanup.js';
 import type { LastRescue, LastUnpushedWorkObservation, RescueWorktree } from './schema.js';
 import { workspaceCloneHintsFrom } from './workspace-swap-hints.js';
 

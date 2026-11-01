@@ -177,12 +177,12 @@ import {
 } from './manager.js';
 import { describeTokenDiff } from './token-diff.js';
 import type { ManagerDenial } from './denial-key.js';
+import type { ManagerUnpushedWork } from './unpushed-work-observation.js';
 import type {
   ManagerPool,
   ManagerSendResult,
   ManagerSummary,
   ManagerTranscript,
-  ManagerUnpushedWork,
   RunnerBacklogSnapshot,
   RunnerFleetOverview,
   RunnerManagerEntry,
