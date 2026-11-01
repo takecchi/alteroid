@@ -41,7 +41,8 @@ export interface UsageWakeSweeperDeps {
   tokenIdentity: () => { tokenId: string; generation: number } | undefined;
   /** 配線されていなければ `undefined`（掃きは何もしない）。 */
   tokenAvailability:
-    ((tokenId: string) => Promise<'ready' | 'cooling' | 'disabled' | 'invalidated' | undefined>) | undefined;
+    | ((tokenId: string) => Promise<'ready' | 'cooling' | 'disabled' | 'invalidated' | undefined>)
+    | undefined;
   /** `Pool#nudgeForUsageRotation`（段2。ここへは移していない）。 */
   nudge: (
     managerId: string,

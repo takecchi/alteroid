@@ -234,6 +234,7 @@ import {
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { UsageRecordOrder, type UsageRecordTicket, usageDate } from './usage.js';
+import { UsageWakeSweeper, type UsageNudgeOutcome } from './usage-wake-sweeper.js';
 import { notePhase } from './loop-stall.js';
 import {
   FOLD_NOTICE_COMMANDS_MAX,
@@ -1368,19 +1369,6 @@ const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
  */
 const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
 
-/** 枠の起こし直しの結果。`'joined'` は同じ担当の起こし直しが既に走っていて、重ねなかった回（#5205）。 */
-type UsageNudgeOutcome = 'nudged' | 'still-running' | 'gone' | 'skipped' | 'joined';
-
-/** 起こし直しが届かなかった担当への挑み直しの間隔: 1分から倍々に、上限30分（#4850）。 */
-const USAGE_WAKE_RETRY_BASE_MS = 60 * 1000;
-const USAGE_WAKE_RETRY_MAX_MS = 30 * 60 * 1000;
-/**
- * 作業者の落ちで手を止めた担当への、周回の掃きの挑み直しの間隔: 1分から倍々に、上限5分。
- * 担当の枠の落ちの挑み直し（上限30分）より短くする: 現役の鍵が `ready` と分かってから起こすので、同じ枠に当たって1ターン焼く心配が無いため。
- */
-const WORKER_LIMIT_WAKE_RETRY_BASE_MS = 60 * 1000;
-const WORKER_LIMIT_WAKE_RETRY_MAX_MS = 5 * 60 * 1000;
-
 /** 退避の id ごとの取り寄せの結果を覚えておく数（送り直しとの二重を防ぐ。#4899）。 */
 const ARCHIVE_REF_OUTCOMES_MAX = 512;
 
@@ -1881,7 +1869,7 @@ class Pool implements ManagerPool {
   readonly #workerLimitWakeRetry = new Map<string, { failures: number; nextAt: number }>();
   /**
    * 鍵の回転の起こし直しを、背景処理を理由に待たせている担当の、待ちの上限の時刻（epoch ms。#5044）。
-   * `#noteUsageWakeOutcome` が次の挑み直しをこの時刻へ寄せるためだけに使い、読んだら下ろす。揮発してよい: 消えても倍々の間隔で挑み直す。
+   * `UsageWakeSweeper#noteOutcome` が次の挑み直しをこの時刻へ寄せるためだけに使い、読んだら下ろす。揮発してよい: 消えても倍々の間隔で挑み直す。
    */
   readonly #rotationFoldDueAt = new Map<string, number>();
   /**
@@ -1958,6 +1946,8 @@ class Pool implements ManagerPool {
   readonly #autoFold: AutoFold;
   readonly #denialRenotifier: DenialRenotifier;
   readonly #rescueSweeper: RescueSweeper;
+  /** 枠で止まった担当の周回の掃き（`UsageWakeSweeper`）。欄は上の `#usageStopped` などをこの `Pool` が持ち、参照を渡している。 */
+  readonly #usageWakeSweeper: UsageWakeSweeper;
   /**
    * 担当ごとの「新しい入力を生きたセッションへ渡しに行った回数」。`#send` が渡す直前に進め、自動の畳み（`abort()` の `by === 'auto-fold'`）が
    * 止める直前に控えと見比べる。時刻にしない: 同じ時刻に2回入っても、回数なら違いが消えない。
@@ -2305,6 +2295,29 @@ class Pool implements ManagerPool {
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
     this.#tokenAvailability = tokenAvailability;
+    this.#usageWakeSweeper = new UsageWakeSweeper({
+      records: this.#records,
+      usageStopped: this.#usageStopped,
+      usageWakeOwed: this.#usageWakeOwed,
+      usageWakeRetry: this.#usageWakeRetry,
+      usageNudgeInFlight: this.#usageNudgeInFlight,
+      workerLimitStopped: this.#workerLimitStopped,
+      workerLimitWakeRetry: this.#workerLimitWakeRetry,
+      rotationFoldDueAt: this.#rotationFoldDueAt,
+      tokenIdentities: this.#tokenIdentities,
+      stores,
+      now: () => this.#now(),
+      stopped: () => this.#stopped,
+      load: (managerId) => this.#load(managerId),
+      findJob: (managerId) => this.#findJob(managerId),
+      journal: (entry) => this.#journal(entry),
+      tokenIdentity: () => this.#tokenIdentity?.(),
+      tokenAvailability:
+        tokenAvailability === undefined ? undefined : (tokenId) => tokenAvailability(tokenId),
+      nudge: (managerId, options) => this.#nudgeForUsageRotation(managerId, options),
+      wakeForWorkerLimit: (managerId, trigger) => this.#wakeForWorkerLimit(managerId, trigger),
+      clearUsageStoppedMark: (managerId) => this.#clearUsageStoppedMark(managerId),
+    });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
@@ -3152,7 +3165,7 @@ class Pool implements ManagerPool {
             `${new Date(options.rotationFoldDueAt).toISOString()}）まで待つ。終わればそのまま、上限を過ぎれば背景処理ごと畳んで起こし直す（#5044）。`
           : '';
       if (rotationWaiting && options.rotationFoldDueAt !== undefined) {
-        // 挑み直しの時刻を上限へ寄せる（`#noteUsageWakeOutcome`）: 倍々の間隔のままだと、上限を最大30分越えて待つため
+        // 挑み直しの時刻を上限へ寄せる（`UsageWakeSweeper#noteOutcome`）: 倍々の間隔のままだと、上限を最大30分越えて待つため
         this.#rotationFoldDueAt.set(managerId, options.rotationFoldDueAt);
       }
       const declineDecision = rotationWaiting
@@ -4269,204 +4282,7 @@ class Pool implements ManagerPool {
   }
 
   async settleStalledUsageWakes(): Promise<string[]> {
-    if (this.#stopped) return [];
-    const nudged: string[] = [];
-    // 挑み直しの状態があるのに像に無い委譲（再起動の後の done・failed・lost）は、台帳から像へ載せてから走査する（#4852）: 像だけを起点にすると拾われない
-    for (const managerId of [...this.#usageWakeRetry.keys()]) {
-      if (this.#records.has(managerId)) continue;
-      const loaded = await this.#load(managerId).catch(() => null);
-      if (loaded === null) this.#usageWakeRetry.delete(managerId);
-    }
-    // `#usageWakeOwed` ではなく `#records` を起点に走査する: 借りの managerId は `abort()` / `#retire()` で `#records` から先に消えうる。
-    for (const [managerId, record] of [...this.#records]) {
-      if (this.#stopped) break;
-      try {
-        // 条件2: 枠で止まったことが分かっている（一般の停滞検知にしない門）。
-        if (!this.#usageStopped.has(managerId)) {
-          this.#usageWakeRetry.delete(managerId);
-          continue;
-        }
-        // 条件3: `waiting_human` は含めない: 待っているのは枠ではなく人間の回答。
-        if (record.job.status === 'waiting_human') continue;
-        // 条件4: 「分からない」を症状へ倒さない（`turnEndedAt` が無ければ発火しない）。
-        const turnEndedAfterLastReport = (): boolean => {
-          if (record.turnEndedAt === undefined) return false;
-          const turnEndedAt = Date.parse(record.turnEndedAt);
-          if (Number.isNaN(turnEndedAt)) return false;
-          if (record.job.lastReportAt !== undefined) {
-            const lastReportAt = Date.parse(record.job.lastReportAt);
-            if (Number.isNaN(lastReportAt)) return false;
-            if (turnEndedAt <= lastReportAt) return false;
-          }
-          return true;
-        };
-        // 条件1: 借りが立っている（鍵が戻ったと回し手が言った時点でまだ走っていた）。
-        const owedEligible =
-          this.#usageWakeOwed.has(managerId) &&
-          record.job.status === 'running' &&
-          turnEndedAfterLastReport();
-        // 条件1b: 前の起こし直しが届かなかった担当は、借りが無くても間隔を置いて挑み直す（#4850 / #4733）。終わっている委譲も対象。走っている回は条件4を満たすときだけ。
-        const retry = this.#usageWakeRetry.get(managerId);
-        const retryEligible =
-          retry !== undefined &&
-          this.#now() >= retry.nextAt &&
-          (record.job.status !== 'running' || turnEndedAfterLastReport());
-        if (!owedEligible && !retryEligible) continue;
-
-        // 借りは挑む前に下ろす: 同じ委譲を毎分掃き続けないため。
-        this.#usageWakeOwed.delete(managerId);
-        const outcome = await this.#nudgeForUsageRotation(managerId, { allowRunning: true });
-        // `skipped`（届かなかった）は印を残し、間隔を伸ばして次の周回以降に挑み直す。
-        this.#noteUsageWakeOutcome(managerId, outcome);
-        if (outcome === 'nudged' || outcome === 'gone') {
-          await this.#clearUsageStoppedMark(managerId);
-        }
-        if (outcome === 'nudged') nudged.push(managerId);
-      } catch (error) {
-        // 1件の失敗で残りを止めないが、黙って握らない: 起きないはずの例外が跡に残らないと、掃きが動いていない回と「対象が無かった」回が見分けられない。
-        noteDroppedRecord('枠で止まった借りの清算', `managerId=${managerId}`, error);
-      }
-    }
-    for (const managerId of await this.#sweepRetiredUsageWakes()) nudged.push(managerId);
-    for (const managerId of await this.#sweepWorkerLimitWakes()) nudged.push(managerId);
-    return nudged;
-  }
-
-  /**
-   * 動いているデーモンの上で枠に当たって failed / lost になり、`#retire` で像から外れた担当を、周回の掃きでも起こす（#5166）。
-   * 上の走査は `#records` を起点にするので、像に無く挑み直しの状態も持たない担当は誰にも拾われない。
-   * 鍵の出来事（`rotated` / `recovered` / `reopened`）が出ない戻り方では、契機は他に無い。
-   * 起こすのは次の両方が成り立つときだけ（片方でも欠ければ印を残す）:
-   * (a) 現役の鍵が `ready`（`#wakeIfHeldTokenStale` と同じ口。通らないなら起こしても同じ枠に当たる）。
-   * (b) 担当が止まった後に鍵が通る状態へ戻ったと言える。次の3つの材料のどれかが成り立つとき。材料が無ければ起こさない（「分からない」を起こす側へ倒さない）。
-   *     1. 世代: 現役の世代が、担当の抱えていた世代（`#tokenIdentities`）と違う。
-   *     2. 冷却明け: 現役の鍵の `cooldownUntil` が `usageStoppedAt` より後で、もう過ぎている。
-   *     3. 成功の観測: 現役の鍵の行に `lastRejectedAt` も `cooldownUntil` も無く、`updatedAt` が `usageStoppedAt` より後。
-   *        鍵が尽きて同じ世代へ戻る形では、成功を観測した回し手が `markTokenUsable` で 2 を消すので、2 だけでは拾えない。
-   *        `lastRejectedAt` を消すのは `markTokenUsable` だけだが、`updatedAt` は人の編集（ラベル・順位・無効の切り替え・値の差し替え。
-   *        `buildTokens` の `changed`）でも進む。拒否の記録が無い行で、止まった後に人が編集した回は誤って起こしうる
-   *        （起こして枠に当たれば、既存の挑み直しの間隔と印に戻る。ready は成り立っているので被害は 1 ターン）。
-   * 人が止めた担当・後継の居る担当は `#nudgeForUsageRotation` の許可リストが `gone` と返す（ここでは緩めない）。
-   * 同じ担当を二重に起こさないのは、掃きを直列のままにして `#resuming` の busy と `#nudge` の判定に任せるため。ここに専用の排他は足さない。
-   */
-  async #sweepRetiredUsageWakes(): Promise<string[]> {
-    const nudged: string[] = [];
-    const candidates = [...this.#usageStopped].filter(
-      (managerId) => !this.#records.has(managerId) && !this.#usageWakeRetry.has(managerId),
-    );
-    if (candidates.length === 0) return nudged;
-    const identity = this.#tokenIdentity?.();
-    if (identity === undefined || this.#tokenAvailability === undefined) return nudged;
-    const availability = await this.#tokenAvailability(identity.tokenId).catch(() => undefined);
-    if (availability !== 'ready') return nudged;
-    // 現役の鍵の行は(b)の2つ目・3つ目の材料で、世代が違えば要らないので、要る担当が現れるまで読まない。1周で1度だけ読む。
-    let activeRow: Pick<AgentToken, 'cooldownUntil' | 'lastRejectedAt' | 'updatedAt'> | undefined;
-    let activeRowRead = false;
-    const readActiveRow = async (): Promise<typeof activeRow> => {
-      if (!activeRowRead) {
-        activeRowRead = true;
-        try {
-          activeRow = (await this.#stores.tokens.list()).find(
-            (token) => token.id === identity.tokenId,
-          );
-        } catch (error) {
-          noteDroppedRecord('枠で止まった担当の鍵の行の読み取り', identity.tokenId, error);
-          activeRow = undefined;
-        }
-      }
-      return activeRow;
-    };
-    for (const managerId of candidates) {
-      if (this.#stopped) break;
-      try {
-        // 判定の間に別の契機が起こして印を下ろした・像に載せた担当は触らない。
-        if (
-          !this.#usageStopped.has(managerId) ||
-          this.#records.has(managerId) ||
-          this.#usageWakeRetry.has(managerId)
-        ) {
-          continue;
-        }
-        // 像へは載せない（`#load` しない）: 起こさない担当まで毎周 `#records` に居座らせないため。起こすなら `#nudgeForUsageRotation` が載せる。
-        const job = await this.#findJob(managerId);
-        if (job === undefined) continue;
-        const heldGeneration = this.#tokenIdentities.get(managerId)?.generation;
-        let returned = heldGeneration !== undefined && heldGeneration !== identity.generation;
-        if (!returned && job.usageStoppedAt !== undefined) {
-          const stoppedAt = Date.parse(job.usageStoppedAt);
-          const row = await readActiveRow();
-          if (!Number.isNaN(stoppedAt) && row !== undefined) {
-            const until = row.cooldownUntil;
-            const updatedAt = row.updatedAt === undefined ? NaN : Date.parse(row.updatedAt);
-            returned =
-              // 冷却明け: 止まった後に明けていて、もう過ぎている
-              (until !== undefined && until > stoppedAt && until <= this.#now()) ||
-              // 成功の観測: 拒否も冷却も残っておらず、行が止まった後に更新されている（`markTokenUsable` だけが `lastRejectedAt` を消して `updatedAt` をその時刻にする）
-              (until === undefined &&
-                row.lastRejectedAt === undefined &&
-                !Number.isNaN(updatedAt) &&
-                updatedAt > stoppedAt);
-          }
-        }
-        if (!returned) continue;
-        // 判定の間に別の契機が起こして印を下ろしていたら、二重に起こさない。走っている間も同じ（#5205）
-        if (!this.#usageStopped.has(managerId) || this.#usageNudgeInFlight.has(managerId)) continue;
-        await this.#journal({
-          type: 'decision',
-          decision: `[${managerId}] 枠で落ちて像から外れた担当を、掃きで起こし直す（現役の鍵は世代 ${String(identity.generation)}、ready。止まった後に通る状態へ戻った）`,
-          grounds:
-            `managerId=${managerId} tokenId=${identity.tokenId} 鍵の状態=ready ` +
-            '（#5166。鍵の出来事が出ない戻り方では、像に無い担当を起こす契機が他に無い）',
-        });
-        const outcome = await this.#nudgeForUsageRotation(managerId);
-        // `skipped`（届かなかった）は印を残し、挑み直しの状態へ乗せる。以後は上の走査が間隔を置いて拾う。
-        this.#noteUsageWakeOutcome(managerId, outcome);
-        if (outcome === 'nudged' || outcome === 'gone') {
-          await this.#clearUsageStoppedMark(managerId);
-        }
-        if (outcome === 'nudged') nudged.push(managerId);
-      } catch (error) {
-        noteDroppedRecord('像から外れた枠の停止の起こし直し', `managerId=${managerId}`, error);
-      }
-    }
-    return nudged;
-  }
-
-  /**
-   * 回転前の鍵で作業者が落ちて手を止めた担当を、周回の掃きでも起こす（#5030 の続き）。
-   * ターンの終わり（`'turn-ended'`）に現役の鍵がまだ `ready` でなかった印や、起こしが届かなかった印は、今までは次の鍵の回転まで
-   * 取り残された（回転が来なければ担当は止まったまま）。担当は `done` で手を止めて待っているので、起こしても仕事は失わない。
-   * 判定は `'turn-ended'` と同じ（担当が `done`・現役の鍵が `ready`・同じターンのまま）。現役の鍵で落ちた印は拾わない:
-   * その鍵は通らない見込みが高く、`ready` の判定にも作業者の落ちは入っていない（#4903）ので、起こすと同じ枠にまた当たる。
-   * 起こせなかった回は、1分から倍々（上限5分）の間隔を空けて挑み直す。
-   */
-  async #sweepWorkerLimitWakes(): Promise<string[]> {
-    const nudged: string[] = [];
-    for (const managerId of [...this.#workerLimitWakeRetry.keys()]) {
-      if (!this.#workerLimitStopped.has(managerId)) this.#workerLimitWakeRetry.delete(managerId);
-    }
-    for (const [managerId, mark] of [...this.#workerLimitStopped]) {
-      if (this.#stopped) break;
-      if (!mark.preRotationKey) continue;
-      const retry = this.#workerLimitWakeRetry.get(managerId);
-      if (retry !== undefined && this.#now() < retry.nextAt) continue;
-      if (await this.#wakeForWorkerLimit(managerId, 'turn-ended')) {
-        this.#workerLimitWakeRetry.delete(managerId);
-        nudged.push(managerId);
-        continue;
-      }
-      if (!this.#workerLimitStopped.has(managerId)) {
-        this.#workerLimitWakeRetry.delete(managerId);
-        continue;
-      }
-      const failures = (retry?.failures ?? 0) + 1;
-      const delayMs = Math.min(
-        WORKER_LIMIT_WAKE_RETRY_BASE_MS * 2 ** (failures - 1),
-        WORKER_LIMIT_WAKE_RETRY_MAX_MS,
-      );
-      this.#workerLimitWakeRetry.set(managerId, { failures, nextAt: this.#now() + delayMs });
-    }
-    return nudged;
+    return this.#usageWakeSweeper.settleStalled();
   }
 
   /**
@@ -4935,33 +4751,6 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 起こし直しの結果を、挑み直しの間隔へ写す（#4850）: 届かなかったら間隔を倍にして（1分・2分・4分…上限30分）次を決め、届いたら戻す。
-   * 回数の上限は置かない（担当が枠で止まったまま黙るほうが高くつく）。間隔で、届かない状態が続いても日誌と runner を叩き続けない。
-   */
-  #noteUsageWakeOutcome(managerId: string, outcome: UsageNudgeOutcome): void {
-    // 重ねなかった回は数えない: 結果は1本目の呼び出し側が写す（#5205）
-    if (outcome === 'joined') return;
-    const foldDueAt = this.#rotationFoldDueAt.get(managerId);
-    this.#rotationFoldDueAt.delete(managerId);
-    if (outcome === 'skipped') {
-      const failures = (this.#usageWakeRetry.get(managerId)?.failures ?? 0) + 1;
-      const interval = Math.min(
-        USAGE_WAKE_RETRY_BASE_MS * 2 ** (failures - 1),
-        USAGE_WAKE_RETRY_MAX_MS,
-      );
-      const backoffAt = this.#now() + interval;
-      // 背景処理を待たせている回は、待ちの上限の時刻より後へ延ばさない（#5044）。最短でも1分は空ける
-      const nextAt =
-        foldDueAt === undefined
-          ? backoffAt
-          : Math.min(backoffAt, Math.max(foldDueAt, this.#now() + USAGE_WAKE_RETRY_BASE_MS));
-      this.#usageWakeRetry.set(managerId, { failures, nextAt });
-    } else if (outcome !== 'still-running') {
-      this.#usageWakeRetry.delete(managerId);
-    }
-  }
-
-  /**
    * 枠（429）で落ちたと分かった委譲について、回し手へ「利用上限に当たった」と頼む（#4850）。
    * 使える鍵が在れば回し手が回して `resumeStoppedByUsage()` を呼び、新しい鍵で続きから起こし直される。無ければ、鍵が戻った時点の同じ呼び出しが拾う。
    * 新しい経路を作らず、`usage_notice` と同じ口（`#observeForTokenRotation`）に乗せる。投げない（口が握る）。
@@ -5030,7 +4819,7 @@ class Pool implements ManagerPool {
    */
   async #wakeStoppedByUsage(managerId: string): Promise<boolean> {
     const outcome = await this.#nudgeForUsageRotation(managerId);
-    this.#noteUsageWakeOutcome(managerId, outcome);
+    this.#usageWakeSweeper.noteOutcome(managerId, outcome);
     // 重ねなかった回は印に触らない: 下ろすかどうかは、走っていた1本目の呼び出し側が結果を見て決める（#5205）
     if (outcome === 'still-running' || outcome === 'joined') return false;
     // `'skipped'`（届かなかった）の印を下ろさない: 空振りで印を失うと、次に拾われるには新しい `usage_notice` が要り、それにはその委譲自身が起きる必要があって、クローンが手で `manager_send` を打つまで戻らなくなる。
@@ -5128,7 +4917,7 @@ class Pool implements ManagerPool {
     this.#usageWakeOwed.delete(managerId);
     // 印は起こせたと分かってから下ろす: 起こす前に下ろすと、空振りで印が消えて次の鍵の回転でも拾われなくなる。
     const outcome = await this.#nudgeForUsageRotation(managerId);
-    this.#noteUsageWakeOutcome(managerId, outcome);
+    this.#usageWakeSweeper.noteOutcome(managerId, outcome);
     if (outcome === 'skipped' || outcome === 'still-running' || outcome === 'joined') return;
     await this.#clearUsageStoppedMark(managerId);
   }
