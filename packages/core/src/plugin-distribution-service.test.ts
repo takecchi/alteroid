@@ -336,6 +336,37 @@ describe('plugin を配る（apply / syncRunner）', () => {
     expect(retained).toBe(0);
   });
 
+  it('1本が毎回失敗しても、ほかの plugin は runner へ届き、外した plugin は runner から外れる', async () => {
+    await s.stores.plugins.put(pluginInput('p-a-broken'));
+    await s.stores.plugins.put(pluginInput('p-b-good'));
+    await s.stores.plugins.put(pluginInput('p-old'));
+    await s.service.apply();
+    await s.stores.plugins.remove('p-old');
+    // p-a-broken は中身を変えて送り直しの対象にし、runner はその1本だけ毎回断る
+    await s.stores.plugins.put(
+      pluginInput('p-a-broken', {
+        source: { kind: 'url', url: 'https://example.invalid/plugins.git', sha: SHA_B },
+      }),
+    );
+    await s.stores.plugins.put(
+      pluginInput('p-b-good', {
+        source: { kind: 'url', url: 'https://example.invalid/plugins.git', sha: SHA_B },
+      }),
+    );
+    const realSet = s.runner.setPlugin?.bind(s.runner);
+    s.runner.setPlugin = async (plugin) => {
+      if (plugin.name === 'p-a-broken') throw new Error('extract failed (test)');
+      return realSet!(plugin);
+    };
+
+    await s.service.syncRunner(s.runner).catch(() => undefined);
+    await s.service.syncRunner(s.runner).catch(() => undefined);
+
+    const held = (await s.runner.plugins?.())?.plugins ?? [];
+    expect(held.find((p) => p.name === 'p-b-good')?.sha).toBe(SHA_B);
+    expect(held.map((p) => p.name)).not.toContain('p-old');
+  });
+
   it('口を持たない実装（setPlugin が無い）へは配ったとも失敗したとも言わない', async () => {
     await s.stores.plugins.put(pluginInput('p-all'));
     (s.runner as { setPlugin?: unknown }).setPlugin = undefined;
