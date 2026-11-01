@@ -2,6 +2,7 @@ import {
   captureStderr,
   createCredentialService,
   createManagerPool,
+  createMcpServerService,
   createProfileService,
   createRunnerRegistry,
 } from '@alteroid/core';
@@ -265,6 +266,7 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
       stores,
       token: 'test-token',
       shutdown: () => undefined,
+      mcpServers: createMcpServerService({ stores }),
     });
 
     let response!: Response;

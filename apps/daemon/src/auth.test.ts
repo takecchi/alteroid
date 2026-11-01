@@ -4,6 +4,7 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   createCredentialService,
+  createMcpServerService,
   createMemoryStores,
   DEFAULT_SSE_HEARTBEAT_MS,
 } from '@alteroid/core';
@@ -915,6 +916,7 @@ describe('許可済みのアカウントは /credentials /reset /mcp-servers /pr
       token: 'test-token',
       shutdown: () => undefined,
       credentials: createCredentialService({ stores, withheldEnvKeys: [] }),
+      mcpServers: createMcpServerService({ stores }),
       auth: {
         plan: resolved,
         service: createAuthService({
