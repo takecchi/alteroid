@@ -1,12 +1,7 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  createManagerPool,
-  describeBackgroundWaitElapsed,
-  withheldReportOverdue,
-  type ManagerPool,
-} from './manager.js';
+import { createManagerPool, type ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -18,6 +13,7 @@ import {
 import type { InboxEvent, Job, JobStatus } from './schema.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
+import { describeBackgroundWaitElapsed, withheldReportOverdue } from './withheld-reports.js';
 
 // ---------------------------------------------------------------------------
 // 足場1: manualRunner（manager.ts 単体の検証）

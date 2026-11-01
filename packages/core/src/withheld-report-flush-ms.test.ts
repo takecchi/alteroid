@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveWithheldReportFlushMs, WITHHELD_REPORT_FLUSH_MS_ENV_KEY } from './manager.js';
+import {
+  resolveWithheldReportFlushMs,
+  WITHHELD_REPORT_FLUSH_MS_ENV_KEY,
+} from './withheld-reports.js';
 import { captureStderr } from './testing.js';
 
 const DEFAULT_MS = 30 * 60_000;
