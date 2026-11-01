@@ -8,6 +8,7 @@ import type {
   AgentManagerSessionSpec,
   AgentSpawnOptions,
 } from './agent-session.js';
+import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
 import { CodexManagerDriver, type CodexChatgptAuthHandle } from './codex-manager-driver.js';
 import { createPeerBroker, describePeerTurnResult, type PeerTurnResult } from './peer-broker.js';
 
@@ -20,7 +21,14 @@ class FakeAppServer extends EventEmitter {
   exitCode: number | null = null;
   #buffer = '';
 
-  constructor(private readonly turnError: Json) {
+  constructor(
+    private readonly turnError: Json,
+    private readonly account: Json | null = {
+      type: 'chatgpt',
+      email: 'me@example.com',
+      planType: 'plus',
+    },
+  ) {
     super();
     this.stdin.setEncoding('utf8');
     this.stdin.on('data', (chunk: string) => {
@@ -53,10 +61,7 @@ class FakeAppServer extends EventEmitter {
         reply({ userAgent: 'codex/0.160.0', platformFamily: 'unix', platformOs: 'linux' });
         return;
       case 'account/read':
-        reply({
-          requiresOpenaiAuth: true,
-          account: { type: 'chatgpt', email: 'me@example.com', planType: 'plus' },
-        });
+        reply({ requiresOpenaiAuth: true, account: this.account });
         return;
       case 'thread/start':
         reply({ thread: { id: 'thr-1', cwd: '/w' }, model: 'gpt-5', approvalPolicy: 'untrusted' });
@@ -88,7 +93,7 @@ const handle: CodexChatgptAuthHandle = {
 };
 
 // 本物の CodexManagerDriver を通して、peer_run がマネージャーへ返す文面を得る。
-async function peerRunFailing(turnError: Json): Promise<PeerTurnResult> {
+async function peerRunFailing(turnError: Json, account?: Json | null): Promise<PeerTurnResult> {
   const broker = createPeerBroker({
     allowed: ['codex'],
     driverOf: () => new CodexManagerDriver({ closeGraceMs: 0, chatgptAuth: handle }),
@@ -109,7 +114,7 @@ async function peerRunFailing(turnError: Json): Promise<PeerTurnResult> {
         managerAutoMemoryEnabled: false,
         sessionLog: { append: async () => undefined, load: async () => null },
         spawnProcess: (_options: AgentSpawnOptions) =>
-          new FakeAppServer(turnError) as unknown as AgentChildProcess,
+          new FakeAppServer(turnError, account) as unknown as AgentChildProcess,
         onPreToolUse: vi.fn(),
         onPermissionDenied: vi.fn(),
         onPostToolUse: () => ({ kind: 'continue' }),
@@ -142,7 +147,20 @@ describe('peer の Codex が認証切れで落ちたとき、マネージャー�
     expect(result.ok).toBe(false);
     const body = describePeerTurnResult(result);
     // 同じ依頼を繰り返さず、人間に鍵の更新（codex login）を頼むべきだと読める
-    expect(body).toMatch(/codex login|ログインし直|ログインが切れ|認証が切れ/);
+    expect(body).toContain(CODEX_PEER_AUTH_EXPIRED_NOTICE);
+    expect(body).toContain(
+      '`alteroid codex login` でログインし直すまで、同じ依頼を繰り返しても失敗する',
+    );
+    // 元の文は括弧で添える
+    expect(body).toContain('（peer のターンが失敗した（failed）: unexpected status 401）');
+  });
+
+  it('セッションごと落ちる認証切れ（Codex が書き出したログインを読まない）も同じ案内になる', async () => {
+    const result = await peerRunFailing({}, null);
+    expect(result.ok).toBe(false);
+    const body = describePeerTurnResult(result);
+    expect(body).toContain('Codex の認証が無い');
+    expect(body).toContain(CODEX_PEER_AUTH_EXPIRED_NOTICE);
   });
 
   it('認証以外の失敗は、そのまま通す（比べる対象。今も通る）', async () => {
@@ -151,6 +169,8 @@ describe('peer の Codex が認証切れで落ちたとき、マネージャー�
       codexErrorInfo: 'other',
     });
     expect(result.ok).toBe(false);
-    expect(describePeerTurnResult(result)).toContain('server exploded');
+    const body = describePeerTurnResult(result);
+    expect(body).toContain('peer のターンが失敗した（failed）: server exploded');
+    expect(body).not.toContain('alteroid codex login');
   });
 });

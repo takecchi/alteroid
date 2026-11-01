@@ -160,6 +160,8 @@ export interface AgentTurnEnded {
   type: 'turn_ended';
   succeeded: boolean;
   failure?: SdkFailure;
+  // 失敗の種類。載せるのは認証切れ（人間がログインし直す案件）だけで、他は付けない
+  failureKind?: 'auth';
   body: string;
   outcome?: string;
   errorLines: readonly string[];

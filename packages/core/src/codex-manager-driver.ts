@@ -63,6 +63,7 @@ import {
   CodexRpcError,
   defaultSpawnProcess,
 } from './codex-app-server-client.js';
+import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
 import {
   buildCodexApiKeyLoginParams,
   codexAuthModeFromAccount,
@@ -389,7 +390,7 @@ class CodexManagerSession implements AgentManagerSession {
       this.#chatgptAuth?.reportFailure(
         'Codex が書き出した ChatGPT ログインを読まなかった（account/read が ChatGPT のアカウントを返さない）',
       );
-      throw new Error(choice.reason);
+      throw new Error(`${choice.reason}（${CODEX_PEER_AUTH_EXPIRED_NOTICE}）`);
     }
   }
 
@@ -714,17 +715,19 @@ class CodexManagerSession implements AgentManagerSession {
         ? message
         : `ターンが ${turn.status} で終わった`,
     );
-    if (isUnauthorizedCodexError(turn.error?.codexErrorInfo)) {
+    const unauthorized = isUnauthorizedCodexError(turn.error?.codexErrorInfo);
+    if (unauthorized) {
       this.#chatgptAuth?.reportFailure(`Codex のターンが認証の失敗で落ちた: ${text}`);
     }
-    return this.#failedTurnEvent(text, turn.status, turn.id);
+    return this.#failedTurnEvent(text, turn.status, turn.id, unauthorized);
   }
 
-  #failedTurnEvent(text: string, code: string, id?: string): AgentEvent {
+  #failedTurnEvent(text: string, code: string, id?: string, unauthorized = false): AgentEvent {
     return {
       type: 'turn_ended',
       succeeded: false,
       failure: { via: 'result_subtype', code, text },
+      ...(unauthorized ? { failureKind: 'auth' as const } : {}),
       body: '',
       outcome: code,
       errorLines: [text],
