@@ -9067,7 +9067,7 @@ const MANAGER_REPORT_BATCH_BODY_BUDGET = 47_500;
  */
 export const MANAGER_REPORT_BODY_LIMIT = 8_000;
 
-// `reportDeliveryTextOf`（manager.ts）が本文の末尾に足す「途中の発言を含む全文…」の段落。頭を切るとこの段落も消えるので、切るときは本文と分けて残す
+// `reportDeliveryTextOf`（manager-notices.ts）が本文の末尾に足す「途中の発言を含む全文…」の段落。頭を切るとこの段落も消えるので、切るときは本文と分けて残す
 // `fullText` が無い報告には付かないが、`#emit`（manager.ts）が足す「畳んだ報告を配っていない」「重複の知らせを配っていない」の注記も、本文の後ろに付く。
 // どれも配っていない報告があったことをクローンへ伝える注記なので、頭を切っても残す。
 const REPORT_DELIVERY_TAIL_MARKS = [

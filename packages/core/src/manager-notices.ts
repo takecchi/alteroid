@@ -585,3 +585,42 @@ export function describeStoppedReportFiles(files: ManagerReportFiles | undefined
   }
   return lines.length === 0 ? '' : `\n\n${lines.join('\n')}`;
 }
+
+export function normalizeRescuePath(value: string): string {
+  return value.trim().replace(/^(\.\/)+/, '');
+}
+
+/** `rescue_restore` の `paths` に合う書き方: `<worktree>/<path>` か `path` だけ。 */
+export function rescueStashKeys(entry: Pick<RescueStashEntry, 'worktree' | 'path'>): string[] {
+  return [rescueStashLocation(entry), entry.path];
+}
+
+/** 報告の全文（途中の発言を含む）。旧 runner は `fullText` を送らず、`text` が全文。 */
+export function reportFullTextOf(event: { text: string; fullText?: string }): string {
+  return event.fullText ?? event.text;
+}
+
+/**
+ * クローンの受信箱へ配る報告の本文。途中の発言があった回は、最後の発言（結論と質問）に全文の在りかを1行添える。
+ * 添える行を省かない: 「途中があった」こと自体が見えないと、クローンは結論だけで足りない回に全文を引く契機を持てないため。
+ */
+export function reportDeliveryTextOf(event: {
+  managerId: string;
+  text: string;
+  fullText?: string;
+}): string {
+  if (event.fullText === undefined) return event.text;
+  return (
+    `${event.text}\n\n` +
+    `（途中の発言を含む全文 ${String(event.fullText.length)} 字は manager_report managerId=${event.managerId} で読める。` +
+    'これはターンの最後の発言だけである）'
+  );
+}
+
+// 停止済みの担当の報告に添えられた成果物を、日誌の行の末尾で名乗る（#4675）。中身は行の `attachments` に結び付いている
+export interface DroppedReportFiles {
+  readonly text: string;
+  readonly attachments: { attachments?: ManagerReportFiles['attachments'] };
+}
+
+export const NO_DROPPED_FILES: DroppedReportFiles = { text: '', attachments: {} };
