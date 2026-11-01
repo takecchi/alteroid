@@ -14,7 +14,6 @@ import {
   nonBlankString,
   stripNul,
   turnFailureKindSchema,
-  githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
   mcpServersSchema,
@@ -1375,8 +1374,6 @@ const githubObservationFailedSchema = z.object({
   ...githubObservationBaseShape,
   reason: z.string(),
 });
-
-export const githubObservationRequestSchema = githubObservationInputSchema;
 
 const progressForecastBasisSchema = z.object({
   open: progressCount,

@@ -872,7 +872,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
 
-// 日誌の枝そのものから導く: `POST /github-observations` と道具 `github_observation_record` が同じ検証を通るように、手で書き直さないため
+// 日誌の枝そのものから導く: 道具 `github_observation_record` の検証を日誌の枝と食い違わせないように、手で書き直さないため
 export const githubObservationInputSchema = (
   journalEntrySchema.options.find(
     (option) => option.shape.type.value === 'github_observation',

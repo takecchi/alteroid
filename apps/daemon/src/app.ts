@@ -298,7 +298,6 @@ import {
   journalWriteFailedResponseSchema,
   eventAcceptedResponseSchema,
   eventPostAcceptedResponseSchema,
-  githubObservationRequestSchema,
   healthResponseSchema,
   statusResponseSchema,
   inboxBacklogResponseSchema,
@@ -8963,7 +8962,7 @@ export function createApp(deps: AppDeps) {
           '**率（%）は出さない**（task に総量が無く、分母が定まらない）。' +
           '`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず ' +
           '`null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。' +
-          '`github` は観測の記録（`POST /github-observations`）を返すだけで、デーモンは GitHub を見に行かない。' +
+          '`github` は観測の記録（道具 `github_observation_record` の記録）を返すだけで、デーモンは GitHub を見に行かない。' +
           '記録が無ければ `not_observed`（0 件ではない）。' +
           '中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。',
         responses: {
@@ -8995,30 +8994,6 @@ export function createApp(deps: AppDeps) {
         }
 
         return c.json(progressResponseSchema.parse(view));
-      },
-    )
-
-    // 申告を受けて残すだけで値は確かめない（`observedBy` を必須にし、`github` が「誰の観測か」を必ず返す）。いつ・誰が観測するかは決めない: 対応表を持った瞬間に自動化ジョブに戻る。日誌が状態そのものなので `appendJournalOrDrop` は使わない（あれは状態変更が済んだ後の型）: 追記できなければ記録は1行も残らずそのまま 500。
-    .post(
-      '/github-observations',
-      describeRoute({
-        tags: ['progress'],
-        summary: '観測した GitHub の数を記録する（申告。デーモンは確かめない）',
-        description:
-          '観測した側が数えた open Issue / open PR の件数を、観測者・repo・母集合の切り方付きで' +
-          '日誌へ置く。`GET /progress` の `github` がこれを repo ごとに返す。**デーモンは GitHub を' +
-          '見に行かない**（値は申告で、確かめていない）。`result.status` が `failed` の回は数を' +
-          '持てない（取れなかったことを理由付きで残す）。日誌へ書けなければ何も残さず 500。',
-        responses: {
-          200: jsonResponse('記録した。', eventAcceptedResponseSchema),
-          400: errorResponse('本文の形が不正。'),
-        },
-      }),
-      jsonBody(githubObservationRequestSchema, invalidWith('github 観測の形が不正')),
-      async (c) => {
-        const body = c.req.valid('json');
-        const entry = await stores.journal.append({ type: 'github_observation', ...body });
-        return c.json(eventAcceptedResponseSchema.parse({ ok: true, id: entry.id }));
       },
     )
 
