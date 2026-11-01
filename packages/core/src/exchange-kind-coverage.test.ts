@@ -354,7 +354,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteVanishedRunnerGauge': 'gauge',
     '#notifyResumeFallback': 'recovery',
     '#notifyUnresumable': 'failure',
-    '#nudgeForUsageRotationOnce': 'failure,recovery',
     '#reattach': 'recovery',
     '#reportedOf': 'thinning',
     '#restoreJobs': 'recovery',
@@ -398,6 +397,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     onUsage: 'failure,gauge',
     onUsageNotice: 'gauge,thinning',
     retire: 'thinning',
+  },
+  // 枠の起こし直しの日誌（旧 `Pool#nudgeForUsageRotationOnce`）。同じ検査をここへ移した。
+  'usage-wake.ts': {
+    '#nudgeForUsageRotationOnce': 'failure,recovery',
   },
 };
 
@@ -474,6 +477,7 @@ describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（i
     'restored-windows.ts',
     'session-loaders.ts',
     'usage-receiver.ts',
+    'usage-wake.ts',
   ]) {
     const sites = findJournalCallObjects(file);
 

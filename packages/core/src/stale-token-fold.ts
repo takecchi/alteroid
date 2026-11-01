@@ -10,7 +10,7 @@ import { UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS } from './unpushed-work-observatio
 
 /**
  * `Pool` が口として渡すもの。欄は参照で渡す（ここで別に持たない）: `resumedCount` は `#resume` が書く欄で、先頭と畳む直前の2回、
- * その時点の値を読むので値では渡さない。`rotationFoldDueAt` は書く側（`UsageWakeSweeper` が同じ参照を読む）。
+ * その時点の値を読むので値では渡さない。`rotationFoldDueAt` は書く側（`UsageWake` が同じ参照を読む）。
  * `tokenIdentity`・`tokenAvailability`・`lastStaleDecline` は呼ぶたびに引く。
  */
 export interface StaleTokenFoldPorts {
@@ -257,7 +257,7 @@ export class StaleTokenFold {
             `${new Date(options.rotationFoldDueAt).toISOString()}）まで待つ。終わればそのまま、上限を過ぎれば背景処理ごと畳んで起こし直す（#5044）。`
           : '';
       if (rotationWaiting && options.rotationFoldDueAt !== undefined) {
-        // 挑み直しの時刻を上限へ寄せる（`UsageWakeSweeper#noteOutcome`）: 倍々の間隔のままだと、上限を最大30分越えて待つため
+        // 挑み直しの時刻を上限へ寄せる（`UsageWake#noteOutcome`）: 倍々の間隔のままだと、上限を最大30分越えて待つため
         ports.rotationFoldDueAt.set(managerId, options.rotationFoldDueAt);
       }
       const declineDecision = rotationWaiting
