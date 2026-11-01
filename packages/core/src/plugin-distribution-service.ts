@@ -95,26 +95,35 @@ export function createPluginDistributionService(
     if (!unreadable && differing.length === 0 && !extra) return null;
 
     const names: string[] = [];
+    const failures: unknown[] = [];
     for (const summary of summaries) {
       if (!differing.includes(summary)) {
         names.push(summary.name);
         continue;
       }
-      const stored = await stores.plugins.get(summary.name);
-      if (stored === null || !isPluginScopeForRunner(stored.scope)) continue;
-      await runner.setPlugin({
-        name: stored.name,
-        sourceSha: stored.source.sha,
-        scope: stored.scope,
-        enableHooks: stored.enableHooks,
-        enableMcp: stored.enableMcp,
-        contentSha256: stored.contentSha256,
-        files: stored.files,
-      });
-      names.push(summary.name);
+      try {
+        const stored = await stores.plugins.get(summary.name);
+        if (stored === null || !isPluginScopeForRunner(stored.scope)) continue;
+        await runner.setPlugin({
+          name: stored.name,
+          sourceSha: stored.source.sha,
+          scope: stored.scope,
+          enableHooks: stored.enableHooks,
+          enableMcp: stored.enableMcp,
+          contentSha256: stored.contentSha256,
+          files: stored.files,
+        });
+        names.push(summary.name);
+      } catch (error) {
+        // 1本の失敗で残りの送りと余りの片づけを止めない: 失敗が続く plugin があると、ほかの plugin が旧版のまま・外した plugin が残ったままになる。
+        // 失敗した plugin は runner が今持っている版を残す（外すと、直るまで旧版の道具まで欠ける）。
+        failures.push(error);
+        if (have.has(summary.name)) names.push(summary.name);
+      }
     }
-    // 全部送れたときだけ余りを外す: 途中で投げたら前の状態が残り、やり直しで揃う。
     const placed = await runner.retainPlugins(names);
+    // 最後にまとめて投げる: 帳面と挑み直しは失敗を見て動く。
+    if (failures.length > 0) throw failures[0];
     return placed === undefined ? {} : { plugins: placed };
   }
 
