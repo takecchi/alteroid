@@ -182,9 +182,9 @@ import type {
   RunnerBacklogSnapshot,
   RunnerFleetOverview,
   RunnerManagerEntry,
-  RunnerPushOutcome,
   TokenGenerationUnknownReason,
 } from './manager.js';
+import type { RunnerPushOutcome } from './push-ledger.js';
 import { resolveMemoryCursor } from './memory-cursor.js';
 import { describeMessageBreakdown } from './message-breakdown.js';
 import {

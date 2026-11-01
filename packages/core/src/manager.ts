@@ -123,7 +123,6 @@ import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import { PushLedger, type RunnerPushHealth } from './push-ledger.js';
-export type { RunnerPushHealth, RunnerPushOutcome } from './push-ledger.js';
 import type { CredentialService } from './credential-service.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { McpServerService } from './mcp-server-service.js';
