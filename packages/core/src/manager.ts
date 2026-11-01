@@ -283,7 +283,7 @@ export type SessionMissingKind = 'resume-failed' | 'unlisted';
  * `awaitingBackground` の分岐より前に実行するので、`status` は必ず `'done'` へ潰れ、
  * 「手が空いた」と「待って畳んだ」が台帳の軸で同じ顔になる。だから状態に添える。
  * `undefined` は「背景処理は無い」ではなく「そう名乗られていない」（古い runner）。
- * 在庫（`#withheldReports`）の写しで、デーモンを作り直すと消える。
+ * 在庫（`#withheldReports`）の写し。在庫は台帳（`Job.withheldReports`）にも写してあり、デーモンを作り直すと起動時に組み直される。
  */
 export interface ManagerAwaitingBackground {
   /** `withheldReports` と畳まない: 待っているタスクの数と握り潰した報告の本数は別の観測。 */
@@ -3286,7 +3286,8 @@ class Pool implements ManagerPool {
    * 担当自身は枠で落ちておらず、鍵の回転の契機（`#observeForTokenRotation`）にも流さない（#4903「回転は起こさない」）。起こすのは担当の続きだけ。
    * `turnStartedAt` は落ちが記録されたターンの開始時刻。担当がそのあと新しいターンを始めたら（値が変わったら）印を下ろす。
    * 6785 の「自力で終えたターンへ一言を投げない」決め（`#settleUsageWake`）の例外は、この印の立つ「作業者の落ちが記録されたターン」だけ。
-   * 永続化しない（既知の限界）: デーモンが再起動すると印は無くなり、今までどおり起こさない。
+   * **台帳（`Job.workerLimitStopped`）にも写しを持つ**（`#usageStopped` と同じ理由）: メモリだけだと、デーモンが再起動した後は回転前の鍵で止まった `done` の担当が鍵が回っても起こされず放置される。
+   * `Map` が真の参照で、台帳側はデーモンの寿命を跨ぐための写し。起動時（`#restoreJobs`）に組み直す。下ろす箇所は `#clearWorkerLimitMark` か、台帳を書く直前の `delete record.job.workerLimitStopped`。
    */
   readonly #workerLimitStopped = new Map<
     string,
@@ -7610,7 +7611,7 @@ class Pool implements ManagerPool {
       if (record === null || record.job.turnStartedAt !== mark.turnStartedAt) {
         // 担当は新しいターンを始めている（または台帳に居ない）: 落ちが記録されたターンではなくなった。
         if (this.#workerLimitStopped.get(managerId) === mark)
-          this.#workerLimitStopped.delete(managerId);
+          await this.#clearWorkerLimitMark(managerId);
         return false;
       }
       if (
@@ -7618,7 +7619,7 @@ class Pool implements ManagerPool {
         this.#supersedePending.has(managerId) ||
         record.job.status === 'stopped'
       ) {
-        this.#workerLimitStopped.delete(managerId);
+        await this.#clearWorkerLimitMark(managerId);
         return false;
       }
       if (trigger === 'turn-ended') {
@@ -7636,7 +7637,7 @@ class Pool implements ManagerPool {
       }
       // 判定の間に別の経路が下ろした・差し替えたなら、二重に起こさない。
       if (this.#workerLimitStopped.get(managerId) !== mark) return false;
-      this.#workerLimitStopped.delete(managerId);
+      await this.#clearWorkerLimitMark(managerId);
       await this.#journal({
         type: 'decision',
         decision:
@@ -7650,7 +7651,14 @@ class Pool implements ManagerPool {
         workerLimit: { generation: identity?.generation },
       });
       if (outcome === 'skipped' || outcome === 'still-running') {
-        if (!this.#workerLimitStopped.has(managerId)) this.#workerLimitStopped.set(managerId, mark);
+        if (!this.#workerLimitStopped.has(managerId)) {
+          this.#workerLimitStopped.set(managerId, mark);
+          const current = this.#records.get(managerId);
+          if (current !== undefined) {
+            current.job.workerLimitStopped = { ...mark };
+            await this.#persist(current);
+          }
+        }
         return false;
       }
       // `'joined'` は印を戻さない: 走っていた枠の起こし直しが、同じ担当へ続きを促している（#5205）
@@ -7786,6 +7794,7 @@ class Pool implements ManagerPool {
       record.job.supersededBy = successorId;
       this.#usageWakeOwed.delete(predecessorId);
       this.#workerLimitStopped.delete(predecessorId);
+      delete record.job.workerLimitStopped;
       // 印の解除は台帳へ書く口を兼ねる。印が無くても `supersededBy` は書く
       await this.#clearUsageStoppedMark(predecessorId);
       await this.#persist(record);
@@ -7800,6 +7809,22 @@ class Pool implements ManagerPool {
       });
     } catch (error) {
       noteDroppedRecord('前任の引き継ぎ', `managerId=${predecessorId}`, error);
+    }
+  }
+
+  /**
+   * 作業者の落ちの印を、`Map` と台帳の写しの両方から下ろす（`#clearUsageStoppedMark` と同じ形）。`Map` は await の前に同期で下ろす: 呼び出し元の「判定 → 下ろす」の間に別の経路が割り込まないように。
+   * 投げない: 呼び出し元は起こし直しの途中で、ここで落ちると起こさないまま終わるため。
+   */
+  async #clearWorkerLimitMark(managerId: string): Promise<void> {
+    this.#workerLimitStopped.delete(managerId);
+    try {
+      const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+      if (record === null || record.job.workerLimitStopped === undefined) return;
+      delete record.job.workerLimitStopped;
+      await this.#persist(record);
+    } catch (error) {
+      noteDroppedRecord('作業者の落ちの印の解除', `managerId=${managerId}`, error);
     }
   }
 
@@ -7980,6 +8005,12 @@ class Pool implements ManagerPool {
 
       // 下で `continue` される `lost` より前に置く: 印を組み直さないと `resumeStoppedByUsage()` が `lost` の委譲を回転の対象にすら入れない。
       // 後継へ引き継いだ前任（`supersededBy`）の印は組み直さない（#4861）
+      if (job.workerLimitStopped !== undefined && job.supersededBy === undefined) {
+        this.#workerLimitStopped.set(job.id, {
+          preRotationKey: job.workerLimitStopped.preRotationKey,
+          turnStartedAt: job.workerLimitStopped.turnStartedAt,
+        });
+      }
       if (job.usageStoppedAt !== undefined && job.supersededBy === undefined) {
         this.#usageStopped.add(job.id);
         // すぐ挑む挑み直しの状態を入れる（#4852）: 挑み直しの状態はメモリだけで再起動で消え、生きていない委譲は像にも載らないので、入れないと次の鍵の出来事まで誰も起こさない
@@ -8368,6 +8399,7 @@ class Pool implements ManagerPool {
       record.attached = false;
       record.job.status = 'stopped';
       this.#workerLimitStopped.delete(managerId);
+      delete record.job.workerLimitStopped;
       await this.#persist(record);
       const withheld = this.#withheldReports.get(managerId);
       // `count > 0` を条件にする: フラッシュ済みの在庫が残っていると、`withheld !== undefined` だけでは「報告を 0 本抱えたまま止まった」という嘘の1行が出る。
@@ -10683,10 +10715,14 @@ class Pool implements ManagerPool {
         // 作業者の落ちの印を立てる（#5030）。`await` の前に同期で立てる: 鍵の突き合わせの間にターンが終わっても、終わりの契機が印を見られるように。
         // `#usageStopped` と鍵の回転の観測（`#observeForTokenRotation`）へは流さない（#4903）。
         if (event.workerLimit !== undefined) {
-          this.#workerLimitStopped.set(event.managerId, {
+          const mark = {
             preRotationKey: event.workerLimit.preRotationKey,
             turnStartedAt: record.job.turnStartedAt,
-          });
+          };
+          this.#workerLimitStopped.set(event.managerId, mark);
+          // 台帳にも写す: デーモンが再起動しても印が残るように
+          record.job.workerLimitStopped = { ...mark };
+          await this.#persist(record);
         }
         // 作業者の落ちの note（`event.workerLimit` の欄で判定する）には、落ちた枠の鍵の突き合わせを1行足す（#5021）。日誌とクローンへの知らせの両方に同じ文を載せる。
         const noteText =

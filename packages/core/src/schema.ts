@@ -1460,6 +1460,10 @@ export const jobSchema = z.object({
   lastCgroupEvents: cgroupEventsDeltaSchema.extend({ at: isoDateTime }).optional(),
   // 台帳にも持つ: `#usageStopped` はデーモンが作り直されると消え、終端している `done` / `failed` / `lost` の委譲が誰にも起こされないまま座り続けるため
   usageStoppedAt: isoDateTime.optional(),
+  // 台帳にも持つ: `#workerLimitStopped`（作業者の枠の落ちで手を止めた担当の印）はデーモンが作り直されると消え、回転前の鍵で止まった `done` の担当が鍵が回っても起こされず放置されるため。`usageStoppedAt` と別の欄にする: 担当自身は枠で落ちておらず、鍵の回転の契機にも流さない（#4903 / #5030）
+  workerLimitStopped: z
+    .object({ preRotationKey: z.boolean(), turnStartedAt: isoDateTime.optional() })
+    .optional(),
   // 台帳にも持つ: 前任を後継へ引き継いだ事実はデーモンが作り直されても残り、自動の起こし直し（鍵の回転・周回の掃き・起動時の印の組み直し）が前任を起こさない根拠になるため（#4861）
   supersededBy: z.string().optional(),
   // `supersededBy` の逆向き: 後継の側から前任をたどる表示用で、判定には使わない（#4861）
