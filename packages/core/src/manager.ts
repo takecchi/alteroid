@@ -8052,14 +8052,7 @@ class Pool implements ManagerPool {
           job: {
             ...job,
             status: living.state.status,
-            runnerId: living.runner.runnerId,
-            cwd: living.state.cwd,
-            workspace: workspaceLocatorFrom(
-              this.#workspace,
-              living.runner.runnerId,
-              living.state.cwd,
-            ),
-            ...(living.state.sessionId === undefined ? {} : { sessionId: living.state.sessionId }),
+            ...this.#placementOn(living.runner, living.state),
           },
           waiting: living.state.waiting,
           attached,
@@ -8252,6 +8245,50 @@ class Pool implements ManagerPool {
       }
     }
     return resumed;
+  }
+
+  /** runner が実際に開いているセッションの値へ台帳の宛先・cwd・workspace・sessionId を揃える（起動時の引き取りと、移送先に既に居た委譲の取り直しが共有する）。 */
+  #placementOn(
+    runner: RunnerClient,
+    state: Awaited<ReturnType<RunnerClient['list']>>[number],
+  ): Pick<Job, 'runnerId' | 'cwd' | 'workspace' | 'sessionId'> {
+    return {
+      runnerId: runner.runnerId,
+      cwd: state.cwd,
+      workspace: workspaceLocatorFrom(this.#workspace, runner.runnerId, state.cwd),
+      ...(state.sessionId === undefined ? {} : { sessionId: state.sessionId }),
+    };
+  }
+
+  /**
+   * 移送先の一覧に既に居る委譲の台帳を移送先へ揃える: 揃えないと台帳は元の runner を指したままで、移送先から届く出来事が「移った後の古い runner」として捨てられる。
+   * 止めた・戻せなかった後は動かさない。像が別の宛先へ移っていたら（古い写し）触らない。
+   */
+  async #alignToTarget(
+    job: Job,
+    runner: RunnerClient,
+    state: Awaited<ReturnType<RunnerClient['list']>>[number],
+  ): Promise<void> {
+    const known = this.#records.get(job.id);
+    const current = known?.job ?? (await this.#latestJobOf(job.id)) ?? job;
+    const again = this.#records.get(job.id);
+    if (
+      current.runnerId !== job.runnerId ||
+      (again?.job.runnerId ?? job.runnerId) !== job.runnerId
+    ) {
+      return;
+    }
+    if (current.status === 'stopped' || current.status === 'lost') return;
+    const attached = state.status === 'running' || state.status === 'waiting_human';
+    const record: ManagerRecord = again ?? {
+      job: { ...current },
+      waiting: state.waiting,
+      attached,
+    };
+    Object.assign(record.job, this.#placementOn(runner, state));
+    record.attached = attached;
+    this.#records.set(job.id, record);
+    await this.#persist(record);
   }
 
   /**
@@ -8844,6 +8881,15 @@ class Pool implements ManagerPool {
       for (const job of jobs) {
         if (alive.has(job.id)) {
           this.#reattachBusyRetries.delete(job.id);
+          const livingState = listing.states.find((state) => state.managerId === job.id);
+          if (
+            livingState !== undefined &&
+            job.runnerId !== undefined &&
+            job.runnerId !== runnerId &&
+            this.#shouldRelocateFrom(job.runnerId)
+          ) {
+            await this.#alignToTarget(job, runner, livingState);
+          }
           continue;
         }
         if (this.#stopped) continue;
