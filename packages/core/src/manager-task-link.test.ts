@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeManagerOrigin } from './clone.js';
+import { describeManagerOrigin, ORIGIN_NO_TASK_GUIDE } from './clone.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
@@ -689,54 +689,61 @@ describe('道具: manager_start の taskId', () => {
 describe('報告は、委譲が結び付いた task を名乗る', () => {
   it('会話の起点があっても無くても、task の id を1行で出す', () => {
     expect(
-      describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1', taskId: 't-1' }),
+      describeManagerOrigin({ kind: 'job', conversationId: 'conv-1', taskId: 't-1' }),
     ).toContain('結び付いた task: t-1');
-    expect(describeManagerOrigin({ kind: 'none', taskId: 't-1' })).toContain(
+    expect(describeManagerOrigin({ kind: 'job', conversationId: null, taskId: 't-1' })).toContain(
       '結び付いた task: t-1',
     );
   });
 
-  it('⭐ 起点の会話が無くても taskId があれば、「task_say で書く」案内を出し、task 無しの手順（task_add で新しい会話を作る）は出さない', () => {
-    const none = describeManagerOrigin({ kind: 'none', taskId: 't-1' });
+  it('⭐ 起点の会話が無くても taskId があれば、「task_say で書く」案内を出し、task 無しの手順（task_list で探す・task_add で足す）は出さない', () => {
+    const none = describeManagerOrigin({ kind: 'job', conversationId: null, taskId: 't-1' });
     expect(none).toContain('結び付いた task へ `task_say` で書く');
     expect(none).toContain('task_set_status で done にする');
-    expect(none).not.toContain('task_add で足すと新しい会話ができる');
-    const conv = describeManagerOrigin({
-      kind: 'conversation',
-      conversationId: 'conv-1',
-      taskId: 't-1',
-    });
+    expect(none).not.toContain('task_list で探し');
+    const conv = describeManagerOrigin({ kind: 'job', conversationId: 'conv-1', taskId: 't-1' });
     expect(conv).toContain('結び付いた task へ `task_say` で書く');
     expect(conv).not.toContain('task_list で探し');
   });
 
-  it('taskId が無い委譲は、task_list で探す・task_add で足す手順を出す', () => {
-    expect(describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' })).toContain(
-      'task_list で探し',
-    );
-    expect(describeManagerOrigin({ kind: 'none' })).toContain(
-      'task_add で足すと新しい会話ができる',
-    );
+  // 経緯: 以前は起点の会話の無い委譲にだけ別の手順（ORIGIN_NONE_GUIDE「task_add で足すと新しい会話ができる」）を出し、この試験はその違いを固定していた。
+  // task_add が宛先の会話を器で決める（起点の会話、無ければ新しい会話）ので手順は同じになり、#5469 の残りとして案内を1本にまとめた。期待を「同じ案内を出す」へ反転した
+  it('⭐ taskId が無い委譲は、起点の会話の有無によらず同じ手順（task_list で探す・無ければ task_add で足す）を出す', () => {
+    const conv = describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' });
+    const none = describeManagerOrigin({ kind: 'job', conversationId: null });
+    expect(conv).toContain(ORIGIN_NO_TASK_GUIDE);
+    expect(none).toContain(ORIGIN_NO_TASK_GUIDE);
+    expect(none).toContain('起点の会話: 無し');
+    expect(none).not.toContain('task_add で足すと新しい会話ができる');
   });
 
-  it('⭐ taskId が無い起点の会話の案内は、manager_list の行と同じ手順・同じ語（task_list で探して task_say、無ければ task_add）', () => {
-    const text = describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' });
+  // manager_list の行（`ORIGIN_HINT_NO_TASK_FULL`）は起点の会話があるときにしか案内を出さないので「この会話を起点にした」のまま。手順の語（task_list で探して task_say、無ければ task_add）を揃える
+  it('⭐ taskId が無い起点の会話の案内は、manager_list の行と同じ手順（task_list で探して task_say、無ければ task_add）', () => {
+    const text = describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' });
     expect(text).toContain(
-      '人間へ知らせるなら、この会話を起点にした task を task_list で探して `task_say` で書く。無ければ task_add で足す。',
+      '人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す',
     );
     expect(text).not.toContain('結び付いた task〔');
     expect(
-      describeManagerOrigin(
-        { kind: 'conversation', conversationId: 'conv-1' },
-        (_id, _full, ref) => ref,
-      ),
+      describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' }, (_id, _full, ref) => ref),
     ).toContain('task_list で探した task へ task_say で書く。無ければ task_add');
   });
 
   it('結び付いていなければ、行そのものを出さない', () => {
-    expect(describeManagerOrigin({ kind: 'conversation', conversationId: 'conv-1' })).not.toContain(
+    expect(describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' })).not.toContain(
       '結び付いた task:',
     );
-    expect(describeManagerOrigin({ kind: 'none' })).not.toContain('結び付いた task:');
+    expect(describeManagerOrigin({ kind: 'job', conversationId: null })).not.toContain(
+      '結び付いた task:',
+    );
+  });
+
+  it('台帳に無い・読めない委譲は「分からない」と名乗り、「無し」に畳まない', () => {
+    expect(describeManagerOrigin({ kind: 'missing', conversationId: null })).toContain(
+      '起点の会話: 分からない',
+    );
+    expect(
+      describeManagerOrigin({ kind: 'unreadable', conversationId: null, reason: 'x' }),
+    ).not.toContain('起点の会話: 無し');
   });
 });

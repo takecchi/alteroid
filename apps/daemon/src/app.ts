@@ -925,7 +925,7 @@ function eventAttachmentResponses() {
 }
 
 // 403（source の不一致）はここに置かず各経路の `describeRoute` に直に書く: 「実際に返すステータスが宣言されているか」を測る歯が、リテラルの `403` を経路ごとに読む。
-// エラーには値を混ぜない（固定の文だけ）。判定は正規化の後（`isReservedEventSource`）: `isDaemonSelfNotice` は `source` だけで daemon 自身の知らせとみなし台帳に載せないので、外から名乗らせない。
+// エラーには値を混ぜない（固定の文だけ）。判定は正規化の後（`isReservedEventSource`）: core は `source` だけで daemon 自身の知らせとみなす（`isDaemonSelfNotice` で受信箱の同じ知らせを1件に畳み、`token-pool` などは名指しで鍵の枠の知らせとして扱う）ので、外から名乗らせない。
 const RESERVED_SOURCE_BODY = {
   error: 'この source は daemon 自身が使う予約語なので、外からは使えない（何も積んでいない）',
   code: 'reserved_source',
