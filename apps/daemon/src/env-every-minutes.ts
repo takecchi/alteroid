@@ -1,7 +1,4 @@
-import { placedEnvValue } from '@alteroid/core';
-
-// 止める綴りを1か所に置く: 綴りが割れると人間が覚えることが増えるため。
-export const OFF_SPELLINGS: ReadonlySet<string> = new Set(['off', 'none', 'false', '0']);
+import { isEnvOffSpelling, placedEnvValue } from '@alteroid/core';
 
 // 上限は 2^31-1 ms: `setTimeout` はそれを超える遅延を 1ms へ倒し、周期の処理が休みなく回ってしまうため。
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -28,7 +25,7 @@ export function readEveryMinutes(
   const notes: string[] = [];
   const raw = placedEnvValue(env, key);
   if (raw === null) return { everyMinutes: defaultMinutes, notes };
-  if (OFF_SPELLINGS.has(raw.toLowerCase())) return { everyMinutes: null, notes };
+  if (isEnvOffSpelling(raw)) return { everyMinutes: null, notes };
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     notes.push(`${key}="${raw}" は分数として読めないので既定 ${defaultMinutes} を使う`);

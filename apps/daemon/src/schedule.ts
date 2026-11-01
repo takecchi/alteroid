@@ -1,5 +1,6 @@
 import {
   dailyReportEntry,
+  isEnvOffSpelling,
   memoryTidyEntry,
   parseTimeOfDay,
   placedEnvValue,
@@ -8,8 +9,6 @@ import {
   type ScheduleEntry,
   type TimeOfDay,
 } from '@alteroid/core';
-
-import { OFF_SPELLINGS } from './env-every-minutes.js';
 
 export interface ScheduleConfig {
   dailyReportAt: TimeOfDay | null;
@@ -45,7 +44,7 @@ function readTimeOfDayEnv(
 ): TimeOfDay | null {
   const raw = placedEnvValue(env, name);
   if (raw === null) return parseTimeOfDay(defaultAt);
-  if (OFF_SPELLINGS.has(raw.toLowerCase())) return null;
+  if (isEnvOffSpelling(raw)) return null;
   const parsed = parseTimeOfDay(raw);
   if (parsed === null) {
     notes.push(`${name}="${raw}" は HH:MM として読めないので既定 ${defaultAt} を使う`);

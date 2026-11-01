@@ -26,7 +26,7 @@ describe('添付ファイルの定期掃除（#3111）', () => {
     expect(readAttachmentPruneConfig({ ALTEROID_ATTACHMENT_PRUNE_EVERY: '15' }).everyMinutes).toBe(
       15,
     );
-    for (const off of ['off', 'none', 'false', '0', 'OFF']) {
+    for (const off of ['off', 'none', 'false', '0', 'OFF', 'no', 'disabled']) {
       expect(
         readAttachmentPruneConfig({ ALTEROID_ATTACHMENT_PRUNE_EVERY: off }).everyMinutes,
       ).toBeNull();

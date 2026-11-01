@@ -6,7 +6,20 @@ import { placedEnvValue } from './placed-env.js';
 // 門（`ALTEROID_MEMORY_GUARD`・`ALTEROID_BASH_GUARD` ほか）はここへ寄せない: 綴り違いを落として、守っているつもりの持ち主に気づかせる
 // 作法（`resolveEnumEnv`）を持ち、ここの「受け付ける綴りを広げる」読み方だと、`false` / `OFF` で黙って門が外れる側に変わるため。
 export const ENV_SWITCH_ON_SPELLINGS: readonly string[] = ['on', '1', 'true', 'yes', 'enabled'];
-export const ENV_SWITCH_OFF_SPELLINGS: readonly string[] = ['off', '0', 'false', 'no', 'disabled'];
+// 「止める」の綴りはここだけ（周期の環境変数と on/off の環境変数で共有する）: 綴りが割れると、片方で効かない綴りを人間が覚えることになるため
+export const ENV_SWITCH_OFF_SPELLINGS: readonly string[] = [
+  'off',
+  'none',
+  'false',
+  '0',
+  'no',
+  'disabled',
+];
+
+/** `placedEnvValue` を通した値が「止める」綴りか。大文字小文字は問わない。 */
+export function isEnvOffSpelling(value: string): boolean {
+  return ENV_SWITCH_OFF_SPELLINGS.includes(value.toLowerCase());
+}
 
 export interface EnvSwitchReading {
   readonly enabled: boolean;
@@ -22,7 +35,7 @@ export function readEnvSwitch(
   const given = placedEnvValue(env, key)?.toLowerCase();
   if (given === undefined) return { enabled: defaultEnabled };
   if (ENV_SWITCH_ON_SPELLINGS.includes(given)) return { enabled: true };
-  if (ENV_SWITCH_OFF_SPELLINGS.includes(given)) return { enabled: false };
+  if (isEnvOffSpelling(given)) return { enabled: false };
   return { enabled: defaultEnabled, unrecognized: given };
 }
 
