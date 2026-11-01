@@ -1,3 +1,6 @@
+/** `tools.ts` の `LIST_REPORT_EXCERPT`（240）に揃えるが import しない: `tools.ts` が `manager.ts` を import しているので循環になる。 */
+export const NOTIFY_REPORT_EXCERPT = 240;
+
 function count(value: number): string {
   return value.toLocaleString('en-US');
 }
