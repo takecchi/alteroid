@@ -69,6 +69,16 @@ export function decodeDenialKey(key: string): {
   return { tool, actor: rawActor === 'manager' || rawActor === 'worker' ? rawActor : undefined };
 }
 
+/** 拒否の知らせ（初回と知らせ直し）の末尾に付ける、答え方の案内。 */
+export const DENIAL_REPLY_ROUTE =
+  '\n答え方: この拒否について「この1回だけ許可しますか」の確認（`requestId` は `toolu_…` の形）が別に届いていれば、' +
+  'その `requestId` と `decision` を付けて `manager_send` で答える（allow しても自動では撃ち直されず、撃ち直しても分類器にまた止められうる。#4904）。' +
+  'その確認が届いていなければ、この拒否には `requestId` が無く、許可として答える口は無い。' +
+  'そのときは `manager_send` に `decision` を付けて送らないこと' +
+  '（`requestId` 無しの `decision` は、このマネージャーが別に待っている確認へ回答として当たりうる）。' +
+  '別の形でやり直させるなら、`decision` 無しの追加指示として送る。' +
+  '作業者の拒否なら、その作業者へ伝えるようマネージャーに頼む（`manager_send` の届け先はマネージャーである）。';
+
 /**
  * `inputHead` は journal へは書かない（`case 'permission_denied':` の doc）。
  * 取れていない欄はキーごと持たない: 作り物を出さない。
