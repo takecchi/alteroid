@@ -4373,6 +4373,8 @@ class RunnerSession {
           managerId: this.#id,
           sessionId: event.sessionId,
           ...(event.runtime.pluginLoad === null ? {} : { pluginLoad: event.runtime.pluginLoad }),
+          // `mcp_servers` が読めなかった（null）なら欄ごと省く: 「観測していない」を「0本」として運ばないため
+          ...(event.runtime.mcpServers === null ? {} : { mcpServers: event.runtime.mcpServers }),
         });
         return;
       }

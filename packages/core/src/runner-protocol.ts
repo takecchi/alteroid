@@ -856,6 +856,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     sessionGeneration: sessionGenerationSchema,
     /** 省略は空の結果とは違う（古い runner・init に `plugins` が無かったセッション）。 */
     pluginLoad: agentPluginLoadSchema.optional(),
+    /** init が知らせた MCP サーバの接続の状態（名前と状態だけ。設定・鍵は載せない）。省略は「観測していない」で、空の一覧とは違う。 */
+    mcpServers: z.array(z.object({ name: z.string(), status: z.string() })).optional(),
   }),
   z.object({ type: z.literal('project_key'), managerId: z.string(), projectKey: z.string() }),
   z.object({

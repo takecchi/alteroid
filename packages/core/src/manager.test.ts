@@ -11464,6 +11464,53 @@ describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => 
     await s.pool.stop();
     await s.real.stop();
   });
+
+  it('接続できていない MCP サーバがあると日誌へ1行（名前と状態だけ）。同じ組の再送は重ねず、変われば書き、全部つながれば書かない', async () => {
+    const s = await setupPoolWithRunner();
+    const mcpTexts = async () =>
+      (await s.stores.journal.list({ types: ['exchange'] })).flatMap((entry) =>
+        entry.type === 'exchange' && entry.text.includes('接続できていないもの')
+          ? [entry.text]
+          : [],
+      );
+    const connected = { name: 'alteroid', status: 'connected' };
+    const github = { name: 'ext-github', status: 'failed' };
+    const notion = { name: 'ext-notion', status: 'needs-auth' };
+
+    // pending（まだつながっていないだけ）・disabled（人が切った）は異常ではなく、つながっているのと同じ扱い（書かず、署名も消す）
+    const pending = { name: 'ext-slow', status: 'pending' };
+    const disabled = { name: 'ext-off', status: 'disabled' };
+
+    for (const [id, mcpServers] of [
+      ['sess-0', [connected, pending, disabled]],
+      ['sess-1', [connected, github, pending]],
+      ['sess-2', [connected, github, disabled]],
+      ['sess-3', [connected, github, notion]],
+      ['sess-4', [connected, pending, disabled]],
+      ['sess-5', [connected, github]],
+    ] as const) {
+      s.a.onEvent?.({
+        type: 'session',
+        managerId: s.managerId,
+        sessionId: id,
+        mcpServers: [...mcpServers],
+      });
+      await expect
+        .poll(async () => (await s.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+        .toBe(id);
+    }
+
+    const texts = await mcpTexts();
+    expect(texts).toHaveLength(3);
+    expect(texts[0]).toContain(`[${s.managerId}] init が知らせた MCP サーバのうち`);
+    expect(texts[0]).toContain('ext-github（failed）');
+    expect(texts[0]).not.toContain('alteroid');
+    expect(texts.join('\n')).not.toMatch(/pending|disabled|ext-slow|ext-off/);
+    expect(texts[1]).toContain('ext-notion（needs-auth）');
+
+    await s.pool.stop();
+    await s.real.stop();
+  });
 });
 
 describe('押し込みに失敗した runner へ、諦めずに挑み直す', () => {
