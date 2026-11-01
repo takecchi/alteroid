@@ -285,10 +285,15 @@ import {
   describeStoppedReportFiles,
   describeVanishedRunnerBacklogLine,
   leaseRefusalDecision,
+  normalizeRescuePath,
+  NO_DROPPED_FILES,
   redactedBackgroundCommands,
   remainingFoldNotice,
   remainingPeerCloseNotice,
+  reportDeliveryTextOf,
+  reportFullTextOf,
   rescueStashClause,
+  rescueStashKeys,
   rescueStashLocation,
   restartNudge,
   resumeFailureDetail,
@@ -297,9 +302,18 @@ import {
   usageRotationNudge,
   workerLimitNudge,
   workspaceAfterSwap,
+  type DroppedReportFiles,
   type PeerCloseNotice,
   type RestartCause,
 } from './manager-notices.js';
+import {
+  isLive,
+  lostSinceOf,
+  runnerListedAtOf,
+  vanishedOf,
+  vanishedRunnerBacklog,
+} from './manager-liveness.js';
+import { summaryOf, tokenGenerationMismatched, type SummaryContext } from './manager-summary.js';
 import {
   probeToolUseStall,
   probeTurnEnd,
@@ -12558,269 +12572,3 @@ class Pool implements ManagerPool {
     }
   }
 }
-
-function normalizeRescuePath(value: string): string {
-  return value.trim().replace(/^(\.\/)+/, '');
-}
-
-/** `rescue_restore` の `paths` に合う書き方: `<worktree>/<path>` か `path` だけ。 */
-function rescueStashKeys(entry: Pick<RescueStashEntry, 'worktree' | 'path'>): string[] {
-  return [rescueStashLocation(entry), entry.path];
-}
-
-// 宛先が書かれていない委譲は引かない: どの器に居たのかをこの情報だけでは決められない。
-function lostSinceOf(
-  record: ManagerRecord,
-  silentRunners: ReadonlyMap<string, string>,
-): string | undefined {
-  return record.job.runnerId === undefined ? undefined : silentRunners.get(record.job.runnerId);
-}
-
-// `status !== 'running'` なら常に `undefined`: `done` で畳まれた委譲の宛先が後から消えても「running のまま残っている」症状ではない。
-// 時刻は返さない（`ManagerSummary.runnerVanished` の doc「時刻を持たない」）。
-function vanishedOf(
-  record: ManagerRecord,
-  registeredRunnerIds: ReadonlySet<string> | null,
-): true | undefined {
-  if (record.job.status !== 'running') return undefined;
-  // 判定できない回は立てない。
-  if (registeredRunnerIds === null) return undefined;
-  const runnerId = record.job.runnerId;
-  if (runnerId === undefined) return undefined;
-  if (registeredRunnerIds.has(runnerId)) return undefined;
-  return true;
-}
-
-function runnerListedAtOf(
-  job: Pick<Job, 'id' | 'runnerId'>,
-  silentRunners: ReadonlyMap<string, string>,
-  sessions: ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }>,
-): string | undefined {
-  const runnerId = job.runnerId;
-  if (runnerId === undefined) return undefined;
-  if (silentRunners.has(runnerId)) return undefined;
-  const observed = sessions.get(runnerId);
-  if (observed === undefined) return undefined;
-  return observed.ids.has(job.id) ? observed.observedAt : undefined;
-}
-
-// 像が `#records` に載っていること自体を「話しかけられる」の根拠にしない: `#load()` が作った像は戻れるかを確かめておらず、`status: lost` と `live: true` の両立しない組が出る。
-function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string>): boolean {
-  // `lost` は何より先に見る: `#resume` は `await runner.resume(...)` の直後に楽観的に `attached = true` を書くので、
-  // その間に `resume_failed` が届くと `lost` の像が `attached: true` で立つ。
-  // `stopped` も同じ列に置く: `abort()` が `runner.list()` を探ってセッションが消えたことを確かめた事実で、`job.sessionId` は消さないので、
-  // 下の `sessionId` 分岐に任せると停止後も `live: true` に化ける。
-  if (record.job.status === 'lost' || record.job.status === 'stopped') return false;
-  // 宛先の器が黙ったなら下の2つを見ない: `attached` / `sessionId` はイベント駆動でしか更新されず、器が合図なしに消えると `attached` が `true` のまま残る。
-  // 足すのはデーモンが既に確定させた判定（名簿の `state: 'lost'`）だけ。`status` は動かさない: 黙っているのが器なのか経路なのかは片側から決められない。
-  // 言えるのは「置き先として数えない」まで、「いま話しかけられない」とは言えない:
-  // この行が `false` を返す委譲へ `ManagerPool.send()` を撃つと `outcome: 'delivered'` が返り、runner の resume の口が実際に叩かれた実測がある。
-  // `silentRunners` と `send()` が通る `Registry#get()` は同じ名簿の違う面で、`#markSilent` は `entry.client` を落とさず `get()` は `entry.state` を見ない。
-  // `live: false` を「送っても届かない」と読み替えない。
-  //
-  // `vacating`（意図して空けている最中）は `false` に倒さない:
-  // 1. `live: false` には理由を1つだけ名指しする欄（`runnerLostSince`）が対に在り、`vacating` を倒すと理由を名乗れない `false` ができる。
-  // 2. `live` は「話しかけられるか」しか言わない。`vacating` な器は heartbeat が続いており、置き先から外れることとは別である。
-  // 3. `#silentRunners` のホワイトリストに `vacating` を足さない（黙った結果ではなく空けると決めた結果）。
-  if (record.job.runnerId !== undefined && silentRunners.has(record.job.runnerId)) return false;
-  if (record.attached) return true;
-  // 「戻れなかった（`lost`）」と「戻る先が無い（session_id なし）」を潰さない: `status` と `sessionId` が別々に持つ。
-  // ここで言えるのは「戻せないことの証明ではない」水準まで（`#runnerNotOpenDetail` と同じ）。
-  return record.job.sessionId !== undefined;
-}
-
-// `isLive()` の返り値は読まない独立した集計にする: 数えるのは「`isLive()` が嘘をついている本数」ではなく、それを包む「宛先が名簿からまるごと消えている本数」。
-function vanishedRunnerBacklog(
-  summaries: readonly ManagerSummary[],
-  registeredRunnerIds: ReadonlySet<string>,
-): ReadonlyMap<string, { count: number; oldestStartedAt: string }> {
-  const backlog = new Map<string, { count: number; oldestStartedAt: string }>();
-  for (const summary of summaries) {
-    if (summary.status !== 'running') continue;
-    if (summary.runnerId === undefined) continue;
-    if (registeredRunnerIds.has(summary.runnerId)) continue;
-    const existing = backlog.get(summary.runnerId);
-    if (existing === undefined) {
-      backlog.set(summary.runnerId, { count: 1, oldestStartedAt: summary.startedAt });
-    } else {
-      existing.count += 1;
-      if (summary.startedAt < existing.oldestStartedAt) {
-        existing.oldestStartedAt = summary.startedAt;
-      }
-    }
-  }
-  return backlog;
-}
-
-// 「デプロイ全体の話」を「この委譲固有の話」より先に見る: プールが配線されていなければ、living 枝を経由していてもこの委譲について言えることは無い。
-function tokenGenerationUnknownReasonOf(
-  tokenGeneration: number | undefined,
-  poolWired: boolean,
-  reattachedAcrossRestart: true | undefined,
-): TokenGenerationUnknownReason | undefined {
-  if (tokenGeneration !== undefined) return undefined;
-  if (!poolWired) return 'pool-not-wired';
-  if (reattachedAcrossRestart === true) return 'reattached-across-restart';
-  return 'not-yet-observed';
-}
-
-// `live` などに既定値を置かず必須の引数にする: 省略した側が黙って「繋がっている」と名乗り、既定を `false` にしても「繋がっているのに切れて見える」が混ざる。
-// 材料が `record` から読めないプロセス内の状態（名簿・`#usageStopped` など）の欄は、呼ぶ側が計算した値だけを渡す。
-// `ManagerPool` の一覧と1件の読みが、同じ応答の中で全件を同じ像で比べるための材料
-interface SummaryContext {
-  silent: ReadonlyMap<string, string>;
-  runnerSessions: ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }>;
-  registeredRunnerIds: ReadonlySet<string> | null;
-  activeTokenGeneration: number | undefined;
-  tokenGenerationPoolWired: boolean;
-}
-
-/** 報告の全文（途中の発言を含む）。旧 runner は `fullText` を送らず、`text` が全文。 */
-function reportFullTextOf(event: { text: string; fullText?: string }): string {
-  return event.fullText ?? event.text;
-}
-
-/**
- * クローンの受信箱へ配る報告の本文。途中の発言があった回は、最後の発言（結論と質問）に全文の在りかを1行添える。
- * 添える行を省かない: 「途中があった」こと自体が見えないと、クローンは結論だけで足りない回に全文を引く契機を持てないため。
- */
-function reportDeliveryTextOf(event: {
-  managerId: string;
-  text: string;
-  fullText?: string;
-}): string {
-  if (event.fullText === undefined) return event.text;
-  return (
-    `${event.text}\n\n` +
-    `（途中の発言を含む全文 ${String(event.fullText.length)} 字は manager_report managerId=${event.managerId} で読める。` +
-    'これはターンの最後の発言だけである）'
-  );
-}
-
-function summaryOf(
-  record: ManagerRecord,
-  live: boolean,
-  runnerLostSince: string | undefined,
-  runnerVanished: true | undefined,
-  sessionMissingSince: string | undefined,
-  turnEndedAt: string | undefined,
-  turnEndReason: string | undefined,
-  turnEndTail: string | undefined,
-  toolUseStallAt: string | undefined,
-  toolUseStallPending: PendingToolUse[] | undefined,
-  awaitingBackground: ManagerAwaitingBackground | undefined,
-  tokenGeneration: number | undefined,
-  activeTokenGeneration: number | undefined,
-  tokenGenerationPoolWired: boolean,
-  resetTimeSkewMatch: NoticeResetMatch | undefined,
-  usageStoppedAt: string | undefined,
-  runnerListedAt: string | undefined,
-): ManagerSummary {
-  const { job } = record;
-  const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
-    tokenGeneration,
-    tokenGenerationPoolWired,
-    record.reattachedAcrossRestart,
-  );
-  return {
-    managerId: job.id,
-    status: job.status,
-    live,
-    ...definedProps({ runnerLostSince, runnerVanished, runnerListedAt }),
-    ...(sessionMissingSince === undefined
-      ? {}
-      : {
-          sessionMissingSince,
-          // 由来は引数にせず像から読み、時刻と一緒にしか出さない: 片方だけ渡し忘れると、時刻の無い由来や由来の無い時刻が外へ出る。
-          ...(record.sessionMissingKind === undefined
-            ? {}
-            : { sessionMissingKind: record.sessionMissingKind }),
-          // 判定できないとき（`record.runnerSessionSince` が無い）も `false`（届いていない）側に倒す。
-          shutdownObservationArrivedAfterSwap:
-            job.lastUnpushedWorkObservation?.source === 'shutdown' &&
-            record.runnerSessionSince !== undefined &&
-            job.lastUnpushedWorkObservation.at >= record.runnerSessionSince,
-        }),
-    // 3欄は独立に出し分ける: `turnEndedAt` だけは元の行が `timestamp` を持たないとき単独で欠けうるので、その有無で残り2つを畳まない（`toolUseStall*` も同じ）。
-    ...definedProps({ turnEndedAt, turnEndReason, turnEndTail }),
-    // `toolUseStallAt` は元の行が `timestamp` を持たないと単独で欠けうるので、`turnEnded*` と独立に出し分ける（片方の有無でもう片方を畳まない）。
-    ...(toolUseStallAt === undefined ? {} : { toolUseStallAt }),
-    ...(toolUseStallPending === undefined ? {} : { toolUseStallPending }),
-    cwd: job.cwd ?? '',
-    request: job.request ?? job.summary,
-    startedAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    waiting: [...record.waiting],
-    ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
-    ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
-    ...(job.lastReportAt === undefined ? {} : { lastReportAt: job.lastReportAt }),
-    ...(job.lastReportStatus === undefined ? {} : { lastReportStatus: job.lastReportStatus }),
-    // `lastReport` と同じ行で運ぶ: 片方だけだと、読む側が「報告が来た」と「エラーで死んだ」を本文の文言で判定するしかなくなる。
-    ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
-    ...(job.lastUnreported === undefined ? {} : { lastUnreported: job.lastUnreported }),
-    ...(job.lastFoldedTurn === undefined ? {} : { lastFoldedTurn: job.lastFoldedTurn }),
-    ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
-    ...(job.lastCgroupEvents === undefined ? {} : { lastCgroupEvents: job.lastCgroupEvents }),
-    ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
-    ...(job.supersededBy === undefined ? {} : { supersededBy: job.supersededBy }),
-    ...(job.supersedes === undefined ? {} : { supersedes: job.supersedes }),
-    ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
-    // `unknown` を黙って落とさない: 欄ごと消すと「取れなかった」という観測が消える。
-    ...(job.workspace === undefined ? {} : { workspace: job.workspace }),
-    // 貸し出しは判定を出さず材料だけ写す: `judgeLease` は時刻で答えが変わるので、一覧に焼くと読んだ瞬間から古びる。
-    ...(job.lease === undefined ? {} : { lease: job.lease }),
-    ...(job.lastUnpushedWorkObservation === undefined
-      ? {}
-      : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
-    ...(job.lastRescue === undefined ? {} : { lastRescue: job.lastRescue }),
-    ...(job.rescueStash === undefined || job.rescueStash.length === 0
-      ? {}
-      : {
-          rescueStash: {
-            count: job.rescueStash.length,
-            totalBytes: job.rescueStash.reduce((sum, e) => sum + e.size, 0),
-            latestAt: job.rescueStash.reduce((latest, e) => (e.at > latest ? e.at : latest), ''),
-          },
-        }),
-    ...(job.externalOutputs === undefined ? {} : { externalOutputs: job.externalOutputs }),
-    ...(job.heldMessages === undefined || job.heldMessages[0] === undefined
-      ? {}
-      : {
-          heldMessages: {
-            count: job.heldMessages.length,
-            oldestHeldAt: job.heldMessages[0].heldAt,
-          },
-        }),
-    // `live` と同じく引数で運ぶ（省略可能にしない）: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
-    ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
-    // `tokenGeneration` が無ければ `activeTokenGeneration` も出さない: 比べる相手が無い判定を作らない。
-    ...(tokenGeneration === undefined
-      ? // 測れていないときだけ、なぜ測れていないかを添える。
-        tokenGenerationUnknownReason === undefined
-        ? {}
-        : { tokenGenerationUnknownReason }
-      : {
-          tokenGeneration,
-          ...(activeTokenGeneration === undefined ? {} : { activeTokenGeneration }),
-        }),
-    ...(resetTimeSkewMatch === undefined ? {} : { resetTimeSkewMatch }),
-  };
-}
-
-// 判定を2箇所へ書かない: `describeTokenGeneration` の ⚠ と `failureLine` の但し書きは同じ事実で、別々に書くと片方だけ直って食い違う。
-// どちらかが `undefined` なら偽: 比べる相手が居ないときに食い違いを捏造しない。
-export function tokenGenerationMismatched(
-  manager: Pick<ManagerSummary, 'tokenGeneration' | 'activeTokenGeneration'>,
-): boolean {
-  if (manager.tokenGeneration === undefined) return false;
-  if (manager.activeTokenGeneration === undefined) return false;
-  return manager.tokenGeneration !== manager.activeTokenGeneration;
-}
-
-// 停止済みの担当の報告に添えられた成果物を、日誌の行の末尾で名乗る（#4675）。中身は行の `attachments` に結び付いている
-interface DroppedReportFiles {
-  readonly text: string;
-  readonly attachments: { attachments?: ManagerReportFiles['attachments'] };
-}
-
-const NO_DROPPED_FILES: DroppedReportFiles = { text: '', attachments: {} };
