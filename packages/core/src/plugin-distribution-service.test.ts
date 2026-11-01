@@ -322,18 +322,20 @@ describe('plugin を配る（apply / syncRunner）', () => {
     expect(retained).toEqual([[]]);
   });
 
-  it('途中の1本が失敗したら、残す一覧は送らない（前の状態を巻き込まない）', async () => {
+  // 旧: 途中の1本が失敗したら残す一覧は送らなかった（#6146 で反転）。今は成功した分と、失敗した plugin で runner が今持っている版の名前を残す一覧にして送り、最後に失敗を投げる。
+  it('途中の1本が失敗したら、その失敗を投げる。残す一覧には runner が持っている版の名前だけを入れる', async () => {
     await s.stores.plugins.put(pluginInput('p-one'));
-    let retained = 0;
+    const retained: string[][] = [];
     s.runner.setPlugin = async () => {
       throw new Error('plugin sync failed (test)');
     };
-    s.runner.retainPlugins = async () => {
-      retained += 1;
+    s.runner.retainPlugins = async (names) => {
+      retained.push([...names]);
       return undefined;
     };
     await expect(s.service.syncRunner(s.runner)).rejects.toThrow('plugin sync failed');
-    expect(retained).toBe(0);
+    // runner は p-one を持っていないので、残す名前に入れない
+    expect(retained).toEqual([[]]);
   });
 
   it('1本が毎回失敗しても、ほかの plugin は runner へ届き、外した plugin は runner から外れる', async () => {
@@ -365,6 +367,8 @@ describe('plugin を配る（apply / syncRunner）', () => {
     const held = (await s.runner.plugins?.())?.plugins ?? [];
     expect(held.find((p) => p.name === 'p-b-good')?.sha).toBe(SHA_B);
     expect(held.map((p) => p.name)).not.toContain('p-old');
+    // 失敗した plugin は、runner が持っている旧版のまま残る（外さない）
+    expect(held.find((p) => p.name === 'p-a-broken')?.sha).toBe(SHA_A);
   });
 
   it('口を持たない実装（setPlugin が無い）へは配ったとも失敗したとも言わない', async () => {
