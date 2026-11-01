@@ -131,7 +131,8 @@ async function setup(
   options: {
     job?: Job;
     availability?: ManagerPoolOptions['tokenAvailability'];
-    tokenIdentity?: ManagerPoolOptions['tokenIdentity'];
+    // 立てると、世代ごとに別の鍵（tok-gen1・tok-gen2…）として名乗り、世代 1 の鍵は常に冷却中と答える（古い鍵を抱えたまま新しい鍵へ回った形）
+    keyPerGeneration?: boolean;
     stores?: ReturnType<typeof createMemoryStores>;
   } = {},
 ) {
@@ -154,12 +155,15 @@ async function setup(
     runners: registry,
     profile: createProfileService({ stores, runners: registry }),
     now: () => clock.now,
-    tokenIdentity:
-      options.tokenIdentity ?? (() => ({ tokenId: 'tok-a', generation: key.generation })),
+    tokenIdentity: () => ({
+      tokenId: options.keyPerGeneration === true ? `tok-gen${String(key.generation)}` : 'tok-a',
+      generation: key.generation,
+    }),
     tokenAvailability:
       options.availability ??
-      (async () => {
+      (async (tokenId) => {
         await key.hold;
+        if (options.keyPerGeneration === true && tokenId === 'tok-gen1') return 'cooling';
         return key.availability;
       }),
     onUsageObservation: async (observation) => {
@@ -371,6 +375,51 @@ describe('掃きの最中に担当の状態が変わったら、掃きは古い�
     expect(await sweep).toEqual([]);
     expect(s.log.filter((line) => line.includes('作業者が上限で落ちた鍵は回った'))).toEqual([]);
     expect((await s.stores.jobs.listJobs())[0]?.workerLimitStopped).toBeUndefined();
+    await s.pool.stop();
+  });
+});
+
+describe('使用量の印の変化は、預かった伝言の届け直しがそのまま見る', () => {
+  it('⭐ 動いている間に枠で止まった担当の預かりは、届けずに預かったまま。印が外れる（起こし直される）と届く', async () => {
+    const s = await setup({ keyPerGeneration: true });
+    s.fake.push(doneReport());
+    await settle();
+    // 鍵が回った後で背景処理を抱えた done へ送った伝言は預かられる
+    s.fake.control.background = 1;
+    s.key.generation = 2;
+    expect((await s.pool.send(ID, '起こし直した後に読む伝言')).outcome).toBe('held');
+    // 鍵が通らない間に、そのセッションが枠で落ちる（印が動いている Pool の中で立つ）
+    s.key.availability = 'cooling';
+    s.fake.push(closedBy429());
+    await settle();
+    const stopped = (await s.pool.list()).find((m) => m.managerId === ID);
+    expect(stopped?.status).toBe('failed');
+    expect(stopped?.usageStoppedAt).toBeDefined();
+    s.fake.control.background = 0;
+    s.fake.resumes.length = 0;
+    s.fake.sends.length = 0;
+
+    // 印の立つ failed・lost は終端ではない: 預かりは届けも捨てもしない（起こし直しを待つ）
+    await s.pool.deliverHeldMessages?.();
+    await settle();
+    expect(s.fake.resumes).toEqual([]);
+    expect(s.fake.sends).toEqual([]);
+    expect((await s.stores.jobs.listJobs())[0]?.heldMessages?.map((item) => item.text)).toEqual([
+      '起こし直した後に読む伝言',
+    ]);
+
+    // 鍵が通って起こし直されると印が外れ、同じ Pool の次の届け直しが預かりを届ける
+    s.key.availability = 'ready';
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([ID]);
+    expect((await s.pool.list()).find((m) => m.managerId === ID)?.usageStoppedAt).toBeUndefined();
+    await s.pool.deliverHeldMessages?.();
+    await settle();
+    const delivered = [
+      ...s.fake.resumes.map((r) => r.message ?? ''),
+      ...s.fake.sends.map((x) => x.text),
+    ].join('\n');
+    expect(delivered).toContain('起こし直した後に読む伝言');
+    expect((await s.stores.jobs.listJobs())[0]?.heldMessages ?? []).toEqual([]);
     await s.pool.stop();
   });
 });
