@@ -167,7 +167,7 @@ async function setup(
         return key.availability;
       }),
     onUsageObservation: async (observation) => {
-      log.push(`observation:${observation.notice.kind}`);
+      log.push(`observation:${observation.notice?.kind ?? 'none'}`);
     },
   });
   await pool.restore();
