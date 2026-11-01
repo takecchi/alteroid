@@ -246,6 +246,59 @@ describe('台帳の lastRescue（Issue #1266）', () => {
     await pool.stop();
   });
 
+  it('3c. 同じ理由でも当たったファイルが変われば、日誌を積み直す（運び直しとは区別する）', async () => {
+    const { pool, fake, stores } = await runningManualSetup('mgr-journal-changed');
+    const tree = {
+      relativePath: '.',
+      branch: 'main',
+      at: AT1,
+      notPushed: { reason: 'secret-like' as const, files: ['config/prod.env'] },
+    };
+    fake.rescueRef('mgr-journal-changed', [tree]);
+    fake.rescueRef('mgr-journal-changed', [
+      {
+        ...tree,
+        at: AT2,
+        notPushed: { reason: 'secret-like' as const, files: ['config/stg.env'] },
+      },
+    ]);
+    await vi.waitFor(async () => {
+      const worktrees = (await listedOf(pool, 'mgr-journal-changed')).lastRescue?.worktrees ?? [];
+      expect(worktrees[0]?.at).toBe(AT2);
+    });
+    await vi.waitFor(async () => {
+      const entries = await stores.journal.list({ types: ['decision'] });
+      expect(entries.filter((e) => JSON.stringify(e).includes('鍵らしい文字列'))).toHaveLength(2);
+    });
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(entries)).toContain('config/stg.env');
+    await pool.stop();
+  });
+
+  it('3d. 前の回が別の理由なら、鍵らしい文字列の日誌を積む。台帳（保存先）へも書く', async () => {
+    const { pool, fake, stores } = await runningManualSetup('mgr-journal-switch');
+    fake.rescueRef('mgr-journal-switch', [
+      { relativePath: '.', branch: 'main', at: AT1, notPushed: { reason: 'no-credential' } },
+    ]);
+    fake.rescueRef('mgr-journal-switch', [
+      {
+        relativePath: '.',
+        branch: 'main',
+        at: AT2,
+        notPushed: { reason: 'secret-like', files: ['config/prod.env'] },
+      },
+    ]);
+    await vi.waitFor(async () => {
+      const stored = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-journal-switch');
+      expect(stored?.lastRescue?.worktrees[0]?.at).toBe(AT2);
+    });
+    const stored = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-journal-switch');
+    expect(stored?.lastRescue?.worktrees[0]?.notPushed?.reason).toBe('secret-like');
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(entries.filter((e) => JSON.stringify(e).includes('鍵らしい文字列'))).toHaveLength(1);
+    await pool.stop();
+  });
+
   it('3. 鍵らしい文字列で止めた回は日誌へ残る（ファイル名だけ）', async () => {
     const { pool, fake, stores } = await runningManualSetup('mgr-journal');
     fake.rescueRef('mgr-journal', [
