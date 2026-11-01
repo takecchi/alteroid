@@ -14,6 +14,7 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import type { AgentToken } from './token-pool.js';
 import type { UsageTotals } from './usage.js';
 
 // 使用量を受ける case（usage / peer_usage / context_usage / usage_notice / rate_limit）を別のクラスへ切り出す前に、
@@ -277,6 +278,83 @@ describe('usage_notice は同期の位置で印を立て、配達の可否を決
       (text) => !text.includes('配達済みの知らせなので'),
     );
     expect(delivered).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+});
+
+const RESET_TARGET = Date.parse('2026-09-15T00:30:00.000Z');
+const NOW = Date.parse('2026-09-14T20:19:00.000Z');
+
+async function seedStaleSkewPool(stores: Stores): Promise<void> {
+  const dropped: AgentToken = {
+    id: 'tok-08',
+    label: 'alteroid08',
+    order: 0,
+    cooldownUntil: RESET_TARGET,
+    cooldownSource: 'quota_reset',
+  };
+  const active: AgentToken = { id: 'tok-09', label: 'alteroid09', order: 1 };
+  await stores.tokens.replace([dropped, active]);
+  await stores.tokens.writeActive({
+    tokenId: 'tok-09',
+    generation: 2,
+    rotatedAt: '2026-09-14T20:00:00.000Z',
+  });
+}
+
+describe('usage_notice の計器（resets 時刻の突き合わせ）は配達の後ろで、畳んだ回も回る', () => {
+  it('⭐ 計器の読み取りが長引いても、知らせは後から届く本物の報告より先に受信箱へ入る', async () => {
+    const s = await setup(['mgr-a'], { now: () => NOW });
+    await seedStaleSkewPool(s.stores);
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const realReadActive = s.stores.tokens.readActive.bind(s.stores.tokens);
+    s.stores.tokens.readActive = async () => {
+      await gate;
+      return realReadActive();
+    };
+
+    s.fake.push(reached('mgr-a'));
+    s.fake.push(okReport('mgr-a'));
+    await settle();
+
+    // 計器を配達の手前に置くと、知らせの配達が計器の読み取りを待ち、報告が先に出る。
+    const texts = s.inbox
+      .filter((event) => event.type === 'manager_message')
+      .map((event) => ('text' in event ? String(event.text) : ''));
+    const noticeAt = texts.findIndex((text) => text.includes(REACHED_TEXT));
+    const reportAt = texts.findIndex((text) => text.includes('調べ終えた'));
+    expect(noticeAt).toBeGreaterThanOrEqual(0);
+    expect(reportAt).toBeGreaterThanOrEqual(0);
+    expect(noticeAt).toBeLessThan(reportAt);
+
+    open();
+    await settle();
+    await s.pool.stop();
+  });
+
+  it('⭐ 配達済みで畳んだ回も計器は回る（成功の報告で下ろした印が、同じ文言の2本目で付き直る）', async () => {
+    const s = await setup(['mgr-a'], { now: () => NOW });
+    await seedStaleSkewPool(s.stores);
+
+    s.fake.push(reached('mgr-a'));
+    await settle();
+    s.fake.push(okReport('mgr-a'));
+    await settle();
+    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-a')?.resetTimeSkewMatch).toBe(
+      undefined,
+    );
+
+    s.fake.push(reached('mgr-a'));
+    await settle();
+
+    expect(await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).toHaveLength(1);
+    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-a')?.resetTimeSkewMatch).toBe(
+      'stale',
+    );
 
     await s.pool.stop();
   });
