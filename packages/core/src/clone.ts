@@ -2726,7 +2726,7 @@ class Clone implements CloneHost {
       this.#reportBodyLimit(),
     );
     this.#stageReportsShown(events, prompt, new Date());
-    await this.#runInternal(prompt, 'normal', attached?.images, originConversationIdOf(origin));
+    await this.#runInternal(prompt, 'normal', attached?.images, origin.conversationId);
   }
 
   // `#handle` の `'external'` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記が抜けて能力の削除になるため
@@ -2780,7 +2780,7 @@ class Clone implements CloneHost {
           ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
           : 'unknown';
       const origin = await this.#managerOrigin(event.managerId);
-      const originId = originConversationIdOf(origin);
+      const originId = origin.conversationId;
       origins.add(originId);
       const sent =
         event.kind === 'permission'
@@ -3126,19 +3126,17 @@ class Clone implements CloneHost {
 
   /** マネージャーの委譲がどの会話で頼まれたか（台帳の `Job.conversationId`）。 */
   async #managerOrigin(managerId: string | undefined): Promise<ManagerOrigin> {
-    if (managerId === undefined) return { kind: 'missing' };
+    if (managerId === undefined) return { kind: 'missing', conversationId: null };
     try {
       const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
-      if (job === undefined) return { kind: 'missing' };
-      return job.conversationId === undefined
-        ? { kind: 'none', ...(job.taskId === undefined ? {} : { taskId: job.taskId }) }
-        : {
-            kind: 'conversation',
-            conversationId: job.conversationId,
-            ...(job.taskId === undefined ? {} : { taskId: job.taskId }),
-          };
+      if (job === undefined) return { kind: 'missing', conversationId: null };
+      return {
+        kind: 'job',
+        conversationId: job.conversationId ?? null,
+        ...(job.taskId === undefined ? {} : { taskId: job.taskId }),
+      };
     } catch (error) {
-      return { kind: 'unreadable', reason: reasonOf(error) };
+      return { kind: 'unreadable', conversationId: null, reason: reasonOf(error) };
     }
   }
 
@@ -5485,12 +5483,7 @@ class Clone implements CloneHost {
             this.#reportBodyLimit(),
           );
           this.#stageReportsShown([event], prompt, new Date());
-          await this.#runInternal(
-            prompt,
-            'normal',
-            attached.images,
-            originConversationIdOf(origin),
-          );
+          await this.#runInternal(prompt, 'normal', attached.images, origin.conversationId);
           return;
         }
         // #4943: 実行許可の確認の、alteroid が組んだ固定の長い段落は、同じ会話の2回目から短い参照にする（日誌の本文は上で全文を書き済み）。質問（担当の言葉）と報告の本文は畳まない
@@ -5509,7 +5502,7 @@ class Clone implements CloneHost {
           this.#reportBodyLimit(),
         );
         this.#stageReportsShown([event], prompt, new Date());
-        await this.#runInternal(prompt, 'normal', [], originConversationIdOf(origin));
+        await this.#runInternal(prompt, 'normal', [], origin.conversationId);
         return;
       }
 
@@ -8979,16 +8972,15 @@ function managerPrompt(
     .join('\n');
 }
 
-/** `missing` / `unreadable` を `none` に畳まない: 起点が在るのに「宛先は自分で選べ」と案内することになるため。 */
+/**
+ * 委譲の起点（台帳の `Job.conversationId` と `Job.taskId`）。
+ * `missing` / `unreadable` を「起点の会話が無い」（`job` の `conversationId: null`）に畳まない: 起点が在るかもしれないのに「起点の会話: 無し」と名乗ることになるため。
+ * `conversationId` はどの種類にも置く: ターンを起点の会話に結ぶ呼び手（`#runInternal` へ渡す4か所）が種類を見ずに読めるようにするため。分からないときは結ばない（`null`）。
+ */
 export type ManagerOrigin =
-  | { kind: 'conversation'; conversationId: string; taskId?: string }
-  | { kind: 'none'; taskId?: string }
-  | { kind: 'missing' }
-  | { kind: 'unreadable'; reason: string };
-
-export function originConversationIdOf(origin: ManagerOrigin): string | null {
-  return origin.kind === 'conversation' ? origin.conversationId : null;
-}
+  | { kind: 'job'; conversationId: string | null; taskId?: string }
+  | { kind: 'missing'; conversationId: null }
+  | { kind: 'unreadable'; conversationId: null; reason: string };
 
 // 「必要なら」で写すかを任せない（#5125 c30-2）: 承認への答えは人間の判断の合図で最も濃いのに、基準として記憶へ写されず、同じ種類の確認を何度も人間へ上げていたため
 // 同じ会話の2回目から参照にする（#5301）。ただし「拒否・条件付き・理由付きの答えは基準として記憶へ書く」「読み取れなければ訊く」は、人間の答えを受けたターンの基本動作なので短い形にも残す。
@@ -9000,16 +8992,15 @@ export const HUMAN_ANSWER_CRITERIA_GUIDE =
 export const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
   '（扱いは前の回答と同じ。会話の上にある）拒否・条件付き・理由付きの答えは、理由と条件を基準として記憶へ書くこと。読み取れなければ人間に訊くこと。';
 
-/** 起点の会話の扱いの説明（会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。 */
-export const ORIGIN_CONVERSATION_GUIDE =
-  '（この委譲はこの会話で頼まれた。人間へ知らせるなら、この会話を起点にした task を task_list で探して `task_say` で書く。無ければ task_add で足す。' +
-  '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、同じ会話に結びつく）';
-export const ORIGIN_CONVERSATION_GUIDE_REF =
+/**
+ * 委譲が task に結び付いていないときの案内（起点の会話の有無によらず同じ。会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。
+ * 起点の会話が無い委譲に別の手順を書かない: task_add はこのターンの起点の会話へ、無ければ新しい会話へ器が結ぶ（`task_add` の `getWorkConversationId() ?? randomUUID()`）ので、クローンの手順は同じになるため（#5469）。
+ */
+export const ORIGIN_NO_TASK_GUIDE =
+  '（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。' +
+  '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）';
+export const ORIGIN_NO_TASK_GUIDE_REF =
   '（扱いは前に出した案内と同じ: task_list で探した task へ task_say で書く。無ければ task_add。知らせるだけの task は done にする）';
-export const ORIGIN_NONE_GUIDE =
-  '（会話の外〔定期の仕事・外部イベント・自発など〕で起こした委譲。人間へ知らせるなら、task_add で足すと新しい会話ができる。そこへ `task_say` で書き、書いたら done にする）';
-export const ORIGIN_NONE_GUIDE_REF =
-  '（会話の外で起こした委譲。知らせるなら task_add で足して task_say で書き、書いたら done にする）';
 
 /** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */
 export const ORIGIN_TASK_GUIDE =
@@ -9029,19 +9020,11 @@ export function describeManagerOrigin(
   fold: FixedTextFold = NO_FOLD,
 ): string {
   switch (origin.kind) {
-    case 'conversation':
+    case 'job':
       return (
-        `起点の会話: ${origin.conversationId}` +
+        `起点の会話: ${origin.conversationId ?? '無し（会話の外で起こした委譲）'}` +
         (origin.taskId === undefined
-          ? fold('origin-conversation', ORIGIN_CONVERSATION_GUIDE, ORIGIN_CONVERSATION_GUIDE_REF)
-          : fold('origin-task', ORIGIN_TASK_GUIDE, ORIGIN_TASK_GUIDE_REF)) +
-        describeOriginTask(origin.taskId)
-      );
-    case 'none':
-      return (
-        '起点の会話: 無し' +
-        (origin.taskId === undefined
-          ? fold('origin-none', ORIGIN_NONE_GUIDE, ORIGIN_NONE_GUIDE_REF)
+          ? fold('origin-no-task', ORIGIN_NO_TASK_GUIDE, ORIGIN_NO_TASK_GUIDE_REF)
           : fold('origin-task', ORIGIN_TASK_GUIDE, ORIGIN_TASK_GUIDE_REF)) +
         describeOriginTask(origin.taskId)
       );

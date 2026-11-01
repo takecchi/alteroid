@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ORIGIN_CONVERSATION_GUIDE, REPORT_FOLLOW_UP_GUIDE } from './clone.js';
+import { ORIGIN_NO_TASK_GUIDE, REPORT_FOLLOW_UP_GUIDE } from './clone.js';
 import { setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 import type { InboxEvent, Job } from './schema.js';
@@ -62,7 +62,7 @@ describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠�
     );
 
     expect(count(merged, 'から届いた。')).toBe(1);
-    expect(count(merged, ORIGIN_CONVERSATION_GUIDE)).toBe(1);
+    expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(1);
     expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(1);
     expect(count(merged, '受け取ってから')).toBe(1);
     for (const managerId of ['mgr-A', 'mgr-B', 'mgr-C']) {
@@ -90,7 +90,7 @@ describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠�
       );
 
       expect(count(merged, 'から届いた。')).toBe(3);
-      expect(count(merged, ORIGIN_CONVERSATION_GUIDE)).toBe(3);
+      expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(3);
       expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(3);
       expect(count(merged, '受け取ってから')).toBe(3);
       expect(count(merged, '受け取り 20')).toBe(0);
@@ -106,7 +106,7 @@ describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠�
     );
 
     expect(count(merged, 'から届いた。')).toBe(3);
-    expect(count(merged, ORIGIN_CONVERSATION_GUIDE)).toBe(3);
+    expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(3);
     expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(3);
     expect(count(merged, '受け取ってから')).toBe(3);
     expect(count(merged, '受け取り 20')).toBe(0);
