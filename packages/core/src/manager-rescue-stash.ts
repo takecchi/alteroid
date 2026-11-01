@@ -69,6 +69,189 @@ export class ManagerRescueStash {
   }
 
   /**
+   * 担当の `rescue_restore` の依頼（#4863 案A その2）。対象の委譲の預かりを選び、添付つきで担当へ送る（クローンの `manager_send` と同じ経路）。
+   * 断るとき・残りがあるときの理由は、同じ届け方で本文だけを送る。
+   */
+  async restore(
+    requester: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'rescue_restore_request' }>,
+  ): Promise<void> {
+    const requesterId = event.managerId;
+    const targetId = event.from ?? requesterId;
+    const tell = async (
+      text: string,
+      attachments?: RunnerAttachment[],
+    ): Promise<ManagerSendResult> =>
+      this.#send(
+        requesterId,
+        text,
+        attachments === undefined || attachments.length === 0 ? {} : { attachments },
+        { mode: 'caller' },
+      );
+    let target = requester;
+    if (targetId !== requesterId) {
+      const found = this.#deps.records.get(targetId) ?? (await this.#deps.load(targetId));
+      // 後継が前任の分を取る。`supersededBy` は後継の起動の後に書かれるので、その間は後継の側の `supersedes` で確かめる
+      const related =
+        found !== null &&
+        (found.job.supersededBy === requesterId ||
+          (found.job.supersededBy === undefined && requester.job.supersedes === targetId));
+      if (found === null || !related) {
+        const why =
+          found === null
+            ? `${targetId} という委譲は居ない`
+            : `${targetId} は、あなた（${requesterId}）が引き継いだ前任ではない`;
+        await tell(
+          `[system] rescue_restore を断った: ${why}。from に渡せるのは、自分が後継として引き継いだ前任の id だけである。` +
+            '何も送っていない。',
+        );
+        await this.#deps.journal({
+          type: 'decision',
+          decision: `[${requesterId}] の rescue_restore（from=${targetId}）を断った。`,
+          grounds: why,
+        });
+        return;
+      }
+      target = found;
+    }
+
+    const stash = target.job.rescueStash ?? [];
+    const wanted = event.paths === undefined ? undefined : event.paths.map(normalizeRescuePath);
+    const matched =
+      wanted === undefined
+        ? [...stash]
+        : stash.filter((e) => {
+            const keys = rescueStashKeys(e);
+            return wanted.some((w) => keys.includes(w));
+          });
+    const unmatched =
+      wanted === undefined
+        ? []
+        : wanted.filter((w) => !stash.some((e) => rescueStashKeys(e).includes(w)));
+    if (matched.length === 0) {
+      await tell(
+        `[system] rescue_restore: ${targetId} の預かりに、依頼のファイルは無かった` +
+          `（預かりは ${String(stash.length)} 件${unmatched.length > 0 ? `。合わなかった指定: ${unmatched.join(', ')}` : ''}）。` +
+          '預かりは猶予（done 7日・failed/stopped 14日）を過ぎると消える。',
+      );
+      await this.#deps.journal({
+        type: 'decision',
+        decision: `[${requesterId}] の rescue_restore（対象 ${targetId}）に送るものが無かった。`,
+        grounds: `預かり ${String(stash.length)} 件、合致 0 件。`,
+      });
+      return;
+    }
+
+    // 1通の個数と合計の上限（`readAttachmentLimits`）に収まる分だけ送り、残りは本文に出す
+    const limits = this.#deps.attachmentLimits ?? readAttachmentLimits().limits;
+    const chosen: { entry: RescueStashEntry; name: string }[] = [];
+    const remaining: RescueStashEntry[] = [];
+    const unsendable: { entry: RescueStashEntry; reason: string }[] = [];
+    let total = 0;
+    for (const entry of matched) {
+      let meta;
+      try {
+        meta = await this.#deps.stores.attachments.getMeta(entry.attachmentId);
+      } catch (error) {
+        unsendable.push({ entry, reason: `控えを読めなかった: ${reasonOf(error)}` });
+        continue;
+      }
+      if (meta === undefined) {
+        unsendable.push({ entry, reason: '預かりの添付が消えている' });
+        continue;
+      }
+      const large = isLargeAttachment(attachmentBatchItemOf(meta), limits);
+      const added = large ? 0 : meta.size;
+      if (!large && meta.size > limits.maxTotalBytes) {
+        unsendable.push({
+          entry,
+          reason: `1通の合計の上限（${String(limits.maxTotalBytes)} バイト）を超える`,
+        });
+        continue;
+      }
+      if (chosen.length >= limits.maxPerMessage || total + added > limits.maxTotalBytes) {
+        remaining.push(entry);
+        continue;
+      }
+      total += added;
+      chosen.push({ entry, name: meta.name });
+    }
+
+    const loaded = await loadManagerAttachments(
+      this.#deps.stores,
+      chosen.map((c) => c.entry.attachmentId),
+      limits,
+    );
+    if (!loaded.ok) {
+      await tell(`[system] rescue_restore: 預かりを読み出せなかった。${loaded.message}`);
+      await this.#deps.journal({
+        type: 'decision',
+        decision: `[${requesterId}] の rescue_restore（対象 ${targetId}）で預かりを読み出せなかった。`,
+        grounds: loaded.message,
+      });
+      return;
+    }
+
+    const lines = chosen.map(
+      ({ entry, name }) =>
+        `- ${rescueStashLocation(entry)}（添付名 ${name}・${String(entry.size)} バイト・sha256 ${entry.sha256.slice(0, 12)}・預けた時刻 ${entry.at}）`,
+    );
+    const body =
+      `[system] rescue_restore: ${targetId} の預かり ${String(chosen.length)} 件を添付で届ける。` +
+      '各ファイルの元の場所は次のとおり。元の場所に別の中身のファイルが既に在るなら、上書きする前に確かめること。\n' +
+      lines.join('\n') +
+      (remaining.length === 0
+        ? ''
+        : `\n\n1通の上限（${String(limits.maxPerMessage)} 個・合計 ${String(limits.maxTotalBytes)} バイト）に収まらなかった残り ${String(remaining.length)} 件は、まだ送っていない: ` +
+          `${remaining.map(rescueStashLocation).join(', ')}。` +
+          `受け取ったら、rescue_restore を paths に残りのパスを渡して呼び直すこと${targetId === requesterId ? '' : `（from: '${targetId}'）`}。`) +
+      (unsendable.length === 0
+        ? ''
+        : `\n\n送れなかった分: ${unsendable.map((u) => `${rescueStashLocation(u.entry)}（${u.reason}）`).join(', ')}。`) +
+      (unmatched.length === 0 ? '' : `\n\n預かりに無かった指定: ${unmatched.join(', ')}。`);
+    const result = await tell(body, loaded.attachments);
+    if (result.outcome !== 'delivered' && result.outcome !== 'answered') {
+      // 添付つきの送信が通らなかったとき（添付の口を名乗らない器など）に担当が黙って待たないよう、本文だけで理由と呼び直しを知らせる（#4874）
+      const reason = result.detail === '' ? '理由の記載なし' : result.detail;
+      await tell(
+        `[system] rescue_restore: 預かり ${String(chosen.length)} 件を送れなかった（結果: ${result.outcome}。${reason}）。` +
+          '添付は何も送っていない。事情が解けたら、paths に必要なパスを渡して' +
+          `rescue_restore を呼び直すこと${targetId === requesterId ? '' : `（from: '${targetId}'）`}。`,
+      );
+      await this.#deps.journal({
+        type: 'decision',
+        decision:
+          `[${requesterId}] の rescue_restore（対象 ${targetId}）で、預かり ${String(chosen.length)} 件を [${requesterId}] へ送れなかった` +
+          `（結果: ${result.outcome}）。`,
+        grounds: `${reason}。本文だけで理由と呼び直しの案内を送った（#4874）。`,
+      });
+      return;
+    }
+    await this.#deps.journal({
+      type: 'decision',
+      decision:
+        `[${requesterId}] の rescue_restore（対象 ${targetId}）で、預かり ${String(chosen.length)} 件を [${requesterId}] へ添付で送った` +
+        `（結果: ${result.outcome}。残り ${String(remaining.length)} 件）。`,
+      grounds:
+        '器が入れ替わった後、担当が預かった未追跡のファイルを取り戻すため（#4863）。パスと件数だけを記録する。',
+    });
+  }
+
+  /** 再開の文・後継の依頼文に足す、預かりの段落（空なら `undefined`）。`runnerId` は担当が走る器。 */
+  note(
+    stash: readonly RescueStashEntry[] | undefined,
+    runnerId: string | undefined,
+    from?: string,
+  ): string | undefined {
+    return rescueStashClause(stash, {
+      restorable:
+        runnerId !== undefined &&
+        this.#deps.runnerHasCapability(runnerId, RUNNER_CAPABILITY_RESCUE_RESTORE),
+      ...(from === undefined ? {} : { from }),
+    });
+  }
+
+  /**
    * runner が写した退避先から取りに行き、保存の印つき（期限で消えない）で添付ストアへ入れ、
    * `job.rescueStash` に載せる。名乗らない runner からは取りに行かない。取れたかどうかに関わらず退避先は消させる
    * （取れなかった分は runner が30分ごとに運び直すので、退避先に積み残さない）。
