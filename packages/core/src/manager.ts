@@ -4092,7 +4092,7 @@ class Pool implements ManagerPool {
 
   /**
    * 材料は `#tokenIdentity`（プロセス内記憶）ではなく `this.#stores.tokens`（DB 正本）から読む: `tokenGeneration` が `undefined` の場面でも独立に判定できるようにするため。
-   * 呼ぶ位置は `case 'usage_notice'` の最後: `await` を足すと並行に走る `report` との勝ち負けが変わり、配達の順が動く。読み取り専用の計器は配達の臨界路の後ろへ置く。
+   * 呼ぶ位置は `UsageReceiver#onUsageNotice` の最後: `await` を足すと並行に走る `report` との勝ち負けが変わり、配達の順が動く。読み取り専用の計器は配達の臨界路の後ろへ置く。
    * 失敗しても投げない: `undefined` は「世代ずれではない」ではなく「判定できなかった」。
    */
   async #rememberResetTimeSkew(event: {
