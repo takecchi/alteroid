@@ -35,7 +35,10 @@ const LIMITS: AttachmentLimits = {
 const BIG = Buffer.alloc(500, 7);
 const SMALL = Buffer.alloc(50, 3);
 
-const CAPABLE = [RUNNER_CAPABILITY_MANAGER_ATTACHMENTS, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE];
+const CAPABLE = [
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
+];
 
 interface FakeOptions {
   capabilities: string[];
