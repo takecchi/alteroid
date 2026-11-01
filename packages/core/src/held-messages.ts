@@ -26,7 +26,7 @@ export const HELD_FORCE_FOLD_AFTER_MS = 15 * 60 * 1000;
  * 鍵の値は持たない（世代・tokenId・状態だけ）。コマンドは伏せ字済み・字数を切ってある。
  */
 export interface StaleHoldStuck {
-  /** 畳めない理由（`#foldStaleTokenSession` の `blockers` をそのまま。それ以前に断った回は断った理由1つ） */
+  /** 畳めない理由（`StaleTokenFold#fold` の `blockers` をそのまま。それ以前に断った回は断った理由1つ） */
   blockers: string[];
   generation?: number;
   heldTokenId?: string;
