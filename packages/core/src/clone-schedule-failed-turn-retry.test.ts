@@ -122,4 +122,32 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
     expect(left?.lastScheduledRunAt).toBeUndefined();
     await t.clone.stop();
   });
+
+  it('後退を使い切っても、最後の間隔（12時間）で同じ回を配り直し続け、動けば元の回として完了する', async () => {
+    const t = await build();
+    let now = DUE;
+    expect(await t.tick(now)).toEqual(['weekly-check']);
+    await waitFor(async () => (await failureLines(t.stores)).length === 1, '失敗 1');
+    const delays = [10, 30, 120, 360, 720];
+    for (const [index, minutes] of delays.entries()) {
+      now += minutes * MIN;
+      expect(await t.tick(now)).toEqual(['weekly-check']);
+      await waitFor(
+        async () => (await failureLines(t.stores)).length === index + 2,
+        `失敗 ${index + 2}`,
+      );
+    }
+    // 使い切った後も、次の周期（1週間後）を待たずに最後の間隔で配り直される
+    now += 720 * MIN;
+    expect(await t.tick(now - MIN)).toEqual([]);
+    t.state.failing = false;
+    expect(await t.tick(now)).toEqual(['weekly-check']);
+    await waitFor(
+      async () => (await t.stores.schedules.get('weekly-check'))?.pendingRun === undefined,
+      '成功して印が消える',
+    );
+    const done = await t.stores.schedules.get('weekly-check');
+    expect(done?.lastScheduledRunAt).toBe(new Date(DUE).toISOString());
+    await t.clone.stop();
+  });
 });
