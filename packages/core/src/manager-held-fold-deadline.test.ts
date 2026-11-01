@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { HELD_FORCE_FOLD_AFTER_MS, createManagerPool } from './manager.js';
+import { HELD_FORCE_FOLD_AFTER_MS } from './held-messages.js';
+import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { createManagerPool, HELD_MESSAGE_TTL_MS } from './manager.js';
+import { HELD_MESSAGE_TTL_MS } from './held-messages.js';
+import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
