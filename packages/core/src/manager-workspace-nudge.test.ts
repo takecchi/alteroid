@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  WORKSPACE_KIND_ENV_KEY,
-  WORKSPACE_REPOSITORY_ENV_KEY,
-  createManagerPool,
-  resolveWorkspacePolicy,
-} from './manager.js';
+import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
@@ -22,6 +17,11 @@ import type {
   WorkspaceLocator,
 } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import {
+  resolveWorkspacePolicy,
+  WORKSPACE_KIND_ENV_KEY,
+  WORKSPACE_REPOSITORY_ENV_KEY,
+} from './workspace-policy.js';
 import { formatWorkspaceCloneHintLines, workspaceCloneHintsFrom } from './workspace-swap-hints.js';
 
 function swappableRunner(runnerId = 'runner-primary') {
