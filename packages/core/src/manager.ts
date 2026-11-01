@@ -8140,97 +8140,69 @@ class Pool implements ManagerPool {
       );
       // 1本が戻せなくても残りを道連れにしない: 投げると走査が止まり、後ろに並んだ委譲は `#records` にすら載らないまま台帳に `running` で残る（呼び出し元は例外を握り潰すので跡はログ1行だけ）。`#resumeOnce` の中の実 I/O は投げうる。
       // 同じ runner への resume が飛んでいる間は `closed` を預ける窓を立て、どの抜け方でも必ず1回閉じる。
-      let windowOpen = false;
-      let windowMoved = false;
+      // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。
+      const windowOpen = !this.#resuming.has(job.id);
       try {
-        // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。
-        if (!this.#resuming.has(job.id)) {
-          this.#sameRunnerResumeWindow.set(job.id, runner.runnerId);
-          windowOpen = true;
-        }
-        let ok: ResumeOutcome;
+        if (windowOpen) this.#sameRunnerResumeWindow.set(job.id, runner.runnerId);
+        let ok: ResumeOutcome | undefined;
+        // 受理された回は `running` を persist した後に閉じる: 処理し直した結果を後から上書きしないため。受理されなかった回と投げた回は `moved` を立てずに閉じる。
         try {
           ok = await this.#resumeOnce(record, runner, nudge);
-        } catch (resumeError) {
-          if (windowOpen) {
-            windowOpen = false;
-            await this.#endRelocationWindow(job.id, false);
-          }
-          throw resumeError;
-        }
-        // 受理された回は `running` を persist した後に閉じる: 処理し直した結果を後から上書きしないため。
-        if (windowOpen) {
           if (ok === 'resumed') {
-            windowMoved = true;
-          } else {
-            windowOpen = false;
-            await this.#endRelocationWindow(job.id, false);
+            // `#resumeOnce` から戻った直後、他の await を挟む前に読む: `#resuming` の関門は既に外れており、await の隙間に別の契機が新しい resume を仕掛けて `record.cwdSwapNotice` を上書きしうる。
+            const swapNotice = cwdSwapNoticeClause(record);
+            // 受理は「戻れた」ではない: 失敗は SSE で追いかけてくるので、無条件に上書きすると書いたばかりの終端状態が `running` へ巻き戻る。
+            if (record.job.status === 'lost') {
+              continue;
+            }
+            // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
+            record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
+            await this.#persist(record);
+            // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
+            if (swapNotice !== undefined) {
+              await runner.send(job.id, swapNotice).catch(() => undefined);
+            }
+            await this.#journalExchange(
+              'outbound',
+              `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
+                (swapNotice === undefined ? '' : ` ${swapNotice}`),
+            );
+            this.#notifyRestored(record, 'resumed', 'runner');
+            resumed.push(
+              summaryOf(
+                record,
+                isLive(record, silent),
+                lostSinceOf(record, silent),
+                vanishedOf(record, registeredRunnerIds),
+                record.sessionMissingSince,
+                record.turnEndedAt,
+                record.turnEndReason,
+                record.turnEndTail,
+                record.toolUseStallAt,
+                record.toolUseStallPending,
+                this.#awaitingBackgroundOf(record.job.id),
+                this.#tokenIdentities.get(record.job.id)?.generation,
+                this.#tokenIdentity?.()?.generation,
+                this.#tokenIdentity !== undefined,
+                this.#resetTimeSkewMatches.get(record.job.id),
+                this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+                undefined,
+              ),
+            );
           }
+        } finally {
+          if (windowOpen) await this.#endRelocationWindow(job.id, ok === 'resumed');
         }
-        if (ok !== 'resumed') {
-          // 貸し出し期限で断られたのは「まだ」: 黙って諦めると次の契機が永久に来ない（台帳では走っているのに誰も走っていない仕事が残る）ので、回数では諦めない梯子へ載せる。他の理由はここでは何もしない。
-          if (ok === 'held-by-lease') {
-            await this.#journal({
-              type: 'decision',
-              decision: leaseRefusalDecision(job.id, record.leaseRefusal),
-              grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
-            });
-            this.#scheduleReattach(runner.runnerId);
-          }
-          continue;
-        }
-        // `#resumeOnce` から戻った直後、他の await を挟む前に読む: `#resuming` の関門は既に外れており、await の隙間に別の契機が新しい resume を仕掛けて `record.cwdSwapNotice` を上書きしうる。
-        const swapNotice = cwdSwapNoticeClause(record);
-        // 受理は「戻れた」ではない: 失敗は SSE で追いかけてくるので、無条件に上書きすると書いたばかりの終端状態が `running` へ巻き戻る。
-        if (record.job.status === 'lost') {
-          if (windowOpen) {
-            windowOpen = false;
-            await this.#endRelocationWindow(job.id, windowMoved);
-          }
-          continue;
-        }
-        // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
-        record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
-        await this.#persist(record);
-        // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
-        if (swapNotice !== undefined) {
-          await runner.send(job.id, swapNotice).catch(() => undefined);
-        }
-        await this.#journalExchange(
-          'outbound',
-          `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
-            (swapNotice === undefined ? '' : ` ${swapNotice}`),
-        );
-        this.#notifyRestored(record, 'resumed', 'runner');
-        resumed.push(
-          summaryOf(
-            record,
-            isLive(record, silent),
-            lostSinceOf(record, silent),
-            vanishedOf(record, registeredRunnerIds),
-            record.sessionMissingSince,
-            record.turnEndedAt,
-            record.turnEndReason,
-            record.turnEndTail,
-            record.toolUseStallAt,
-            record.toolUseStallPending,
-            this.#awaitingBackgroundOf(record.job.id),
-            this.#tokenIdentities.get(record.job.id)?.generation,
-            this.#tokenIdentity?.()?.generation,
-            this.#tokenIdentity !== undefined,
-            this.#resetTimeSkewMatches.get(record.job.id),
-            this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
-            undefined,
-          ),
-        );
-        if (windowOpen) {
-          windowOpen = false;
-          await this.#endRelocationWindow(job.id, windowMoved);
+        // 貸し出し期限で断られたのは「まだ」: 黙って諦めると次の契機が永久に来ない（台帳では走っているのに誰も走っていない仕事が残る）ので、回数では諦めない梯子へ載せる。他の理由はここでは何もしない。
+        if (ok === 'held-by-lease') {
+          await this.#journal({
+            type: 'decision',
+            decision: leaseRefusalDecision(job.id, record.leaseRefusal),
+            grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
+          });
+          this.#scheduleReattach(runner.runnerId);
         }
       } catch (error) {
-        if (windowOpen) {
-          await this.#endRelocationWindow(job.id, windowMoved);
-        }
         if (isFencedRunnerError(error)) {
           // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さず、必ず知らせる。
           await this.#refuseFenced(job.id, error, '起動時の引き取りを止めた', '起動時の引き取り');
@@ -8938,8 +8910,6 @@ class Pool implements ManagerPool {
         if (!relocating) markMissing();
 
         // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`#endRelocationWindow`）。
-        let windowOpen = false;
-        let windowMoved = false;
         try {
           const cause: RestartCause = relocating ? 'relocated' : 'runner';
           const message = restartNudge(
@@ -8956,9 +8926,9 @@ class Pool implements ManagerPool {
           if (ownsWindow) {
             if (relocating) this.#relocatingTo.set(job.id, runnerId);
             else this.#sameRunnerResumeWindow.set(job.id, runnerId);
-            windowOpen = true;
           }
-          let outcome: ResumeOutcome;
+          let outcome: ResumeOutcome | undefined;
+          // 受理された回は台帳を `running` へ戻して persist した後に閉じる: 移送先自身の出来事（closed(failed) や ask）を処理し直した結果を、後から `running` で上書きしないため。受理されなかった回と投げた回は `moved` を立てずに、下の分岐より先に閉じる。
           try {
             outcome = await this.#resumeOnce(
               record,
@@ -8967,21 +8937,32 @@ class Pool implements ManagerPool {
               undefined,
               relocating ? markMissing : undefined,
             );
-          } catch (resumeError) {
-            if (windowOpen) {
-              windowOpen = false;
-              await this.#endRelocationWindow(job.id, false);
-            }
-            throw resumeError;
-          }
-          // 受理された回は台帳を `running` へ戻して persist した後に閉じる: 移送先自身の出来事（closed(failed) や ask）を処理し直した結果を、後から `running` で上書きしないため。
-          if (windowOpen) {
             if (outcome === 'resumed') {
-              windowMoved = true;
-            } else {
-              windowOpen = false;
-              await this.#endRelocationWindow(job.id, false);
+              // `#resumeOnce` から戻った直後、他の await を挟む前に読む（`#restoreJobs` と同じ理由）。
+              const swapNotice = cwdSwapNoticeClause(record);
+              // 受理と「戻れた」を取り違えない。
+              if (record.job.status === 'lost') continue;
+              // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
+              record.sessionMissingSince = undefined;
+              // 由来も一緒に消す: 片方だけ残さない。
+              record.sessionMissingKind = undefined;
+              // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
+              record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
+              this.#relocationRefusals.delete(job.id);
+              await this.#persist(record);
+              // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
+              if (swapNotice !== undefined) {
+                await runner.send(job.id, swapNotice).catch(() => undefined);
+              }
+              await this.#journalExchange(
+                'outbound',
+                `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
+                  (swapNotice === undefined ? '' : ` ${swapNotice}`),
+              );
+              this.#notifyRestored(record, 'resumed', cause);
             }
+          } finally {
+            if (ownsWindow) await this.#endRelocationWindow(job.id, outcome === 'resumed');
           }
           // 引けなかっただけなら `continue` で済ませず予約して挑み直す: 次の名乗り（`hello`）は SSE が繋がったときにしか来ず、永久に来ないことがある。
           if (outcome === 'busy') {
@@ -9050,44 +9031,7 @@ class Pool implements ManagerPool {
             }
             continue;
           }
-          if (outcome !== 'resumed') continue;
-          // `#resumeOnce` から戻った直後、他の await を挟む前に読む（`#restoreJobs` と同じ理由）。
-          const swapNotice = cwdSwapNoticeClause(record);
-          // 受理と「戻れた」を取り違えない。
-          if (record.job.status === 'lost') {
-            if (windowOpen) {
-              windowOpen = false;
-              await this.#endRelocationWindow(job.id, windowMoved);
-            }
-            continue;
-          }
-          // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
-          record.sessionMissingSince = undefined;
-          // 由来も一緒に消す: 片方だけ残さない。
-          record.sessionMissingKind = undefined;
-          // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
-          record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
-          this.#relocationRefusals.delete(job.id);
-          await this.#persist(record);
-          // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
-          if (swapNotice !== undefined) {
-            await runner.send(job.id, swapNotice).catch(() => undefined);
-          }
-          await this.#journalExchange(
-            'outbound',
-            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
-              (swapNotice === undefined ? '' : ` ${swapNotice}`),
-          );
-          this.#notifyRestored(record, 'resumed', cause);
-          if (windowOpen) {
-            windowOpen = false;
-            await this.#endRelocationWindow(job.id, windowMoved);
-          }
         } catch (error) {
-          if (windowOpen) {
-            windowOpen = false;
-            await this.#endRelocationWindow(job.id, windowMoved);
-          }
           this.#reattachBusyRetries.delete(job.id);
           // 一時的にこけたときは自分で予約する: `hello` は SSE が繋がったときにしか来ず、ストリームが安定していれば永久に来ないので、台帳が `running` のまま誰も走っていない仕事が残る。
           if (isFencedRunnerError(error)) {
