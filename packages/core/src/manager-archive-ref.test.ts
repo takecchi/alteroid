@@ -386,6 +386,61 @@ describe('置き場への書き込みの失敗と後始末（切り出しで崩�
     }
   });
 
+  // 退避の id ごとの結果は 512 件まで覚え、古いものから忘れる（`ARCHIVE_REF_OUTCOMES_MAX`）
+  const REMEMBERED = 512;
+  const idOf = (n: number): string => `id-${String(n).padStart(4, '0')}`;
+
+  it('参照の取り寄せの結果は512件を超えたら古いものから忘れ、忘れた id の本文は入れる', async () => {
+    const stored = new Map<string, string>();
+    for (let n = 0; n <= REMEMBERED; n += 1) stored.set(idOf(n), `本文${String(n)}`);
+    const { stores, fake } = await setup(stored);
+    for (let n = 0; n <= REMEMBERED; n += 1) {
+      fake.emit({ type: 'archive', managerId: job.id, ref: { id: idOf(n), chars: 4 } });
+    }
+    await vi.waitFor(async () => expect(await archiveIdsOf(stores)).toHaveLength(REMEMBERED + 1));
+
+    // 最も古い id（0 番）は忘れられている: 本文が来れば入れる。最も新しい id は覚えている: 入れない
+    fake.emit({ type: 'archive', managerId: job.id, id: idOf(0), body: '忘れた id の本文' });
+    fake.emit({
+      type: 'archive',
+      managerId: job.id,
+      id: idOf(REMEMBERED),
+      body: '覚えた id の本文',
+    });
+    const ids = await settleWith(stores, fake, REMEMBERED + 3);
+    const reads = await Promise.all(ids.map((id) => stores.archive.read(id)));
+    const texts = reads.map((read) => (read.kind === 'body' ? read.body : undefined));
+    expect(texts).toContain('忘れた id の本文');
+    expect(texts).not.toContain('覚えた id の本文');
+  });
+
+  it('本文で届いた id は512件を超えたら古いものから忘れ、忘れた id への参照の取り寄せが「無い」で落ちたら跡を残す', async () => {
+    const lines: string[] = [];
+    setStderrSinkForTesting((line) => lines.push(line));
+    try {
+      const { stores, fake } = await setup(new Map());
+      for (let n = 0; n <= REMEMBERED; n += 1) {
+        fake.emit({ type: 'archive', managerId: job.id, id: idOf(n), body: `本文${String(n)}` });
+      }
+      await vi.waitFor(async () => expect(await archiveIdsOf(stores)).toHaveLength(REMEMBERED + 1));
+
+      // 覚えている id（最も新しい）への参照が落ちても跡は出ない
+      fake.emit({ type: 'archive', managerId: job.id, ref: { id: idOf(REMEMBERED), chars: 4 } });
+      await settleWith(stores, fake, REMEMBERED + 2);
+      expect(lines.join('')).not.toContain('トランスクリプトの退避');
+
+      // 忘れた id（最も古い）への参照が落ちたら、落とした扱いにして跡を残す
+      fake.emit({ type: 'archive', managerId: job.id, ref: { id: idOf(0), chars: 4 } });
+      await vi.waitFor(() =>
+        expect(
+          lines.some((line) => line.includes('トランスクリプトの退避') && line.includes(idOf(0))),
+        ).toBe(true),
+      );
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+  });
+
   it('本文も参照も無い退避の出来事は、置き場へ入れず、跡を残す', async () => {
     const lines: string[] = [];
     setStderrSinkForTesting((line) => lines.push(line));
