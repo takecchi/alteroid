@@ -12217,7 +12217,7 @@ class Pool implements ManagerPool {
   async #ignoreIfMovedAway(
     record: ManagerRecord,
     fromRunnerId: string,
-    event: RunnerEvent,
+    event: Extract<RunnerEvent, { managerId: string }>,
   ): Promise<boolean> {
     if (!this.#movedAwayFrom(record, fromRunnerId)) return false;
     const dropped = await this.#droppedReportFiles(event, fromRunnerId);
