@@ -122,6 +122,8 @@ import { describeMcpStatusForJournal } from './mcp-status-journal.js';
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
+import { PushLedger, type RunnerPushHealth } from './push-ledger.js';
+export type { RunnerPushHealth, RunnerPushOutcome } from './push-ledger.js';
 import type { CredentialService } from './credential-service.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { McpServerService } from './mcp-server-service.js';
@@ -707,57 +709,6 @@ export interface RunnerManagerEntry {
   activeTokenGeneration?: number;
   /** 同じ理由でここにも運ぶ（運ばないと3つの理由が `runner_list` でだけ「欄が消える」に潰れる）。 */
   tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
-}
-
-/** プロセス内の記憶で、デーモンを作り直せば消える（押し込みは繋ぎ直しのたびにやり直す）。 */
-export interface RunnerPushOutcome {
-  status: 'ok' | 'failed';
-  at: string;
-  /** 失敗の理由（原文。言い換えない）。 */
-  error?: string;
-}
-
-/**
- * 3つの押し込みは互いに独立して落ちる（`#pushSpecs` の doc）ので1つの状態へ畳まない:
- * 「どれが原因か」が見えなくなる。まだ試みていない欄は省き、`undefined` を「成功した」の
- * 既定値で埋めない（取れない軸に0の行を作らない）。
- */
-export interface RunnerPushHealth {
-  profile?: RunnerPushOutcome;
-  credentials?: RunnerPushOutcome;
-  agentToken?: RunnerPushOutcome;
-  mcpServers?: RunnerPushOutcome;
-  plugins?: RunnerPushOutcome;
-  /** 委譲先の許可規則（#4952）。 */
-  permissionRules?: RunnerPushOutcome;
-}
-
-/** `#pushSetting` が見る、置く種類1つぶんの違い（#5871）。`ManagerPool#pushSpecs` が表にする。 */
-interface PushSpec {
-  readonly kind: keyof RunnerPushHealth;
-  /** `undefined` はその口を配線していない種類で、何もしない。返すのは「runner が断った」とき（投げずに失敗を報せる口）の理由と日誌の本文で、受け入れられたら `undefined`。 */
-  readonly sync: ((runner: RunnerClient) => Promise<PushRefusal | undefined>) | undefined;
-  /** 呼びが投げたときの日誌の本文。 */
-  readonly thrown: (runnerId: string, reason: string) => string;
-}
-
-/** 結果を読まない種類（呼んで待つだけ。断りは投げて知らせる）の `sync`。`undefined` はその口を配線していない種類。 */
-function viaSync(
-  service: { syncRunner(runner: RunnerClient): Promise<unknown> } | undefined,
-): PushSpec['sync'] {
-  return service === undefined
-    ? undefined
-    : async (runner) => {
-        await service.syncRunner(runner);
-        return undefined;
-      };
-}
-
-interface PushRefusal {
-  /** 帳面（`RunnerPushOutcome.error`）へ書く理由。 */
-  readonly error: string;
-  /** 日誌の本文（接頭辞は `#journalPushFailure` が付ける）。 */
-  readonly body: string;
 }
 
 /**
@@ -1487,19 +1438,6 @@ const ARCHIVE_FETCH_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 
  */
 const MIRROR_APPEND_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000];
 
-/** **能力の上限ではなく、混雑を作らないための間隔である。** 繋がったままの runner へ繋ぎ直しを待たずに挑み直す梯子。 */
-const PUSH_RETRY_BASE_MS = 2_000;
-const PUSH_RETRY_MAX_MS = 60_000;
-
-/**
- * 既定の `JOURNAL_FOLD_IDLE_GAP_MS`（60秒）は使えない: 挑み直しは `PUSH_RETRY_MAX_MS`（60秒）で頭打ちなので、
- * 定常の空きが60秒を少し超え、毎回「途切れた」と判定されて何も畳まれない。
- */
-export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
-
-/** 既定（5分）だと60秒間隔の反復は5件ごとに要約が出て、行数が 1/5 にしかならない。 */
-const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
-
 /**
  * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS` と同じ値だが共有しない: `tools.ts` が
  * `manager.ts` を import する向きを逆にしないため。実測に基づく値ではない。
@@ -2049,12 +1987,7 @@ class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
-  readonly #profile: ProfileService | undefined;
-  readonly #credentials: CredentialService | undefined;
-  readonly #mcpServers: McpServerService | undefined;
   readonly #codexAuth: CodexAuthRunnerSync | undefined;
-  readonly #plugins: PluginDistributionService | undefined;
-  readonly #permissionRules: DelegatedPermissionRuleService | undefined;
   readonly #records = new Map<string, ManagerRecord>();
   /** **器の時計を直に読まない**（時計を渡せないと「猶予の中では奪わない」を確かめる試験が書けない）。 */
   readonly #now: () => number;
@@ -2101,7 +2034,6 @@ class Pool implements ManagerPool {
   readonly #tokenIdentity:
     (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
   readonly #tokenAvailability: ManagerPoolOptions['tokenAvailability'];
-  readonly #syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
   readonly #onWorkerToolEvent: ((event: WorkerToolEvent) => void) | undefined;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
@@ -2374,7 +2306,7 @@ class Pool implements ManagerPool {
   readonly #ambiguousRunnersNotified = new Set<string>();
   /** 弱参照なのは、名簿から外れた runner をここが握り続けないため。 */
   readonly #connections = new WeakMap<RunnerClient, Promise<void>>();
-  readonly #pushHealth = new Map<string, RunnerPushHealth>();
+  readonly #pushLedger: PushLedger;
   /** 消さない: 器が入れ替わっても次の `session` が上書きし、`at` が観測の古さを名乗る。 */
   readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
   /**
@@ -2384,11 +2316,7 @@ class Pool implements ManagerPool {
   readonly #pluginLoadDigests = new Map<string, string>();
   /** `#pluginLoadDigests` と同じ形・同じ理由で、接続できていない MCP サーバの組の署名を持つ。全部つながったら消す（次の失敗は書き直す）。 */
   readonly #mcpStatusDigests = new Map<string, string>();
-  /** `#reattachTimers` とは別: あちらは繋ぎ直し（`hello` を待つ）で、こちらは繋がったままの runner へ自分から挑み直す。 */
-  readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
-  readonly #pushRetryDelays = new Map<string, number>();
-  readonly #pushFailureFolds = new Map<string, JournalFoldWindow>();
   /**
    * 古い鍵の done へ本文を断った decision の、最後に書いた本文（decision と grounds）。managerId ごと（#4982）。
    * 見回りの届け直しが同じ判定をやり直しただけの回に、同じ decision を書き直さないために使う。預かりが届いた・捨てた・担当を外した時点で消す。
@@ -2502,12 +2430,25 @@ class Pool implements ManagerPool {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
-    this.#profile = profile;
-    this.#credentials = credentials;
-    this.#mcpServers = mcpServers;
-    this.#plugins = plugins;
-    this.#permissionRules = permissionRules;
     this.#codexAuth = codexAuth;
+    this.#now = now ?? (() => Date.now());
+    this.#pushLedger = new PushLedger({
+      services: {
+        profile,
+        credentials,
+        mcpServers,
+        plugins,
+        permissionRules,
+        codexAuth,
+        syncRunnerToken,
+      },
+      runners,
+      journal: (entry) => this.#journal(entry),
+      now: () => this.#now(),
+      stopped: () => this.#stopped,
+      pendingPush: (runnerId, runner) =>
+        this.#reattachPushes.get(runnerId) ?? this.#connections.get(runner),
+    });
     for (const [kind, source] of [
       ['permissionRules', permissionRules],
       ['profile', profile],
@@ -2517,11 +2458,11 @@ class Pool implements ManagerPool {
       ['agentToken', agentTokenPushes],
     ] as const) {
       const unsubscribe = source?.onPushed?.((results, scope?: { unnamed: true }) =>
-        this.#recordDirectPushResults(
+        this.#pushLedger.recordDirectPushResults(
           kind,
           // 名指せなかった失敗は、この manager が知っている runner（帳面に載っている runner）全部の失敗として記録する。
           scope?.unnamed === true
-            ? [...this.#pushHealth.keys()].map((runnerId) => ({
+            ? this.#pushLedger.knownRunnerIds().map((runnerId) => ({
                 runnerId,
                 ok: false,
                 error: results[0]?.error,
@@ -2531,7 +2472,6 @@ class Pool implements ManagerPool {
       );
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
-    this.#now = now ?? (() => Date.now());
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
     this.#tokenSavingExcerpt = tokenSavingExcerpt ?? resolveTokenSavingExcerpt();
     this.#synthesizedNoticeWindowMs =
@@ -2543,7 +2483,6 @@ class Pool implements ManagerPool {
     this.#tokenIdentity = tokenIdentity;
     this.#tokenAvailability = tokenAvailability;
     this.#onUsageObservation = onUsageObservation;
-    this.#syncRunnerToken = syncRunnerToken;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
       if (this.#stopped) return;
@@ -4145,7 +4084,7 @@ class Pool implements ManagerPool {
   }
 
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined {
-    return this.#pushHealth.get(runnerId);
+    return this.#pushLedger.healthOf(runnerId);
   }
 
   pluginLoadOf(runnerId: string): RunnerPluginLoadObservation | undefined {
@@ -4193,7 +4132,7 @@ class Pool implements ManagerPool {
       entries.map(async (entry) => {
         const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
         const pushHealth =
-          entry.runnerId === undefined ? undefined : this.#pushHealth.get(entry.runnerId);
+          entry.runnerId === undefined ? undefined : this.#pushLedger.healthOf(entry.runnerId);
         // `probe` を必ず併せて返す: 「頼まれていない」「聞けなかった」「聞いたが失敗した」を同じ `undefined` に潰さない。
         const [credentialsProbed, profileProbed, mcpServersProbed] = await Promise.all([
           probeRunnerFingerprint(client, options.fingerprints, (c) => c.credentials()),
@@ -7349,7 +7288,7 @@ class Pool implements ManagerPool {
     await this.#drainNoticeWindows();
     // 日誌の畳み込みも吐き出す: こちらは日誌のどこにも書かれていない記録そのものを失い、`#retire()` を通らずに止まると畳んだ2件目以降が丸ごと消える。
     this.#flushRateLimitJournalFolds();
-    this.#flushPushFailureFolds();
+    this.#pushLedger.stop();
     this.#unsubscribe();
     for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
     this.#reattachTimers.clear();
@@ -7359,9 +7298,6 @@ class Pool implements ManagerPool {
     this.#resumeConfirmations.clear();
     this.#reattachDelays.clear();
     this.#reattachBusyRetries.clear();
-    for (const timer of this.#pushRetryTimers.values()) clearTimeout(timer);
-    this.#pushRetryTimers.clear();
-    this.#pushRetryDelays.clear();
     this.#unresumable.clear();
     // 閉じる前に受け取る: `runner.close()` が SSE を自分で切るので、待つならこの手前でなければ効かない。
     await this.#awaitRunnerFarewells(options?.farewellDeadlineAt);
@@ -7439,135 +7375,6 @@ class Pool implements ManagerPool {
   // -------------------------------------------------------------------------
 
   /**
-   * runner へ置く設定の表（#5871）。置く種類ごとの違い（呼ぶ口・失敗の文言）だけをここに持ち、成否の記録・日誌・続け方は `#pushSetting` の1本が受け持つ。
-   * 並びは `#pushEnvironmentTo` が使う順そのもの: 鍵を先に降ろす（#4841）。runner はプロファイルを受け取った時点の env（鍵を含む）で評価して固めるので、後に降ろすと `"$GH_TOKEN"` や gh を叩く行が鍵の無い env で評価されたまま残る。
-   * 種類ごとに別の呼びにする: 片方が落ちても片方は降りるべき（プロファイルの評価が落ちた器へ、無関係な鍵まで降りないことを避ける）。
-   * 日誌には値・本文を書かない: 失敗の理由は runner の文言をそのまま運ぶが、各 `parse*` が値を載せない形で作っている（files の中身・規則の command の全文・MCP の値）。
-   * `sync` が無い（その口を配線していない）種類は何もしない。
-   */
-  #pushSpecs(): { readonly ordered: readonly PushSpec[]; readonly agentToken: PushSpec } {
-    const profile = this.#profile;
-    const credentials = this.#credentials;
-    const mcpServers = this.#mcpServers;
-    const plugins = this.#plugins;
-    const permissionRules = this.#permissionRules;
-    const syncRunnerToken = this.#syncRunnerToken;
-    return {
-      ordered: [
-        {
-          kind: 'credentials',
-          // runner が自分で取りに行く形にしない: 取りに行けるなら runner に記憶ストアの鍵があることになる（AGENTS.md「runner に記憶ストアの鍵を足さないこと」）。
-          // プロファイルと別の呼びにする: 1つにまとめると、プロファイルの評価が落ちた器へは無関係な鍵まで降りない。
-          sync: viaSync(credentials),
-          thrown: (runnerId, reason) =>
-            `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reason}`,
-        },
-        {
-          kind: 'profile',
-          // 失敗しても委譲は止めないが、降りていないことは日誌に残す: 黙って古い環境で走ると「鍵が届いていない」のか「権限が足りない」のかを切り分けられない。
-          sync:
-            profile === undefined
-              ? undefined
-              : async (runner) => {
-                  // 更新と同じ列に入れる: 直に読んで直に書くと、更新の最中に古い本文で上書きしうる。
-                  const result = await profile.syncRunner(runner);
-                  if (result === null || result.ok) return undefined;
-                  // `result.output` は日誌へ書かず長さだけを書く: 生の stderr にはシェルが返した行や echo から鍵の値そのものが乗りうり、日誌は永続でクローンも人間も後から読む。
-                  const outputChars = result.output?.length ?? 0;
-                  return {
-                    error: result.error ?? '理由不明',
-                    body:
-                      `${runner.runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
-                      `${result.error ?? '理由不明'}` +
-                      (outputChars === 0
-                        ? ''
-                        : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
-                          '出力は profile_write / PUT /profile/:name で書き直したときの応答で読める）'),
-                  };
-                },
-          thrown: (runnerId, reason) =>
-            `${runnerId} へ実行環境プロファイルを降ろせなかった: ${reason}`,
-        },
-        {
-          kind: 'mcpServers',
-          sync: viaSync(mcpServers),
-          thrown: (runnerId, reason) =>
-            `${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reason}`,
-        },
-        {
-          kind: 'plugins',
-          sync: viaSync(plugins),
-          thrown: (runnerId, reason) =>
-            `${runnerId} へ plugin を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの plugin を持たずに走る）: ${reason}`,
-        },
-        {
-          kind: 'permissionRules',
-          // 委譲先の許可規則（#4952）。
-          sync: viaSync(permissionRules),
-          thrown: (runnerId, reason) =>
-            `${runnerId} へ委譲先の許可規則を降ろせなかった（この runner で起こすマネージャー・作業者には、人間が承認した許可が規則として載っていない。前に降りた一覧が残っていればそれが効いている）: ${reason}`,
-        },
-      ],
-      // 失敗しても委譲は止めない。ただし黙って古いトークンで走らせない: 跡を残す。
-      agentToken: {
-        kind: 'agentToken',
-        sync: viaSync(syncRunnerToken && { syncRunner: syncRunnerToken }),
-        thrown: (runnerId, reason) =>
-          `${runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reason}`,
-      },
-    };
-  }
-
-  /**
-   * 投げ直さない: 委譲経路を日誌の失敗で止めず、応答を受け取って判断し直す相手がここには居ない（tools.ts の `appendJournalOrThrow` とは非対称）。
-   * `this.#journalPushFailure` を経由し、直に `this.#stores.journal.append` を呼ばない: 日誌 append の失敗を配布の失敗として書いてしまううえ、append 自体が落ちると跡が残らない（`#journal` は `self_dropped` へ残す）。
-   */
-  async #pushSetting(spec: PushSpec, runner: RunnerClient): Promise<void> {
-    if (this.#stopped || spec.sync === undefined) return;
-    const runnerId = runner.runnerId;
-    try {
-      const refusal = await spec.sync(runner);
-      if (refusal === undefined) {
-        this.#notePushOutcome(runnerId, spec.kind, { status: 'ok', at: this.#nowIso() });
-        return;
-      }
-      this.#notePushOutcome(runnerId, spec.kind, {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: refusal.error,
-      });
-      await this.#journalPushFailure(runnerId, spec.kind, refusal.body);
-    } catch (error) {
-      this.#notePushOutcome(runnerId, spec.kind, {
-        status: 'failed',
-        at: this.#nowIso(),
-        error: reasonOf(error),
-      });
-      await this.#journalPushFailure(runnerId, spec.kind, spec.thrown(runnerId, reasonOf(error)));
-    }
-  }
-
-  /** 種類を名指しで置き直す（失敗した種類だけを挑み直す `#retryFailedPushes` が使う）。 */
-  async #pushKind(kind: keyof RunnerPushHealth, runner: RunnerClient): Promise<void> {
-    const specs = this.#pushSpecs();
-    const spec = [...specs.ordered, specs.agentToken].find((candidate) => candidate.kind === kind);
-    if (spec !== undefined) await this.#pushSetting(spec, runner);
-  }
-
-  /**
-   * `#connectTo`（繋いだとき）と `#reattach`（繋ぎ直したとき）が共有する、置く並びの全部。表の並び（鍵が先）→ codex 認証 → 認証トークン。
-   * 1つ失敗しても残りは置く（`#pushSetting` は投げない）。
-   * codex 認証の失敗は相手の側が日誌に残す。
-   * 認証トークンを降ろし忘れない: 器が入れ替わっていれば置いた鍵も消えており、器の環境変数（＝回す前のトークン）のまま走るのに、その食い違いは「マネージャーの側からは見えない」。「実害が出にくい」を「要らない」と読まない。
-   */
-  async #pushEnvironmentTo(runner: RunnerClient): Promise<void> {
-    const specs = this.#pushSpecs();
-    for (const spec of specs.ordered) await this.#pushSetting(spec, runner);
-    await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
-    await this.#pushSetting(specs.agentToken, runner);
-  }
-
-  /**
    * 一度きりにしない: 「もう繋いだ」を1つの旗で持つと、後から載った runner の報告も許可確認も永久に届かない。旗は宛先ごとに持つ。
    * 転んだ1台に他を道連れにさせない。選んだ相手に繋がっているかどうかは `start` が別に確かめる。
    */
@@ -7609,8 +7416,8 @@ class Pool implements ManagerPool {
       });
       // 委譲を始める前に環境を整える: 名乗り（`hello`）任せにすると、最初のマネージャーが届く前に走り出し、「たまに鍵が無い」という形で現れる。器が作り直されていれば置いたものは消えている。
       // 鍵を先に降ろす（#4841）: 並びは `#pushSpecs` の表の順。
-      await this.#pushEnvironmentTo(runner);
-      this.#settlePushRetry(runner.runnerId);
+      await this.#pushLedger.pushEnvironmentTo(runner);
+      this.#pushLedger.settleRetry(runner.runnerId);
     })().catch((error: unknown) => {
       this.#connections.delete(runner);
       throw error;
@@ -7692,8 +7499,8 @@ class Pool implements ManagerPool {
       const push = (async () => {
         // 繋ぎ直してきた runner は器ごと入れ替わっていることがあり、置いた鍵とプロファイルは消えているので降ろし直す。
         // 鍵を先に降ろす（#4841）: 並びは `#pushSpecs` の表の順。認証トークンも降ろし忘れない（`#pushEnvironmentTo` の注記）。
-        await this.#pushEnvironmentTo(runner);
-        this.#settlePushRetry(runnerId);
+        await this.#pushLedger.pushEnvironmentTo(runner);
+        this.#pushLedger.settleRetry(runnerId);
       })();
       this.#reattachPushes.set(runnerId, push);
       try {
@@ -10867,72 +10674,6 @@ class Pool implements ManagerPool {
     return denied;
   }
 
-  // 同じ本文が続くあいだは2件目以降を畳む: 直らない障害では挑み直しのたびに同じ行が毎分積まれるため。
-  // 畳むのは日誌の1行だけ。帳面（`#pushHealth`）・挑み直し・クローンへの通知は畳まない。
-  async #journalPushFailure(
-    runnerId: string,
-    kind: keyof RunnerPushHealth,
-    body: string,
-  ): Promise<void> {
-    // 接頭辞は書く箇所の字面に置く（`exchange-kind-coverage.test.ts` の静的検査が読む）。
-    const text = `${EXCHANGE_KIND_FAILURE_PREFIX}${body}`;
-    const key = `${runnerId}\u0000${kind}`;
-    let fold = this.#pushFailureFolds.get(key);
-    if (fold === undefined) {
-      fold = new JournalFoldWindow({
-        idleGapMs: PUSH_FAILURE_FOLD_IDLE_GAP_MS,
-        maxSpanMs: PUSH_FAILURE_FOLD_MAX_SPAN_MS,
-      });
-      this.#pushFailureFolds.set(key, fold);
-    }
-    const folded = fold.observe(text, text, this.#now());
-    if (folded.flush !== undefined) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(folded.flush)}`,
-      });
-    }
-    if (folded.write) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${body}`,
-      });
-    }
-  }
-
-  #flushPushFailureFold(runnerId: string, kind: keyof RunnerPushHealth): void {
-    const key = `${runnerId}\u0000${kind}`;
-    const fold = this.#pushFailureFolds.get(key);
-    if (fold === undefined) return;
-    this.#pushFailureFolds.delete(key);
-    const flushed = fold.flush();
-    if (flushed === undefined) return;
-    void this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
-    });
-  }
-
-  #flushPushFailureFolds(): void {
-    for (const fold of this.#pushFailureFolds.values()) {
-      const flushed = fold.flush();
-      if (flushed === undefined) continue;
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
-      });
-    }
-    this.#pushFailureFolds.clear();
-  }
-
   // 一時障害は「居ない」「空」に倒す（呼び出し側が個別に握り直す必要が無い口）。async にせず元の Promise をそのまま返す: await の回数・順を変えない。
   #runnerOrNull(runnerId: string) {
     return this.#runners.get(runnerId).catch(() => null);
@@ -10944,99 +10685,6 @@ class Pool implements ManagerPool {
 
   #nowIso(): string {
     return new Date(this.#now()).toISOString();
-  }
-
-  // `runnerId` が無い runner には書かない: 名乗る前の runner は `RunnerOverview` にも `runnerId` 無しの行で出るので紐づけようがない。
-  #notePushOutcome(
-    runnerId: string | undefined,
-    kind: keyof RunnerPushHealth,
-    outcome: RunnerPushOutcome,
-  ): void {
-    if (runnerId === undefined) return;
-    if (outcome.status === 'ok') this.#flushPushFailureFold(runnerId, kind);
-    const health = this.#pushHealth.get(runnerId) ?? {};
-    health[kind] = outcome;
-    this.#pushHealth.set(runnerId, health);
-  }
-
-  // 日誌の行はここでは書かない: 即時の配布の失敗を日誌へ残すのは呼び出し元（`app.ts` / `tools.ts`）で、ここでも書くと二重になる。
-  #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins' | 'agentToken' | 'permissionRules',
-    results: readonly { runnerId: string; ok: boolean; error?: string }[],
-  ): void {
-    if (this.#stopped) return;
-    const at = this.#nowIso();
-    for (const result of results) {
-      this.#notePushOutcome(
-        result.runnerId,
-        kind,
-        result.ok
-          ? { status: 'ok', at }
-          : { status: 'failed', at, error: result.error ?? '理由不明' },
-      );
-      this.#settlePushRetry(result.runnerId);
-    }
-  }
-
-  #settlePushRetry(runnerId: string): void {
-    const health = this.#pushHealth.get(runnerId);
-    const stillFailing =
-      health !== undefined && Object.values(health).some((outcome) => outcome?.status === 'failed');
-    if (!stillFailing) {
-      this.#pushRetryDelays.delete(runnerId);
-      return;
-    }
-    this.#schedulePushRetry(runnerId);
-  }
-
-  // 間隔は伸ばすが、挑み直しを諦めない（north_star 禁止2）。
-  #schedulePushRetry(runnerId: string): void {
-    if (this.#stopped) return;
-    if (this.#pushRetryTimers.has(runnerId)) return;
-    const delay = this.#pushRetryDelays.get(runnerId) ?? PUSH_RETRY_BASE_MS;
-    this.#pushRetryDelays.set(runnerId, Math.min(delay * 2, PUSH_RETRY_MAX_MS));
-    const timer = setTimeout(() => {
-      this.#pushRetryTimers.delete(runnerId);
-      if (!this.#stopped) void this.#retryFailedPushes(runnerId);
-    }, delay);
-    timer.unref?.();
-    this.#pushRetryTimers.set(runnerId, timer);
-  }
-
-  // 直っている種類は撒き直さない: 種類ごとに独立して落ちる。
-  // 繋ぎ直し中の押し込みがあれば待つ: 二重に撒くと日誌が無駄に二重の跡を残す。
-  async #retryFailedPushes(runnerId: string): Promise<void> {
-    if (this.#stopped) return;
-    const health = this.#pushHealth.get(runnerId);
-    if (health === undefined) return;
-
-    // 名簿を引けなかったのは一時障害だが、居ないと答えられたのは別（`#reattach` と同じ区別）: 居ない runner は戻ってこないので諦め、一時障害は予約し直す。
-    let lookupFailed = false;
-    const runner = await this.#runners.get(runnerId).catch(() => {
-      lookupFailed = true;
-      return null;
-    });
-    if (runner === null) {
-      if (lookupFailed) this.#settlePushRetry(runnerId);
-      return;
-    }
-
-    const inFlight = this.#reattachPushes.get(runnerId) ?? this.#connections.get(runner);
-    if (inFlight !== undefined) await inFlight.catch(() => undefined);
-    if (this.#stopped) return;
-
-    // 並びは繋いだときと別（既存の順を保つ）。
-    for (const kind of [
-      'profile',
-      'credentials',
-      'agentToken',
-      'mcpServers',
-      'plugins',
-      'permissionRules',
-    ] as const) {
-      if (health[kind]?.status === 'failed') await this.#pushKind(kind, runner);
-    }
-    this.#settlePushRetry(runnerId);
   }
 
   // `ManagerPool#restore()` の living 枝（生きているセッションを引き取るだけの経路）から呼ばない:

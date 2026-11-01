@@ -1,7 +1,8 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PUSH_FAILURE_FOLD_IDLE_GAP_MS, WITHHELD_ENV_KEYS, createManagerPool } from './manager.js';
+import { WITHHELD_ENV_KEYS, createManagerPool } from './manager.js';
+import { PUSH_FAILURE_FOLD_IDLE_GAP_MS } from './push-ledger.js';
 import { createCredentialService } from './credential-service.js';
 import { createProfileService } from './profile-service.js';
 import { createLocalRunner } from './runner-local.js';

@@ -349,14 +349,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#deliverRestoredWindow': 'thinning',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
-    '#flushPushFailureFold': 'thinning',
-    '#flushPushFailureFolds': 'thinning',
     '#flushRateLimitJournalFolds': 'thinning',
     '#flushSynthesizedNoticeFor': 'gauge,thinning',
     '#handleEvent': 'decision,failure,gauge,recovery,reply,thinning',
     '#ignoreIfMovedAway': 'decision',
     '#joinQuotaStopWindow': 'thinning',
-    '#journalPushFailure': 'failure,thinning',
     '#noteAmbiguousResolved': 'recovery',
     '#noteAmbiguousSighting': 'failure',
     '#noteVanishedRunnerGauge': 'gauge',
@@ -376,6 +373,12 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#startAfterSupersedeCheck': 'reply',
     '#usageNoticeMemoryOf': 'thinning',
     abort: 'reply',
+  },
+  // 押し込みの帳面の失敗の日誌（旧 `Pool#journalPushFailure` / `#flushPushFailureFold(s)`）。同じ検査をここへ移した。
+  'push-ledger.ts': {
+    '#flushFailureFold': 'thinning',
+    '#flushFailureFolds': 'thinning',
+    '#journalFailure': 'failure,thinning',
   },
 };
 
@@ -443,7 +446,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 }
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
-  for (const file of ['clone.ts', 'manager.ts']) {
+  for (const file of ['clone.ts', 'manager.ts', 'push-ledger.ts']) {
     const sites = findJournalCallObjects(file);
 
     it(`${file}: 走査が書き込み箇所を1つも見つけられない状態（走査の故障）を通さない`, () => {
