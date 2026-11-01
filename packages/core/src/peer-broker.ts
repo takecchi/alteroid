@@ -15,6 +15,7 @@ import type {
   AgentUserInput,
 } from './agent-session.js';
 import type { AgentProviderId } from './agent-ports.js';
+import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { noteEnvValueNotUsed } from './env-value-not-used.js';
 import { excerptLine } from './excerpt.js';
@@ -769,6 +770,13 @@ class PeerSession {
         await this.#scanWorkdir();
         if (event.failure !== undefined || !event.succeeded) {
           const lines = event.errorLines.length > 0 ? `: ${event.errorLines.join(' / ')}` : '';
+          if (event.failureKind === 'auth') {
+            this.#finishTurn({
+              ok: false,
+              text: `${CODEX_PEER_AUTH_EXPIRED_NOTICE}（peer のターンが失敗した（${event.outcome ?? '失敗'}）${lines}）`,
+            });
+            return;
+          }
           this.#finishTurn({
             ok: false,
             text: `peer のターンが失敗した（${event.outcome ?? '失敗'}）${lines}`,

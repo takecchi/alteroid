@@ -35,9 +35,16 @@ export interface PeerOpening {
   readonly closed: readonly PeerClosed[];
 }
 
+const CODEX_LOGIN_BY_HUMAN = '人間が Web の「設定 — Codex」か `alteroid codex login` で';
+
+/** peer（codex）の認証が切れて落ちたときにマネージャーへ返す案内（ターンの失敗・セッションの失敗で共通）。 */
+export const CODEX_PEER_AUTH_EXPIRED_NOTICE =
+  'peer（codex）の認証が切れている。' +
+  `${CODEX_LOGIN_BY_HUMAN}ログインし直すまで、同じ依頼を繰り返しても失敗する。人間へ知らせて待つこと`;
+
 export const CODEX_PEER_CLOSED_REASON =
   'Codex の資格がこの器に届いていない（ChatGPT ログインも CODEX_API_KEY も無い）。' +
-  '人間が Web の「設定 — Codex」か `alteroid codex login` でログインするか、' +
+  `${CODEX_LOGIN_BY_HUMAN}ログインするか、` +
   '`alteroid credential set CODEX_API_KEY` で鍵を置くと、再起動なしで開く';
 
 /** 届いている資格から、開いている peer と閉じている peer（理由つき）を決める。**純粋関数。** */
