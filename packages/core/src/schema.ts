@@ -1494,7 +1494,7 @@ export const jobSchema = z.object({
   // `pendingFoldNotice` と同じく、実際に届いた回に下ろす。人が止めた場合は担当が起こされないので、ここへは置かずクローンへ知らせる
   pendingPeerCloseNotice: z
     .object({
-      reason: z.enum(['expired', 'replaced', 'shutdown']),
+      reason: z.enum(['expired', 'replaced', 'shutdown', 'failed']),
       // 閉じた peer。`interrupted` は途中で終わった背景ターンの止まりどころの抜粋（伏せ字済み・字数を切ってある）
       peers: z.array(
         z.object({
@@ -1502,7 +1502,7 @@ export const jobSchema = z.object({
           provider: z.string(),
           interrupted: z.string().optional(),
           // この peer を閉じた理由（#4899）。理由の違う peer を1つの知らせに混ぜないため、peer ごとに持つ。欄が無い古い台帳の peer は `reason`（直近の理由）で読む
-          reason: z.enum(['expired', 'replaced', 'shutdown']).optional(),
+          reason: z.enum(['expired', 'replaced', 'shutdown', 'failed']).optional(),
         }),
       ),
       at: isoDateTime,

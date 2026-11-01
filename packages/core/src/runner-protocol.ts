@@ -1133,6 +1133,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   }),
   /**
    * 鍵の付け替えで預けた peer を、担当へ引き継がないまま閉じた（期限・人が止めた・同じ担当の預かり直し・器を畳む。#4885）。
+   * 預けずに peer を閉じた畳み（人・クローンの停止 `stopped`・器の畳み `shutdown`・担当のセッションの終わり `failed`。#6123）でも、
+   * 背景ターン・確認待ちで止まっていた peer が1本以上あったときだけ、同じ形で出す。
    * 背景で走っていたターンは途中で終わっており、担当はそれを知らないので、デーモンが担当の次の起こし直しに添えるかクローンへ知らせる。
    * `interrupted` は止まりどころの抜粋（伏せ字済み・字数を切ってある）。背景ターンが無かった peer には付かない。
    * 判定は `reason` の欄で行い、`note.text` の文言では行わない。
@@ -1140,7 +1142,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('parked_peers_closed'),
     managerId: z.string(),
-    reason: z.enum(['expired', 'stopped', 'replaced', 'shutdown']),
+    reason: z.enum(['expired', 'stopped', 'replaced', 'shutdown', 'failed']),
     peers: z.array(
       z.object({
         id: z.string(),

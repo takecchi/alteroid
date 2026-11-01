@@ -703,6 +703,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const broker = {
       sessionList: () => [],
       backgroundTasks: () => [],
+      pendingApprovals: () => [],
       closeAll: () => undefined,
     } as unknown as ParkedPeers['broker'];
     const notes: string[] = [];
@@ -752,6 +753,86 @@ describe('runner: peer の承認をクローンへ上げる', () => {
   it('対照: 人間・クローンの停止（印なし）では今どおり peer を閉じ、起こし直しても前の peer は無い（#4734）', async () => {
     const { s, replyText } = await idlePeerThenStop(false);
     expect(replyText).toContain('peer セッションは無い');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('⭐ 背景の peer が走っている担当を畳んで（keepPeers 無し・器の畳み）peer を閉じたら、途中で終わった背景ターンを誰かに見える形（note か出来事）で残す', async () => {
+    // 開かないゲート: 背景ターンは走ったまま、止まりどころに来ない
+    const gate = new Promise<void>(() => undefined);
+    const s = await setupPeerCall([], {
+      args: { run_in_background: true },
+      sdk: readingQuery(),
+      gate,
+    });
+    expect(s.firstText).toContain('背景で流し始めた');
+    const peerId = /session_id: (peer-[0-9a-f]+)/.exec(s.firstText)?.[1];
+    expect(peerId).toBeDefined();
+    // 器の畳み（runner shutdown）は keepPeers 無しの停止で、背景の peer を閉じる
+    await s.host.shutdown();
+    const closed = s.events.flatMap((e) => (e.type === 'parked_peers_closed' ? [e] : []));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ managerId: 'mgr-1', reason: 'shutdown' });
+    expect(closed[0]?.peers).toHaveLength(1);
+    expect(closed[0]?.peers[0]?.id).toBe(peerId);
+    expect(closed[0]?.peers[0]?.interrupted).toContain('途中で終わった');
+    await s.client.close();
+  });
+
+  it('⭐ 人間・クローンの停止（keepPeers 無し）で背景の peer を閉じたら、reason=stopped で途中で終わった背景ターンを運ぶ（#6123）', async () => {
+    const gate = new Promise<void>(() => undefined);
+    const s = await setupPeerCall([], {
+      args: { run_in_background: true },
+      sdk: readingQuery(),
+      gate,
+    });
+    await s.host.stop('mgr-1');
+    const closed = s.events.flatMap((e) => (e.type === 'parked_peers_closed' ? [e] : []));
+    expect(closed.map((e) => e.reason)).toEqual(['stopped']);
+    expect(closed[0]?.peers[0]?.interrupted).toContain('途中で終わった');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('⭐ 担当のセッションが落ちて（#finish）背景の peer を閉じたら、reason=failed で途中で終わった背景ターンを運ぶ（#6123）', async () => {
+    let crash = (): void => undefined;
+    const crashed = new Promise<void>((resolve) => {
+      crash = resolve;
+    });
+    const fn = vi.fn(() => {
+      // eslint-disable-next-line require-yield
+      async function* generate(): AsyncGenerator<never, void> {
+        await crashed;
+        throw new Error('SDK が落ちた（試験）');
+      }
+      return Object.assign(generate(), {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    });
+    const sdk = { fn: fn as unknown as typeof sdkQuery, options: () => ({}), inputs: [] };
+    const gate = new Promise<void>(() => undefined);
+    const s = await setupPeerCall([], {
+      args: { run_in_background: true },
+      sdk: sdk as unknown as ReturnType<typeof readingQuery>,
+      gate,
+    });
+    expect(s.firstText).toContain('背景で流し始めた');
+    crash();
+    await waitFor(() => s.events.some((e) => e.type === 'parked_peers_closed'));
+    const closed = s.events.flatMap((e) => (e.type === 'parked_peers_closed' ? [e] : []));
+    expect(closed.map((e) => e.reason)).toEqual(['failed']);
+    expect(closed[0]?.peers[0]?.interrupted).toContain('途中で終わった');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('背景ターンも確認待ちも無い peer だけを閉じるときは、parked_peers_closed を出さない（畳むたびに知らせが出ないように。#6123）', async () => {
+    const s = await setupPeerCall();
+    await s.approve('allow');
+    await waitFor(() => s.decisions.length === 1);
+    await s.host.stop('mgr-1');
+    expect(s.events.some((e) => e.type === 'parked_peers_closed')).toBe(false);
     await s.client.close();
     await s.host.shutdown();
   });

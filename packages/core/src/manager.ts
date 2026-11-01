@@ -1999,6 +1999,7 @@ const PEER_CLOSE_REASON_LABELS = {
   replaced: '同じ担当の peer を預かり直した',
   shutdown: '器を畳んだ',
   stopped: 'ユーザーが止めた',
+  failed: '担当のセッションが終わった（落ちた・失効した）',
 } as const;
 
 type PeerCloseReason = keyof typeof PEER_CLOSE_REASON_LABELS;
@@ -2076,7 +2077,7 @@ function composePeerCloseNotice(notice: PeerCloseNotice): string {
           .map((peer) => `${peer.provider}[${peer.id}] ${peer.interrupted ?? ''}`)
           .join(' / ')}`;
   return (
-    `（alteroid より: 器の入れ替え・期限で、預けていた peer ${String(notice.peers.length)} 本を閉じた` +
+    `（alteroid より: peer ${String(notice.peers.length)} 本を閉じた` +
     `（${PEER_CLOSE_REASON_LABELS[notice.reason]}）。閉じた peer: ${notice.peers
       .map((peer) => `${peer.provider}[${peer.id}]`)
       .join(', ')}${interruptedClause}。` +

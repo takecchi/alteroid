@@ -2327,7 +2327,10 @@ class Host implements RunnerHost {
     await settle(
       'セッションの停止',
       [...this.#sessions.values()].map((session) =>
-        session.stop('runner が停止した。', { captureUnpushedWork: true }),
+        session.stop('runner が停止した。', {
+          captureUnpushedWork: true,
+          peerCloseKind: 'shutdown',
+        }),
       ),
     );
     this.#sessions.clear();
@@ -2371,7 +2374,8 @@ function pickupKey(kind: 'archive' | 'outbox' | 'rescue', managerId: string, id:
  */
 export const PEER_PARK_TTL_MS = 10 * 60_000;
 
-type ParkedPeersCloseKind = 'expired' | 'stopped' | 'replaced' | 'shutdown';
+// `failed` は預かりではなく、担当のセッション自身の終わり（`#finish`）で閉じた peer（#6123）
+type ParkedPeersCloseKind = 'expired' | 'stopped' | 'replaced' | 'shutdown' | 'failed';
 
 /** 預かった peer を閉じた理由（日誌の文）。`parked_peers_closed` の `reason` は種別そのものを運ぶ。 */
 const PARKED_PEERS_CLOSE_REASON: Record<ParkedPeersCloseKind, string> = {
@@ -2379,6 +2383,7 @@ const PARKED_PEERS_CLOSE_REASON: Record<ParkedPeersCloseKind, string> = {
   replaced: '同じ担当の peer を預かり直した',
   expired: `鍵の付け替えで畳んだ担当が ${String(PEER_PARK_TTL_MS / 60_000)} 分戻らなかった`,
   shutdown: '器を畳む',
+  failed: '担当のセッションが終わった（落ちた・失効した）',
 };
 
 const RESOLVED_MEMORY_LIMIT = 512;
@@ -2533,6 +2538,8 @@ export async function closeParkedPeers(
   note: (text: string) => void,
   // 伏せ字（env と vault の値を渡したもの。#4923）。抜粋はこれを通してから切る（伏せ字が先、切り詰めが後）
   redact: (text: string) => string,
+  // 日誌の主語。預かりではなく、いま生きている担当の peer を閉じるとき（#6123）は呼び手が言い換える
+  subject = '預かっていた peer',
 ): Promise<ClosedParkedPeer[]> {
   const { binding, broker } = parked;
   for (const ask of binding.heldAsks.splice(0)) {
@@ -2565,6 +2572,18 @@ export async function closeParkedPeers(
   // 閉じるとき走っていた背景ターンは、閉じた後に止まりどころが届く（`readEvents` が終わる → ターンが終わる → `onBackgroundStop`）。
   // それを `heldStops` へ積ませず、届くまで待って集める（#4885）
   const awaiting = new Set(broker.backgroundTasks().map((task) => task.id.replace(/^peer:/u, '')));
+  // 確認待ちで止まっている peer（背景ではなく、担当が `peer_approve` で答えるのを待っているもの）も、閉じると拒否で終わる。閉じる前に控える（#6123）
+  const liveSessions = broker.sessionList();
+  for (const pending of broker.pendingApprovals()) {
+    if (closed.get(pending.sessionId)?.interrupted !== undefined) continue;
+    const session = liveSessions.find((entry) => entry.id === pending.sessionId);
+    if (session === undefined) continue;
+    closed.set(session.id, {
+      id: session.id,
+      provider: session.provider,
+      interrupted: `確認待ちで止まっていた（approval_id=${pending.approvalId}）`,
+    });
+  }
   let finish = (): void => undefined;
   const collected = new Promise<void>((resolve) => {
     finish = resolve;
@@ -2590,7 +2609,17 @@ export async function closeParkedPeers(
     clearTimeout(timer);
   }
   done = true;
-  note(`預かっていた peer のセッションを閉じた（${reason}）`);
+  // 上限で切ったとき止まりどころが届かなかった背景ターンも、途中で終わったものとして数える（黙って「走っていなかった」にしない）
+  for (const sessionId of awaiting) {
+    const entry = closed.get(sessionId);
+    if (entry !== undefined && entry.interrupted === undefined) {
+      closed.set(sessionId, {
+        ...entry,
+        interrupted: '背景ターンが走っていた（閉じたが、止まりどころは届かなかった）',
+      });
+    }
+  }
+  note(`${subject} のセッションを閉じた（${reason}）`);
   return [...closed.values()];
 }
 
@@ -3178,9 +3207,52 @@ class RunnerSession {
     }
   }
 
+  /**
+   * 預けずに peer を閉じる（#6123）。閉じるとき背景ターン・確認待ちで止まっていた peer があれば、預かりの閉じと同じ `parked_peers_closed` で運ぶ
+   * （担当が起こし直されても、頼んだ peer が途中で終わったと知る手が他に無いため）。走っていなかった peer だけのときは出さない。
+   */
+  #holdPeerNotices(binding: PeerBinding): void {
+    binding.heldStops.unshift(...this.#peerNotices.splice(0).map((n) => n.result));
+  }
+
+  async #closePeers(kind: ParkedPeersCloseKind): Promise<void> {
+    await this.#peerBinding?.rollouts.closeAfterCollecting();
+    const broker = this.#peerBroker;
+    const binding = this.#peerBinding;
+    if (broker === undefined) return;
+    if (binding === undefined) {
+      broker.closeAll();
+      return;
+    }
+    const vaultValues = Object.values(this.#credentials?.values() ?? {});
+    const closed = await closeParkedPeers(
+      { broker, binding },
+      PARKED_PEERS_CLOSE_REASON[kind],
+      (text) => this.#note(text),
+      (text) => redactErrorText(text, process.env, vaultValues),
+      '担当の peer',
+    );
+    if (!closed.some((peer) => peer.interrupted !== undefined)) return;
+    this.#emit({
+      type: 'parked_peers_closed',
+      managerId: this.#id,
+      reason: kind,
+      peers: closed.map((peer) => ({
+        id: peer.id,
+        provider: peer.provider,
+        ...(peer.interrupted === undefined ? {} : { interrupted: peer.interrupted }),
+      })),
+    });
+  }
+
   async stop(
     reason: string,
-    options: { captureUnpushedWork?: boolean; keepPeers?: boolean } = {},
+    options: {
+      captureUnpushedWork?: boolean;
+      keepPeers?: boolean;
+      /** 預けずに peer を閉じるときの理由（`parked_peers_closed.reason`）。既定は `stopped`。 */
+      peerCloseKind?: ParkedPeersCloseKind;
+    } = {},
   ): Promise<void> {
     if (this.#sdkSession.stopped) {
       // 畳み中のものがあれば待ってから返る（2本目は自分では畳まない）: 即座に返すと `stop()` を await した呼び出し元が畳み終わったと思って先へ進むため
@@ -3194,7 +3266,11 @@ class RunnerSession {
 
   async #stopBody(
     reason: string,
-    options: { captureUnpushedWork?: boolean; keepPeers?: boolean } = {},
+    options: {
+      captureUnpushedWork?: boolean;
+      keepPeers?: boolean;
+      peerCloseKind?: ParkedPeersCloseKind;
+    } = {},
   ): Promise<void> {
     this.#sdkSession.markStopped();
     // 預け終えるまでの間に届く背景 peer の止まりどころは、捨てずに預かる（下の `parked = true` で降ろす）
@@ -3202,10 +3278,11 @@ class RunnerSession {
       options.keepPeers === true &&
       this.#peerBroker !== undefined &&
       this.#peerBinding !== undefined;
-    if (parking && this.#peerBinding !== undefined) {
-      this.#peerBinding.holdingStops = true;
+    if (this.#peerBinding !== undefined) {
+      if (parking) this.#peerBinding.holdingStops = true;
       // 確認待ちの間に溜めた知らせは、下の `#settleAll` → `#deliverPeerNotices` が `stopped` で捨てる前に、預かりへ移す（届け先は起こし直した担当）。溜めた順を保つため先頭へ入れる
-      this.#peerBinding.heldStops.unshift(...this.#peerNotices.splice(0).map((n) => n.result));
+      // 預けない畳みでも移す（#6123）: 閉じるときの集め（`closeParkedPeers`）が `parked_peers_closed` の `interrupted` に載せ、起こし直した担当へ届く
+      this.#holdPeerNotices(this.#peerBinding);
     }
 
     // `#settleAll` より前に状態を控える: 控えずに `#status` を読むと確認が解放された後の `running` を報告が名乗ってしまうため
@@ -3237,8 +3314,7 @@ class RunnerSession {
       this.#peerBinding = undefined;
       this.#onPeersParked?.(parked);
     } else {
-      await this.#peerBinding?.rollouts.closeAfterCollecting();
-      this.#peerBroker?.closeAll();
+      await this.#closePeers(options.peerCloseKind ?? 'stopped');
     }
     this.#sdkSession.closeQuery();
     // 生ログの送り出しと報告を `#reader` が終わるまで待つ: `query.close()` の前に読むと CLI が EOF を受けてから書く最後の数行を取りこぼすため
@@ -4752,7 +4828,13 @@ class RunnerSession {
   }
 
   #onPeerBackgroundStop(result: PeerTurnResult): void {
-    if (this.#sdkSession.stopped) return;
+    if (this.#sdkSession.stopped) {
+      // 黙って捨てない（#6123）。本文は載せない（伏せ字を通さない経路のため）
+      this.#note(
+        `畳まれたので、背景の peer（${result.provider}）[${result.sessionId}] の止まりどころを届けられなかった（${result.pendingApproval !== undefined ? '確認待ち' : result.ok ? 'ターンの終わり' : '失敗・セッションの終わり'}）`,
+      );
+      return;
+    }
     const where =
       result.pendingApproval !== undefined
         ? '確認待ちで止まった'
@@ -4992,6 +5074,8 @@ class RunnerSession {
     options: { selfFenced?: true; systemError?: SystemErrorFacts } = {},
   ): Promise<void> {
     this.#sdkSession.markStopped();
+    // 確認待ちの間に溜めた背景 peer の知らせは、下の `#settleAll` が捨てる前に閉じの集めへ移す（#6123）
+    if (this.#peerBinding !== undefined) this.#holdPeerNotices(this.#peerBinding);
     // 量をここでも1行にまとめる: `stop()` は `#finish` を通らず、片方だけにすると存在は残るが量だけが失われ、落ちていることに気づく手がかりが出力に無いため
     noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
     // `close()` より先に読む: 閉じた後の control channel からは何も取れないため
@@ -5003,8 +5087,7 @@ class RunnerSession {
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
     this.#sdkSession.wakeInput();
-    await this.#peerBinding?.rollouts.closeAfterCollecting();
-    this.#peerBroker?.closeAll();
+    await this.#closePeers('failed');
     this.#sdkSession.closeQuery();
     this.#sdkSession.setStatus(status);
     await this.#shipArchive();
