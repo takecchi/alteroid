@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { createManagerPool, probeToolUseStall, probeTurnEnd, type ManagerPool } from './manager.js';
+import { createManagerPool, type ManagerPool } from './manager.js';
+import { probeToolUseStall, probeTurnEnd } from './turn-end-probe.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
