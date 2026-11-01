@@ -800,6 +800,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       crash = resolve;
     });
     const fn = vi.fn(() => {
+      // eslint-disable-next-line require-yield
       async function* generate(): AsyncGenerator<never, void> {
         await crashed;
         throw new Error('SDK が落ちた（試験）');
