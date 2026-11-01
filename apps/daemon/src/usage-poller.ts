@@ -178,14 +178,27 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
         schedule(delay, true, startedAt);
         return;
       }
-      void refresh().then(scheduleAfter);
+      runThenSchedule();
     }, step);
     timer.unref?.();
   };
   const scheduleAfter = (state: AccountUsageState) =>
     schedule(nextInterval(state), waitingForKey(state), Date.now());
 
-  void refresh().then(scheduleAfter);
+  // 投げても次を予約する: `refresh` の頭（`options.env()`・`options.identity()`）が投げると拒否で返り、`.then(scheduleAfter)` だけでは予約が途切れて枠の観測が止まるため。
+  // 直接 `refresh()` を呼んだ呼び手には拒否のまま返す（受けるのは骨組みが起こす回だけ）。
+  const runThenSchedule = () => {
+    void refresh()
+      .catch((error: unknown) => {
+        writeStderrLine(
+          `alteroidd: 枠の観測の回が失敗しました（次の回は予約します）: ${reasonOf(error)}\n`,
+        );
+        return current;
+      })
+      .then(scheduleAfter);
+  };
+
+  runThenSchedule();
 
   return {
     state: () => {

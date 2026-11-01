@@ -1,4 +1,4 @@
-import { notePhase, type ManagerPool } from '@alteroid/core';
+import { notePhase, reasonOf, writeStderrLine, type ManagerPool } from '@alteroid/core';
 
 import { startPeriodicRun } from './periodic-runner.js';
 
@@ -19,6 +19,18 @@ export interface ManagerPoller {
 export function startManagerPolling(options: ManagerPollerOptions): ManagerPoller {
   const interval = options.intervalMs ?? MANAGER_POLL_INTERVAL_MS;
 
+  // 段ごとの直前の失敗の理由（プロセスの中だけ）: 60 秒ごとに同じ失敗を書き積まないため。成功した段は消して、次に落ちたら書く。
+  // 日誌へは書かない: 見回りの失敗で日誌を埋めないため。
+  const lastFailure = new Map<string, string>();
+  const noteFailure = (label: string, error: unknown) => {
+    const reason = reasonOf(error);
+    if (lastFailure.get(label) === reason) return;
+    lastFailure.set(label, reason);
+    writeStderrLine(
+      `alteroidd: 見回りの段 ${label} が失敗しました（次の回も続けます）: ${reason}\n`,
+    );
+  };
+
   // 段ごとに印を打つ（#4485）: 見回りは印の無いまま 60 秒ごとに5段を回すので、どれかの段の同期の処理がループを止めても、
   // 止まった窓の「直前の印」が直前に通った別の出来事（runner の tool_use など）に見えていたため
   const step = (label: string, run: () => Promise<unknown> | undefined): Promise<void> => {
@@ -26,13 +38,19 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     let pending: Promise<unknown> | undefined;
     try {
       pending = run();
-    } catch {
-      // 段の失敗で他の段を止めない（今までの `.catch(() => undefined)` と同じ扱い）
+    } catch (error) {
+      // 段の失敗で他の段を止めない
+      noteFailure(label, error);
       return Promise.resolve();
     }
-    return Promise.resolve(pending)
-      .catch(() => undefined)
-      .then(() => undefined);
+    return Promise.resolve(pending).then(
+      () => {
+        lastFailure.delete(label);
+      },
+      (error: unknown) => {
+        noteFailure(label, error);
+      },
+    );
   };
 
   const probe = (): Promise<void> => {

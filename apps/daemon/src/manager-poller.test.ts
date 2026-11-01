@@ -1,5 +1,5 @@
-import type { ManagerPool } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { setStderrSinkForTesting, type ManagerPool } from '@alteroid/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { startManagerPolling } from './manager-poller.js';
 
@@ -302,5 +302,84 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     expect(calls()).toBeGreaterThanOrEqual(1);
 
     poller.stop();
+  });
+});
+
+describe('見回りの段の失敗は stderr に跡を残す（止めない・間引く）', () => {
+  let lines: string[] = [];
+  beforeEach(() => {
+    lines = [];
+    setStderrSinkForTesting((line) => {
+      lines.push(line);
+    });
+  });
+  afterEach(() => {
+    setStderrSinkForTesting(null);
+  });
+
+  const failuresOf = (label: string) => lines.filter((line) => line.includes(label));
+
+  it('段が投げる（同期）と、段の名前と理由を stderr に1行残し、後ろの段は走る', async () => {
+    const { managers, flushCalls } = fakeManagers(() => {
+      throw new Error('生ログが読めなかった（模擬）');
+    });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    poller.stop();
+
+    expect(failuresOf('turn-ends')).toHaveLength(1);
+    expect(failuresOf('turn-ends')[0]).toContain('生ログが読めなかった（模擬）');
+    expect(flushCalls()).toBeGreaterThanOrEqual(1);
+  });
+
+  it('段が拒否で落ちる（非同期）ときも、stderr に跡を残す', async () => {
+    const { managers } = fakeManagers(
+      () => undefined,
+      () => Promise.reject(new Error('預かった伝言を渡せない（模擬）')),
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    poller.stop();
+
+    expect(failuresOf('withheld-reports')).toHaveLength(1);
+    expect(failuresOf('withheld-reports')[0]).toContain('預かった伝言を渡せない（模擬）');
+  });
+
+  it('同じ失敗が続く間は2回目から書かない。成功で戻り、また落ちたら書く', async () => {
+    let mode: 'fail' | 'ok' = 'fail';
+    const { managers } = fakeManagers(() => {
+      if (mode === 'fail') throw new Error('同じ失敗（模擬）');
+    });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    await poller.refresh();
+    await poller.refresh();
+    expect(failuresOf('turn-ends')).toHaveLength(1);
+
+    mode = 'ok';
+    await poller.refresh();
+    mode = 'fail';
+    await poller.refresh();
+    poller.stop();
+
+    expect(failuresOf('turn-ends')).toHaveLength(2);
+  });
+
+  it('理由が変われば同じ段でも書く', async () => {
+    let n = 0;
+    const { managers } = fakeManagers(() => {
+      n += 1;
+      throw new Error(`失敗${n}（模擬）`);
+    });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    await poller.refresh();
+    poller.stop();
+
+    expect(failuresOf('turn-ends')).toHaveLength(2);
   });
 });
