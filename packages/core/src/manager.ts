@@ -2318,14 +2318,11 @@ class Pool implements ManagerPool {
     // 前任が預かっていた未追跡のファイルがあれば、最初の依頼文の末尾に取り戻しの口を足す（台帳の `request` は元のまま）
     let startRequest = input.request;
     if (input.supersedes !== undefined) {
-      const predecessor =
-        this.#records.get(input.supersedes)?.job ?? (await this.#latestJobOf(input.supersedes));
-      const note = this.#rescueStash.note(
-        predecessor?.rescueStash,
-        runner.runnerId,
+      startRequest = await this.#startRequestWithPredecessorNote(
+        input.request,
         input.supersedes,
+        runner.runnerId,
       );
-      if (note !== undefined) startRequest = `${input.request}\n\n[system] ${note}`;
     }
 
     const { record, lease } = this.#newStartRecord(input, runner, managerId, cwd, now, at);
@@ -2359,6 +2356,17 @@ class Pool implements ManagerPool {
     if (input.supersedes !== undefined)
       await this.#handOverToSuccessor(input.supersedes, managerId);
     return this.#startedSummaryOf(record, requestedCwd);
+  }
+
+  /** 前任が預かっていた未追跡のファイルの取り戻しの口を、最初の依頼文の末尾へ足す（口が無ければ依頼文のまま返す）。 */
+  async #startRequestWithPredecessorNote(
+    request: string,
+    supersedes: string,
+    runnerId: string,
+  ): Promise<string> {
+    const predecessor = this.#records.get(supersedes)?.job ?? (await this.#latestJobOf(supersedes));
+    const note = this.#rescueStash.note(predecessor?.rescueStash, runnerId, supersedes);
+    return note === undefined ? request : `${request}\n\n[system] ${note}`;
   }
 
   /** 新しい委譲の貸し出しと台帳の行を組む（同期。`#records.set` は呼び元）。 */
