@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import type {
@@ -210,6 +210,29 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
     return { stores, runnerA, runnerB, pool, inbox };
   }
 
+  /** 捨てた出来事の日誌の行（外から見える「処理が終わった」印）が現れるまで待つ。実時間では待たない。 */
+  async function waitForExchange(
+    stores: ReturnType<typeof createMemoryStores>,
+    needle: string,
+  ): Promise<void> {
+    await vi.waitFor(async () => {
+      const texts = (await stores.journal.list({ types: ['exchange'] })).map((entry) =>
+        entry.type === 'exchange' ? entry.text : '',
+      );
+      if (!texts.some((text) => text.includes(needle))) {
+        throw new Error(`日誌にまだ現れていない: ${needle}`);
+      }
+    });
+  }
+
+  /** 印が現れた後の残りの非同期の続きを、macrotask 2周ぶん流しきる（メモリの台帳・日誌は実時間を使わない）。 */
+  async function drain(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  const MOVED = '（runner-id 不一致のため無視。いまの宛先は runner-b、この出来事は runner-a から）';
+
   it('runner-b へ移った後に届く runner-a の古い closed は、台帳と貸し出しを巻き戻さない', async () => {
     const { stores, runnerA } = await setupRelocated();
 
@@ -220,9 +243,11 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       status: 'lost',
       reason: 'runner-a が自分で畳んだ（遅延して届いた）',
     });
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForExchange(
+      stores,
+      `${MOVED}runner 側の終了イベント（status=lost）を受け取った: runner-a が自分で畳んだ（遅延して届いた）`,
+    );
+    await drain();
 
     const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
     expect(after?.status).toBe('running');
@@ -242,9 +267,11 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       reason: '前の会話を見つけられなかった（遅延して届いた）',
       recovered: false,
     });
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForExchange(
+      stores,
+      `${MOVED}前のセッション（sess-before-relocate）を開き直せなかった: 前の会話を見つけられなかった（遅延して届いた）`,
+    );
+    await drain();
 
     const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
     expect(after?.status).toBe('running');
@@ -262,7 +289,11 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       text: 'runner-a からの古い報告（遅延して届いた）',
       reportId: 'stale-report-1',
     } as RunnerEvent);
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await waitForExchange(
+      stores,
+      `${MOVED}移った後に届いた古い runner の report を無視した\n\n捨てた報告の本文: runner-a からの古い報告（遅延して届いた）`,
+    );
+    await drain();
     const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
     expect(after?.runnerId).toBe('runner-b');
     expect(after?.status).toBe('running');
@@ -279,7 +310,8 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       summary: 'runner-a の古い確認',
       kind: 'permission',
     } as RunnerEvent);
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await waitForExchange(stores, `${MOVED}移った後に届いた古い runner の ask を無視した`);
+    await drain();
     const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
     expect(after?.status).toBe('running');
     expect(inbox.filter((e) => JSON.stringify(e).includes('古い確認'))).toEqual([]);
@@ -292,14 +324,15 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       managerId: 'mgr-race',
       sessionId: 'sess-stale-from-a',
     } as RunnerEvent);
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await waitForExchange(stores, `${MOVED}移った後に届いた古い runner の session を無視した`);
+    await drain();
     const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
     expect(after?.runnerId).toBe('runner-b');
     expect(after?.sessionId).toBe('sess-before-relocate');
   });
 
   it('runner-b へ移った後に届く runner-a の古い session の pluginLoad は控えない。いまの runner-b のは控える（Issue #3816）', async () => {
-    const { runnerA, runnerB, pool } = await setupRelocated();
+    const { stores, runnerA, runnerB, pool } = await setupRelocated();
     const stale = { plugins: [{ name: 'stale' }], errors: null };
     const current = { plugins: [{ name: 'current' }], errors: null };
     runnerA.emit?.({
@@ -314,7 +347,12 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       sessionId: 'sess-from-b',
       pluginLoad: current,
     } as RunnerEvent);
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    // 古い側は「無視した」の日誌が印、いまの側は控えた結果そのものが印。
+    await waitForExchange(stores, `${MOVED}移った後に届いた古い runner の session を無視した`);
+    await vi.waitFor(() => {
+      if (pool.pluginLoadOf?.('runner-b') === undefined) throw new Error('まだ控えていない');
+    });
+    await drain();
 
     expect(pool.pluginLoadOf?.('runner-a')).toBeUndefined();
     expect(pool.pluginLoadOf?.('runner-b')).toEqual({
@@ -325,14 +363,15 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
   });
 
   it('runner-b へ移った後に届く runner-a の古い settled は、確認の取り下げとして受信箱へ回さない', async () => {
-    const { runnerA, inbox } = await setupRelocated();
+    const { stores, runnerA, inbox } = await setupRelocated();
     const before = inbox.length;
     runnerA.emit?.({
       type: 'settled',
       managerId: 'mgr-race',
       requestId: 'stale-ask-2',
     } as RunnerEvent);
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await waitForExchange(stores, `${MOVED}移った後に届いた古い runner の settled を無視した`);
+    await drain();
     expect(inbox.length).toBe(before);
   });
 
@@ -363,10 +402,11 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
         status: 'done',
         reason: '普通に終わった（runner-a 自身から）',
       });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
+      // 起きること: 台帳が done になるまで、結果そのものを待つ。
+      await vi.waitFor(async () => {
+        const row = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-default-id');
+        if (row?.status !== 'done') throw new Error('台帳がまだ done になっていない');
+      });
       const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-default-id');
       expect(after?.status).toBe('done');
     },
