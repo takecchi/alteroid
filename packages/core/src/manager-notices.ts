@@ -2,7 +2,12 @@ import { redactSecretsInText } from './denial-input-head.js';
 import { reasonOf } from './dropped-record.js';
 import { NOTIFY_REPORT_EXCERPT, excerptLine } from './excerpt.js';
 import { formatDurationMinutes } from './format-elapsed.js';
-import type { ManagerRecord, LeaseRefusalKind, ResumeOutcome } from './manager.js';
+import type {
+  ManagerRecord,
+  ManagerStopActor,
+  LeaseRefusalKind,
+  ResumeOutcome,
+} from './manager.js';
 import type { ManagerReportFiles } from './manager-outbox-fetch.js';
 import type {
   HeldMessage,
@@ -11,6 +16,7 @@ import type {
   LastRescue,
   LastUnpushedWorkObservation,
   RescueStashEntry,
+  TextMarkup,
   WorkspaceLocator,
 } from './schema.js';
 import {
@@ -284,6 +290,44 @@ export function sendFailureDetail(
     '（デーモンにこの2つを区別する材料は無い）。**委譲し直す前に manager_report を見ること** — ' +
     '報告が空でも、生ログまで降りて「生成されたが配られていない」報告を拾う経路がある。'
   );
+}
+
+/** 段E（止めた結果の文）: `abort()` の日誌の detail・クローン/人間へ配る文・本文の印を、引数だけで決める。 */
+export function abortTextsOf(input: {
+  outcome: 'stopped' | 'not_stopped' | 'unknown';
+  stopError: unknown;
+  who: string;
+  reason: string | undefined;
+  by: ManagerStopActor;
+  managerId: string;
+  withheldNote: string;
+}): { detail: string; messageText: string; markup: TextMarkup | undefined } {
+  const { outcome, stopError, who, reason, by, managerId, withheldNote } = input;
+  const stopErrorNote =
+    stopError === undefined ? '' : `（runner.stop() が例外を投げた: ${reasonOf(stopError)}）`;
+  const attemptedBase =
+    reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
+  const stoppedBase =
+    reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
+  const detail =
+    outcome === 'stopped'
+      ? `${stoppedBase}${stopErrorNote}${withheldNote}`
+      : outcome === 'not_stopped'
+        ? `${attemptedBase}runner には ${managerId} のセッションがまだ残っている。止まっていない。${stopErrorNote}`
+        : `${attemptedBase}runner に確認が取れず、止まったかは未確認。${stopErrorNote}`;
+  // outcome ごとに言い分ける: 止まっていないのに「停止させました」と言うと、クローンは止まったつもりで次の判断へ進む。
+  const messageText =
+    outcome === 'stopped'
+      ? `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}${withheldNote}`
+      : outcome === 'not_stopped'
+        ? `${managerId} を${who}が止めようとしましたが、まだ止まっていません` +
+          `（runner にセッションが残っています）。`
+        : `${managerId} を${who}が止めようとしましたが、止まったかどうか確認が取れませんでした。`;
+  // `markup: 'none'` は人間が打った `reason` が実際に `messageText` へ入る回（`outcome === 'stopped'` の人間発）だけに立てる: 文字が1文字も入っていないメッセージに印を立てるのは、その text についての嘘になる。他の `#post` 呼び出し箇所には足さない。
+  // クローン発に `markup: 'markdown'` を立てない: 「まだ決めていない」を `undefined` で残さないと、将来既定が反転したとき、確かめていない推定が方針変更の外へ生き残る。
+  const markup: TextMarkup | undefined =
+    outcome === 'stopped' && by === 'human' && reason !== undefined ? 'none' : undefined;
+  return { detail, messageText, markup };
 }
 
 export type RestartCause = 'daemon' | 'runner' | 'relocated';

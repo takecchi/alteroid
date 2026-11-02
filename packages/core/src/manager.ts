@@ -192,6 +192,7 @@ import { WithheldReportsStore } from './withheld-reports-store.js';
 import { notePhase } from './loop-stall.js';
 import {
   FOLD_NOTICE_COMMANDS_MAX,
+  abortTextsOf,
   composeFoldNotice,
   composePeerCloseNotice,
   composePeerCloseNotices,
@@ -4458,29 +4459,12 @@ class Pool implements ManagerPool {
     reason?: string,
     by: ManagerStopActor = 'human',
   ): Promise<ManagerAbortResult> {
-    await this.#ensureConnected();
+    const target = await this.#resolveAbortTarget(managerId);
+    if ('outcome' in target) return target;
+    const { record, runner } = target;
 
     const who =
       by === 'clone' ? 'クローン' : by === 'auto-fold' ? 'デーモン（pids逼迫の自動畳み）' : '人間';
-
-    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
-    if (!record) {
-      // 読めない形で在る行は「居ない」と言わない。
-      const unreadable = await this.#unreadableRowDetail(managerId);
-      if (unreadable !== undefined) {
-        return {
-          outcome: 'unreadable',
-          detail: `${unreadable}止めていない。行は書き換えていない。`,
-        };
-      }
-      return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
-    }
-
-    const runner = await this.#runnerOf(record);
-    if (!runner) {
-      // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、`app.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
-      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
-    }
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
     const lastReportAtAtStart = record.job.lastReportAt;
@@ -4503,16 +4487,7 @@ class Pool implements ManagerPool {
         record.job.lastReportAt !== lastReportAtAtStart ||
         this.#inputMarks.get(managerId) !== inputMarkAtStart)
     ) {
-      const detail =
-        `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
-        `（status=${record.job.status}）ので取りやめた。止めていない。`;
-      await this.#journal({
-        type: 'decision',
-        decision: `[auto-fold] ${managerId} の自動の畳みを取りやめた（直前に依頼が入った）: ${detail}`,
-        grounds:
-          'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
-      });
-      return { outcome: 'not_stopped', detail };
+      return await this.#cancelAutoFold(managerId, record, who);
     }
     // 読み直しと同じ同期の区間で立てる（間に `await` を挟まない）: 以後の `send()` は従来どおりこの印で断られる。
     if (by === 'auto-fold') record.stopConfirmedAt = this.#nowIso();
@@ -4526,17 +4501,7 @@ class Pool implements ManagerPool {
 
     // 二重の網: 印を立てる前の await の間に `#reattach` が resume を終えていれば印では塞げないので、戻った直後に宛先の食い違いを見る。新しい持ち主に任せず止めた意思を優先し、確かめられなければ「台帳を書かない」側へ合流させる。
     if (outcome === 'stopped' && record.job.runnerId !== runnerIdBeforeConfirm) {
-      const movedRunner = await this.#runnerOf(record);
-      if (movedRunner === null) {
-        outcome = 'unknown';
-        stopError = undefined;
-        sessionGone = undefined;
-      } else {
-        const moved = await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
-        outcome = moved.outcome;
-        stopError = moved.stopError;
-        sessionGone = moved.sessionGone;
-      }
+      ({ outcome, stopError, sessionGone } = await this.#reconfirmAfterMove(record, managerId));
     }
 
     if (outcome !== 'stopped') {
@@ -4544,32 +4509,21 @@ class Pool implements ManagerPool {
       delete record.stopConfirmedAt;
     }
 
-    // `#retire()` で在庫が消えるので、読むのは必ずその前（`WithheldReportsStore#stoppedNote`）。
     let withheldNote = '';
     if (outcome === 'stopped') {
-      record.waiting = [];
-      record.attached = false;
-      record.job.status = 'stopped';
-      this.#workerLimitStopped.delete(managerId);
-      delete record.job.workerLimitStopped;
-      await this.#persist(record);
-      withheldNote = this.#withheld.stoppedNote(managerId);
-      this.#retire(managerId);
+      withheldNote = await this.#settleStoppedRecord(record, managerId);
     }
     // `'not_stopped'` / `'unknown'` のときは台帳を書かない: 生きているかもしれないマネージャーの `waiting` を畳まず、確かめていない状態を確定させない。「止めた」と言えるのは止まったと確かめたときだけ。
 
-    const stopErrorNote =
-      stopError === undefined ? '' : `（runner.stop() が例外を投げた: ${reasonOf(stopError)}）`;
-    const attemptedBase =
-      reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
-    const stoppedBase =
-      reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
-    const detail =
-      outcome === 'stopped'
-        ? `${stoppedBase}${stopErrorNote}${withheldNote}`
-        : outcome === 'not_stopped'
-          ? `${attemptedBase}runner には ${managerId} のセッションがまだ残っている。止まっていない。${stopErrorNote}`
-          : `${attemptedBase}runner に確認が取れず、止まったかは未確認。${stopErrorNote}`;
+    const { detail, messageText, markup } = abortTextsOf({
+      outcome,
+      stopError,
+      who,
+      reason,
+      by,
+      managerId,
+      withheldNote,
+    });
     await this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -4577,18 +4531,6 @@ class Pool implements ManagerPool {
       // `（停止）` はそのまま残す: テストが固定している。`[outcome=...]` は文の解釈なしに grep で数えられるようにする。
       text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] （停止）[outcome=${outcome}] ${detail}`,
     });
-    // outcome ごとに言い分ける: 止まっていないのに「停止させました」と言うと、クローンは止まったつもりで次の判断へ進む。
-    const messageText =
-      outcome === 'stopped'
-        ? `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}${withheldNote}`
-        : outcome === 'not_stopped'
-          ? `${managerId} を${who}が止めようとしましたが、まだ止まっていません` +
-            `（runner にセッションが残っています）。`
-          : `${managerId} を${who}が止めようとしましたが、止まったかどうか確認が取れませんでした。`;
-    // `markup: 'none'` は人間が打った `reason` が実際に `messageText` へ入る回（`outcome === 'stopped'` の人間発）だけに立てる: 文字が1文字も入っていないメッセージに印を立てるのは、その text についての嘘になる。他の `#post` 呼び出し箇所には足さない。
-    // クローン発に `markup: 'markdown'` を立てない: 「まだ決めていない」を `undefined` で残さないと、将来既定が反転したとき、確かめていない推定が方針変更の外へ生き残る。
-    const markup: TextMarkup | undefined =
-      outcome === 'stopped' && by === 'human' && reason !== undefined ? 'none' : undefined;
     // クローン発の停止は受信箱へ配らない: `manager_stop` の戻り値で同じターンに同期的に受け取る内容の真部分集合で新しい事実が無く、`manager_message` は束ねられないので、停止1本ごとにクローンのターン（システムプロンプトの読み直し）を1回焼く。日誌には条件を問わず残る。
     // 人間発は配る: クローンには戻り値が無く、他に知る手段が無い。
     if (by !== 'clone') {
@@ -4596,6 +4538,82 @@ class Pool implements ManagerPool {
     }
 
     return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
+  }
+
+  /** 段A（入口）: 接続を確かめ、台帳の像と宛先の runner を引く。引けなければ断りの結果を返す。 */
+  async #resolveAbortTarget(
+    managerId: string,
+  ): Promise<{ record: ManagerRecord; runner: RunnerClient } | ManagerAbortResult> {
+    await this.#ensureConnected();
+
+    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+    if (!record) {
+      // 読めない形で在る行は「居ない」と言わない。
+      const unreadable = await this.#unreadableRowDetail(managerId);
+      if (unreadable !== undefined) {
+        return {
+          outcome: 'unreadable',
+          detail: `${unreadable}止めていない。行は書き換えていない。`,
+        };
+      }
+      return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
+    }
+
+    const runner = await this.#runnerOf(record);
+    if (!runner) {
+      // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、`app.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
+      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
+    }
+
+    return { record, runner };
+  }
+
+  /** 段B（自動の畳みの取りやめ）: 止める直前に新しい動きが入っていた回を日誌に残し、止めていない結果を返す。条件は呼び元が見る。 */
+  async #cancelAutoFold(
+    managerId: string,
+    record: ManagerRecord,
+    who: string,
+  ): Promise<ManagerAbortResult> {
+    const detail =
+      `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
+      `（status=${record.job.status}）ので取りやめた。止めていない。`;
+    await this.#journal({
+      type: 'decision',
+      decision: `[auto-fold] ${managerId} の自動の畳みを取りやめた（直前に依頼が入った）: ${detail}`,
+      grounds:
+        'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
+    });
+    return { outcome: 'not_stopped', detail };
+  }
+
+  /** 段C（宛先の食い違い）: 委譲が別の runner へ移っていた回に、移った先で止まりを確かめ直す。条件は呼び元が見る。 */
+  async #reconfirmAfterMove(
+    record: ManagerRecord,
+    managerId: string,
+  ): Promise<{
+    outcome: 'stopped' | 'not_stopped' | 'unknown';
+    stopError: unknown;
+    sessionGone: boolean | undefined;
+  }> {
+    const movedRunner = await this.#runnerOf(record);
+    if (movedRunner === null) {
+      return { outcome: 'unknown', stopError: undefined, sessionGone: undefined };
+    }
+    return await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
+  }
+
+  /** 段D（止めた台帳の確定）: 止まったと確かめた回の台帳の整理・保存・在庫の控え・像の片付け。控えた知らせの文を返す。条件は呼び元が見る。 */
+  async #settleStoppedRecord(record: ManagerRecord, managerId: string): Promise<string> {
+    record.waiting = [];
+    record.attached = false;
+    record.job.status = 'stopped';
+    this.#workerLimitStopped.delete(managerId);
+    delete record.job.workerLimitStopped;
+    await this.#persist(record);
+    // `#retire()` で在庫が消えるので、読むのは必ずその前（`WithheldReportsStore#stoppedNote`）。
+    const withheldNote = this.#withheld.stoppedNote(managerId);
+    this.#retire(managerId);
+    return withheldNote;
   }
 
   async stop(options?: ManagerPoolStopOptions): Promise<void> {
@@ -5731,22 +5749,72 @@ class Pool implements ManagerPool {
     // 引けなかったものを「無い」として進めない: 材料無しで resume すると `resume_failed` の `recovered: false` が `lost` に確定し、一時的に DB が読めなかっただけで委譲が恒久に終端する。
     if (material.kind === 'unreadable') return 'unreadable';
 
-    // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
-    const subagents =
+    const { subagents, peers } =
       material.kind === 'loaded' && projectKey !== undefined
-        ? await this.#sessionLoaders.loadSubagents(record.job.id, projectKey, sessionId)
-        : [];
-    // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
-    const peers =
-      material.kind === 'loaded' && projectKey !== undefined
-        ? await this.#sessionLoaders.loadPeers(record.job.id, projectKey, sessionId)
-        : [];
+        ? await this.#loadResumeCompanions(record.job.id, projectKey, sessionId)
+        : { subagents: [], peers: [] };
 
     // チェックポイント1: `#claimForResume` の後・`runner.resume()` の直前に置く。前に置くと確認から呼び出しまでの窓が開くだけで得が無く、呼ぶ前に見送れる回は実 I/O を減らす。
     if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
 
     // 応答の `cwd` と比べる基準は `record.job.cwd`（`undefined` のことがある）ではなくこの値。
     const requestedCwd = cwd ?? runner.workspacePath;
+    const resumed = await this.#issueResume(record, runner, {
+      sessionId,
+      requestedCwd,
+      request,
+      message,
+      attachments,
+      material,
+      subagents,
+      peers,
+    });
+    this.#noteResumedCwd(record, runner, resumed, requestedCwd);
+
+    // チェックポイント2: ここで `record.attached` などを書くと、止めたつもりの委譲が「走っているはず」を名乗ったまま誰にも追われなくなる。
+    // `record.job.status` は書かない（`abort()` が `'stopped'` を書いて `#persist()` 済み）。畳み直せなかったときは、台帳は「止めた」なのに runner にセッションが生き残る最も危ない不一致なので黙らない。
+    if (record.stopConfirmedAt !== undefined) {
+      await this.#settleStoppedAfterResume(record, runner);
+      return 'stopped-meanwhile';
+    }
+
+    this.#recordResumed(record, runner, resumed, material, projectKey);
+    return 'resumed';
+  }
+
+  /** `#resume` の段: 主の記録が戻る回に、作業者（subagents）と peer の記録を引く（呼び元が条件を見てから呼ぶ）。 */
+  async #loadResumeCompanions(
+    managerId: string,
+    projectKey: string,
+    sessionId: string,
+  ): Promise<{
+    subagents: Awaited<ReturnType<SessionLoaders['loadSubagents']>>;
+    peers: Awaited<ReturnType<SessionLoaders['loadPeers']>>;
+  }> {
+    // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
+    const subagents = await this.#sessionLoaders.loadSubagents(managerId, projectKey, sessionId);
+    // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
+    const peers = await this.#sessionLoaders.loadPeers(managerId, projectKey, sessionId);
+    return { subagents, peers };
+  }
+
+  /** `#resume` の段: 世代を下ろして `#restored.begin` を立て、`runner.resume()` を出す（応答が返らない失敗は一覧で確かめ、居なければ `#restored.end` して投げる）。 */
+  async #issueResume(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    args: {
+      sessionId: string;
+      requestedCwd: string;
+      request: string | undefined;
+      message: string | undefined;
+      attachments: RunnerAttachment[] | undefined;
+      material: Awaited<ReturnType<SessionLoaders['loadSession']>>;
+      subagents: Awaited<ReturnType<SessionLoaders['loadSubagents']>>;
+      peers: Awaited<ReturnType<SessionLoaders['loadPeers']>>;
+    },
+  ): Promise<Partial<Awaited<ReturnType<RunnerClient['resume']>>>> {
+    const { sessionId, requestedCwd, request, message, attachments, material, subagents, peers } =
+      args;
     // 出す直前に追っている世代を下ろす: 応答が返るまで（失敗して返らなければその後も）世代の判定はしない。
     delete record.sessionGeneration;
     // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
@@ -5796,6 +5864,16 @@ class Pool implements ManagerPool {
         grounds: `resume の失敗: ${reasonOf(error)}。${runner.runnerId} の一覧にこの委譲が居た`,
       });
     }
+    return resumed;
+  }
+
+  /** `#resume` の段（同期）: 応答の `cwd` が頼んだ値と違えば、台帳の `cwd` と locator を直して `cwdSwapNotice` を立てる。 */
+  #noteResumedCwd(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>,
+    requestedCwd: string,
+  ): void {
     // 応答が返らず引き取った回（`resumed.cwd` が無い）は何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
     // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
     record.cwdSwapNotice = undefined;
@@ -5804,24 +5882,31 @@ class Pool implements ManagerPool {
       record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, resumed.cwd);
       record.cwdSwapNotice = { requested: requestedCwd, actual: resumed.cwd };
     }
+  }
 
-    // チェックポイント2: ここで `record.attached` などを書くと、止めたつもりの委譲が「走っているはず」を名乗ったまま誰にも追われなくなる。
-    // `record.job.status` は書かない（`abort()` が `'stopped'` を書いて `#persist()` 済み）。畳み直せなかったときは、台帳は「止めた」なのに runner にセッションが生き残る最も危ない不一致なので黙らない。
-    if (record.stopConfirmedAt !== undefined) {
-      this.#restored.end(record.job.id);
-      const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
-        record,
-        runner,
-        record.job.id,
-      );
-      if (foldOutcome === 'stopped') {
-        await this.#persist(record);
-      } else {
-        noteResumeAfterStopFoldFailed(record.job.id, foldOutcome);
-      }
-      return 'stopped-meanwhile';
+  /** `#resume` の段: resume の後で止められていた委譲を畳み直す（呼び元が `stopConfirmedAt` を見てから呼ぶ）。 */
+  async #settleStoppedAfterResume(record: ManagerRecord, runner: RunnerClient): Promise<void> {
+    this.#restored.end(record.job.id);
+    const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
+      record,
+      runner,
+      record.job.id,
+    );
+    if (foldOutcome === 'stopped') {
+      await this.#persist(record);
+    } else {
+      noteResumeAfterStopFoldFailed(record.job.id, foldOutcome);
     }
+  }
 
+  /** `#resume` の段（同期）: 受理された resume を台帳と pool の欄へ写す。await が無い並びなので途中で切らない。 */
+  #recordResumed(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>,
+    material: Awaited<ReturnType<SessionLoaders['loadSession']>>,
+    projectKey: string | undefined,
+  ): void {
     record.attached = true;
     const previousRunnerId = record.job.runnerId;
     record.job.runnerId = runner.runnerId;
@@ -5854,7 +5939,6 @@ class Pool implements ManagerPool {
       resumed.reusedLiveSession !== true;
     this.#unresumable.delete(record.job.id);
     this.#resumedCount.set(record.job.id, (this.#resumedCount.get(record.job.id) ?? 0) + 1);
-    return 'resumed';
   }
 
   #swapNote(runnerId: string, before: string | undefined): string {
