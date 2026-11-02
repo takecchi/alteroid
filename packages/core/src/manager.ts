@@ -4438,16 +4438,7 @@ class Pool implements ManagerPool {
         record.job.lastReportAt !== lastReportAtAtStart ||
         this.#inputMarks.get(managerId) !== inputMarkAtStart)
     ) {
-      const detail =
-        `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
-        `（status=${record.job.status}）ので取りやめた。止めていない。`;
-      await this.#journal({
-        type: 'decision',
-        decision: `[auto-fold] ${managerId} の自動の畳みを取りやめた（直前に依頼が入った）: ${detail}`,
-        grounds:
-          'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
-      });
-      return { outcome: 'not_stopped', detail };
+      return await this.#cancelAutoFold(managerId, record, who);
     }
     // 読み直しと同じ同期の区間で立てる（間に `await` を挟まない）: 以後の `send()` は従来どおりこの印で断られる。
     if (by === 'auto-fold') record.stopConfirmedAt = this.#nowIso();
@@ -4559,6 +4550,24 @@ class Pool implements ManagerPool {
     }
 
     return { record, runner };
+  }
+
+  /** 段B（自動の畳みの取りやめ）: 止める直前に新しい動きが入っていた回を日誌に残し、止めていない結果を返す。条件は呼び元が見る。 */
+  async #cancelAutoFold(
+    managerId: string,
+    record: ManagerRecord,
+    who: string,
+  ): Promise<ManagerAbortResult> {
+    const detail =
+      `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
+      `（status=${record.job.status}）ので取りやめた。止めていない。`;
+    await this.#journal({
+      type: 'decision',
+      decision: `[auto-fold] ${managerId} の自動の畳みを取りやめた（直前に依頼が入った）: ${detail}`,
+      grounds:
+        'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
+    });
+    return { outcome: 'not_stopped', detail };
   }
 
   async stop(options?: ManagerPoolStopOptions): Promise<void> {
