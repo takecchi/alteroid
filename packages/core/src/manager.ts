@@ -4410,29 +4410,12 @@ class Pool implements ManagerPool {
     reason?: string,
     by: ManagerStopActor = 'human',
   ): Promise<ManagerAbortResult> {
-    await this.#ensureConnected();
+    const target = await this.#resolveAbortTarget(managerId);
+    if ('outcome' in target) return target;
+    const { record, runner } = target;
 
     const who =
       by === 'clone' ? 'クローン' : by === 'auto-fold' ? 'デーモン（pids逼迫の自動畳み）' : '人間';
-
-    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
-    if (!record) {
-      // 読めない形で在る行は「居ない」と言わない。
-      const unreadable = await this.#unreadableRowDetail(managerId);
-      if (unreadable !== undefined) {
-        return {
-          outcome: 'unreadable',
-          detail: `${unreadable}止めていない。行は書き換えていない。`,
-        };
-      }
-      return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
-    }
-
-    const runner = await this.#runnerOf(record);
-    if (!runner) {
-      // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、`app.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
-      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
-    }
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
     const lastReportAtAtStart = record.job.lastReportAt;
@@ -4548,6 +4531,34 @@ class Pool implements ManagerPool {
     }
 
     return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
+  }
+
+  /** 段A（入口）: 接続を確かめ、台帳の像と宛先の runner を引く。引けなければ断りの結果を返す。 */
+  async #resolveAbortTarget(
+    managerId: string,
+  ): Promise<{ record: ManagerRecord; runner: RunnerClient } | ManagerAbortResult> {
+    await this.#ensureConnected();
+
+    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+    if (!record) {
+      // 読めない形で在る行は「居ない」と言わない。
+      const unreadable = await this.#unreadableRowDetail(managerId);
+      if (unreadable !== undefined) {
+        return {
+          outcome: 'unreadable',
+          detail: `${unreadable}止めていない。行は書き換えていない。`,
+        };
+      }
+      return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
+    }
+
+    const runner = await this.#runnerOf(record);
+    if (!runner) {
+      // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、`app.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
+      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
+    }
+
+    return { record, runner };
   }
 
   async stop(options?: ManagerPoolStopOptions): Promise<void> {
