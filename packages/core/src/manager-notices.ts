@@ -1,10 +1,12 @@
 import { redactSecretsInText } from './denial-input-head.js';
-import { excerptLine } from './excerpt.js';
+import { reasonOf } from './dropped-record.js';
+import { NOTIFY_REPORT_EXCERPT, excerptLine } from './excerpt.js';
 import { formatDurationMinutes } from './format-elapsed.js';
 import type { ManagerRecord, LeaseRefusalKind, ResumeOutcome } from './manager.js';
 import type { ManagerReportFiles } from './manager-outbox-fetch.js';
 import type {
   HeldMessage,
+  Job,
   JobStatus,
   LastRescue,
   LastUnpushedWorkObservation,
@@ -624,3 +626,69 @@ export interface DroppedReportFiles {
 }
 
 export const NO_DROPPED_FILES: DroppedReportFiles = { text: '', attachments: {} };
+
+/** `依頼:` を載せず、直近の報告も全文ではなく `excerptLine` の短い抜粋だけにする: 依頼文はクローン自身が書いたもので、中身は `manager_report` でいつでも読める。 */
+export function notifyExcerptLines(job: Pick<Job, 'id' | 'lastReport'>): string[] {
+  return [
+    job.lastReport === undefined
+      ? ''
+      : `直近の報告（抜粋）: ${excerptLine(job.lastReport, NOTIFY_REPORT_EXCERPT)}`,
+    `続きを読むなら manager_report managerId=${job.id}（直近の報告の全文） / ` +
+      `manager_report managerId=${job.id} part=request（依頼文）。`,
+  ];
+}
+
+/**
+ * 戻せなかった委譲の知らせ。`journal` は日誌の行（種別の接頭辞と `[id]` は呼ぶ側が前に付ける）、`notice` は合流窓へ積む本文。
+ * 黙って `running` のまま置かない: 再試行しても同じ答えが返る失敗なので、人間とクローンに見えるようにするのが唯一の出口。
+ */
+export function unresumableNotice(
+  job: Pick<Job, 'id' | 'cwd' | 'lastReport'>,
+  error: unknown,
+  cause: 'runner' | 'session',
+): { journal: string; notice: string } {
+  const journal =
+    '（戻せなかった）' +
+    (cause === 'session'
+      ? '前のセッションから戻せなかった（SDK に会話が残っていない）。'
+      : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
+    ` 理由: ${reasonOf(error)}`;
+  const notice = [
+    cause === 'session'
+      ? 'この委譲を前のセッションから戻せなかった（SDK に会話が残っていない）。' +
+        '生ログも預かっていないので、続きの材料が無い。'
+      : 'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
+    `理由: ${reasonOf(error)}`,
+    `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
+    ...notifyExcerptLines(job),
+    '',
+    // 「成果が無い」と言わない: 観測したのは戻れなかったことだけで、PR もブランチも見に行かない（落ちる直前にマージまで済ませていた、が実際に起きている）。
+    '同じ命令を投げ直しても同じ答えが返る種類の失敗なので、自動では再試行しない。' +
+      'ただし**この失敗は「仕事が終わっていない」ことの証拠ではない** — ' +
+      '落ちる前に成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）。' +
+      '`manager_start` で起こし直す前に、そこを確かめること。',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+  return { journal, notice };
+}
+
+/** 生ログから作り直して続けた回の知らせの本文。日誌と合流窓へ同じ文字列を渡すため、組み立てはここ1箇所に置く。 */
+export function resumeFallbackBody(
+  job: Pick<Job, 'id' | 'lastReport'>,
+  sessionId: string,
+  reason: string,
+): string {
+  return [
+    `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
+      '新しいセッションを起こして続けさせた。',
+    `理由: ${reason}`,
+    ...notifyExcerptLines(job),
+    '',
+    'マネージャーが持っているのは記録から読み取れる範囲だけである。' +
+      '前のセッションで口頭で足した細かい指示は効いていないと考えて、' +
+      '必要なら `manager_send` で言い直すこと。',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+}
