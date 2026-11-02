@@ -5693,55 +5693,16 @@ class Pool implements ManagerPool {
 
     // 応答の `cwd` と比べる基準は `record.job.cwd`（`undefined` のことがある）ではなくこの値。
     const requestedCwd = cwd ?? runner.workspacePath;
-    // 出す直前に追っている世代を下ろす: 応答が返るまで（失敗して返らなければその後も）世代の判定はしない。
-    delete record.sessionGeneration;
-    // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
-    this.#restored.begin(record.job.id, runner.runnerId);
-    // 応答が返らず一覧で引き取った回（下の `resumed = {}`）だけは、runner が開いた値を持たない
-    let resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>;
-    try {
-      resumed = await runner.resume({
-        managerId: record.job.id,
-        sessionId,
-        cwd: requestedCwd,
-        request: request ?? record.job.summary,
-        ...(message === undefined ? {} : { message }),
-        ...(message === undefined || attachments === undefined || attachments.length === 0
-          ? {}
-          : { attachments }),
-        ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
-        ...(subagents.length === 0 ? {} : { subagents }),
-        ...(peers.length === 0 ? {} : { peers }),
-        ...(record.job.lease === undefined
-          ? {}
-          : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
-      });
-    } catch (error) {
-      // 応答の無い失敗（期限切れ・接続の断）は「効かなかった」と決めず、runner の一覧で確かめる（#4715）: runner は受け取って
-      // セッションを起こしたのに応答だけが返らないことがあり、効かなかった側へ倒すと、生きているセッションを引き取らないまま
-      // その出来事を「移った後の古い runner」として捨て続けるため。runner が答えた失敗（`RunnerHttpError`）は確かめずにそのまま投げる
-      const alive =
-        error instanceof RunnerHttpError
-          ? false
-          : await listRunnerManagers(runner)
-              .then(
-                (listing) =>
-                  listing.states.some((state) => state.managerId === record.job.id) ||
-                  listing.unreadableIds.includes(record.job.id),
-              )
-              .catch(() => false);
-      if (!alive) {
-        this.#restored.end(record.job.id);
-        throw error;
-      }
-      // 世代は分からないので持たない（応答が運ぶもの）: 世代の判定は「不明」として出来事を受ける
-      resumed = {};
-      await this.#journal({
-        type: 'decision',
-        decision: `[${record.job.id}] resume の応答が返らなかったが、${runner.runnerId} にセッションが居るので、resume は効いたとして引き取った`,
-        grounds: `resume の失敗: ${reasonOf(error)}。${runner.runnerId} の一覧にこの委譲が居た`,
-      });
-    }
+    const resumed = await this.#issueResume(record, runner, {
+      sessionId,
+      requestedCwd,
+      request,
+      message,
+      attachments,
+      material,
+      subagents,
+      peers,
+    });
     // 応答が返らず引き取った回（`resumed.cwd` が無い）は何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
     // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
     record.cwdSwapNotice = undefined;
@@ -5817,6 +5778,75 @@ class Pool implements ManagerPool {
     // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
     const peers = await this.#sessionLoaders.loadPeers(managerId, projectKey, sessionId);
     return { subagents, peers };
+  }
+
+  /** `#resume` の段: 世代を下ろして `#restored.begin` を立て、`runner.resume()` を出す（応答が返らない失敗は一覧で確かめ、居なければ `#restored.end` して投げる）。 */
+  async #issueResume(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    args: {
+      sessionId: string;
+      requestedCwd: string;
+      request: string | undefined;
+      message: string | undefined;
+      attachments: RunnerAttachment[] | undefined;
+      material: Awaited<ReturnType<SessionLoaders['loadSession']>>;
+      subagents: Awaited<ReturnType<SessionLoaders['loadSubagents']>>;
+      peers: Awaited<ReturnType<SessionLoaders['loadPeers']>>;
+    },
+  ): Promise<Partial<Awaited<ReturnType<RunnerClient['resume']>>>> {
+    const { sessionId, requestedCwd, request, message, attachments, material, subagents, peers } =
+      args;
+    // 出す直前に追っている世代を下ろす: 応答が返るまで（失敗して返らなければその後も）世代の判定はしない。
+    delete record.sessionGeneration;
+    // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
+    this.#restored.begin(record.job.id, runner.runnerId);
+    // 応答が返らず一覧で引き取った回（下の `resumed = {}`）だけは、runner が開いた値を持たない
+    let resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>;
+    try {
+      resumed = await runner.resume({
+        managerId: record.job.id,
+        sessionId,
+        cwd: requestedCwd,
+        request: request ?? record.job.summary,
+        ...(message === undefined ? {} : { message }),
+        ...(message === undefined || attachments === undefined || attachments.length === 0
+          ? {}
+          : { attachments }),
+        ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
+        ...(subagents.length === 0 ? {} : { subagents }),
+        ...(peers.length === 0 ? {} : { peers }),
+        ...(record.job.lease === undefined
+          ? {}
+          : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
+      });
+    } catch (error) {
+      // 応答の無い失敗（期限切れ・接続の断）は「効かなかった」と決めず、runner の一覧で確かめる（#4715）: runner は受け取って
+      // セッションを起こしたのに応答だけが返らないことがあり、効かなかった側へ倒すと、生きているセッションを引き取らないまま
+      // その出来事を「移った後の古い runner」として捨て続けるため。runner が答えた失敗（`RunnerHttpError`）は確かめずにそのまま投げる
+      const alive =
+        error instanceof RunnerHttpError
+          ? false
+          : await listRunnerManagers(runner)
+              .then(
+                (listing) =>
+                  listing.states.some((state) => state.managerId === record.job.id) ||
+                  listing.unreadableIds.includes(record.job.id),
+              )
+              .catch(() => false);
+      if (!alive) {
+        this.#restored.end(record.job.id);
+        throw error;
+      }
+      // 世代は分からないので持たない（応答が運ぶもの）: 世代の判定は「不明」として出来事を受ける
+      resumed = {};
+      await this.#journal({
+        type: 'decision',
+        decision: `[${record.job.id}] resume の応答が返らなかったが、${runner.runnerId} にセッションが居るので、resume は効いたとして引き取った`,
+        grounds: `resume の失敗: ${reasonOf(error)}。${runner.runnerId} の一覧にこの委譲が居た`,
+      });
+    }
+    return resumed;
   }
 
   #swapNote(runnerId: string, before: string | undefined): string {
