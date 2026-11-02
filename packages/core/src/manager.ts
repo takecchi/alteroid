@@ -52,6 +52,7 @@ import {
 import { QuotaStopWindows } from './quota-stop-windows.js';
 import { RestoredWindows } from './restored-windows.js';
 import { RESUME_CONFIRM_TIMEOUT_MS } from './resume-confirmation.js';
+import { ResumeEventWindows } from './resume-event-windows.js';
 import type { ClassifierDenialOverLimit } from './classifier-denial-streak.js';
 import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
@@ -1878,6 +1879,8 @@ class Pool implements ManagerPool {
       fromRunnerId: string;
     }[]
   >();
+  /** resume の最中に届く出来事を預ける窓（`ResumeEventWindows`）。欄は上の3つをこの `Pool` が持ち、参照を渡している。 */
+  readonly #resumeWindows: ResumeEventWindows;
   /**
    * 生きていた旧プロセスへ流しただけの resume の印。`send()` の返す文と、`#tokenIdentities` を書かない理由（凍った鍵）に対応する。
    * `#retire()` で消さない: 畳んだ委譲への次の `send()` が同じ旧プロセスへ流れたとき、返す文が変わる。消えるのは resume で新しい SDK を起こした回と指紋で確かめた回。
@@ -2159,6 +2162,17 @@ class Pool implements ManagerPool {
       stopped: () => this.#stopped,
       windowMs: quotaWindowMs,
       confirmTimeoutMs: resumeConfirmTimeoutMs ?? RESUME_CONFIRM_TIMEOUT_MS,
+    });
+    this.#resumeWindows = new ResumeEventWindows({
+      records: this.#records,
+      judgeSessionGeneration: (record, event) => this.#judgeSessionGeneration(record, event),
+      trackedGenerationSilent,
+      onEvent: (event, fromRunnerId) => this.#onEvent(event, fromRunnerId),
+      droppedReportFiles: (event, fromRunnerId) => this.#droppedReportFiles(event, fromRunnerId),
+      journal: (entry) => this.#journal(entry),
+      relocatingTo: this.#relocatingTo,
+      sameRunnerResumeWindow: this.#sameRunnerResumeWindow,
+      deferredEvents: this.#deferredEvents,
     });
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
@@ -4291,7 +4305,7 @@ class Pool implements ManagerPool {
     // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。
     const windowOpen = !this.#resuming.has(job.id);
     try {
-      if (windowOpen) this.#sameRunnerResumeWindow.set(job.id, runner.runnerId);
+      if (windowOpen) this.#resumeWindows.openSameRunner(job.id, runner.runnerId);
       let ok: ResumeOutcome | undefined;
       // 受理された回は `running` を persist した後に閉じる: 処理し直した結果を後から上書きしないため。受理されなかった回と投げた回は `moved` を立てずに閉じる。
       try {
@@ -4982,8 +4996,8 @@ class Pool implements ManagerPool {
       // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。同じ runner への復帰は `closed` だけを預ける別の窓を持つ。
       const ownsWindow = !this.#resuming.has(job.id);
       if (ownsWindow) {
-        if (relocating) this.#relocatingTo.set(job.id, runnerId);
-        else this.#sameRunnerResumeWindow.set(job.id, runnerId);
+        if (relocating) this.#resumeWindows.openRelocation(job.id, runnerId);
+        else this.#resumeWindows.openSameRunner(job.id, runnerId);
       }
       let outcome: ResumeOutcome | undefined;
       // 受理された回は台帳を `running` へ戻して persist した後に閉じる: 移送先自身の出来事（closed(failed) や ask）を処理し直した結果を、後から `running` で上書きしないため。受理されなかった回と投げた回は `moved` を立てずに、下の分岐より先に閉じる。
