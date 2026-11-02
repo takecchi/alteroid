@@ -6034,7 +6034,7 @@ class Pool implements ManagerPool {
     // 古い世代の出来事を捨てた後に見る: 前のセッションの遅れた出来事で「戻れた」と確定しないため。
     this.#restored.observe(record, event, fromRunnerId);
 
-    if (this.#deferIfWindow(event, fromRunnerId)) return;
+    if (this.#resumeWindows.deferIfWindow(event, fromRunnerId)) return;
 
     // 移った後の古い runner の出来事は、この種類なら入口で捨てる（個別の判定は `closed` / `resume_failed` / `usage` / `rescue_files`: 捨て方が違う）。
     // `report` / `ask` は停止済みの扱い（日誌へ残す）が先: 停止済みなら下の case が受ける。
@@ -6554,32 +6554,6 @@ class Pool implements ManagerPool {
         dropped.text,
       ...dropped.attachments,
     });
-  }
-
-  /** `#handleEvent` の入口の段: 移送中・同じ runner への復帰窓の出来事を預ける（同期。預けたら true）。 */
-  #deferIfWindow(event: RunnerEvent, fromRunnerId: string): boolean {
-    // 窓の間は `job.runnerId` がまだ元の runner で `#ignoreIfMovedAway` が素通りし、移送の前に古い報告が台帳と受信箱へ流れるので、結論が出るまで預かる。
-    if (
-      event.type === 'session' ||
-      event.type === 'report' ||
-      event.type === 'ask' ||
-      event.type === 'settled'
-    ) {
-      // 移送先自身の出来事も預かる: 素通りさせると `#ignoreIfMovedAway` が「移った後の古い runner」と読んで捨てる。
-      if (this.#relocatingTo.has(event.managerId)) {
-        this.#deferEvent(event, fromRunnerId);
-        return true;
-      }
-      // 世代で選り分けない: 世代の判定は窓が閉じるとき（応答で追う世代が決まった後）に行う。
-      if (
-        event.type === 'report' &&
-        this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId
-      ) {
-        this.#deferEvent(event, fromRunnerId);
-        return true;
-      }
-    }
-    return false;
   }
 
   /** `note` の段1: 作業者の落ちの印を立てて台帳へ写す（呼び元が `event.workerLimit` の有無で呼ぶ）。 */
