@@ -8,6 +8,7 @@ import { noteDroppedRecord, reasonOf } from './dropped-record.js';
 import type { ManagerRecord, ManagerSendOptions, ManagerSendResult } from './manager.js';
 import { loadManagerAttachments } from './manager-attachments.js';
 import { fetchRescueFile } from './manager-outbox-fetch.js';
+import { mergeRescue } from './rescue-cleanup.js';
 import {
   normalizeRescuePath,
   rescueStashClause,
@@ -90,6 +91,50 @@ export class ManagerRescueStash {
       }
     });
     await next;
+  }
+
+  /**
+   * `rescue_ref`（作業ツリーの退避 ref の受け取り）。移った後の古い器から届いても捨てずに取り込む（今どおり）。
+   * `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
+   */
+  async acceptRef(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'rescue_ref' }>,
+    fromRunnerId: string,
+  ): Promise<void> {
+    const at = this.#deps.nowIso();
+    const previousRescue = record.job.lastRescue;
+    // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
+    const instanceId = this.#deps.instanceIdOf(fromRunnerId);
+    const incoming =
+      instanceId === undefined
+        ? event.worktrees
+        : event.worktrees.map((tree) => ({ ...tree, instanceId }));
+    record.job.lastRescue = mergeRescue(previousRescue, incoming, at);
+    for (const tree of event.worktrees) {
+      if (tree.notPushed?.reason !== 'secret-like') continue;
+      // 運び直しで同じ日誌を積まない。
+      const before = previousRescue?.worktrees.find(
+        (w) => w.relativePath === tree.relativePath,
+      )?.notPushed;
+      if (
+        before?.reason === 'secret-like' &&
+        JSON.stringify(before.files ?? []) === JSON.stringify(tree.notPushed.files ?? [])
+      ) {
+        continue;
+      }
+      await this.#deps.journal({
+        type: 'decision',
+        decision:
+          `作業ツリー ${tree.relativePath} の退避 ref は、鍵らしい文字列を差分に ` +
+          '見つけたので送らなかった。',
+        grounds:
+          `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
+          `当たった形: ${(tree.notPushed.patterns ?? []).join(', ') || '(不明)'}。` +
+          '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
+      });
+    }
+    await this.#deps.persist(record);
   }
 
   /**

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import { ArchiveReceiver } from './archive-receiver.js';
 import { AutoFold } from './auto-fold.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import { DenialRenotifier } from './denial-renotify.js';
@@ -14,23 +14,13 @@ import {
   noteResumeAfterStopFoldFailed,
   noteRunnerFarewellGaveUp,
   noteUnreadableRecord,
-  noteWithheldReportsDiscarded,
   reasonOf,
   runnerEventShape,
 } from './dropped-record.js';
 import { NOTIFY_REPORT_EXCERPT, excerptLine, renderListing } from './excerpt.js';
 import { laterIso } from './later-iso.js';
 import { HELD_FORCE_FOLD_AFTER_MS, HeldMessages, type StaleHoldStuck } from './held-messages.js';
-import {
-  WITHHELD_REPORT_EXCERPT,
-  WITHHELD_REPORT_LISTING_BUDGET,
-  WITHHELD_REPORT_LISTING_BUDGET_BEFORE_SAVING,
-  describeBackgroundWaitElapsed,
-  renderWithheldExcerpts,
-  resolveWithheldReportFlushMs,
-  trimWithheldExcerpts,
-  withheldReportOverdue,
-} from './withheld-reports.js';
+import { WITHHELD_REPORT_EXCERPT, resolveWithheldReportFlushMs } from './withheld-reports.js';
 import {
   bashCommandLooksLikeGitBranchCreate,
   bashCommandLooksLikeGitPush,
@@ -101,8 +91,6 @@ import {
   type LeaseSighting,
   type LeaseVerdict,
 } from './lease.js';
-import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
-import type { ManagerActivityInput } from './manager-activity.js';
 import type { AgentPluginLoad } from './agent-events.js';
 import { describeMcpStatusForJournal } from './mcp-status-journal.js';
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
@@ -189,7 +177,7 @@ import {
   type ManagerUnpushedWork,
 } from './unpushed-work-observation.js';
 import { StaleTokenFold } from './stale-token-fold.js';
-import { markRescueGoneWhileAlive, mergeRescue } from './rescue-cleanup.js';
+import { markRescueGoneWhileAlive } from './rescue-cleanup.js';
 import { RescueSweeper } from './rescue-sweeper.js';
 import { ManagerRescueStash } from './manager-rescue-stash.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
@@ -201,6 +189,7 @@ import type { TokenRotatorObservation } from './token-rotator.js';
 import { UsageRecordOrder, type UsageRecordTicket } from './usage.js';
 import { UsageReceiver } from './usage-receiver.js';
 import { UsageWake } from './usage-wake.js';
+import { WithheldReportsStore } from './withheld-reports-store.js';
 import { notePhase } from './loop-stall.js';
 import {
   FOLD_NOTICE_COMMANDS_MAX,
@@ -283,7 +272,7 @@ export type SessionMissingKind = 'resume-failed' | 'unlisted';
  * `awaitingBackground` の分岐より前に実行するので、`status` は必ず `'done'` へ潰れ、
  * 「手が空いた」と「待って畳んだ」が台帳の軸で同じ顔になる。だから状態に添える。
  * `undefined` は「背景処理は無い」ではなく「そう名乗られていない」（古い runner）。
- * 在庫（`#withheldReports`）の写し。在庫は台帳（`Job.withheldReports`）にも写してあり、デーモンを作り直すと起動時に組み直される。
+ * 在庫（`WithheldReportsStore`）の写し。在庫は台帳（`Job.withheldReports`）にも写してあり、デーモンを作り直すと起動時に組み直される。
  */
 export interface ManagerAwaitingBackground {
   /** `withheldReports` と畳まない: 待っているタスクの数と握り潰した報告の本数は別の観測。 */
@@ -1319,9 +1308,6 @@ const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'rescue_restore_request',
 ]);
 
-/** 退避の id ごとの取り寄せの結果を覚えておく数（送り直しとの二重を防ぐ。#4899）。 */
-const ARCHIVE_REF_OUTCOMES_MAX = 512;
-
 // 読めない時刻と無い時刻は数えない: 全部無ければ `undefined`（待ちの数え始めが分からない）
 function earliestMs(times: readonly (string | undefined)[]): number | undefined {
   return times
@@ -1621,21 +1607,6 @@ const HELLO_WAIT_MS = 5_000;
 const HELLO_POLL_MS = 50;
 
 /**
- * 正はこのプロセス内の在庫で、書き換えるたびに台帳（`Job.withheldReports`）へ写す（`#setWithheld`）。
- * 写さないとデーモンの再起動（夜の反映）で件数も冒頭も消え、配る前だった報告がクローンに一度も届かない（#4626）。
- * `restore()` が台帳の写しから組み直す。全文は `case 'report'` が積む前に書く日誌の `exchange` に在る。
- */
-type WithheldReportMemory = NonNullable<Job['withheldReports']>;
-
-// 欄の意味は型の正（`schema.ts` の `jobSchema.withheldReports`）とここで二重に持たない。各欄の約束:
-// - `count`: 次の本物の報告・`flushWithheldReports()`・`closed` で配って0へ戻る。
-// - `lastAt`: `flushWithheldReports()` の期限判定はここを見る。
-// - `excerpts`: エピソード中に畳んだ報告の冒頭（古い順）。**最後の1本だけを持たない**: 上書きすると、マージの報告のような重要な本文が後続の畳んだ報告で消える。
-//   `'flush'` で配った分は `count` と一緒に空へ戻す。積むときに配るときと同じ予算の内へ詰める（`trimWithheldExcerpts`）。
-// - `taskCount`: **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。
-// - `flushedAt`: 経過時間の出所にしない（いつから待っているかは `firstAt` だけが持つ）。`#withholdBackgroundReport` はこの欄を持ち越す: 持ち越さないと印が消えて「エピソードにつき1本だけ」が壊れる。
-
-/**
  * - `'seen'` — `closed(done)` は報告の後の idle の終わりで、知らせない
  * - `'none'` — 一度も受け取っていない。報告無しで終わった
  * - `'unknown'` — 判定できない。**知らせる側へ倒す**（黙って無音へ倒さない）。
@@ -1808,24 +1779,15 @@ class Pool implements ManagerPool {
    * 台帳には写さない: 起こし直す対象を覚える印ではなく計器で、次の `reached` で作り直せる。
    */
   readonly #resetTimeSkewMatches = new Map<string, NoticeResetMatch>();
+  /** 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫と、窓へ運ぶ途中の在庫（`WithheldReportsStore`）。 */
+  readonly #withheld: WithheldReportsStore;
   /**
-   * 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫（{@link WithheldReportMemory}）。
-   * `#emit()` が次に配る `text` の末尾へ1行足して空にする: 日誌は引きに行かないと気づけず、
-   * 握り潰しすぎて本物の報告を消していないかをクローンが確かめる手段が要る。
-   */
-  readonly #withheldReports = new Map<string, WithheldReportMemory>();
-  /**
-   * 機構が合成した知らせの合流窓（{@link SynthesizedNoticeWindow}）。`#withheldReports` とは別物:
+   * 機構が合成した知らせの合流窓（{@link SynthesizedNoticeWindow}）。在庫（`#withheld`）とは別物:
    * あちらは時間の上限まで保持する在庫、こちらは短い窓だけ保持して必ず1本にまとめて配る。
    * `#emit()` は呼ばれるたびに全 managerId ぶんを先に flush する（`docs/architecture.md`「順序は並べ替えない」）:
    * 畳めない出来事が先に受信箱へ入って到着順が崩れるのを防ぐ。
    */
   readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
-  /**
-   * `closed` が合流窓へ積んだとき、`#retire()` に消される前に移した `#withheldReports` の在庫。
-   * 窓の flush の `#deliver` が末尾へ運んで消す（運ぶ先が窓なので、在庫のままでは `#retire()` で失われる）。委譲1本につき高々1件。
-   */
-  readonly #withheldCarriedToWindow = new Map<string, WithheldReportMemory>();
   /**
    * 窓をまたいで同文を畳むための、もう配った束の署名（{@link SynthesizedNoticeStreak}）。
    * 窓が閉じても消えず、別の `manager_message` を配った時点で消える（`#deliver`）。
@@ -1960,42 +1922,9 @@ class Pool implements ManagerPool {
    */
   readonly #reportFetchGates = new Map<string, Promise<void>>();
   readonly #attachmentLimits: AttachmentLimits | undefined;
-  // 参照で届いた退避の id ごとに、置き場へ入れられたか（送り直しの本文との二重を防ぐ。#4899）。キーは `managerId/id`
-  readonly #archiveRefOutcomes = new Map<string, Promise<boolean>>();
-  // 本文で（送り直しで）届いた退避の id。参照の取り寄せが「無い」で落ちても落とした扱いにしないため
-  readonly #inlineArchiveIds = new Set<string>();
+  readonly #archiveReceiver: ArchiveReceiver;
 
   readonly #usageOrder = new UsageRecordOrder();
-
-  /**
-   * 同じ生ログ（`projectKey`・`sessionId`・`subpath`）への `mirror` の預けを、届いた順に1つずつ行う（#4485）。
-   * `#onEvent` は並行に走るので、並べないと先の預け（大きい書き出し）が pg へ届く前に後の預けが追い越し、
-   * 生ログの行が挿入の順（`seq`）で読み戻されるときに入れ替わる。札は最初の `await` より前に取る（`#usageOrder` と同じ）。
-   */
-  readonly #mirrorTails = new Map<string, Promise<void>>();
-  readonly #mirrorTurns = new WeakMap<RunnerEvent, Promise<void>>();
-
-  #takeMirrorTurn(event: Extract<RunnerEvent, { type: 'mirror' }>): () => void {
-    // 欄の欠けで落とさない: 落とすと預けそのものが失われる（並べる鍵が粗くなるだけで済ませる）
-    const key = [event.managerId, event.key?.projectKey, event.key?.sessionId, event.key?.subpath]
-      .map((part) => String(part ?? '').replaceAll('\u0000', ''))
-      .join('\u0000');
-    const previous = this.#mirrorTails.get(key) ?? Promise.resolve();
-    let release = (): void => undefined;
-    const done = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = previous.then(() => done);
-    this.#mirrorTails.set(key, tail);
-    this.#mirrorTurns.set(event, previous);
-    return () => {
-      release();
-      // 最後の札なら消す: 生ログの鍵ごとに積もらせない
-      void tail.then(() => {
-        if (this.#mirrorTails.get(key) === tail) this.#mirrorTails.delete(key);
-      });
-    };
-  }
 
   /** 名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の `hello` が来たら消す（古い名乗りで新しい器を待たない）。 */
   readonly #farewellRunners = new Set<string>();
@@ -2043,9 +1972,20 @@ class Pool implements ManagerPool {
       sighting: (runnerId) => this.#sighting(runnerId),
       swapNote: (runnerId, before) => this.#swapNote(runnerId, before),
     });
+    this.#withheld = new WithheldReportsStore({
+      records: this.#records,
+      persist: (record) => this.#persist(record),
+      now: () => this.#now(),
+      nowIso: () => this.#nowIso(),
+      tokenSavingExcerpt: () => this.#tokenSavingExcerpt,
+      withheldReportFlushMs: () => this.#withheldReportFlushMs,
+      emitFlush: (managerId, text) => {
+        this.#emit(managerId, 'report', text, undefined, undefined, 'flush');
+      },
+    });
     this.#turnEndWatch = new TurnEndWatch({
       records: this.#records,
-      withheldReports: this.#withheldReports,
+      withheldReports: this.#withheld.reports,
       stores,
       now: () => this.#now(),
       journal: (entry) => this.#journal(entry),
@@ -2180,7 +2120,7 @@ class Pool implements ManagerPool {
       journalExchange: this.#journalExchange.bind(this),
       post: (event) => this.#post(event),
       listJobsOrNote: (skipped) => this.#listJobsOrNote(skipped),
-      withheldCarriedToWindow: this.#withheldCarriedToWindow,
+      withheldCarriedToWindow: this.#withheld.carriedToWindow,
       now: () => this.#now(),
       nowIso: () => this.#nowIso(),
       windowMs: quotaWindowMs,
@@ -2268,6 +2208,15 @@ class Pool implements ManagerPool {
       rememberResetTimeSkew: (event) => this.#usageWake.rememberResetTimeSkew(event),
       queueSynthesizedNotice: (managerId, label, text, quotaMark) =>
         this.#queueSynthesizedNotice(managerId, label, text, quotaMark),
+    });
+    this.#archiveReceiver = new ArchiveReceiver({
+      stores: this.#stores,
+      fetchArchiveRetrying: (managerId, archiveId, fromRunnerId) =>
+        this.#sessionLoaders.fetchArchiveRetrying(managerId, archiveId, fromRunnerId),
+      appendMirrorRetrying: (store, event) =>
+        this.#sessionLoaders.appendMirrorRetrying(store, event),
+      persist: (record) => this.#persist(record),
+      journalExchange: this.#journalExchange.bind(this),
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -2451,7 +2400,7 @@ class Pool implements ManagerPool {
       record.turnEndTail,
       record.toolUseStallAt,
       record.toolUseStallPending,
-      this.#awaitingBackgroundOf(record.job.id),
+      this.#withheld.awaitingBackgroundOf(record.job.id),
       this.#tokenIdentities.get(record.job.id)?.generation,
       this.#tokenIdentity?.()?.generation,
       this.#tokenIdentity !== undefined,
@@ -2658,7 +2607,7 @@ class Pool implements ManagerPool {
       // 背景処理を待っていて、話しかけたい伝言が届いた時点で、もう止まっている時間を数えるため（預かりだけから数えると、LAND-9 は8分で畳まれなかった）。
       // 畳むのは今どおり `StaleTokenFold` が「鍵が現役と食い違い、その鍵が ready でない」と判定した回だけ
       // （ready なら旧セッションへ届ける）。人が走らせる長い仕事を、鍵が使える間に奪わない。
-      const awaitingSince = this.#awaitingBackgroundOf(managerId)?.since;
+      const awaitingSince = this.#withheld.awaitingBackgroundOf(managerId)?.since;
       const waitStartedAt = earliestMs([oldestHeldAt, awaitingSince]);
       const waitedLongEnough =
         mode === 'held-delivery' &&
@@ -3104,7 +3053,7 @@ class Pool implements ManagerPool {
       record.turnEndTail,
       record.toolUseStallAt,
       record.toolUseStallPending,
-      this.#awaitingBackgroundOf(job.id),
+      this.#withheld.awaitingBackgroundOf(job.id),
       this.#tokenIdentities.get(job.id)?.generation,
       context.activeTokenGeneration,
       context.tokenGenerationPoolWired,
@@ -3680,50 +3629,8 @@ class Pool implements ManagerPool {
     return this.#turnEndWatch.probe();
   }
 
-  /** `record` が無いときは「観測が無い」として渡す: `'unknown'` に落ち、`'active'`（進んでいる）へは倒れない。 */
-  #activityInputOfRecord(record: ManagerRecord | undefined): ManagerActivityInput {
-    if (record === undefined) return { waitingCount: 0 };
-    return {
-      turnEndReason: record.turnEndReason,
-      turnEndedAt: record.turnEndedAt,
-      lastReportAt: record.job.lastReportAt,
-      toolUseStallPending: record.toolUseStallPending,
-      waitingCount: record.waiting.length,
-    };
-  }
-
-  /**
-   * エピソードにつき1本だけ配る: 在庫ごと `delete` すると周期のたびに同じ合図が立ち直るため。
-   * 配らない回も畳まない（次の本物の報告か `case 'closed'` で件数ごと配る）。
-   * 判定が変わったときの立て直しや、基準を `lastAt` から `firstAt` へ変えることはしない:
-   * 変化は `manager_list` で読め、後者は別の面の話のため。
-   */
   async flushWithheldReports(): Promise<void> {
-    const now = this.#now();
-    for (const [managerId, memory] of [...this.#withheldReports.entries()]) {
-      try {
-        if (memory.flushedAt !== undefined) continue;
-        if (memory.count === 0) continue;
-        if (!withheldReportOverdue(memory.lastAt, now, this.#withheldReportFlushMs)) continue;
-        const activity = classifyManagerActivity(
-          this.#activityInputOfRecord(this.#records.get(managerId)),
-        );
-        this.#emit(
-          managerId,
-          'report',
-          `[${managerId}] 背景処理の完了待ちで畳んだ報告が、次のターンの完了を` +
-            `${String(Math.round(this.#withheldReportFlushMs / 60_000))}分待っても届かなかった。` +
-            'まとめて配る。' +
-            describeBackgroundWaitElapsed(memory.firstAt, now) +
-            describeManagerActivityForFlush(activity),
-          undefined,
-          undefined,
-          'flush',
-        );
-      } catch {
-        // 1件の失敗で残りを止めない。
-      }
-    }
+    this.#withheld.flush();
   }
 
   async transcriptTail(managerId: string, maxChars: number): Promise<ManagerTranscript> {
@@ -3934,20 +3841,11 @@ class Pool implements ManagerPool {
     try {
       if (!this.#stopped) await this.#repairStrandedTasks();
       const restored = await this.#restoreJobs();
-      this.#rebuildWithheldFromLedger();
+      this.#withheld.rebuildFromLedger();
       return restored;
     } finally {
       this.#restoring = null;
       finished();
-    }
-  }
-
-  // 引き取った委譲の台帳の写しから、畳んだ報告の在庫を組み直す（#4626）。プロセス内に既に在る在庫は上書きしない: そちらが新しい
-  #rebuildWithheldFromLedger(): void {
-    for (const [managerId, record] of this.#records) {
-      const copy = record.job.withheldReports;
-      if (copy === undefined || this.#withheldReports.has(managerId)) continue;
-      this.#withheldReports.set(managerId, copy);
     }
   }
 
@@ -4071,7 +3969,7 @@ class Pool implements ManagerPool {
             record.turnEndTail,
             record.toolUseStallAt,
             record.toolUseStallPending,
-            this.#awaitingBackgroundOf(record.job.id),
+            this.#withheld.awaitingBackgroundOf(record.job.id),
             this.#tokenIdentities.get(record.job.id)?.generation,
             this.#tokenIdentity?.()?.generation,
             this.#tokenIdentity !== undefined,
@@ -4156,7 +4054,7 @@ class Pool implements ManagerPool {
                 record.turnEndTail,
                 record.toolUseStallAt,
                 record.toolUseStallPending,
-                this.#awaitingBackgroundOf(record.job.id),
+                this.#withheld.awaitingBackgroundOf(record.job.id),
                 this.#tokenIdentities.get(record.job.id)?.generation,
                 this.#tokenIdentity?.()?.generation,
                 this.#tokenIdentity !== undefined,
@@ -4383,7 +4281,7 @@ class Pool implements ManagerPool {
       delete record.stopConfirmedAt;
     }
 
-    // `#retire()` で `#withheldReports` のエントリが消えるので、読むのは必ずその前。中身（`lastText`）は載せない（R4）: 「止めた後は受信箱へ回さない」を覆さず、「積みが在った」事実の告知だけにする。
+    // `#retire()` で在庫が消えるので、読むのは必ずその前（`WithheldReportsStore#stoppedNote`）。
     let withheldNote = '';
     if (outcome === 'stopped') {
       record.waiting = [];
@@ -4392,14 +4290,7 @@ class Pool implements ManagerPool {
       this.#workerLimitStopped.delete(managerId);
       delete record.job.workerLimitStopped;
       await this.#persist(record);
-      const withheld = this.#withheldReports.get(managerId);
-      // `count > 0` を条件にする: フラッシュ済みの在庫が残っていると、`withheld !== undefined` だけでは「報告を 0 本抱えたまま止まった」という嘘の1行が出る。
-      if (withheld !== undefined && withheld.count > 0) {
-        withheldNote =
-          ` このマネージャーは、背景処理の完了待ちで畳んだ報告を ${String(withheld.count)} ` +
-          `本抱えたまま止まった（最初 ${withheld.firstAt} / 最後 ${withheld.lastAt}）。` +
-          'もう配られない（R4「止めた後は受信箱へ回さない」）。全文は日誌に在る（`journal_read`）。';
-      }
+      withheldNote = this.#withheld.stoppedNote(managerId);
       this.#retire(managerId);
     }
     // `'not_stopped'` / `'unknown'` のときは台帳を書かない: 生きているかもしれないマネージャーの `waiting` を畳まず、確かめていない状態を確定させない。「止めた」と言えるのは止まったと確かめたときだけ。
@@ -5725,7 +5616,8 @@ class Pool implements ManagerPool {
     const usageTicket =
       event.type === 'usage' ? this.#usageOrder.ticket(`manager:${event.managerId}`) : undefined;
     // 返すのは処理の終わり（`finally`）: 途中で return・throw しても後の預けを止めないため
-    const releaseMirrorTurn = event.type === 'mirror' ? this.#takeMirrorTurn(event) : undefined;
+    const releaseMirrorTurn =
+      event.type === 'mirror' ? this.#archiveReceiver.takeMirrorTurn(event) : undefined;
     const fetchGate = this.#enterReportFetchGate(event);
     try {
       // 待つ相手が無いときは `await` を挟まない（余計な yield が並行した出来事の順序を変えるため）
@@ -6202,7 +6094,7 @@ class Pool implements ManagerPool {
             });
             return;
           }
-          this.#withholdBackgroundReport(event.managerId, event.text, awaitingBackground);
+          this.#withheld.withhold(event.managerId, event.text, awaitingBackground);
           return;
         }
         // `event.text` を包まない: runner 側で複数の書き手（マネージャー・SDK・runner）の断片が既に1本の文字列に連結されており、この層には `codeSpan()` で包む境目が無い。包むなら連結する側（`runner.ts`）。
@@ -6579,114 +6471,12 @@ class Pool implements ManagerPool {
       }
 
       case 'mirror': {
-        const store = this.#stores.sessionStore;
-        if (store === undefined) return;
-        // 同じ生ログへの先の預けが終わるのを待つ（`#mirrorTails`）
-        await this.#mirrorTurns.get(event);
-        await this.#sessionLoaders.appendMirrorRetrying(store, event);
+        await this.#archiveReceiver.onMirror(event);
         return;
       }
 
       case 'archive': {
-        // 本文は参照で届くことがある（#4485）: SSE の1行で数十 MB を運ぶと、受け取りの間ループが塞がるため。取りに行くのは出来事を出した器
-        // 送り直し（`body` と元の `id`）と参照が同じ退避を指すなら、置き場へ入れるのは1回だけ（#4899）。
-        // 参照の取り寄せが終わった（置き場へ入れた）なら本文は捨てる。取り寄せ中なら結果を待ち、取れなかったときだけ本文を使う
-        const archiveKey =
-          event.ref !== undefined
-            ? `${event.managerId}/${event.ref.id}`
-            : event.id !== undefined
-              ? `${event.managerId}/${event.id}`
-              : undefined;
-        let settleStored: ((stored: boolean) => void) | undefined;
-        if (archiveKey !== undefined && event.ref !== undefined) {
-          const outcome = new Promise<boolean>((resolve) => {
-            settleStored = resolve;
-          });
-          this.#archiveRefOutcomes.set(archiveKey, outcome);
-          // 古いものから忘れる: 退避の id は一度きりで、数を持ち続けない
-          while (this.#archiveRefOutcomes.size > ARCHIVE_REF_OUTCOMES_MAX) {
-            const oldest = this.#archiveRefOutcomes.keys().next().value;
-            if (oldest === undefined) break;
-            this.#archiveRefOutcomes.delete(oldest);
-          }
-        } else if (archiveKey !== undefined && event.body !== undefined) {
-          this.#inlineArchiveIds.add(archiveKey);
-          while (this.#inlineArchiveIds.size > ARCHIVE_REF_OUTCOMES_MAX) {
-            const oldest = this.#inlineArchiveIds.values().next().value;
-            if (oldest === undefined) break;
-            this.#inlineArchiveIds.delete(oldest);
-          }
-          const earlier = this.#archiveRefOutcomes.get(archiveKey);
-          if (earlier !== undefined && (await earlier)) return;
-        }
-        const chars = event.body?.length ?? event.ref?.chars ?? 0;
-        let body: string;
-        let fetchedFrom: { runner: RunnerClient; archiveId: string } | undefined;
-        try {
-          if (event.body !== undefined) {
-            body = event.body;
-          } else if (event.ref !== undefined) {
-            const fetched = await this.#sessionLoaders.fetchArchiveRetrying(
-              event.managerId,
-              event.ref.id,
-              fromRunnerId,
-            );
-            body = fetched.body;
-            fetchedFrom = { runner: fetched.runner, archiveId: event.ref.id };
-          } else {
-            throw new Error('本文も参照も無い退避の出来事が届いた');
-          }
-        } catch (error) {
-          settleStored?.(false);
-          // 本文で届いた id への参照の取り寄せが落ちたのは、runner が送り直して預かりを消したため。本文は届いているので、落とした扱いにしない
-          if (
-            archiveKey !== undefined &&
-            event.ref !== undefined &&
-            this.#inlineArchiveIds.has(archiveKey)
-          ) {
-            return;
-          }
-          noteDroppedRecord(
-            'トランスクリプトの退避',
-            `managerId=${event.managerId} chars=${String(chars)}${event.ref === undefined ? '' : ` ref=${event.ref.id}`}`,
-            error,
-          );
-          return;
-        }
-        try {
-          const write = await this.#stores.archive.archive(event.managerId, body);
-          record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];
-          settleStored?.(true);
-          await this.#persist(record);
-          // 置き場へ入れてから消させる: 先に消すと、置き場への書き込みが失敗した回に本文がどこにも残らないため。消せなくても runner の期限が消す
-          if (fetchedFrom !== undefined) {
-            await fetchedFrom.runner
-              .deleteArchive?.(event.managerId, fetchedFrom.archiveId)
-              .catch(() => undefined);
-          }
-          // `#journal` は自分で失敗を握るので、退避と台帳への記録の成功を日誌の失敗に道連れにしない。
-          const continuityText = describeArchiveContinuityForJournal({
-            caller: 'マネージャーの生ログの退避',
-            sessionId: event.managerId,
-            continuity: write.continuity,
-            comparedTo: write.comparedTo,
-            bodyChars: body.length,
-          });
-          if (continuityText !== null) {
-            await this.#journalExchange(
-              'outbound',
-              `${EXCHANGE_KIND_FAILURE_PREFIX}${continuityText}`,
-            );
-          }
-        } catch (error) {
-          settleStored?.(false);
-          // 止めないが黙って消さない: 跡が無いと「そもそも退避しなかった」と区別が付かない。
-          noteDroppedRecord(
-            'トランスクリプトの退避',
-            `managerId=${event.managerId} chars=${String(body.length)}`,
-            error,
-          );
-        }
+        await this.#archiveReceiver.onArchive(event, fromRunnerId, record);
         return;
       }
 
@@ -6990,8 +6780,8 @@ class Pool implements ManagerPool {
           );
         }
         // report が無いまま `closed(done)` だけが届いたらクローンへ知らせる: 台帳は `done` になるが受信箱には何も出ず、成果が出ているかを誰も確かめないまま終わる。報告の後の idle としての `closed(done)` は無音。判定できないときは知らせる側へ倒す（`reportSeenInSession`）。
-        // 背景処理の積み（`#withheldReports`）が在るときは重ねない: 直下の分岐が「この委譲は終わった」を配るので二重になる。本文を先に日誌へ書く（flush の前に落ちても辿れるように）。
-        if (event.status === 'done' && !this.#withheldReports.has(event.managerId)) {
+        // 背景処理の積み（`#withheld`）が在るときは重ねない: 直下の分岐が「この委譲は終わった」を配るので二重になる。本文を先に日誌へ書く（flush の前に落ちても辿れるように）。
+        if (event.status === 'done' && !this.#withheld.has(event.managerId)) {
           const seen = reportSeenInSession(
             record.job.lastReportAt,
             record.job.runnerSessionSince,
@@ -7035,7 +6825,7 @@ class Pool implements ManagerPool {
           }
         }
         // 積みが在れば `#retire()` の前に配る: 握り潰した報告は「後で必ず配る」約束で、この委譲はもう走らないので次の本物の報告が上書きする経路は来ない。`#emit()` が積みを見つけて末尾へ足すので、ここは「畳まれた」事実だけを書く。
-        const withheldAtClose = this.#withheldReports.get(event.managerId);
+        const withheldAtClose = this.#withheld.get(event.managerId);
         if (withheldAtClose !== undefined) {
           const closedNote =
             `[${event.managerId}] この委譲は終わった（status=${event.status}）。` +
@@ -7043,8 +6833,7 @@ class Pool implements ManagerPool {
           if (this.#synthesizedNotices.has(event.managerId)) {
             // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
             // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。枠の印（`quota`）は下で `closed_failed` から受け継ぐ（枠で落ちた回だけ）。印の無い回は付けず、印の無い断片が混ざった束は担当ごとに配られる。
-            this.#withheldCarriedToWindow.set(event.managerId, withheldAtClose);
-            this.#setWithheld(event.managerId, undefined);
+            this.#withheld.carryToWindow(event.managerId, withheldAtClose);
             // 枠で落ちた回（同じ `closed` で積んだ `closed_failed` に枠の印がある）だけ、その印（トークンの鍵ごと）を受け継ぐ: 束が「枠だけ」のままになり、プール窓の一覧に入る。印の無い回は付けない。
             const inheritedQuota = this.#synthesizedNotices
               .get(event.managerId)
@@ -7109,40 +6898,7 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_ref': {
-        // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
-        const at = this.#nowIso();
-        const previousRescue = record.job.lastRescue;
-        // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
-        const instanceId = this.#sighting(fromRunnerId).instanceId;
-        const incoming =
-          instanceId === undefined
-            ? event.worktrees
-            : event.worktrees.map((tree) => ({ ...tree, instanceId }));
-        record.job.lastRescue = mergeRescue(previousRescue, incoming, at);
-        for (const tree of event.worktrees) {
-          if (tree.notPushed?.reason !== 'secret-like') continue;
-          // 運び直しで同じ日誌を積まない。
-          const before = previousRescue?.worktrees.find(
-            (w) => w.relativePath === tree.relativePath,
-          )?.notPushed;
-          if (
-            before?.reason === 'secret-like' &&
-            JSON.stringify(before.files ?? []) === JSON.stringify(tree.notPushed.files ?? [])
-          ) {
-            continue;
-          }
-          await this.#journal({
-            type: 'decision',
-            decision:
-              `作業ツリー ${tree.relativePath} の退避 ref は、鍵らしい文字列を差分に ` +
-              '見つけたので送らなかった。',
-            grounds:
-              `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
-              `当たった形: ${(tree.notPushed.patterns ?? []).join(', ') || '(不明)'}。` +
-              '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
-          });
-        }
-        await this.#persist(record);
+        await this.#rescueStash.acceptRef(record, event, fromRunnerId);
         return;
       }
 
@@ -7385,68 +7141,6 @@ class Pool implements ManagerPool {
     };
   }
 
-  // `new Date()` を直接使わず `this.#now()` を使う: `lastAt` は `flushWithheldReports()` が `this.#now()` との差分で期限を判定する材料で、時計が違うと注入したテストで期限判定を検査できない。
-  #withholdBackgroundReport(
-    managerId: string,
-    text: string,
-    awaitingBackground: { count: number; breakdown: string },
-  ): void {
-    const now = this.#nowIso();
-    const existing = this.#withheldReports.get(managerId);
-    this.#setWithheld(managerId, {
-      count: (existing?.count ?? 0) + 1,
-      firstAt: existing?.firstAt ?? now,
-      lastAt: now,
-      excerpts: trimWithheldExcerpts(
-        [
-          ...(existing?.excerpts ?? []),
-          { at: now, line: excerptLine(text, WITHHELD_REPORT_EXCERPT) },
-        ],
-        this.#withheldListingBudget(),
-      ),
-      breakdown: awaitingBackground.breakdown,
-      // 在り高は足さず上書きする: `awaitingBackground.count` は runner がその回に見た在り高で増分ではなく、足すと二重に数える。
-      taskCount: awaitingBackground.count,
-      // `flushedAt` は持ち越す: オブジェクトを作り直すので、落とすと `flushWithheldReports()` の「エピソードにつき1本だけ」が壊れる。
-      ...(existing?.flushedAt === undefined ? {} : { flushedAt: existing.flushedAt }),
-    });
-  }
-
-  #withheldListingBudget(): number {
-    return this.#tokenSavingExcerpt
-      ? WITHHELD_REPORT_LISTING_BUDGET
-      : WITHHELD_REPORT_LISTING_BUDGET_BEFORE_SAVING;
-  }
-
-  // 在庫を書き換えるのはここだけにする: 台帳の写し（`Job.withheldReports`）を書き忘れる経路を作らないため（#4626）
-  // 書き込みを待たない: 呼び手（`#deliver` など）は同期で、台帳が書けなくても配る・畳むは止めない（`#persist` が失敗の跡を残す）
-  #setWithheld(managerId: string, memory: WithheldReportMemory | undefined): void {
-    if (memory === undefined) this.#withheldReports.delete(managerId);
-    else this.#withheldReports.set(managerId, memory);
-    const record = this.#records.get(managerId);
-    if (record === undefined) return;
-    if (memory === undefined) {
-      if (record.job.withheldReports === undefined) return;
-      delete record.job.withheldReports;
-    } else {
-      record.job.withheldReports = memory;
-    }
-    void this.#persist(record);
-  }
-
-  // `WithheldReportMemory` をそのまま外へ出さない: `lastText` は報告の本文そのもので、一覧に全文を載せない（`listing-and-detail`）。
-  // 読むだけで在庫は動かさない: 一覧を開いて握り潰しが配られると、`manager_list` のたびに受信箱が動く。
-  #awaitingBackgroundOf(managerId: string): ManagerAwaitingBackground | undefined {
-    const withheld = this.#withheldReports.get(managerId);
-    if (withheld === undefined) return undefined;
-    return {
-      tasks: withheld.taskCount,
-      withheldReports: withheld.count,
-      breakdown: withheld.breakdown,
-      since: withheld.firstAt,
-    };
-  }
-
   // 宛先（`requestId`）も意思（`decision`）も無い一言は、待ちが1件でも回答として消費しない（`send` の「宛先を推測しない」）:
   // 普通の会話文が `inferDecision` に落ちて `allow` に化け、「少し待って」が `deny` として返る。
   // 知らせ直しより前から待っていた1件へも黙って当てない（`'renotify-pending'`）: 無関係な確認へ許可・拒否を当てる側に倒さない。
@@ -7615,43 +7309,11 @@ class Pool implements ManagerPool {
     quotaStop?: { readonly sessionWindow: boolean },
     foldWhenBack?: FoldWhenBack,
   ): void {
-    // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
-    // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
-    const carried = this.#withheldCarriedToWindow.get(managerId);
-    if (carried !== undefined && this.#withheldReports.get(managerId) === undefined) {
-      this.#setWithheld(managerId, carried);
-    }
-    this.#withheldCarriedToWindow.delete(managerId);
-    const withheld = this.#withheldReports.get(managerId);
-    let outgoing = text;
+    // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す（`WithheldReportsStore#takeForDelivery`）。同期のまま、`#post` より前。
+    const withheldStep = this.#withheld.takeForDelivery(managerId, text, withheldSuffixDetail);
+    let outgoing = withheldStep.text;
     // 畳んでよい印も同じ回に外す（#5048）: 足した中身（畳んだ報告・配らなかった知らせの件数）まで、担当が戻ったことを理由に消さないため
-    let foldable = foldWhenBack;
-    if (withheld !== undefined) {
-      // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
-      if (withheldSuffixDetail === 'flush') {
-        this.#setWithheld(managerId, {
-          ...withheld,
-          count: 0,
-          // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
-          excerpts: [],
-          flushedAt: this.#nowIso(),
-        });
-      } else {
-        this.#setWithheld(managerId, undefined);
-      }
-      // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
-      if (withheld.count > 0) {
-        foldable = undefined;
-        // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
-        // 「少し前・少し後」と書く: 日誌の `exchange` は在庫を積む（`firstAt` / `lastAt`）より前に書かれ、`until` は含まないため、端の時刻そのままだと両端の報告を外す。
-        outgoing =
-          `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
-          `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
-          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read q=${managerId}\` ` +
-          `since=最初の少し前 until=最後の少し後）。\n` +
-          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count, this.#withheldListingBudget())}\n）`;
-      }
-    }
+    let foldable = withheldStep.appended ? undefined : foldWhenBack;
     // 何を配ったかに関わらず帳面を消す: 次に同じ本文の知らせが来たら、また1件目として配る（`#flushSynthesizedNoticeFor` だけは直後に新しい署名で `set` し直す）。
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
     this.#synthesizedNoticeStreaks.delete(managerId);
@@ -8041,26 +7703,9 @@ class Pool implements ManagerPool {
   // 「上限で古いものを捨てる」にしない。上限を持たせると、走行中のマネージャーが増えただけで無関係な1本が押し出される形になりうる（north_star 禁止2）。
   // 契機は終端という状態遷移だけにする。
   #retire(managerId: string): void {
-    // 像を外す前に台帳の写しを下ろす: 外した後は `#setWithheld` が像を引けず、終えた委譲の台帳に古い在庫が残って次の `restore()` が組み直すため
-    const retiringRecord = this.#records.get(managerId);
-    if (retiringRecord?.job.withheldReports !== undefined) {
-      delete retiringRecord.job.withheldReports;
-      void this.#persist(retiringRecord);
-    }
+    // 像を外す前に在庫を下ろす（台帳の写しは像から引くため）。
+    this.#withheld.retire(managerId);
     this.#records.delete(managerId);
-    // 握り潰した報告を静かに畳んでよい理由は、全文が日誌の `type: 'exchange'` に残っているから（`decision` 側は冒頭抜粋だけ）。
-    // 受信箱へ流して起こすのは `abort()` の「止めた後は回さない」を覆すので流さず、握り潰したまま終わった事実だけを stderr へ残す。
-    // 呼び出し元で分岐させずここに置く: どの呼び出し元でも同じ1行が漏れなく残る。
-    const withheldBeforeDelete = this.#withheldReports.get(managerId);
-    if (withheldBeforeDelete !== undefined && withheldBeforeDelete.count > 0) {
-      noteWithheldReportsDiscarded(
-        managerId,
-        withheldBeforeDelete.count,
-        withheldBeforeDelete.firstAt,
-        withheldBeforeDelete.lastAt,
-      );
-    }
-    this.#withheldReports.delete(managerId);
     this.#synthesizedNoticeStreaks.delete(managerId);
     // 日誌の畳み込みは外す前に畳み残しを吐く: 畳んだ2件目以降はまだ日誌のどこにも書かれておらず、黙って捨てると件数が失われる（`UsageReceiver#retire`）。
     this.#usageReceiver.retire(managerId);
