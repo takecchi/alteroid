@@ -349,7 +349,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
-    '#handleEvent': 'decision,failure',
+    '#handleEvent': 'decision,failure,reply',
     '#ignoreIfMovedAway': 'decision',
     '#ignoreOrDeferClosed': 'decision',
     '#journalNote': 'reply',
