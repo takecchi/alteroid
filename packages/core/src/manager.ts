@@ -5763,28 +5763,7 @@ class Pool implements ManagerPool {
       case 'report': {
         // 止めた後に届く `report` を無条件に処理しない: `#retire()` 後も `#onEvent` は台帳から像を作り直す（`#load()`）ので、`stopped` を上書きし `#emit()` でクローンのターンを起こしてしまう。日誌には残す（捨てると黙って失われる）。
         if (record.job.status === 'stopped') {
-          // 添えられた成果物は取り寄せて置き場へ入れ、日誌の行に結び付ける（#4675）: 取り寄せないと runner の退避先に残ったまま掃除で消え、止めた担当の成果が黙って失われるため
-          const stoppedFiles =
-            (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
-              ? await this.#fetchReportFiles(event, fromRunnerId)
-              : undefined;
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${reportFullTextOf(event)}` +
-              describeStoppedReportFiles(stoppedFiles),
-            ...(stoppedFiles === undefined || stoppedFiles.attachments.length === 0
-              ? {}
-              : { attachments: stoppedFiles.attachments.map((ref) => ({ ...ref })) }),
-          });
-          // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
-          record.job.lastFoldedTurn = {
-            text: reportFullTextOf(event),
-            at: this.#nowIso(),
-          };
-          await this.#persist(record);
+          await this.#recordStoppedReport(record, event, fromRunnerId);
           return;
         }
         // `reportId` で冪等にする（`ask` の `requestId` と同型）。
@@ -5794,193 +5773,14 @@ class Pool implements ManagerPool {
           if (reported.has(event.reportId)) return;
           reported.set(event.reportId, true);
         }
-        // 台帳と日誌には全文を残す: `manager_report` と画面の「最後の報告」は `lastReport` を読むので、途中の発言を見たいときはそこから引ける
-        record.job.lastReport = reportFullTextOf(event);
-        // `#noteRunnerSessionSince` と同じ時計（`this.#now()`）で書く: `reportSeenInSession` が前後を比べるので、別の時計だと注入した時計の試験で崩れる。
-        record.job.lastReportAt = this.#nowIso();
-        // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
-        // `isTerminalJobStatus` は使わない: `done` を含むが、`done` は idle を兼ね再び走り出せる。managerId ごとの直列化は配達順に効くので採らない。
-        const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
-        // 畳む直前の書き出し（`unreported`）は、台帳を `failed` / `lost` にしない（#4963）: 状態は直後に必ず届く `closed` が決める。
-        // ここで終端にすると、続く `closed(failed)` が「確定済みへの重複」として捨てられ、`closed` にしか無い処理（失敗の行と cgroup の注記・`lastSystemError` / `lastCgroupEvents`・器の失敗の計上・pids の飽和の印・`closed_failed` の知らせ）が全部飛ぶ。
-        const deferTerminalToClosed =
-          event.unreported !== undefined && (event.status === 'failed' || event.status === 'lost');
-        if (!settledByClosed && !deferTerminalToClosed) record.job.status = event.status;
-        // `waiting` が空なら `waiting_human` を名乗らせない: `stop()` は `#settleAll` の前に控えた状態で報告を畳むので「解かれる前」の値が届き、器の入れ替え（`abort()` の上書きが無い経路）では食い違いが台帳に残る。
-        // `event.status` そのものは書き換えない: 報告が名乗った値は `lastReportStatus` に残し、「何を名乗ったか」と「いまの状態をどう数えるか」を1つに畳まない。
-        if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
-          record.job.status = 'running';
-        }
-        // `record.job.status` とは意図して別の値になりうる（上の補正）: `lastReportStatus` は「報告が何を名乗ったか」を残す欄で、既定値は作らない。
-        record.job.lastReportStatus = event.status;
-        // 応答として終わった回では畳んだ本文を消す: 残すと次に `manager_report` を読む側が「畳まれた途中経過」と誤読する。
-        delete record.job.lastFoldedTurn;
-        // `event.failure` の有無で条件を付けない: `report` が届いたこと自体が「セッションは生きて出力している」を確定させ、`lastSystemError` / `lastCgroupEvents` は過去になる。
-        delete record.job.lastSystemError;
-        delete record.job.lastCgroupEvents;
-        // この報告で枠の印を新しく立てたか（下の失敗の枝）。立てた回だけ、使える鍵が在れば今すぐ回すよう回し手へ頼む。
-        let markedByFailure = false;
-        // 失敗として終わった回は台帳にもそう残す: 包んだ文字列だけに頼ると、一覧を出す側は「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することになる（＝ 表示のたびに文言の判定が要る）。
-        // 応答として終わった回では消す: 過去の失敗が生きているマネージャーに貼り付く。`delete` なのは `exactOptionalPropertyTypes` のため。
-        if (event.failure === undefined) {
-          delete record.job.lastFailure;
-          // 枠で止まった印は成功した回で下ろす（失敗の回では下ろさない: そこが起こし直したい相手）。印は `reached` の通知でターンの途中にも立つので、残すと通り切ったマネージャーが「枠で止まっている」ことになり、鍵が回るたびに1ターン焼く。
-          this.#usageStopped.delete(event.managerId);
-          this.#resetTimeSkewMatches.delete(event.managerId);
-          // `UsageWake#clearUsageStoppedMark` を呼ばず直接 `delete`: すぐ下の `#persist` に乗せるので、呼ぶと二重に書き込む。
-          delete record.job.usageStoppedAt;
-        } else {
-          // `status` は台帳へ写さない: 枠の束の判定にだけ使う値で、`lastFailure` の欄（code / via）を増やさない。
-          record.job.lastFailure = {
-            code: event.failure.code,
-            via: event.failure.via,
-            at: this.#nowIso(),
-          };
-          // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
-          // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
-          if (isQuotaFailure(event.failure) && !this.#usageStopped.has(event.managerId)) {
-            this.#usageStopped.add(event.managerId);
-            record.job.usageStoppedAt ??= this.#nowIso();
-            markedByFailure = true;
-          }
-        }
-        // `event.failure` の有無とは独立に判定する: 両方無いことも片方だけ在ることもある。
-        if (event.unreported === undefined) {
-          delete record.job.lastUnreported;
-        } else {
-          record.job.lastUnreported = {
-            ...event.unreported,
-            at: this.#nowIso(),
-          };
-        }
+        const markedByFailure = this.#applyReportToJob(record, event);
         await this.#persist(record);
         await this.#journalExchange(
           'inbound',
           `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${reportFullTextOf(event)}`,
         );
-        // 待たない: 完了を待つと、報告を受けてからクローンのターンが起きるまでに runner への往復が乗る。`contentless` / `awaitingBackground` の早い `return` より手前に置く（後ろだと中身の無い報告・背景待ちの報告で観測が取られない）。停止済みの早期 return は通らないので、止めた委譲へ往復を起こさない。
-        this.#observeUnpushedWorkOnce(event.managerId, 'report');
-        // `contentless` / `awaitingBackground` の早い `return` より手前に置く: 後ろだと中身の無い報告で終わった回だけ起こされないまま残る。
-        // 判定は `event.failure` ではなく印（`#usageStopped`）で行う: 失敗には SDK のクラッシュも混ざり、枠と無関係に落ちたターンへ「通る鍵に戻った」と言ってしまう。
-        await this.#usageWake.settleUsageWake(
-          event.managerId,
-          this.#usageStopped.has(event.managerId),
-        );
-        // 作業者の落ちで手を止めた担当は、ターンが `done` で終わったこの時点で起こす（回転前の鍵で落ちた印だけ。#5030）。
-        await this.#usageWake.wakeForWorkerLimit(event.managerId, 'turn-ended');
-        // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。起こし直しは回し手が鍵を回した後の `resumeStoppedByUsage()` に乗る。
-        // 上の `UsageWake#settleUsageWake` が起こせて印が下りていれば頼まない: 要らない鍵の回転を起こさない。
-        if (markedByFailure && this.#usageStopped.has(event.managerId)) {
-          await this.#usageWake.requestRotationForFailure(
-            event.managerId,
-            failedReportBodyOf(event.text) ?? event.text,
-          );
-        } else if (event.failure !== undefined && this.#usageStopped.has(event.managerId)) {
-          // 印がターンの途中の `usage_notice` で先に立っていた回も、失敗で終わったこの時点で起こし直す: 通知の枝は印を立てるだけで起こさず、
-          // 回転の借りも挑み直しの状態も無ければ周回の掃きも拾わないので、次の鍵の回転まで止まる（古い鍵のセッションで回転の後も走っていた担当）。
-          await this.#usageWake.wakeIfHeldTokenStale(event.managerId);
-        }
-        // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも配る: 成果物を握り潰さない。何も添えられていない報告は `await` を挟まない。
-        const reportFiles =
-          (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
-            ? await this.#fetchReportFiles(event, fromRunnerId)
-            : undefined;
-        const carriesFiles =
-          reportFiles !== undefined &&
-          (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
-        // 中身の無い報告は記録だけ残しクローンのターンを起こさない。`event.text` の文字列ではなく構造化された印 `contentless` で判定する。
-        if (event.contentless === true && !carriesFiles) return;
-        // 背景処理の完了待ちで畳んだターンの報告は記録だけ残し受信箱へ回さない（`event.text` の中身では判定しない）。捨てるのではなく後で必ず配る: 次の本物の報告が `#emit()` を通るときに上書きされ、来なければ `case 'closed'` と `flushWithheldReports()` が配る。
-        // 配らなかった判断は日誌の `decision` に残る（本文は上の `exchange` に全文あるので抜粋でよい）。
-        // 外へ出した成果（マージ・PR の作成・push など）を含む報告は畳まない: 30分のまとめ配りまで待たせると、他の担当への連絡がその分遅れるため。判定は本文ではなく、runner が見た実際のコマンド（`outwardActions`）だけで行う
-        if (event.awaitingBackground !== undefined && event.outwardActions !== undefined) {
-          await this.#journal({
-            type: 'decision',
-            decision: `[${event.managerId}] 背景処理の完了待ちのターンだが、外へ出した成果を含むので受信箱へ回す`,
-            grounds:
-              `managerId=${event.managerId} ` +
-              `outwardActions=${event.outwardActions.join(', ')} ` +
-              `awaitingBackground.count=${String(event.awaitingBackground.count)}`,
-          });
-        }
-        if (
-          event.awaitingBackground !== undefined &&
-          event.outwardActions === undefined &&
-          !carriesFiles
-        ) {
-          const awaitingBackground = event.awaitingBackground;
-          await this.#journal({
-            type: 'decision',
-            decision: `[${event.managerId}] 背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない`,
-            grounds:
-              `managerId=${event.managerId} ` +
-              `awaitingBackground.count=${String(awaitingBackground.count)} ` +
-              `breakdown=${awaitingBackground.breakdown} ` +
-              `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
-            routine: true,
-          });
-          // 畳む前に像と状態を見直す: 上の `await` の間に `abort()` / `#retire()` が走り切ると在庫が消えており、ここで積むと止めた委譲の報告を `flushWithheldReports()` が受信箱へ配ってしまう（#5504）。日誌の `decision` は事実として残す。
-          if (record.job.status === 'stopped') return;
-          // 人間・クローンが止めたのではなく、同じ担当の `closed`（done など）に追い越されて `#retire()` されただけなら、積まずに今すぐ配る: 積んでも `closed` はもう在庫を見終えており、`flushWithheldReports()` も像が無くて拾わないので、本文がクローンへ届かず消える。`closed` の「report 無し」の知らせは `lastReportAt` が書かれていて出ないので、二重にもならない。
-          if (this.#records.get(event.managerId) !== record) {
-            this.#emit(
-              event.managerId,
-              'report',
-              this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
-              undefined,
-              undefined,
-              'full',
-              event.failure !== undefined || event.unreported !== undefined,
-            );
-            // 上で書いた「受信箱へは回さない」の decision は消せないので、実際には配ったことを日誌に足す（日誌だけ読む人に「配られていない」と読ませない）。
-            await this.#journal({
-              type: 'decision',
-              decision: `[${event.managerId}] 同じ担当の closed に追い越されたので、畳まずに受信箱へ配った`,
-              grounds:
-                `managerId=${event.managerId} ` +
-                `awaitingBackground.count=${String(awaitingBackground.count)} ` +
-                `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
-              routine: true,
-            });
-            return;
-          }
-          this.#withheld.withhold(event.managerId, event.text, awaitingBackground);
-          return;
-        }
-        // `event.text` を包まない: runner 側で複数の書き手（マネージャー・SDK・runner）の断片が既に1本の文字列に連結されており、この層には `codeSpan()` で包む境目が無い。包むなら連結する側（`runner.ts`）。
-        // `foldedTurn` は本文の文言ではなく構造化された印（`event.failure` / `event.unreported`）だけで判定する。
-        const foldedTurn = event.failure !== undefined || event.unreported !== undefined;
-        // `synthesized` が無い（旧 runner）ときは常に即配る側へ倒す: 版がずれた窓では必ず「起こす側」にする。
-        // 合流窓へ積む枝では `foldedTurn` を渡さない: 複数の断片を1本にまとめる口で単発の bool を渡す場所が無く、`#flushSynthesizedNoticeFor` が `label` から判定し直す。
-        if (event.synthesized !== undefined && !carriesFiles) {
-          // 枠の印は構造化された失敗（`failure.code` / `via` / `status`）だけで付ける。時刻の言い回しは SDK の本文（見出しと「失敗する前に出ていた本文」を除いた部分）からだけ読む: マネージャー本人の文に `resets` と書いてあっても拾わない。
-          let quota: QuotaMark | undefined;
-          if (
-            event.synthesized === 'turn_failed' &&
-            event.failure !== undefined &&
-            isQuotaFailure(event.failure)
-          ) {
-            const body = failedReportBodyOf(event.text);
-            const said = partialBeforeFailureOf(event.text);
-            quota = quotaMarkOf(body === undefined ? {} : { text: body }, this.#now(), {
-              ...(body === undefined ? {} : { sdkText: body }),
-              ...(said === undefined ? {} : { said }),
-            });
-          }
-          this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text, quota);
-        } else {
-          this.#emit(
-            event.managerId,
-            'report',
-            // 系統3の節約が無効なら、途中の発言を含む全文を配る（#5269 の前の形）
-            this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
-            undefined,
-            undefined,
-            'full',
-            foldedTurn,
-            carriesFiles ? reportFiles : undefined,
-          );
-        }
+        await this.#afterReportRecorded(event, markedByFailure);
+        await this.#deliverReport(record, event, fromRunnerId);
         return;
       }
 
@@ -6408,321 +6208,9 @@ class Pool implements ManagerPool {
       }
 
       case 'closed': {
-        // 止めた後の `closed` で status を巻き戻さない: 無条件に `event.status` へ上書きすると終端が甦り、`failed` の枝がクローンへ `#emit()` する。日誌には残す。`#retire()` は `abort()` が済ませているので呼ばない。
-        if (record.job.status === 'stopped') {
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
-              `（status=${event.status}）を受け取った: ${event.reason}`,
-          );
-          return;
-        }
-        // 移った後に古い runner から届いた closed で巻き戻さない: 無条件に処理すると `status` を書き換え、`releaseLease` でいま使われている新しい runner の貸し出しを解放して他の器が奪える状態になる。判定の理由は `case 'resume_failed'` の同じ判定を見る。
-        // 移送の resume が飛んでいる最中の closed は結論が出るまで預かる（`#relocatingTo`）: 捨てると移送が失敗した回に元の runner の lost を取りこぼし、処理すると受理された回に台帳が lost のまま残る。移送先自身の closed も預かる（素通りさせると下の runner-id 不一致で捨てる）。
-        if (this.#relocatingTo.has(event.managerId)) {
-          this.#deferEvent(event, fromRunnerId);
-          return;
-        }
-        // 同じ runner への復帰の resume の最中の closed も預かるが、いま追っているセッション自身の出来事（世代が一致）は預けない: 窓は「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事には使わない。
-        // 預けた列が空でない間は、一致する `closed` も列の後ろへ並べる: その場で処理すると、先に預けた `report` より先に `closed(done)` が処理され、`lastReportAt` が古いまま「report 無しの done」と誤って知らせる。
-        if (
-          this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId &&
-          (generation !== 'current' || (this.#deferredEvents.get(event.managerId)?.length ?? 0) > 0)
-        ) {
-          this.#deferEvent(event, fromRunnerId);
-          return;
-        }
-        if (this.#movedAwayFrom(record, fromRunnerId)) {
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
-              `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
-              `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
-          );
-          return;
-        }
-        // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
-        // `done` のときだけクローンへ1回知らせる: `lost` は成果を誰も確かめていない状態で、成果が出ている可能性を人間に見せる必要がある。`failed` / `lost` は新しい材料が無いので日誌だけ。
-        // 「1回だけ」は `Job.lateDoneNotifiedAt`（`closed` に冪等キーが無く、台帳なので再起動をまたぐ）で持ち、印を先に永続してから出す: 二重に出るより、落ちたとき日誌から辿れるほうを採る。
-        // `selfFenced` の枝より前に置く（`lost` の委譲は引き取り直しの梯子に載せない）。
-        if (record.job.status === 'lost') {
-          const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
-          const notice = notifyDone
-            ? [
-                `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
-                '台帳の状態は `lost` のまま変えていない。',
-                '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
-                  '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
-                  '確かめるまで「終わった」とも「終わっていない」とも言わない。',
-                `closed の reason: ${event.reason}`,
-              ].join('\n')
-            : undefined;
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
-              `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
-              (notice !== undefined
-                ? `。done なのでクローンへ知らせる: ${notice}`
-                : event.status === 'done'
-                  ? '。done は既に知らせてあるので重ねて知らせない'
-                  : '。受信箱へは出さない'),
-          );
-          if (notice !== undefined) {
-            record.job.lateDoneNotifiedAt = this.#nowIso();
-            await this.#persist(record);
-            this.#emit(event.managerId, 'report', notice);
-          }
-          this.#retire(event.managerId);
-          return;
-        }
-        // `failed` 確定済みへ同じ `closed(failed)` が再度届いても日誌にだけ残す: SSE の再接続の配り直しで、日誌の失敗行・`closed_failed` の知らせ（合流窓で「×2」）・`noteManagerFailed`（器の失敗が二重に加算され器が余計に沈む）が重なる。`closed` に冪等キーは足さない（runner とのやり取りの形が変わる）ので、デーモンの中だけで直す。
-        // resume が飛んでいる最中は重複と読まない: `send()` は resume の後で `running` を書くので台帳はまだ `failed` で、その窓の `closed(failed)` は開き直した新しいセッションがすぐ落ちた知らせでありうる。`done` / `lost` はここで扱わない。
-        if (
-          record.job.status === 'failed' &&
-          event.status === 'failed' &&
-          !this.#resuming.has(event.managerId)
-        ) {
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
-              `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
-              event.reason,
-          );
-          this.#retire(event.managerId);
-          return;
-        }
-        // 自己失効は「終わった」ではない: `lost` をそのまま書くと `#restoreJobs` も `#reattach` も引き取らず、二重実行を止めた代わりに誰も拾わない仕事ができる。状態は動かさず貸し出しだけ返して梯子へ載せる。
-        // 判定は構造化された印だけで行う: `reason` の文字列一致だと、マネージャーが同じ文を書いた回まで巻き込む（`sdk-failure.ts` と同じ理由）。
-        if (event.selfFenced === true) {
-          this.#withdrawWaiting(record, '器が貸し出し期限で自分で畳んだ');
-          record.attached = false;
-          // 返すのは印を立てることで消すことではない: 世代（`fence`）を残す。
-          if (record.job.lease !== undefined) {
-            record.job.lease = releaseLease(record.job.lease, this.#now());
-          }
-          await this.#persist(record);
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
-              `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
-          );
-          // クローンへも知らせる: 黙って止まったように見えるのが一番まずい。末尾の `event.reason` は包まない: 既に完成した1つの prose 文（runner の定型文）で、この層に包む材料が無い。包むなら `runner.ts` 側。
-          this.#emit(
-            event.managerId,
-            'report',
-            `器がデーモンと連絡を失い、貸し出し期限で自分で畳みました（自己失効）。` +
-              `この委譲は終わっていません — 引き取りを自動で挑み直します: ${event.reason}`,
-          );
-          // 像から外さない（終わっていない）。
-          if (record.job.runnerId !== undefined) this.#scheduleReattach(record.job.runnerId);
-          return;
-        }
-
-        record.job.status = event.status;
-        this.#withdrawWaiting(record, `セッションが閉じた（status=${event.status}）`);
-        record.attached = false;
-        // 貸し出しは期限を待たず返す（`closed` は持ち主自身が「もう走っていない」と言っている）: 返さないと引き取りが猶予のぶん遅れる。消さずに印を立てる: 消すと世代（`fence`）まで消え、遅れて届いた返却で runner の世代より小さい世代を渡し命令が拒まれ続ける。
-        if (record.job.lease !== undefined) {
-          record.job.lease = releaseLease(record.job.lease, this.#now());
-        }
-        // 台帳へも残す: 受信箱は流れるので、本文だけでは振り返る面（`manager_list` / `manager_report`）から復元できない。無い回に既定値を作らない。
-        // 先に前の回の値を下ろす: 欄が無い回に下ろさないと、続けて `failed` で閉じたとき1回目の値が今回の落ち方として残る。`status` では絞らない。
-        delete record.job.lastSystemError;
-        if (event.status === 'failed' && event.systemError !== undefined) {
-          record.job.lastSystemError = {
-            ...event.systemError,
-            at: this.#nowIso(),
-          };
-        }
-        // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
-        delete record.job.lastCgroupEvents;
-        if (event.status === 'failed' && event.cgroupEvents !== undefined) {
-          record.job.lastCgroupEvents = {
-            ...event.cgroupEvents,
-            at: this.#nowIso(),
-          };
-        }
-        // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
-        // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
-        if (event.unpushedWork !== undefined) {
-          const at = this.#nowIso();
-          const observation = unpushedWorkObservationOf(event.unpushedWork, at, 'closed');
-          if (
-            isUnpushedWorkObservationAtLeastAsNewAs(
-              observation,
-              record.job.lastUnpushedWorkObservation,
-            )
-          ) {
-            record.job.lastUnpushedWorkObservation = carryKnownBranches(
-              observation,
-              record.job.lastUnpushedWorkObservation,
-            );
-          }
-        }
-        await this.#persist(record);
-        // `failed` だけでなく `lost` も見る: SIGABRT の `failed` の後の resume が `spawn … EAGAIN` で `lost` になる形で、後者は `failed` 専用の `noteManagerFailed` に届かない。判定は構造化された値だけ。`runnerId` が無い分は無実の器を沈めないために数えない。
-        if (
-          (event.status === 'failed' || event.status === 'lost') &&
-          record.job.runnerId !== undefined
-        ) {
-          if (event.systemError?.code === 'EAGAIN') {
-            this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'eagain');
-          }
-          if ((event.cgroupEvents?.pidsMaxDelta ?? 0) > 0) {
-            this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'fork-denied');
-          }
-        }
-        // `event.reason` を包まない: runner の接頭辞と例外文言が既に1本の文字列に連結されており、この層に `codeSpan()` で包む境目が無い。包むなら `runner.ts` の `#read()`。`event.reason` は1文字も変えず、`systemError` / `cgroupEvents` は末尾に足すだけ。
-        // 枠の文言で落ちた回に、枠の印を新しく立てたか（下の `failed` の枝）。
-        let markedByClosed: string | undefined;
-        if (event.status === 'failed') {
-          // 本文を日誌へ先に書く: 合流窓の flush の日誌は内訳の1行だけで個々の本文を含まないので、flush 前にプロセスが落ちると本文がどこにも残らない。
-          const body = withCgroupEventsNote(
-            withSystemErrorNote(event.reason, event.systemError),
-            event.cgroupEvents,
-          );
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${body}`,
-          );
-          // 枠の印は落ちた理由を既存の分類（`classifyUsageNotice`）に通して付ける: `reached` / `transition` のときだけ。分類できない落ち方（SDK のクラッシュ等）は印を付けず、担当ごとに配る。
-          const reasonNotice = classifyUsageNotice(event.reason);
-          // 枠の文言で落ちた回にも、`usage_notice` を待たずに枠の印を立てる（#4850）: セッションの例外で落ちた回は runner が通知を出さず、印が無いと回転の起こし直しの対象に入らない。`reached` だけ（`usage_notice` と同じ）。分類できない落ち方（SDK のクラッシュ等）には立てない。
-          // API の 429（rate_limit_error）をそのまま運ぶ理由文も枠として扱う（#4859）: SDK の枠の決まり文句を含まないことがあり、`closed` には構造化された失敗が無いため
-          const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
-          if (quotaReason && !this.#usageStopped.has(event.managerId)) {
-            this.#usageStopped.add(event.managerId);
-            record.job.usageStoppedAt ??= this.#nowIso();
-            markedByClosed = reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason;
-            // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
-            await this.#persist(record).catch((error: unknown) => {
-              noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
-            });
-          }
-          this.#queueSynthesizedNotice(
-            event.managerId,
-            'closed_failed',
-            body,
-            reasonNotice?.kind === 'reached' || reasonNotice?.kind === 'transition'
-              ? quotaMarkOf({ text: event.reason }, this.#now(), { sdkText: event.reason })
-              : undefined,
-          );
-          // 落ちたことを名簿へも知らせる: 無いと `/health` の `managers` が減り配置の点数の分母が縮んで落とした器がまた選ばれる。
-          // `failed` だけを数える: `lost` は器の不調と別の軸（枠 429 が理由の回が並んでいた）で、入れ替わった直後の resume 失敗を数えると戻ってきたばかりの器を二重に沈める。
-          // `systemError` で絞らない: シグナルで畳まれた回には `code` が付かず、`SIGABRT` を取りこぼす。`runnerId` が無い分は数えない: 無実の器を沈める。
-          if (record.job.runnerId !== undefined) {
-            this.#runners.noteManagerFailed(record.job.runnerId);
-          }
-        }
-        // 担当が終端で終わったとき、台帳に残る peer の閉じの知らせをクローンへも知らせる: `parked_peers_closed(failed)` は `closed` より前に届き、その時点の job はまだ running なので台帳へ積まれる。以後起こされないと誰にも届かない。
-        // 台帳の知らせは消さない（あとで起こし直されれば担当の先頭にも添う。宛先が違うので二重にならない）。同じ知らせは1回だけ（`#peerCloseReportedAt`）。
-        const pendingPeerClose = record.job.pendingPeerCloseNotice;
-        if (
-          (event.status === 'failed' || event.status === 'lost') &&
-          pendingPeerClose !== undefined &&
-          this.#peerCloseReportedAt.get(event.managerId) !== pendingPeerClose.at
-        ) {
-          this.#peerCloseReportedAt.set(event.managerId, pendingPeerClose.at);
-          this.#emit(
-            event.managerId,
-            'report',
-            `[${event.managerId}] ${composePeerCloseNotices(pendingPeerClose)}`,
-          );
-        }
-        // report が無いまま `closed(done)` だけが届いたらクローンへ知らせる: 台帳は `done` になるが受信箱には何も出ず、成果が出ているかを誰も確かめないまま終わる。報告の後の idle としての `closed(done)` は無音。判定できないときは知らせる側へ倒す（`reportSeenInSession`）。
-        // 背景処理の積み（`#withheld`）が在るときは重ねない: 直下の分岐が「この委譲は終わった」を配るので二重になる。本文を先に日誌へ書く（flush の前に落ちても辿れるように）。
-        if (event.status === 'done' && !this.#withheld.has(event.managerId)) {
-          const seen = reportSeenInSession(
-            record.job.lastReportAt,
-            record.job.runnerSessionSince,
-            record.job.turnStartedAt,
-          );
-          // 同じセッションについては1回だけ: 印はターンの始まりを含めた境の時刻で、新しいセッションやターンでは値が変わり知らせ直せる（`Job.silentDoneNotifiedFor`）。
-          const sessionKey =
-            laterIso(record.job.runnerSessionSince, record.job.turnStartedAt) ?? '';
-          const alreadyNotified = record.job.silentDoneNotifiedFor === sessionKey;
-          if (seen !== 'seen' && alreadyNotified) {
-            await this.#journalExchange(
-              'inbound',
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)。` +
-                `同じセッション（${sessionKey === '' ? '開始時刻は不明' : sessionKey}）については知らせ済みなので重ねて知らせない: ` +
-                event.reason,
-            );
-          } else if (seen !== 'seen') {
-            const body = [
-              `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
-              '**成果が出ているとは限らない** — 成果が実際に出ているか' +
-                '（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
-                '確かめるまで「終わった」とも「終わっていない」とも言わない。',
-              ...(seen === 'unknown'
-                ? [
-                    'このセッションで report を受け取ったかは判定できなかった（この欄を書く前の古い行などで' +
-                      '比較する時刻が無い）ため、念のため知らせている。',
-                  ]
-                : []),
-              `closed の reason: ${event.reason}`,
-            ].join('\n');
-            await this.#journalExchange(
-              'inbound',
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)` +
-                `（${seen === 'none' ? 'report は一度も受け取っていない' : '判定できないので知らせる側へ倒した'}）。` +
-                `クローンへ知らせる: ${body}`,
-            );
-            // 印を先に台帳へ書く（`lateDoneNotifiedAt` と同じ）。
-            record.job.silentDoneNotifiedFor = sessionKey;
-            await this.#persist(record);
-            this.#queueSynthesizedNotice(event.managerId, 'closed_done_silent', body);
-          }
-        }
-        // 積みが在れば `#retire()` の前に配る: 握り潰した報告は「後で必ず配る」約束で、この委譲はもう走らないので次の本物の報告が上書きする経路は来ない。`#emit()` が積みを見つけて末尾へ足すので、ここは「畳まれた」事実だけを書く。
-        const withheldAtClose = this.#withheld.get(event.managerId);
-        if (withheldAtClose !== undefined) {
-          const closedNote =
-            `[${event.managerId}] この委譲は終わった（status=${event.status}）。` +
-            '背景処理の完了待ちで畳んでいた報告をまとめて配る。';
-          if (this.#synthesized.hasWindow(event.managerId)) {
-            // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
-            // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。枠の印（`quota`）は下で `closed_failed` から受け継ぐ（枠で落ちた回だけ）。印の無い回は付けず、印の無い断片が混ざった束は担当ごとに配られる。
-            this.#withheld.carryToWindow(event.managerId, withheldAtClose);
-            // 枠で落ちた回（同じ `closed` で積んだ `closed_failed` に枠の印がある）だけ、その印（トークンの鍵ごと）を受け継ぐ: 束が「枠だけ」のままになり、プール窓の一覧に入る。印の無い回は付けない。
-            const inheritedQuota = this.#synthesized.quotaOfFragment(
-              event.managerId,
-              'closed_failed',
-            );
-            this.#queueSynthesizedNotice(
-              event.managerId,
-              'closed_withheld_flush',
-              closedNote,
-              inheritedQuota,
-            );
-          } else {
-            this.#emit(event.managerId, 'report', closedNote);
-          }
-        }
-        // 像を外す前に控える: 再起動で引き取っただけのセッションの鍵は、像の上の指紋でしか分からない（`UsageWake#wakeIfHeldTokenStale`）
-        const heldFingerprintAtClose = this.#sessionTokenFingerprintOf(event.managerId);
-        this.#retire(event.managerId);
-        // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。`#retire` の後に置く: 回し手が鍵を回して `resumeStoppedByUsage()` を呼ぶと `send()` が像を載せ直すので、手前だと `#retire` がそれを消す。
-        if (markedByClosed !== undefined && this.#usageStopped.has(event.managerId)) {
-          await this.#usageWake.requestRotationForFailure(
-            event.managerId,
-            markedByClosed,
-            heldFingerprintAtClose,
-          );
-        } else if (
-          (event.status === 'failed' || event.status === 'lost') &&
-          this.#usageStopped.has(event.managerId)
-        ) {
-          // 印が既に立っていた担当（古い鍵のまま背景処理を待たされていた回、#5044）も、セッションが終わった時点で起こし直す:
-          // 待つ理由（背景処理）はセッションと一緒に消えたのに、周回の掃きは待ちの上限（15 分）まで拾わず、その間 failed のまま止まる。
-          // 落ちた理由の文で絞らない: 背景処理の完了で古い鍵のターンが起き、`exited with code 1` だけを残して落ちる形が在る（2026-10-19 HOUSE-17・PROFILE-2）。
-          await this.#usageWake.wakeIfHeldTokenStale(event.managerId, heldFingerprintAtClose);
-        }
-        // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
-        await this.#usageWake.settleUsageWake(
-          event.managerId,
-          this.#usageStopped.has(event.managerId),
-        );
+        if (await this.#ignoreOrDeferClosed(record, event, fromRunnerId, generation)) return;
+        if (await this.#closeWithoutTransition(record, event)) return;
+        await this.#closeJob(record, event);
         return;
       }
 
@@ -6798,6 +6286,609 @@ class Pool implements ManagerPool {
       default: {
         const exhaustive: never = event;
         throw new Error(`未知の runner イベント: ${JSON.stringify(exhaustive)}`);
+      }
+    }
+  }
+
+  // `report` の段1: 止めた担当へ届いた報告を、受信箱へは回さず日誌と台帳にだけ残す。
+  async #recordStoppedReport(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    fromRunnerId: string,
+  ): Promise<void> {
+    // 添えられた成果物は取り寄せて置き場へ入れ、日誌の行に結び付ける（#4675）: 取り寄せないと runner の退避先に残ったまま掃除で消え、止めた担当の成果が黙って失われるため
+    const stoppedFiles =
+      (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
+        ? await this.#fetchReportFiles(event, fromRunnerId)
+        : undefined;
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${reportFullTextOf(event)}` +
+        describeStoppedReportFiles(stoppedFiles),
+      ...(stoppedFiles === undefined || stoppedFiles.attachments.length === 0
+        ? {}
+        : { attachments: stoppedFiles.attachments.map((ref) => ({ ...ref })) }),
+    });
+    // 本文は台帳にも残す: 日誌だけだと、誤って止めたことに気づく契機が `manager_stop` / `manager_report` のどちらにも出ない。`record.job.status` は動かさず `#emit()` もしない。
+    record.job.lastFoldedTurn = {
+      text: reportFullTextOf(event),
+      at: this.#nowIso(),
+    };
+    await this.#persist(record);
+  }
+
+  // `report` の段2: 報告の中身を台帳（`record.job`）へ写す。同期のまま保つ（`await` を挟むと並行の出来事に先を越される）。枠の印を新しく立てたら `true`。
+  #applyReportToJob(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'report' }>,
+  ): boolean {
+    // 台帳と日誌には全文を残す: `manager_report` と画面の「最後の報告」は `lastReport` を読むので、途中の発言を見たいときはそこから引ける
+    record.job.lastReport = reportFullTextOf(event);
+    // `#noteRunnerSessionSince` と同じ時計（`this.#now()`）で書く: `reportSeenInSession` が前後を比べるので、別の時計だと注入した時計の試験で崩れる。
+    record.job.lastReportAt = this.#nowIso();
+    // 並行処理の間に `closed(failed / lost)` が書いた終端を `event.status` で書き戻さない: 台帳は非終端のままクローンに `closed_failed` が出る／`lost` の引き取りの契機が消える。
+    // `isTerminalJobStatus` は使わない: `done` を含むが、`done` は idle を兼ね再び走り出せる。managerId ごとの直列化は配達順に効くので採らない。
+    const settledByClosed = record.job.status === 'failed' || record.job.status === 'lost';
+    // 畳む直前の書き出し（`unreported`）は、台帳を `failed` / `lost` にしない（#4963）: 状態は直後に必ず届く `closed` が決める。
+    // ここで終端にすると、続く `closed(failed)` が「確定済みへの重複」として捨てられ、`closed` にしか無い処理（失敗の行と cgroup の注記・`lastSystemError` / `lastCgroupEvents`・器の失敗の計上・pids の飽和の印・`closed_failed` の知らせ）が全部飛ぶ。
+    const deferTerminalToClosed =
+      event.unreported !== undefined && (event.status === 'failed' || event.status === 'lost');
+    if (!settledByClosed && !deferTerminalToClosed) record.job.status = event.status;
+    // `waiting` が空なら `waiting_human` を名乗らせない: `stop()` は `#settleAll` の前に控えた状態で報告を畳むので「解かれる前」の値が届き、器の入れ替え（`abort()` の上書きが無い経路）では食い違いが台帳に残る。
+    // `event.status` そのものは書き換えない: 報告が名乗った値は `lastReportStatus` に残し、「何を名乗ったか」と「いまの状態をどう数えるか」を1つに畳まない。
+    if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
+      record.job.status = 'running';
+    }
+    // `record.job.status` とは意図して別の値になりうる（上の補正）: `lastReportStatus` は「報告が何を名乗ったか」を残す欄で、既定値は作らない。
+    record.job.lastReportStatus = event.status;
+    // 応答として終わった回では畳んだ本文を消す: 残すと次に `manager_report` を読む側が「畳まれた途中経過」と誤読する。
+    delete record.job.lastFoldedTurn;
+    // `event.failure` の有無で条件を付けない: `report` が届いたこと自体が「セッションは生きて出力している」を確定させ、`lastSystemError` / `lastCgroupEvents` は過去になる。
+    delete record.job.lastSystemError;
+    delete record.job.lastCgroupEvents;
+    // この報告で枠の印を新しく立てたか（下の失敗の枝）。立てた回だけ、使える鍵が在れば今すぐ回すよう回し手へ頼む。
+    let markedByFailure = false;
+    // 失敗として終わった回は台帳にもそう残す: 包んだ文字列だけに頼ると、一覧を出す側は「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することになる（＝ 表示のたびに文言の判定が要る）。
+    // 応答として終わった回では消す: 過去の失敗が生きているマネージャーに貼り付く。`delete` なのは `exactOptionalPropertyTypes` のため。
+    if (event.failure === undefined) {
+      delete record.job.lastFailure;
+      // 枠で止まった印は成功した回で下ろす（失敗の回では下ろさない: そこが起こし直したい相手）。印は `reached` の通知でターンの途中にも立つので、残すと通り切ったマネージャーが「枠で止まっている」ことになり、鍵が回るたびに1ターン焼く。
+      this.#usageStopped.delete(event.managerId);
+      this.#resetTimeSkewMatches.delete(event.managerId);
+      // `UsageWake#clearUsageStoppedMark` を呼ばず直接 `delete`: すぐ下の `#persist` に乗せるので、呼ぶと二重に書き込む。
+      delete record.job.usageStoppedAt;
+    } else {
+      // `status` は台帳へ写さない: 枠の束の判定にだけ使う値で、`lastFailure` の欄（code / via）を増やさない。
+      record.job.lastFailure = {
+        code: event.failure.code,
+        via: event.failure.via,
+        at: this.#nowIso(),
+      };
+      // 429・枠の失敗は、枠の通知（`usage_notice`）が先に届かなくても印を立てる（#4850）: 通知は本文の文言でしか出ないので、構造化された失敗（`status=429` など）だけで落ちたターンは印が無く、鍵が回っても起こし直しの対象に入らなかった。クラッシュなど枠と無関係な失敗は `isQuotaFailure` が偽なので立てない。
+      // 同期の位置で立てる（`usage_notice` と同じ理由）: 間に `await` を挟むと並行の出来事に先を越される。永続化は下の `#persist` に乗せる。
+      if (isQuotaFailure(event.failure) && !this.#usageStopped.has(event.managerId)) {
+        this.#usageStopped.add(event.managerId);
+        record.job.usageStoppedAt ??= this.#nowIso();
+        markedByFailure = true;
+      }
+    }
+    // `event.failure` の有無とは独立に判定する: 両方無いことも片方だけ在ることもある。
+    if (event.unreported === undefined) {
+      delete record.job.lastUnreported;
+    } else {
+      record.job.lastUnreported = {
+        ...event.unreported,
+        at: this.#nowIso(),
+      };
+    }
+    return markedByFailure;
+  }
+
+  // `report` の段3: 台帳と日誌へ書いた後の、未 push の観測と枠の起こし直し。配達の判断（`#deliverReport`）の早い `return` より手前に置く。
+  async #afterReportRecorded(
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    markedByFailure: boolean,
+  ): Promise<void> {
+    // 待たない: 完了を待つと、報告を受けてからクローンのターンが起きるまでに runner への往復が乗る。`contentless` / `awaitingBackground` の早い `return` より手前に置く（後ろだと中身の無い報告・背景待ちの報告で観測が取られない）。停止済みの早期 return は通らないので、止めた委譲へ往復を起こさない。
+    this.#observeUnpushedWorkOnce(event.managerId, 'report');
+    // `contentless` / `awaitingBackground` の早い `return` より手前に置く: 後ろだと中身の無い報告で終わった回だけ起こされないまま残る。
+    // 判定は `event.failure` ではなく印（`#usageStopped`）で行う: 失敗には SDK のクラッシュも混ざり、枠と無関係に落ちたターンへ「通る鍵に戻った」と言ってしまう。
+    await this.#usageWake.settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+    // 作業者の落ちで手を止めた担当は、ターンが `done` で終わったこの時点で起こす（回転前の鍵で落ちた印だけ。#5030）。
+    await this.#usageWake.wakeForWorkerLimit(event.managerId, 'turn-ended');
+    // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。起こし直しは回し手が鍵を回した後の `resumeStoppedByUsage()` に乗る。
+    // 上の `UsageWake#settleUsageWake` が起こせて印が下りていれば頼まない: 要らない鍵の回転を起こさない。
+    if (markedByFailure && this.#usageStopped.has(event.managerId)) {
+      await this.#usageWake.requestRotationForFailure(
+        event.managerId,
+        failedReportBodyOf(event.text) ?? event.text,
+      );
+    } else if (event.failure !== undefined && this.#usageStopped.has(event.managerId)) {
+      // 印がターンの途中の `usage_notice` で先に立っていた回も、失敗で終わったこの時点で起こし直す: 通知の枝は印を立てるだけで起こさず、
+      // 回転の借りも挑み直しの状態も無ければ周回の掃きも拾わないので、次の鍵の回転まで止まる（古い鍵のセッションで回転の後も走っていた担当）。
+      await this.#usageWake.wakeIfHeldTokenStale(event.managerId);
+    }
+  }
+
+  // `report` の段4: 報告をクローンへ配るか畳むかを決めて配る。中身の無い報告・畳んだ報告・追い越された報告の早い `return` はすべてここに閉じる。
+  async #deliverReport(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    fromRunnerId: string,
+  ): Promise<void> {
+    // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも配る: 成果物を握り潰さない。何も添えられていない報告は `await` を挟まない。
+    const reportFiles =
+      (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
+        ? await this.#fetchReportFiles(event, fromRunnerId)
+        : undefined;
+    const carriesFiles =
+      reportFiles !== undefined &&
+      (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
+    // 中身の無い報告は記録だけ残しクローンのターンを起こさない。`event.text` の文字列ではなく構造化された印 `contentless` で判定する。
+    if (event.contentless === true && !carriesFiles) return;
+    // 背景処理の完了待ちで畳んだターンの報告は記録だけ残し受信箱へ回さない（`event.text` の中身では判定しない）。捨てるのではなく後で必ず配る: 次の本物の報告が `#emit()` を通るときに上書きされ、来なければ `case 'closed'` と `flushWithheldReports()` が配る。
+    // 配らなかった判断は日誌の `decision` に残る（本文は上の `exchange` に全文あるので抜粋でよい）。
+    // 外へ出した成果（マージ・PR の作成・push など）を含む報告は畳まない: 30分のまとめ配りまで待たせると、他の担当への連絡がその分遅れるため。判定は本文ではなく、runner が見た実際のコマンド（`outwardActions`）だけで行う
+    if (event.awaitingBackground !== undefined && event.outwardActions !== undefined) {
+      await this.#journal({
+        type: 'decision',
+        decision: `[${event.managerId}] 背景処理の完了待ちのターンだが、外へ出した成果を含むので受信箱へ回す`,
+        grounds:
+          `managerId=${event.managerId} ` +
+          `outwardActions=${event.outwardActions.join(', ')} ` +
+          `awaitingBackground.count=${String(event.awaitingBackground.count)}`,
+      });
+    }
+    if (
+      event.awaitingBackground !== undefined &&
+      event.outwardActions === undefined &&
+      !carriesFiles
+    ) {
+      const awaitingBackground = event.awaitingBackground;
+      await this.#journal({
+        type: 'decision',
+        decision: `[${event.managerId}] 背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない`,
+        grounds:
+          `managerId=${event.managerId} ` +
+          `awaitingBackground.count=${String(awaitingBackground.count)} ` +
+          `breakdown=${awaitingBackground.breakdown} ` +
+          `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
+        routine: true,
+      });
+      // 畳む前に像と状態を見直す: 上の `await` の間に `abort()` / `#retire()` が走り切ると在庫が消えており、ここで積むと止めた委譲の報告を `flushWithheldReports()` が受信箱へ配ってしまう（#5504）。日誌の `decision` は事実として残す。
+      if (record.job.status === 'stopped') return;
+      // 人間・クローンが止めたのではなく、同じ担当の `closed`（done など）に追い越されて `#retire()` されただけなら、積まずに今すぐ配る: 積んでも `closed` はもう在庫を見終えており、`flushWithheldReports()` も像が無くて拾わないので、本文がクローンへ届かず消える。`closed` の「report 無し」の知らせは `lastReportAt` が書かれていて出ないので、二重にもならない。
+      if (this.#records.get(event.managerId) !== record) {
+        this.#emit(
+          event.managerId,
+          'report',
+          this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
+          undefined,
+          undefined,
+          'full',
+          event.failure !== undefined || event.unreported !== undefined,
+        );
+        // 上で書いた「受信箱へは回さない」の decision は消せないので、実際には配ったことを日誌に足す（日誌だけ読む人に「配られていない」と読ませない）。
+        await this.#journal({
+          type: 'decision',
+          decision: `[${event.managerId}] 同じ担当の closed に追い越されたので、畳まずに受信箱へ配った`,
+          grounds:
+            `managerId=${event.managerId} ` +
+            `awaitingBackground.count=${String(awaitingBackground.count)} ` +
+            `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
+          routine: true,
+        });
+        return;
+      }
+      this.#withheld.withhold(event.managerId, event.text, awaitingBackground);
+      return;
+    }
+    // `event.text` を包まない: runner 側で複数の書き手（マネージャー・SDK・runner）の断片が既に1本の文字列に連結されており、この層には `codeSpan()` で包む境目が無い。包むなら連結する側（`runner.ts`）。
+    // `foldedTurn` は本文の文言ではなく構造化された印（`event.failure` / `event.unreported`）だけで判定する。
+    const foldedTurn = event.failure !== undefined || event.unreported !== undefined;
+    // `synthesized` が無い（旧 runner）ときは常に即配る側へ倒す: 版がずれた窓では必ず「起こす側」にする。
+    // 合流窓へ積む枝では `foldedTurn` を渡さない: 複数の断片を1本にまとめる口で単発の bool を渡す場所が無く、`#flushSynthesizedNoticeFor` が `label` から判定し直す。
+    if (event.synthesized !== undefined && !carriesFiles) {
+      // 枠の印は構造化された失敗（`failure.code` / `via` / `status`）だけで付ける。時刻の言い回しは SDK の本文（見出しと「失敗する前に出ていた本文」を除いた部分）からだけ読む: マネージャー本人の文に `resets` と書いてあっても拾わない。
+      let quota: QuotaMark | undefined;
+      if (
+        event.synthesized === 'turn_failed' &&
+        event.failure !== undefined &&
+        isQuotaFailure(event.failure)
+      ) {
+        const body = failedReportBodyOf(event.text);
+        const said = partialBeforeFailureOf(event.text);
+        quota = quotaMarkOf(body === undefined ? {} : { text: body }, this.#now(), {
+          ...(body === undefined ? {} : { sdkText: body }),
+          ...(said === undefined ? {} : { said }),
+        });
+      }
+      this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text, quota);
+    } else {
+      this.#emit(
+        event.managerId,
+        'report',
+        // 系統3の節約が無効なら、途中の発言を含む全文を配る（#5269 の前の形）
+        this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
+        undefined,
+        undefined,
+        'full',
+        foldedTurn,
+        carriesFiles ? reportFiles : undefined,
+      );
+    }
+  }
+
+  // `closed` の段1: 停止済み・移送中と復帰窓の預かり・移った後の古い runner の `closed` を処理して抜ける。処理したら `true`（呼び元はそこで case を抜ける）。
+  async #ignoreOrDeferClosed(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+    fromRunnerId: string,
+    generation: 'stale' | 'current' | 'unknown',
+  ): Promise<boolean> {
+    // 止めた後の `closed` で status を巻き戻さない: 無条件に `event.status` へ上書きすると終端が甦り、`failed` の枝がクローンへ `#emit()` する。日誌には残す。`#retire()` は `abort()` が済ませているので呼ばない。
+    if (record.job.status === 'stopped') {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
+          `（status=${event.status}）を受け取った: ${event.reason}`,
+      );
+      return true;
+    }
+    // 移った後に古い runner から届いた closed で巻き戻さない: 無条件に処理すると `status` を書き換え、`releaseLease` でいま使われている新しい runner の貸し出しを解放して他の器が奪える状態になる。判定の理由は `case 'resume_failed'` の同じ判定を見る。
+    // 移送の resume が飛んでいる最中の closed は結論が出るまで預かる（`#relocatingTo`）: 捨てると移送が失敗した回に元の runner の lost を取りこぼし、処理すると受理された回に台帳が lost のまま残る。移送先自身の closed も預かる（素通りさせると下の runner-id 不一致で捨てる）。
+    if (this.#relocatingTo.has(event.managerId)) {
+      this.#deferEvent(event, fromRunnerId);
+      return true;
+    }
+    // 同じ runner への復帰の resume の最中の closed も預かるが、いま追っているセッション自身の出来事（世代が一致）は預けない: 窓は「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事には使わない。
+    // 預けた列が空でない間は、一致する `closed` も列の後ろへ並べる: その場で処理すると、先に預けた `report` より先に `closed(done)` が処理され、`lastReportAt` が古いまま「report 無しの done」と誤って知らせる。
+    if (
+      this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId &&
+      (generation !== 'current' || (this.#deferredEvents.get(event.managerId)?.length ?? 0) > 0)
+    ) {
+      this.#deferEvent(event, fromRunnerId);
+      return true;
+    }
+    if (this.#movedAwayFrom(record, fromRunnerId)) {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+          `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
+          `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  // `closed` の段2: 状態を動かさずに済ませる `closed`（lost 確定済み・failed の重複・自己失効）を処理して抜ける。処理したら `true`。
+  async #closeWithoutTransition(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): Promise<boolean> {
+    // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
+    // `done` のときだけクローンへ1回知らせる: `lost` は成果を誰も確かめていない状態で、成果が出ている可能性を人間に見せる必要がある。`failed` / `lost` は新しい材料が無いので日誌だけ。
+    // 「1回だけ」は `Job.lateDoneNotifiedAt`（`closed` に冪等キーが無く、台帳なので再起動をまたぐ）で持ち、印を先に永続してから出す: 二重に出るより、落ちたとき日誌から辿れるほうを採る。
+    // `selfFenced` の枝より前に置く（`lost` の委譲は引き取り直しの梯子に載せない）。
+    if (record.job.status === 'lost') {
+      const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
+      const notice = notifyDone
+        ? [
+            `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
+            '台帳の状態は `lost` のまま変えていない。',
+            '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
+              '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
+              '確かめるまで「終わった」とも「終わっていない」とも言わない。',
+            `closed の reason: ${event.reason}`,
+          ].join('\n')
+        : undefined;
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
+          `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
+          (notice !== undefined
+            ? `。done なのでクローンへ知らせる: ${notice}`
+            : event.status === 'done'
+              ? '。done は既に知らせてあるので重ねて知らせない'
+              : '。受信箱へは出さない'),
+      );
+      if (notice !== undefined) {
+        record.job.lateDoneNotifiedAt = this.#nowIso();
+        await this.#persist(record);
+        this.#emit(event.managerId, 'report', notice);
+      }
+      this.#retire(event.managerId);
+      return true;
+    }
+    // `failed` 確定済みへ同じ `closed(failed)` が再度届いても日誌にだけ残す: SSE の再接続の配り直しで、日誌の失敗行・`closed_failed` の知らせ（合流窓で「×2」）・`noteManagerFailed`（器の失敗が二重に加算され器が余計に沈む）が重なる。`closed` に冪等キーは足さない（runner とのやり取りの形が変わる）ので、デーモンの中だけで直す。
+    // resume が飛んでいる最中は重複と読まない: `send()` は resume の後で `running` を書くので台帳はまだ `failed` で、その窓の `closed(failed)` は開き直した新しいセッションがすぐ落ちた知らせでありうる。`done` / `lost` はここで扱わない。
+    if (
+      record.job.status === 'failed' &&
+      event.status === 'failed' &&
+      !this.#resuming.has(event.managerId)
+    ) {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
+          `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
+          event.reason,
+      );
+      this.#retire(event.managerId);
+      return true;
+    }
+    // 自己失効は「終わった」ではない: `lost` をそのまま書くと `#restoreJobs` も `#reattach` も引き取らず、二重実行を止めた代わりに誰も拾わない仕事ができる。状態は動かさず貸し出しだけ返して梯子へ載せる。
+    // 判定は構造化された印だけで行う: `reason` の文字列一致だと、マネージャーが同じ文を書いた回まで巻き込む（`sdk-failure.ts` と同じ理由）。
+    if (event.selfFenced === true) {
+      this.#withdrawWaiting(record, '器が貸し出し期限で自分で畳んだ');
+      record.attached = false;
+      // 返すのは印を立てることで消すことではない: 世代（`fence`）を残す。
+      if (record.job.lease !== undefined) {
+        record.job.lease = releaseLease(record.job.lease, this.#now());
+      }
+      await this.#persist(record);
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
+          `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
+      );
+      // クローンへも知らせる: 黙って止まったように見えるのが一番まずい。末尾の `event.reason` は包まない: 既に完成した1つの prose 文（runner の定型文）で、この層に包む材料が無い。包むなら `runner.ts` 側。
+      this.#emit(
+        event.managerId,
+        'report',
+        `器がデーモンと連絡を失い、貸し出し期限で自分で畳みました（自己失効）。` +
+          `この委譲は終わっていません — 引き取りを自動で挑み直します: ${event.reason}`,
+      );
+      // 像から外さない（終わっていない）。
+      if (record.job.runnerId !== undefined) this.#scheduleReattach(record.job.runnerId);
+      return true;
+    }
+    return false;
+  }
+
+  // `closed` の段3: 終端として確定させる本体。台帳へ写し、失敗・peer・report 無しの done・畳んだ報告を知らせ、像を外して起こし直す。
+  async #closeJob(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): Promise<void> {
+    this.#applyClosedToJob(record, event);
+    await this.#persist(record);
+    this.#notePidsSaturationAtClose(record, event);
+    const markedByClosed =
+      event.status === 'failed' ? await this.#noteClosedFailure(record, event) : undefined;
+    this.#noticePeerCloseAtEnd(record, event);
+    // report が無いまま `closed(done)` だけが届いたらクローンへ知らせる: 台帳は `done` になるが受信箱には何も出ず、成果が出ているかを誰も確かめないまま終わる。報告の後の idle としての `closed(done)` は無音。判定できないときは知らせる側へ倒す（`reportSeenInSession`）。
+    // 背景処理の積み（`#withheld`）が在るときは重ねない: 直下の分岐が「この委譲は終わった」を配るので二重になる。本文を先に日誌へ書く（flush の前に落ちても辿れるように）。
+    if (event.status === 'done' && !this.#withheld.has(event.managerId)) {
+      await this.#noticeSilentDone(record, event);
+    }
+    this.#flushWithheldAtClose(event);
+    // 像を外す前に控える: 再起動で引き取っただけのセッションの鍵は、像の上の指紋でしか分からない（`UsageWake#wakeIfHeldTokenStale`）
+    const heldFingerprintAtClose = this.#sessionTokenFingerprintOf(event.managerId);
+    this.#retire(event.managerId);
+    // 印を立てた直後に、使える鍵が在れば今すぐ起こし直してもらう（#4850）。`#retire` の後に置く: 回し手が鍵を回して `resumeStoppedByUsage()` を呼ぶと `send()` が像を載せ直すので、手前だと `#retire` がそれを消す。
+    if (markedByClosed !== undefined && this.#usageStopped.has(event.managerId)) {
+      await this.#usageWake.requestRotationForFailure(
+        event.managerId,
+        markedByClosed,
+        heldFingerprintAtClose,
+      );
+    } else if (
+      (event.status === 'failed' || event.status === 'lost') &&
+      this.#usageStopped.has(event.managerId)
+    ) {
+      // 印が既に立っていた担当（古い鍵のまま背景処理を待たされていた回、#5044）も、セッションが終わった時点で起こし直す:
+      // 待つ理由（背景処理）はセッションと一緒に消えたのに、周回の掃きは待ちの上限（15 分）まで拾わず、その間 failed のまま止まる。
+      // 落ちた理由の文で絞らない: 背景処理の完了で古い鍵のターンが起き、`exited with code 1` だけを残して落ちる形が在る（2026-10-19 HOUSE-17・PROFILE-2）。
+      await this.#usageWake.wakeIfHeldTokenStale(event.managerId, heldFingerprintAtClose);
+    }
+    // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
+    await this.#usageWake.settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+  }
+
+  // `closed` の段3-1: 状態・貸し出し・直近の失敗の事実・未 push の観測を台帳（`record.job`）へ写す。同期のまま保つ。
+  #applyClosedToJob(record: ManagerRecord, event: Extract<RunnerEvent, { type: 'closed' }>): void {
+    record.job.status = event.status;
+    this.#withdrawWaiting(record, `セッションが閉じた（status=${event.status}）`);
+    record.attached = false;
+    // 貸し出しは期限を待たず返す（`closed` は持ち主自身が「もう走っていない」と言っている）: 返さないと引き取りが猶予のぶん遅れる。消さずに印を立てる: 消すと世代（`fence`）まで消え、遅れて届いた返却で runner の世代より小さい世代を渡し命令が拒まれ続ける。
+    if (record.job.lease !== undefined) {
+      record.job.lease = releaseLease(record.job.lease, this.#now());
+    }
+    // 台帳へも残す: 受信箱は流れるので、本文だけでは振り返る面（`manager_list` / `manager_report`）から復元できない。無い回に既定値を作らない。
+    // 先に前の回の値を下ろす: 欄が無い回に下ろさないと、続けて `failed` で閉じたとき1回目の値が今回の落ち方として残る。`status` では絞らない。
+    delete record.job.lastSystemError;
+    if (event.status === 'failed' && event.systemError !== undefined) {
+      record.job.lastSystemError = {
+        ...event.systemError,
+        at: this.#nowIso(),
+      };
+    }
+    // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
+    delete record.job.lastCgroupEvents;
+    if (event.status === 'failed' && event.cgroupEvents !== undefined) {
+      record.job.lastCgroupEvents = {
+        ...event.cgroupEvents,
+        at: this.#nowIso(),
+      };
+    }
+    // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
+    // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
+    if (event.unpushedWork !== undefined) {
+      const at = this.#nowIso();
+      const observation = unpushedWorkObservationOf(event.unpushedWork, at, 'closed');
+      if (
+        isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
+      ) {
+        record.job.lastUnpushedWorkObservation = carryKnownBranches(
+          observation,
+          record.job.lastUnpushedWorkObservation,
+        );
+      }
+    }
+  }
+
+  // `closed` の段3-2: `failed` / `lost` の落ち方から、器の pids 飽和の印を立てる。同期のまま保つ。
+  #notePidsSaturationAtClose(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): void {
+    // `failed` だけでなく `lost` も見る: SIGABRT の `failed` の後の resume が `spawn … EAGAIN` で `lost` になる形で、後者は `failed` 専用の `noteManagerFailed` に届かない。判定は構造化された値だけ。`runnerId` が無い分は無実の器を沈めないために数えない。
+    if (
+      (event.status === 'failed' || event.status === 'lost') &&
+      record.job.runnerId !== undefined
+    ) {
+      if (event.systemError?.code === 'EAGAIN') {
+        this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'eagain');
+      }
+      if ((event.cgroupEvents?.pidsMaxDelta ?? 0) > 0) {
+        this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'fork-denied');
+      }
+    }
+  }
+
+  // `closed` の段3-3: `failed` で閉じた回の知らせ（日誌・枠の印・合流窓・器の失敗の計上）。枠の印を新しく立てたときはその理由を返す。
+  async #noteClosedFailure(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): Promise<string | undefined> {
+    // `event.reason` を包まない: runner の接頭辞と例外文言が既に1本の文字列に連結されており、この層に `codeSpan()` で包む境目が無い。包むなら `runner.ts` の `#read()`。`event.reason` は1文字も変えず、`systemError` / `cgroupEvents` は末尾に足すだけ。
+    // 枠の文言で落ちた回に、枠の印を新しく立てたか（下の `failed` の枝）。
+    let markedByClosed: string | undefined;
+    // 本文を日誌へ先に書く: 合流窓の flush の日誌は内訳の1行だけで個々の本文を含まないので、flush 前にプロセスが落ちると本文がどこにも残らない。
+    const body = withCgroupEventsNote(
+      withSystemErrorNote(event.reason, event.systemError),
+      event.cgroupEvents,
+    );
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${body}`,
+    );
+    // 枠の印は落ちた理由を既存の分類（`classifyUsageNotice`）に通して付ける: `reached` / `transition` のときだけ。分類できない落ち方（SDK のクラッシュ等）は印を付けず、担当ごとに配る。
+    const reasonNotice = classifyUsageNotice(event.reason);
+    // 枠の文言で落ちた回にも、`usage_notice` を待たずに枠の印を立てる（#4850）: セッションの例外で落ちた回は runner が通知を出さず、印が無いと回転の起こし直しの対象に入らない。`reached` だけ（`usage_notice` と同じ）。分類できない落ち方（SDK のクラッシュ等）には立てない。
+    // API の 429（rate_limit_error）をそのまま運ぶ理由文も枠として扱う（#4859）: SDK の枠の決まり文句を含まないことがあり、`closed` には構造化された失敗が無いため
+    const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
+    if (quotaReason && !this.#usageStopped.has(event.managerId)) {
+      this.#usageStopped.add(event.managerId);
+      record.job.usageStoppedAt ??= this.#nowIso();
+      markedByClosed = reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason;
+      // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
+      await this.#persist(record).catch((error: unknown) => {
+        noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
+      });
+    }
+    this.#queueSynthesizedNotice(
+      event.managerId,
+      'closed_failed',
+      body,
+      reasonNotice?.kind === 'reached' || reasonNotice?.kind === 'transition'
+        ? quotaMarkOf({ text: event.reason }, this.#now(), { sdkText: event.reason })
+        : undefined,
+    );
+    // 落ちたことを名簿へも知らせる: 無いと `/health` の `managers` が減り配置の点数の分母が縮んで落とした器がまた選ばれる。
+    // `failed` だけを数える: `lost` は器の不調と別の軸（枠 429 が理由の回が並んでいた）で、入れ替わった直後の resume 失敗を数えると戻ってきたばかりの器を二重に沈める。
+    // `systemError` で絞らない: シグナルで畳まれた回には `code` が付かず、`SIGABRT` を取りこぼす。`runnerId` が無い分は数えない: 無実の器を沈める。
+    if (record.job.runnerId !== undefined) {
+      this.#runners.noteManagerFailed(record.job.runnerId);
+    }
+    return markedByClosed;
+  }
+
+  // `closed` の段3-4: 担当が終端で終わったとき、台帳に残る peer の閉じの知らせをクローンへも知らせる。同期のまま保つ。
+  #noticePeerCloseAtEnd(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): void {
+    // 担当が終端で終わったとき、台帳に残る peer の閉じの知らせをクローンへも知らせる: `parked_peers_closed(failed)` は `closed` より前に届き、その時点の job はまだ running なので台帳へ積まれる。以後起こされないと誰にも届かない。
+    // 台帳の知らせは消さない（あとで起こし直されれば担当の先頭にも添う。宛先が違うので二重にならない）。同じ知らせは1回だけ（`#peerCloseReportedAt`）。
+    const pendingPeerClose = record.job.pendingPeerCloseNotice;
+    if (
+      (event.status === 'failed' || event.status === 'lost') &&
+      pendingPeerClose !== undefined &&
+      this.#peerCloseReportedAt.get(event.managerId) !== pendingPeerClose.at
+    ) {
+      this.#peerCloseReportedAt.set(event.managerId, pendingPeerClose.at);
+      this.#emit(
+        event.managerId,
+        'report',
+        `[${event.managerId}] ${composePeerCloseNotices(pendingPeerClose)}`,
+      );
+    }
+  }
+
+  // `closed` の段3-5: report が無いまま届いた `closed(done)` をクローンへ知らせる（呼び元が `done` かつ在庫無しのときだけ呼ぶ）。
+  async #noticeSilentDone(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): Promise<void> {
+    const seen = reportSeenInSession(
+      record.job.lastReportAt,
+      record.job.runnerSessionSince,
+      record.job.turnStartedAt,
+    );
+    // 同じセッションについては1回だけ: 印はターンの始まりを含めた境の時刻で、新しいセッションやターンでは値が変わり知らせ直せる（`Job.silentDoneNotifiedFor`）。
+    const sessionKey = laterIso(record.job.runnerSessionSince, record.job.turnStartedAt) ?? '';
+    const alreadyNotified = record.job.silentDoneNotifiedFor === sessionKey;
+    if (seen !== 'seen' && alreadyNotified) {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)。` +
+          `同じセッション（${sessionKey === '' ? '開始時刻は不明' : sessionKey}）については知らせ済みなので重ねて知らせない: ` +
+          event.reason,
+      );
+    } else if (seen !== 'seen') {
+      const body = [
+        `この委譲 ${event.managerId} は、report を出さないまま終わった（closed の status=done。台帳の状態は done）。`,
+        '**成果が出ているとは限らない** — 成果が実際に出ているか' +
+          '（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
+          '確かめるまで「終わった」とも「終わっていない」とも言わない。',
+        ...(seen === 'unknown'
+          ? [
+              'このセッションで report を受け取ったかは判定できなかった（この欄を書く前の古い行などで' +
+                '比較する時刻が無い）ため、念のため知らせている。',
+            ]
+          : []),
+        `closed の reason: ${event.reason}`,
+      ].join('\n');
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] report 無しの closed(done)` +
+          `（${seen === 'none' ? 'report は一度も受け取っていない' : '判定できないので知らせる側へ倒した'}）。` +
+          `クローンへ知らせる: ${body}`,
+      );
+      // 印を先に台帳へ書く（`lateDoneNotifiedAt` と同じ）。
+      record.job.silentDoneNotifiedFor = sessionKey;
+      await this.#persist(record);
+      this.#queueSynthesizedNotice(event.managerId, 'closed_done_silent', body);
+    }
+  }
+
+  // `closed` の段3-6: 畳んでいた報告の在庫が在れば、像を外す前に配る（合流窓が開いていれば窓へ積む）。同期のまま保つ。
+  #flushWithheldAtClose(event: Extract<RunnerEvent, { type: 'closed' }>): void {
+    // 積みが在れば `#retire()` の前に配る: 握り潰した報告は「後で必ず配る」約束で、この委譲はもう走らないので次の本物の報告が上書きする経路は来ない。`#emit()` が積みを見つけて末尾へ足すので、ここは「畳まれた」事実だけを書く。
+    const withheldAtClose = this.#withheld.get(event.managerId);
+    if (withheldAtClose !== undefined) {
+      const closedNote =
+        `[${event.managerId}] この委譲は終わった（status=${event.status}）。` +
+        '背景処理の完了待ちで畳んでいた報告をまとめて配る。';
+      if (this.#synthesized.hasWindow(event.managerId)) {
+        // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
+        // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。枠の印（`quota`）は下で `closed_failed` から受け継ぐ（枠で落ちた回だけ）。印の無い回は付けず、印の無い断片が混ざった束は担当ごとに配られる。
+        this.#withheld.carryToWindow(event.managerId, withheldAtClose);
+        // 枠で落ちた回（同じ `closed` で積んだ `closed_failed` に枠の印がある）だけ、その印（トークンの鍵ごと）を受け継ぐ: 束が「枠だけ」のままになり、プール窓の一覧に入る。印の無い回は付けない。
+        const inheritedQuota = this.#synthesized.quotaOfFragment(event.managerId, 'closed_failed');
+        this.#queueSynthesizedNotice(
+          event.managerId,
+          'closed_withheld_flush',
+          closedNote,
+          inheritedQuota,
+        );
+      } else {
+        this.#emit(event.managerId, 'report', closedNote);
       }
     }
   }
