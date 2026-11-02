@@ -143,6 +143,67 @@ describe('同じ生ログへの mirror の預けは、届いた順に1つずつ�
   });
 });
 
+describe('並べるのは同じ生ログの預けだけで、別の生ログの預けは待たせない（#4485）', () => {
+  // 先に届いた預けを止めたまま、別の鍵の預けが進むか。止まる鍵は `first`、動く鍵は `other`
+  async function appendsWhileFirstHeld(
+    firstKey: { projectKey: string; sessionId: string; subpath?: string },
+    otherKey: { projectKey: string; sessionId: string; subpath?: string },
+  ) {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const stores: Stores = {
+      ...createMemoryStores(),
+      sessionStore: {
+        append: async (_key, entries) => {
+          const uuid = String((entries[0] as { uuid?: string }).uuid);
+          started.push(uuid);
+          if (uuid === 'first') {
+            await new Promise<void>((resolve) => {
+              releaseFirst = resolve;
+            });
+          }
+          finished.push(uuid);
+        },
+        load: async () => null,
+      },
+    };
+    const { fake, pool } = await bootWith(stores);
+    try {
+      fake.emit({ ...mirror('first'), key: firstKey } as RunnerEvent);
+      fake.emit({ ...mirror('other'), key: otherKey } as RunnerEvent);
+      // 別の鍵は、先の預けが終わっていなくても進む
+      // 並べてしまう実装では永久に来ないので、試験の上限より手前で落とす
+      await vi.waitFor(() => expect(finished).toEqual(['other']), { timeout: 2_000 });
+      expect(started).toEqual(['first', 'other']);
+    } finally {
+      releaseFirst?.();
+      await pool.stop();
+    }
+  }
+
+  it('sessionId が違えば並べない', async () => {
+    await appendsWhileFirstHeld(
+      { projectKey: 'proj-key', sessionId: 'sess-a' },
+      { projectKey: 'proj-key', sessionId: 'sess-b' },
+    );
+  });
+
+  it('subpath が違えば並べない（同じセッションの別の生ログ）', async () => {
+    await appendsWhileFirstHeld(
+      { projectKey: 'proj-key', sessionId: 'sess-a' },
+      { projectKey: 'proj-key', sessionId: 'sess-a', subpath: 'subagents/agent-1' },
+    );
+  });
+
+  it('projectKey が違えば並べない', async () => {
+    await appendsWhileFirstHeld(
+      { projectKey: 'proj-key', sessionId: 'sess-a' },
+      { projectKey: 'other-key', sessionId: 'sess-a' },
+    );
+  });
+});
+
 /** 預けのやり直しの待ち（既定の 1 秒・5 秒・30 秒）。試験は偽の時計でこの値のまま進める。 */
 const MIRROR_RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const;
 
