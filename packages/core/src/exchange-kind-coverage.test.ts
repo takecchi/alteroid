@@ -349,7 +349,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#dropStaleSessionEvent': 'decision',
-    '#endRelocationWindow': 'decision',
     '#handleEvent': 'decision,failure,reply',
     '#ignoreIfMovedAway': 'decision',
     '#ignoreOrDeferClosed': 'decision',
@@ -398,6 +397,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#onTimeout': 'recovery',
     notify: 'recovery,thinning',
     observe: 'recovery',
+  },
+  // resume の最中に預けた出来事を窓が閉じるときに捨てた日誌（旧 `Pool#endRelocationWindow`）。同じ検査をここへ移した。
+  'resume-event-windows.ts': {
+    close: 'decision',
   },
   // 生ログの写しの預けの失敗の日誌（旧 `Pool#appendMirrorRetrying`）。同じ検査をここへ移した。
   'session-loaders.ts': {
@@ -492,6 +495,7 @@ describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（i
     'push-ledger.ts',
     'quota-stop-windows.ts',
     'restored-windows.ts',
+    'resume-event-windows.ts',
     'session-loaders.ts',
     'synthesized-notice-windows.ts',
     'usage-receiver.ts',

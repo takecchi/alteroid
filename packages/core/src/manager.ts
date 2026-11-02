@@ -4321,7 +4321,7 @@ class Pool implements ManagerPool {
           summary = this.#restoredSummaryOf(record, silent, registeredRunnerIds);
         }
       } finally {
-        if (windowOpen) await this.#endRelocationWindow(job.id, ok === 'resumed');
+        if (windowOpen) await this.#resumeWindows.close(job.id, ok === 'resumed');
       }
       // 貸し出し期限で断られたのは「まだ」: 黙って諦めると次の契機が永久に来ない（台帳では走っているのに誰も走っていない仕事が残る）ので、回数では諦めない梯子へ載せる。他の理由はここでは何もしない。
       if (ok === 'held-by-lease') {
@@ -4981,7 +4981,7 @@ class Pool implements ManagerPool {
     };
     if (!relocating) markMissing();
 
-    // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`#endRelocationWindow`）。
+    // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`ResumeEventWindows#close`）。
     try {
       const cause: RestartCause = relocating ? 'relocated' : 'runner';
       const message = restartNudge(
@@ -5025,7 +5025,7 @@ class Pool implements ManagerPool {
           );
         }
       } finally {
-        if (ownsWindow) await this.#endRelocationWindow(job.id, outcome === 'resumed');
+        if (ownsWindow) await this.#resumeWindows.close(job.id, outcome === 'resumed');
       }
       // 引けなかっただけなら `continue` で済ませず予約して挑み直す: 次の名乗り（`hello`）は SSE が繋がったときにしか来ず、永久に来ないことがある。
       if (outcome === 'busy') {
@@ -5362,86 +5362,6 @@ class Pool implements ManagerPool {
     // 残りの候補へ予約する: 並行に起こされた候補の `#reattach` は、この移送先が resume 中だと `busy` で黙って抜けており、予約しないと次の名乗りまで誰にも試されない。
     for (const candidate of remaining) this.#scheduleReattach(candidate);
     return exhausted;
-  }
-
-  /** 受理されなかった移送では元の runner の出来事を処理し直す: 捨てると lost や report を取りこぼす。受理されたなら古い世代の出来事なので日誌にだけ残して捨てる。 */
-  async #endRelocationWindow(managerId: string, moved: boolean): Promise<void> {
-    const target = this.#relocatingTo.get(managerId);
-    this.#relocatingTo.delete(managerId);
-    const sameRunner = this.#sameRunnerResumeWindow.get(managerId);
-    this.#sameRunnerResumeWindow.delete(managerId);
-    const held = this.#deferredEvents.get(managerId) ?? [];
-    this.#deferredEvents.delete(managerId);
-    for (const { event, fromRunnerId } of held) {
-      // 1件が投げても残りを捨てない（預かった順に続ける）: 投げた1件は跡だけ残す。処理し直す道（預け直し・梯子）は無い（窓は閉じ済みで、`#onEvent` が窓の外から直接処理する）。
-      try {
-        // 同じ runner への復帰の窓: 受理されたなら、窓の間に届いた `closed` は resume の前のセッションの畳みなので日誌にだけ残して捨てる。
-        if (sameRunner !== undefined) {
-          // 新しいセッション自身の出来事だと分かるなら古い世代として捨てない。`report` は追っている世代が無い（`unknown`）ときも処理し直し、`closed` は世代が一致するときだけ。
-          const record = this.#records.get(managerId);
-          const generation =
-            record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
-          // 古い世代の `report` / `ask` でも、新しい世代がまだ何も出していなければ処理し直す（#5195 / #5203）: 捨てるか知らせるかは `#handleEvent` の同じ判定に任せる
-          const trackedSilent = record !== undefined && trackedGenerationSilent(record);
-          if (
-            !moved ||
-            generation === 'current' ||
-            (event.type === 'report' && (generation === 'unknown' || trackedSilent)) ||
-            (event.type === 'ask' && trackedSilent)
-          ) {
-            await this.#onEvent(event, fromRunnerId);
-            continue;
-          }
-          const dropped = await this.#droppedReportFiles(event, fromRunnerId);
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （同じ runner ${sameRunner} への復帰の resume の最中に届いた、` +
-              `古いセッションの出来事のため無視。resume は受理された）` +
-              (event.type === 'closed'
-                ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
-                : `古いセッションの ${event.type} を無視した`) +
-              dropped.text,
-            ...dropped.attachments,
-          });
-          continue;
-        }
-        const fromTarget = fromRunnerId === target;
-        // 移送先自身の出来事: 受理されたなら通常の経路で処理し直し、受理されなかったなら移送先は引き取っていないので日誌にだけ残して捨てる。
-        if (fromTarget && moved) {
-          await this.#onEvent(event, fromRunnerId);
-          continue;
-        }
-        if (moved || fromTarget) {
-          const dropped = await this.#droppedReportFiles(event, fromRunnerId);
-          await this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            ...dropped.attachments,
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （移送の最中に届いた古い runner の出来事のため無視。` +
-              `移送先は ${target ?? '不明'}、この出来事は ${fromRunnerId} から${
-                fromTarget ? '。移送は受理されなかった' : ''
-              }）` +
-              (event.type === 'closed'
-                ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
-                : `移送の最中に届いた古い runner の ${event.type} を無視した`) +
-              dropped.text,
-          });
-        } else {
-          await this.#onEvent(event, fromRunnerId);
-        }
-      } catch (error) {
-        noteBackgroundFailure(
-          '移送の窓で預かった出来事の処理し直し',
-          runnerEventShape(event),
-          error,
-        );
-      }
-    }
   }
 
   /**
