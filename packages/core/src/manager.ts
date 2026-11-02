@@ -6494,7 +6494,6 @@ class Pool implements ManagerPool {
               `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）前のセッション` +
               `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
           );
-          return;
         }
         // 「resume を投げた」は「戻れた」ではない: SDK が会話を見つけられなかったので、台帳と受信箱を実際に起きたことへ揃え直す。
         await this.#journalExchange(
