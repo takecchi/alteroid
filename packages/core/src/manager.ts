@@ -192,6 +192,7 @@ import { WithheldReportsStore } from './withheld-reports-store.js';
 import { notePhase } from './loop-stall.js';
 import {
   FOLD_NOTICE_COMMANDS_MAX,
+  abortTextsOf,
   composeFoldNotice,
   composePeerCloseNotice,
   composePeerCloseNotices,
@@ -4466,18 +4467,15 @@ class Pool implements ManagerPool {
     }
     // `'not_stopped'` / `'unknown'` のときは台帳を書かない: 生きているかもしれないマネージャーの `waiting` を畳まず、確かめていない状態を確定させない。「止めた」と言えるのは止まったと確かめたときだけ。
 
-    const stopErrorNote =
-      stopError === undefined ? '' : `（runner.stop() が例外を投げた: ${reasonOf(stopError)}）`;
-    const attemptedBase =
-      reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
-    const stoppedBase =
-      reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
-    const detail =
-      outcome === 'stopped'
-        ? `${stoppedBase}${stopErrorNote}${withheldNote}`
-        : outcome === 'not_stopped'
-          ? `${attemptedBase}runner には ${managerId} のセッションがまだ残っている。止まっていない。${stopErrorNote}`
-          : `${attemptedBase}runner に確認が取れず、止まったかは未確認。${stopErrorNote}`;
+    const { detail, messageText, markup } = abortTextsOf({
+      outcome,
+      stopError,
+      who,
+      reason,
+      by,
+      managerId,
+      withheldNote,
+    });
     await this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -4485,18 +4483,6 @@ class Pool implements ManagerPool {
       // `（停止）` はそのまま残す: テストが固定している。`[outcome=...]` は文の解釈なしに grep で数えられるようにする。
       text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] （停止）[outcome=${outcome}] ${detail}`,
     });
-    // outcome ごとに言い分ける: 止まっていないのに「停止させました」と言うと、クローンは止まったつもりで次の判断へ進む。
-    const messageText =
-      outcome === 'stopped'
-        ? `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}${withheldNote}`
-        : outcome === 'not_stopped'
-          ? `${managerId} を${who}が止めようとしましたが、まだ止まっていません` +
-            `（runner にセッションが残っています）。`
-          : `${managerId} を${who}が止めようとしましたが、止まったかどうか確認が取れませんでした。`;
-    // `markup: 'none'` は人間が打った `reason` が実際に `messageText` へ入る回（`outcome === 'stopped'` の人間発）だけに立てる: 文字が1文字も入っていないメッセージに印を立てるのは、その text についての嘘になる。他の `#post` 呼び出し箇所には足さない。
-    // クローン発に `markup: 'markdown'` を立てない: 「まだ決めていない」を `undefined` で残さないと、将来既定が反転したとき、確かめていない推定が方針変更の外へ生き残る。
-    const markup: TextMarkup | undefined =
-      outcome === 'stopped' && by === 'human' && reason !== undefined ? 'none' : undefined;
     // クローン発の停止は受信箱へ配らない: `manager_stop` の戻り値で同じターンに同期的に受け取る内容の真部分集合で新しい事実が無く、`manager_message` は束ねられないので、停止1本ごとにクローンのターン（システムプロンプトの読み直し）を1回焼く。日誌には条件を問わず残る。
     // 人間発は配る: クローンには戻り値が無く、他に知る手段が無い。
     if (by !== 'clone') {
