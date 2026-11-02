@@ -119,10 +119,14 @@ async function setup() {
       sessionId: 'sess-moved',
     },
   ]);
+  // 開く口（`open`）で登録する: 配列で渡す形だと名簿が `instanceId` を採らず、`#sighting` が器を名乗れない
+  const registry = createRunnerRegistry();
+  await registry.register({ label: 'http://runner-a:4518', open: async () => a.runner });
+  await registry.register({ label: 'http://runner-b:4518', open: async () => b.runner });
   pool = createManagerPool({
     stores,
     post: () => undefined,
-    runners: createRunnerRegistry([a.runner, b.runner]),
+    runners: registry,
   });
   await pool.restore();
   return { stores, a, b };
@@ -138,9 +142,7 @@ function rescueRef(ref: string, commit: string, at: string) {
   return {
     type: 'rescue_ref',
     managerId: MANAGER_ID,
-    worktrees: [
-      { relativePath: '.', branch: 'feat/x', at, pushed: { ref, commit, at } },
-    ],
+    worktrees: [{ relativePath: '.', branch: 'feat/x', at, pushed: { ref, commit, at } }],
   };
 }
 
@@ -163,5 +165,9 @@ describe('移った後の古い器からの遅れた rescue_ref は、新しい�
     expect(tree?.instanceId).toBe('inst-b');
     expect(tree?.at).toBe(AT_B);
     expect(tree?.goneAt).toBeUndefined();
+    const dropped = (await stores.journal.list()).filter((entry) =>
+      JSON.stringify(entry).includes('移った後に届いた古い runner の rescue_ref を無視した'),
+    );
+    expect(dropped).toHaveLength(1);
   });
 });
