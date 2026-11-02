@@ -5703,64 +5703,16 @@ class Pool implements ManagerPool {
       subagents,
       peers,
     });
-    // 応答が返らず引き取った回（`resumed.cwd` が無い）は何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
-    // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
-    record.cwdSwapNotice = undefined;
-    if (resumed.cwd !== undefined && resumed.cwd !== requestedCwd) {
-      record.job.cwd = resumed.cwd;
-      record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, resumed.cwd);
-      record.cwdSwapNotice = { requested: requestedCwd, actual: resumed.cwd };
-    }
+    this.#noteResumedCwd(record, runner, resumed, requestedCwd);
 
     // チェックポイント2: ここで `record.attached` などを書くと、止めたつもりの委譲が「走っているはず」を名乗ったまま誰にも追われなくなる。
     // `record.job.status` は書かない（`abort()` が `'stopped'` を書いて `#persist()` 済み）。畳み直せなかったときは、台帳は「止めた」なのに runner にセッションが生き残る最も危ない不一致なので黙らない。
     if (record.stopConfirmedAt !== undefined) {
-      this.#restored.end(record.job.id);
-      const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
-        record,
-        runner,
-        record.job.id,
-      );
-      if (foldOutcome === 'stopped') {
-        await this.#persist(record);
-      } else {
-        noteResumeAfterStopFoldFailed(record.job.id, foldOutcome);
-      }
+      await this.#settleStoppedAfterResume(record, runner);
       return 'stopped-meanwhile';
     }
 
-    record.attached = true;
-    const previousRunnerId = record.job.runnerId;
-    record.job.runnerId = runner.runnerId;
-    // cwd が倒れた回だけ locator を作り直さない: 倒れなかった移送で `runnerId` が元の器を指したまま残る。
-    if (previousRunnerId !== undefined && previousRunnerId !== runner.runnerId) {
-      record.job.workspace = workspaceAfterRelocation(record.job.workspace, runner.runnerId);
-    }
-    this.#noteRunnerSessionSince(record);
-    if (resumed.sessionGeneration !== undefined && resumed.sessionGeneration.length > 0) {
-      record.sessionGeneration = resumed.sessionGeneration;
-    }
-    // 名簿を引き直さない: 写すのは関門（`#claimForResume`）が判定した相手。理由は `Job.sessionInstanceId` の doc。
-    // これより前の枝ではこの欄が動かない: 貸し出しだけが新しい器へ進んで告げる1行が届かなかった回に、次の `send()` がもう一度告げられる。
-    const placed = record.job.lease?.instanceId;
-    if (placed !== undefined) record.job.sessionInstanceId = placed;
-    // 生きていた旧プロセスへ流しただけの回は身元を覚えない: 旧プロセスの env は凍っているので、いまの世代を書くと古い鍵のまま走っているのに `manager_list` の ⚠ が消える（偽の一致）。
-    // resume で起こし直した回は覚える: 抜けると `observedBy` が無く世代の照合が素通しになり、消費のトークン帰属も持てない。
-    if (resumed.reusedLiveSession === true) {
-      this.#resumedIntoLiveProcess.add(record.job.id);
-    } else {
-      this.#resumedIntoLiveProcess.delete(record.job.id);
-      this.#rememberTokenIdentity(record.job.id);
-    }
-    // 生きていた旧プロセスへ流しただけの回は立てない: 会話はそのプロセスが持っている。
-    // 預け先が在って引けた結果が空だった回だけ立てる: 預け先の無い構成（fs）や鍵（projectKey）の無い古い行では、`absent` は「無いと確かめた」ではない。
-    record.resumedWithoutLog =
-      this.#stores.sessionStore !== undefined &&
-      projectKey !== undefined &&
-      material.kind === 'absent' &&
-      resumed.reusedLiveSession !== true;
-    this.#unresumable.delete(record.job.id);
-    this.#resumedCount.set(record.job.id, (this.#resumedCount.get(record.job.id) ?? 0) + 1);
+    this.#recordResumed(record, runner, resumed, material, projectKey);
     return 'resumed';
   }
 
@@ -5847,6 +5799,80 @@ class Pool implements ManagerPool {
       });
     }
     return resumed;
+  }
+
+  /** `#resume` の段（同期）: 応答の `cwd` が頼んだ値と違えば、台帳の `cwd` と locator を直して `cwdSwapNotice` を立てる。 */
+  #noteResumedCwd(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>,
+    requestedCwd: string,
+  ): void {
+    // 応答が返らず引き取った回（`resumed.cwd` が無い）は何もしない: 「未確認」を `requestedCwd` で埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
+    // 倒れたかは応答後にしか分からず、resume 前に組む「移送の一言」へ混ぜられないので `cwdSwapNotice` で伝える。前回の通知は持ち越さない。
+    record.cwdSwapNotice = undefined;
+    if (resumed.cwd !== undefined && resumed.cwd !== requestedCwd) {
+      record.job.cwd = resumed.cwd;
+      record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, resumed.cwd);
+      record.cwdSwapNotice = { requested: requestedCwd, actual: resumed.cwd };
+    }
+  }
+
+  /** `#resume` の段: resume の後で止められていた委譲を畳み直す（呼び元が `stopConfirmedAt` を見てから呼ぶ）。 */
+  async #settleStoppedAfterResume(record: ManagerRecord, runner: RunnerClient): Promise<void> {
+    this.#restored.end(record.job.id);
+    const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
+      record,
+      runner,
+      record.job.id,
+    );
+    if (foldOutcome === 'stopped') {
+      await this.#persist(record);
+    } else {
+      noteResumeAfterStopFoldFailed(record.job.id, foldOutcome);
+    }
+  }
+
+  /** `#resume` の段（同期）: 受理された resume を台帳と pool の欄へ写す。await が無い並びなので途中で切らない。 */
+  #recordResumed(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>,
+    material: Awaited<ReturnType<SessionLoaders['loadSession']>>,
+    projectKey: string | undefined,
+  ): void {
+    record.attached = true;
+    const previousRunnerId = record.job.runnerId;
+    record.job.runnerId = runner.runnerId;
+    // cwd が倒れた回だけ locator を作り直さない: 倒れなかった移送で `runnerId` が元の器を指したまま残る。
+    if (previousRunnerId !== undefined && previousRunnerId !== runner.runnerId) {
+      record.job.workspace = workspaceAfterRelocation(record.job.workspace, runner.runnerId);
+    }
+    this.#noteRunnerSessionSince(record);
+    if (resumed.sessionGeneration !== undefined && resumed.sessionGeneration.length > 0) {
+      record.sessionGeneration = resumed.sessionGeneration;
+    }
+    // 名簿を引き直さない: 写すのは関門（`#claimForResume`）が判定した相手。理由は `Job.sessionInstanceId` の doc。
+    // これより前の枝ではこの欄が動かない: 貸し出しだけが新しい器へ進んで告げる1行が届かなかった回に、次の `send()` がもう一度告げられる。
+    const placed = record.job.lease?.instanceId;
+    if (placed !== undefined) record.job.sessionInstanceId = placed;
+    // 生きていた旧プロセスへ流しただけの回は身元を覚えない: 旧プロセスの env は凍っているので、いまの世代を書くと古い鍵のまま走っているのに `manager_list` の ⚠ が消える（偽の一致）。
+    // resume で起こし直した回は覚える: 抜けると `observedBy` が無く世代の照合が素通しになり、消費のトークン帰属も持てない。
+    if (resumed.reusedLiveSession === true) {
+      this.#resumedIntoLiveProcess.add(record.job.id);
+    } else {
+      this.#resumedIntoLiveProcess.delete(record.job.id);
+      this.#rememberTokenIdentity(record.job.id);
+    }
+    // 生きていた旧プロセスへ流しただけの回は立てない: 会話はそのプロセスが持っている。
+    // 預け先が在って引けた結果が空だった回だけ立てる: 預け先の無い構成（fs）や鍵（projectKey）の無い古い行では、`absent` は「無いと確かめた」ではない。
+    record.resumedWithoutLog =
+      this.#stores.sessionStore !== undefined &&
+      projectKey !== undefined &&
+      material.kind === 'absent' &&
+      resumed.reusedLiveSession !== true;
+    this.#unresumable.delete(record.job.id);
+    this.#resumedCount.set(record.job.id, (this.#resumedCount.get(record.job.id) ?? 0) + 1);
   }
 
   #swapNote(runnerId: string, before: string | undefined): string {
