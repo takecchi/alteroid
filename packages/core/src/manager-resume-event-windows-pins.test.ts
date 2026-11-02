@@ -295,25 +295,19 @@ describe('resume の最中に届く出来事を預ける窓', () => {
       await reattach;
     });
 
-    it('窓の間に届いた settled は預けず、その場で待ちから外して running へ戻す', async () => {
+    it('窓の間に届いた settled（取り下げ）は預けず、その場で日誌へ取り下げを残す', async () => {
       const { stores, runnerA, release, reattach } = await sameRunnerRig();
-      runnerA.emit?.({
-        type: 'ask',
-        managerId: 'mgr-same',
-        requestId: 'ask-then-settled',
-        kind: 'permission',
-        summary: '取り下げられる確認',
-      } as RunnerEvent);
-      await vi.waitFor(async () => {
-        expect((await jobOf(stores, 'mgr-same'))?.status).toBe('waiting_human');
-      });
       runnerA.emit?.({
         type: 'settled',
         managerId: 'mgr-same',
-        requestId: 'ask-then-settled',
+        requestId: 'withdrawn-in-window',
+        withdrawn: { reason: 'セッションを畳んだ' },
       } as RunnerEvent);
       await vi.waitFor(async () => {
-        expect((await jobOf(stores, 'mgr-same'))?.status).toBe('running');
+        const withdrawn = (await stores.journal.list({ types: ['escalation'] })).filter(
+          (entry) => entry.type === 'escalation' && entry.approvalId === 'withdrawn-in-window',
+        );
+        expect(withdrawn.length).toBe(1);
       });
       release();
       await reattach;
