@@ -2381,6 +2381,29 @@ class Pool implements ManagerPool {
       this.#records.delete(managerId);
       throw error;
     }
+    const requestedCwd = this.#noteStarted(record, runner, started, cwd, lease);
+    await this.#persist(record);
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      managerId,
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
+      ...(startAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(startAttachments) }),
+    });
+    if (input.supersedes !== undefined)
+      await this.#handOverToSuccessor(input.supersedes, managerId);
+    return this.#startedSummaryOf(record, requestedCwd);
+  }
+
+  /** runner が起こした結果を台帳の行へ写す（同期。頼んだ cwd と違ったときだけ、その頼んだ値を返す）。 */
+  #noteStarted(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    started: { cwd: string; sessionGeneration?: string },
+    cwd: string,
+    lease: ReturnType<typeof grantLease>,
+  ): string | undefined {
     this.#noteRunnerSessionSince(record);
     if (started.sessionGeneration !== undefined && started.sessionGeneration.length > 0) {
       record.sessionGeneration = started.sessionGeneration;
@@ -2394,18 +2417,7 @@ class Pool implements ManagerPool {
     }
     // 名簿を引き直さず、この回に貸し出しを立てた相手を写す。`undefined` で上書きしない: 一度名乗った器の値まで消えて以後判定できなくなる。
     if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
-    await this.#persist(record);
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      managerId,
-      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
-      ...(startAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(startAttachments) }),
-    });
-    if (input.supersedes !== undefined)
-      await this.#handOverToSuccessor(input.supersedes, managerId);
-    return this.#startedSummaryOf(record, requestedCwd);
+    return requestedCwd;
   }
 
   /** 起こした直後の要約を組む（同期。`cwdConfirmed` / `requestedCwd` を足す）。 */
