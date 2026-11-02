@@ -2328,6 +2328,48 @@ class Pool implements ManagerPool {
       if (note !== undefined) startRequest = `${input.request}\n\n[system] ${note}`;
     }
 
+    const { record, lease } = this.#newStartRecord(input, runner, managerId, cwd, now, at);
+    this.#records.set(managerId, record);
+    this.#rememberTokenIdentity(managerId);
+
+    let started: { cwd: string; sessionGeneration?: string };
+    try {
+      started = await runner.start({
+        managerId,
+        request: startRequest,
+        cwd,
+        lease: { fence: lease.fence, ttlMs: lease.ttlMs },
+        ...(startAttachments.length === 0 ? {} : { attachments: startAttachments }),
+      });
+    } catch (error) {
+      // 起こせなかったものを一覧に残さない: 「走っている」と見えて、誰も読まない相手へ指示を送り続けることになる。
+      this.#records.delete(managerId);
+      throw error;
+    }
+    const requestedCwd = this.#noteStarted(record, runner, started, cwd, lease);
+    await this.#persist(record);
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      managerId,
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
+      ...(startAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(startAttachments) }),
+    });
+    if (input.supersedes !== undefined)
+      await this.#handOverToSuccessor(input.supersedes, managerId);
+    return this.#startedSummaryOf(record, requestedCwd);
+  }
+
+  /** 新しい委譲の貸し出しと台帳の行を組む（同期。`#records.set` は呼び元）。 */
+  #newStartRecord(
+    input: ManagerStartInput,
+    runner: RunnerClient,
+    managerId: string,
+    cwd: string,
+    now: number,
+    at: string,
+  ): { record: ManagerRecord; lease: ReturnType<typeof grantLease> } {
     // 新しい委譲の貸し出しは、`#claimForResume` の関門を通さない: 握っている者が存在せず、奪う操作ではない。
     // 台帳へ書けたことも条件にしない（新規の委譲は台帳が書けなくても走らせる）。
     const lease = grantLease({
@@ -2364,36 +2406,7 @@ class Pool implements ManagerPool {
       waiting: [],
       attached: true,
     };
-    this.#records.set(managerId, record);
-    this.#rememberTokenIdentity(managerId);
-
-    let started: { cwd: string; sessionGeneration?: string };
-    try {
-      started = await runner.start({
-        managerId,
-        request: startRequest,
-        cwd,
-        lease: { fence: lease.fence, ttlMs: lease.ttlMs },
-        ...(startAttachments.length === 0 ? {} : { attachments: startAttachments }),
-      });
-    } catch (error) {
-      // 起こせなかったものを一覧に残さない: 「走っている」と見えて、誰も読まない相手へ指示を送り続けることになる。
-      this.#records.delete(managerId);
-      throw error;
-    }
-    const requestedCwd = this.#noteStarted(record, runner, started, cwd, lease);
-    await this.#persist(record);
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      managerId,
-      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
-      ...(startAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(startAttachments) }),
-    });
-    if (input.supersedes !== undefined)
-      await this.#handOverToSuccessor(input.supersedes, managerId);
-    return this.#startedSummaryOf(record, requestedCwd);
+    return { record, lease };
   }
 
   /** runner が起こした結果を台帳の行へ写す（同期。頼んだ cwd と違ったときだけ、その頼んだ値を返す）。 */
