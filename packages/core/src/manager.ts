@@ -4048,69 +4048,7 @@ class Pool implements ManagerPool {
 
       const living = alive.get(job.id);
       if (living) {
-        // `attached: true` を固定しない: runner が畳まれた `lost` / `failed` を名乗ることがあり、畳まれたセッションへの `push` は黙って捨てられるのに、届いたことにして台帳の終端状態を `running` へ巻き戻す。
-        // `done` も同じ隙間を持つが、この一覧（`RunnerManagerState`）はどちらの `done` かを区別する材料を持たない。
-        // だからホワイトリストで書く: ブラックリストに `done` を足す形は、状態が増えたとき既定が `attached: true`（危険側）へ倒れる。
-        // 安全側に倒しても代償は無い: 待機している `done` は resume 扱いになるが、`host.resume()` が生きたセッションへ `push` して短絡する。
-        const attached =
-          living.state.status === 'running' || living.state.status === 'waiting_human';
-        // 台帳の `cwd` を runner が実際に開いているセッションの値へ揃える: 頼んだだけの古い値を持ち越すと、`manager_list` / Web UI が実際と違う `cwd` を名乗り続ける。
-        const record: ManagerRecord = {
-          job: {
-            ...job,
-            status: living.state.status,
-            ...this.#placementOn(living.runner, living.state),
-          },
-          waiting: living.state.waiting,
-          attached,
-          reattachedAcrossRestart: true,
-          ...(living.state.tokenFingerprint === undefined
-            ? {}
-            : { tokenFingerprintAtReattach: living.state.tokenFingerprint }),
-          // `running` だけ: `waiting_human` は確認を待っていてターンを終えておらず、配り直しは `#redeliverWaitingAfterRestore` が持つ
-          ...(living.state.status === 'running' ? { reportCheckAfterRestore: true as const } : {}),
-        };
-        this.#records.set(job.id, record);
-        // 現役と違う鍵で走り続けている委譲は、起こし直しの借りに載せる（#4643）: 借り（`#usageWakeOwed`）はメモリにしか無く再起動で消えるが、
-        // 「回した時点で古い鍵のまま走っていた」はセッションの鍵の指紋と現役の指紋から引き取りの場で組み直せる。載せないと、古い鍵で枠に落ちた
-        // 通知は回し手に「もう回した後」として捨てられ（正しい）、鍵の側からの契機が二度と来ず、その委譲はクローンが手で起こすまで止まる。
-        const activeFingerprint = this.#tokenIdentity?.()?.fingerprint;
-        if (
-          attached &&
-          living.state.tokenFingerprint !== undefined &&
-          activeFingerprint !== undefined &&
-          living.state.tokenFingerprint !== activeFingerprint
-        ) {
-          this.#usageWakeOwed.add(job.id);
-        }
-        // `#rememberTokenIdentity(job.id)` を呼ばない: 引き取っただけでセッションの env は古い世代の鍵のままなので、観測しただけの現役の世代を書くと本物の食い違いが「一致」に化ける。
-        // 記録が無いままにする: 嘘の「一致」より、取れない軸に0の行を作らず正直に「材料が無い」を選ぶ。理由は `reattachedAcrossRestart` で名乗る。
-        await this.#persist(record);
-        if (attached) {
-          this.#restored.notify(record, 'attached');
-          this.#redeliverWaitingAfterRestore(record);
-        }
-        resumed.push(
-          summaryOf(
-            record,
-            isLive(record, silent),
-            lostSinceOf(record, silent),
-            vanishedOf(record, registeredRunnerIds),
-            record.sessionMissingSince,
-            record.turnEndedAt,
-            record.turnEndReason,
-            record.turnEndTail,
-            record.toolUseStallAt,
-            record.toolUseStallPending,
-            this.#withheld.awaitingBackgroundOf(record.job.id),
-            this.#tokenIdentities.get(record.job.id)?.generation,
-            this.#tokenIdentity?.()?.generation,
-            this.#tokenIdentity !== undefined,
-            this.#resetTimeSkewMatches.get(record.job.id),
-            this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
-            undefined,
-          ),
-        );
+        resumed.push(await this.#adoptLiving(job, living, silent, registeredRunnerIds));
         continue;
       }
 
@@ -4269,6 +4207,84 @@ class Pool implements ManagerPool {
     };
     this.#records.set(job.id, record);
     await this.#persist(record);
+  }
+
+  /** runner が生きているセッションを開いている委譲を、resume せずに台帳へ引き取る。一覧へ載せる要約を返す。 */
+  async #adoptLiving(
+    job: Job,
+    living: { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] },
+    silent: ReadonlyMap<string, string>,
+    registeredRunnerIds: ReadonlySet<string> | null,
+  ): Promise<ManagerSummary> {
+    // `attached: true` を固定しない: runner が畳まれた `lost` / `failed` を名乗ることがあり、畳まれたセッションへの `push` は黙って捨てられるのに、届いたことにして台帳の終端状態を `running` へ巻き戻す。
+    // `done` も同じ隙間を持つが、この一覧（`RunnerManagerState`）はどちらの `done` かを区別する材料を持たない。
+    // だからホワイトリストで書く: ブラックリストに `done` を足す形は、状態が増えたとき既定が `attached: true`（危険側）へ倒れる。
+    // 安全側に倒しても代償は無い: 待機している `done` は resume 扱いになるが、`host.resume()` が生きたセッションへ `push` して短絡する。
+    const attached = living.state.status === 'running' || living.state.status === 'waiting_human';
+    // 台帳の `cwd` を runner が実際に開いているセッションの値へ揃える: 頼んだだけの古い値を持ち越すと、`manager_list` / Web UI が実際と違う `cwd` を名乗り続ける。
+    const record: ManagerRecord = {
+      job: {
+        ...job,
+        status: living.state.status,
+        ...this.#placementOn(living.runner, living.state),
+      },
+      waiting: living.state.waiting,
+      attached,
+      reattachedAcrossRestart: true,
+      ...(living.state.tokenFingerprint === undefined
+        ? {}
+        : { tokenFingerprintAtReattach: living.state.tokenFingerprint }),
+      // `running` だけ: `waiting_human` は確認を待っていてターンを終えておらず、配り直しは `#redeliverWaitingAfterRestore` が持つ
+      ...(living.state.status === 'running' ? { reportCheckAfterRestore: true as const } : {}),
+    };
+    this.#records.set(job.id, record);
+    // 現役と違う鍵で走り続けている委譲は、起こし直しの借りに載せる（#4643）: 借り（`#usageWakeOwed`）はメモリにしか無く再起動で消えるが、
+    // 「回した時点で古い鍵のまま走っていた」はセッションの鍵の指紋と現役の指紋から引き取りの場で組み直せる。載せないと、古い鍵で枠に落ちた
+    // 通知は回し手に「もう回した後」として捨てられ（正しい）、鍵の側からの契機が二度と来ず、その委譲はクローンが手で起こすまで止まる。
+    const activeFingerprint = this.#tokenIdentity?.()?.fingerprint;
+    if (
+      attached &&
+      living.state.tokenFingerprint !== undefined &&
+      activeFingerprint !== undefined &&
+      living.state.tokenFingerprint !== activeFingerprint
+    ) {
+      this.#usageWakeOwed.add(job.id);
+    }
+    // `#rememberTokenIdentity(job.id)` を呼ばない: 引き取っただけでセッションの env は古い世代の鍵のままなので、観測しただけの現役の世代を書くと本物の食い違いが「一致」に化ける。
+    // 記録が無いままにする: 嘘の「一致」より、取れない軸に0の行を作らず正直に「材料が無い」を選ぶ。理由は `reattachedAcrossRestart` で名乗る。
+    await this.#persist(record);
+    if (attached) {
+      this.#restored.notify(record, 'attached');
+      this.#redeliverWaitingAfterRestore(record);
+    }
+    return this.#restoredSummaryOf(record, silent, registeredRunnerIds);
+  }
+
+  /** 起動時の引き取りで一覧へ載せる要約を作る（生きていたセッションの引き取りと resume の受理で共有する）。 */
+  #restoredSummaryOf(
+    record: ManagerRecord,
+    silent: ReadonlyMap<string, string>,
+    registeredRunnerIds: ReadonlySet<string> | null,
+  ): ManagerSummary {
+    return summaryOf(
+      record,
+      isLive(record, silent),
+      lostSinceOf(record, silent),
+      vanishedOf(record, registeredRunnerIds),
+      record.sessionMissingSince,
+      record.turnEndedAt,
+      record.turnEndReason,
+      record.turnEndTail,
+      record.toolUseStallAt,
+      record.toolUseStallPending,
+      this.#withheld.awaitingBackgroundOf(record.job.id),
+      this.#tokenIdentities.get(record.job.id)?.generation,
+      this.#tokenIdentity?.()?.generation,
+      this.#tokenIdentity !== undefined,
+      this.#resetTimeSkewMatches.get(record.job.id),
+      this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
+      undefined,
+    );
   }
 
   /** runner が実際に開いているセッションの値へ台帳の宛先・cwd・workspace・sessionId を揃える（起動時の引き取りと、移送先に既に居た委譲の取り直しが共有する）。 */
