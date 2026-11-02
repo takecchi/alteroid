@@ -4938,7 +4938,15 @@ class Pool implements ManagerPool {
         return false;
       }
     } catch (error) {
-      return await this.#classifyReattachError(error, record, job.id, runnerId, relocating);
+      // 投げる前に立てた予約（`held-by-lease` の日誌の書き込みが投げた回など）は落とさない: 切り出す前は `retry` が `#reattach` の変数で、catch でも残っていた。
+      const retryAfterError = await this.#classifyReattachError(
+        error,
+        record,
+        job.id,
+        runnerId,
+        relocating,
+      );
+      return retry || retryAfterError;
     }
     return retry;
   }
