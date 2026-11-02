@@ -4879,24 +4879,15 @@ class Pool implements ManagerPool {
           const swapNotice = cwdSwapNoticeClause(record);
           // 受理と「戻れた」を取り違えない。
           if (record.job.status === 'lost') return false;
-          // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
-          record.sessionMissingSince = undefined;
-          // 由来も一緒に消す: 片方だけ残さない。
-          record.sessionMissingKind = undefined;
-          // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
-          record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
-          this.#relocationRefusals.delete(job.id);
-          await this.#persist(record);
-          // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
-          if (swapNotice !== undefined) {
-            await runner.send(job.id, swapNotice).catch(() => undefined);
-          }
-          await this.#journalExchange(
-            'outbound',
-            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
-              (swapNotice === undefined ? '' : ` ${swapNotice}`),
+          await this.#settleResumedReattach(
+            job,
+            record,
+            runner,
+            relocating,
+            cause,
+            message,
+            swapNotice,
           );
-          this.#restored.notify(record, 'resumed', cause);
         }
       } finally {
         if (ownsWindow) await this.#endRelocationWindow(job.id, outcome === 'resumed');
@@ -4997,6 +4988,36 @@ class Pool implements ManagerPool {
       }
     }
     return retry;
+  }
+
+  /** resume が受理され、戻れたと確かめた後の後始末: 古い観測の消去・台帳への書き戻し・一言・日誌・知らせ。 */
+  async #settleResumedReattach(
+    job: Job,
+    record: ManagerRecord,
+    runner: RunnerClient,
+    relocating: boolean,
+    cause: RestartCause,
+    message: string,
+    swapNotice: string | undefined,
+  ): Promise<void> {
+    // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
+    record.sessionMissingSince = undefined;
+    // 由来も一緒に消す: 片方だけ残さない。
+    record.sessionMissingKind = undefined;
+    // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
+    record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
+    this.#relocationRefusals.delete(job.id);
+    await this.#persist(record);
+    // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
+    if (swapNotice !== undefined) {
+      await runner.send(job.id, swapNotice).catch(() => undefined);
+    }
+    await this.#journalExchange(
+      'outbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
+        (swapNotice === undefined ? '' : ` ${swapNotice}`),
+    );
+    this.#restored.notify(record, 'resumed', cause);
   }
 
   /** 回数で打ち切らない: 残るのは「台帳では走っているのに誰も走っていない仕事」で、この経路が直そうとしている状態そのもの。 */
