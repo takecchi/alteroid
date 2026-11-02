@@ -4669,40 +4669,11 @@ class Pool implements ManagerPool {
         // 梯子を予約する: 残さないと、解けた後に取り直す契機は `hello` しか無く、来なければ委譲は `running` のまま誰にも拾われない。時間で解けるとは限らないので間隔は上限に固定する。`viaLadder` の回は併存の日誌・知らせを出し直さない: 梯子が回るたびに積まれる。
         retry = true;
         this.#reattachDelays.set(runnerId, REATTACH_RETRY_MAX_MS);
-        if (viaLadder) {
-          await this.#refuseRelocationsBeforeGate(runnerId, sighting.duplicates);
-          return;
-        }
-        await this.#journal({
-          type: 'decision',
-          decision: `runnerId=${runnerId} の取り直しを見送った（併存を関門より前で検出。#pushProfile と runner.list() は誤解決した相手へ走らせていない）`,
-          grounds: describeAmbiguousSighting(runnerId, sighting.duplicates),
-        });
-        // 受信箱にもここで知らせる: `#claimForResume` 側の通知だけに任せると、併存を検出する経路（`hello`）がここで折り返され続け、クローンへ一度も届かない。dedup は `#ambiguousRunnersNotified` を共有するので二重には出ない。
-        // ジョブの一覧は store から引く: `this.#records`（プロセス内の像）はまだこのジョブを持っていないことがある。
-        // 一覧を読めなかった回を「紐づく委譲が無い」とみなさない: `#noteAmbiguousSighting` を呼ばなければ通知済みにもならず、次の `hello` で再挑戦できる。見送ったことは日誌に残す。
-        const listed = await this.#listJobsOrNote(
-          `runnerId=${runnerId} の併存の通知を見送った（通知済みにはしていない。次の hello で再挑戦する）`,
-        );
-        if (listed !== null) {
-          const jobIds = listed.filter((job) => job.runnerId === runnerId).map((job) => job.id);
-          this.#noteAmbiguousSighting(runnerId, sighting.duplicates, jobIds);
-        }
-        // この runner を移送先の候補として数えていたジョブには、見送りを断りとして流す: runner 単位の `return` なので、ジョブのループには届かない。
-        await this.#refuseRelocationsBeforeGate(runnerId, sighting.duplicates);
+        await this.#refuseAmbiguousRunner(runnerId, sighting.duplicates, viaLadder);
         return;
       }
       if (this.#ambiguousRunnersNotified.has(runnerId)) {
-        // 読めなかった回は「解けた」を言わず通知済みのまま残し、次に読めた回に言う。
-        const listed = await this.#listJobsOrNote(
-          `runnerId=${runnerId} の併存が解けた通知を見送った（通知済みの印は残している。次に読めた回に言う）`,
-        );
-        if (listed !== null) {
-          this.#noteAmbiguousResolved(
-            runnerId,
-            listed.filter((job) => job.runnerId === runnerId).map((job) => job.id),
-          );
-        }
+        await this.#noteAmbiguousResolvedFor(runnerId);
       }
 
       // 取り直しの前に環境を整える: 走り出してから降ろすと、その仕事の最初のコマンドだけが古い環境で走る。降ろし切るまで委譲にも待たせる。
@@ -4964,6 +4935,52 @@ class Pool implements ManagerPool {
       // 走っている間に届いた名乗りは予約より即時を優先する。
       if (this.#reattachAgain.delete(runnerId) && !this.#stopped) void this.#reattach(runnerId);
       else if (retry && !this.#stopped) this.#scheduleReattach(runnerId);
+    }
+  }
+
+  /**
+   * 併存（同じ runnerId を名乗る器が2台以上）を検出した回の断り: 日誌と受信箱へ知らせ、移送先の候補として数えていたジョブへ見送りを流す。
+   * `viaLadder` の回は流すだけで、日誌・知らせは出し直さない。
+   */
+  async #refuseAmbiguousRunner(
+    runnerId: string,
+    duplicates: number,
+    viaLadder: boolean,
+  ): Promise<void> {
+    if (viaLadder) {
+      await this.#refuseRelocationsBeforeGate(runnerId, duplicates);
+      return;
+    }
+    await this.#journal({
+      type: 'decision',
+      decision: `runnerId=${runnerId} の取り直しを見送った（併存を関門より前で検出。#pushProfile と runner.list() は誤解決した相手へ走らせていない）`,
+      grounds: describeAmbiguousSighting(runnerId, duplicates),
+    });
+    // 受信箱にもここで知らせる: `#claimForResume` 側の通知だけに任せると、併存を検出する経路（`hello`）がここで折り返され続け、クローンへ一度も届かない。dedup は `#ambiguousRunnersNotified` を共有するので二重には出ない。
+    // ジョブの一覧は store から引く: `this.#records`（プロセス内の像）はまだこのジョブを持っていないことがある。
+    // 一覧を読めなかった回を「紐づく委譲が無い」とみなさない: `#noteAmbiguousSighting` を呼ばなければ通知済みにもならず、次の `hello` で再挑戦できる。見送ったことは日誌に残す。
+    const listed = await this.#listJobsOrNote(
+      `runnerId=${runnerId} の併存の通知を見送った（通知済みにはしていない。次の hello で再挑戦する）`,
+    );
+    if (listed !== null) {
+      const jobIds = listed.filter((job) => job.runnerId === runnerId).map((job) => job.id);
+      this.#noteAmbiguousSighting(runnerId, duplicates, jobIds);
+    }
+    // この runner を移送先の候補として数えていたジョブには、見送りを断りとして流す: runner 単位の `return` なので、ジョブのループには届かない。
+    await this.#refuseRelocationsBeforeGate(runnerId, duplicates);
+  }
+
+  /** 併存が解けた回の通知: 台帳の一覧を読めなかった回は言わず、通知済みの印を残す。 */
+  async #noteAmbiguousResolvedFor(runnerId: string): Promise<void> {
+    // 読めなかった回は「解けた」を言わず通知済みのまま残し、次に読めた回に言う。
+    const listed = await this.#listJobsOrNote(
+      `runnerId=${runnerId} の併存が解けた通知を見送った（通知済みの印は残している。次に読めた回に言う）`,
+    );
+    if (listed !== null) {
+      this.#noteAmbiguousResolved(
+        runnerId,
+        listed.filter((job) => job.runnerId === runnerId).map((job) => job.id),
+      );
     }
   }
 
