@@ -348,6 +348,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#closeSelfFenced': 'recovery',
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
+    '#dropStaleSessionEvent': 'decision',
     '#endRelocationWindow': 'decision',
     '#handleEvent': 'decision,failure,reply',
     '#ignoreIfMovedAway': 'decision',

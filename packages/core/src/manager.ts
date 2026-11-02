@@ -5961,32 +5961,7 @@ class Pool implements ManagerPool {
     this.#observeSessionGeneration(record, event);
     const generation = this.#judgeSessionGeneration(record, event);
     if (generation === 'stale' && isSessionScopedEvent(event)) {
-      if (
-        event.type === 'report' &&
-        (await this.#deliverReportFromUnreplacedSession(record, event, fromRunnerId))
-      ) {
-        return;
-      }
-      if (
-        event.type === 'ask' &&
-        (await this.#noticeAskFromUnreplacedSession(record, event, fromRunnerId))
-      ) {
-        return;
-      }
-      const dropped = await this.#droppedReportFiles(event, fromRunnerId);
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （古いセッションの出来事のため無視。いま追っている世代は ` +
-          `${record.sessionGeneration ?? '不明'}、この出来事の世代は ${event.sessionGeneration ?? '不明'}）` +
-          (event.type === 'closed'
-            ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
-            : `古いセッションの ${event.type} を無視した`) +
-          dropped.text,
-        ...dropped.attachments,
-      });
+      await this.#dropStaleSessionEvent(record, event, fromRunnerId);
       return;
     }
 
@@ -6499,6 +6474,40 @@ class Pool implements ManagerPool {
     }
 
     return false;
+  }
+
+  /** `#handleEvent` の入口の段: 古いセッションの出来事を、配る・知らせる・日誌に残して捨てる（呼び元が古い世代かどうかで呼ぶ）。 */
+  async #dropStaleSessionEvent(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }>,
+    fromRunnerId: string,
+  ): Promise<void> {
+    if (
+      event.type === 'report' &&
+      (await this.#deliverReportFromUnreplacedSession(record, event, fromRunnerId))
+    ) {
+      return;
+    }
+    if (
+      event.type === 'ask' &&
+      (await this.#noticeAskFromUnreplacedSession(record, event, fromRunnerId))
+    ) {
+      return;
+    }
+    const dropped = await this.#droppedReportFiles(event, fromRunnerId);
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （古いセッションの出来事のため無視。いま追っている世代は ` +
+        `${record.sessionGeneration ?? '不明'}、この出来事の世代は ${event.sessionGeneration ?? '不明'}）` +
+        (event.type === 'closed'
+          ? `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}`
+          : `古いセッションの ${event.type} を無視した`) +
+        dropped.text,
+      ...dropped.attachments,
+    });
   }
 
   /** `note` の段1: 作業者の落ちの印を立てて台帳へ写す（呼び元が `event.workerLimit` の有無で呼ぶ）。 */
