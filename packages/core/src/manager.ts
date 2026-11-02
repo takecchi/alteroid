@@ -6208,8 +6208,16 @@ class Pool implements ManagerPool {
       }
 
       case 'closed': {
-        if (await this.#ignoreOrDeferClosed(record, event, fromRunnerId, generation)) return;
-        if (await this.#closeWithoutTransition(record, event)) return;
+        const ignored = this.#ignoreOrDeferClosed(record, event, fromRunnerId, generation);
+        if (ignored !== false) {
+          await ignored;
+          return;
+        }
+        const unchanged = this.#closeWithoutTransition(record, event);
+        if (unchanged !== false) {
+          await unchanged;
+          return;
+        }
         await this.#closeJob(record, event);
         return;
       }
@@ -6522,27 +6530,27 @@ class Pool implements ManagerPool {
     }
   }
 
-  // `closed` の段1: 停止済み・移送中と復帰窓の預かり・移った後の古い runner の `closed` を処理して抜ける。処理したら `true`（呼び元はそこで case を抜ける）。
-  async #ignoreOrDeferClosed(
+  // `closed` の段1: 停止済み・移送中と復帰窓の預かり・移った後の古い runner の `closed` を処理して抜ける。処理したらその完了の Promise（呼び元はそこで case を抜ける）、どれにも当たらなければ `false`。
+  // `async` にしない: 当たらない回に呼び元の `await` が1周ぶん増えると、`closed` を同期の順で追う試験（`manager-onevent-stale-runner.test.ts`）と台帳の書き込みの時機がずれる。
+  #ignoreOrDeferClosed(
     record: ManagerRecord,
     event: Extract<RunnerEvent, { type: 'closed' }>,
     fromRunnerId: string,
     generation: 'stale' | 'current' | 'unknown',
-  ): Promise<boolean> {
+  ): Promise<void> | false {
     // 止めた後の `closed` で status を巻き戻さない: 無条件に `event.status` へ上書きすると終端が甦り、`failed` の枝がクローンへ `#emit()` する。日誌には残す。`#retire()` は `abort()` が済ませているので呼ばない。
     if (record.job.status === 'stopped') {
-      await this.#journalExchange(
+      return this.#journalExchange(
         'inbound',
         `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
           `（status=${event.status}）を受け取った: ${event.reason}`,
       );
-      return true;
     }
     // 移った後に古い runner から届いた closed で巻き戻さない: 無条件に処理すると `status` を書き換え、`releaseLease` でいま使われている新しい runner の貸し出しを解放して他の器が奪える状態になる。判定の理由は `case 'resume_failed'` の同じ判定を見る。
     // 移送の resume が飛んでいる最中の closed は結論が出るまで預かる（`#relocatingTo`）: 捨てると移送が失敗した回に元の runner の lost を取りこぼし、処理すると受理された回に台帳が lost のまま残る。移送先自身の closed も預かる（素通りさせると下の runner-id 不一致で捨てる）。
     if (this.#relocatingTo.has(event.managerId)) {
       this.#deferEvent(event, fromRunnerId);
-      return true;
+      return Promise.resolve();
     }
     // 同じ runner への復帰の resume の最中の closed も預かるが、いま追っているセッション自身の出来事（世代が一致）は預けない: 窓は「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事には使わない。
     // 預けた列が空でない間は、一致する `closed` も列の後ろへ並べる: その場で処理すると、先に預けた `report` より先に `closed(done)` が処理され、`lastReportAt` が古いまま「report 無しの done」と誤って知らせる。
@@ -6551,102 +6559,116 @@ class Pool implements ManagerPool {
       (generation !== 'current' || (this.#deferredEvents.get(event.managerId)?.length ?? 0) > 0)
     ) {
       this.#deferEvent(event, fromRunnerId);
-      return true;
+      return Promise.resolve();
     }
     if (this.#movedAwayFrom(record, fromRunnerId)) {
-      await this.#journalExchange(
+      return this.#journalExchange(
         'inbound',
         `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
           `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
           `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
       );
-      return true;
     }
     return false;
   }
 
-  // `closed` の段2: 状態を動かさずに済ませる `closed`（lost 確定済み・failed の重複・自己失効）を処理して抜ける。処理したら `true`。
-  async #closeWithoutTransition(
+  // `closed` の段2: 状態を動かさずに済ませる `closed`（lost 確定済み・failed の重複・自己失効）を、当たった枝へ振って処理する。処理したらその完了の Promise、どれにも当たらなければ `false`。
+  // `async` にしない: 当たらない回に呼び元の `await` が1周ぶん増えるのを避ける（段1と同じ理由）。枝の順は変えない（`lost` が `selfFenced` より先）。
+  #closeWithoutTransition(
     record: ManagerRecord,
     event: Extract<RunnerEvent, { type: 'closed' }>,
-  ): Promise<boolean> {
-    // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
-    // `done` のときだけクローンへ1回知らせる: `lost` は成果を誰も確かめていない状態で、成果が出ている可能性を人間に見せる必要がある。`failed` / `lost` は新しい材料が無いので日誌だけ。
-    // 「1回だけ」は `Job.lateDoneNotifiedAt`（`closed` に冪等キーが無く、台帳なので再起動をまたぐ）で持ち、印を先に永続してから出す: 二重に出るより、落ちたとき日誌から辿れるほうを採る。
-    // `selfFenced` の枝より前に置く（`lost` の委譲は引き取り直しの梯子に載せない）。
-    if (record.job.status === 'lost') {
-      const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
-      const notice = notifyDone
-        ? [
-            `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
-            '台帳の状態は `lost` のまま変えていない。',
-            '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
-              '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
-              '確かめるまで「終わった」とも「終わっていない」とも言わない。',
-            `closed の reason: ${event.reason}`,
-          ].join('\n')
-        : undefined;
-      await this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
-          `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
-          (notice !== undefined
-            ? `。done なのでクローンへ知らせる: ${notice}`
-            : event.status === 'done'
-              ? '。done は既に知らせてあるので重ねて知らせない'
-              : '。受信箱へは出さない'),
-      );
-      if (notice !== undefined) {
-        record.job.lateDoneNotifiedAt = this.#nowIso();
-        await this.#persist(record);
-        this.#emit(event.managerId, 'report', notice);
-      }
-      this.#retire(event.managerId);
-      return true;
-    }
-    // `failed` 確定済みへ同じ `closed(failed)` が再度届いても日誌にだけ残す: SSE の再接続の配り直しで、日誌の失敗行・`closed_failed` の知らせ（合流窓で「×2」）・`noteManagerFailed`（器の失敗が二重に加算され器が余計に沈む）が重なる。`closed` に冪等キーは足さない（runner とのやり取りの形が変わる）ので、デーモンの中だけで直す。
-    // resume が飛んでいる最中は重複と読まない: `send()` は resume の後で `running` を書くので台帳はまだ `failed` で、その窓の `closed(failed)` は開き直した新しいセッションがすぐ落ちた知らせでありうる。`done` / `lost` はここで扱わない。
+  ): Promise<void> | false {
+    if (record.job.status === 'lost') return this.#closeAfterLost(record, event);
     if (
       record.job.status === 'failed' &&
       event.status === 'failed' &&
       !this.#resuming.has(event.managerId)
     ) {
-      await this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
-          `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
-          event.reason,
-      );
-      this.#retire(event.managerId);
-      return true;
+      return this.#closeDuplicateFailed(event);
     }
+    if (event.selfFenced === true) return this.#closeSelfFenced(record, event);
+    return false;
+  }
+
+  // `closed` の段2-1: `lost` 確定後に届いた `closed`。status は動かさず、`done` のときだけクローンへ1回知らせる。
+  async #closeAfterLost(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): Promise<void> {
+    // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
+    // `done` のときだけクローンへ1回知らせる: `lost` は成果を誰も確かめていない状態で、成果が出ている可能性を人間に見せる必要がある。`failed` / `lost` は新しい材料が無いので日誌だけ。
+    // 「1回だけ」は `Job.lateDoneNotifiedAt`（`closed` に冪等キーが無く、台帳なので再起動をまたぐ）で持ち、印を先に永続してから出す: 二重に出るより、落ちたとき日誌から辿れるほうを採る。
+    // `selfFenced` の枝より前に置く（`lost` の委譲は引き取り直しの梯子に載せない）。
+    const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
+    const notice = notifyDone
+      ? [
+          `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
+          '台帳の状態は `lost` のまま変えていない。',
+          '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
+            '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
+            '確かめるまで「終わった」とも「終わっていない」とも言わない。',
+          `closed の reason: ${event.reason}`,
+        ].join('\n')
+      : undefined;
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
+        `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
+        (notice !== undefined
+          ? `。done なのでクローンへ知らせる: ${notice}`
+          : event.status === 'done'
+            ? '。done は既に知らせてあるので重ねて知らせない'
+            : '。受信箱へは出さない'),
+    );
+    if (notice !== undefined) {
+      record.job.lateDoneNotifiedAt = this.#nowIso();
+      await this.#persist(record);
+      this.#emit(event.managerId, 'report', notice);
+    }
+    this.#retire(event.managerId);
+  }
+
+  // `closed` の段2-2: `failed` 確定済みへ再度届いた `closed(failed)`（SSE の再送）。日誌にだけ残して像を外す。
+  async #closeDuplicateFailed(event: Extract<RunnerEvent, { type: 'closed' }>): Promise<void> {
+    // `failed` 確定済みへ同じ `closed(failed)` が再度届いても日誌にだけ残す: SSE の再接続の配り直しで、日誌の失敗行・`closed_failed` の知らせ（合流窓で「×2」）・`noteManagerFailed`（器の失敗が二重に加算され器が余計に沈む）が重なる。`closed` に冪等キーは足さない（runner とのやり取りの形が変わる）ので、デーモンの中だけで直す。
+    // resume が飛んでいる最中は重複と読まない: `send()` は resume の後で `running` を書くので台帳はまだ `failed` で、その窓の `closed(failed)` は開き直した新しいセッションがすぐ落ちた知らせでありうる。`done` / `lost` はここで扱わない。
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
+        `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
+        event.reason,
+    );
+    this.#retire(event.managerId);
+  }
+
+  // `closed` の段2-3: 自己失効の `closed`。状態は動かさず貸し出しだけ返し、引き取りを挑み直す。
+  async #closeSelfFenced(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'closed' }>,
+  ): Promise<void> {
     // 自己失効は「終わった」ではない: `lost` をそのまま書くと `#restoreJobs` も `#reattach` も引き取らず、二重実行を止めた代わりに誰も拾わない仕事ができる。状態は動かさず貸し出しだけ返して梯子へ載せる。
     // 判定は構造化された印だけで行う: `reason` の文字列一致だと、マネージャーが同じ文を書いた回まで巻き込む（`sdk-failure.ts` と同じ理由）。
-    if (event.selfFenced === true) {
-      this.#withdrawWaiting(record, '器が貸し出し期限で自分で畳んだ');
-      record.attached = false;
-      // 返すのは印を立てることで消すことではない: 世代（`fence`）を残す。
-      if (record.job.lease !== undefined) {
-        record.job.lease = releaseLease(record.job.lease, this.#now());
-      }
-      await this.#persist(record);
-      await this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
-          `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
-      );
-      // クローンへも知らせる: 黙って止まったように見えるのが一番まずい。末尾の `event.reason` は包まない: 既に完成した1つの prose 文（runner の定型文）で、この層に包む材料が無い。包むなら `runner.ts` 側。
-      this.#emit(
-        event.managerId,
-        'report',
-        `器がデーモンと連絡を失い、貸し出し期限で自分で畳みました（自己失効）。` +
-          `この委譲は終わっていません — 引き取りを自動で挑み直します: ${event.reason}`,
-      );
-      // 像から外さない（終わっていない）。
-      if (record.job.runnerId !== undefined) this.#scheduleReattach(record.job.runnerId);
-      return true;
+    this.#withdrawWaiting(record, '器が貸し出し期限で自分で畳んだ');
+    record.attached = false;
+    // 返すのは印を立てることで消すことではない: 世代（`fence`）を残す。
+    if (record.job.lease !== undefined) {
+      record.job.lease = releaseLease(record.job.lease, this.#now());
     }
-    return false;
+    await this.#persist(record);
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
+        `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
+    );
+    // クローンへも知らせる: 黙って止まったように見えるのが一番まずい。末尾の `event.reason` は包まない: 既に完成した1つの prose 文（runner の定型文）で、この層に包む材料が無い。包むなら `runner.ts` 側。
+    this.#emit(
+      event.managerId,
+      'report',
+      `器がデーモンと連絡を失い、貸し出し期限で自分で畳みました（自己失効）。` +
+        `この委譲は終わっていません — 引き取りを自動で挑み直します: ${event.reason}`,
+    );
+    // 像から外さない（終わっていない）。
+    if (record.job.runnerId !== undefined) this.#scheduleReattach(record.job.runnerId);
   }
 
   // `closed` の段3: 終端として確定させる本体。台帳へ写し、失敗・peer・report 無しの done・畳んだ報告を知らせ、像を外して起こし直す。

@@ -343,7 +343,9 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   },
   'manager.ts': {
     '#askedOf': 'thinning',
-    '#closeWithoutTransition': 'decision,recovery',
+    '#closeAfterLost': 'decision',
+    '#closeDuplicateFailed': 'decision',
+    '#closeSelfFenced': 'recovery',
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
