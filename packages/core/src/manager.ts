@@ -4929,34 +4929,12 @@ class Pool implements ManagerPool {
       }
       if (relocating && outcome === 'no-session') {
         // 移送のときの `no-session` はその場で lost に確定する: セッションが無いのは委譲の側の事実で、候補を回しても変わらない。
-        const reason = new Error(
-          'no-session: 委譲が session_id を持っておらず、どの runner でも開き直せない（移送の候補を回しても変わらないので、その場で確定した）',
-        );
-        await this.#journal({
-          type: 'decision',
-          decision: `[${job.id}] 移送先 ${runnerId} へ移せない（セッションが無い）。候補を回さず、戻せなかったものとして確定する`,
-          grounds: reasonOf(reason),
-        });
-        await this.#confirmLost(record, reason);
+        await this.#settleRelocationNoSession(job, record, runnerId);
         return false;
       }
       if (relocating && outcome === 'workspace-path-unknown') {
         // 貸し出しは返さない: この回では貸していず、`record.job.lease` がこの候補を指していても以前の回が貸したもので、セッションが起きていないと確かめられないものは返さない。
-        const reason = new Error(
-          `workspace-path-unknown: 移送先 ${runnerId} は cwd を記録しておらず、runner からも workspacePath を聞けていない`,
-        );
-        if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
-          await this.#confirmLost(record, reason);
-        } else if (
-          record.job.lease?.runnerId === runnerId &&
-          record.job.lease.releasedAt === undefined
-        ) {
-          await this.#journal({
-            type: 'decision',
-            decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しは返していない（以前の回の貸し出しで、セッションが起きていないと確かめられない）`,
-            grounds: reasonOf(reason),
-          });
-        }
+        await this.#settleRelocationWorkspaceUnknown(job, record, runnerId);
         return false;
       }
     } catch (error) {
@@ -5018,6 +4996,46 @@ class Pool implements ManagerPool {
         (swapNotice === undefined ? '' : ` ${swapNotice}`),
     );
     this.#restored.notify(record, 'resumed', cause);
+  }
+
+  /** 移送のときの `no-session` の後始末: セッションが無いのは委譲の側の事実なので、その場で lost に確定する。 */
+  async #settleRelocationNoSession(
+    job: Job,
+    record: ManagerRecord,
+    runnerId: string,
+  ): Promise<void> {
+    const reason = new Error(
+      'no-session: 委譲が session_id を持っておらず、どの runner でも開き直せない（移送の候補を回しても変わらないので、その場で確定した）',
+    );
+    await this.#journal({
+      type: 'decision',
+      decision: `[${job.id}] 移送先 ${runnerId} へ移せない（セッションが無い）。候補を回さず、戻せなかったものとして確定する`,
+      grounds: reasonOf(reason),
+    });
+    await this.#confirmLost(record, reason);
+  }
+
+  /** 移送のときの `workspace-path-unknown` の後始末: 断りを数え、上限なら lost に確定し、そうでなければ貸し出しを返さなかったことを日誌に残す。 */
+  async #settleRelocationWorkspaceUnknown(
+    job: Job,
+    record: ManagerRecord,
+    runnerId: string,
+  ): Promise<void> {
+    const reason = new Error(
+      `workspace-path-unknown: 移送先 ${runnerId} は cwd を記録しておらず、runner からも workspacePath を聞けていない`,
+    );
+    if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
+      await this.#confirmLost(record, reason);
+    } else if (
+      record.job.lease?.runnerId === runnerId &&
+      record.job.lease.releasedAt === undefined
+    ) {
+      await this.#journal({
+        type: 'decision',
+        decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しは返していない（以前の回の貸し出しで、セッションが起きていないと確かめられない）`,
+        grounds: reasonOf(reason),
+      });
+    }
   }
 
   /** 回数で打ち切らない: 残るのは「台帳では走っているのに誰も走っていない仕事」で、この経路が直そうとしている状態そのもの。 */
