@@ -5396,7 +5396,7 @@ class Pool implements ManagerPool {
         }
         const fromTarget = fromRunnerId === target;
         // 移送先自身の出来事: 受理されたなら通常の経路で処理し直し、受理されなかったなら移送先は引き取っていないので日誌にだけ残して捨てる。
-        if (fromTarget && moved) {
+        if (false && fromTarget && moved) {
           await this.#onEvent(event, fromRunnerId);
           continue;
         }
