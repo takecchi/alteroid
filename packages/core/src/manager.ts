@@ -189,7 +189,7 @@ import {
   type ManagerUnpushedWork,
 } from './unpushed-work-observation.js';
 import { StaleTokenFold } from './stale-token-fold.js';
-import { markRescueGoneWhileAlive, mergeRescue } from './rescue-cleanup.js';
+import { markRescueGoneWhileAlive } from './rescue-cleanup.js';
 import { RescueSweeper } from './rescue-sweeper.js';
 import { ManagerRescueStash } from './manager-rescue-stash.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
@@ -6981,40 +6981,7 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_ref': {
-        // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
-        const at = this.#nowIso();
-        const previousRescue = record.job.lastRescue;
-        // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
-        const instanceId = this.#sighting(fromRunnerId).instanceId;
-        const incoming =
-          instanceId === undefined
-            ? event.worktrees
-            : event.worktrees.map((tree) => ({ ...tree, instanceId }));
-        record.job.lastRescue = mergeRescue(previousRescue, incoming, at);
-        for (const tree of event.worktrees) {
-          if (tree.notPushed?.reason !== 'secret-like') continue;
-          // 運び直しで同じ日誌を積まない。
-          const before = previousRescue?.worktrees.find(
-            (w) => w.relativePath === tree.relativePath,
-          )?.notPushed;
-          if (
-            before?.reason === 'secret-like' &&
-            JSON.stringify(before.files ?? []) === JSON.stringify(tree.notPushed.files ?? [])
-          ) {
-            continue;
-          }
-          await this.#journal({
-            type: 'decision',
-            decision:
-              `作業ツリー ${tree.relativePath} の退避 ref は、鍵らしい文字列を差分に ` +
-              '見つけたので送らなかった。',
-            grounds:
-              `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
-              `当たった形: ${(tree.notPushed.patterns ?? []).join(', ') || '(不明)'}。` +
-              '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
-          });
-        }
-        await this.#persist(record);
+        await this.#rescueStash.acceptRef(record, event, fromRunnerId);
         return;
       }
 
