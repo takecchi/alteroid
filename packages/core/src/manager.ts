@@ -43,11 +43,9 @@ import {
 } from './workspace-policy.js';
 import {
   QUOTA_STOP_WINDOW_MS,
-  allSessionWindow,
   failedReportBodyOf,
   partialBeforeFailureOf,
   quotaMarkOf,
-  quotaStopWindowKeyOf,
   type QuotaMark,
 } from './quota-stop-notice.js';
 import { QuotaStopWindows } from './quota-stop-windows.js';
@@ -58,18 +56,8 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
-import {
-  FOLD_WHEN_BACK_SYNTHESIZED_LABELS,
-  isCrossWindowStreakEligible,
-  mergeSynthesizedNoticeFragments,
-  resolveSynthesizedNoticeWindowMs,
-  synthesizedNoticeArrivalIntervals,
-  synthesizedNoticeSignature,
-  type FoldWhenBack,
-  type SynthesizedNoticeLabel,
-  type SynthesizedNoticeStreak,
-  type SynthesizedNoticeWindow,
-} from './synthesized-notice.js';
+import { resolveSynthesizedNoticeWindowMs, type FoldWhenBack } from './synthesized-notice.js';
+import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import { isQuotaFailure } from './sdk-failure.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -1681,8 +1669,6 @@ class Pool implements ManagerPool {
   readonly #withheldReportFlushMs: number;
   /** 構築時に一度だけ確定する（`ALTEROID_TOKEN_SAVING_EXCERPT`）。偽なら報告を最後の発言だけにせず、畳んだ報告の抜粋の予算を #5414 の前に戻す。 */
   readonly #tokenSavingExcerpt: boolean;
-  /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない。 */
-  readonly #synthesizedNoticeWindowMs: number;
   /** 枠だけの束のプール全体の窓と、窓を外した後の flush の集合（`QuotaStopWindows`）。 */
   readonly #quotaWindows: QuotaStopWindows;
   /** 「取り戻した」知らせの窓と、resume が戻れたかの確認（`RestoredWindows`）。 */
@@ -1800,18 +1786,10 @@ class Pool implements ManagerPool {
   /** 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫と、窓へ運ぶ途中の在庫（`WithheldReportsStore`）。 */
   readonly #withheld: WithheldReportsStore;
   /**
-   * 機構が合成した知らせの合流窓（{@link SynthesizedNoticeWindow}）。在庫（`#withheld`）とは別物:
-   * あちらは時間の上限まで保持する在庫、こちらは短い窓だけ保持して必ず1本にまとめて配る。
-   * `#emit()` は呼ばれるたびに全 managerId ぶんを先に flush する（`docs/architecture.md`「順序は並べ替えない」）:
-   * 畳めない出来事が先に受信箱へ入って到着順が崩れるのを防ぐ。
+   * 機構が合成した知らせの担当ごとの合流窓と、窓をまたいで同文を畳む連（`SynthesizedNoticeWindows`）。在庫（`#withheld`）とは別物。
+   * `#emit()` は呼ばれるたびに全 managerId ぶんを先に flush する（`docs/architecture.md`「順序は並べ替えない」）。
    */
-  readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
-  /**
-   * 窓をまたいで同文を畳むための、もう配った束の署名（{@link SynthesizedNoticeStreak}）。
-   * 窓が閉じても消えず、別の `manager_message` を配った時点で消える（`#deliver`）。
-   * 委譲1本につき1件で、終端すれば `#retire()` が外すので上限が要らない。タイマーは持たない。
-   */
-  readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
+  readonly #synthesized: SynthesizedNoticeWindows;
   /**
    * `#observeUnpushedWorkOnce` の多重投げ止め。トリガー（`report` 終わり・`git push` 検出）を問わず
    * 1つの Set を共有する: 待たずに投げるので、短い間隔で続くと runner への往復が同じ委譲へ積み上がる。
@@ -2129,8 +2107,6 @@ class Pool implements ManagerPool {
     }
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
     this.#tokenSavingExcerpt = tokenSavingExcerpt ?? resolveTokenSavingExcerpt();
-    this.#synthesizedNoticeWindowMs =
-      synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs();
     const quotaWindowMs = quotaStopWindowMs ?? QUOTA_STOP_WINDOW_MS;
     this.#quotaWindows = new QuotaStopWindows({
       records: this.#records,
@@ -2142,6 +2118,21 @@ class Pool implements ManagerPool {
       now: () => this.#now(),
       nowIso: () => this.#nowIso(),
       windowMs: quotaWindowMs,
+    });
+    this.#synthesized = new SynthesizedNoticeWindows({
+      records: this.#records,
+      tokenIdentities: this.#tokenIdentities,
+      supersedePending: this.#supersedePending,
+      quotaWindows: this.#quotaWindows,
+      takeWithheldForDelivery: (managerId, text, withheldSuffixDetail) =>
+        this.#withheld.takeForDelivery(managerId, text, withheldSuffixDetail),
+      post: (event) => this.#post(event),
+      statusAtDelivery: (managerId) => this.#statusAtDelivery(managerId),
+      // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
+      journalExchange: this.#journalExchange.bind(this),
+      now: () => this.#now(),
+      nowIso: () => this.#nowIso(),
+      windowMs: synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs(),
     });
     this.#restored = new RestoredWindows({
       records: this.#records,
@@ -4336,7 +4327,7 @@ class Pool implements ManagerPool {
   // 窓の中でデーモンが落ちると積んだ知らせが失われるので、ここで flush する（`setTimeout` は二度と発火しない）。
   // 担当ごとの窓を先に閉じる: 閉じた束がプール全体の窓へ入るので、順序が逆だとその分が残る。
   async #drainNoticeWindows(): Promise<void> {
-    this.#flushSynthesizedNotices();
+    this.#synthesized.flushAll();
     await this.#quotaWindows.flushAll();
     await this.#restored.flushAll();
     await this.#quotaWindows.settleInFlight();
@@ -6689,14 +6680,15 @@ class Pool implements ManagerPool {
           const closedNote =
             `[${event.managerId}] この委譲は終わった（status=${event.status}）。` +
             '背景処理の完了待ちで畳んでいた報告をまとめて配る。';
-          if (this.#synthesizedNotices.has(event.managerId)) {
+          if (this.#synthesized.hasWindow(event.managerId)) {
             // 担当の合流窓が開いている（同じ落ち方の `turn_failed` / `closed_failed` が居る）ときは、`#emit()` せず窓へ積んで1通にする: `#emit()` は全窓を閉じて先に断片だけを配るので、この1通が別に届く。窓は開けない・延ばさない（開いていなければ下の `#emit()` で今までどおりすぐ配る）。
             // 在庫は `#retire()` が消すので、窓の flush（`#deliver`）が運べるよう先に移す。移した分は `#retire()` の「握り潰したまま終わった」の stderr にも出ない（配るので捨てていない）。枠の印（`quota`）は下で `closed_failed` から受け継ぐ（枠で落ちた回だけ）。印の無い回は付けず、印の無い断片が混ざった束は担当ごとに配られる。
             this.#withheld.carryToWindow(event.managerId, withheldAtClose);
             // 枠で落ちた回（同じ `closed` で積んだ `closed_failed` に枠の印がある）だけ、その印（トークンの鍵ごと）を受け継ぐ: 束が「枠だけ」のままになり、プール窓の一覧に入る。印の無い回は付けない。
-            const inheritedQuota = this.#synthesizedNotices
-              .get(event.managerId)
-              ?.fragments.find((fragment) => fragment.label === 'closed_failed')?.quota;
+            const inheritedQuota = this.#synthesized.quotaOfFragment(
+              event.managerId,
+              'closed_failed',
+            );
             this.#queueSynthesizedNotice(
               event.managerId,
               'closed_withheld_flush',
@@ -7122,257 +7114,13 @@ class Pool implements ManagerPool {
     );
   }
 
-  // 順序は並べ替えない（`docs/architecture.md`）: 畳めない出来事が来たら、先に合成した知らせの積みを全部配り切ってから本題を配る。
-  // `#flushSynthesizedNoticeFor` はここを経由せず直接 `#deliver` を呼ぶ: 経由すると、窓が閉じて配る1回が新しい出来事として全 managerId の積みを二重に flush する。
-  #emit(
-    managerId: string,
-    kind: 'report' | 'question' | 'permission',
-    text: string,
-    requestId?: string,
-    markup?: TextMarkup,
-    withheldSuffixDetail: 'full' | 'flush' = 'full',
-    foldedTurn = false,
-    reportFiles?: ManagerReportFiles,
-    foldWhenBack?: FoldWhenBack,
-  ): void {
-    this.#flushSynthesizedNotices();
-    this.#deliver(
-      managerId,
-      kind,
-      text,
-      requestId,
-      markup,
-      withheldSuffixDetail,
-      false,
-      foldedTurn,
-      reportFiles,
-      undefined,
-      foldWhenBack,
-    );
+  // 合成した知らせの段2（担当ごとの短い窓）は `SynthesizedNoticeWindows` が持つ。呼び元と他のクラスへ渡す口を書き換えずに済むよう、ここは1行で委ねる。
+  #emit(...args: Parameters<SynthesizedNoticeWindows['emit']>): void {
+    this.#synthesized.emit(...args);
   }
 
-  #deliver(
-    managerId: string,
-    kind: 'report' | 'question' | 'permission',
-    text: string,
-    requestId?: string,
-    markup?: TextMarkup,
-    withheldSuffixDetail: 'full' | 'flush' = 'full',
-    synthesized = false,
-    foldedTurn = false,
-    reportFiles?: ManagerReportFiles,
-    quotaStop?: { readonly sessionWindow: boolean },
-    foldWhenBack?: FoldWhenBack,
-  ): void {
-    // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す（`WithheldReportsStore#takeForDelivery`）。同期のまま、`#post` より前。
-    const withheldStep = this.#withheld.takeForDelivery(managerId, text, withheldSuffixDetail);
-    let outgoing = withheldStep.text;
-    // 畳んでよい印も同じ回に外す（#5048）: 足した中身（畳んだ報告・配らなかった知らせの件数）まで、担当が戻ったことを理由に消さないため
-    let foldable = withheldStep.appended ? undefined : foldWhenBack;
-    // 何を配ったかに関わらず帳面を消す: 次に同じ本文の知らせが来たら、また1件目として配る（`#flushSynthesizedNoticeFor` だけは直後に新しい署名で `set` し直す）。
-    const streak = this.#synthesizedNoticeStreaks.get(managerId);
-    this.#synthesizedNoticeStreaks.delete(managerId);
-    if (streak !== undefined && streak.suppressed > 0) {
-      foldable = undefined;
-      outgoing =
-        `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
-        `${String(streak.suppressed)} 束（通数 ${String(streak.suppressedArrived)} 件）配っていない` +
-        `（最初 ${streak.firstAt ?? '不明'} / 最後 ${streak.lastAt ?? '不明'}）。` +
-        `**1件目は配ってあり、配らなかったのは2件目以降の完全な重複だけである。**` +
-        `全文は日誌に在る（\`journal_read\`）。）`;
-    }
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: this.#nowIso(),
-      managerId,
-      kind,
-      text: outgoing,
-      ...(requestId === undefined ? {} : { requestId }),
-      // 取れない軸に値を作らない: `markup` が `undefined` のときはキーごと書かない。
-      ...(markup === undefined ? {} : { markup }),
-      ...this.#statusAtDelivery(managerId),
-      ...(synthesized ? { synthesized: true as const } : {}),
-      ...(foldedTurn ? { foldedTurn: true as const } : {}),
-      ...(quotaStop === undefined ? {} : { quotaStop: true as const }),
-      ...(quotaStop?.sessionWindow === true ? { quotaSessionWindow: true as const } : {}),
-      // 添付を運ぶ報告には付けない: 添付は畳むと受け取られないため
-      ...(foldable === undefined || reportFiles !== undefined ? {} : { foldWhenBack: foldable }),
-      ...(reportFiles === undefined || reportFiles.attachments.length === 0
-        ? {}
-        : { attachments: reportFiles.attachments }),
-      ...(reportFiles === undefined || reportFiles.rejected.length === 0
-        ? {}
-        : { rejectedAttachments: reportFiles.rejected }),
-    });
-  }
-
-  // 畳む判定は「機構が合成した印」と「窓の中」の積: 印だけで畳むと、数十秒離れて届いた別の束まで巻き込む。
-  // 同じ束か別の出来事か外から決められないときは畳まない: 畳めなければクローンのターンが焼けるだけで情報は消えず、畳み間違いのほうが重い。
-  // 窓のタイマーは延長しない: 届き続ける限り閉じなくなり、後から必ず配られる保証が崩れる（north_star 禁止2）。
-  // 族も本文も同一の2度目は数を増やすだけ、本文が違えば別の出来事として積みを flush する: 内容の違う2件を1件に潰すとクローンから「2件目が来なかった」と区別が付かない。
-  // `quota` は呼び手が付ける（構造化された値か既存の分類から）。ここで本文から判定し直さない: 印の無い断片が1つでも混ざる束は担当ごとに配る側へ倒れる。
-  #queueSynthesizedNotice(
-    managerId: string,
-    label: SynthesizedNoticeLabel,
-    text: string,
-    quotaMark?: QuotaMark,
-  ): void {
-    // 抱えているトークンは積む時点で読む: 畳まれた委譲の分も `#tokenIdentities` には残る（`#retire()` は消さない）ので、畳んだ後に届いた束も同じ窓の鍵になる。
-    const heldTokenId = this.#tokenIdentities.get(managerId)?.tokenId;
-    const quota =
-      quotaMark === undefined || heldTokenId === undefined
-        ? quotaMark
-        : { ...quotaMark, tokenKey: heldTokenId };
-    const arrivedAt = this.#now();
-    const existing = this.#synthesizedNotices.get(managerId);
-    if (existing !== undefined) {
-      // 本文の比較は正規化も切り詰めもしない: 1バイトでも違えば別のことを言っている側へ倒す。
-      const duplicate = existing.fragments.find(
-        (fragment) => fragment.label === label && fragment.text === text,
-      );
-      if (duplicate !== undefined) {
-        duplicate.count += 1;
-        existing.arrivedAt.push(arrivedAt);
-        return;
-      }
-      if (existing.fragments.some((fragment) => fragment.label === label)) {
-        this.#flushSynthesizedNoticeFor(managerId);
-      } else {
-        existing.fragments.push({
-          label,
-          text,
-          count: 1,
-          ...(quota === undefined ? {} : { quota }),
-        });
-        existing.arrivedAt.push(arrivedAt);
-        return;
-      }
-    }
-    const timer = setTimeout(() => {
-      this.#flushSynthesizedNoticeFor(managerId);
-    }, this.#synthesizedNoticeWindowMs);
-    timer.unref?.();
-    this.#synthesizedNotices.set(managerId, {
-      fragments: [{ label, text, count: 1, ...(quota === undefined ? {} : { quota }) }],
-      timer,
-      arrivedAt: [arrivedAt],
-    });
-  }
-
-  // `#emit()` を経由せず直接 `#deliver` を呼ぶ: 経由すると窓を1本閉じるたびに他の managerId の窓まで早期に閉じる。
-  // 同期のまま保つ（日誌は待たない）: `#emit()` の「全部 flush してから配る」が非同期だと、本題の `#deliver` が先に走って順序が崩れる。
-  #flushSynthesizedNoticeFor(managerId: string): void {
-    const entry = this.#synthesizedNotices.get(managerId);
-    if (entry === undefined) return;
-    this.#synthesizedNotices.delete(managerId);
-    clearTimeout(entry.timer);
-    const { text, breakdown, arrived } = mergeSynthesizedNoticeFragments(entry.fragments);
-
-    // 合流しなかった窓（`undefined`）は行を書かない: 取れない軸に 0 の行を作らない。
-    const arrivalIntervals = synthesizedNoticeArrivalIntervals(entry.arrivedAt);
-    if (arrivalIntervals !== undefined) {
-      void this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_GAUGE_PREFIX}[${managerId}] 合流窓に続けて畳まれた合図は ` +
-          `${String(arrivalIntervals.count)} 件、間隔は最大 ${String(arrivalIntervals.maxIntervalMs)}ms・` +
-          `最小 ${String(arrivalIntervals.minIntervalMs)}ms だった` +
-          `（窓の長さ ${String(this.#synthesizedNoticeWindowMs)}ms）。`,
-      );
-    }
-
-    // 全断片に枠の印が付いた束だけが対象。1つでも印の無い断片が混ざれば今どおり担当ごとに配る（畳み間違いのほうが重い）。
-    // 窓が開いていて、窓を開けた担当とは別の担当なら、担当ごとには配らず窓へ貯める（配っていないので、下の streak は立てない・読まない）。
-    // 窓が無い／窓を開けた担当自身なら、下で今までどおり担当ごとに配る（1本目はすぐ）。窓の開閉と一覧の材料だけここで記録する。
-    if (entry.fragments.every((fragment) => fragment.quota !== undefined)) {
-      const windowKey = quotaStopWindowKeyOf(entry.fragments);
-      if (this.#quotaWindows.isOpenedByOther(windowKey, managerId)) {
-        this.#quotaWindows.join(windowKey, managerId, entry, breakdown, arrived);
-        return;
-      }
-    }
-
-    // 「同文なら常に捨てる」にしない: 1件目まで消えて黙らせる側になる（連鎖は配ったあとの `set` で初めて立つ）。
-    // 対象は `turn_failed` 単独の束だけ: `rate_limit` / `usage_notice` は専用の状態ベースの判定を経ており、文字列一致を重ねると誤って握りつぶす。
-    const signature = synthesizedNoticeSignature(entry.fragments);
-    const eligible = isCrossWindowStreakEligible(entry.fragments);
-    const streak = this.#synthesizedNoticeStreaks.get(managerId);
-    const suppressed = eligible && streak !== undefined && streak.signature === signature;
-    // 窓を開けるのは配る束だけ: 連鎖で握りつぶす束で窓を開けると、一覧がその担当を「最初の1本。担当への報告としては先に届けてある」と言うのに、
-    // この回の知らせは担当へ届いていない。開いている窓の2本目（窓を開けた担当自身）は、握りつぶしても一覧の通数には数える。
-    if (entry.fragments.every((fragment) => fragment.quota !== undefined)) {
-      const windowKey = quotaStopWindowKeyOf(entry.fragments);
-      if (!suppressed || this.#quotaWindows.isOpen(windowKey)) {
-        this.#quotaWindows.noteOpener(windowKey, managerId, entry, arrived);
-      }
-    }
-    if (suppressed && streak !== undefined) {
-      const at = this.#nowIso();
-      streak.suppressed += 1;
-      streak.suppressedArrived += arrived;
-      streak.firstAt ??= at;
-      streak.lastAt = at;
-      void this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
-          `${String(arrived)} 件届いたので、受信箱へは回さず数だけ残した` +
-          `（この連鎖で ${String(streak.suppressed)} 束目 / 通数 ${String(streak.suppressedArrived)} 件）。`,
-      );
-      return;
-    }
-    // 本文の文言ではなく `label` で判定する。
-    const foldedTurn = entry.fragments.some((fragment) => fragment.label === 'turn_failed');
-    // `#deliver` より先に `set` しない: `#deliver` は直前の連鎖の件数を末尾に運んでから帳面を消すので、先に上書きすると「配らなかった件数」が届かず消える。
-    const quotaStop = entry.fragments.every((fragment) => fragment.quota !== undefined)
-      ? { sessionWindow: allSessionWindow(entry.fragments) }
-      : undefined;
-    // `supersededBy` が在る／後継を起こしている最中の担当は、窓の間に後継がつながった回（クローンが手を打つ余地が在る）。
-    const noSuccessor =
-      this.#records.get(managerId)?.job.supersededBy === undefined &&
-      !this.#supersedePending.has(managerId);
-    // 担当が戻っていればクローンが畳んでよい束（#5048）: 起こし直し（後継が居ない回だけ）・背景処理を畳んだ起こし直し・セッションの落ちだけでできた束。
-    // 枠の印の付いた断片が1つでも混ざる束は付けない（#4499 の判定に任せる。週の上限で落ちた知らせを消さないため）。後継が居る起こし直しは、どちらかを止める判断が要るので付けない
-    const foldWhenBack =
-      entry.fragments.every(
-        (fragment) =>
-          fragment.quota === undefined && FOLD_WHEN_BACK_SYNTHESIZED_LABELS.has(fragment.label),
-      ) &&
-      (noSuccessor || entry.fragments.every((fragment) => fragment.label !== 'usage_rewoken'))
-        ? {}
-        : undefined;
-    this.#deliver(
-      managerId,
-      'report',
-      text,
-      undefined,
-      undefined,
-      'full',
-      true,
-      foldedTurn,
-      undefined,
-      quotaStop,
-      foldWhenBack,
-    );
-    // 対象外の束では新しい連鎖を立てない: 次に同じ族が来ても握りつぶす先が無く、記憶を持つだけ無駄。
-    if (eligible) {
-      this.#synthesizedNoticeStreaks.set(managerId, {
-        signature,
-        suppressed: 0,
-        suppressedArrived: 0,
-      });
-    }
-    // 消えてよいのはクローンを起こすことだけで、記録ではない: 個々の知らせは積んだ時点で既に日誌に書かれており、ここで足すのは「まとめた」1行だけ。
-    void this.#journalExchange(
-      'inbound',
-      `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
-        `1件にまとめて配った（内訳: ${breakdown}）。`,
-    );
-  }
-
-  #flushSynthesizedNotices(): void {
-    for (const managerId of [...this.#synthesizedNotices.keys()]) {
-      this.#flushSynthesizedNoticeFor(managerId);
-    }
+  #queueSynthesizedNotice(...args: Parameters<SynthesizedNoticeWindows['queue']>): void {
+    this.#synthesized.queue(...args);
   }
 
   async #persist(record: ManagerRecord): Promise<void> {
@@ -7561,7 +7309,7 @@ class Pool implements ManagerPool {
     // 像を外す前に在庫を下ろす（台帳の写しは像から引くため）。
     this.#withheld.retire(managerId);
     this.#records.delete(managerId);
-    this.#synthesizedNoticeStreaks.delete(managerId);
+    this.#synthesized.forget(managerId);
     // 日誌の畳み込みは外す前に畳み残しを吐く: 畳んだ2件目以降はまだ日誌のどこにも書かれておらず、黙って捨てると件数が失われる（`UsageReceiver#retire`）。
     this.#usageReceiver.retire(managerId);
     this.#held.forget(managerId);
