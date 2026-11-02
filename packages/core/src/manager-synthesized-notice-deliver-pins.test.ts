@@ -213,6 +213,28 @@ describe('畳めない出来事が来たときの配る順（#emit は先に全�
   });
 });
 
+describe('担当を畳んだ（abort の #retire）あとの窓と連', () => {
+  it('開いていた窓は畳んだ後も残って配られ、連だけが消える（同じ本文でも握りつぶされず1件目として届く）', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    await queueAndClose(fake, 'mgr-a', X_BODY);
+    // 連が立っている担当の窓に、同文の知らせを積んだままにする。
+    turnFailed(fake, 'mgr-a', X_BODY);
+    await settle();
+    expect(messages(inbox)).toHaveLength(1);
+
+    const aborting = pool.abort('mgr-a', '人間が止めた');
+    await settle();
+    await aborting;
+    const afterAbort = messages(inbox).length;
+
+    await settle(NOTICE_WINDOW_MS);
+    // 窓は消えていない（配られる）。連が残っていれば同文として握りつぶされて増えない。
+    expect(messages(inbox)).toHaveLength(afterAbort + 1);
+    expect(messages(inbox).at(-1)?.text).toBe(X_BODY);
+    await pool.stop();
+  });
+});
+
 describe('配る文は、引数の組み合わせごとに1文字も変わらない（全文で固定）', () => {
   it('合成の単発（連も在庫も無い）は本文そのままで、末尾に何も足さない', async () => {
     const { pool, fake, inbox } = await setup(['mgr-a']);
