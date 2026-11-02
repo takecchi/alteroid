@@ -362,7 +362,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#recordDelivery': 'reply',
     '#recordStoppedReport': 'decision',
     '#reportedOf': 'thinning',
-    '#restoreJobs': 'recovery',
+    '#settleResumedAfterRestart': 'recovery',
     '#settleResumedReattach': 'recovery',
     '#startAfterSupersedeCheck': 'reply',
     abort: 'reply',
