@@ -4013,27 +4013,7 @@ class Pool implements ManagerPool {
     if (this.#stopped) return [];
     await this.#ensureConnected();
 
-    const alive = new Map<
-      string,
-      { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] }
-    >();
-    // 生死を聞けなかった器を覚える: 応答が無いことを「セッションが無い」と読むと、生きている仕事を二重に起こし、`gh pr create` のような取り返しのつかない操作が二度走る。
-    const unheard = new Set<string>();
-    // 状態は読めなかったが runner に居る委譲: 「居ない」と畳むと、まだ走っている委譲を resume し、待っていた確認を捨てる。
-    const unreadable = new Map<string, RunnerClient>();
-    for (const runner of await this.#runners.list()) {
-      const listing = await listRunnerManagers(runner).catch((error: unknown) => {
-        unheard.add(runner.runnerId);
-        // 黙って引き下がらない: 跡が無いと「セッションが無かった」のか「聞けなかった」のかを誰も言えない。
-        noteUnreadableRecord('runner のセッション一覧', `runnerId=${runner.runnerId}`, error);
-        return null;
-      });
-      if (listing === null) continue;
-      for (const state of listing.states) {
-        alive.set(state.managerId, { runner, state });
-      }
-      for (const managerId of listing.unreadableIds) unreadable.set(managerId, runner);
-    }
+    const { alive, unheard, unreadable } = await this.#listLivingSessions();
 
     const silent = this.#silentRunners();
     const registeredRunnerIds = this.#registeredRunnerIds();
@@ -4251,6 +4231,39 @@ class Pool implements ManagerPool {
       }
     }
     return resumed;
+  }
+
+  /** 全 runner に生きているセッションを聞く（聞けなかった器と、状態は読めなかった委譲も集める）。 */
+  async #listLivingSessions(): Promise<{
+    alive: Map<
+      string,
+      { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] }
+    >;
+    unheard: Set<string>;
+    unreadable: Map<string, RunnerClient>;
+  }> {
+    const alive = new Map<
+      string,
+      { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] }
+    >();
+    // 生死を聞けなかった器を覚える: 応答が無いことを「セッションが無い」と読むと、生きている仕事を二重に起こし、`gh pr create` のような取り返しのつかない操作が二度走る。
+    const unheard = new Set<string>();
+    // 状態は読めなかったが runner に居る委譲: 「居ない」と畳むと、まだ走っている委譲を resume し、待っていた確認を捨てる。
+    const unreadable = new Map<string, RunnerClient>();
+    for (const runner of await this.#runners.list()) {
+      const listing = await listRunnerManagers(runner).catch((error: unknown) => {
+        unheard.add(runner.runnerId);
+        // 黙って引き下がらない: 跡が無いと「セッションが無かった」のか「聞けなかった」のかを誰も言えない。
+        noteUnreadableRecord('runner のセッション一覧', `runnerId=${runner.runnerId}`, error);
+        return null;
+      });
+      if (listing === null) continue;
+      for (const state of listing.states) {
+        alive.set(state.managerId, { runner, state });
+      }
+      for (const managerId of listing.unreadableIds) unreadable.set(managerId, runner);
+    }
+    return { alive, unheard, unreadable };
   }
 
   /** runner が実際に開いているセッションの値へ台帳の宛先・cwd・workspace・sessionId を揃える（起動時の引き取りと、移送先に既に居た委譲の取り直しが共有する）。 */
