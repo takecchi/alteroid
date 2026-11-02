@@ -143,6 +143,31 @@ function turnFailed(fake: FakeRunner, managerId: string, text: string): void {
   });
 }
 
+const X_BODY = '（このターンは応答を返さずに終わった: crash / X）';
+const Y_BODY = '（このターンは応答を返さずに終わった: crash / Y）';
+
+/** 窓を閉じるところまで時計を進める。戻り値は、その時点（＝窓が閉じて配られた時刻）の ISO。 */
+async function queueAndClose(fake: FakeRunner, managerId: string, text: string): Promise<string> {
+  turnFailed(fake, managerId, text);
+  await settle();
+  await settle(NOTICE_WINDOW_MS);
+  return new Date().toISOString();
+}
+
+function realReport(fake: FakeRunner, managerId: string, text: string): void {
+  fake.emit({ type: 'report', managerId, text, status: 'done' });
+}
+
+// 連（streak）の末尾の文。「配らなかった」件数と時刻、断り書きを1文字も変えない。
+function streakFooter(bundles: number, arrived: number, first: string, last: string): string {
+  return (
+    `\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ${String(bundles)} 束（通数 ${String(arrived)} 件）配っていない` +
+    `（最初 ${first} / 最後 ${last}）。` +
+    `**1件目は配ってあり、配らなかったのは2件目以降の完全な重複だけである。**` +
+    `全文は日誌に在る（\`journal_read\`）。）`
+  );
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'));
@@ -185,5 +210,88 @@ describe('畳めない出来事が来たときの配る順（#emit は先に全�
     expect(messages(inbox)).toHaveLength(3);
     await pool.stop();
     expect(messages(inbox)).toHaveLength(3);
+  });
+});
+
+describe('配る文は、引数の組み合わせごとに1文字も変わらない（全文で固定）', () => {
+  it('合成の単発（連も在庫も無い）は本文そのままで、末尾に何も足さない', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    await queueAndClose(fake, 'mgr-a', X_BODY);
+    expect(messages(inbox).map((m) => m.text)).toEqual([X_BODY]);
+    await pool.stop();
+  });
+
+  it('連で配らなかった束は、次の本物の報告の末尾に件数・時刻・断り書きとして付き、その後の報告には付かない', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    await queueAndClose(fake, 'mgr-a', X_BODY);
+    await settle(100);
+    const first = await queueAndClose(fake, 'mgr-a', X_BODY);
+    const last = await queueAndClose(fake, 'mgr-a', X_BODY);
+    expect(messages(inbox)).toHaveLength(1);
+
+    realReport(fake, 'mgr-a', 'R1');
+    await settle();
+    realReport(fake, 'mgr-a', 'R2');
+    await settle();
+    expect(messages(inbox).map((m) => m.text)).toEqual([
+      X_BODY,
+      `R1${streakFooter(2, 2, first, last)}`,
+      'R2',
+    ]);
+    await pool.stop();
+  });
+
+  it('畳んでいた報告の在庫の文が先、連の文が後に付く（在庫の末尾の文 → 連の件数の順）', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    await queueAndClose(fake, 'mgr-a', X_BODY);
+    await settle(100);
+    const suppressedAt = await queueAndClose(fake, 'mgr-a', X_BODY);
+    await settle(10);
+    const heldAt = new Date().toISOString();
+    fake.emit({
+      type: 'report',
+      managerId: 'mgr-a',
+      text: 'HELD',
+      status: 'done',
+      awaitingBackground: { count: 1, breakdown: 'shell×1' },
+    });
+    await settle();
+    expect(messages(inbox)).toHaveLength(1);
+    await settle(10);
+    realReport(fake, 'mgr-a', 'R');
+    await settle();
+
+    expect(messages(inbox)[1]?.text).toBe(
+      'R' +
+        `\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を 1 本配っていない（最初 ${heldAt} / 最後 ${heldAt}）。` +
+        '全文は日誌に在る（`journal_read q=mgr-a` since=最初の少し前 until=最後の少し後）。\n' +
+        `畳んだ報告の冒頭（古い順）:\n- ${heldAt} HELD\n）` +
+        streakFooter(1, 1, suppressedAt, suppressedAt),
+    );
+    await pool.stop();
+  });
+
+  it('連を運んでから新しい連を登録する: 別の本文の知らせは前の連の件数を末尾に運び、その本文での新しい連が立つ', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    await queueAndClose(fake, 'mgr-a', X_BODY);
+    await settle(100);
+    const xSuppressed = await queueAndClose(fake, 'mgr-a', X_BODY);
+    expect(messages(inbox)).toHaveLength(1);
+
+    // Y は別の本文なので配られ、X の連の件数（1束・1通）がこの1通の末尾へ運ばれる。
+    await queueAndClose(fake, 'mgr-a', Y_BODY);
+    expect(messages(inbox)).toHaveLength(2);
+    expect(messages(inbox)[1]?.text).toBe(
+      `${Y_BODY}${streakFooter(1, 1, xSuppressed, xSuppressed)}`,
+    );
+
+    // 運んだ後は Y の連が立っている: 同じ Y は握りつぶされ、X の件数は重ねて運ばれない。
+    await settle(100);
+    const ySuppressed = await queueAndClose(fake, 'mgr-a', Y_BODY);
+    expect(messages(inbox)).toHaveLength(2);
+    realReport(fake, 'mgr-a', 'R');
+    await settle();
+    expect(messages(inbox)[2]?.text).toBe(`R${streakFooter(1, 1, ySuppressed, ySuppressed)}`);
+    await pool.stop();
   });
 });
