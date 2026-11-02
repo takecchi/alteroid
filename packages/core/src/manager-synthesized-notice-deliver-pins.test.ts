@@ -213,6 +213,86 @@ describe('畳めない出来事が来たときの配る順（#emit は先に全�
   });
 });
 
+describe('担当ごとの窓のタイマー', () => {
+  it('窓は最初の知らせから数えて閉じ、2つ目の知らせでは延びない（別の族は同じ窓の1通に入る）', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    turnFailed(fake, 'mgr-a', X_BODY);
+    await settle();
+    await settle(15);
+    fake.emit({
+      type: 'rate_limit',
+      managerId: 'mgr-a',
+      facts: { status: 'rejected', kind: 'five_hour' },
+    });
+    await settle();
+    await settle(NOTICE_WINDOW_MS - 15 - 1);
+    expect(messages(inbox)).toHaveLength(0);
+
+    await settle(1);
+    expect(messages(inbox)).toHaveLength(1);
+    expect(messages(inbox)[0]?.text).toContain(X_BODY);
+    expect(messages(inbox)[0]?.text).toContain('枠から追い返された');
+    await pool.stop();
+  });
+
+  it('同じ族の2つ目は、前の積みをすぐ配り、自分は新しい窓（満了までは配らない）を張る', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    turnFailed(fake, 'mgr-a', X_BODY);
+    await settle();
+    await settle(5);
+    turnFailed(fake, 'mgr-a', Y_BODY);
+    await settle();
+    // X は窓の満了を待たずに配られている。Y はまだ。
+    expect(messages(inbox).map((m) => m.text)).toEqual([X_BODY]);
+
+    // 古い窓のタイマー（最初の知らせから 20ms）では Y は配られず、新しい窓の満了で配られる。
+    await settle(NOTICE_WINDOW_MS - 5);
+    expect(messages(inbox)).toHaveLength(1);
+    await settle(5);
+    expect(messages(inbox).map((m) => m.text)).toEqual([X_BODY, Y_BODY]);
+    await pool.stop();
+  });
+});
+
+describe('closed(failed) が窓へ持ち越した在庫', () => {
+  it('窓の1通の末尾に、在庫の文が1文字も変わらず1回だけ付く（連の文は付かない）', async () => {
+    const { pool, fake, inbox } = await setup(['mgr-a']);
+    const heldAt = new Date().toISOString();
+    fake.emit({
+      type: 'report',
+      managerId: 'mgr-a',
+      text: 'HELD',
+      status: 'done',
+      awaitingBackground: { count: 1, breakdown: 'shell×1' },
+    });
+    await settle();
+    turnFailed(fake, 'mgr-a', X_BODY);
+    const at = fake.alive.findIndex((entry) => entry.managerId === 'mgr-a');
+    if (at !== -1) fake.alive.splice(at, 1);
+    fake.emit({
+      type: 'closed',
+      managerId: 'mgr-a',
+      status: 'failed',
+      reason: 'セッションが落ちた',
+    });
+    await settle();
+    expect(messages(inbox)).toHaveLength(0);
+    await settle(NOTICE_WINDOW_MS);
+
+    expect(messages(inbox)).toHaveLength(1);
+    const text = messages(inbox)[0]?.text ?? '';
+    const suffix =
+      `\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を 1 本配っていない（最初 ${heldAt} / 最後 ${heldAt}）。` +
+      '全文は日誌に在る（`journal_read q=mgr-a` since=最初の少し前 until=最後の少し後）。\n' +
+      `畳んだ報告の冒頭（古い順）:\n- ${heldAt} HELD\n）`;
+    expect(text.endsWith(suffix)).toBe(true);
+    expect(text.split('配っていない').length - 1).toBe(1);
+    expect(text).toContain(X_BODY);
+    await pool.stop();
+    expect(messages(inbox)).toHaveLength(1);
+  });
+});
+
 describe('担当を畳んだ（abort の #retire）あとの窓と連', () => {
   it('開いていた窓は畳んだ後も残って配られ、連だけが消える（同じ本文でも握りつぶされず1件目として届く）', async () => {
     const { pool, fake, inbox } = await setup(['mgr-a']);
