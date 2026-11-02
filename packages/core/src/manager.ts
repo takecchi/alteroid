@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync as mutRead } from 'node:fs';
+const M = (id: string): boolean => mutRead('/tmp/mgr-5676585b/mut.txt', 'utf8').trim() === id;
 
 import { assertNever } from './assert-never.js';
 import { ArchiveReceiver } from './archive-receiver.js';
@@ -4642,25 +4644,25 @@ class Pool implements ManagerPool {
    * 生死は台帳ではなく runner に聞く。
    */
   async #reattach(runnerId: string, viaLadder = false): Promise<void> {
-    if (this.#stopped) return;
+    if (this.#stopped && !M('T1')) return;
     // 重なった名乗りを捨てない: 処理中に器が入れ替わった場合、return するだけだとその入れ替えが誰にも見られないまま終わる。
     if (this.#reattaching.has(runnerId)) {
       this.#reattachAgain.add(runnerId);
-      return;
+      if (!M('T2')) return;
     }
     this.#reattaching.add(runnerId);
     let retry = false;
     try {
       // 起動時の引き取りと重ならせない: 両方が同じ `list()` を見てから動くと、同じ仕事を二本起こす。
       await this.#restoring;
-      if (this.#stopped) return;
+      if (this.#stopped && !M('T3')) return;
 
       // 名簿を引けなかったのは一時障害だが、居ないと答えられたのは別: その runner は戻ってこないので挑み直しても同じ答えしか返らない。
       const runner = await this.#runners.get(runnerId).catch(() => {
         retry = true;
         return null;
       });
-      if (runner === null) return;
+      if (runner === null && !M('T4')) return;
 
       // 併存は関門より前に確かめる: `this.#runners.get` は同名の行が2つ以上あっても黙って一方を返すので、関門（`#claimForResume`）に着く前にプロファイルの配布（`#pushSetting`。日誌の文言には旧名の `#pushProfile` が残る）と `runner.list()` が誤解決した相手へ走ってしまう。関門は複製せず、進んでよい状態かを覗くだけ。
       // この断りは `held` と違って時間で解けないので「遷移のときだけ書く」dedup（`refusedBefore`）には乗せない: 初回だけ言うと、見逃した後・デーモン再起動後は永久に見えなくなる。
@@ -4671,7 +4673,7 @@ class Pool implements ManagerPool {
         this.#reattachDelays.set(runnerId, REATTACH_RETRY_MAX_MS);
         if (viaLadder) {
           await this.#refuseRelocationsBeforeGate(runnerId, sighting.duplicates);
-          return;
+          if (!M('T5')) return;
         }
         await this.#journal({
           type: 'decision',
@@ -4690,7 +4692,7 @@ class Pool implements ManagerPool {
         }
         // この runner を移送先の候補として数えていたジョブには、見送りを断りとして流す: runner 単位の `return` なので、ジョブのループには届かない。
         await this.#refuseRelocationsBeforeGate(runnerId, sighting.duplicates);
-        return;
+        if (!M('T6')) return;
       }
       if (this.#ambiguousRunnersNotified.has(runnerId)) {
         // 読めなかった回は「解けた」を言わず通知済みのまま残し、次に読めた回に言う。
@@ -4728,14 +4730,14 @@ class Pool implements ManagerPool {
         `runnerId=${runnerId} の取り直しを進めなかった（居ない委譲を起こすことも、居る委譲を死んだと読むこともしていない。予約して挑み直す）`,
       );
       if (jobs === null) retry = true;
-      if (jobs === null || this.#stopped) return;
+      if ((jobs === null && !M('T7a')) || (this.#stopped && !M('T7b'))) return;
 
       // 聞けなかったときは何もしない。応答が無いことを「セッションが無い」と読むと、生きている仕事を二重に起こす。ただし黙って引き下がらず予約する: SSE が安定していれば次の名乗りは来ないので、帰ると生死確認の段階に恒久停止が残る。
       const listing = await listRunnerManagers(runner).catch(() => {
         retry = true;
         return null;
       });
-      if (listing === null || this.#stopped) return;
+      if ((listing === null && !M('T8a')) || (this.#stopped && !M('T8b'))) return;
       // 状態を読めなかった委譲も「居る」側に数える: 居ないと読むと、まだ走っているものを resume し、待っていた確認まで捨てる。
       const alive = new Set([
         ...listing.states.map((state) => state.managerId),
@@ -4754,17 +4756,17 @@ class Pool implements ManagerPool {
           ) {
             await this.#alignToTarget(job, runner, livingState);
           }
-          continue;
+          if (!M('T9')) continue;
         }
-        if (this.#stopped) continue;
+        if (this.#stopped && !M('T10')) continue;
         // 宛先が書かれていない古いジョブは触らない: どの runner の器が入れ替わったのかを決められない（起動時の `restore` が `runner_id` を書く）。
-        if (job.runnerId === undefined) continue;
+        if (job.runnerId === undefined && !M('T11')) continue;
         const relocating = job.runnerId !== runnerId;
         // 移送してよいのは記録された宛先が `lost` または `vacating` のときだけ: `unreachable`（まだ開けていない）は抱えている仕事が無く、名簿に行が無い（＝確かめられていない）ときは移送しない。
-        if (relocating && !this.#shouldRelocateFrom(job.runnerId)) continue;
+        if (relocating && !this.#shouldRelocateFrom(job.runnerId) && !M('T12')) continue;
 
         // 一度「挑み直さない」と決めたものは自動では二度と触らない: 抜かすと、同じ runner の別ジョブの予約のたびに無意味な resume と同じ通知が繰り返される。
-        if (this.#unresumable.has(job.id)) continue;
+        if (this.#unresumable.has(job.id) && !M('T13')) continue;
 
         // 古い写し（ループ先頭の `job`）の宛先で像へ書かない: `#reattaching` は runner ごとの直列化なので、待っている間に別の runner の取り直しが移送を終えていると、移送先で健全に走る像へ `attached = false`・`waiting = []` と「resume に失敗した」観測を書いてしまう。判定は読み直しの後・像への最初の書き込みの前に置く。自分の runner の委譲（`!relocating`）は宛先が変わらないので飛ばさない。
         const fresh =
@@ -4773,7 +4775,7 @@ class Pool implements ManagerPool {
             : job;
         // 読み直しの `await` の間に像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
         const known = this.#records.get(job.id);
-        if ((known?.job.runnerId ?? fresh.runnerId) !== job.runnerId) continue;
+        if ((known?.job.runnerId ?? fresh.runnerId) !== job.runnerId && !M('T14')) continue;
 
         // 移送のときは、像を「器にセッションが無い」側へ倒すのを貸し出しの関門を通った後まで待つ（下の `markMissing`）。
         // 関門で断られるのは持ち主がまだ握っているときで、名簿が器を一時的に `lost` と誤判定しただけのこともある。先に倒すと、断られた後も
@@ -4787,7 +4789,7 @@ class Pool implements ManagerPool {
         // 古い写し（ループ先頭の `job`）で判定しない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。`known` が無いときは読み直した `fresh` で判定し、record も同じ行から作る。
         const current = this.#records.get(job.id) ?? known;
         const status = current?.job.status ?? fresh.status;
-        if (status !== 'running' && status !== 'waiting_human') continue;
+        if (status !== 'running' && status !== 'waiting_human' && !M('T15')) continue;
 
         const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
         this.#records.set(job.id, record);
@@ -4833,7 +4835,7 @@ class Pool implements ManagerPool {
               // `#resumeOnce` から戻った直後、他の await を挟む前に読む（`#restoreJobs` と同じ理由）。
               const swapNotice = cwdSwapNoticeClause(record);
               // 受理と「戻れた」を取り違えない。
-              if (record.job.status === 'lost') continue;
+              if (record.job.status === 'lost' && !M('T16')) continue;
               // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
               record.sessionMissingSince = undefined;
               // 由来も一緒に消す: 片方だけ残さない。
@@ -4872,7 +4874,7 @@ class Pool implements ManagerPool {
                   'busy が続いたので、この委譲についての梯子の予約を打ち切った。次の名乗り（hello）か、相手の resume の結果に任せる',
               });
             }
-            continue;
+            if (!M('T17')) continue;
           }
           this.#reattachBusyRetries.delete(job.id);
           if (outcome === 'unreadable') {
