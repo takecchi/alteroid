@@ -1,4 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync as __rf } from 'node:fs';
+const __mut = (id: string): boolean => {
+  try {
+    return __rf('/tmp/mgr-5676585b/mut.txt', 'utf8').trim() === id;
+  } catch {
+    return false;
+  }
+};
 
 import { ArchiveReceiver } from './archive-receiver.js';
 import { AutoFold } from './auto-fold.js';
@@ -2472,22 +2480,31 @@ class Pool implements ManagerPool {
     if (!record) {
       // 読めない形で在る行は「居ない」と言わない。
       const unreadable = await this.#unreadableRowDetail(managerId);
-      if (unreadable !== undefined) {
-        return { outcome: 'unreadable', detail: `${unreadable}送っていない。` };
+      if (unreadable !== undefined && !__mut('S1F')) {
+        return {
+          outcome: __mut('S1O') ? 'unknown' : 'unreadable',
+          detail: `${unreadable}送っていない。`,
+        };
       }
-      return { outcome: 'unknown', detail: `${managerId} というマネージャーは居ない。` };
+      return {
+        outcome: __mut('S2O') ? 'delivered' : 'unknown',
+        detail: `${managerId} というマネージャーは居ない。`,
+      };
     }
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
+      return {
+        outcome: __mut('S3O') ? 'delivered' : 'unknown',
+        detail: this.#runnerNotOpenDetail(record),
+      };
     }
 
     const { decision, requestId } = options;
     const pending = this.#choosePending(record, requestId, decision);
-    if (pending === 'ambiguous') {
+    if (pending === 'ambiguous' && !__mut('S4F')) {
       return {
-        outcome: 'unknown',
+        outcome: __mut('S4O') ? 'delivered' : 'unknown',
         detail:
           `${managerId} は複数の確認を同時に待っている。requestId を指定して答えること: ` +
           excerptLine(
@@ -2496,13 +2513,13 @@ class Pool implements ManagerPool {
           ),
       };
     }
-    if (pending === 'gone') {
+    if (pending === 'gone' && !__mut('S5F')) {
       return {
-        outcome: 'unknown',
+        outcome: __mut('S5O') ? 'delivered' : 'unknown',
         detail: `${requestId ?? ''} という確認は ${managerId} で待っていない（既に解けたか、別のマネージャーのもの）。`,
       };
     }
-    if (pending === 'renotify-pending') {
+    if (pending === 'renotify-pending' && !__mut('S6F')) {
       // `record.waiting.length === 1` は保証済み（`#choosePending` がその枝でだけこの値を返す）。
       const only = record.waiting[0];
       const last = record.lastDenialRenotify;
@@ -2515,7 +2532,7 @@ class Pool implements ManagerPool {
             ? '作業者'
             : 'どちらの層か不明';
       return {
-        outcome: 'unknown',
+        outcome: __mut('S6O') ? 'delivered' : 'unknown',
         detail:
           `${managerId} には直前に${tool === undefined ? '' : ` ${codeSpan(tool)}（${actorLabel}）の`}拒否の` +
           '知らせ直しが届いている。requestId の無い decision は、いま待っている確認' +
@@ -2525,9 +2542,9 @@ class Pool implements ManagerPool {
     }
 
     const sendAttachments = options.attachments ?? [];
-    if (pending && sendAttachments.length > 0) {
+    if (pending && sendAttachments.length > 0 && !__mut('S7F')) {
       return {
-        outcome: 'unknown',
+        outcome: __mut('S7O') ? 'delivered' : 'unknown',
         detail:
           '確認への回答（requestId / decision を付けた送信）には添付を載せられない。' +
           '何も送っていない。回答は添付なしで送り、添付は追加指示として別に送ること。',
@@ -2535,12 +2552,18 @@ class Pool implements ManagerPool {
     }
     if (!pending && sendAttachments.length > 0) {
       const refused = await this.#attachmentStager.refusal(runner, sendAttachments, message);
-      if (refused !== undefined)
-        return { outcome: 'unknown', detail: `${refused}（何も送っていない）` };
+      if (refused !== undefined && !__mut('S8F'))
+        return {
+          outcome: __mut('S8O') ? 'delivered' : 'unknown',
+          detail: `${refused}（何も送っていない）`,
+        };
       // 大きいファイルは、命令（`send` でも resume でも）を出す前に別口へ押す。押せなければ命令を送らない。
       const stageFailed = await this.#attachmentStager.stage(runner, managerId, sendAttachments);
-      if (stageFailed !== undefined)
-        return { outcome: 'unknown', detail: `${stageFailed}（何も送っていない）` };
+      if (stageFailed !== undefined && !__mut('S9F'))
+        return {
+          outcome: __mut('S9O') ? 'delivered' : 'unknown',
+          detail: `${stageFailed}（何も送っていない）`,
+        };
     }
 
     if (pending) {
@@ -2551,12 +2574,12 @@ class Pool implements ManagerPool {
         message,
         ...(decision === undefined ? {} : { decision }),
       });
-      if (!answered.delivered) {
+      if (!answered.delivered && !__mut('S10F')) {
         // runner がもう持っていない確認は台帳の待ちからも外す（#4775）: 残すと、requestId を付けない次の答えも同じ古い確認を選び、届かないまま担当が waiting_human に残るため
         const dropped = this.#dropUndeliveredWaiting(record, pending.requestId);
         if (dropped) await this.#persist(record);
         return {
-          outcome: 'unknown',
+          outcome: __mut('S10O') ? 'delivered' : 'unknown',
           detail:
             `${pending.requestId} は runner 側で既に解けている。` +
             (dropped
@@ -2582,7 +2605,7 @@ class Pool implements ManagerPool {
             : `[${answered.decision}] ${message}`,
       });
       return {
-        outcome: 'answered',
+        outcome: __mut('S11O') ? 'delivered' : 'answered',
         // `decideAnswer` が SDK へ返す値では `unreadable` も `deny` に畳まれて区別できないので、その手前の `answered.decision` を見る。
         detail:
           answered.decision === 'unreadable'
@@ -2598,9 +2621,9 @@ class Pool implements ManagerPool {
     const holdable = mode === 'caller' && sendAttachments.length === 0;
     if (holdable && (record.job.heldMessages?.length ?? 0) > 0) {
       const queued = await this.#held.hold(record, message, '先に預かった伝言がまだ届いていない');
-      if (queued.outcome !== 'held') return queued;
+      if (queued.outcome !== 'held' && !__mut('S12F')) return queued;
       const attempt = await this.#held.deliver(managerId, 'caller');
-      return attempt ?? queued;
+      return __mut('S13F') ? queued : (attempt ?? queued);
     }
 
     // 認証トークンの世代が食い違った done の委譲は旧セッションへ流さない: 旧プロセスの env は起動時に凍っていて、
@@ -2645,10 +2668,10 @@ class Pool implements ManagerPool {
           : { rotationFoldDueAt }),
         skipUnchangedDeclineRecord: mode === 'held-delivery' && pollRetry,
       });
-      if (folded.declined !== undefined) {
+      if (folded.declined !== undefined && !__mut('S15F')) {
         if (waitedLongEnough && folded.stuck !== undefined) onStuck?.(folded.stuck);
         // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
-        if (holdable) {
+        if (holdable && !__mut('S14F')) {
           // 畳めない理由が背景処理だけなら、待ちの上限で畳んで届ける。その時刻を返事で言う: 言わないと、呼び手はいつ届くか分からず、
           // 背景処理ごと捨てる manager_stop → manager_start を選ぶ（2026-10-19 に4回。どれも上限の前に手で止めた）
           const backgroundOnly =
@@ -2665,7 +2688,7 @@ class Pool implements ManagerPool {
             foldDueAt,
           );
         }
-        return folded.declined;
+        return __mut('S15O') ? { ...folded.declined, outcome: 'delivered' } : folded.declined;
       }
       fingerprintMatched = folded.fingerprintMatched === true;
       staleDelivery = folded.staleDelivery;
@@ -2735,9 +2758,9 @@ class Pool implements ManagerPool {
       // `sessionMissingSince` が立っている回は「持っていない」と確かめてあるので、失敗は `'unknown'` ではない。
       const missing = record.sessionMissingSince !== undefined;
       // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。「戻れない」とは別の理由なので別のことを言う。
-      if (this.#resuming.has(managerId)) {
+      if (this.#resuming.has(managerId) && !__mut('S16F')) {
         return {
-          outcome: missing ? 'session_missing' : 'unknown',
+          outcome: __mut('S16O') ? 'delivered' : missing ? 'session_missing' : 'unknown',
           detail: sendFailureDetail(managerId, resumeFailureDetail(managerId, 'busy'), missing),
         };
       }
@@ -2762,15 +2785,15 @@ class Pool implements ManagerPool {
           : outgoing,
         sendAttachments,
       );
-      if (resumed !== 'resumed') {
+      if (resumed !== 'resumed' && !__mut('S18F')) {
         /*
          * `stopped-meanwhile` は `abort()` と同時に走って `#resume` が畳み直した回で、セッションが無いことは確かめてある:
          * `missing` に頼らず直接 `session_missing` を選び、`delivered` を返さない（止められた委譲を「届いた」と言わない）。
          * `sendFailureDetail` の前置きも付けない: 404 で訂正した回と事実の出所が違う（自分で畳んだ）。
          */
-        if (resumed === 'stopped-meanwhile') {
+        if (resumed === 'stopped-meanwhile' && !__mut('S17F')) {
           return {
-            outcome: 'session_missing',
+            outcome: __mut('S17O') ? 'unknown' : 'session_missing',
             detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal),
           };
         }
@@ -2779,7 +2802,7 @@ class Pool implements ManagerPool {
          * 「そのものは無い」としか読めなくなるが、台帳には在り、`sessionId` が残っていればもう一度 resume を試せる。
          */
         return {
-          outcome: missing ? 'session_missing' : 'unknown',
+          outcome: __mut('S18O') ? 'delivered' : missing ? 'session_missing' : 'unknown',
           detail: sendFailureDetail(
             managerId,
             resumeFailureDetail(managerId, resumed, record.leaseRefusal),
@@ -2805,7 +2828,7 @@ class Pool implements ManagerPool {
      * `send()` へ戻るまでの `await` の間に `abort()` が印を立てうる。畳み直しは `abort()` と同じ
      * `#confirmStoppedAndReleaseLease` を使う。
      */
-    if (record.stopConfirmedAt !== undefined) {
+    if (record.stopConfirmedAt !== undefined && !__mut('S19F')) {
       const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
         record,
         runner,
@@ -2817,7 +2840,7 @@ class Pool implements ManagerPool {
         noteResumeAfterStopFoldFailed(managerId, foldOutcome);
       }
       return {
-        outcome: 'session_missing',
+        outcome: __mut('S19O') ? 'unknown' : 'session_missing',
         detail: resumeFailureDetail(managerId, 'stopped-meanwhile', record.leaseRefusal),
       };
     }
