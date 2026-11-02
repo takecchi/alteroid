@@ -346,7 +346,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#endRelocationWindow': 'decision',
-    '#flushSynthesizedNoticeFor': 'gauge,thinning',
     '#handleEvent': 'decision,failure,recovery,reply',
     '#ignoreIfMovedAway': 'decision',
     '#noteAmbiguousResolved': 'recovery',
@@ -379,6 +378,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'quota-stop-windows.ts': {
     '#deliver': 'thinning',
     join: 'thinning',
+  },
+  // 合成した知らせの担当ごとの窓の日誌（旧 `Pool#flushSynthesizedNoticeFor`）。同じ検査をここへ移した。
+  'synthesized-notice-windows.ts': {
+    '#flushFor': 'gauge,thinning',
   },
   // 「取り戻した」窓と resume 確認の日誌（旧 `Pool#notifyRestored` / `#observeResumeConfirmation` ほか）。同じ検査をここへ移した。
   'restored-windows.ts': {
@@ -481,6 +484,7 @@ describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（i
     'quota-stop-windows.ts',
     'restored-windows.ts',
     'session-loaders.ts',
+    'synthesized-notice-windows.ts',
     'usage-receiver.ts',
     'usage-wake.ts',
   ]) {
