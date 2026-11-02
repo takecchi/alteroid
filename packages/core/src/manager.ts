@@ -4452,17 +4452,7 @@ class Pool implements ManagerPool {
 
     // 二重の網: 印を立てる前の await の間に `#reattach` が resume を終えていれば印では塞げないので、戻った直後に宛先の食い違いを見る。新しい持ち主に任せず止めた意思を優先し、確かめられなければ「台帳を書かない」側へ合流させる。
     if (outcome === 'stopped' && record.job.runnerId !== runnerIdBeforeConfirm) {
-      const movedRunner = await this.#runnerOf(record);
-      if (movedRunner === null) {
-        outcome = 'unknown';
-        stopError = undefined;
-        sessionGone = undefined;
-      } else {
-        const moved = await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
-        outcome = moved.outcome;
-        stopError = moved.stopError;
-        sessionGone = moved.sessionGone;
-      }
+      ({ outcome, stopError, sessionGone } = await this.#reconfirmAfterMove(record, managerId));
     }
 
     if (outcome !== 'stopped') {
@@ -4568,6 +4558,22 @@ class Pool implements ManagerPool {
         'デーモンの自動畳み（Issue #1394）: 止める直前の読み直しで、手が空いた状態ではなくなっていた',
     });
     return { outcome: 'not_stopped', detail };
+  }
+
+  /** 段C（宛先の食い違い）: 委譲が別の runner へ移っていた回に、移った先で止まりを確かめ直す。条件は呼び元が見る。 */
+  async #reconfirmAfterMove(
+    record: ManagerRecord,
+    managerId: string,
+  ): Promise<{
+    outcome: 'stopped' | 'not_stopped' | 'unknown';
+    stopError: unknown;
+    sessionGone: boolean | undefined;
+  }> {
+    const movedRunner = await this.#runnerOf(record);
+    if (movedRunner === null) {
+      return { outcome: 'unknown', stopError: undefined, sessionGone: undefined };
+    }
+    return await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
   }
 
   async stop(options?: ManagerPoolStopOptions): Promise<void> {
