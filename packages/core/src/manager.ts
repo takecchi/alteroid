@@ -5935,12 +5935,12 @@ class Pool implements ManagerPool {
     if (event.type === 'shutting_down') {
       // 同期で立てる: 先頭の `await` より前でなければ `stop()` の判定に間に合わない（`#onEvent` は並行に走る）。
       this.#farewellRunners.add(fromRunnerId);
-      return;
+      if (process.env['ALT_MUT'] !== 'E1') return;
     }
     if (event.type === 'hello') {
       this.#farewellRunners.delete(fromRunnerId);
       this.#farewellRunners.delete(event.runnerId);
-      if (this.#stopped) return;
+      if (this.#stopped && process.env['ALT_MUT'] !== 'E2a') return;
       // 前の名乗りを持ち越さない: 同じ runnerId の器が入れ替わって版が下がりうる。
       this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
       this.#attachmentStager.noteHello(
@@ -5964,38 +5964,38 @@ class Pool implements ManagerPool {
       this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
       // 初回だけ素通りにしない: 起動時に掴んだ器と SSE の繋がった先が違う場合（畳まれつつある旧 runner がまだ `/health` に答える間）に取り直しが起きない。
       void this.#reattach(event.runnerId);
-      return;
+      if (process.env['ALT_MUT'] !== 'E2b') return;
     }
 
     if (event.type === 'anthropic_route') {
-      if (this.#stopped) return;
+      if (this.#stopped && process.env['ALT_MUT'] !== 'E3a') return;
       this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
-      return;
+      if (process.env['ALT_MUT'] !== 'E3b') return;
     }
 
     if (event.type === 'manager_peers') {
-      if (this.#stopped) return;
+      if (this.#stopped && process.env['ALT_MUT'] !== 'E4a') return;
       this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
-      return;
+      if (process.env['ALT_MUT'] !== 'E4b') return;
     }
 
     if (event.type === 'scratch_sweep') {
       await this.#onScratchSweep(event, fromRunnerId);
-      return;
+      if (process.env['ALT_MUT'] !== 'E5') return;
     }
 
     if (event.type === 'codex_auth') {
-      if (this.#codexAuth === undefined) return;
+      if (this.#codexAuth === undefined && process.env['ALT_MUT'] !== 'E6a') return;
       const runner = await this.#runnerOrNull(fromRunnerId);
-      await this.#codexAuth.onRunnerNotice(event, fromRunnerId, runner);
-      return;
+      await this.#codexAuth?.onRunnerNotice(event, fromRunnerId, runner);
+      if (process.env['ALT_MUT'] !== 'E6b') return;
     }
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) {
       // 台帳に無い担当の出来事: 取りに行かない出し箱・預かりも消させる（#4925）。消さないと runner の畳みが、取られない退避先を上限まで待つ
       await this.#discardRunnerPickups(event, fromRunnerId);
-      return;
+      if (process.env['ALT_MUT'] !== 'E7') return;
     }
 
     this.#observeSessionGeneration(record, event);
@@ -6005,13 +6005,13 @@ class Pool implements ManagerPool {
         event.type === 'report' &&
         (await this.#deliverReportFromUnreplacedSession(record, event, fromRunnerId))
       ) {
-        return;
+        if (process.env['ALT_MUT'] !== 'E8a') return;
       }
       if (
         event.type === 'ask' &&
         (await this.#noticeAskFromUnreplacedSession(record, event, fromRunnerId))
       ) {
-        return;
+        if (process.env['ALT_MUT'] !== 'E8b') return;
       }
       const dropped = await this.#droppedReportFiles(event, fromRunnerId);
       await this.#journal({
@@ -6027,7 +6027,7 @@ class Pool implements ManagerPool {
           dropped.text,
         ...dropped.attachments,
       });
-      return;
+      if (process.env['ALT_MUT'] !== 'E8c') return;
     }
 
     // 古い世代の出来事を捨てた後に見る: 前のセッションの遅れた出来事で「戻れた」と確定しないため。
@@ -6043,7 +6043,7 @@ class Pool implements ManagerPool {
       // 移送先自身の出来事も預かる: 素通りさせると `#ignoreIfMovedAway` が「移った後の古い runner」と読んで捨てる。
       if (this.#relocatingTo.has(event.managerId)) {
         this.#deferEvent(event, fromRunnerId);
-        return;
+        if (process.env['ALT_MUT'] !== 'E9') return;
       }
       // 世代で選り分けない: 世代の判定は窓が閉じるとき（応答で追う世代が決まった後）に行う。
       if (
@@ -6051,7 +6051,7 @@ class Pool implements ManagerPool {
         this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId
       ) {
         this.#deferEvent(event, fromRunnerId);
-        return;
+        if (process.env['ALT_MUT'] !== 'E10') return;
       }
     }
 
@@ -6062,7 +6062,7 @@ class Pool implements ManagerPool {
       !(record.job.status === 'stopped' && (event.type === 'report' || event.type === 'ask')) &&
       (await this.#ignoreIfMovedAway(record, fromRunnerId, event))
     ) {
-      return;
+      if (process.env['ALT_MUT'] !== 'E11') return;
     }
 
     switch (event.type) {
