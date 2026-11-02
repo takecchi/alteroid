@@ -4723,194 +4723,7 @@ class Pool implements ManagerPool {
         // 一度「挑み直さない」と決めたものは自動では二度と触らない: 抜かすと、同じ runner の別ジョブの予約のたびに無意味な resume と同じ通知が繰り返される。
         if (this.#unresumable.has(job.id)) continue;
 
-        // 古い写し（ループ先頭の `job`）の宛先で像へ書かない: `#reattaching` は runner ごとの直列化なので、待っている間に別の runner の取り直しが移送を終えていると、移送先で健全に走る像へ `attached = false`・`waiting = []` と「resume に失敗した」観測を書いてしまう。判定は読み直しの後・像への最初の書き込みの前に置く。自分の runner の委譲（`!relocating`）は宛先が変わらないので飛ばさない。
-        const fresh =
-          this.#records.get(job.id) === undefined
-            ? ((await this.#latestJobOf(job.id)) ?? job)
-            : job;
-        // 読み直しの `await` の間に像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
-        const known = this.#records.get(job.id);
-        if ((known?.job.runnerId ?? fresh.runnerId) !== job.runnerId) continue;
-
-        // 移送のときは、像を「器にセッションが無い」側へ倒すのを貸し出しの関門を通った後まで待つ（下の `markMissing`）。
-        // 関門で断られるのは持ち主がまだ握っているときで、名簿が器を一時的に `lost` と誤判定しただけのこともある。先に倒すと、断られた後も
-        // 待っていた確認（`waiting`）が消えたまま戻らず、回答が届かなくなる。`attached = false` も残り、次の `manager_send` が生きたセッションへ resume を撃ち直す（#4454）。
-        if (known && !relocating) known.attached = false;
-
-        // 印は resume を挑む直前に置き、戻れたときに消す: `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ resume が成功しなかった、が成り立つ。
-        const missingAt = this.#nowIso();
-
-        // 手を動かしている最中だったものだけ戻す: `done` は死ではなく待機で、起こすと開いたままの窓を勝手に閉じる。判定より前に `#records` へ載せない: 終わった仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
-        // 古い写し（ループ先頭の `job`）で判定しない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。`known` が無いときは読み直した `fresh` で判定し、record も同じ行から作る。
-        const current = this.#records.get(job.id) ?? known;
-        const status = current?.job.status ?? fresh.status;
-        if (status !== 'running' && status !== 'waiting_human') continue;
-
-        const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
-        this.#records.set(job.id, record);
-        const markMissing = (): void => {
-          record.attached = false;
-          // 待っていた確認を持ち越さない: 新しい器はその request_id を知らず、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、誰からも届かないマネージャーになる。
-          this.#withdrawWaiting(record, '器が入れ替わり、新しい器はこの確認を知らない');
-          record.sessionMissingSince ??= missingAt;
-          // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ resume でも入り直せなかった。
-          record.sessionMissingKind = 'resume-failed';
-        };
-        if (!relocating) markMissing();
-
-        // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`#endRelocationWindow`）。
-        try {
-          const cause: RestartCause = relocating ? 'relocated' : 'runner';
-          const message = restartNudge(
-            status,
-            cause,
-            record.job.workspace,
-            record.job.lastUnpushedWorkObservation,
-            record.job.lastRescue,
-            this.#rescueStash.note(record.job.rescueStash, runnerId),
-          );
-          const refusedBefore = record.leaseRefusal !== undefined;
-          // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。同じ runner への復帰は `closed` だけを預ける別の窓を持つ。
-          const ownsWindow = !this.#resuming.has(job.id);
-          if (ownsWindow) {
-            if (relocating) this.#relocatingTo.set(job.id, runnerId);
-            else this.#sameRunnerResumeWindow.set(job.id, runnerId);
-          }
-          let outcome: ResumeOutcome | undefined;
-          // 受理された回は台帳を `running` へ戻して persist した後に閉じる: 移送先自身の出来事（closed(failed) や ask）を処理し直した結果を、後から `running` で上書きしないため。受理されなかった回と投げた回は `moved` を立てずに、下の分岐より先に閉じる。
-          try {
-            outcome = await this.#resumeOnce(
-              record,
-              runner,
-              message,
-              undefined,
-              relocating ? markMissing : undefined,
-            );
-            if (outcome === 'resumed') {
-              // `#resumeOnce` から戻った直後、他の await を挟む前に読む（`#restoreJobs` と同じ理由）。
-              const swapNotice = cwdSwapNoticeClause(record);
-              // 受理と「戻れた」を取り違えない。
-              if (record.job.status === 'lost') continue;
-              // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
-              record.sessionMissingSince = undefined;
-              // 由来も一緒に消す: 片方だけ残さない。
-              record.sessionMissingKind = undefined;
-              // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
-              record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
-              this.#relocationRefusals.delete(job.id);
-              await this.#persist(record);
-              // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
-              if (swapNotice !== undefined) {
-                await runner.send(job.id, swapNotice).catch(() => undefined);
-              }
-              await this.#journalExchange(
-                'outbound',
-                `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
-                  (swapNotice === undefined ? '' : ` ${swapNotice}`),
-              );
-              this.#restored.notify(record, 'resumed', cause);
-            }
-          } finally {
-            if (ownsWindow) await this.#endRelocationWindow(job.id, outcome === 'resumed');
-          }
-          // 引けなかっただけなら `continue` で済ませず予約して挑み直す: 次の名乗り（`hello`）は SSE が繋がったときにしか来ず、永久に来ないことがある。
-          if (outcome === 'busy') {
-            // 別の契機が resume 中でそちらが失敗すると誰も取り直さないので梯子に載せるが、委譲ごとに `REATTACH_BUSY_MAX_RETRIES` 回で打ち切る: 相手の resume が終わらない限り毎回 busy に当たる。打ち切った委譲は `retry` を立てず、梯子を延命しない。
-            const tried = this.#reattachBusyRetries.get(job.id) ?? 0;
-            if (tried < REATTACH_BUSY_MAX_RETRIES) {
-              this.#reattachBusyRetries.set(job.id, tried + 1);
-              retry = true;
-            } else {
-              this.#reattachBusyRetries.delete(job.id);
-              await this.#journal({
-                type: 'decision',
-                decision: `[${job.id}] 取り直しの予約を止めた（別の契機の resume が ${REATTACH_BUSY_MAX_RETRIES} 回の挑み直しを通じて終わらなかった）`,
-                grounds:
-                  'busy が続いたので、この委譲についての梯子の予約を打ち切った。次の名乗り（hello）か、相手の resume の結果に任せる',
-              });
-            }
-            continue;
-          }
-          this.#reattachBusyRetries.delete(job.id);
-          if (outcome === 'unreadable') {
-            retry = true;
-            continue;
-          }
-          if (outcome === 'held-by-lease') {
-            retry = true;
-            // 待っていることを日誌に残す: 書かないと「待っている」と「忘れている」が記録から区別できない。遷移のときだけ書く: 梯子は最大30秒間隔で挑み直すので、毎回書くと同じ行が積まれ、日誌を読む側で本当に1回だけ起きたことが埋もれる。
-            if (!refusedBefore) {
-              await this.#journal({
-                type: 'decision',
-                decision: leaseRefusalDecision(job.id, record.leaseRefusal),
-                grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
-              });
-            }
-            continue;
-          }
-          if (relocating && outcome === 'no-session') {
-            // 移送のときの `no-session` はその場で lost に確定する: セッションが無いのは委譲の側の事実で、候補を回しても変わらない。
-            const reason = new Error(
-              'no-session: 委譲が session_id を持っておらず、どの runner でも開き直せない（移送の候補を回しても変わらないので、その場で確定した）',
-            );
-            await this.#journal({
-              type: 'decision',
-              decision: `[${job.id}] 移送先 ${runnerId} へ移せない（セッションが無い）。候補を回さず、戻せなかったものとして確定する`,
-              grounds: reasonOf(reason),
-            });
-            await this.#confirmLost(record, reason);
-            continue;
-          }
-          if (relocating && outcome === 'workspace-path-unknown') {
-            // 貸し出しは返さない: この回では貸していず、`record.job.lease` がこの候補を指していても以前の回が貸したもので、セッションが起きていないと確かめられないものは返さない。
-            const reason = new Error(
-              `workspace-path-unknown: 移送先 ${runnerId} は cwd を記録しておらず、runner からも workspacePath を聞けていない`,
-            );
-            if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
-              await this.#confirmLost(record, reason);
-            } else if (
-              record.job.lease?.runnerId === runnerId &&
-              record.job.lease.releasedAt === undefined
-            ) {
-              await this.#journal({
-                type: 'decision',
-                decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しは返していない（以前の回の貸し出しで、セッションが起きていないと確かめられない）`,
-                grounds: reasonOf(reason),
-              });
-            }
-            continue;
-          }
-        } catch (error) {
-          this.#reattachBusyRetries.delete(job.id);
-          // 一時的にこけたときは自分で予約する: `hello` は SSE が繋がったときにしか来ず、ストリームが安定していれば永久に来ないので、台帳が `running` のまま誰も走っていない仕事が残る。
-          if (isFencedRunnerError(error)) {
-            // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さない（同じ世代で投げ直しても同じ答え）が、台帳の書き込み失敗か別のデーモンの存在を人間が知る必要があるので必ず知らせる。
-            await this.#refuseFenced(job.id, error, '取り直しを止めた', '取り直し');
-          } else if (isRetryableRunnerError(error)) retry = true;
-          else if (
-            relocating &&
-            isRunnerSpecificRefusal(error) &&
-            !(await this.#noteRelocationRefusal(record, runnerId, error))
-          ) {
-            // 移送先1台の断りは委譲の運命ではない: lost に確定せず `#unresumable` も立てず、この移送先だけ見送る。ほかの候補が引き取れる。
-            // この移送先へ貸した貸し出しは返す: 残すとほかの候補の関門が `held` で断り、TTL が切れるまで移れない。4xx は命令を受け取らなかったという答えで、セッションは起きていない（起きていれば 2xx）。
-            if (
-              record.job.lease?.runnerId === runnerId &&
-              record.job.lease.releasedAt === undefined
-            ) {
-              record.job.lease = releaseLease(record.job.lease, this.#now());
-              await this.#persist(record);
-              // 黙って返さない: この契機だけは持ち主自身の `closed` ではなく 4xx の答えに拠っている。
-              await this.#journal({
-                type: 'decision',
-                decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しを返した（resume を 4xx で断られ、そこではセッションが起きていない）`,
-                grounds: reasonOf(error),
-              });
-            }
-          } else {
-            await this.#confirmLost(record, error);
-          }
-        }
+        if (await this.#reattachOne(job, runner, runnerId, relocating)) retry = true;
       }
     } catch {
       // 想定外で転んでもデーモンごと落とさず、黙って終わらない: 「もう挑まない」に倒すと、走行中だった仕事が誰にも拾われないまま `running` で残る。
@@ -4987,6 +4800,203 @@ class Pool implements ManagerPool {
         this.#reattachPushes.delete(runnerId);
       }
     }
+  }
+
+  /**
+   * 1本の委譲を取り直す（`#reattach` のループの1周ぶん）: 像の読み直し・resume・結果ごとの後始末まで。
+   * 戻り値は「挑み直しを予約するか」。`continue` で次の委譲へ進んでいた所は `return` で返す。
+   */
+  async #reattachOne(
+    job: Job,
+    runner: RunnerClient,
+    runnerId: string,
+    relocating: boolean,
+  ): Promise<boolean> {
+    let retry = false;
+    // 古い写し（ループ先頭の `job`）の宛先で像へ書かない: `#reattaching` は runner ごとの直列化なので、待っている間に別の runner の取り直しが移送を終えていると、移送先で健全に走る像へ `attached = false`・`waiting = []` と「resume に失敗した」観測を書いてしまう。判定は読み直しの後・像への最初の書き込みの前に置く。自分の runner の委譲（`!relocating`）は宛先が変わらないので飛ばさない。
+    const fresh =
+      this.#records.get(job.id) === undefined ? ((await this.#latestJobOf(job.id)) ?? job) : job;
+    // 読み直しの `await` の間に像が載ることもあるので、読んだ後にもう一度 `#records` を見る。
+    const known = this.#records.get(job.id);
+    if ((known?.job.runnerId ?? fresh.runnerId) !== job.runnerId) return false;
+
+    // 移送のときは、像を「器にセッションが無い」側へ倒すのを貸し出しの関門を通った後まで待つ（下の `markMissing`）。
+    // 関門で断られるのは持ち主がまだ握っているときで、名簿が器を一時的に `lost` と誤判定しただけのこともある。先に倒すと、断られた後も
+    // 待っていた確認（`waiting`）が消えたまま戻らず、回答が届かなくなる。`attached = false` も残り、次の `manager_send` が生きたセッションへ resume を撃ち直す（#4454）。
+    if (known && !relocating) known.attached = false;
+
+    // 印は resume を挑む直前に置き、戻れたときに消す: `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ resume が成功しなかった、が成り立つ。
+    const missingAt = this.#nowIso();
+
+    // 手を動かしている最中だったものだけ戻す: `done` は死ではなく待機で、起こすと開いたままの窓を勝手に閉じる。判定より前に `#records` へ載せない: 終わった仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
+    // 古い写し（ループ先頭の `job`）で判定しない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。`known` が無いときは読み直した `fresh` で判定し、record も同じ行から作る。
+    const current = this.#records.get(job.id) ?? known;
+    const status = current?.job.status ?? fresh.status;
+    if (status !== 'running' && status !== 'waiting_human') return false;
+
+    const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
+    this.#records.set(job.id, record);
+    const markMissing = (): void => {
+      record.attached = false;
+      // 待っていた確認を持ち越さない: 新しい器はその request_id を知らず、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、誰からも届かないマネージャーになる。
+      this.#withdrawWaiting(record, '器が入れ替わり、新しい器はこの確認を知らない');
+      record.sessionMissingSince ??= missingAt;
+      // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ resume でも入り直せなかった。
+      record.sessionMissingKind = 'resume-failed';
+    };
+    if (!relocating) markMissing();
+
+    // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`#endRelocationWindow`）。
+    try {
+      const cause: RestartCause = relocating ? 'relocated' : 'runner';
+      const message = restartNudge(
+        status,
+        cause,
+        record.job.workspace,
+        record.job.lastUnpushedWorkObservation,
+        record.job.lastRescue,
+        this.#rescueStash.note(record.job.rescueStash, runnerId),
+      );
+      const refusedBefore = record.leaseRefusal !== undefined;
+      // 別の契機が resume 中なら窓は持たない: そちらの窓を壊さない。同じ runner への復帰は `closed` だけを預ける別の窓を持つ。
+      const ownsWindow = !this.#resuming.has(job.id);
+      if (ownsWindow) {
+        if (relocating) this.#relocatingTo.set(job.id, runnerId);
+        else this.#sameRunnerResumeWindow.set(job.id, runnerId);
+      }
+      let outcome: ResumeOutcome | undefined;
+      // 受理された回は台帳を `running` へ戻して persist した後に閉じる: 移送先自身の出来事（closed(failed) や ask）を処理し直した結果を、後から `running` で上書きしないため。受理されなかった回と投げた回は `moved` を立てずに、下の分岐より先に閉じる。
+      try {
+        outcome = await this.#resumeOnce(
+          record,
+          runner,
+          message,
+          undefined,
+          relocating ? markMissing : undefined,
+        );
+        if (outcome === 'resumed') {
+          // `#resumeOnce` から戻った直後、他の await を挟む前に読む（`#restoreJobs` と同じ理由）。
+          const swapNotice = cwdSwapNoticeClause(record);
+          // 受理と「戻れた」を取り違えない。
+          if (record.job.status === 'lost') return false;
+          // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
+          record.sessionMissingSince = undefined;
+          // 由来も一緒に消す: 片方だけ残さない。
+          record.sessionMissingKind = undefined;
+          // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
+          record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
+          this.#relocationRefusals.delete(job.id);
+          await this.#persist(record);
+          // `runner.send()` の失敗は無視する: 本体の resume は成功しており、この一言が届かなくても致命ではない。
+          if (swapNotice !== undefined) {
+            await runner.send(job.id, swapNotice).catch(() => undefined);
+          }
+          await this.#journalExchange(
+            'outbound',
+            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
+              (swapNotice === undefined ? '' : ` ${swapNotice}`),
+          );
+          this.#restored.notify(record, 'resumed', cause);
+        }
+      } finally {
+        if (ownsWindow) await this.#endRelocationWindow(job.id, outcome === 'resumed');
+      }
+      // 引けなかっただけなら `continue` で済ませず予約して挑み直す: 次の名乗り（`hello`）は SSE が繋がったときにしか来ず、永久に来ないことがある。
+      if (outcome === 'busy') {
+        // 別の契機が resume 中でそちらが失敗すると誰も取り直さないので梯子に載せるが、委譲ごとに `REATTACH_BUSY_MAX_RETRIES` 回で打ち切る: 相手の resume が終わらない限り毎回 busy に当たる。打ち切った委譲は `retry` を立てず、梯子を延命しない。
+        const tried = this.#reattachBusyRetries.get(job.id) ?? 0;
+        if (tried < REATTACH_BUSY_MAX_RETRIES) {
+          this.#reattachBusyRetries.set(job.id, tried + 1);
+          retry = true;
+        } else {
+          this.#reattachBusyRetries.delete(job.id);
+          await this.#journal({
+            type: 'decision',
+            decision: `[${job.id}] 取り直しの予約を止めた（別の契機の resume が ${REATTACH_BUSY_MAX_RETRIES} 回の挑み直しを通じて終わらなかった）`,
+            grounds:
+              'busy が続いたので、この委譲についての梯子の予約を打ち切った。次の名乗り（hello）か、相手の resume の結果に任せる',
+          });
+        }
+        return retry;
+      }
+      this.#reattachBusyRetries.delete(job.id);
+      if (outcome === 'unreadable') {
+        retry = true;
+        return retry;
+      }
+      if (outcome === 'held-by-lease') {
+        retry = true;
+        // 待っていることを日誌に残す: 書かないと「待っている」と「忘れている」が記録から区別できない。遷移のときだけ書く: 梯子は最大30秒間隔で挑み直すので、毎回書くと同じ行が積まれ、日誌を読む側で本当に1回だけ起きたことが埋もれる。
+        if (!refusedBefore) {
+          await this.#journal({
+            type: 'decision',
+            decision: leaseRefusalDecision(job.id, record.leaseRefusal),
+            grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
+          });
+        }
+        return retry;
+      }
+      if (relocating && outcome === 'no-session') {
+        // 移送のときの `no-session` はその場で lost に確定する: セッションが無いのは委譲の側の事実で、候補を回しても変わらない。
+        const reason = new Error(
+          'no-session: 委譲が session_id を持っておらず、どの runner でも開き直せない（移送の候補を回しても変わらないので、その場で確定した）',
+        );
+        await this.#journal({
+          type: 'decision',
+          decision: `[${job.id}] 移送先 ${runnerId} へ移せない（セッションが無い）。候補を回さず、戻せなかったものとして確定する`,
+          grounds: reasonOf(reason),
+        });
+        await this.#confirmLost(record, reason);
+        return false;
+      }
+      if (relocating && outcome === 'workspace-path-unknown') {
+        // 貸し出しは返さない: この回では貸していず、`record.job.lease` がこの候補を指していても以前の回が貸したもので、セッションが起きていないと確かめられないものは返さない。
+        const reason = new Error(
+          `workspace-path-unknown: 移送先 ${runnerId} は cwd を記録しておらず、runner からも workspacePath を聞けていない`,
+        );
+        if (await this.#noteRelocationRefusal(record, runnerId, reason)) {
+          await this.#confirmLost(record, reason);
+        } else if (
+          record.job.lease?.runnerId === runnerId &&
+          record.job.lease.releasedAt === undefined
+        ) {
+          await this.#journal({
+            type: 'decision',
+            decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しは返していない（以前の回の貸し出しで、セッションが起きていないと確かめられない）`,
+            grounds: reasonOf(reason),
+          });
+        }
+        return false;
+      }
+    } catch (error) {
+      this.#reattachBusyRetries.delete(job.id);
+      // 一時的にこけたときは自分で予約する: `hello` は SSE が繋がったときにしか来ず、ストリームが安定していれば永久に来ないので、台帳が `running` のまま誰も走っていない仕事が残る。
+      if (isFencedRunnerError(error)) {
+        // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さない（同じ世代で投げ直しても同じ答え）が、台帳の書き込み失敗か別のデーモンの存在を人間が知る必要があるので必ず知らせる。
+        await this.#refuseFenced(job.id, error, '取り直しを止めた', '取り直し');
+      } else if (isRetryableRunnerError(error)) retry = true;
+      else if (
+        relocating &&
+        isRunnerSpecificRefusal(error) &&
+        !(await this.#noteRelocationRefusal(record, runnerId, error))
+      ) {
+        // 移送先1台の断りは委譲の運命ではない: lost に確定せず `#unresumable` も立てず、この移送先だけ見送る。ほかの候補が引き取れる。
+        // この移送先へ貸した貸し出しは返す: 残すとほかの候補の関門が `held` で断り、TTL が切れるまで移れない。4xx は命令を受け取らなかったという答えで、セッションは起きていない（起きていれば 2xx）。
+        if (record.job.lease?.runnerId === runnerId && record.job.lease.releasedAt === undefined) {
+          record.job.lease = releaseLease(record.job.lease, this.#now());
+          await this.#persist(record);
+          // 黙って返さない: この契機だけは持ち主自身の `closed` ではなく 4xx の答えに拠っている。
+          await this.#journal({
+            type: 'decision',
+            decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しを返した（resume を 4xx で断られ、そこではセッションが起きていない）`,
+            grounds: reasonOf(error),
+          });
+        }
+      } else {
+        await this.#confirmLost(record, error);
+      }
+    }
+    return retry;
   }
 
   /** 回数で打ち切らない: 残るのは「台帳では走っているのに誰も走っていない仕事」で、この経路が直そうとしている状態そのもの。 */
