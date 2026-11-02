@@ -4938,32 +4938,7 @@ class Pool implements ManagerPool {
         return false;
       }
     } catch (error) {
-      this.#reattachBusyRetries.delete(job.id);
-      // 一時的にこけたときは自分で予約する: `hello` は SSE が繋がったときにしか来ず、ストリームが安定していれば永久に来ないので、台帳が `running` のまま誰も走っていない仕事が残る。
-      if (isFencedRunnerError(error)) {
-        // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さない（同じ世代で投げ直しても同じ答え）が、台帳の書き込み失敗か別のデーモンの存在を人間が知る必要があるので必ず知らせる。
-        await this.#refuseFenced(job.id, error, '取り直しを止めた', '取り直し');
-      } else if (isRetryableRunnerError(error)) retry = true;
-      else if (
-        relocating &&
-        isRunnerSpecificRefusal(error) &&
-        !(await this.#noteRelocationRefusal(record, runnerId, error))
-      ) {
-        // 移送先1台の断りは委譲の運命ではない: lost に確定せず `#unresumable` も立てず、この移送先だけ見送る。ほかの候補が引き取れる。
-        // この移送先へ貸した貸し出しは返す: 残すとほかの候補の関門が `held` で断り、TTL が切れるまで移れない。4xx は命令を受け取らなかったという答えで、セッションは起きていない（起きていれば 2xx）。
-        if (record.job.lease?.runnerId === runnerId && record.job.lease.releasedAt === undefined) {
-          record.job.lease = releaseLease(record.job.lease, this.#now());
-          await this.#persist(record);
-          // 黙って返さない: この契機だけは持ち主自身の `closed` ではなく 4xx の答えに拠っている。
-          await this.#journal({
-            type: 'decision',
-            decision: `[${job.id}] 移送先 ${runnerId} に貸した貸し出しを返した（resume を 4xx で断られ、そこではセッションが起きていない）`,
-            grounds: reasonOf(error),
-          });
-        }
-      } else {
-        await this.#confirmLost(record, error);
-      }
+      return await this.#classifyReattachError(error, record, job.id, runnerId, relocating);
     }
     return retry;
   }
@@ -5036,6 +5011,47 @@ class Pool implements ManagerPool {
         grounds: reasonOf(reason),
       });
     }
+  }
+
+  /**
+   * 取り直しで投げられた失敗の仕分け: 世代で拒まれたら止める・一時的なら予約する・移送先1台の断りなら見送る・それ以外は lost に確定する。
+   * 戻り値は「挑み直しを予約するか」。
+   */
+  async #classifyReattachError(
+    error: unknown,
+    record: ManagerRecord,
+    jobId: string,
+    runnerId: string,
+    relocating: boolean,
+  ): Promise<boolean> {
+    let retry = false;
+    this.#reattachBusyRetries.delete(jobId);
+    // 一時的にこけたときは自分で予約する: `hello` は SSE が繋がったときにしか来ず、ストリームが安定していれば永久に来ないので、台帳が `running` のまま誰も走っていない仕事が残る。
+    if (isFencedRunnerError(error)) {
+      // 世代で拒まれた（409）は「戻せなかった」ではない: `lost` にして像から外すと、クローンが新しく起こし直し、fencing の失敗経路から二重実行へ到達する。状態は動かさず挑み直さない（同じ世代で投げ直しても同じ答え）が、台帳の書き込み失敗か別のデーモンの存在を人間が知る必要があるので必ず知らせる。
+      await this.#refuseFenced(jobId, error, '取り直しを止めた', '取り直し');
+    } else if (isRetryableRunnerError(error)) retry = true;
+    else if (
+      relocating &&
+      isRunnerSpecificRefusal(error) &&
+      !(await this.#noteRelocationRefusal(record, runnerId, error))
+    ) {
+      // 移送先1台の断りは委譲の運命ではない: lost に確定せず `#unresumable` も立てず、この移送先だけ見送る。ほかの候補が引き取れる。
+      // この移送先へ貸した貸し出しは返す: 残すとほかの候補の関門が `held` で断り、TTL が切れるまで移れない。4xx は命令を受け取らなかったという答えで、セッションは起きていない（起きていれば 2xx）。
+      if (record.job.lease?.runnerId === runnerId && record.job.lease.releasedAt === undefined) {
+        record.job.lease = releaseLease(record.job.lease, this.#now());
+        await this.#persist(record);
+        // 黙って返さない: この契機だけは持ち主自身の `closed` ではなく 4xx の答えに拠っている。
+        await this.#journal({
+          type: 'decision',
+          decision: `[${jobId}] 移送先 ${runnerId} に貸した貸し出しを返した（resume を 4xx で断られ、そこではセッションが起きていない）`,
+          grounds: reasonOf(error),
+        });
+      }
+    } else {
+      await this.#confirmLost(record, error);
+    }
+    return retry;
   }
 
   /** 回数で打ち切らない: 残るのは「台帳では走っているのに誰も走っていない仕事」で、この経路が直そうとしている状態そのもの。 */
