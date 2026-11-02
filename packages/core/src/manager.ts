@@ -4678,21 +4678,7 @@ class Pool implements ManagerPool {
 
       // 取り直しの前に環境を整える: 走り出してから降ろすと、その仕事の最初のコマンドだけが古い環境で走る。降ろし切るまで委譲にも待たせる。
       // `#connections` は触らず別の窓口（`#reattachPushes`）に置く: `#connectTo` の失敗時の後始末が誰の Promise かを見ずに消すため、上書きすると古い接続の失敗がこの降ろし直しを巻き添えで消しうる。
-      const push = (async () => {
-        // 繋ぎ直してきた runner は器ごと入れ替わっていることがあり、置いた鍵とプロファイルは消えているので降ろし直す。
-        // 鍵を先に降ろす（#4841）: 並びは `#pushSpecs` の表の順。認証トークンも降ろし忘れない（`#pushEnvironmentTo` の注記）。
-        await this.#pushLedger.pushEnvironmentTo(runner);
-        this.#pushLedger.settleRetry(runnerId);
-      })();
-      this.#reattachPushes.set(runnerId, push);
-      try {
-        await push;
-      } finally {
-        // 自分が置いたものだけを消す: 後から来た再実行が新しく置いた分を消さない。
-        if (this.#reattachPushes.get(runnerId) === push) {
-          this.#reattachPushes.delete(runnerId);
-        }
-      }
+      await this.#pushEnvironmentBeforeReattach(runner, runnerId);
 
       // 台帳を先に、runner を後に読む: 逆にすると、隙間で起こされた委譲が「runner に居ないのに台帳には居る」と見えて、走り出したばかりの仕事を死んだものとして起こし直す。読めなかった回は予約して挑み直すが、黙らない。
       const jobs = await this.#listJobsOrNote(
@@ -4981,6 +4967,25 @@ class Pool implements ManagerPool {
         runnerId,
         listed.filter((job) => job.runnerId === runnerId).map((job) => job.id),
       );
+    }
+  }
+
+  /** 取り直しの前に鍵・プロファイルを降ろし直す: 降ろし切るまで委譲（`#connectTo`）にも待たせる。 */
+  async #pushEnvironmentBeforeReattach(runner: RunnerClient, runnerId: string): Promise<void> {
+    const push = (async () => {
+      // 繋ぎ直してきた runner は器ごと入れ替わっていることがあり、置いた鍵とプロファイルは消えているので降ろし直す。
+      // 鍵を先に降ろす（#4841）: 並びは `#pushSpecs` の表の順。認証トークンも降ろし忘れない（`#pushEnvironmentTo` の注記）。
+      await this.#pushLedger.pushEnvironmentTo(runner);
+      this.#pushLedger.settleRetry(runnerId);
+    })();
+    this.#reattachPushes.set(runnerId, push);
+    try {
+      await push;
+    } finally {
+      // 自分が置いたものだけを消す: 後から来た再実行が新しく置いた分を消さない。
+      if (this.#reattachPushes.get(runnerId) === push) {
+        this.#reattachPushes.delete(runnerId);
+      }
     }
   }
 
