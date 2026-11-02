@@ -4419,17 +4419,21 @@ class Pool implements ManagerPool {
     if (!record) {
       // 読めない形で在る行は「居ない」と言わない。
       const unreadable = await this.#unreadableRowDetail(managerId);
-      if (unreadable !== undefined) {
+      if (unreadable !== undefined && process.env['ALT_MUT_A'] !== 'A1a') {
         return {
-          outcome: 'unreadable',
+          outcome: (process.env['ALT_MUT_A'] === 'A1a-alt' ? 'absent' : 'unreadable') as 'unreadable',
           detail: `${unreadable}止めていない。行は書き換えていない。`,
         };
       }
-      return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
+      if (process.env['ALT_MUT_A'] !== 'A1b')
+        return {
+          outcome: (process.env['ALT_MUT_A'] === 'A1b-alt' ? 'unknown' : 'absent') as 'absent',
+          detail: `${managerId} というマネージャーは居ない。`,
+        };
     }
 
-    const runner = await this.#runnerOf(record);
-    if (!runner) {
+    const runner = await this.#runnerOf(record!);
+    if (!runner && process.env['ALT_MUT_A'] !== 'A2') {
       // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、`app.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
       return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
@@ -4451,9 +4455,11 @@ class Pool implements ManagerPool {
     // 自動の畳みだけ、止める直前にもう一度「手が空いたまま」かを読み直す: 候補の判定からここまでに未pushの確認（最大5秒×2）と日誌の書き込みの往復を挟み、その間に届いた依頼（`send()` / 預かりの届け直し）が `status` を `running` へ、新しい報告が `lastReportAt` を動かす。止めると依頼を受けた担当を畳み、送り直しで二重になる。人間・クローンの明示の停止は読み直さない（意思が先）。
     if (
       by === 'auto-fold' &&
-      (record.job.status !== 'done' ||
-        record.job.lastReportAt !== lastReportAtAtStart ||
-        this.#inputMarks.get(managerId) !== inputMarkAtStart)
+      ((record.job.status !== 'done' && process.env['ALT_MUT_A'] !== 'A3a') ||
+        (record.job.lastReportAt !== lastReportAtAtStart && process.env['ALT_MUT_A'] !== 'A3b') ||
+        (this.#inputMarks.get(managerId) !== inputMarkAtStart &&
+          process.env['ALT_MUT_A'] !== 'A3c')) &&
+      process.env['ALT_MUT_A'] !== 'A3'
     ) {
       const detail =
         `${who}が停止を試みたが、止める直前に ${managerId} へ新しい動きが入っていた` +
