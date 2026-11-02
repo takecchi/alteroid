@@ -5501,16 +5501,6 @@ class Pool implements ManagerPool {
     return true;
   }
 
-  /** 移送の窓の間に届いた出来事を、届いた順に預ける（`#deferredEvents`）。同期で呼ぶこと。 */
-  #deferEvent(
-    event: Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }>,
-    fromRunnerId: string,
-  ): void {
-    const held = this.#deferredEvents.get(event.managerId) ?? [];
-    held.push({ event, fromRunnerId });
-    this.#deferredEvents.set(event.managerId, held);
-  }
-
   /** 確かめてから立てるまでに `await` を挟まない: 挟むと別の契機が同じ判断をし、同じ仕事が二重に走って同じコミットや PR が二度出る。 */
   async #resumeOnce(
     record: ManagerRecord,
@@ -7035,21 +7025,10 @@ class Pool implements ManagerPool {
           `（status=${event.status}）を受け取った: ${event.reason}`,
       );
     }
+    if (this.#resumeWindows.deferClosedIfWindow(event, fromRunnerId, generation)) {
+      return Promise.resolve();
+    }
     // 移った後に古い runner から届いた closed で巻き戻さない: 無条件に処理すると `status` を書き換え、`releaseLease` でいま使われている新しい runner の貸し出しを解放して他の器が奪える状態になる。判定の理由は `case 'resume_failed'` の同じ判定を見る。
-    // 移送の resume が飛んでいる最中の closed は結論が出るまで預かる（`#relocatingTo`）: 捨てると移送が失敗した回に元の runner の lost を取りこぼし、処理すると受理された回に台帳が lost のまま残る。移送先自身の closed も預かる（素通りさせると下の runner-id 不一致で捨てる）。
-    if (this.#relocatingTo.has(event.managerId)) {
-      this.#deferEvent(event, fromRunnerId);
-      return Promise.resolve();
-    }
-    // 同じ runner への復帰の resume の最中の closed も預かるが、いま追っているセッション自身の出来事（世代が一致）は預けない: 窓は「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事には使わない。
-    // 預けた列が空でない間は、一致する `closed` も列の後ろへ並べる: その場で処理すると、先に預けた `report` より先に `closed(done)` が処理され、`lastReportAt` が古いまま「report 無しの done」と誤って知らせる。
-    if (
-      this.#sameRunnerResumeWindow.get(event.managerId) === fromRunnerId &&
-      (generation !== 'current' || (this.#deferredEvents.get(event.managerId)?.length ?? 0) > 0)
-    ) {
-      this.#deferEvent(event, fromRunnerId);
-      return Promise.resolve();
-    }
     if (this.#movedAwayFrom(record, fromRunnerId)) {
       return this.#journalExchange(
         'inbound',
