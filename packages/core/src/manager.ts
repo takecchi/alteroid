@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import { ArchiveReceiver } from './archive-receiver.js';
 import { AutoFold } from './auto-fold.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import { DenialRenotifier } from './denial-renotify.js';
@@ -177,7 +177,7 @@ import {
   type ManagerUnpushedWork,
 } from './unpushed-work-observation.js';
 import { StaleTokenFold } from './stale-token-fold.js';
-import { markRescueGoneWhileAlive, mergeRescue } from './rescue-cleanup.js';
+import { markRescueGoneWhileAlive } from './rescue-cleanup.js';
 import { RescueSweeper } from './rescue-sweeper.js';
 import { ManagerRescueStash } from './manager-rescue-stash.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
@@ -1308,9 +1308,6 @@ const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'rescue_restore_request',
 ]);
 
-/** 退避の id ごとの取り寄せの結果を覚えておく数（送り直しとの二重を防ぐ。#4899）。 */
-const ARCHIVE_REF_OUTCOMES_MAX = 512;
-
 // 読めない時刻と無い時刻は数えない: 全部無ければ `undefined`（待ちの数え始めが分からない）
 function earliestMs(times: readonly (string | undefined)[]): number | undefined {
   return times
@@ -1925,42 +1922,9 @@ class Pool implements ManagerPool {
    */
   readonly #reportFetchGates = new Map<string, Promise<void>>();
   readonly #attachmentLimits: AttachmentLimits | undefined;
-  // 参照で届いた退避の id ごとに、置き場へ入れられたか（送り直しの本文との二重を防ぐ。#4899）。キーは `managerId/id`
-  readonly #archiveRefOutcomes = new Map<string, Promise<boolean>>();
-  // 本文で（送り直しで）届いた退避の id。参照の取り寄せが「無い」で落ちても落とした扱いにしないため
-  readonly #inlineArchiveIds = new Set<string>();
+  readonly #archiveReceiver: ArchiveReceiver;
 
   readonly #usageOrder = new UsageRecordOrder();
-
-  /**
-   * 同じ生ログ（`projectKey`・`sessionId`・`subpath`）への `mirror` の預けを、届いた順に1つずつ行う（#4485）。
-   * `#onEvent` は並行に走るので、並べないと先の預け（大きい書き出し）が pg へ届く前に後の預けが追い越し、
-   * 生ログの行が挿入の順（`seq`）で読み戻されるときに入れ替わる。札は最初の `await` より前に取る（`#usageOrder` と同じ）。
-   */
-  readonly #mirrorTails = new Map<string, Promise<void>>();
-  readonly #mirrorTurns = new WeakMap<RunnerEvent, Promise<void>>();
-
-  #takeMirrorTurn(event: Extract<RunnerEvent, { type: 'mirror' }>): () => void {
-    // 欄の欠けで落とさない: 落とすと預けそのものが失われる（並べる鍵が粗くなるだけで済ませる）
-    const key = [event.managerId, event.key?.projectKey, event.key?.sessionId, event.key?.subpath]
-      .map((part) => String(part ?? '').replaceAll('\u0000', ''))
-      .join('\u0000');
-    const previous = this.#mirrorTails.get(key) ?? Promise.resolve();
-    let release = (): void => undefined;
-    const done = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = previous.then(() => done);
-    this.#mirrorTails.set(key, tail);
-    this.#mirrorTurns.set(event, previous);
-    return () => {
-      release();
-      // 最後の札なら消す: 生ログの鍵ごとに積もらせない
-      void tail.then(() => {
-        if (this.#mirrorTails.get(key) === tail) this.#mirrorTails.delete(key);
-      });
-    };
-  }
 
   /** 名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の `hello` が来たら消す（古い名乗りで新しい器を待たない）。 */
   readonly #farewellRunners = new Set<string>();
@@ -2244,6 +2208,15 @@ class Pool implements ManagerPool {
       rememberResetTimeSkew: (event) => this.#usageWake.rememberResetTimeSkew(event),
       queueSynthesizedNotice: (managerId, label, text, quotaMark) =>
         this.#queueSynthesizedNotice(managerId, label, text, quotaMark),
+    });
+    this.#archiveReceiver = new ArchiveReceiver({
+      stores: this.#stores,
+      fetchArchiveRetrying: (managerId, archiveId, fromRunnerId) =>
+        this.#sessionLoaders.fetchArchiveRetrying(managerId, archiveId, fromRunnerId),
+      appendMirrorRetrying: (store, event) =>
+        this.#sessionLoaders.appendMirrorRetrying(store, event),
+      persist: (record) => this.#persist(record),
+      journalExchange: this.#journalExchange.bind(this),
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -5643,7 +5616,8 @@ class Pool implements ManagerPool {
     const usageTicket =
       event.type === 'usage' ? this.#usageOrder.ticket(`manager:${event.managerId}`) : undefined;
     // 返すのは処理の終わり（`finally`）: 途中で return・throw しても後の預けを止めないため
-    const releaseMirrorTurn = event.type === 'mirror' ? this.#takeMirrorTurn(event) : undefined;
+    const releaseMirrorTurn =
+      event.type === 'mirror' ? this.#archiveReceiver.takeMirrorTurn(event) : undefined;
     const fetchGate = this.#enterReportFetchGate(event);
     try {
       // 待つ相手が無いときは `await` を挟まない（余計な yield が並行した出来事の順序を変えるため）
@@ -6497,114 +6471,12 @@ class Pool implements ManagerPool {
       }
 
       case 'mirror': {
-        const store = this.#stores.sessionStore;
-        if (store === undefined) return;
-        // 同じ生ログへの先の預けが終わるのを待つ（`#mirrorTails`）
-        await this.#mirrorTurns.get(event);
-        await this.#sessionLoaders.appendMirrorRetrying(store, event);
+        await this.#archiveReceiver.onMirror(event);
         return;
       }
 
       case 'archive': {
-        // 本文は参照で届くことがある（#4485）: SSE の1行で数十 MB を運ぶと、受け取りの間ループが塞がるため。取りに行くのは出来事を出した器
-        // 送り直し（`body` と元の `id`）と参照が同じ退避を指すなら、置き場へ入れるのは1回だけ（#4899）。
-        // 参照の取り寄せが終わった（置き場へ入れた）なら本文は捨てる。取り寄せ中なら結果を待ち、取れなかったときだけ本文を使う
-        const archiveKey =
-          event.ref !== undefined
-            ? `${event.managerId}/${event.ref.id}`
-            : event.id !== undefined
-              ? `${event.managerId}/${event.id}`
-              : undefined;
-        let settleStored: ((stored: boolean) => void) | undefined;
-        if (archiveKey !== undefined && event.ref !== undefined) {
-          const outcome = new Promise<boolean>((resolve) => {
-            settleStored = resolve;
-          });
-          this.#archiveRefOutcomes.set(archiveKey, outcome);
-          // 古いものから忘れる: 退避の id は一度きりで、数を持ち続けない
-          while (this.#archiveRefOutcomes.size > ARCHIVE_REF_OUTCOMES_MAX) {
-            const oldest = this.#archiveRefOutcomes.keys().next().value;
-            if (oldest === undefined) break;
-            this.#archiveRefOutcomes.delete(oldest);
-          }
-        } else if (archiveKey !== undefined && event.body !== undefined) {
-          this.#inlineArchiveIds.add(archiveKey);
-          while (this.#inlineArchiveIds.size > ARCHIVE_REF_OUTCOMES_MAX) {
-            const oldest = this.#inlineArchiveIds.values().next().value;
-            if (oldest === undefined) break;
-            this.#inlineArchiveIds.delete(oldest);
-          }
-          const earlier = this.#archiveRefOutcomes.get(archiveKey);
-          if (earlier !== undefined && (await earlier)) return;
-        }
-        const chars = event.body?.length ?? event.ref?.chars ?? 0;
-        let body: string;
-        let fetchedFrom: { runner: RunnerClient; archiveId: string } | undefined;
-        try {
-          if (event.body !== undefined) {
-            body = event.body;
-          } else if (event.ref !== undefined) {
-            const fetched = await this.#sessionLoaders.fetchArchiveRetrying(
-              event.managerId,
-              event.ref.id,
-              fromRunnerId,
-            );
-            body = fetched.body;
-            fetchedFrom = { runner: fetched.runner, archiveId: event.ref.id };
-          } else {
-            throw new Error('本文も参照も無い退避の出来事が届いた');
-          }
-        } catch (error) {
-          settleStored?.(false);
-          // 本文で届いた id への参照の取り寄せが落ちたのは、runner が送り直して預かりを消したため。本文は届いているので、落とした扱いにしない
-          if (
-            archiveKey !== undefined &&
-            event.ref !== undefined &&
-            this.#inlineArchiveIds.has(archiveKey)
-          ) {
-            return;
-          }
-          noteDroppedRecord(
-            'トランスクリプトの退避',
-            `managerId=${event.managerId} chars=${String(chars)}${event.ref === undefined ? '' : ` ref=${event.ref.id}`}`,
-            error,
-          );
-          return;
-        }
-        try {
-          const write = await this.#stores.archive.archive(event.managerId, body);
-          record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];
-          settleStored?.(true);
-          await this.#persist(record);
-          // 置き場へ入れてから消させる: 先に消すと、置き場への書き込みが失敗した回に本文がどこにも残らないため。消せなくても runner の期限が消す
-          if (fetchedFrom !== undefined) {
-            await fetchedFrom.runner
-              .deleteArchive?.(event.managerId, fetchedFrom.archiveId)
-              .catch(() => undefined);
-          }
-          // `#journal` は自分で失敗を握るので、退避と台帳への記録の成功を日誌の失敗に道連れにしない。
-          const continuityText = describeArchiveContinuityForJournal({
-            caller: 'マネージャーの生ログの退避',
-            sessionId: event.managerId,
-            continuity: write.continuity,
-            comparedTo: write.comparedTo,
-            bodyChars: body.length,
-          });
-          if (continuityText !== null) {
-            await this.#journalExchange(
-              'outbound',
-              `${EXCHANGE_KIND_FAILURE_PREFIX}${continuityText}`,
-            );
-          }
-        } catch (error) {
-          settleStored?.(false);
-          // 止めないが黙って消さない: 跡が無いと「そもそも退避しなかった」と区別が付かない。
-          noteDroppedRecord(
-            'トランスクリプトの退避',
-            `managerId=${event.managerId} chars=${String(body.length)}`,
-            error,
-          );
-        }
+        await this.#archiveReceiver.onArchive(event, fromRunnerId, record);
         return;
       }
 
@@ -7026,40 +6898,7 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_ref': {
-        // `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
-        const at = this.#nowIso();
-        const previousRescue = record.job.lastRescue;
-        // 受け取った時点の器の `instanceId` を項目へ付ける: 後の観測が同じ器のものかを見分ける材料（`markRescueGoneWhileAlive`）。分からなければ付けない。
-        const instanceId = this.#sighting(fromRunnerId).instanceId;
-        const incoming =
-          instanceId === undefined
-            ? event.worktrees
-            : event.worktrees.map((tree) => ({ ...tree, instanceId }));
-        record.job.lastRescue = mergeRescue(previousRescue, incoming, at);
-        for (const tree of event.worktrees) {
-          if (tree.notPushed?.reason !== 'secret-like') continue;
-          // 運び直しで同じ日誌を積まない。
-          const before = previousRescue?.worktrees.find(
-            (w) => w.relativePath === tree.relativePath,
-          )?.notPushed;
-          if (
-            before?.reason === 'secret-like' &&
-            JSON.stringify(before.files ?? []) === JSON.stringify(tree.notPushed.files ?? [])
-          ) {
-            continue;
-          }
-          await this.#journal({
-            type: 'decision',
-            decision:
-              `作業ツリー ${tree.relativePath} の退避 ref は、鍵らしい文字列を差分に ` +
-              '見つけたので送らなかった。',
-            grounds:
-              `当たったファイル: ${(tree.notPushed.files ?? []).join(', ') || '(不明)'}。` +
-              `当たった形: ${(tree.notPushed.patterns ?? []).join(', ') || '(不明)'}。` +
-              '文字列そのものは記録しない。取り除くか伏せれば次の周期で送られる。',
-          });
-        }
-        await this.#persist(record);
+        await this.#rescueStash.acceptRef(record, event, fromRunnerId);
         return;
       }
 
