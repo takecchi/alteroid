@@ -5683,16 +5683,10 @@ class Pool implements ManagerPool {
     // 引けなかったものを「無い」として進めない: 材料無しで resume すると `resume_failed` の `recovered: false` が `lost` に確定し、一時的に DB が読めなかっただけで委譲が恒久に終端する。
     if (material.kind === 'unreadable') return 'unreadable';
 
-    // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
-    const subagents =
+    const { subagents, peers } =
       material.kind === 'loaded' && projectKey !== undefined
-        ? await this.#sessionLoaders.loadSubagents(record.job.id, projectKey, sessionId)
-        : [];
-    // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
-    const peers =
-      material.kind === 'loaded' && projectKey !== undefined
-        ? await this.#sessionLoaders.loadPeers(record.job.id, projectKey, sessionId)
-        : [];
+        ? await this.#loadResumeCompanions(record.job.id, projectKey, sessionId)
+        : { subagents: [], peers: [] };
 
     // チェックポイント1: `#claimForResume` の後・`runner.resume()` の直前に置く。前に置くと確認から呼び出しまでの窓が開くだけで得が無く、呼ぶ前に見送れる回は実 I/O を減らす。
     if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
@@ -5807,6 +5801,22 @@ class Pool implements ManagerPool {
     this.#unresumable.delete(record.job.id);
     this.#resumedCount.set(record.job.id, (this.#resumedCount.get(record.job.id) ?? 0) + 1);
     return 'resumed';
+  }
+
+  /** `#resume` の段: 主の記録が戻る回に、作業者（subagents）と peer の記録を引く（呼び元が条件を見てから呼ぶ）。 */
+  async #loadResumeCompanions(
+    managerId: string,
+    projectKey: string,
+    sessionId: string,
+  ): Promise<{
+    subagents: Awaited<ReturnType<SessionLoaders['loadSubagents']>>;
+    peers: Awaited<ReturnType<SessionLoaders['loadPeers']>>;
+  }> {
+    // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
+    const subagents = await this.#sessionLoaders.loadSubagents(managerId, projectKey, sessionId);
+    // peer（Codex）の記録も同じ条件で戻す: 主が無ければ、peer の続きを頼む担当の会話そのものが無い
+    const peers = await this.#sessionLoaders.loadPeers(managerId, projectKey, sessionId);
+    return { subagents, peers };
   }
 
   #swapNote(runnerId: string, before: string | undefined): string {
