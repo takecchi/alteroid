@@ -5785,13 +5785,13 @@ class Pool implements ManagerPool {
             at: this.#nowIso(),
           };
           await this.#persist(record);
-          return;
+          if (process.env['MUT'] !== 'R1') return;
         }
         // `reportId` で冪等にする（`ask` の `requestId` と同型）。
         // `reportId` を送らない旧 runner の report は拒まず毎回処理する: 無条件に捨てると本物の報告が消える。二重配達を見分けられないだけ。
         if (event.reportId !== undefined) {
           const reported = this.#reportedOf(record);
-          if (reported.has(event.reportId)) return;
+          if (reported.has(event.reportId) && process.env['MUT'] !== 'R2') return;
           reported.set(event.reportId, true);
         }
         // 台帳と日誌には全文を残す: `manager_report` と画面の「最後の報告」は `lastReport` を読むので、途中の発言を見たいときはそこから引ける
@@ -5889,7 +5889,7 @@ class Pool implements ManagerPool {
           reportFiles !== undefined &&
           (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
         // 中身の無い報告は記録だけ残しクローンのターンを起こさない。`event.text` の文字列ではなく構造化された印 `contentless` で判定する。
-        if (event.contentless === true && !carriesFiles) return;
+        if (event.contentless === true && !carriesFiles && process.env['MUT'] !== 'R3') return;
         // 背景処理の完了待ちで畳んだターンの報告は記録だけ残し受信箱へ回さない（`event.text` の中身では判定しない）。捨てるのではなく後で必ず配る: 次の本物の報告が `#emit()` を通るときに上書きされ、来なければ `case 'closed'` と `flushWithheldReports()` が配る。
         // 配らなかった判断は日誌の `decision` に残る（本文は上の `exchange` に全文あるので抜粋でよい）。
         // 外へ出した成果（マージ・PR の作成・push など）を含む報告は畳まない: 30分のまとめ配りまで待たせると、他の担当への連絡がその分遅れるため。判定は本文ではなく、runner が見た実際のコマンド（`outwardActions`）だけで行う
@@ -5920,7 +5920,7 @@ class Pool implements ManagerPool {
             routine: true,
           });
           // 畳む前に像と状態を見直す: 上の `await` の間に `abort()` / `#retire()` が走り切ると在庫が消えており、ここで積むと止めた委譲の報告を `flushWithheldReports()` が受信箱へ配ってしまう（#5504）。日誌の `decision` は事実として残す。
-          if (record.job.status === 'stopped') return;
+          if (record.job.status === 'stopped' && process.env['MUT'] !== 'R4') return;
           // 人間・クローンが止めたのではなく、同じ担当の `closed`（done など）に追い越されて `#retire()` されただけなら、積まずに今すぐ配る: 積んでも `closed` はもう在庫を見終えており、`flushWithheldReports()` も像が無くて拾わないので、本文がクローンへ届かず消える。`closed` の「report 無し」の知らせは `lastReportAt` が書かれていて出ないので、二重にもならない。
           if (this.#records.get(event.managerId) !== record) {
             this.#emit(
@@ -5942,10 +5942,10 @@ class Pool implements ManagerPool {
                 `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
               routine: true,
             });
-            return;
+            if (process.env['MUT'] !== 'R5') return;
           }
           this.#withheld.withhold(event.managerId, event.text, awaitingBackground);
-          return;
+          if (process.env['MUT'] !== 'R6') return;
         }
         // `event.text` を包まない: runner 側で複数の書き手（マネージャー・SDK・runner）の断片が既に1本の文字列に連結されており、この層には `codeSpan()` で包む境目が無い。包むなら連結する側（`runner.ts`）。
         // `foldedTurn` は本文の文言ではなく構造化された印（`event.failure` / `event.unreported`）だけで判定する。
@@ -6415,13 +6415,13 @@ class Pool implements ManagerPool {
             `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
               `（status=${event.status}）を受け取った: ${event.reason}`,
           );
-          return;
+          if (process.env['MUT'] !== 'C1') return;
         }
         // 移った後に古い runner から届いた closed で巻き戻さない: 無条件に処理すると `status` を書き換え、`releaseLease` でいま使われている新しい runner の貸し出しを解放して他の器が奪える状態になる。判定の理由は `case 'resume_failed'` の同じ判定を見る。
         // 移送の resume が飛んでいる最中の closed は結論が出るまで預かる（`#relocatingTo`）: 捨てると移送が失敗した回に元の runner の lost を取りこぼし、処理すると受理された回に台帳が lost のまま残る。移送先自身の closed も預かる（素通りさせると下の runner-id 不一致で捨てる）。
         if (this.#relocatingTo.has(event.managerId)) {
           this.#deferEvent(event, fromRunnerId);
-          return;
+          if (process.env['MUT'] !== 'C2') return;
         }
         // 同じ runner への復帰の resume の最中の closed も預かるが、いま追っているセッション自身の出来事（世代が一致）は預けない: 窓は「窓の間に届いたものは古い世代」と読む近似で、世代が分かる出来事には使わない。
         // 預けた列が空でない間は、一致する `closed` も列の後ろへ並べる: その場で処理すると、先に預けた `report` より先に `closed(done)` が処理され、`lastReportAt` が古いまま「report 無しの done」と誤って知らせる。
@@ -6430,7 +6430,7 @@ class Pool implements ManagerPool {
           (generation !== 'current' || (this.#deferredEvents.get(event.managerId)?.length ?? 0) > 0)
         ) {
           this.#deferEvent(event, fromRunnerId);
-          return;
+          if (process.env['MUT'] !== 'C3') return;
         }
         if (this.#movedAwayFrom(record, fromRunnerId)) {
           await this.#journalExchange(
@@ -6439,7 +6439,7 @@ class Pool implements ManagerPool {
               `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
               `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
           );
-          return;
+          if (process.env['MUT'] !== 'C4') return;
         }
         // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
         // `done` のときだけクローンへ1回知らせる: `lost` は成果を誰も確かめていない状態で、成果が出ている可能性を人間に見せる必要がある。`failed` / `lost` は新しい材料が無いので日誌だけ。
@@ -6473,7 +6473,7 @@ class Pool implements ManagerPool {
             this.#emit(event.managerId, 'report', notice);
           }
           this.#retire(event.managerId);
-          return;
+          if (process.env['MUT'] !== 'C5') return;
         }
         // `failed` 確定済みへ同じ `closed(failed)` が再度届いても日誌にだけ残す: SSE の再接続の配り直しで、日誌の失敗行・`closed_failed` の知らせ（合流窓で「×2」）・`noteManagerFailed`（器の失敗が二重に加算され器が余計に沈む）が重なる。`closed` に冪等キーは足さない（runner とのやり取りの形が変わる）ので、デーモンの中だけで直す。
         // resume が飛んでいる最中は重複と読まない: `send()` は resume の後で `running` を書くので台帳はまだ `failed` で、その窓の `closed(failed)` は開き直した新しいセッションがすぐ落ちた知らせでありうる。`done` / `lost` はここで扱わない。
@@ -6489,7 +6489,7 @@ class Pool implements ManagerPool {
               event.reason,
           );
           this.#retire(event.managerId);
-          return;
+          if (process.env['MUT'] !== 'C6') return;
         }
         // 自己失効は「終わった」ではない: `lost` をそのまま書くと `#restoreJobs` も `#reattach` も引き取らず、二重実行を止めた代わりに誰も拾わない仕事ができる。状態は動かさず貸し出しだけ返して梯子へ載せる。
         // 判定は構造化された印だけで行う: `reason` の文字列一致だと、マネージャーが同じ文を書いた回まで巻き込む（`sdk-failure.ts` と同じ理由）。
@@ -6515,7 +6515,7 @@ class Pool implements ManagerPool {
           );
           // 像から外さない（終わっていない）。
           if (record.job.runnerId !== undefined) this.#scheduleReattach(record.job.runnerId);
-          return;
+          if (process.env['MUT'] !== 'C7') return;
         }
 
         record.job.status = event.status;
