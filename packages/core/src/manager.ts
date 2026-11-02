@@ -18,7 +18,7 @@ import {
   reasonOf,
   runnerEventShape,
 } from './dropped-record.js';
-import { NOTIFY_REPORT_EXCERPT, excerptLine, renderListing } from './excerpt.js';
+import { excerptLine, renderListing } from './excerpt.js';
 import { laterIso } from './later-iso.js';
 import { HELD_FORCE_FOLD_AFTER_MS, HeldMessages, type StaleHoldStuck } from './held-messages.js';
 import {
@@ -99,8 +99,18 @@ import {
   releaseLease,
   touchLease,
   type LeaseSighting,
-  type LeaseVerdict,
 } from './lease.js';
+import {
+  judgeClaimAgainst,
+  movedAwayOf,
+  registeredRunnerIdsOf,
+  runnerSessionsOf,
+  runnerSwappedSince,
+  shouldRelocateFromRoster,
+  sightingOf,
+  silentRunnersOf,
+  swapNoteOf,
+} from './runner-roster.js';
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import type { AgentPluginLoad } from './agent-events.js';
@@ -212,14 +222,17 @@ import {
   describeVanishedRunnerBacklogLine,
   leaseRefusalDecision,
   NO_DROPPED_FILES,
+  notifyExcerptLines,
   remainingFoldNotice,
   remainingPeerCloseNotice,
   reportDeliveryTextOf,
   reportFullTextOf,
   restartNudge,
   resumeFailureDetail,
+  resumeFallbackBody,
   runnerSwapNudge,
   sendFailureDetail,
+  unresumableNotice,
   type DroppedReportFiles,
   type PeerCloseNotice,
   type RestartCause,
@@ -2192,7 +2205,7 @@ class Pool implements ManagerPool {
       post: (event) => this.#post(event),
       postReport: (managerId, text, extra) => this.#postReport(managerId, text, extra),
       queueNotice: (managerId, label, text) => this.#queueSynthesizedNotice(managerId, label, text),
-      notifyExcerptLines: (job) => this.#notifyExcerptLines(job),
+      notifyExcerptLines,
       listJobsOrNote: (skipped) => this.#listJobsOrNote(skipped),
       trackFlush: (flush) => this.#quotaWindows.trackFlush(flush),
       now: () => this.#now(),
@@ -2935,68 +2948,17 @@ class Pool implements ManagerPool {
     }
   }
 
-  /**
-   * ここで新たに runner を叩かない: `RunnerRegistry#entries()` が10秒ごとの生存確認で立てた判定を読むだけで、一覧を出すたびに往復を増やさない。
-   *
-   * `state === 'lost'` だけを採る（ホワイトリスト）: `connecting` / `unreachable` / `unusable` は「まだ一度も開けていない」側で、
-   * 数え漏らしても「今までどおり `live` を計算する」に倒れるだけである。
-   * `vacating` も数えない: 黙ったのではなく空けると決めた結果で、名乗り自体は続いている。
-   * `runnerId` を名乗れていない行も数えない: どの委譲に当たるか決められないまま `live` を倒すことになる。
-   */
+  // 名簿の読み取り（`runner-roster.ts`）: runner は叩かず、名簿に既に立っている観測を同期に読むだけ（往復を払うのは heartbeat の側）。
   #silentRunners(): ReadonlyMap<string, string> {
-    const silent = new Map<string, string>();
-    for (const entry of this.#runners.entries()) {
-      if (entry.state !== 'lost') continue;
-      if (entry.runnerId === undefined) continue;
-      silent.set(entry.runnerId, entry.since);
-    }
-    return silent;
+    return silentRunnersOf(this.#runners.entries());
   }
 
-  /**
-   * `#silentRunners()` とは見ている軸が違う: あちらは `state === 'lost'` だけを拾い、こちらは state を問わず entry の有無だけを見る
-   * （entry がまるごと消えている runnerId を見分けるため）。runner は叩かず、名簿の観測を同期に読むだけ。
-   *
-   * 名乗っていない entry が1本でも在れば `null`（判定できない）を返す: 起動し直した直後は最初の `#open()` が成功するまで
-   * entry は `runnerId` を持たず、読み飛ばすと数秒後に繋がる runner の委譲まで全部「名簿から消えた」と出る。
-   * 偽の「消えた」より黙っているほうが安全側で、本当に消えていれば後の呼びで立つ（呼ぶ側は `null` なら印も計器も立てない）。
-   * 代償として、名乗らない runner（古い器）が常駐する構成ではこの判定は常に「判定できない」になる。
-   */
   #registeredRunnerIds(): ReadonlySet<string> | null {
-    const ids = new Set<string>();
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId === undefined) return null;
-      ids.add(entry.runnerId);
-    }
-    return ids;
+    return registeredRunnerIdsOf(this.#runners.entries());
   }
 
-  /**
-   * runner は叩かず、名簿に既に立っている観測を同期に読むだけ（往復を払うのは heartbeat の側）。
-   *
-   * 同じ `runnerId` の行が複数在るときは和を採る（畳まれつつある旧い器と新しい器が並びうる）: どれか1台でも「抱えている」と答えたなら
-   * 抱えている側へ倒す。片方の空の答えで「セッションが消えた」と名乗ると、まだ生きている器を持つ委譲に ⚠ が付く。
-   * 聞けていない行（`sessions` が無い）は数に入れない。
-   */
   #runnerSessions(): ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }> {
-    const seen = new Map<string, { ids: Set<string>; observedAt: string }>();
-    for (const entry of this.#runners.entries()) {
-      if (entry.runnerId === undefined) continue;
-      if (entry.sessions === undefined || entry.sessionsObservedAt === undefined) continue;
-      const before = seen.get(entry.runnerId);
-      if (before === undefined) {
-        seen.set(entry.runnerId, {
-          ids: new Set(entry.sessions),
-          observedAt: entry.sessionsObservedAt,
-        });
-        continue;
-      }
-      for (const id of entry.sessions) before.ids.add(id);
-      if (entry.sessionsObservedAt.localeCompare(before.observedAt) > 0) {
-        before.observedAt = entry.sessionsObservedAt;
-      }
-    }
-    return seen;
+    return runnerSessionsOf(this.#runners.entries());
   }
 
   /**
@@ -4929,72 +4891,24 @@ class Pool implements ManagerPool {
     this.#reattachTimers.set(runnerId, timer);
   }
 
-  /** `依頼:` を載せず、直近の報告も全文ではなく `excerptLine` の短い抜粋だけにする: 依頼文はクローン自身が書いたもので、中身は `manager_report` でいつでも読める。 */
-  #notifyExcerptLines(job: Job): string[] {
-    return [
-      job.lastReport === undefined
-        ? ''
-        : `直近の報告（抜粋）: ${excerptLine(job.lastReport, NOTIFY_REPORT_EXCERPT)}`,
-      `続きを読むなら manager_report managerId=${job.id}（直近の報告の全文） / ` +
-        `manager_report managerId=${job.id} part=request（依頼文）。`,
-    ];
-  }
-
-  /** 黙って `running` のまま置かない: 再試行しても同じ答えが返る失敗なので、人間とクローンに見えるようにするのが唯一の出口。 */
+  /** 文面は `unresumableNotice`（`manager-notices.ts`）。ここは日誌と合流窓へ積む副作用だけを持つ。 */
   #notifyUnresumable(
     record: ManagerRecord,
     error: unknown,
     cause: 'runner' | 'session' = 'runner',
   ): void {
     const { job } = record;
+    const { journal, notice } = unresumableNotice(job, error, cause);
     // 日誌は呼び出し元に委ねない: 経路ごとに呼び出し元の事前の書き込みが違い、「日誌に無い＝この経路を通っていない」を判別器にするには、経路によらず必ず1本書く必要がある。
-    void this.#journalExchange(
-      'outbound',
-      `${EXCHANGE_KIND_FAILURE_PREFIX}[${job.id}] （戻せなかった）` +
-        (cause === 'session'
-          ? '前のセッションから戻せなかった（SDK に会話が残っていない）。'
-          : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
-        ` 理由: ${reasonOf(error)}`,
-    );
+    void this.#journalExchange('outbound', `${EXCHANGE_KIND_FAILURE_PREFIX}[${job.id}] ${journal}`);
     // 即配らず合流窓へ積む: 委譲が器と一緒に失われた族は `resume_fallback` / `resume_failed` / `closed_failed` の3通で構成され、「一枠落ち一合図」に揃える。
-    this.#queueSynthesizedNotice(
-      job.id,
-      'resume_failed',
-      [
-        cause === 'session'
-          ? 'この委譲を前のセッションから戻せなかった（SDK に会話が残っていない）。' +
-            '生ログも預かっていないので、続きの材料が無い。'
-          : 'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
-        `理由: ${reasonOf(error)}`,
-        `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
-        ...this.#notifyExcerptLines(job),
-        '',
-        // 「成果が無い」と言わない: 観測したのは戻れなかったことだけで、PR もブランチも見に行かない（落ちる直前にマージまで済ませていた、が実際に起きている）。
-        '同じ命令を投げ直しても同じ答えが返る種類の失敗なので、自動では再試行しない。' +
-          'ただし**この失敗は「仕事が終わっていない」ことの証拠ではない** — ' +
-          '落ちる前に成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）。' +
-          '`manager_start` で起こし直す前に、そこを確かめること。',
-      ]
-        .filter((line) => line !== '')
-        .join('\n'),
-    );
+    this.#queueSynthesizedNotice(job.id, 'resume_failed', notice);
   }
 
   /** 成功として黙らせない: 続きは前のセッションそのものではなく、知らないクローンは「前に渡した細かい指示は効いている」前提で次を積んでしまう。 */
   #notifyResumeFallback(record: ManagerRecord, sessionId: string, reason: string): void {
     const { job } = record;
-    const body = [
-      `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
-        '新しいセッションを起こして続けさせた。',
-      `理由: ${reason}`,
-      ...this.#notifyExcerptLines(job),
-      '',
-      'マネージャーが持っているのは記録から読み取れる範囲だけである。' +
-        '前のセッションで口頭で足した細かい指示は効いていないと考えて、' +
-        '必要なら `manager_send` で言い直すこと。',
-    ]
-      .filter((line) => line !== '')
-      .join('\n');
+    const body = resumeFallbackBody(job, sessionId, reason);
     // 日誌は呼び出し元にも合流窓の flush にも委ねない: 呼び出し元は理由までしか書かず、flush の1行は内訳（族と通数）だけで、ここで組み立てた拡張文言はどこにも残らない。
     void this.#journalExchange(
       'outbound',
@@ -5377,48 +5291,16 @@ class Pool implements ManagerPool {
     }
   }
 
-  /**
-   * 同じ名前を名乗る器が2台以上開いているときは instanceId を採らず台数を返す: どちらと突き合わせるか決める材料が無く、片方を選べば話しかける相手（`Registry#get` の線形一致）と判定した相手が食い違いうる。
-   * 食い違ったまま `same-holder` と答えるのが一番危ない（奪っていないつもりで奪う）ので、台数（`duplicates`）を返して `judgeLease` を `ambiguous` へ倒す。
-   * 名簿に居ない回は「一意でない」とは別なので `{ runnerId }` だけを返す。
-   */
   #sighting(runnerId: string): LeaseSighting {
-    const matches = this.#runners.entries().filter((entry) => entry.runnerId === runnerId);
-    const only = matches.length === 1 ? matches[0] : undefined;
-    if (only === undefined) {
-      return matches.length > 1 ? { runnerId, duplicates: matches.length } : { runnerId };
-    }
-    const since = only.instanceSince === undefined ? NaN : Date.parse(only.instanceSince);
-    return {
-      runnerId,
-      ...(only.instanceId === undefined ? {} : { instanceId: only.instanceId }),
-      ...(Number.isNaN(since) ? {} : { instanceSince: since }),
-    };
+    return sightingOf(this.#runners.entries(), runnerId);
   }
 
-  /**
-   * 判定材料を貸し出し（`job.lease.instanceId`）にしない: `#claimForResume` は `runner.resume()` の前に新しい `instanceId` を書くので、関門を通った後に resume が失敗すると「もう告げた」と読めて二度と告げられなくなる。セッションが実際に載ったと確かめた回にだけ進む `job.sessionInstanceId` を見る。
-   * 時刻ではなく `instanceId` 同士を直接比べる: 時刻の比較は初回観測を入れ替えと誤読する。どちらか一方でも取れなければ「判定できない」（`false`）で、併存のときも `#sighting` が `instanceId` を返さずここへ落ちる。
-   * 宛先の名前（`runnerId`）は見ない: 移送された委譲でも `instanceId` が違えば別の `/workspace` で、条件に足すと移送された委譲にだけ告げない穴ができる。
-   * 像ではなく `Job` に持たせる: 像にだけ持たせると、デーモンの再起動で判定材料が消え、`done` の委譲は告げる機会を失う。
-   * この欄が無い古い行だけ貸し出しへ落とす: 落とさなければ1回も告げず、落とせば失敗した回でも元の穴と同じ所へ落ちるだけで、どの筋でも悪くならない。
-   */
   #runnerSwappedSinceSession(record: ManagerRecord, runner: RunnerClient): boolean {
-    // `??` で書く: `sessionInstanceId` が在ればそれだけを見て、貸し出しは見ない。
-    const recorded = record.job.sessionInstanceId ?? record.job.lease?.instanceId;
-    if (recorded === undefined) return false;
-    const answering = this.#sighting(runner.runnerId).instanceId;
-    if (answering === undefined) return false;
-    return recorded !== answering;
+    return runnerSwappedSince(record.job, this.#sighting(runner.runnerId).instanceId);
   }
 
-  /** 行が0本のときは `false`: 「開けていた宛先から動いてよい」と確かめられていない以上、移送してよいとは言えない。`vacating` は「黙った」のではなく「空けると決めた」だけなので `lost` と同じ側に立つ。 */
   #shouldRelocateFrom(runnerId: string): boolean {
-    const matches = this.#runners.entries().filter((entry) => entry.runnerId === runnerId);
-    return (
-      matches.length > 0 &&
-      matches.every((entry) => entry.state === 'lost' || entry.state === 'vacating')
-    );
+    return shouldRelocateFromRoster(this.#runners.entries(), runnerId);
   }
 
   /**
@@ -5462,36 +5344,17 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 引き取りの判定の材料を組むのはここだけ: `#claimForResume` の関門と `#reattach` の移送の前の覗き見が別々に組むと、片方だけ材料が欠ける。
-   * 持ち主の名乗りを最後に聞けた時刻（`holderSeenAt`）を添える理由は `judgeLease` の doc（#4454）。
-   */
-  #judgeClaim(lease: Job['lease'], runnerId: string, now: number): LeaseVerdict {
-    const holderSeenAt = lease === undefined ? undefined : this.#lastSeenAtOf(lease.runnerId);
-    return judgeLease({
-      lease,
-      now,
-      answering: this.#sighting(runnerId),
-      ...(holderSeenAt === undefined ? {} : { holderSeenAt }),
-    });
-  }
-
-  /** 同じ名前の行が2つ以上あれば遅い方を採る: 早い方を採ると、まだ名乗っている側の委譲を引き取れることにしてしまう。 */
-  #lastSeenAtOf(runnerId: string): number | undefined {
-    const seen = this.#runners
-      .entries()
-      .filter((entry) => entry.runnerId === runnerId && entry.lastSeenAt !== undefined)
-      .map((entry) => Date.parse(entry.lastSeenAt as string))
-      .filter((at) => !Number.isNaN(at));
-    return seen.length === 0 ? undefined : Math.max(...seen);
-  }
-
-  /**
    * 関門を契機（`restore` / `hello` / `manager_send`）ごとに置かない: 足し忘れた契機だけが素通しになり、二重実行が起きるまで見えない。`#resume` は3つとも通る。
    * 断っても回数で諦めない: 持ち主が握っている間だけの話で待てば通る。諦めると、台帳では走っているのに誰も走っていない仕事が残る。
    */
   async #claimForResume(record: ManagerRecord, runner: RunnerClient): Promise<boolean> {
     const now = this.#now();
-    const verdict = this.#judgeClaim(record.job.lease, runner.runnerId, now);
+    const verdict = judgeClaimAgainst(
+      this.#runners.entries(),
+      record.job.lease,
+      runner.runnerId,
+      now,
+    );
 
     if (!mayClaim(verdict)) {
       // 未知の判定が増えて落ちてきても `ambiguous`（時間では解けない側）に倒す: `mayClaim` の「名指ししなかった判定は断る」と同じ安全側。
@@ -5707,17 +5570,8 @@ class Pool implements ManagerPool {
     return 'resumed';
   }
 
-  /**
-   * `fromRunnerId` を見るのは `case 'closed'` / `case 'resume_failed'` だけ: 古い runner から遅れて届いた出来事が、別の runner へ移った後の委譲の台帳・貸し出しを巻き戻すのを防ぐ。`RunnerEvent` 自身は `runnerId` を運ばない。
-   */
   #swapNote(runnerId: string, before: string | undefined): string {
-    const after = this.#sighting(runnerId).instanceId;
-    if (before === undefined || after === undefined) {
-      return 'runner の器の入れ替えの前後かは判定できない（instanceId を名乗っていない）';
-    }
-    return before === after
-      ? `runner の器は入れ替わっていない（instanceId=${after}）`
-      : `runner の器が入れ替わっていた（参照を受けた時の instanceId=${before}、取りに行った時=${after}）。預けたプロセスは既に居ない`;
+    return swapNoteOf(this.#sighting(runnerId).instanceId, before);
   }
 
   async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
@@ -7331,15 +7185,8 @@ class Pool implements ManagerPool {
     notePhase(`manager:token-rotation-done:${managerId}`);
   }
 
-  // 名簿が判定不能なら移ったとは言わない（`case 'closed'` / `'resume_failed'` と同じ）。
   #movedAwayFrom(record: ManagerRecord, fromRunnerId: string): boolean {
-    const registered = this.#registeredRunnerIds();
-    return (
-      record.job.runnerId !== undefined &&
-      record.job.runnerId !== fromRunnerId &&
-      registered !== null &&
-      registered.has(record.job.runnerId)
-    );
+    return movedAwayOf(record.job.runnerId, fromRunnerId, this.#registeredRunnerIds());
   }
 
   // 台帳・受信箱・`#emit` には触れない: 引き取り先の委譲の `status` / `lastReport` / `sessionId` を古い側の値で上書きし、答えの届かない確認を配ってしまう。
