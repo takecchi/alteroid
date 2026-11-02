@@ -483,6 +483,51 @@ describe('resume の最中に届く出来事を預ける窓', () => {
       });
     });
 
+    const withdrawnEscalations = async (stores: Stores, requestId: string): Promise<number> =>
+      (await stores.journal.list({ types: ['escalation'] })).filter(
+        (entry) => entry.type === 'escalation' && entry.approvalId === requestId,
+      ).length;
+
+    it('移送が受理された回、窓の間に届いた元の runner の settled は預かって捨て、取り下げの日誌を書かない', async () => {
+      const { stores, runnerA, release, reattach } = await relocateRig('accept');
+      runnerA.emit?.({
+        type: 'settled',
+        managerId: 'mgr-moved',
+        requestId: 'stale-settled',
+        withdrawn: { reason: '元の runner が畳んだ' },
+      } as RunnerEvent);
+      await drain();
+      release();
+      await reattach;
+      await vi.waitFor(async () => {
+        expect(
+          (await exchangeTexts(stores)).filter((text) => text.includes('移送の最中に届いた古い')),
+        ).toEqual([
+          '[判断] [mgr-moved] （移送の最中に届いた古い runner の出来事のため無視。移送先は runner-b、この出来事は runner-a から）' +
+            '移送の最中に届いた古い runner の settled を無視した',
+        ]);
+      });
+      expect(await withdrawnEscalations(stores, 'stale-settled')).toBe(0);
+    });
+
+    it('移送が受理されなかった回、窓の間に届いた元の runner の settled は処理し直され、取り下げの日誌が1本残る', async () => {
+      const { stores, runnerA, release, reattach } = await relocateRig('refuse');
+      runnerA.emit?.({
+        type: 'settled',
+        managerId: 'mgr-moved',
+        requestId: 'replayed-settled',
+        withdrawn: { reason: '元の runner が畳んだ' },
+      } as RunnerEvent);
+      await drain();
+      // 預かっている間は処理しない（窓が閉じるまで日誌に出ない）。
+      expect(await withdrawnEscalations(stores, 'replayed-settled')).toBe(0);
+      release();
+      await reattach;
+      await vi.waitFor(async () => {
+        expect(await withdrawnEscalations(stores, 'replayed-settled')).toBe(1);
+      });
+    });
+
     it('同じ runner への復帰が受理された回に捨てた、古いセッションの closed', async () => {
       const { stores, runnerA, release, reattach } = await sameRunnerRig({
         generation: 'gen-new',
