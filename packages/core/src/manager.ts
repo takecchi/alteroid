@@ -5669,19 +5669,21 @@ class Pool implements ManagerPool {
     onClaimed?: () => void,
   ): Promise<ResumeOutcome> {
     const { sessionId, cwd, request, projectKey } = record.job;
-    if (sessionId === undefined) return 'no-session';
+    if (sessionId === undefined && process.env['ALT_MUT_U'] !== 'U1') return 'no-session';
 
     // `#claimForResume` / `SessionLoaders#loadSession` より前に断る: 後段（貸し出し・生ログ取得）が空振りする前に分かる条件。
-    if (cwd === undefined && !runner.workspacePathKnown) return 'workspace-path-unknown';
+    if (cwd === undefined && !runner.workspacePathKnown && process.env['ALT_MUT_U'] !== 'U2')
+      return 'workspace-path-unknown';
 
-    if (!(await this.#claimForResume(record, runner))) return 'held-by-lease';
+    if (!(await this.#claimForResume(record, runner)) && process.env['ALT_MUT_U'] !== 'U3')
+      return 'held-by-lease';
     onClaimed?.();
 
     // runner のディスクに生ログが残っている前提を置かない: 器は作り直される。
     const material = await this.#sessionLoaders.loadSession(projectKey, sessionId);
 
     // 引けなかったものを「無い」として進めない: 材料無しで resume すると `resume_failed` の `recovered: false` が `lost` に確定し、一時的に DB が読めなかっただけで委譲が恒久に終端する。
-    if (material.kind === 'unreadable') return 'unreadable';
+    if (material.kind === 'unreadable' && process.env['ALT_MUT_U'] !== 'U4') return 'unreadable';
 
     // 主の記録が戻る回だけ作業者の分も戻す: 主が無い回に作業者だけ戻しても、続ける会話が無い
     const subagents =
@@ -5695,7 +5697,8 @@ class Pool implements ManagerPool {
         : [];
 
     // チェックポイント1: `#claimForResume` の後・`runner.resume()` の直前に置く。前に置くと確認から呼び出しまでの窓が開くだけで得が無く、呼ぶ前に見送れる回は実 I/O を減らす。
-    if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
+    if (record.stopConfirmedAt !== undefined && process.env['ALT_MUT_U'] !== 'U5')
+      return 'stopped-meanwhile';
 
     // 応答の `cwd` と比べる基準は `record.job.cwd`（`undefined` のことがある）ではなくこの値。
     const requestedCwd = cwd ?? runner.workspacePath;
@@ -5736,7 +5739,7 @@ class Pool implements ManagerPool {
                   listing.unreadableIds.includes(record.job.id),
               )
               .catch(() => false);
-      if (!alive) {
+      if (!alive && process.env['ALT_MUT_U'] !== 'U7') {
         this.#restored.end(record.job.id);
         throw error;
       }
@@ -5759,7 +5762,7 @@ class Pool implements ManagerPool {
 
     // チェックポイント2: ここで `record.attached` などを書くと、止めたつもりの委譲が「走っているはず」を名乗ったまま誰にも追われなくなる。
     // `record.job.status` は書かない（`abort()` が `'stopped'` を書いて `#persist()` 済み）。畳み直せなかったときは、台帳は「止めた」なのに runner にセッションが生き残る最も危ない不一致なので黙らない。
-    if (record.stopConfirmedAt !== undefined) {
+    if (record.stopConfirmedAt !== undefined && process.env['ALT_MUT_U'] !== 'U6') {
       this.#restored.end(record.job.id);
       const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
         record,
