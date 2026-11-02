@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync as mutRead } from 'node:fs';
+const M = (id: string): boolean => mutRead('/tmp/mgr-5676585b/mut.txt', 'utf8').trim() === id;
 
 import { assertNever } from './assert-never.js';
 import { ArchiveReceiver } from './archive-receiver.js';
@@ -4010,7 +4012,7 @@ class Pool implements ManagerPool {
   }
 
   async #restoreJobs(): Promise<ManagerSummary[]> {
-    if (this.#stopped) return [];
+    if (this.#stopped && !M('R1')) return [];
     await this.#ensureConnected();
 
     const alive = new Map<
@@ -4028,7 +4030,7 @@ class Pool implements ManagerPool {
         noteUnreadableRecord('runner のセッション一覧', `runnerId=${runner.runnerId}`, error);
         return null;
       });
-      if (listing === null) continue;
+      if (listing === null && !M('R2')) continue;
       for (const state of listing.states) {
         alive.set(state.managerId, { runner, state });
       }
@@ -4041,7 +4043,7 @@ class Pool implements ManagerPool {
     for (const job of await this.#stores.jobs.listJobs()) {
       // 像の有無より前に置く: 預かりの見回りは像を持たない終端の委譲（捨てて返す側）も見るため。
       this.#held.indexRestored(job);
-      if (this.#records.has(job.id)) continue;
+      if (this.#records.has(job.id) && !M('R3')) continue;
 
       // 下で `continue` される `lost` より前に置く: 印を組み直さないと `resumeStoppedByUsage()` が `lost` の委譲を回転の対象にすら入れない。
       // 後継へ引き継いだ前任（`supersededBy`）の印は組み直さない（#4861）
@@ -4070,7 +4072,7 @@ class Pool implements ManagerPool {
         };
         this.#records.set(job.id, record);
         await this.#persist(record);
-        continue;
+        if (!M('R4')) continue;
       }
 
       const living = alive.get(job.id);
@@ -4138,30 +4140,30 @@ class Pool implements ManagerPool {
             undefined,
           ),
         );
-        continue;
+        if (!M('R5')) continue;
       }
 
       // 聞けなかった器のジョブは触らず、`#records` へ載せる前に抜ける: 「`alive` に居ない」は「確かめられなかった」であり、載せなければ次の `restore()` が拾い直す。宛先の無いジョブは聞けなかった器が1台でもあれば同じ扱いにする。
-      if (unheard.size > 0 && (job.runnerId === undefined || unheard.has(job.runnerId))) continue;
+      if (unheard.size > 0 && (job.runnerId === undefined || unheard.has(job.runnerId)) && !M('R6')) continue;
 
-      if (job.sessionId === undefined) continue;
+      if (job.sessionId === undefined && !M('R7')) continue;
 
       // 戻せないものを「居る」ことにしない: `#records` へ載せると `list()` が `live: true` で見せ、腐った session_id しか持たない相手に話しかければ続くように見える。
-      if (job.status === 'lost') continue;
+      if (job.status === 'lost' && !M('R8')) continue;
 
       // 古い写し（ループ先頭の `job`）で resume を決めない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。resume しうる写しだけ像を載せる直前に読み直し、`await` の間に像が載りうるので読んだ後にもう一度 `#records` を見る。
       const resumable = job.status === 'running' || job.status === 'waiting_human';
       const fresh = resumable ? ((await this.#latestJobOf(job.id)) ?? job) : job;
-      if (resumable && this.#records.has(job.id)) continue;
-      if (fresh.status === 'lost') continue;
+      if (resumable && this.#records.has(job.id) && !M('R9')) continue;
+      if (fresh.status === 'lost' && !M('R10')) continue;
 
       const record: ManagerRecord = { job: { ...fresh }, waiting: [], attached: false };
       this.#records.set(job.id, record);
 
-      if (fresh.status !== 'running' && fresh.status !== 'waiting_human') continue;
+      if (fresh.status !== 'running' && fresh.status !== 'waiting_human' && !M('R11')) continue;
 
       const runner = await this.#runnerOf(record);
-      if (!runner) continue;
+      if (!runner && !M('R12')) continue;
 
       // cause は `'runner'`: runner がセッションを知らないのは器の入れ替わり（作業ツリーが消えている）と区別できず、`'daemon'` だと枝名の clone 案内と「コミット前の変更は失われている」が出ない。
       const nudge = restartNudge(
@@ -4187,7 +4189,7 @@ class Pool implements ManagerPool {
             const swapNotice = cwdSwapNoticeClause(record);
             // 受理は「戻れた」ではない: 失敗は SSE で追いかけてくるので、無条件に上書きすると書いたばかりの終端状態が `running` へ巻き戻る。
             if (record.job.status === 'lost') {
-              continue;
+              if (!M('R13')) continue;
             }
             // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ（`#send` の同じ書き込みと同じ理由）。
             record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
