@@ -5937,47 +5937,7 @@ class Pool implements ManagerPool {
       this.#farewellRunners.add(fromRunnerId);
       return;
     }
-    if (event.type === 'hello') {
-      this.#farewellRunners.delete(fromRunnerId);
-      this.#farewellRunners.delete(event.runnerId);
-      if (this.#stopped) return;
-      // 前の名乗りを持ち越さない: 同じ runnerId の器が入れ替わって版が下がりうる。
-      this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
-      this.#attachmentStager.noteHello(
-        event.runnerId,
-        event.attachmentBodyLimit,
-        event.attachmentStageLimit,
-      );
-      if (event.managerModel === undefined && event.workerModel === undefined) {
-        this.#runnerModels.delete(event.runnerId);
-      } else {
-        this.#runnerModels.set(event.runnerId, {
-          ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
-          ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
-        });
-      }
-      if (event.anthropicRoute === undefined) {
-        this.#runnerAnthropicRoutes.delete(event.runnerId);
-      } else {
-        this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
-      }
-      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
-      // 初回だけ素通りにしない: 起動時に掴んだ器と SSE の繋がった先が違う場合（畳まれつつある旧 runner がまだ `/health` に答える間）に取り直しが起きない。
-      void this.#reattach(event.runnerId);
-      return;
-    }
-
-    if (event.type === 'anthropic_route') {
-      if (this.#stopped) return;
-      this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
-      return;
-    }
-
-    if (event.type === 'manager_peers') {
-      if (this.#stopped) return;
-      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
-      return;
-    }
+    if (this.#applyRunnerNotice(event, fromRunnerId)) return;
 
     if (event.type === 'scratch_sweep') {
       await this.#onScratchSweep(event, fromRunnerId);
@@ -6489,6 +6449,56 @@ class Pool implements ManagerPool {
         throw new Error(`未知の runner イベント: ${JSON.stringify(exhaustive)}`);
       }
     }
+  }
+
+  /** `#handleEvent` の入口の段: hello / anthropic_route / manager_peers の runner 名乗りを受ける（同期。当たれば true）。 */
+  #applyRunnerNotice(
+    event: RunnerEvent,
+    fromRunnerId: string,
+  ): event is Extract<RunnerEvent, { type: 'hello' | 'anthropic_route' | 'manager_peers' }> {
+    if (event.type === 'hello') {
+      this.#farewellRunners.delete(fromRunnerId);
+      this.#farewellRunners.delete(event.runnerId);
+      if (this.#stopped) return true;
+      // 前の名乗りを持ち越さない: 同じ runnerId の器が入れ替わって版が下がりうる。
+      this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
+      this.#attachmentStager.noteHello(
+        event.runnerId,
+        event.attachmentBodyLimit,
+        event.attachmentStageLimit,
+      );
+      if (event.managerModel === undefined && event.workerModel === undefined) {
+        this.#runnerModels.delete(event.runnerId);
+      } else {
+        this.#runnerModels.set(event.runnerId, {
+          ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
+          ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
+        });
+      }
+      if (event.anthropicRoute === undefined) {
+        this.#runnerAnthropicRoutes.delete(event.runnerId);
+      } else {
+        this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
+      }
+      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
+      // 初回だけ素通りにしない: 起動時に掴んだ器と SSE の繋がった先が違う場合（畳まれつつある旧 runner がまだ `/health` に答える間）に取り直しが起きない。
+      void this.#reattach(event.runnerId);
+      return true;
+    }
+
+    if (event.type === 'anthropic_route') {
+      if (this.#stopped) return true;
+      this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
+      return true;
+    }
+
+    if (event.type === 'manager_peers') {
+      if (this.#stopped) return true;
+      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
+      return true;
+    }
+
+    return false;
   }
 
   /** `note` の段1: 作業者の落ちの印を立てて台帳へ写す（呼び元が `event.workerLimit` の有無で呼ぶ）。 */
