@@ -7602,6 +7602,48 @@ class Pool implements ManagerPool {
     );
   }
 
+  // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
+  // 同期のまま保つ（`#deliver` の中で「持ち越し → 登録 → 取り出し → 流す」の順を崩さない）。
+  #takeWithheldForDelivery(
+    managerId: string,
+    text: string,
+    withheldSuffixDetail: 'full' | 'flush',
+  ): { text: string; appended: boolean } {
+    // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
+    const carried = this.#withheldCarriedToWindow.get(managerId);
+    if (carried !== undefined && this.#withheldReports.get(managerId) === undefined) {
+      this.#setWithheld(managerId, carried);
+    }
+    this.#withheldCarriedToWindow.delete(managerId);
+    const withheld = this.#withheldReports.get(managerId);
+    if (withheld === undefined) return { text, appended: false };
+    // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
+    if (withheldSuffixDetail === 'flush') {
+      this.#setWithheld(managerId, {
+        ...withheld,
+        count: 0,
+        // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
+        excerpts: [],
+        flushedAt: this.#nowIso(),
+      });
+    } else {
+      this.#setWithheld(managerId, undefined);
+    }
+    // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
+    if (withheld.count === 0) return { text, appended: false };
+    // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
+    // 「少し前・少し後」と書く: 日誌の `exchange` は在庫を積む（`firstAt` / `lastAt`）より前に書かれ、`until` は含まないため、端の時刻そのままだと両端の報告を外す。
+    return {
+      text:
+        `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
+        `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
+        `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read q=${managerId}\` ` +
+        `since=最初の少し前 until=最後の少し後）。\n` +
+        `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count, this.#withheldListingBudget())}\n）`,
+      appended: true,
+    };
+  }
+
   #deliver(
     managerId: string,
     kind: 'report' | 'question' | 'permission',
@@ -7615,43 +7657,10 @@ class Pool implements ManagerPool {
     quotaStop?: { readonly sessionWindow: boolean },
     foldWhenBack?: FoldWhenBack,
   ): void {
-    // 握り潰した報告の件数を日誌だけに残さず、配る `text` の末尾にも足す: 日誌だと引きに行かないと、報告まで消していないかに気づけない。
-    // 窓へ移した在庫（`closed` が積んだ分）は、この配りで運んで消す。普通の在庫が在れば（窓の後に積み直されることは無いが）そちらを先にする。
-    const carried = this.#withheldCarriedToWindow.get(managerId);
-    if (carried !== undefined && this.#withheldReports.get(managerId) === undefined) {
-      this.#setWithheld(managerId, carried);
-    }
-    this.#withheldCarriedToWindow.delete(managerId);
-    const withheld = this.#withheldReports.get(managerId);
-    let outgoing = text;
+    const withheldStep = this.#takeWithheldForDelivery(managerId, text, withheldSuffixDetail);
+    let outgoing = withheldStep.text;
     // 畳んでよい印も同じ回に外す（#5048）: 足した中身（畳んだ報告・配らなかった知らせの件数）まで、担当が戻ったことを理由に消さないため
-    let foldable = foldWhenBack;
-    if (withheld !== undefined) {
-      // `'flush'` は在庫を `delete` しない: `firstAt` が失われ、次に積んだ回が新しいエピソードとして数え直され、`flushWithheldReports()` が何度でも合図を立て直せてしまう。
-      if (withheldSuffixDetail === 'flush') {
-        this.#setWithheld(managerId, {
-          ...withheld,
-          count: 0,
-          // 配った分の冒頭は空へ: 次に配るときに同じ行を重ねない（flush 後に積んだ分だけが次の一覧に入る）。
-          excerpts: [],
-          flushedAt: this.#nowIso(),
-        });
-      } else {
-        this.#setWithheld(managerId, undefined);
-      }
-      // `count === 0` のときは足さない: フラッシュ直後は在庫が `count: 0` で残っており、足すと「0 本配っていない」という嘘の1行が出る。
-      if (withheld.count > 0) {
-        foldable = undefined;
-        // `'flush'` でも抜粋を付ける: 件数だけだと、マージの報告のような本文がクローンから見えないまま日誌にだけ残る。
-        // 「少し前・少し後」と書く: 日誌の `exchange` は在庫を積む（`firstAt` / `lastAt`）より前に書かれ、`until` は含まないため、端の時刻そのままだと両端の報告を外す。
-        outgoing =
-          `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
-          `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
-          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read q=${managerId}\` ` +
-          `since=最初の少し前 until=最後の少し後）。\n` +
-          `畳んだ報告の冒頭（古い順）:\n${renderWithheldExcerpts(withheld.excerpts, withheld.count, this.#withheldListingBudget())}\n）`;
-      }
-    }
+    let foldable = withheldStep.appended ? undefined : foldWhenBack;
     // 何を配ったかに関わらず帳面を消す: 次に同じ本文の知らせが来たら、また1件目として配る（`#flushSynthesizedNoticeFor` だけは直後に新しい署名で `set` し直す）。
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
     this.#synthesizedNoticeStreaks.delete(managerId);
