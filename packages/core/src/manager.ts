@@ -2285,33 +2285,7 @@ class Pool implements ManagerPool {
   }
 
   async #startAfterSupersedeCheck(input: ManagerStartInput): Promise<ManagerSummary> {
-    const runner = await this.#runners.select({
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-      ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
-    });
-    // best-effort にしない: 受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も誰にも届かない。
-    await this.#connectTo(runner);
-    const startAttachments = input.attachments ?? [];
-    if (startAttachments.length > 0) {
-      const refused = await this.#attachmentStager.refusal(runner, startAttachments, input.request);
-      if (refused !== undefined) throw new ManagerAttachmentsRefusedError(refused);
-    }
-    // `cwd` を省いて `workspacePath` が未取得のまま `input.cwd ?? runner.workspacePath` へ通すと、既定値 `''` が
-    // `runnerStartCommandSchema` に「cwd の形が不正」と弾かれ、真因が別の顔で報告されて台帳にも跡が残らない。
-    if (input.cwd === undefined && !runner.workspacePathKnown) {
-      throw new Error(
-        `runner（runnerId=${runner.runnerId}）から workspacePath をまだ一度も聞けていないため、` +
-          'cwd を省いてマネージャーを起こせない（cwd の形が不正なのではない）。' +
-          'cwd を明示して起こすか、runner が /health で workspacePath を名乗ってから起こすこと（#402）。',
-      );
-    }
-    const managerId = this.#claimManagerId();
-    // 大きいファイルは、貸し出しの時刻（`now`）を取る前に別口へ押す（押す間に貸し出しの猶予を食わないため）。
-    // 押せなければ起こさない（台帳にも跡を残さない）。
-    if (startAttachments.some((item) => item.staged === true)) {
-      const failed = await this.#attachmentStager.stage(runner, managerId, startAttachments);
-      if (failed !== undefined) throw new ManagerAttachmentsRefusedError(failed);
-    }
+    const { runner, managerId, startAttachments } = await this.#prepareStart(input);
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
     const at = new Date(now).toISOString();
@@ -2356,6 +2330,42 @@ class Pool implements ManagerPool {
     if (input.supersedes !== undefined)
       await this.#handOverToSuccessor(input.supersedes, managerId);
     return this.#startedSummaryOf(record, requestedCwd);
+  }
+
+  /** 起こす前の支度（runner の選択・接続・添付の断り・cwd の確認・managerId の発行・大きいファイルの押し出し）。断るときは投げる。 */
+  async #prepareStart(input: ManagerStartInput): Promise<{
+    runner: RunnerClient;
+    managerId: string;
+    startAttachments: NonNullable<ManagerStartInput['attachments']>;
+  }> {
+    const runner = await this.#runners.select({
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+      ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
+    });
+    // best-effort にしない: 受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も誰にも届かない。
+    await this.#connectTo(runner);
+    const startAttachments = input.attachments ?? [];
+    if (startAttachments.length > 0) {
+      const refused = await this.#attachmentStager.refusal(runner, startAttachments, input.request);
+      if (refused !== undefined) throw new ManagerAttachmentsRefusedError(refused);
+    }
+    // `cwd` を省いて `workspacePath` が未取得のまま `input.cwd ?? runner.workspacePath` へ通すと、既定値 `''` が
+    // `runnerStartCommandSchema` に「cwd の形が不正」と弾かれ、真因が別の顔で報告されて台帳にも跡が残らない。
+    if (input.cwd === undefined && !runner.workspacePathKnown) {
+      throw new Error(
+        `runner（runnerId=${runner.runnerId}）から workspacePath をまだ一度も聞けていないため、` +
+          'cwd を省いてマネージャーを起こせない（cwd の形が不正なのではない）。' +
+          'cwd を明示して起こすか、runner が /health で workspacePath を名乗ってから起こすこと（#402）。',
+      );
+    }
+    const managerId = this.#claimManagerId();
+    // 大きいファイルは、貸し出しの時刻（`now`）を取る前に別口へ押す（押す間に貸し出しの猶予を食わないため）。
+    // 押せなければ起こさない（台帳にも跡を残さない）。
+    if (startAttachments.some((item) => item.staged === true)) {
+      const failed = await this.#attachmentStager.stage(runner, managerId, startAttachments);
+      if (failed !== undefined) throw new ManagerAttachmentsRefusedError(failed);
+    }
+    return { runner, managerId, startAttachments };
   }
 
   /** 前任が預かっていた未追跡のファイルの取り戻しの口を、最初の依頼文の末尾へ足す（口が無ければ依頼文のまま返す）。 */
