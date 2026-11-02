@@ -1311,7 +1311,12 @@ const REATTACH_RETRY_MAX_MS = 30_000;
  */
 const REATTACH_BUSY_MAX_RETRIES = 5;
 
-/** 移った後の古い runner から届いたら、台帳・受信箱に触れず日誌にだけ残して捨てる出来事（#4924）。 */
+/**
+ * 移った後の古い runner から届いたら、台帳・受信箱に触れず日誌にだけ残して捨てる出来事（#4924）。
+ * `archive`（生ログの退避）と `mirror`（生ログの写し）は古い器からも取り込む。生ログの本文は古い器にしか無く、
+ * 台帳も動かさないので、取り込まないと失われるため（#6190 の試験で縛ってある）。
+ * `rescue_ref` は古い器からは取り込まない（#6193。個別に判定する: `rescue_files` と同じく `case` の頭で捨てる）。
+ */
 const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'session',
   'report',
@@ -6752,6 +6757,9 @@ class Pool implements ManagerPool {
       }
 
       case 'rescue_ref': {
+        // #6193: 移った後の古い器からは取り込まない（後勝ちで今の器の項目を古い内容で上書きするため）。
+        // `rescue_files` と違い消させる物は無いので DELETE はせず、日誌にだけ残す。
+        if (await this.#ignoreIfMovedAway(record, fromRunnerId, event)) return;
         await this.#rescueStash.acceptRef(record, event, fromRunnerId);
         return;
       }

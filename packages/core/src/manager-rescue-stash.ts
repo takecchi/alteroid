@@ -94,7 +94,7 @@ export class ManagerRescueStash {
   }
 
   /**
-   * `rescue_ref`（作業ツリーの退避 ref の受け取り）。移った後の古い器から届いても捨てずに取り込む（今どおり）。
+   * `rescue_ref`（作業ツリーの退避 ref の受け取り）。移った後の古い器からのものは呼び手（`Pool#handleEvent`）が先に捨てる（#6193）ので、ここへ来るのは今の器のもの。
    * `pushed` は新しい回が持たなければ前のものを残す: 後の回が「送らなかった」でも remote の ref はまだ在る。`status` / `lease` には触れない。`secret-like` はファイル名だけ日誌へ残し、文字列そのものは持たない。
    */
   async acceptRef(

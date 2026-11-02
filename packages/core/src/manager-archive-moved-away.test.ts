@@ -13,7 +13,7 @@ import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
 // 担当が別の器（runner-b）へ移った後に、古い器（runner-a）から届く archive / mirror / rescue_ref。
-// `MOVED_AWAY_IGNORED_EVENT_TYPES` に無い種類なので、捨てずに取り込む（取りに行く先は出来事を出した器）。
+// archive / mirror は捨てずに取り込む（取りに行く先は出来事を出した器）。rescue_ref は取り込まず日誌に残す（#6193）。
 // 切り出しで「移った後は捨てる」守りを足したり、取りに行く先を `job.runnerId` へ変えたりすると、預けた本文や生ログが失われる。
 
 const MANAGER_ID = 'mgr-moved';
@@ -150,7 +150,7 @@ async function jobNow(stores: Stores): Promise<Job> {
   return found;
 }
 
-describe('移った後の古い器からの archive / mirror / rescue_ref は、捨てずに取り込む', () => {
+describe('移った後の古い器からの archive / mirror は取り込み、rescue_ref は取り込まない', () => {
   it('archive（参照）: 取りに行く先は出来事を出した古い器で、置き場へ入れ、その器に消させる。今の器へは聞かない', async () => {
     const { stores, a, b } = await setup();
     a.stored.set(ARCHIVE_ID, '古い器に預けた生ログ');
@@ -190,7 +190,7 @@ describe('移った後の古い器からの archive / mirror / rescue_ref は、
     await vi.waitFor(() => expect(appended).toEqual(['from-old-runner']));
   });
 
-  it('rescue_ref: 台帳の lastRescue へ取り込み、status・runnerId には触れない', async () => {
+  it('rescue_ref: 取り込まず日誌に1行残し、lastRescue・status・runnerId には触れない（#6193）', async () => {
     const { stores, a } = await setup();
     a.raw({
       type: 'rescue_ref',
@@ -208,13 +208,15 @@ describe('移った後の古い器からの archive / mirror / rescue_ref は、
         },
       ],
     });
-    await vi.waitFor(async () =>
-      expect((await jobNow(stores)).lastRescue?.worktrees).toHaveLength(1),
-    );
+    // 同じ器の出来事は順に処理される前提で、後続の archive が取り込まれたことを「rescue_ref も処理済み」の目印にする。
+    a.raw({ type: 'archive', managerId: MANAGER_ID, body: '目印' });
+    await vi.waitFor(async () => expect((await jobNow(stores)).archiveIds).toHaveLength(1));
     const after = await jobNow(stores);
-    expect(after.lastRescue?.worktrees[0]?.pushed?.ref).toBe(
-      'refs/alteroid-rescue/mgr-moved/root-1234abcd',
+    expect(after.lastRescue).toBeUndefined();
+    const dropped = (await stores.journal.list()).filter((entry) =>
+      JSON.stringify(entry).includes('移った後に届いた古い runner の rescue_ref を無視した'),
     );
+    expect(dropped).toHaveLength(1);
     expect(after.status).toBe('running');
     expect(after.runnerId).toBe('runner-b');
   });
