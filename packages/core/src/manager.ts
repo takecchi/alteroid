@@ -4460,17 +4460,9 @@ class Pool implements ManagerPool {
       delete record.stopConfirmedAt;
     }
 
-    // `#retire()` で在庫が消えるので、読むのは必ずその前（`WithheldReportsStore#stoppedNote`）。
     let withheldNote = '';
     if (outcome === 'stopped') {
-      record.waiting = [];
-      record.attached = false;
-      record.job.status = 'stopped';
-      this.#workerLimitStopped.delete(managerId);
-      delete record.job.workerLimitStopped;
-      await this.#persist(record);
-      withheldNote = this.#withheld.stoppedNote(managerId);
-      this.#retire(managerId);
+      withheldNote = await this.#settleStoppedRecord(record, managerId);
     }
     // `'not_stopped'` / `'unknown'` のときは台帳を書かない: 生きているかもしれないマネージャーの `waiting` を畳まず、確かめていない状態を確定させない。「止めた」と言えるのは止まったと確かめたときだけ。
 
@@ -4574,6 +4566,20 @@ class Pool implements ManagerPool {
       return { outcome: 'unknown', stopError: undefined, sessionGone: undefined };
     }
     return await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
+  }
+
+  /** 段D（止めた台帳の確定）: 止まったと確かめた回の台帳の整理・保存・在庫の控え・像の片付け。控えた知らせの文を返す。条件は呼び元が見る。 */
+  async #settleStoppedRecord(record: ManagerRecord, managerId: string): Promise<string> {
+    record.waiting = [];
+    record.attached = false;
+    record.job.status = 'stopped';
+    this.#workerLimitStopped.delete(managerId);
+    delete record.job.workerLimitStopped;
+    await this.#persist(record);
+    // `#retire()` で在庫が消えるので、読むのは必ずその前（`WithheldReportsStore#stoppedNote`）。
+    const withheldNote = this.#withheld.stoppedNote(managerId);
+    this.#retire(managerId);
+    return withheldNote;
   }
 
   async stop(options?: ManagerPoolStopOptions): Promise<void> {
