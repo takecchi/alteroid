@@ -5,7 +5,7 @@ import type { DroppedReportFiles } from './manager-notices.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { JournalEntryInput } from './schema.js';
 
-/** 窓の間、預けて遅らせる出来事の種類（`closed` と、それ以外の窓ごとに預ける種類を選んだもの）。 */
+/** 窓の間に預けうる出来事の種類（どの種類を預けるかは窓ごとに `deferIfWindow` / `deferClosedIfWindow` が選ぶ）。 */
 type DeferrableEvent = Extract<
   RunnerEvent,
   { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }
@@ -26,9 +26,6 @@ export interface ResumeEventWindowsDeps {
   droppedReportFiles: (event: RunnerEvent, fromRunnerId: string) => Promise<DroppedReportFiles>;
   /** `Pool#journal` を束ねたもの。 */
   journal: (entry: JournalEntryInput) => Promise<void>;
-  relocatingTo: Map<string, string>;
-  sameRunnerResumeWindow: Map<string, string>;
-  deferredEvents: Map<string, { event: DeferrableEvent; fromRunnerId: string }[]>;
 }
 
 /**
@@ -36,9 +33,28 @@ export interface ResumeEventWindowsDeps {
  * 同じ runner への復帰の窓（`openSameRunner`）。預ける列（`#deferredEvents`）と閉じ方（`close`）は2つの窓で共有する。
  */
 export class ResumeEventWindows {
-  readonly #relocatingTo: ResumeEventWindowsDeps['relocatingTo'];
-  readonly #sameRunnerResumeWindow: ResumeEventWindowsDeps['sameRunnerResumeWindow'];
-  readonly #deferredEvents: ResumeEventWindowsDeps['deferredEvents'];
+  /**
+   * `case 'closed'` の「移った後の古い出来事を捨てる」判定は `job.runnerId` が移送先へ書き換わるまで効かず、
+   * その窓に元の runner の遅れた `closed(lost)` が届くと台帳が `lost` になり、移送先が persist されない。
+   * `#resuming` を流用しない: 移送先を知る材料が無い。
+   */
+  readonly #relocatingTo = new Map<string, string>();
+  /**
+   * `#relocatingTo` に同じ runnerId を立てない: あちらは受理されたら処理し直し・受理されなければ捨てるが、
+   * 同じ runner への復帰ではその向きが逆（受理されたら古いセッションの `closed` を捨て、失敗したら `lost` にする）で、
+   * 同じ値を立てると失敗した回の `closed(lost)` を捨てる。預かる列と閉じ方だけを共有する。
+   *
+   * 預かるのは `closed` と `report` だけ（`session` / `ask` / `settled` は預けない）: それらは預けて遅らせても得るものが無く、
+   * 受理の後まで遅らせると新しいセッションの `ask` を待たせる。`closed` には世代の識別子が無いので、窓の間に届いたものは古い世代と読む。
+   * `report` を預ける理由: その場で処理すると `lastReportAt` が resume の応答の前の時刻になり、
+   * あとの `closed(done)` で「このセッションで report を受け取っていない」と誤る。
+   */
+  readonly #sameRunnerResumeWindow = new Map<string, string>();
+  /**
+   * 捨てずに預かる: 移送が受理されれば古い世代として日誌にだけ残し、失敗したなら（元の runner の出来事は事実のまま）
+   * 届いた順に `#onEvent` で処理し直す。
+   */
+  readonly #deferredEvents = new Map<string, { event: DeferrableEvent; fromRunnerId: string }[]>();
   readonly #records: ResumeEventWindowsDeps['records'];
   readonly #judgeSessionGeneration: ResumeEventWindowsDeps['judgeSessionGeneration'];
   readonly #trackedGenerationSilent: ResumeEventWindowsDeps['trackedGenerationSilent'];
@@ -47,9 +63,6 @@ export class ResumeEventWindows {
   readonly #journal: ResumeEventWindowsDeps['journal'];
 
   constructor(deps: ResumeEventWindowsDeps) {
-    this.#relocatingTo = deps.relocatingTo;
-    this.#sameRunnerResumeWindow = deps.sameRunnerResumeWindow;
-    this.#deferredEvents = deps.deferredEvents;
     this.#records = deps.records;
     this.#judgeSessionGeneration = deps.judgeSessionGeneration;
     this.#trackedGenerationSilent = deps.trackedGenerationSilent;
