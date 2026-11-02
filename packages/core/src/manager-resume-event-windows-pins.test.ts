@@ -240,7 +240,9 @@ describe('resume の最中に届く出来事を預ける窓', () => {
   // ---------------------------------------------------------------------------------------------
   // 同じ runner-a への復帰の窓（`#reattachOne` の !relocating 側）の舞台。
   // ---------------------------------------------------------------------------------------------
-  async function sameRunnerRig(options: { generation?: string; outcome?: 'accept' | 'refuse' } = {}) {
+  async function sameRunnerRig(
+    options: { generation?: string; outcome?: 'accept' | 'refuse' } = {},
+  ) {
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-same', 'runner-a'));
     const fake = createFakeRegistry();
