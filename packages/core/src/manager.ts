@@ -1315,6 +1315,14 @@ const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'rescue_restore_request',
 ]);
 
+/** `permission_denied` の日誌と知らせに載せる、拒否の詳細・入力の形・層の呼び名。 */
+interface DenialTexts {
+  denialSuffix: string;
+  inputShape: string | undefined;
+  inputText: string;
+  actorLabel: string;
+}
+
 // 読めない時刻と無い時刻は数えない: 全部無ければ `undefined`（待ちの数え始めが分からない）
 function earliestMs(times: readonly (string | undefined)[]): number | undefined {
   return times
@@ -6200,70 +6208,15 @@ class Pool implements ManagerPool {
         // 作業者の落ちの印を立てる（#5030）。`await` の前に同期で立てる: 鍵の突き合わせの間にターンが終わっても、終わりの契機が印を見られるように。
         // `#usageStopped` と鍵の回転の観測（`#observeForTokenRotation`）へは流さない（#4903）。
         if (event.workerLimit !== undefined) {
-          const mark = {
-            preRotationKey: event.workerLimit.preRotationKey,
-            turnStartedAt: record.job.turnStartedAt,
-          };
-          this.#workerLimitStopped.set(event.managerId, mark);
-          // 台帳にも写す: デーモンが再起動しても印が残るように
-          record.job.workerLimitStopped = { ...mark };
-          await this.#persist(record);
+          await this.#markWorkerLimitStopped(record, event.managerId, event.workerLimit);
         }
         // 作業者の落ちの note（`event.workerLimit` の欄で判定する）には、落ちた枠の鍵の突き合わせを1行足す（#5021）。日誌とクローンへの知らせの両方に同じ文を載せる。
         const noteText =
           event.workerLimit === undefined
             ? event.text
             : `${event.text}\n${await this.#usageWake.describeWorkerLimitKey(event.workerLimit.raw)}`;
-        // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
-        // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
-        if (event.stall === undefined) {
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
-          );
-        } else {
-          await this.#journal({
-            type: 'subagent_stall',
-            agentId: event.stall.agentId,
-            ...(event.stall.agentType === undefined ? {} : { agentType: event.stall.agentType }),
-            ownedTaskCount: event.stall.ownedTaskCount,
-            sessionTaskCount: event.stall.sessionTaskCount,
-            wakeupCount: event.stall.wakeupCount,
-            outcome: event.stall.outcome,
-            text: `[${event.managerId}] ${event.text}`,
-          });
-        }
-
-        // 欄（`event.escalate`）で判定し、本文を嗅がない。
-        if (event.escalate === true) {
-          this.#emit(
-            event.managerId,
-            'report',
-            `[${event.managerId}] 作業者が自分で起こした背景処理を残したまま畳もうとする回が、` +
-              '背景処理の完了を待つ上限（30分）に達して打ち切った。**この作業者は自動では再開しない**（委譲がここで止まっている）。\n' +
-              `詳細（何が残っているか・何回目だったか）: ${event.text}\n` +
-              '全件は日誌に残っている（`journal_read` で辿れる）。',
-          );
-        }
-
-        // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
-        if (event.notifyClone === true) {
-          // 作業者の落ちには、積んだ時点の担当の鍵の世代を添えて「別の世代へ移って戻ったら畳んでよい」と印を付ける（#5048）。世代が分からなければ付けない
-          const heldGeneration = this.#tokenIdentities.get(event.managerId)?.generation;
-          this.#emit(
-            event.managerId,
-            'report',
-            `[${event.managerId}] ${noteText}`,
-            undefined,
-            undefined,
-            'full',
-            false,
-            undefined,
-            event.workerLimit === undefined || heldGeneration === undefined
-              ? undefined
-              : { movedFromGeneration: heldGeneration },
-          );
-        }
+        await this.#journalNote(event, noteText);
+        this.#emitNoteNotices(event, noteText);
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
         if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);
@@ -6298,47 +6251,11 @@ class Pool implements ManagerPool {
       }
 
       case 'permission_denied': {
-        // 日誌には全部残す: ここが無いと「静かになった」と「起きていない」が区別できない。受信箱へは繰り返しのときだけ（拒否は正常な運用でも起きるので、1件ずつ流すとクローンの判断が雑音で鈍る）。
-        // 鍵は道具＋層: 層を分けないとマネージャー自身の拒否と作業者の拒否が同じ数へ畳まれる。`event.actor` が無い回は「取れていない」層として別枠で数え、マネージャー側へ黙って寄せない。
-        const actorLayer = denialActorLayerOf(event.actor);
-        const denied = this.#deniedOf(record);
-        const key = denialKey(event.tool, actorLayer);
-        const count = (denied.get(key) ?? 0) + 1;
-        denied.set(key, count);
-        (record.deniedLastAt ??= new Map()).set(key, this.#nowIso());
-        // この回に無ければ前回分を消す: 「最新1件」の像なので古い理由を持ち越さない。
-        const reasonSnapshot = denialReasonSnapshotOf(event);
-        if (reasonSnapshot === undefined) {
-          record.deniedLastReason?.delete(key);
-        } else {
-          (record.deniedLastReason ??= new Map()).set(key, reasonSnapshot);
-        }
-        (record.deniedLastRequestId ??= new Map()).set(key, event.toolUseId);
-
-        // escalation は layer 別ではなく道具ごとの合計で判定する: 層ごとだと頻度が下がりすぎてクローンに1件も上がらず「止まっていることが見える」を裏切る。合計は拒否1件ごとにちょうど1ずつ増えるので、`shouldEscalateDenial` の exact-equality（`step === count`）にそのまま渡せる。
-        // 入力の中身ではなく道具の名前で束ねる: 1文字違う `Edit` を別物と数えると、同じファイルの編集が何度も拒否される形を取り逃す。
-        const toolTotal = denied
-          .entries()
-          .reduce((sum, [k, v]) => (decodeDenialKey(k).tool === event.tool ? sum + v : sum), 0);
-
-        // 欠けているものは作り物を出さず、そのキーごと省く。
-        const denialDetails = [
-          event.reasonType === undefined ? undefined : `分類: ${event.reasonType}`,
-          event.reason === undefined ? undefined : `理由: ${event.reason}`,
-          event.message === undefined ? undefined : `モデルへの拒否文: ${event.message}`,
-        ].filter((line): line is string => line !== undefined);
-        const denialSuffix = denialDetails.length > 0 ? ` [${denialDetails.join(' / ')}]` : '';
-        // 入力は値ではなく形だけ残す: 値に環境変数・トークン・URL 内の鍵が入りうる。それでも「何も分からない」へは戻さない（先頭の語・欄名・長さで良性の誤検知と拒否されるべきコマンドを分けられる）。
-        // 「無い」の種類を潰さない: 空のコマンドと入力が届かない経路が同じ字面に見える。
-        const inputShape = denialInputShape(event.input);
-        const inputText = inputShape ?? denialInputAbsence(event.via);
-        // `undefined`（取れていない）を「マネージャー」へ読み替えず、3値のまま言う。
-        const actorLabel =
-          actorLayer === 'manager'
-            ? 'マネージャー自身'
-            : actorLayer === 'worker'
-              ? '作業者'
-              : 'どちらの層か不明';
+        const { actorLayer, count, toolTotal } = this.#countDenial(record, event);
+        const { denialSuffix, inputShape, inputText, actorLabel } = this.#denialTexts(
+          event,
+          actorLayer,
+        );
 
         await this.#journalExchange(
           'inbound',
@@ -6351,39 +6268,12 @@ class Pool implements ManagerPool {
         // 止めた委譲の拒否は受信箱へ回さない: クローンの判断材料にならず、`DENIED_ESCALATE_AT = 1` で1件目から `#emit` してしまう。日誌と数え上げは済んでいる。
         if (record.job.status === 'stopped') return;
         if (!shouldEscalateDenial(toolTotal)) return;
-        // 本文は Markdown で書いてあるので、Markdown ではない字面（入力の形・ツール名）は `codeSpan()` で包む: 形の欄名のアンダースコアが `<em>` になる。`markup` は立てられない（書き手が3人の1本の文字列）ので、混ざらないようにするだけ。
-        // `denialSuffix` と入力が無い回の一文は包まない: 包むと等幅になり「文章」ではなく「コード」として描かれる。日誌も包まない（Markdown で描かれる面ではない）。
-        // 層が取れているなら、その層だけを名指しする: 両論併記だとクローンが誤った相手へ指示しうる。取れていない回だけ両論を残し、分からないものを片方へ絞らない。
-        const stuckWho =
-          actorLayer === 'manager'
-            ? 'マネージャー自身の手が止まっている可能性がある'
-            : actorLayer === 'worker'
-              ? '作業者の手が止まっている可能性がある'
-              : 'マネージャーか作業者の手が止まっている可能性がある（どちらの層かはこの合図からは取れていない）';
-        // 拒否の出所を断定しない: alteroid 自身の `PreToolUse` フック（`bash-wait-guard.ts` など）の拒否も同じ `case 'permission_denied'` を通り、帰結が違う（器の分類器 / deny 規則は担い手が本当に詰むが、フックは理由と代替案が担い手へ直接返り自力で抜けられる）。「クローンに回っていない」と決めつけず、まず担い手自身が受け取った拒否文を読ませる。
-        this.#emit(
-          event.managerId,
-          'report',
-          `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーで ${toolTotal} 件目・道具ごとの合計）。` +
-            'この合図だけでは拒否の出所は特定できない。**まず、担い手自身に返っている拒否の理由文を読ませること**。' +
-            '(a) 器のモデル分類器か deny 規則がその場で拒否したのであれば、この確認はクローンには回ってきていない。' +
-            '(b) alteroid 自身の `PreToolUse` フック（例: `bash-wait-guard.ts`）が拒否したのであれば、' +
-            '理由と代替案は担い手へ直接返っているので、担い手はそれだけで自力で抜けられることがある。' +
-            `${stuckWho}（(a) の場合）。` +
-            `直近の入力の形: ${inputShape === undefined ? inputText : codeSpan(inputShape)}${denialSuffix}` +
-            // 「先頭の語」は拒否の理由ではない（機械的に取った `command` の先頭の単語）が、形だけを見ると原因欄に読めるので、載っているときだけ断る。
-            (inputShape !== undefined && inputShape.includes('先頭の語=')
-              ? '（「先頭の語」は入力コマンドの先頭の単語であって、拒否の原因ではない）'
-              : '') +
-            // `inputHead` が欠ける回は作り物で埋めず「形」だけで案内する。出所（拒否の合図が運んだ値ではなく、同じ `tool_use_id` で `PreToolUse` フックが先に見た値）を明記して誤解させない。
-            (event.inputHead === undefined
-              ? ''
-              : `\n拒否より前に見た入力の先頭（伏せ字・最大160字。この拒否の合図自体が` +
-                `運んだ値ではなく、同じ tool_use_id で runner の \`PreToolUse\` フックが` +
-                `拒否より前に見た値である）: ${codeSpan(event.inputHead)}`) +
-            DENIAL_REPLY_ROUTE +
-            '\n全件は日誌に残っている（`journal_read` で辿れる）。',
-        );
+        this.#emitDenialNotice(event, actorLayer, toolTotal, {
+          denialSuffix,
+          inputShape,
+          inputText,
+          actorLabel,
+        });
         return;
       }
 
@@ -6503,51 +6393,10 @@ class Pool implements ManagerPool {
             event.reason,
         );
         if (event.recovered) {
-          // 終端を `running` で書き戻さない: 待つ間に `closed(failed / lost)` が書いていると台帳が非終端へ戻る。
-          if (record.job.status !== 'failed' && record.job.status !== 'lost') {
-            record.job.status = 'running';
-          }
-          record.attached = true;
-          this.#noteRunnerSessionSince(record);
-          await this.#persist(record);
-          this.#notifyResumeFallback(record, event.sessionId, event.reason);
+          await this.#recoverAfterResumeFailed(record, event);
           return;
         }
-        // 待っても同じ答えが返る失敗なので自動の挑み直しを打ち切る: 続けても同じ障害通知が積み上がるだけ。明示的な `manager_send` は塞がない。
-        this.#unresumable.add(event.managerId);
-        // 諦めをプロセス内の記憶だけに置かない: `#unresumable` は器と一緒に消え、次のデプロイでまた同じ死体を起こしに行って失敗する。台帳を終端へ落として再起動の向こうまで持たせる。
-        record.job.status = 'lost';
-        record.attached = false;
-        // `closed` と揃えて畳む: `#retire` で像ごと消すので、「消える時点で waiting が空」を呼び出し元の代入に頼らせない。
-        this.#withdrawWaiting(record, 'resume に失敗し、この委譲は戻らない');
-        await this.#persist(record);
-        this.#notifyUnresumable(record, event.reason, 'session');
-        // 枠の印も一緒に下ろす: 台帳に残したままだと、諦めを持たせたはずの `lost` の死体を次のデプロイでまた起こしに行く。
-        // ただし理由文が枠（429・枠の文言）のときは下ろさず立てて保つ（#4866）: 戻れなかった原因が鍵の枠なら、鍵を替えれば戻れる見込みがあり、下ろすと鍵の回転にも周回の掃きにも拾われないため。
-        const reasonNotice = classifyUsageNotice(event.reason);
-        const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
-        this.#usageWakeOwed.delete(event.managerId);
-        if (quotaReason) {
-          this.#usageStopped.add(event.managerId);
-          record.job.usageStoppedAt ??= this.#nowIso();
-          // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
-          await this.#persist(record).catch((error: unknown) => {
-            noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
-          });
-        } else {
-          await this.#usageWake.clearUsageStoppedMark(event.managerId);
-        }
-        // 像を外す前に指紋を控える（`closed` の枝と同じ）
-        const heldFingerprintAtRetire = this.#sessionTokenFingerprintOf(event.managerId);
-        this.#retire(event.managerId);
-        // 印を立てたら、使える鍵が在れば今すぐ起こし直してもらう（`closed` の枝と同じ）: `#retire` の後に置く理由も同じ。
-        if (quotaReason) {
-          await this.#usageWake.requestRotationForFailure(
-            event.managerId,
-            reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason,
-            heldFingerprintAtRetire,
-          );
-        }
+        await this.#giveUpAfterResumeFailed(record, event);
         return;
       }
 
@@ -6639,6 +6488,237 @@ class Pool implements ManagerPool {
         const exhaustive: never = event;
         throw new Error(`未知の runner イベント: ${JSON.stringify(exhaustive)}`);
       }
+    }
+  }
+
+  /** `note` の段1: 作業者の落ちの印を立てて台帳へ写す（呼び元が `event.workerLimit` の有無で呼ぶ）。 */
+  async #markWorkerLimitStopped(
+    record: ManagerRecord,
+    managerId: string,
+    workerLimit: NonNullable<Extract<RunnerEvent, { type: 'note' }>['workerLimit']>,
+  ): Promise<void> {
+    const mark = {
+      preRotationKey: workerLimit.preRotationKey,
+      turnStartedAt: record.job.turnStartedAt,
+    };
+    this.#workerLimitStopped.set(managerId, mark);
+    // 台帳にも写す: デーモンが再起動しても印が残るように
+    record.job.workerLimitStopped = { ...mark };
+    await this.#persist(record);
+  }
+
+  /** `note` の段2: note を日誌へ残す（stall の有無で行の種類を分ける）。 */
+  async #journalNote(
+    event: Extract<RunnerEvent, { type: 'note' }>,
+    noteText: string,
+  ): Promise<void> {
+    // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
+    // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
+    if (event.stall === undefined) {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
+      );
+    } else {
+      await this.#journal({
+        type: 'subagent_stall',
+        agentId: event.stall.agentId,
+        ...(event.stall.agentType === undefined ? {} : { agentType: event.stall.agentType }),
+        ownedTaskCount: event.stall.ownedTaskCount,
+        sessionTaskCount: event.stall.sessionTaskCount,
+        wakeupCount: event.stall.wakeupCount,
+        outcome: event.stall.outcome,
+        text: `[${event.managerId}] ${event.text}`,
+      });
+    }
+  }
+
+  /** `note` の段3（同期）: `escalate` / `notifyClone` の欄に応じてクローンへの知らせを積む。 */
+  #emitNoteNotices(event: Extract<RunnerEvent, { type: 'note' }>, noteText: string): void {
+    // 欄（`event.escalate`）で判定し、本文を嗅がない。
+    if (event.escalate === true) {
+      this.#emit(
+        event.managerId,
+        'report',
+        `[${event.managerId}] 作業者が自分で起こした背景処理を残したまま畳もうとする回が、` +
+          '背景処理の完了を待つ上限（30分）に達して打ち切った。**この作業者は自動では再開しない**（委譲がここで止まっている）。\n' +
+          `詳細（何が残っているか・何回目だったか）: ${event.text}\n` +
+          '全件は日誌に残っている（`journal_read` で辿れる）。',
+      );
+    }
+
+    // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
+    if (event.notifyClone === true) {
+      // 作業者の落ちには、積んだ時点の担当の鍵の世代を添えて「別の世代へ移って戻ったら畳んでよい」と印を付ける（#5048）。世代が分からなければ付けない
+      const heldGeneration = this.#tokenIdentities.get(event.managerId)?.generation;
+      this.#emit(
+        event.managerId,
+        'report',
+        `[${event.managerId}] ${noteText}`,
+        undefined,
+        undefined,
+        'full',
+        false,
+        undefined,
+        event.workerLimit === undefined || heldGeneration === undefined
+          ? undefined
+          : { movedFromGeneration: heldGeneration },
+      );
+    }
+  }
+
+  /** `permission_denied` の段1（同期）: 拒否を道具＋層の鍵で数え、記録を更新して件数を返す。 */
+  #countDenial(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'permission_denied' }>,
+  ): { actorLayer: ReturnType<typeof denialActorLayerOf>; count: number; toolTotal: number } {
+    // 日誌には全部残す: ここが無いと「静かになった」と「起きていない」が区別できない。受信箱へは繰り返しのときだけ（拒否は正常な運用でも起きるので、1件ずつ流すとクローンの判断が雑音で鈍る）。
+    // 鍵は道具＋層: 層を分けないとマネージャー自身の拒否と作業者の拒否が同じ数へ畳まれる。`event.actor` が無い回は「取れていない」層として別枠で数え、マネージャー側へ黙って寄せない。
+    const actorLayer = denialActorLayerOf(event.actor);
+    const denied = this.#deniedOf(record);
+    const key = denialKey(event.tool, actorLayer);
+    const count = (denied.get(key) ?? 0) + 1;
+    denied.set(key, count);
+    (record.deniedLastAt ??= new Map()).set(key, this.#nowIso());
+    // この回に無ければ前回分を消す: 「最新1件」の像なので古い理由を持ち越さない。
+    const reasonSnapshot = denialReasonSnapshotOf(event);
+    if (reasonSnapshot === undefined) {
+      record.deniedLastReason?.delete(key);
+    } else {
+      (record.deniedLastReason ??= new Map()).set(key, reasonSnapshot);
+    }
+    (record.deniedLastRequestId ??= new Map()).set(key, event.toolUseId);
+
+    // escalation は layer 別ではなく道具ごとの合計で判定する: 層ごとだと頻度が下がりすぎてクローンに1件も上がらず「止まっていることが見える」を裏切る。合計は拒否1件ごとにちょうど1ずつ増えるので、`shouldEscalateDenial` の exact-equality（`step === count`）にそのまま渡せる。
+    // 入力の中身ではなく道具の名前で束ねる: 1文字違う `Edit` を別物と数えると、同じファイルの編集が何度も拒否される形を取り逃す。
+    const toolTotal = denied
+      .entries()
+      .reduce((sum, [k, v]) => (decodeDenialKey(k).tool === event.tool ? sum + v : sum), 0);
+    return { actorLayer, count, toolTotal };
+  }
+
+  /** `permission_denied` の段2（同期）: 日誌と知らせに載せる拒否の詳細・入力の形・層の呼び名を作る。 */
+  #denialTexts(
+    event: Extract<RunnerEvent, { type: 'permission_denied' }>,
+    actorLayer: ReturnType<typeof denialActorLayerOf>,
+  ): DenialTexts {
+    // 欠けているものは作り物を出さず、そのキーごと省く。
+    const denialDetails = [
+      event.reasonType === undefined ? undefined : `分類: ${event.reasonType}`,
+      event.reason === undefined ? undefined : `理由: ${event.reason}`,
+      event.message === undefined ? undefined : `モデルへの拒否文: ${event.message}`,
+    ].filter((line): line is string => line !== undefined);
+    const denialSuffix = denialDetails.length > 0 ? ` [${denialDetails.join(' / ')}]` : '';
+    // 入力は値ではなく形だけ残す: 値に環境変数・トークン・URL 内の鍵が入りうる。それでも「何も分からない」へは戻さない（先頭の語・欄名・長さで良性の誤検知と拒否されるべきコマンドを分けられる）。
+    // 「無い」の種類を潰さない: 空のコマンドと入力が届かない経路が同じ字面に見える。
+    const inputShape = denialInputShape(event.input);
+    const inputText = inputShape ?? denialInputAbsence(event.via);
+    // `undefined`（取れていない）を「マネージャー」へ読み替えず、3値のまま言う。
+    const actorLabel =
+      actorLayer === 'manager'
+        ? 'マネージャー自身'
+        : actorLayer === 'worker'
+          ? '作業者'
+          : 'どちらの層か不明';
+    return { denialSuffix, inputShape, inputText, actorLabel };
+  }
+
+  /** `permission_denied` の段3（同期）: 繰り返しの拒否をクローンへの知らせとして受信箱へ積む。 */
+  #emitDenialNotice(
+    event: Extract<RunnerEvent, { type: 'permission_denied' }>,
+    actorLayer: ReturnType<typeof denialActorLayerOf>,
+    toolTotal: number,
+    { denialSuffix, inputShape, inputText, actorLabel }: DenialTexts,
+  ): void {
+    // 本文は Markdown で書いてあるので、Markdown ではない字面（入力の形・ツール名）は `codeSpan()` で包む: 形の欄名のアンダースコアが `<em>` になる。`markup` は立てられない（書き手が3人の1本の文字列）ので、混ざらないようにするだけ。
+    // `denialSuffix` と入力が無い回の一文は包まない: 包むと等幅になり「文章」ではなく「コード」として描かれる。日誌も包まない（Markdown で描かれる面ではない）。
+    // 層が取れているなら、その層だけを名指しする: 両論併記だとクローンが誤った相手へ指示しうる。取れていない回だけ両論を残し、分からないものを片方へ絞らない。
+    const stuckWho =
+      actorLayer === 'manager'
+        ? 'マネージャー自身の手が止まっている可能性がある'
+        : actorLayer === 'worker'
+          ? '作業者の手が止まっている可能性がある'
+          : 'マネージャーか作業者の手が止まっている可能性がある（どちらの層かはこの合図からは取れていない）';
+    // 拒否の出所を断定しない: alteroid 自身の `PreToolUse` フック（`bash-wait-guard.ts` など）の拒否も同じ `case 'permission_denied'` を通り、帰結が違う（器の分類器 / deny 規則は担い手が本当に詰むが、フックは理由と代替案が担い手へ直接返り自力で抜けられる）。「クローンに回っていない」と決めつけず、まず担い手自身が受け取った拒否文を読ませる。
+    this.#emit(
+      event.managerId,
+      'report',
+      `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーで ${toolTotal} 件目・道具ごとの合計）。` +
+        'この合図だけでは拒否の出所は特定できない。**まず、担い手自身に返っている拒否の理由文を読ませること**。' +
+        '(a) 器のモデル分類器か deny 規則がその場で拒否したのであれば、この確認はクローンには回ってきていない。' +
+        '(b) alteroid 自身の `PreToolUse` フック（例: `bash-wait-guard.ts`）が拒否したのであれば、' +
+        '理由と代替案は担い手へ直接返っているので、担い手はそれだけで自力で抜けられることがある。' +
+        `${stuckWho}（(a) の場合）。` +
+        `直近の入力の形: ${inputShape === undefined ? inputText : codeSpan(inputShape)}${denialSuffix}` +
+        // 「先頭の語」は拒否の理由ではない（機械的に取った `command` の先頭の単語）が、形だけを見ると原因欄に読めるので、載っているときだけ断る。
+        (inputShape !== undefined && inputShape.includes('先頭の語=')
+          ? '（「先頭の語」は入力コマンドの先頭の単語であって、拒否の原因ではない）'
+          : '') +
+        // `inputHead` が欠ける回は作り物で埋めず「形」だけで案内する。出所（拒否の合図が運んだ値ではなく、同じ `tool_use_id` で `PreToolUse` フックが先に見た値）を明記して誤解させない。
+        (event.inputHead === undefined
+          ? ''
+          : `\n拒否より前に見た入力の先頭（伏せ字・最大160字。この拒否の合図自体が` +
+            `運んだ値ではなく、同じ tool_use_id で runner の \`PreToolUse\` フックが` +
+            `拒否より前に見た値である）: ${codeSpan(event.inputHead)}`) +
+        DENIAL_REPLY_ROUTE +
+        '\n全件は日誌に残っている（`journal_read` で辿れる）。',
+    );
+  }
+
+  /** `resume_failed` の段1: 前のセッションを開き直せなかったが runner が自力で戻れた回の台帳・知らせを整える。 */
+  async #recoverAfterResumeFailed(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'resume_failed' }>,
+  ): Promise<void> {
+    // 終端を `running` で書き戻さない: 待つ間に `closed(failed / lost)` が書いていると台帳が非終端へ戻る。
+    if (record.job.status !== 'failed' && record.job.status !== 'lost') {
+      record.job.status = 'running';
+    }
+    record.attached = true;
+    this.#noteRunnerSessionSince(record);
+    await this.#persist(record);
+    this.#notifyResumeFallback(record, event.sessionId, event.reason);
+  }
+
+  /** `resume_failed` の段2: 戻れなかった委譲を `lost` へ落として諦め、枠の印と像を片付ける。 */
+  async #giveUpAfterResumeFailed(
+    record: ManagerRecord,
+    event: Extract<RunnerEvent, { type: 'resume_failed' }>,
+  ): Promise<void> {
+    // 待っても同じ答えが返る失敗なので自動の挑み直しを打ち切る: 続けても同じ障害通知が積み上がるだけ。明示的な `manager_send` は塞がない。
+    this.#unresumable.add(event.managerId);
+    // 諦めをプロセス内の記憶だけに置かない: `#unresumable` は器と一緒に消え、次のデプロイでまた同じ死体を起こしに行って失敗する。台帳を終端へ落として再起動の向こうまで持たせる。
+    record.job.status = 'lost';
+    record.attached = false;
+    // `closed` と揃えて畳む: `#retire` で像ごと消すので、「消える時点で waiting が空」を呼び出し元の代入に頼らせない。
+    this.#withdrawWaiting(record, 'resume に失敗し、この委譲は戻らない');
+    await this.#persist(record);
+    this.#notifyUnresumable(record, event.reason, 'session');
+    // 枠の印も一緒に下ろす: 台帳に残したままだと、諦めを持たせたはずの `lost` の死体を次のデプロイでまた起こしに行く。
+    // ただし理由文が枠（429・枠の文言）のときは下ろさず立てて保つ（#4866）: 戻れなかった原因が鍵の枠なら、鍵を替えれば戻れる見込みがあり、下ろすと鍵の回転にも周回の掃きにも拾われないため。
+    const reasonNotice = classifyUsageNotice(event.reason);
+    const quotaReason = reasonNotice?.kind === 'reached' || isRateLimitReason(event.reason);
+    this.#usageWakeOwed.delete(event.managerId);
+    if (quotaReason) {
+      this.#usageStopped.add(event.managerId);
+      record.job.usageStoppedAt ??= this.#nowIso();
+      // 書けなくても進む: 台帳に写せないのは再起動を跨ぐ分だけで、メモリの印で今回の回転は拾える。
+      await this.#persist(record).catch((error: unknown) => {
+        noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
+      });
+    } else {
+      await this.#usageWake.clearUsageStoppedMark(event.managerId);
+    }
+    // 像を外す前に指紋を控える（`closed` の枝と同じ）
+    const heldFingerprintAtRetire = this.#sessionTokenFingerprintOf(event.managerId);
+    this.#retire(event.managerId);
+    // 印を立てたら、使える鍵が在れば今すぐ起こし直してもらう（`closed` の枝と同じ）: `#retire` の後に置く理由も同じ。
+    if (quotaReason) {
+      await this.#usageWake.requestRotationForFailure(
+        event.managerId,
+        reasonNotice?.kind === 'reached' ? reasonNotice.text : event.reason,
+        heldFingerprintAtRetire,
+      );
     }
   }
 
