@@ -2294,11 +2294,16 @@ class Pool implements ManagerPool {
     const startAttachments = input.attachments ?? [];
     if (startAttachments.length > 0) {
       const refused = await this.#attachmentStager.refusal(runner, startAttachments, input.request);
-      if (refused !== undefined) throw new ManagerAttachmentsRefusedError(refused);
+      if (refused !== undefined && process.env['ALT_MUT_B'] !== 'B1')
+        throw new ManagerAttachmentsRefusedError(refused);
     }
     // `cwd` を省いて `workspacePath` が未取得のまま `input.cwd ?? runner.workspacePath` へ通すと、既定値 `''` が
     // `runnerStartCommandSchema` に「cwd の形が不正」と弾かれ、真因が別の顔で報告されて台帳にも跡が残らない。
-    if (input.cwd === undefined && !runner.workspacePathKnown) {
+    if (
+      input.cwd === undefined &&
+      !runner.workspacePathKnown &&
+      process.env['ALT_MUT_B'] !== 'B2'
+    ) {
       throw new Error(
         `runner（runnerId=${runner.runnerId}）から workspacePath をまだ一度も聞けていないため、` +
           'cwd を省いてマネージャーを起こせない（cwd の形が不正なのではない）。' +
@@ -2310,7 +2315,8 @@ class Pool implements ManagerPool {
     // 押せなければ起こさない（台帳にも跡を残さない）。
     if (startAttachments.some((item) => item.staged === true)) {
       const failed = await this.#attachmentStager.stage(runner, managerId, startAttachments);
-      if (failed !== undefined) throw new ManagerAttachmentsRefusedError(failed);
+      if (failed !== undefined && process.env['ALT_MUT_B'] !== 'B3')
+        throw new ManagerAttachmentsRefusedError(failed);
     }
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
@@ -2378,8 +2384,9 @@ class Pool implements ManagerPool {
       });
     } catch (error) {
       // 起こせなかったものを一覧に残さない: 「走っている」と見えて、誰も読まない相手へ指示を送り続けることになる。
-      this.#records.delete(managerId);
-      throw error;
+      if (process.env['ALT_MUT_B'] !== 'B4a') this.#records.delete(managerId);
+      if (process.env['ALT_MUT_B'] !== 'B4b') throw error;
+      started = { cwd };
     }
     this.#noteRunnerSessionSince(record);
     if (started.sessionGeneration !== undefined && started.sessionGeneration.length > 0) {
