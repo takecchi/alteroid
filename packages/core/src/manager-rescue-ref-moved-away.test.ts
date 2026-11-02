@@ -16,7 +16,6 @@ import type { Stores } from './store.js';
 // B が既に書いた項目を A の古い commit・ref・instanceId で置き換えてはならない。
 
 const MANAGER_ID = 'mgr-moved-ref';
-const ARCHIVE_ID = '0b5c6e1a-2f3d-4a7b-9c8d-1e2f3a4b5c6d';
 const AT_B = '2026-10-12T02:00:00.000Z';
 const AT_A = '2026-10-12T01:00:00.000Z';
 const REF_B = 'refs/alteroid-rescue/mgr-moved-ref/root-bbbbbbbb';
