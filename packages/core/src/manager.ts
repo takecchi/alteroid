@@ -2405,6 +2405,11 @@ class Pool implements ManagerPool {
     });
     if (input.supersedes !== undefined)
       await this.#handOverToSuccessor(input.supersedes, managerId);
+    return this.#startedSummaryOf(record, requestedCwd);
+  }
+
+  /** 起こした直後の要約を組む（同期。`cwdConfirmed` / `requestedCwd` を足す）。 */
+  #startedSummaryOf(record: ManagerRecord, requestedCwd: string | undefined): ManagerSummary {
     const silent = this.#silentRunners();
     const registeredRunnerIds = this.#registeredRunnerIds();
     const summary = summaryOf(
