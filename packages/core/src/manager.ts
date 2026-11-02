@@ -4042,14 +4042,7 @@ class Pool implements ManagerPool {
       // 状態を読めなかったが runner に居る委譲は resume せずに引き取る: 生きているとしか読めない状態を名指しできないので `attached: false`（話しかけたら `host.resume()` が生きたセッションへ流して短絡する）。待ちは持ち越さず、`status` は台帳の値のまま。
       const unreadableOn = alive.has(job.id) ? undefined : unreadable.get(job.id);
       if (unreadableOn !== undefined) {
-        const record: ManagerRecord = {
-          job: { ...job, runnerId: unreadableOn.runnerId },
-          waiting: [],
-          attached: false,
-          reattachedAcrossRestart: true,
-        };
-        this.#records.set(job.id, record);
-        await this.#persist(record);
+        await this.#adoptUnreadable(job, unreadableOn);
         continue;
       }
 
@@ -4264,6 +4257,18 @@ class Pool implements ManagerPool {
       for (const managerId of listing.unreadableIds) unreadable.set(managerId, runner);
     }
     return { alive, unheard, unreadable };
+  }
+
+  /** 状態を読めなかったが runner に居る委譲を、resume せずに台帳へ載せる（`attached: false`）。 */
+  async #adoptUnreadable(job: Job, unreadableOn: RunnerClient): Promise<void> {
+    const record: ManagerRecord = {
+      job: { ...job, runnerId: unreadableOn.runnerId },
+      waiting: [],
+      attached: false,
+      reattachedAcrossRestart: true,
+    };
+    this.#records.set(job.id, record);
+    await this.#persist(record);
   }
 
   /** runner が実際に開いているセッションの値へ台帳の宛先・cwd・workspace・sessionId を揃える（起動時の引き取りと、移送先に既に居た委譲の取り直しが共有する）。 */
