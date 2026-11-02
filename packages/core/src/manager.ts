@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { assertNever } from './assert-never.js';
 import { ArchiveReceiver } from './archive-receiver.js';
 import { AutoFold } from './auto-fold.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
@@ -2465,7 +2466,138 @@ class Pool implements ManagerPool {
     options: ManagerSendOptions,
     delivery: SendDelivery,
   ): Promise<ManagerSendResult> {
-    const { mode, onFoldNoticeDelivered, pollRetry = false, onStuck } = delivery;
+    const { mode } = delivery;
+    const target = await this.#resolveSendTarget(managerId);
+    if ('outcome' in target) return target;
+    const { record, runner } = target;
+
+    const { decision, requestId } = options;
+    const pending = this.#choosePending(record, requestId, decision);
+    if (typeof pending === 'string') {
+      return this.#refuseUnclearPending(record, managerId, requestId, pending);
+    }
+
+    const sendAttachments = options.attachments ?? [];
+    if (pending && sendAttachments.length > 0) {
+      return {
+        outcome: 'unknown',
+        detail:
+          '確認への回答（requestId / decision を付けた送信）には添付を載せられない。' +
+          '何も送っていない。回答は添付なしで送り、添付は追加指示として別に送ること。',
+      };
+    }
+    if (!pending && sendAttachments.length > 0) {
+      const refusedAttachments = await this.#refuseOrStageAttachments(
+        runner,
+        managerId,
+        message,
+        sendAttachments,
+      );
+      if (refusedAttachments !== undefined) return refusedAttachments;
+    }
+
+    if (pending) {
+      return await this.#answerPending(
+        record,
+        runner,
+        managerId,
+        message,
+        options,
+        decision,
+        pending,
+      );
+    }
+
+    // 預かりがある間に来た伝言は列の後ろへ積み、まとめて届けを試す: 先に届けると、預かった伝言を追い越すため。
+    // 添付付きは預からない（中身を台帳に載せない）ので、ここでは並ばずに下の経路で扱う。
+    const holdable = mode === 'caller' && sendAttachments.length === 0;
+    if (holdable && (record.job.heldMessages?.length ?? 0) > 0) {
+      return await this.#queueBehindHeld(record, managerId, message);
+    }
+
+    // 認証トークンの世代が食い違った done の委譲は旧セッションへ流さない: 旧プロセスの env は起動時に凍っていて、
+    // 鍵が回った後も古い鍵で走り、また枠に当たる。
+    let fingerprintMatched = false;
+    let staleDelivery: { generation: number; blockers: string[] } | undefined;
+    // 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
+    const turnStartedAt = this.#nowIso();
+    if (record.job.status === 'done') {
+      const folded = await this.#foldStaleTokenBeforeDelivery(
+        record,
+        runner,
+        managerId,
+        message,
+        delivery,
+        holdable,
+      );
+      if ('outcome' in folded) return folded;
+      fingerprintMatched = folded.fingerprintMatched;
+      staleDelivery = folded.staleDelivery;
+    }
+    const { outgoing, foldedFoldNotice, foldedPeerCloseNotice } = this.#composeOutgoing(
+      record,
+      message,
+    );
+
+    // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
+    // `true` のまま嘘になる。404 を例外のまま `send()` から貫通させると、どの `outcome` にもならず人間は 500 を受け取る。
+    let attached = record.attached;
+    let reentered = false;
+    // 渡しに行く前に印を進める（預かりの届け直し `HeldMessages#deliver` もここを通る）: 自動の畳みが、渡した一言ごと担当を止めないため。
+    this.#inputMarks.set(managerId, (this.#inputMarks.get(managerId) ?? 0) + 1);
+    if (attached) {
+      const missing = await this.#deliverToAttachedSession(
+        record,
+        runner,
+        managerId,
+        outgoing,
+        sendAttachments,
+      );
+      if (missing) attached = false;
+    }
+
+    // 直前に 404 で訂正した相手も同じここを通す: 別経路を作ると、同じ session を二本起こさないための歯止めが片方にだけ効く。
+    if (!attached) {
+      const reentry = await this.#reenterByResume(
+        record,
+        runner,
+        managerId,
+        outgoing,
+        sendAttachments,
+        fingerprintMatched,
+      );
+      if ('outcome' in reentry) return reentry;
+      reentered = reentry.reentered;
+    }
+
+    /*
+     * 台帳へ `running` を書く直前にもう一度 `stopConfirmedAt` を見る: `#resume` の2つのチェックポイントを通った後でも、
+     * `send()` へ戻るまでの `await` の間に `abort()` が印を立てうる。畳み直しは `abort()` と同じ
+     * `#confirmStoppedAndReleaseLease` を使う。
+     */
+    if (record.stopConfirmedAt !== undefined) {
+      return await this.#settleStoppedMeanwhile(record, runner, managerId);
+    }
+
+    return await this.#recordDelivery(
+      record,
+      managerId,
+      outgoing,
+      sendAttachments,
+      turnStartedAt,
+      foldedFoldNotice,
+      foldedPeerCloseNotice,
+      delivery,
+      staleDelivery,
+      reentered,
+      attached,
+    );
+  }
+
+  /** 段A（入口）: 接続を確かめ、台帳の像と宛先の runner を引く。引けなければ断りの結果を返す。 */
+  async #resolveSendTarget(
+    managerId: string,
+  ): Promise<{ record: ManagerRecord; runner: RunnerClient } | ManagerSendResult> {
     await this.#ensureConnected();
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
@@ -2483,8 +2615,16 @@ class Pool implements ManagerPool {
       return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
-    const { decision, requestId } = options;
-    const pending = this.#choosePending(record, requestId, decision);
+    return { record, runner };
+  }
+
+  /** 段B（確認の選び方）: 宛先を選べなかった（あいまい・無い・知らせ直し直後）ときの断りを返す。同期。 */
+  #refuseUnclearPending(
+    record: ManagerRecord,
+    managerId: string,
+    requestId: string | undefined,
+    pending: 'ambiguous' | 'gone' | 'renotify-pending',
+  ): ManagerSendResult {
     if (pending === 'ambiguous') {
       return {
         outcome: 'unknown',
@@ -2523,174 +2663,198 @@ class Pool implements ManagerPool {
           '返答のつもりでも、この確認とは無関係かもしれない。答えるなら requestId を明示すること。',
       };
     }
+    return assertNever('未知の確認の選び方（send）', pending);
+  }
 
-    const sendAttachments = options.attachments ?? [];
-    if (pending && sendAttachments.length > 0) {
+  /** 段C（添付）: 追加指示に付いた添付を検め、大きいファイルを別口へ押す。断るなら結果を返し、通れば `undefined`。 */
+  async #refuseOrStageAttachments(
+    runner: RunnerClient,
+    managerId: string,
+    message: string,
+    sendAttachments: RunnerAttachment[],
+  ): Promise<ManagerSendResult | undefined> {
+    const refused = await this.#attachmentStager.refusal(runner, sendAttachments, message);
+    if (refused !== undefined)
+      return { outcome: 'unknown', detail: `${refused}（何も送っていない）` };
+    // 大きいファイルは、命令（`send` でも resume でも）を出す前に別口へ押す。押せなければ命令を送らない。
+    const stageFailed = await this.#attachmentStager.stage(runner, managerId, sendAttachments);
+    if (stageFailed !== undefined)
+      return { outcome: 'unknown', detail: `${stageFailed}（何も送っていない）` };
+    return undefined;
+  }
+
+  /** 段D（答え）: 止まっている確認へ回答を届け、日誌へ残す。 */
+  async #answerPending(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+    message: string,
+    options: ManagerSendOptions,
+    decision: ManagerDecision | undefined,
+    pending: { requestId: string; summary: string },
+  ): Promise<ManagerSendResult> {
+    // 答える前に呼ぶ: 答えが届いた後に日誌が書けない窓を作らないため（投げたら答えない）
+    await options.beforeAnswer?.({ requestId: pending.requestId, summary: pending.summary });
+    const answered = await runner.answer(managerId, {
+      requestId: pending.requestId,
+      message,
+      ...(decision === undefined ? {} : { decision }),
+    });
+    if (!answered.delivered) {
+      // runner がもう持っていない確認は台帳の待ちからも外す（#4775）: 残すと、requestId を付けない次の答えも同じ古い確認を選び、届かないまま担当が waiting_human に残るため
+      const dropped = this.#dropUndeliveredWaiting(record, pending.requestId);
+      if (dropped) await this.#persist(record);
       return {
         outcome: 'unknown',
         detail:
-          '確認への回答（requestId / decision を付けた送信）には添付を載せられない。' +
-          '何も送っていない。回答は添付なしで送り、添付は追加指示として別に送ること。',
+          `${pending.requestId} は runner 側で既に解けている。` +
+          (dropped
+            ? '台帳の待ちからも外した（次の送信はこの確認への答えとしては扱われない）。'
+            : ''),
       };
     }
-    if (!pending && sendAttachments.length > 0) {
-      const refused = await this.#attachmentStager.refusal(runner, sendAttachments, message);
-      if (refused !== undefined)
-        return { outcome: 'unknown', detail: `${refused}（何も送っていない）` };
-      // 大きいファイルは、命令（`send` でも resume でも）を出す前に別口へ押す。押せなければ命令を送らない。
-      const stageFailed = await this.#attachmentStager.stage(runner, managerId, sendAttachments);
-      if (stageFailed !== undefined)
-        return { outcome: 'unknown', detail: `${stageFailed}（何も送っていない）` };
-    }
+    await this.#journal({
+      type: 'escalation',
+      question: pending.summary,
+      approvalId: pending.requestId,
+      managerId,
+      answeredAt: this.#nowIso(),
+      /*
+       * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
+       * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
+       * `answered.decision` が無い回（届いたのに `decision` を名乗らない応答。runner は届いた回に必ず付ける）は `allow`/`deny` へ倒さず `[unknown]` で区別する。
+       * `'unreadable'` は `[unreadable]` のまま残し、`allow`/`deny`/`unknown` へ畳まない。
+       */
+      answer:
+        answered.decision === undefined
+          ? `[unknown] ${message}`
+          : `[${answered.decision}] ${message}`,
+    });
+    return {
+      outcome: 'answered',
+      // `decideAnswer` が SDK へ返す値では `unreadable` も `deny` に畳まれて区別できないので、その手前の `answered.decision` を見る。
+      detail:
+        answered.decision === 'unreadable'
+          ? `${pending.summary} への回答が読み取れず、安全側で拒否した` +
+            `（decision が無く、承認とも拒否とも読めなかった）。` +
+            `許可するなら decision: 'allow' を付けて答え直すこと。`
+          : `${pending.summary} に回答した。`,
+    };
+  }
 
-    if (pending) {
-      // 答える前に呼ぶ: 答えが届いた後に日誌が書けない窓を作らないため（投げたら答えない）
-      await options.beforeAnswer?.({ requestId: pending.requestId, summary: pending.summary });
-      const answered = await runner.answer(managerId, {
-        requestId: pending.requestId,
-        message,
-        ...(decision === undefined ? {} : { decision }),
-      });
-      if (!answered.delivered) {
-        // runner がもう持っていない確認は台帳の待ちからも外す（#4775）: 残すと、requestId を付けない次の答えも同じ古い確認を選び、届かないまま担当が waiting_human に残るため
-        const dropped = this.#dropUndeliveredWaiting(record, pending.requestId);
-        if (dropped) await this.#persist(record);
-        return {
-          outcome: 'unknown',
-          detail:
-            `${pending.requestId} は runner 側で既に解けている。` +
-            (dropped
-              ? '台帳の待ちからも外した（次の送信はこの確認への答えとしては扱われない）。'
-              : ''),
-        };
+  /** 段E（預かりの列）: 預かりがある間に来た伝言を列の後ろへ積み、まとめて届けを試す。 */
+  async #queueBehindHeld(
+    record: ManagerRecord,
+    managerId: string,
+    message: string,
+  ): Promise<ManagerSendResult> {
+    const queued = await this.#held.hold(record, message, '先に預かった伝言がまだ届いていない');
+    if (queued.outcome !== 'held') return queued;
+    const attempt = await this.#held.deliver(managerId, 'caller');
+    return attempt ?? queued;
+  }
+
+  /** 段F（古い鍵の畳み）: done の委譲を畳めるか確かめる。断る・預かるなら結果を返し、進めるなら畳み込みの材料を返す。 */
+  async #foldStaleTokenBeforeDelivery(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+    message: string,
+    delivery: SendDelivery,
+    holdable: boolean,
+  ): Promise<
+    | ManagerSendResult
+    | {
+        fingerprintMatched: boolean;
+        staleDelivery: { generation: number; blockers: string[] } | undefined;
       }
-      await this.#journal({
-        type: 'escalation',
-        question: pending.summary,
-        approvalId: pending.requestId,
-        managerId,
-        answeredAt: this.#nowIso(),
-        /*
-         * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
-         * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
-         * `answered.decision` が無い回（届いたのに `decision` を名乗らない応答。runner は届いた回に必ず付ける）は `allow`/`deny` へ倒さず `[unknown]` で区別する。
-         * `'unreadable'` は `[unreadable]` のまま残し、`allow`/`deny`/`unknown` へ畳まない。
-         */
-        answer:
-          answered.decision === undefined
-            ? `[unknown] ${message}`
-            : `[${answered.decision}] ${message}`,
-      });
-      return {
-        outcome: 'answered',
-        // `decideAnswer` が SDK へ返す値では `unreadable` も `deny` に畳まれて区別できないので、その手前の `answered.decision` を見る。
-        detail:
-          answered.decision === 'unreadable'
-            ? `${pending.summary} への回答が読み取れず、安全側で拒否した` +
-              `（decision が無く、承認とも拒否とも読めなかった）。` +
-              `許可するなら decision: 'allow' を付けて答え直すこと。`
-            : `${pending.summary} に回答した。`,
-      };
-    }
-
-    // 預かりがある間に来た伝言は列の後ろへ積み、まとめて届けを試す: 先に届けると、預かった伝言を追い越すため。
-    // 添付付きは預からない（中身を台帳に載せない）ので、ここでは並ばずに下の経路で扱う。
-    const holdable = mode === 'caller' && sendAttachments.length === 0;
-    if (holdable && (record.job.heldMessages?.length ?? 0) > 0) {
-      const queued = await this.#held.hold(record, message, '先に預かった伝言がまだ届いていない');
-      if (queued.outcome !== 'held') return queued;
-      const attempt = await this.#held.deliver(managerId, 'caller');
-      return attempt ?? queued;
-    }
-
-    // 認証トークンの世代が食い違った done の委譲は旧セッションへ流さない: 旧プロセスの env は起動時に凍っていて、
-    // 鍵が回った後も古い鍵で走り、また枠に当たる。
-    let fingerprintMatched = false;
-    let staleDelivery: { generation: number; blockers: string[] } | undefined;
-    // 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
-    const turnStartedAt = this.#nowIso();
-    let outgoing = message;
-    if (record.job.status === 'done') {
-      const oldestHeldAt = record.job.heldMessages?.[0]?.heldAt;
-      // 待ちの数え始めは、いちばん古い預かりと、背景処理待ちに入った時刻の早いほう（#5041）: 担当は預かりより前から古い鍵のまま
-      // 背景処理を待っていて、話しかけたい伝言が届いた時点で、もう止まっている時間を数えるため（預かりだけから数えると、LAND-9 は8分で畳まれなかった）。
-      // 畳むのは今どおり `StaleTokenFold` が「鍵が現役と食い違い、その鍵が ready でない」と判定した回だけ
-      // （ready なら旧セッションへ届ける）。人が走らせる長い仕事を、鍵が使える間に奪わない。
-      const awaitingSince = this.#withheld.awaitingBackgroundOf(managerId)?.since;
-      const waitStartedAt = earliestMs([oldestHeldAt, awaitingSince]);
-      const waitedLongEnough =
-        mode === 'held-delivery' &&
-        oldestHeldAt !== undefined &&
-        waitStartedAt !== undefined &&
-        this.#now() - waitStartedAt >= HELD_FORCE_FOLD_AFTER_MS;
-      // 鍵の回転の起こし直しの待ちの数え始め（#5044）: 枠で止まった時刻と、背景処理待ちに入った時刻の早いほう。
-      // どちらも分からなければ待たない（#4850 の今まで）: 数え始めの無い待ちは、上限が来ないまま古い鍵で居座るため
-      const rotationWaitStartedAt =
-        mode === 'usage-rotation'
-          ? earliestMs([
-              // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
-              this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
-              awaitingSince,
-            ])
+  > {
+    const { mode, pollRetry = false, onStuck } = delivery;
+    const oldestHeldAt = record.job.heldMessages?.[0]?.heldAt;
+    // 待ちの数え始めは、いちばん古い預かりと、背景処理待ちに入った時刻の早いほう（#5041）: 担当は預かりより前から古い鍵のまま
+    // 背景処理を待っていて、話しかけたい伝言が届いた時点で、もう止まっている時間を数えるため（預かりだけから数えると、LAND-9 は8分で畳まれなかった）。
+    // 畳むのは今どおり `StaleTokenFold` が「鍵が現役と食い違い、その鍵が ready でない」と判定した回だけ
+    // （ready なら旧セッションへ届ける）。人が走らせる長い仕事を、鍵が使える間に奪わない。
+    const awaitingSince = this.#withheld.awaitingBackgroundOf(managerId)?.since;
+    const waitStartedAt = earliestMs([oldestHeldAt, awaitingSince]);
+    const waitedLongEnough =
+      mode === 'held-delivery' &&
+      oldestHeldAt !== undefined &&
+      waitStartedAt !== undefined &&
+      this.#now() - waitStartedAt >= HELD_FORCE_FOLD_AFTER_MS;
+    // 鍵の回転の起こし直しの待ちの数え始め（#5044）: 枠で止まった時刻と、背景処理待ちに入った時刻の早いほう。
+    // どちらも分からなければ待たない（#4850 の今まで）: 数え始めの無い待ちは、上限が来ないまま古い鍵で居座るため
+    const rotationWaitStartedAt =
+      mode === 'usage-rotation'
+        ? earliestMs([
+            // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
+            this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
+            awaitingSince,
+          ])
+        : undefined;
+    const rotationFoldDueAt =
+      rotationWaitStartedAt === undefined
+        ? undefined
+        : rotationWaitStartedAt + HELD_FORCE_FOLD_AFTER_MS;
+    const folded = await this.#staleTokenFold.fold(record, runner, managerId, {
+      foldBackgroundAfterWait: waitedLongEnough,
+      foldBackgroundIfHeldTokenNotReady: mode === 'usage-rotation',
+      ...(rotationFoldDueAt === undefined || this.#now() >= rotationFoldDueAt
+        ? {}
+        : { rotationFoldDueAt }),
+      skipUnchangedDeclineRecord: mode === 'held-delivery' && pollRetry,
+    });
+    if (folded.declined !== undefined) {
+      if (waitedLongEnough && folded.stuck !== undefined) onStuck?.(folded.stuck);
+      // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
+      if (holdable) {
+        // 畳めない理由が背景処理だけなら、待ちの上限で畳んで届ける。その時刻を返事で言う: 言わないと、呼び手はいつ届くか分からず、
+        // 背景処理ごと捨てる manager_stop → manager_start を選ぶ（2026-10-19 に4回。どれも上限の前に手で止めた）
+        const backgroundOnly =
+          folded.stuck !== undefined &&
+          folded.stuck.blockers.length === 1 &&
+          (folded.stuck.backgroundTasks ?? 0) > 0;
+        const foldDueAt = backgroundOnly
+          ? this.#held.foldDueAt(oldestHeldAt, awaitingSince)
           : undefined;
-      const rotationFoldDueAt =
-        rotationWaitStartedAt === undefined
-          ? undefined
-          : rotationWaitStartedAt + HELD_FORCE_FOLD_AFTER_MS;
-      const folded = await this.#staleTokenFold.fold(record, runner, managerId, {
-        foldBackgroundAfterWait: waitedLongEnough,
-        foldBackgroundIfHeldTokenNotReady: mode === 'usage-rotation',
-        ...(rotationFoldDueAt === undefined || this.#now() >= rotationFoldDueAt
-          ? {}
-          : { rotationFoldDueAt }),
-        skipUnchangedDeclineRecord: mode === 'held-delivery' && pollRetry,
-      });
-      if (folded.declined !== undefined) {
-        if (waitedLongEnough && folded.stuck !== undefined) onStuck?.(folded.stuck);
-        // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
-        if (holdable) {
-          // 畳めない理由が背景処理だけなら、待ちの上限で畳んで届ける。その時刻を返事で言う: 言わないと、呼び手はいつ届くか分からず、
-          // 背景処理ごと捨てる manager_stop → manager_start を選ぶ（2026-10-19 に4回。どれも上限の前に手で止めた）
-          const backgroundOnly =
-            folded.stuck !== undefined &&
-            folded.stuck.blockers.length === 1 &&
-            (folded.stuck.backgroundTasks ?? 0) > 0;
-          const foldDueAt = backgroundOnly
-            ? this.#held.foldDueAt(oldestHeldAt, awaitingSince)
-            : undefined;
-          return await this.#held.hold(
-            record,
-            message,
-            folded.declinedReason ?? folded.declined.detail,
-            foldDueAt,
-          );
-        }
-        return folded.declined;
+        return await this.#held.hold(
+          record,
+          message,
+          folded.declinedReason ?? folded.declined.detail,
+          foldDueAt,
+        );
       }
-      fingerprintMatched = folded.fingerprintMatched === true;
-      staleDelivery = folded.staleDelivery;
-      if (folded.foldedBackground !== undefined || folded.foldedPeers !== undefined) {
-        // 畳んだ事実は届くまで台帳に残す: この後の resume が失敗して預かりのまま再試行になると、旧セッションはもう無く、畳んだと知る手が無くなるため。
-        const peers = (folded.foldedPeers ?? 0) + (record.job.pendingFoldNotice?.peers ?? 0);
-        record.job.pendingFoldNotice = {
-          backgroundTasks:
-            (folded.foldedBackground ?? 0) + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
-          ...(peers === 0 ? {} : { peers }),
-          ...(folded.foldedBackgroundCommands === undefined &&
-          record.job.pendingFoldNotice?.commands === undefined
-            ? {}
-            : {
-                commands: [
-                  ...(record.job.pendingFoldNotice?.commands ?? []),
-                  ...(folded.foldedBackgroundCommands ?? []),
-                ].slice(0, FOLD_NOTICE_COMMANDS_MAX),
-              }),
-          at: this.#nowIso(),
-        };
-        // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
-        await this.#persist(record).catch(() => undefined);
-      }
+      return folded.declined;
     }
+    const fingerprintMatched = folded.fingerprintMatched === true;
+    const staleDelivery = folded.staleDelivery;
+    if (folded.foldedBackground !== undefined || folded.foldedPeers !== undefined) {
+      // 畳んだ事実は届くまで台帳に残す: この後の resume が失敗して預かりのまま再試行になると、旧セッションはもう無く、畳んだと知る手が無くなるため。
+      const peers = (folded.foldedPeers ?? 0) + (record.job.pendingFoldNotice?.peers ?? 0);
+      record.job.pendingFoldNotice = {
+        backgroundTasks:
+          (folded.foldedBackground ?? 0) + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
+        ...(peers === 0 ? {} : { peers }),
+        ...(folded.foldedBackgroundCommands === undefined &&
+        record.job.pendingFoldNotice?.commands === undefined
+          ? {}
+          : {
+              commands: [
+                ...(record.job.pendingFoldNotice?.commands ?? []),
+                ...(folded.foldedBackgroundCommands ?? []),
+              ].slice(0, FOLD_NOTICE_COMMANDS_MAX),
+            }),
+        at: this.#nowIso(),
+      };
+      // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
+      await this.#persist(record).catch(() => undefined);
+    }
+    return { fingerprintMatched, staleDelivery };
+  }
+
+  /** 段F2（本文の組み立て）: 畳み込んだ分の写しを取り、断り書きを前に付けた本文を作る。同期。 */
+  #composeOutgoing(record: ManagerRecord, message: string) {
+    let outgoing = message;
     // 畳み込んだ分の写しを取っておく（#4899）: 配達の途中の長い await の間に積まれた知らせまで下ろさないため
     const foldedFoldNotice =
       record.job.pendingFoldNotice === undefined
@@ -2706,122 +2870,149 @@ class Pool implements ManagerPool {
     if (foldedPeerCloseNotice !== undefined) {
       outgoing = composePeerCloseNotices(foldedPeerCloseNotice) + '\n\n' + outgoing;
     }
+    return { outgoing, foldedFoldNotice, foldedPeerCloseNotice };
+  }
 
-    // `attached` を信じ切らない: イベント駆動でしか更新されず、`closed` / resume 失敗の合図が届かなかった窓では
-    // `true` のまま嘘になる。404 を例外のまま `send()` から貫通させると、どの `outcome` にもならず人間は 500 を受け取る。
-    let attached = record.attached;
-    let reentered = false;
-    // 渡しに行く前に印を進める（預かりの届け直し `HeldMessages#deliver` もここを通る）: 自動の畳みが、渡した一言ごと担当を止めないため。
-    this.#inputMarks.set(managerId, (this.#inputMarks.get(managerId) ?? 0) + 1);
-    if (attached) {
-      const missing = await this.#sendDetectingMissingSession(
-        runner,
-        managerId,
-        outgoing,
-        sendAttachments,
-      );
-      if (missing) {
-        record.attached = false;
-        record.sessionMissingSince ??= this.#nowIso();
-        // 由来は上書きする（生存確認が先に置いた `unlisted` より強い観測）が、時刻は `??=` のまま: 最初に気づいた時刻を動かさない。
-        record.sessionMissingKind = 'resume-failed';
-        await this.#persist(record);
-        attached = false;
-      }
+  /** 段G（渡す）: 生きているセッションへ送り、runner が「持っていない」と答えたら台帳へそう書く。持っていなければ true。 */
+  async #deliverToAttachedSession(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+    outgoing: string,
+    sendAttachments: RunnerAttachment[],
+  ): Promise<boolean> {
+    const missing = await this.#sendDetectingMissingSession(
+      runner,
+      managerId,
+      outgoing,
+      sendAttachments,
+    );
+    if (missing) {
+      record.attached = false;
+      record.sessionMissingSince ??= this.#nowIso();
+      // 由来は上書きする（生存確認が先に置いた `unlisted` より強い観測）が、時刻は `??=` のまま: 最初に気づいた時刻を動かさない。
+      record.sessionMissingKind = 'resume-failed';
+      await this.#persist(record);
     }
+    return missing;
+  }
 
-    // 直前に 404 で訂正した相手も同じここを通す: 別経路を作ると、同じ session を二本起こさないための歯止めが片方にだけ効く。
-    if (!attached) {
-      // `sessionMissingSince` が立っている回は「持っていない」と確かめてあるので、失敗は `'unknown'` ではない。
-      const missing = record.sessionMissingSince !== undefined;
-      // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。「戻れない」とは別の理由なので別のことを言う。
-      if (this.#resuming.has(managerId)) {
+  /** 段H（起こし直し）: セッションの無い委譲を resume から入り直す。断るなら結果を返し、入れたら入り直したかを返す。 */
+  async #reenterByResume(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+    outgoing: string,
+    sendAttachments: RunnerAttachment[],
+    fingerprintMatched: boolean,
+  ): Promise<ManagerSendResult | { reentered: boolean }> {
+    let reentered = false;
+    // `sessionMissingSince` が立っている回は「持っていない」と確かめてあるので、失敗は `'unknown'` ではない。
+    const missing = record.sessionMissingSince !== undefined;
+    // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。「戻れない」とは別の理由なので別のことを言う。
+    if (this.#resuming.has(managerId)) {
+      return {
+        outcome: missing ? 'session_missing' : 'unknown',
+        detail: sendFailureDetail(managerId, resumeFailureDetail(managerId, 'busy'), missing),
+      };
+    }
+    /*
+     * 器の入れ替わりの1行は、`status` で分岐せず resume から入り直す全委譲に同じ判定を当てる:
+     * `running` / `waiting_human` は `#reattach` が告げた時点で `#claimForResume` が貸し出しを貸し直すので、二重には告げない。
+     * 判定は `#resumeOnce` より前に置く: 貸し直した後に読むと「入れ替わっていない」としか見えない。
+     * 告げたことをここで「告げた」と記録しない: 記録が進むのは `#resume` が `runner.resume()` の戻りまで届いた回だけで、
+     * resume が失敗した回に進めると、届いていない1行を「届いた」と数えて二度と告げられなくなる。
+     */
+    const swapped = this.#runnerSwappedSinceSession(record, runner);
+    const resumed = await this.#resumeOnce(
+      record,
+      runner,
+      swapped
+        ? `${runnerSwapNudge(
+            record.job.workspace,
+            record.job.lastUnpushedWorkObservation,
+            record.job.lastRescue,
+            this.#rescueStash.note(record.job.rescueStash, runner.runnerId),
+          )}\n\n${outgoing}`
+        : outgoing,
+      sendAttachments,
+    );
+    if (resumed !== 'resumed') {
+      /*
+       * `stopped-meanwhile` は `abort()` と同時に走って `#resume` が畳み直した回で、セッションが無いことは確かめてある:
+       * `missing` に頼らず直接 `session_missing` を選び、`delivered` を返さない（止められた委譲を「届いた」と言わない）。
+       * `sendFailureDetail` の前置きも付けない: 404 で訂正した回と事実の出所が違う（自分で畳んだ）。
+       */
+      if (resumed === 'stopped-meanwhile') {
         return {
-          outcome: missing ? 'session_missing' : 'unknown',
-          detail: sendFailureDetail(managerId, resumeFailureDetail(managerId, 'busy'), missing),
+          outcome: 'session_missing',
+          detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal),
         };
       }
       /*
-       * 器の入れ替わりの1行は、`status` で分岐せず resume から入り直す全委譲に同じ判定を当てる:
-       * `running` / `waiting_human` は `#reattach` が告げた時点で `#claimForResume` が貸し出しを貸し直すので、二重には告げない。
-       * 判定は `#resumeOnce` より前に置く: 貸し直した後に読むと「入れ替わっていない」としか見えない。
-       * 告げたことをここで「告げた」と記録しない: 記録が進むのは `#resume` が `runner.resume()` の戻りまで届いた回だけで、
-       * resume が失敗した回に進めると、届いていない1行を「届いた」と数えて二度と告げられなくなる。
+       * `session_missing` を `'unknown'` へ畳まない（`ManagerSendResult` の doc の表）: 畳むと `app.ts` が 404 を返し、
+       * 「そのものは無い」としか読めなくなるが、台帳には在り、`sessionId` が残っていればもう一度 resume を試せる。
        */
-      const swapped = this.#runnerSwappedSinceSession(record, runner);
-      const resumed = await this.#resumeOnce(
-        record,
-        runner,
-        swapped
-          ? `${runnerSwapNudge(
-              record.job.workspace,
-              record.job.lastUnpushedWorkObservation,
-              record.job.lastRescue,
-              this.#rescueStash.note(record.job.rescueStash, runner.runnerId),
-            )}\n\n${outgoing}`
-          : outgoing,
-        sendAttachments,
-      );
-      if (resumed !== 'resumed') {
-        /*
-         * `stopped-meanwhile` は `abort()` と同時に走って `#resume` が畳み直した回で、セッションが無いことは確かめてある:
-         * `missing` に頼らず直接 `session_missing` を選び、`delivered` を返さない（止められた委譲を「届いた」と言わない）。
-         * `sendFailureDetail` の前置きも付けない: 404 で訂正した回と事実の出所が違う（自分で畳んだ）。
-         */
-        if (resumed === 'stopped-meanwhile') {
-          return {
-            outcome: 'session_missing',
-            detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal),
-          };
-        }
-        /*
-         * `session_missing` を `'unknown'` へ畳まない（`ManagerSendResult` の doc の表）: 畳むと `app.ts` が 404 を返し、
-         * 「そのものは無い」としか読めなくなるが、台帳には在り、`sessionId` が残っていればもう一度 resume を試せる。
-         */
-        return {
-          outcome: missing ? 'session_missing' : 'unknown',
-          detail: sendFailureDetail(
-            managerId,
-            resumeFailureDetail(managerId, resumed, record.leaseRefusal),
-            missing,
-          ),
-        };
-      }
-      if (missing) {
-        record.sessionMissingSince = undefined;
-        // 由来も一緒に消す: 片方だけ残すと、時刻の無い由来が一覧の字面に出る。
-        record.sessionMissingKind = undefined;
-        reentered = true;
-      }
-      // `#resume` は短絡した回に世代を書かないので、指紋で確かめられた回はここで追いつかせる。
-      if (fingerprintMatched) {
-        this.#rememberTokenIdentity(managerId);
-        this.#resumedIntoLiveProcess.delete(managerId);
-      }
-    }
-
-    /*
-     * 台帳へ `running` を書く直前にもう一度 `stopConfirmedAt` を見る: `#resume` の2つのチェックポイントを通った後でも、
-     * `send()` へ戻るまでの `await` の間に `abort()` が印を立てうる。畳み直しは `abort()` と同じ
-     * `#confirmStoppedAndReleaseLease` を使う。
-     */
-    if (record.stopConfirmedAt !== undefined) {
-      const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
-        record,
-        runner,
-        managerId,
-      );
-      if (foldOutcome === 'stopped') {
-        await this.#persist(record);
-      } else {
-        noteResumeAfterStopFoldFailed(managerId, foldOutcome);
-      }
       return {
-        outcome: 'session_missing',
-        detail: resumeFailureDetail(managerId, 'stopped-meanwhile', record.leaseRefusal),
+        outcome: missing ? 'session_missing' : 'unknown',
+        detail: sendFailureDetail(
+          managerId,
+          resumeFailureDetail(managerId, resumed, record.leaseRefusal),
+          missing,
+        ),
       };
     }
+    if (missing) {
+      record.sessionMissingSince = undefined;
+      // 由来も一緒に消す: 片方だけ残すと、時刻の無い由来が一覧の字面に出る。
+      record.sessionMissingKind = undefined;
+      reentered = true;
+    }
+    // `#resume` は短絡した回に世代を書かないので、指紋で確かめられた回はここで追いつかせる。
+    if (fingerprintMatched) {
+      this.#rememberTokenIdentity(managerId);
+      this.#resumedIntoLiveProcess.delete(managerId);
+    }
+    return { reentered };
+  }
 
+  /** 段I（停止の確かめ）: 送っている間に止められていた委譲を畳み直し、`session_missing` を返す。 */
+  async #settleStoppedMeanwhile(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+  ): Promise<ManagerSendResult> {
+    const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
+      record,
+      runner,
+      managerId,
+    );
+    if (foldOutcome === 'stopped') {
+      await this.#persist(record);
+    } else {
+      noteResumeAfterStopFoldFailed(managerId, foldOutcome);
+    }
+    return {
+      outcome: 'session_missing',
+      detail: resumeFailureDetail(managerId, 'stopped-meanwhile', record.leaseRefusal),
+    };
+  }
+
+  /** 段J（書いて返す）: 台帳へ届いたことを書き、日誌へ残して `delivered` を返す。 */
+  async #recordDelivery(
+    record: ManagerRecord,
+    managerId: string,
+    outgoing: string,
+    sendAttachments: RunnerAttachment[],
+    turnStartedAt: string,
+    foldedFoldNotice: Job['pendingFoldNotice'],
+    foldedPeerCloseNotice: Job['pendingPeerCloseNotice'],
+    delivery: SendDelivery,
+    staleDelivery: { generation: number; blockers: string[] } | undefined,
+    reentered: boolean,
+    attached: boolean,
+  ): Promise<ManagerSendResult> {
+    const { onFoldNoticeDelivered } = delivery;
     // 応答より先に届いた確認（`waiting`）があれば `waiting_human` を保つ: `running` で上書きすると一覧が確認待ちに見えず、`waiting_human` を前提にした処理が外れる。
     record.job.status = record.waiting.length > 0 ? 'waiting_human' : 'running';
     record.job.turnStartedAt = laterIso(record.job.turnStartedAt, turnStartedAt);
@@ -2849,20 +3040,31 @@ class Pool implements ManagerPool {
     return {
       outcome: 'delivered',
       // 台帳を直したことは黙らず呼び手へ言う: 届き方が違うと、続けて送る側は器が入れ替わった後の文脈で走っていると知る必要がある。
-      detail:
-        // 畳めない理由が残るので古い鍵のまま届けた回は、それを黙らない（鍵がいま使えると確かめたうえでの判断）。
-        staleDelivery !== undefined && !reentered
-          ? `追加指示として届けた（古い鍵（世代 ${String(staleDelivery.generation)}）のまま旧セッションへ届けた。` +
+      detail: this.#deliveredDetail(managerId, staleDelivery, reentered, attached),
+    };
+  }
+
+  /** 段Jの detail: 届き方（古い鍵のまま・生きた旧プロセス・入り直し）を言い分ける。同期。 */
+  #deliveredDetail(
+    managerId: string,
+    staleDelivery: { generation: number; blockers: string[] } | undefined,
+    reentered: boolean,
+    attached: boolean,
+  ): string {
+    return (
+      // 畳めない理由が残るので古い鍵のまま届けた回は、それを黙らない（鍵がいま使えると確かめたうえでの判断）。
+      staleDelivery !== undefined && !reentered
+        ? `追加指示として届けた（古い鍵（世代 ${String(staleDelivery.generation)}）のまま旧セッションへ届けた。` +
             `畳めない理由（${staleDelivery.blockers.join('。')}）が残っているため、新しい鍵で起こし直していない。` +
             'その鍵はいま使える状態（ready）だった）。'
-          : // 短絡した回は、新しい SDK を起こしておらず旧プロセス（起動時の鍵が凍っている）へ届いたと言う。
-            !attached && this.#resumedIntoLiveProcess.has(managerId)
-            ? '追加指示として届けた（生きた旧プロセスへ流した。新しい SDK は起こしていない。' +
-              'その鍵が現役かどうかは確かめていないので、この委譲の認証トークンの世代は「分からない」のままにしてある）。'
-            : reentered
-              ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
-              : '追加指示として届けた。',
-    };
+        : // 短絡した回は、新しい SDK を起こしておらず旧プロセス（起動時の鍵が凍っている）へ届いたと言う。
+          !attached && this.#resumedIntoLiveProcess.has(managerId)
+          ? '追加指示として届けた（生きた旧プロセスへ流した。新しい SDK は起こしていない。' +
+            'その鍵が現役かどうかは確かめていないので、この委譲の認証トークンの世代は「分からない」のままにしてある）。'
+          : reentered
+            ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
+            : '追加指示として届けた。'
+    );
   }
 
   deliverHeldMessages(): Promise<void> {
