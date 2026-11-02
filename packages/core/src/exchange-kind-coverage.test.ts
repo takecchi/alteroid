@@ -365,6 +365,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'denial-renotify.ts': {
     '#renotifyOne': 'thinning',
   },
+  // 生ログの退避の継続性の日誌（旧 `Pool#handleEvent` の archive の case）。同じ検査をここへ移した。
+  'archive-receiver.ts': {
+    onArchive: 'failure',
+  },
   // 押し込みの帳面の失敗の日誌（旧 `Pool#journalPushFailure` / `#flushPushFailureFold(s)`）。同じ検査をここへ移した。
   'push-ledger.ts': {
     '#flushFailureFold': 'thinning',
@@ -469,6 +473,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
   for (const file of [
+    'archive-receiver.ts',
     'clone.ts',
     'denial-renotify.ts',
     'manager.ts',
