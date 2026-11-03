@@ -7,6 +7,8 @@ import {
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
+// `app.ts` ↔ `openapi.ts` ↔ `app-shared.ts` は循環 import: 先に `app.js` から入れて、本番と同じ評価順にする（`app-shared.js` から入ると `nonNulString` が未定義のまま族のファイルが読まれる）。
+import './app.js';
 import {
   INTEGRATION_ATTACHMENT_NOTICE_BYTES,
   noteIntegrationAttachmentUsage,
