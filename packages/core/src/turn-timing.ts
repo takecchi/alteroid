@@ -21,14 +21,14 @@ export type TurnTimingPhase =
   | 'finalize'
   | `finalize.${string}`;
 
-export interface TurnTimingToolSummary {
+interface TurnTimingToolSummary {
   name: string;
   count: number;
   totalMs: number;
   maxMs: number;
 }
 
-export interface TurnTimingRecord {
+interface TurnTimingRecord {
   /** 束ねた合図の種類（重複は除く） */
   triggers: string[];
   batchSize: number;

@@ -16,7 +16,7 @@ import {
 import { describeWorkerLimitKeyMatch, type RememberedWindow } from './worker-limit-key-match.js';
 
 /** 枠の起こし直しの結果。`'joined'` は同じ担当の起こし直しが既に走っていて、重ねなかった回（#5205）。 */
-export type UsageNudgeOutcome = 'nudged' | 'still-running' | 'gone' | 'skipped' | 'joined';
+type UsageNudgeOutcome = 'nudged' | 'still-running' | 'gone' | 'skipped' | 'joined';
 
 /** 起こし直しが届かなかった担当への挑み直しの間隔: 1分から倍々に、上限30分（#4850）。 */
 const USAGE_WAKE_RETRY_BASE_MS = 60 * 1000;
@@ -29,12 +29,12 @@ const WORKER_LIMIT_WAKE_RETRY_BASE_MS = 60 * 1000;
 const WORKER_LIMIT_WAKE_RETRY_MAX_MS = 5 * 60 * 1000;
 
 /** 起こし直しが `Pool#send` へ渡す届け方（`SendDelivery` の `mode === 'usage-rotation'` の形）。 */
-export interface UsageRotationDelivery {
+interface UsageRotationDelivery {
   mode: 'usage-rotation';
   onFoldNoticeDelivered: (backgroundTasks: number) => void;
 }
 
-export interface UsageWakeDeps {
+interface UsageWakeDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   /** 欄は `Pool` が持つ。同じ Map/Set の参照を受け取り、ここでは別の欄を作らない。 */
   usageStopped: Set<string>;

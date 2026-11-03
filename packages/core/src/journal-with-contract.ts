@@ -1,7 +1,7 @@
 import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg は `@alteroid/core` を実行時の依存として読むので、`expect` で書くとその依存を2パッケージへ持ち込む。
-export type JournalStoreWithContractSubject = Pick<JournalStore, 'append' | 'list'>;
+type JournalStoreWithContractSubject = Pick<JournalStore, 'append' | 'list'>;
 
 export async function verifyJournalStoreWithContract(
   journal: JournalStoreWithContractSubject,

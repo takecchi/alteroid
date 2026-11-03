@@ -52,7 +52,7 @@ import { streamSSE } from 'hono/streaming';
 import type { TaskBreakdownReader } from './tasks.js';
 
 // 逆向きのコールバックを足さない: runner の中の子プロセス（マネージャー）がその経路で記憶へ届くようになるため。
-export interface RunnerAppDeps {
+interface RunnerAppDeps {
   host: RunnerHost;
   outbox: Outbox;
   // 鍵そのものではなくハッシュだけ持つ: 素の鍵を環境変数に置くとマネージャーが読めて、自分宛の許可確認に自分で allow を返せるため。
@@ -113,7 +113,7 @@ function matches(header: string | undefined, expectedHex: string): boolean {
 type OutboxSeq = number;
 
 // 列の1件。連番と `queuedAt` は `push` のときに1回だけ振り、以後は書き換えない（差し戻しで振り直すと、次の接続で同じ出来事が2回届き、最古の時刻の計器が嘘になるため）。
-export interface OutboxItem {
+interface OutboxItem {
   event: RunnerEvent;
   queuedAt: string;
   seq: OutboxSeq;
@@ -121,7 +121,7 @@ export interface OutboxItem {
   chars?: number;
 }
 
-export interface OutboxPendingGroup {
+interface OutboxPendingGroup {
   type: string;
   managerId?: string;
   count: number;
@@ -139,7 +139,7 @@ export interface OutboxShutdownSnapshot {
  * `/events` の1接続が持つのは「次に書く連番」（cursor）だけ。出来事そのものは `Outbox` の列にしか無い。
  * 書き込みが成功したら `wrote` で進める。失敗・締め切り越え・置き換えのときは進めず、cursor は接続と一緒に捨てる。
  */
-export interface OutboxSubscription {
+interface OutboxSubscription {
   /** 新しい接続に置き換えられたら true。以後 `wrote` は何も進めない（止まっていた書き込みが後から成功で返っても、書き終えたことにしない）。 */
   readonly superseded: boolean;
   /** 次に書く1件。書き終える（`wrote`）まで同じものを返す。 */

@@ -10,7 +10,7 @@ function stripNulFromTokenId(tokenId: string): string {
 }
 
 // 鍵でも断らず落として残す: 断ると消費の記録が丸ごと消える（呼び出し側は失敗を握りつぶすだけ）ため
-export function stripNulFromUsageSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
+function stripNulFromUsageSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
   return {
     ...snapshot,
     ...(snapshot.sessionId === undefined ? {} : { sessionId: stripNul(snapshot.sessionId) }),

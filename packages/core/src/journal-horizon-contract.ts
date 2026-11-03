@@ -1,7 +1,7 @@
 import type { JournalStore } from './store.js';
 
 // vitest の `expect` で書かない: `storage-fs` / `storage-pg` が `@alteroid/core` を実行時の依存として読むため
-export type JournalStoreHorizonContractSubject = Pick<JournalStore, 'append' | 'oldestAt'>;
+type JournalStoreHorizonContractSubject = Pick<JournalStore, 'append' | 'oldestAt'>;
 
 export async function verifyJournalStoreHorizonContract(
   journal: JournalStoreHorizonContractSubject,

@@ -4,7 +4,7 @@ import type { JournalStore } from './store.js';
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つよう、期待値は積んだ行の `at` から自分で導く。
 // 口は省略可能（`JournalStore.countToolUsesByActor`）だが、3実装は持つので、持たないことを契約の破れとして扱う
-export type JournalStoreToolUseCountContractSubject = Pick<
+type JournalStoreToolUseCountContractSubject = Pick<
   JournalStore,
   'append' | 'countToolUsesByActor'
 >;

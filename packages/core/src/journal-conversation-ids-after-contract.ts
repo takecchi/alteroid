@@ -5,7 +5,7 @@ import { scanJournalPages } from './journal-scan.js';
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つよう、`until` の期待値は積んだ行の `at` から自分で導く。
 // 口は省略可能（`JournalStore.conversationIdsAfter`）だが、3実装は持つので、持たないことを契約の破れとして扱う
-export type JournalStoreConversationIdsAfterContractSubject = Pick<
+type JournalStoreConversationIdsAfterContractSubject = Pick<
   JournalStore,
   'append' | 'listPage' | 'conversationIdsAfter'
 >;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import type {
@@ -19,7 +19,6 @@ import type {
   StoredMcpServers,
   DelegatedPermissionRuleService,
   Exchange,
-  GrantResult,
   InboxEvent,
   Task,
   TaskPlacement,
@@ -39,15 +38,10 @@ import type {
 } from '@alteroid/core';
 import {
   conversationBindingKey,
-  type MemoryDocument,
-  MemoryConflictError,
-  memoryVersion,
-  memoryVersionMatches,
   PracticeConflictError,
   practiceVersion,
   practiceVersionMatches,
   ScheduleConflictError,
-  ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
   composedFingerprints,
@@ -80,7 +74,6 @@ import {
   redactProfileFailure,
   TokenPoolInputError,
   TokenPoolVersionMismatchError,
-  UnreadableAccountError,
   UnreadableTaskError,
   TASK_TITLE_MAX,
   describeTaskPlacement,
@@ -99,13 +92,8 @@ import {
   compareApprovalPagingKey,
   computeSupersededIds,
   conversationMessages,
-  droppedTraceLedgerSince,
   findUnrecordedManagers,
-  isOffsetQualifiedTimeBoundary,
   describeUnreadableJournalTimeBoundary,
-  describeOffsetRequiredTimeBoundary,
-  guardArchiveRemoval,
-  INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
   isDailyReport,
   jobStatusSchema,
@@ -113,12 +101,7 @@ import {
   journalEntrySchema,
   journalWindowCrossesHorizon,
   localDayRange,
-  matchesInboxRemoveManyFilter,
   normalizeJournalTimeBoundary,
-  removeArchiveJournalFirst,
-  removeInboxChunkJournalFirst,
-  summarizeInboxBacklog,
-  memorySlugSchema,
   practiceKindSchema,
   practiceSlugSchema,
   fingerprintOf,
@@ -142,27 +125,15 @@ import {
   InvalidConversationCursorError,
   type ConversationCursor,
   clientMessageIdSchema,
-  RECENT_TRACE_LIMIT,
-  recentDroppedTraces,
-  chunkIdsByChars,
-  REMOVE_MANY_JOURNAL_ID_CHARS,
-  REMOVE_MANY_LIMIT_DEFAULT,
-  REMOVE_MANY_LIMIT_MAX,
   reportRunnerRevision,
-  describeResetTargets,
   describeUnreadableManagerRow,
-  resetWorkspaceState,
   resolveBuildRevision,
   scheduleKindSchema,
   SCHEDULE_EVERY_MINUTES_MAX_MESSAGE,
   scheduleSpecSchema,
   startSseHeartbeat,
-  readProgress,
-  DEFAULT_PROGRESS_WINDOW_HOURS,
   approvalSelectionSchema,
   describeSelectionsViolation,
-  InvalidProgressWindowError,
-  PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   summarizeUsage,
   tokenRotationSettingsSchema,
   toRowsUnreadable,
@@ -181,7 +152,6 @@ import {
   sha256Hex,
   type ApprovalPagingKey,
   type IntegrationKeyRecord,
-  type AuthAccount,
   type AuthService,
   NulNotAllowedError,
   InvalidCredentialNameError,
@@ -193,7 +163,6 @@ import {
   UnreadableJobError,
   type TokenPolicyChange,
   type TokenPoolChange,
-  type InboxRemoveManyFilter,
 } from '@alteroid/core';
 import {
   AttachmentContentRemoveError,
@@ -208,7 +177,7 @@ import {
   type AttachmentLimits,
   writeStderrLine,
 } from '@alteroid/core';
-import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
+import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.js';
 import { clientMessageFingerprint } from './client-message-fingerprint.js';
 import { checkAndBindAttachments, type AttachmentBatchResult } from './attachment-batch.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
@@ -231,17 +200,12 @@ import {
   cloneInterruptResponseSchema,
   cloneSessionReopenRequestSchema,
   cloneSessionReopenResponseSchema,
-  accessAccountResponseSchema,
-  accessListResponseSchema,
   approvalsAnswerResponseSchema,
   approvalByIdResponseSchema,
   approvalsAnsweredDatesResponseSchema,
   approvalsResponseSchema,
   approvalTraceResponseSchema,
-  archiveListResponseSchema,
   archiveRemovedResponseSchema,
-  archiveRemoveResponseSchema,
-  archiveSessionsResponseSchema,
   attachmentErrorResponseSchema,
   attachmentKeptBodySchema,
   attachmentLimitsSchema,
@@ -252,7 +216,6 @@ import {
   taskDetailResponseSchema,
   taskAddedResponseSchema,
   taskConflictResponseSchema,
-  progressResponseSchema,
   conversationDetailResponseSchema,
   conversationReadRequestSchema,
   conversationReadResponseSchema,
@@ -265,7 +228,6 @@ import {
   codexLogoutResponseSchema,
   credentialsUpdateRequestSchema,
   credentialsUpdateResponseSchema,
-  droppedResponseSchema,
   errorResponseSchema,
   integrationKeyCreateErrorResponseSchema,
   integrationKeyCreateRequestSchema,
@@ -277,23 +239,11 @@ import {
   eventPostAcceptedResponseSchema,
   healthResponseSchema,
   statusResponseSchema,
-  inboxBacklogResponseSchema,
-  inboxRemoveManyRequestSchema,
-  inboxRemoveManyResponseSchema,
-  inboxRemoveManyStoppedResponseSchema,
   journalListResponseSchema,
-  loginClaimResponseSchema,
-  loginStartResponseSchema,
   clientMessageLookupResponseSchema,
   managerActionResponseSchema,
   managerDetailResponseSchema,
   managersListResponseSchema,
-  memoryDeleteResponseSchema,
-  memoryListResponseSchema,
-  memoryConflictResponseSchema,
-  memoryReadResponseSchema,
-  memoryWriteResponseSchema,
-  meResponseSchema,
   okResponseSchema,
   scheduleCreateResponseSchema,
   openApiDocumentation,
@@ -323,8 +273,6 @@ import {
   profileResponseSchema,
   profileUpdateResponseSchema,
   reportsResponseSchema,
-  resetRequestSchema,
-  resetResponseSchema,
   runnersListResponseSchema,
   runnersVacateCommandSchema,
   runnersVacateResponseSchema,
@@ -354,6 +302,7 @@ import {
 import { createAppContext, principalRefOf } from './app-context.js';
 import {
   ifMatchDeleteQuery,
+  ifMatchField,
   deliberateClient,
   mimeEssence,
   noBodyPostRequestBody,
@@ -384,6 +333,10 @@ import {
   answerApprovalViaOf,
   humanActionOf,
 } from './app-shared.js';
+import { adminRoutes } from './app-routes-admin.js';
+import { memoryRoutes } from './app-routes-memory.js';
+import { authRoutes } from './app-routes-auth.js';
+import { workspaceRoutes } from './app-routes-workspace.js';
 
 export { humanActionOf } from './app-shared.js';
 // 外から叩かせるなら境界は手前（リバースプロキシ・トンネル・認証）に置く: 能力側で絞らず実行環境の境界で守る（north_star 禁止2）。
@@ -523,26 +476,7 @@ const octetStreamClient = createMiddleware(async (c, next) => {
   await next();
 });
 
-// 書き込みの `ifMatch`: 省略は後勝ち、`null` は「まだ無いこと」を前提にする（読んだ版を前提にする書き込みの共通の欄）。
-const ifMatchField = z.string().nullable().optional();
-const memoryBody = z.object({ content: z.string(), ifMatch: ifMatchField });
-
 // 記憶・やり方の 409 の本文の組み立て（検査の順序は route ごとに違うので寄せない）。`error` は `as const` のリテラルのまま返す: 文が `string` に広がると `hc` の応答の型が変わる。
-const MEMORY_CONFLICT_ERROR = {
-  write: '記憶が読んだ後に変わっています（書き換えていません）',
-  remove: '記憶が読んだ後に変わっています（消していません）',
-} as const;
-const memoryCurrent = (document: MemoryDocument) => ({
-  document,
-  version: memoryVersion(document.content),
-});
-const memoryConflictBody = <Op extends keyof typeof MEMORY_CONFLICT_ERROR>(
-  current: MemoryDocument | null,
-  op: Op,
-) => ({
-  error: MEMORY_CONFLICT_ERROR[op],
-  current: current === null ? null : memoryCurrent(current),
-});
 const PRACTICE_CONFLICT_ERROR = {
   write: 'やり方が読んだ後に変わっています（書き換えていません）',
   remove: 'やり方が読んだ後に変わっています（消していません）',
@@ -684,10 +618,6 @@ const usageQuery = z.object({
 const journalStreamQuery = z.object({
   type: z.string().optional(),
 });
-// 空文字を弾かない: `guardArchiveRemoval` が `reason?.trim()` の非空を override の意思表示として扱うので、ここで `min(1)` を掛けると同じ入力が契約より手前で別の応答（400）になる。
-const archiveRemoveQuery = z.object({
-  overrideReason: z.string().optional(),
-});
 // 「空」は NUL を落とした後で見る: ストアは NUL を落とすので、落とす前の長さで見ると NUL だけの値が空のまま届く。`nonBlankString`（空白だけも弾く）とは別物。
 const nonNulString = z
   .string()
@@ -750,11 +680,6 @@ const taskEditBody = z
   })
   .refine((value) => value.title !== undefined || value.body !== undefined);
 
-// 文字列のまま受ける: `z.coerce.number()` だと空文字が 0 になり、「渡していない」「空を渡した」「0 を渡した」が区別できない。
-const progressQuery = z.object({
-  windowHours: z.string().optional(),
-});
-
 // 何も渡さない呼びは応答が1バイトも変わらない（opt-in）: 判定は生のクエリで行う（`c.req.valid('query')` は既定値を埋めるので「渡されたか」を答えない）。
 // カーソルは `/journal` 形（可視の複合キー）である。`order` は足さない（並びは `ManagerPool.list()` が固定している）。`limit` の既定を作らない: 渡していない呼びの応答が変わり、到達できない行が生まれる（north_star 禁止2）。
 // `max` を 1000 にしたのは窓の形を `/journal` と揃えるためで、資源を守る数値ではない。
@@ -793,32 +718,11 @@ function parseManagerStatuses(raw: string): { statuses: JobStatus[]; unknown: st
   return { statuses, unknown };
 }
 
-const loginBody = z.object({
-  provider: z.string().min(1),
-  label: z.string().max(200).optional(),
-});
-const claimBody = z.object({ claimSecret: z.string().min(1) });
-
 // `reasonOf` は各段の頭に `${name}: ` を付ける。`PluginFetchError` の message は人間向けの完結した文なので、web がそのまま出す本文からは自分のクラス名だけを外す（伏せ字・切り詰め・cause の連なりは `reasonOf` のまま）。web 側で頭を削らない: 文が変わると黙って外れる。
 function reasonWithoutOwnName(error: Error): string {
   const reason = reasonOf(error);
   const head = `${error.name}: `;
   return reason.startsWith(head) ? reason.slice(head.length) : reason;
-}
-
-function loginErrorDetail(reason: string): string {
-  switch (reason) {
-    case 'invalid_state':
-      return 'ログイン要求が見つかりません（やり直してください）。';
-    case 'expired':
-      return 'ログイン要求の期限が切れています（やり直してください）。';
-    case 'already_used':
-      return 'このログイン要求は既に使われています。';
-    case 'unknown_provider':
-      return '設定されていないログイン手段です。';
-    default:
-      return 'プロバイダとのトークン交換に失敗しました。';
-  }
 }
 
 // 値も sha256 の全体も載せない（指紋＝先頭12桁だけ）。
@@ -840,24 +744,6 @@ function integrationKeyView(key: IntegrationKeyRecord) {
 // 名前・source・id・指紋だけ（値は書かない）。
 function describeIntegrationKey(key: IntegrationKeyRecord): string {
   return `「${key.name}」（id=${key.id}、source=${key.source}、指紋=${integrationKeyFingerprint(key.sha256)}）`;
-}
-
-function describeAccount(account: AuthAccount): string {
-  const name = account.email ?? account.displayName;
-  return name === null || name === undefined ? account.id : `${name} (${account.id})`;
-}
-
-function claimErrorDetail(reason: string): string {
-  switch (reason) {
-    case 'invalid_secret':
-      return 'claimSecret が違う';
-    case 'expired':
-      return 'ログイン要求の期限が切れている';
-    case 'failed':
-      return 'ログインに失敗している';
-    default:
-      return 'ログイン要求が見つからない（既に引き取り済みの可能性）';
-  }
 }
 
 // ステータスの数値は各経路の `describeRoute` に直に書く: 「実際に返すステータスが宣言されているか」を測る歯が、リテラルのキーを経路ごとに読む。
@@ -994,13 +880,6 @@ function managerListItem(managers: ManagerPool, summary: ManagerSummary) {
     ...(request === undefined ? {} : { request, requestTruncated: true as const }),
     ...(lastReport === undefined ? {} : { lastReport, lastReportTruncated: true as const }),
   };
-}
-
-// 固定の `'operator'` を書かない: `grantedBy` は「誰が許可したか」を持つ欄で、常に同じ値なら情報を運ばず、事後に追えるという最終承認の実体が記録の側から崩れる。`grantedBy`（正本）は突き合わせ用に id だけ、`grounds` は人間が読む文（`describeActor`）。
-function actorOf(principal: Principal): string {
-  if (principal.kind === 'operator') return 'operator';
-  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
-  return principal.account.id;
 }
 
 function mcpServersReadBody(stored: StoredMcpServers | null): {
@@ -1191,57 +1070,6 @@ class AnswerJournalWriteError extends Error {
     super('答えを届ける前の日誌が書けなかった');
     this.name = 'AnswerJournalWriteError';
   }
-}
-
-async function accountView(
-  stores: Stores,
-  account: AuthAccount,
-): Promise<
-  AuthAccount & {
-    granted: boolean;
-    identities: {
-      provider: string;
-      subject: string;
-      email: string | null;
-      emailVerified: boolean;
-      lastLoginAt: string;
-    }[];
-  }
-> {
-  const identities = await stores.auth.listIdentities(account.id);
-  return {
-    ...account,
-    granted: isAccountGranted(account),
-    identities: identities.map(({ provider, subject, email, emailVerified, lastLoginAt }) => ({
-      provider,
-      subject,
-      email,
-      emailVerified,
-      lastLoginAt,
-    })),
-  };
-}
-
-// ここで alteroid を操作させない（Web UI は非ゴール）。`autoClose` の成否を判定しない: 同じタブごと遷移していた場合 `window.close()` は黙って何もしないが、メッセージ「閉じて端末に戻る」がフォールバックになる。
-function callbackPage(title: string, detail: string, autoClose = false): string {
-  const escape = (value: string) =>
-    value.replace(/[&<>"]/g, (ch) =>
-      ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;',
-    );
-  return `<!doctype html>
-<html lang="ja"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>alteroid</title>
-<style>
- body{font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;
-      display:grid;place-items:center;min-height:100vh;margin:0;color:#1a1a1a;background:#fafafa}
- main{max-width:32rem;padding:2rem;text-align:center}
- h1{font-size:1.25rem;margin:0 0 .75rem}
- p{margin:0;color:#555;line-height:1.7}
-</style></head>
-<body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body>${
-    autoClose ? '<script>window.close()</script>' : ''
-  }</html>`;
 }
 
 // 行の要約（本文を載せない）。409 の `current`・更新の応答・GET が同じ欄を同じ順で返す。
@@ -1468,7 +1296,6 @@ export function createApp(deps: AppDeps) {
     watchSseCredential,
     chatEventPump,
     providerList,
-    callbackUrl,
   } = ctx;
 
   const integrationRateLimiter = createFixedWindowRateLimiter(() => clock().getTime());
@@ -3129,239 +2956,7 @@ export function createApp(deps: AppDeps) {
         }),
     )
 
-    .get(
-      '/memory',
-      describeRoute({
-        tags: ['memory'],
-        summary: '記憶文書の一覧',
-        description: '記憶（PersonaStore）の文書一覧。本文は含まない（メタ情報だけ）。',
-        responses: {
-          200: jsonResponse('記憶文書のメタ情報一覧。', memoryListResponseSchema),
-        },
-      }),
-      async (c) => c.json({ documents: await stores.persona.list() }),
-    )
-
-    .get(
-      '/memory/:slug',
-      describeRoute({
-        tags: ['memory'],
-        summary: '記憶文書を1つ読む',
-        responses: {
-          200: jsonResponse('記憶文書。', memoryReadResponseSchema),
-          400: errorResponse('記憶のスラッグが不正。'),
-          404: errorResponse('該当する記憶が無い。'),
-        },
-      }),
-      async (c) => {
-        // `PUT`/`DELETE` と同じ門: ここが無いと `FsPersonaStore#path` が投げる例外が `onError` まで抜けて 500 になり、同じ入力なのに応答が違う。
-        const slug = c.req.param('slug');
-        if (!memorySlugSchema.safeParse(slug).success) {
-          return c.json({ error: '記憶のスラッグが不正' as const }, 400);
-        }
-        const doc = await stores.persona.read(slug);
-        if (!doc) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ document: doc, version: memoryVersion(doc.content) });
-      },
-    )
-
-    .put(
-      '/memory/:slug',
-      describeRoute({
-        tags: ['memory'],
-        summary: '記憶文書を全文置換で書く',
-        description:
-          '人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。' +
-          '日誌を先に書き、書けなければ本文を書かずに 500 を返す（印の付かない保存を起こさない）。' +
-          '本文が書けなかった（409 ほか）ときは、日誌に打ち消しの行（`action: write_failed`）を足す。',
-        responses: {
-          200: jsonResponse(
-            '書き換え後の記憶文書。`created` は新規なら true、置換なら false。',
-            memoryWriteResponseSchema,
-          ),
-          400: errorResponse('記憶のスラッグが不正、または本文が JSON として不正。'),
-          409: jsonResponse(
-            '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから書くまでの間に別の書き手が' +
-              '書いた、または消した）。**何も書いていない。** `current` にいまの版を返す。',
-            memoryConflictResponseSchema,
-          ),
-          500: journalWriteFailedResponse('日誌が書けなかった（**本文を書いていない**）。'),
-        },
-      }),
-      jsonBody(memoryBody, invalidWith('記憶の本文の形が不正')),
-      async (c) => {
-        const slug = c.req.param('slug');
-        if (!memorySlugSchema.safeParse(slug).success) {
-          return c.json({ error: '記憶のスラッグが不正' as const }, 400);
-        }
-        const before = await stores.persona.read(slug);
-        const { content, ifMatch } = c.req.valid('json');
-        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す: ふつうの衝突のたびに `write` と `write_failed` の2行を日誌へ積まないため。
-        // ここを抜けた後に割り込まれた回は、下の `persona.write` の排他が 409 にし、打ち消しの行で対応を保つ。
-        if (!memoryVersionMatches(before, ifMatch)) {
-          return c.json(memoryConflictBody(before, 'write'), 409);
-        }
-        // 日誌を先に書き、書けなければ本文を書かずに 500（#4774）: 本文の後に書いて `appendJournalOrDrop` で握ると、本文は変わったのに裏付けの `cause:'human'` の行が無く、`markHumanTouched` も呼べない「印の付かない人間の保存」が生まれる（クローンが次の蒸留で黙って上書きできてしまう）。
-        let entry;
-        try {
-          entry = await stores.journal.append({
-            type: 'memory_update',
-            slug,
-            cause: 'human',
-            action: 'write',
-            // クローンの道具（memory_write）と同じ機械可読な面: 片方だけ足すと「人間の書き込みだけ数えられない」が生まれる。
-            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(content, 'utf8'),
-            summary: 'HTTP API 経由で人間が記憶を書き換えた',
-          });
-        } catch (error) {
-          noteDroppedRecord(
-            '記憶書き換えの日誌（保存していない）',
-            `slug=${slug}`,
-            kindOfError(error),
-          );
-          return c.json(journalWriteFailedBody(), 500);
-        }
-        let doc;
-        try {
-          // 印（`humanTouchedAt`）は本文と同じ排他・同じ1文で立てる: 本文の後に別の呼び出しで立てると、その間は `clone-only` で、蒸留が人間の本文を全置換・削除できた。書けなかった回は印も立たない。裏付けの行は上で先に書いてある。
-          doc = await stores.persona.write(slug, content, { ifMatch, humanTouchedAt: entry.at });
-        } catch (error) {
-          // 日誌には「人間が書いた」が残っているので打ち消す: `deriveHumanTouchedAtFromJournal` が、この行を印の根拠にしない。足せなければ跡だけ残し（`appendJournalOrDrop`）、応答は元の失敗のまま返す（再構築で印が立ちうるのは守りすぎの側）。
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'memory_update',
-              slug,
-              cause: 'human',
-              action: 'write_failed',
-              summary:
-                'HTTP API 経由の人間の保存は本文に届かなかった（直前の write の行を打ち消す）',
-            },
-            '記憶書き換えの打ち消しの日誌',
-            `slug=${slug}`,
-          );
-          // 黙って上書きしない: 書いていない。
-          if (error instanceof MemoryConflictError) {
-            return c.json(memoryConflictBody(error.current, 'write'), 409);
-          }
-          throw error;
-        }
-        // 無い slug への書き込みは新規作成: 打ち間違いの slug が更新と同じ 200 に紛れないよう、応答で言い分ける。
-        return c.json({
-          document: doc,
-          version: memoryVersion(doc.content),
-          created: before === null,
-        });
-      },
-    )
-
-    .delete(
-      '/memory/:slug',
-      describeRoute({
-        tags: ['memory'],
-        summary: '記憶文書を消す',
-        description:
-          '書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は' +
-          '日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。\n\n' +
-          '**読んだ版を前提にできる（Issue #2881）。** クエリ `ifMatch` に、読んだ時の版' +
-          '（`GET /memory/{slug}` の `version`）を付けると、いまの版と違うとき**何も消さず 409** で' +
-          'いまの版を返す（読んだ後にクローンが書いた内容を黙って消さない）。\n\n' +
-          '**版は必須。** `ifMatch` を付けない削除は **428** で断り、何も消さず・日誌にも積まず、' +
-          'いまの版を `current` に返す（読み直して、その `version` を付けて打ち直す）。' +
-          'スラッグが不正なら 400、記憶が無ければ 404 を先に返す。',
-        responses: {
-          200: jsonResponse('消した。', memoryDeleteResponseSchema),
-          409: jsonResponse(
-            '`ifMatch`（読んだ時の版）が、いまの版と違う（読んでから消すまでの間に別の書き手が' +
-              '書いた）。**何も消していない。** `current` にいまの版を返す。',
-            memoryConflictResponseSchema,
-          ),
-          428: jsonResponse(
-            '`ifMatch`（読んだ時の版）が無い。**何も消していない。** `current` にいまの版を返す' +
-              '（409 と同じ形）。',
-            memoryConflictResponseSchema,
-          ),
-          400: errorResponse('記憶のスラッグが名前として成立しない（「無い」とは区別する）。'),
-          404: errorResponse('該当する記憶が無い。'),
-          500: journalWriteFailedResponse('消す前の日誌が書けなかった（**消していない**）。'),
-        },
-      }),
-      queryParams(ifMatchDeleteQuery),
-      async (c) => {
-        const slug = c.req.param('slug');
-        if (!memorySlugSchema.safeParse(slug).success) {
-          return c.json({ error: '記憶のスラッグが不正' as const }, 400);
-        }
-        const { ifMatch } = c.req.valid('query');
-        const existing = await stores.persona.read(slug);
-        if (existing === null) return c.json({ error: 'not found' as const }, 404);
-        // 読み直せるよう、いまの版を 409 と同じ形で返す。
-        if (ifMatch === undefined) {
-          return c.json(
-            {
-              error: '消す記憶の版（ifMatch）が無いので、消していません' as const,
-              current: memoryCurrent(existing),
-            },
-            428,
-          );
-        }
-        // 読んだ版が既に食い違っていれば、日誌を書く前に 409 で返す（消さないので書く跡が無い。ふつうの衝突のたびに2行を積まない）。
-        if (!memoryVersionMatches(existing, ifMatch)) {
-          return c.json(memoryConflictBody(existing, 'remove'), 409);
-        }
-        // 日誌を先に書き、書けなければ消さずに 500（#5243）: 消した後に書いて `appendJournalOrDrop` で握ると、人間がクローンの記憶を消したのにクローンへ名指しされず、学びにもならない。
-        // 先の行は `memory_update`（`cause:'human'`）にせず `decision` にする: `memory_update` の `cause:'human'` は `deriveHumanTouchedAtFromJournal` などが派生値の根拠に読む行なので、消せなかった回に残すと派生を誤らせる。`decision` の先の行は humanAction を持たないので、クローンへ名指しもされない。
-        // 効いた後の `memory_update` の行（下）は今までどおり。
-        const entryBefore: JournalEntryInput = {
-          type: 'decision',
-          decision: `人間が記憶 ${slug} を消す`,
-          grounds: '人間が直接 API から消そうとしている',
-        };
-        try {
-          await stores.journal.append(entryBefore);
-        } catch (error) {
-          noteDroppedRecord('記憶削除の日誌（消していない）', `slug=${slug}`, kindOfError(error));
-          return c.json(journalWriteFailedBody(), 500);
-        }
-        // `markHumanTouched` はここでは呼ばない: `PersonaStore.remove` が保護状態の派生値も一緒に消す（実体の無い印は監査上の嘘になる）ので、印を立てても同じ操作の中で消える。delete は「人間の意思で消した」であって、将来ここに書かれる新しい内容を無条件に保護する理由にならない。
-        try {
-          await stores.persona.remove(slug, { ifMatch });
-        } catch (error) {
-          // 先の行を打ち消す: 消していない。
-          await humanRetractor(stores, {
-            operation: '記憶を消す',
-            subject: `記憶 ${slug} の削除`,
-            what: '記憶削除の打ち消しの日誌',
-            detail: `slug=${slug}`,
-          })(
-            error instanceof MemoryConflictError
-              ? '消す直前に記憶が書き換えられていた（見た版と違う）'
-              : '記憶の削除が失敗した',
-          );
-          if (error instanceof MemoryConflictError) {
-            return c.json(memoryConflictBody(error.current, 'remove'), 409);
-          }
-          throw error;
-        }
-        // 削除自体は効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'memory_update',
-            slug,
-            cause: 'human',
-            action: 'remove',
-            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-            bytesAfter: 0,
-            summary: 'HTTP API 経由で人間が記憶を削除した',
-          },
-          '記憶削除の日誌',
-          `slug=${slug}`,
-        );
-        return c.json({ ok: true as const, slug });
-      },
-    )
+    .route('/', memoryRoutes(ctx))
 
     // `apply` / `enforce` に当たる経路を足さない: 「このやり方に従え」という操作はどの入口にも存在しない（`docs/north_star.md`）。やり方は読む素材で、従うかはそのときのクローンが決める。
     // 日誌は `practice_write` / `practice_remove`（クローンの道具）と同じ `type: 'decision'` に揃える: 揃えないと同じ操作が人間経由かクローン経由かで日誌の型が変わる。
@@ -7715,940 +7310,11 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    .get(
-      '/archive',
-      describeRoute({
-        tags: ['archive'],
-        summary: 'アーカイブ済みセッション生ログの一覧',
-        description:
-          'セッション生ログ（可観測性の最下段）の一覧（#698）。id だけでなく ' +
-          'sessionId・時刻・実使用バイト数（storedBytes）を返す——大きさや時刻を ' +
-          '知るために本文（GET /archive/:id）を全文落とす必要が無い。',
-        responses: {
-          200: jsonResponse('アーカイブの一覧。新しい順。', archiveListResponseSchema),
-        },
-      }),
-      async (c) =>
-        c.json(archiveListResponseSchema.parse({ entries: await stores.archive.list() })),
-    )
+    .route('/', workspaceRoutes(ctx))
 
-    // `:id` より前に置く: 後ろだと `sessions` が `:id` に食われてこの経路へ一生届かない（hono は登録順で最初に一致した経路を使う）。
-    .get(
-      '/archive/sessions',
-      describeRoute({
-        tags: ['archive'],
-        summary: 'アーカイブ済みセッション生ログの sessionId ごとの集計',
-        description:
-          'sessionId ごとの行数（rows）・実使用バイト数の合計/最大・最初/最後の ' +
-          '時刻（#698）。rows は tombstone 済みの行も数える——「同じセッションの ' +
-          '生ログが何度も積まれている」という重複を見つけるための経路。',
-        responses: {
-          200: jsonResponse('sessionId ごとの集計の一覧。', archiveSessionsResponseSchema),
-        },
-      }),
-      async (c) =>
-        c.json(archiveSessionsResponseSchema.parse({ sessions: await stores.archive.sessions() })),
-    )
+    .route('/', authRoutes(ctx))
 
-    .get(
-      '/archive/:id',
-      describeRoute({
-        tags: ['archive'],
-        summary: 'アーカイブ済み生ログを1件読む',
-        responses: {
-          200: {
-            description: '生ログ（JSONL の生テキスト）。',
-            content: { 'text/plain': { schema: resolver(z.string()) } },
-          },
-          404: errorResponse('該当するアーカイブが無い。'),
-          410: jsonResponse(
-            '本文は `DELETE /archive/:id` で消されている（#698）。行そのものは残る——' +
-              'この id は `/archive` の一覧には引き続き出る。いつ・何バイト落としたかを返す。',
-            archiveRemovedResponseSchema,
-          ),
-        },
-      }),
-      async (c) => {
-        const result = await stores.archive.read(c.req.param('id'));
-        if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
-        if (result.kind === 'removed') {
-          return c.json(
-            archiveRemovedResponseSchema.parse({
-              error: 'removed',
-              removedAt: result.removedAt,
-              bytes: result.bytes,
-            }),
-            410,
-          );
-        }
-        return c.text(result.body);
-      },
-    )
-
-    // 走行中のマネージャーの退避の判定は `guardArchiveRemoval`（`ManagerPool.runningManagerOwning()`）1箇所だけを通す: クローンの道具 `archive_remove` と同じ関数で、2箇所に書くと片方だけ直る形になる。
-    .delete(
-      '/archive/:id',
-      describeRoute({
-        tags: ['archive'],
-        summary: 'アーカイブ済み生ログの本文を消す（行は残る）',
-        description:
-          '本文だけを落とす（tombstone）。行そのものは消えない——`/archive` の一覧には' +
-          '引き続き出る。存在しない id を渡しても成功にはならない。走行中のマネージャーの' +
-          '退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。' +
-          'クエリ引数 `overrideReason` にその理由を書けば通せる' +
-          '（north_star 禁止2「方針は設定で開けられなければならない」の実装——' +
-          '既定拒否は能力の一律な削除ではなく方針である）。override したときは' +
-          '理由と対象のマネージャー id を日誌に残す。',
-        responses: {
-          200: jsonResponse('消した（または前から消されていた）。', archiveRemoveResponseSchema),
-          400: errorResponse(
-            'クエリ引数 `overrideReason` の形が不正（`queryParams` の hook が断る。' +
-              'PR #1747 が揃えた形——送られた値は1文字も含めない）。',
-          ),
-          404: errorResponse('該当するアーカイブが無い。'),
-          409: errorResponse(
-            '走行中のマネージャーの退避なので消せない。`overrideReason` クエリ引数で開ける。',
-          ),
-          500: journalWriteFailedResponse(
-            '消す前の日誌が書けなかったので消していない（`code` は `journal_write_failed`。本文は戻せないので、日誌を先に書く）。',
-          ),
-        },
-      }),
-      queryParams(archiveRemoveQuery),
-      async (c) => {
-        const id = c.req.param('id');
-        const { overrideReason } = c.req.valid('query');
-        const guard = guardArchiveRemoval(clone.managers, id, overrideReason);
-        if (guard.kind === 'denied') {
-          return c.json(
-            {
-              error:
-                `走行中のマネージャー ${guard.managerId} の退避なので消せない` +
-                '（overrideReason クエリ引数に理由を書けば通せる）',
-            },
-            409,
-          );
-        }
-        // 本文は消すと戻らないので、日誌を先に書いてから消す（`removeArchiveJournalFirst`）。書けなければ消さずに 500。
-        // 消す対象・override の理由は消す前に決まるので先の行に書く。バイト数と「前から消されていたか」は消した後でないと分からないので、2行目として足す（落ちても握る）。
-        const overrideNote =
-          guard.kind === 'allowed-with-override'
-            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だが、` +
-              `理由「${guard.reason}」により消す）`
-            : '';
-        const grounds =
-          guard.kind === 'allowed-with-override'
-            ? `人間が API から直接操作した（override理由: ${guard.reason}）`
-            : '人間が API から直接操作した';
-        const result = await removeArchiveJournalFirst(stores, id, {
-          buildEntry: () => ({
-            type: 'decision',
-            decision: `退避済み生ログの本文を消す: ${id}${overrideNote}`,
-            grounds,
-          }),
-          buildAfterEntry: (done) => ({
-            type: 'decision',
-            decision:
-              `退避済み生ログの本文を消した結果: ${id}（${done.bytes} バイト。${ARCHIVE_REMOVED_BYTES_UNIT_NOTE}。` +
-              `${done.kind === 'already' ? '前から消されていたので今回は何も変わっていない' : 'いま消した'}）`,
-            grounds,
-          }),
-        });
-        if (result.kind === 'journal-failed') {
-          noteDroppedRecord(
-            'アーカイブ本文削除の日誌（消していない）',
-            `id=${id}`,
-            kindOfError(result.error),
-          );
-          return c.json(journalWriteFailedBody(), 500);
-        }
-        if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
-        return c.json(
-          archiveRemoveResponseSchema.parse({
-            ok: true,
-            id,
-            bytes: result.bytes,
-            alreadyRemoved: result.kind === 'already',
-            ...(guard.kind === 'allowed-with-override'
-              ? { override: { managerId: guard.managerId, reason: guard.reason } }
-              : {}),
-          }),
-        );
-      },
-    )
-
-    // クローン自身の道具（`inbox_remove_many`）はまだ無い: 自分の受信箱を自分で捨てられることの是非があるため保留中で、ここへ道具を足す実装者は別 PR（draft・`[保留]`）の判断（takecchi）を待つこと。絞り込みの判定（`matchesInboxRemoveManyFilter`）は SQL 側に複製しない。「全部消すを1回で撃てる形は作らない」: 事故で受信箱を1回で空にできる形を作らない。
-    .post(
-      '/inbox/remove',
-      describeRoute({
-        tags: ['inbox'],
-        summary: '受信箱の未読を、絞り込みを渡してまとめて畳む（消す）',
-        description:
-          '人間の入口から、受信箱の未読を絞り込んでまとめて消す（issue #972）。' +
-          '同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか' +
-          '排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接' +
-          'まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も' +
-          '消さない。** ' +
-          `\`types\` は必須で、在る7種類（${INBOX_EVENT_TYPE_ORDER.join(' / ')}）を` +
-          '全部並べた呼びは断る（「全部消す」を1回で撃てる形は作らない——それは' +
-          '`POST /reset`（記憶ごと全部消す）の役目である）。行は台帳の close とは' +
-          '違い**物理的に消える**——`InboxStore` は「まだ処理し終えていない」という' +
-          '事実だけを持つ器で、片付いた後の記録を残す場所ではない。' +
-          '**消す id は塊ごとに、消す前に日誌へ残す**（書けなかったらその塊は消さずに止める）。',
-        responses: {
-          200: jsonResponse('試算、または実際に消した結果。', inboxRemoveManyResponseSchema),
-          500: jsonResponse(
-            '塊の先の日誌が書けなかったので、その塊とそれ以降を消さずに止めた（`code` は `journal_write_failed`）。' +
-              '止める前の塊は消えている——`removedIds` / `droppedFromDelivery` がどこまでかを言う。',
-            inboxRemoveManyStoppedResponseSchema,
-          ),
-          400: errorResponse(
-            '本文が不正、または `types` が在る7種類を全部並べている（絞り込みが無いのと同じ）、' +
-              'または `before` が ISO8601 として読めない。',
-          ),
-        },
-      }),
-      jsonBody(inboxRemoveManyRequestSchema),
-      async (c) => {
-        const { types, sources, before, reason, dryRun, limit } = c.req.valid('json');
-
-        // 絞り込みの無い呼びを断る。
-        if (INBOX_EVENT_TYPE_ORDER.every((known) => types.includes(known))) {
-          return c.json(
-            {
-              error:
-                `types に在る7種類（${INBOX_EVENT_TYPE_ORDER.join(', ')}）を全部並べた呼びは` +
-                '断る——それは絞り込みが無いのと同じで、1回で受信箱を空にできてしまう。' +
-                '消したい種類だけを名指しすること（例 types: ["manager_message"]）。' +
-                '**1件も消していない。**',
-            },
-            400,
-          );
-        }
-        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
-          // 存在しない日付・日付でない文字列を別の時刻として読んで消さず、時差の無い時刻をデーモンの地方時刻として読んで消さない: 元に戻せない一括削除なので時差を必須にする（道具 `inbox_remove_many` と同じ門・同じ文言）。
-          return c.json(
-            {
-              error:
-                describeOffsetRequiredTimeBoundary('before', before, '2026-10-06T09:00:00+09:00') +
-                '**1件も消していない。**',
-            },
-            400,
-          );
-        }
-        if (limit !== undefined && limit > REMOVE_MANY_LIMIT_MAX) {
-          return c.json(
-            { error: `limit は ${REMOVE_MANY_LIMIT_MAX} 件までである。**1件も消していない。**` },
-            400,
-          );
-        }
-
-        const filter: InboxRemoveManyFilter = {
-          types,
-          ...(sources === undefined ? {} : { sources }),
-          ...(before === undefined ? {} : { before }),
-        };
-        // 絞りはここで当てる: SQL 側に同じ判定を複製しない（`matchesInboxRemoveManyFilter`）。
-        const allPending = (await stores.inbox.peekPending()).entries;
-        const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
-
-        const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
-        const targets = matched.slice(0, effectiveLimit);
-        const remaining = matched.length - targets.length;
-
-        if (dryRun !== false) {
-          return c.json(
-            inboxRemoveManyResponseSchema.parse({
-              ok: true,
-              dryRun: true,
-              totalPending: allPending.length,
-              matched: matched.length,
-              targeted: targets.length,
-              removedIds: targets.map((row) => row.event.id),
-              droppedFromDelivery: 0,
-              remaining,
-            }),
-          );
-        }
-
-        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeInboxChunkJournalFirst`）: 消すと配達も止まるので、消してから書くと日誌が落ちた回に何を畳んだかが残らない（消えた合図は戻らない）。
-        // 塊の先の行が書けなければ、その塊は消さずにそこで止める（後ろの塊も消さない）。止める前の塊は消えているので、どこまで消したかを 500 の本文で返す。
-        // `stores.inbox.removeMany` を直に呼ばない: 器から消すのと配達を止めるのを1つの呼びで行うクローンの道具と同じ関数を通す（helper の中）。2箇所に割れたまま残すと片方だけ直っている形が再生産される。
-        const chunks = chunkIdsByChars(
-          targets.map((row) => row.event.id),
-          REMOVE_MANY_JOURNAL_ID_CHARS,
-        );
-        const filterText = [
-          `types=[${types.join(', ')}]`,
-          ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
-          ...(before === undefined ? [] : [`before=${before}`]),
-        ].join(' / ');
-        const removedIds: string[] = [];
-        let droppedFromDelivery = 0;
-        for (const [index, chunk] of chunks.entries()) {
-          const outcome = await removeInboxChunkJournalFirst(stores, clone, chunk, () => ({
-            type: 'decision',
-            decision:
-              `人間が受信箱の未読を絞り込みで一括して畳む（消す）` +
-              `（${index + 1}/${chunks.length} 塊目、この塊は ${chunk.length} 件）: ${reason}\n` +
-              `絞り込み: ${filterText}\n` +
-              `消す id: ${chunk.join(' ')}`,
-            grounds: '人間が直接 API から操作した',
-          }));
-          if (outcome.kind === 'journal-failed') {
-            noteDroppedRecord(
-              '受信箱一括削除の日誌（この塊は消していない）',
-              `chunk=${index + 1}/${chunks.length} count=${chunk.length}`,
-              kindOfError(outcome.error),
-            );
-            return c.json(
-              inboxRemoveManyStoppedResponseSchema.parse({
-                ...journalWriteFailedBody(),
-                removedIds,
-                droppedFromDelivery,
-              }),
-              500,
-            );
-          }
-          droppedFromDelivery += outcome.droppedFromDelivery;
-          removedIds.push(...outcome.removedIds);
-        }
-
-        return c.json(
-          inboxRemoveManyResponseSchema.parse({
-            ok: true,
-            dryRun: false,
-            totalPending: allPending.length,
-            matched: matched.length,
-            targeted: targets.length,
-            removedIds,
-            droppedFromDelivery,
-            remaining,
-          }),
-        );
-      },
-    )
-
-    // `claimPending()` ではなく `peekPending()` を使う: `claimPending()` は呼ぶだけで未読の全行の `deliveries`（器の入れ替え回数）を進めるので、ただ読むだけの口が「器が入れ替わった」という嘘の回数を増やしてはならない。集計は `summarizeInboxBacklog` をそのまま呼び複製しない: クローンの `manager_list` とこの口が別々の集計を持つと数が食い違う。上限（bySource の上位5件）も同じ関数から継承する。
-    .get(
-      '/inbox',
-      describeRoute({
-        tags: ['inbox'],
-        summary: '受信箱の滞留の内訳を読む',
-        description:
-          'クローンの道具 `manager_list` の中にしか出ていなかった内訳' +
-          '（`summarizeInboxBacklog` の結果）を、人間の入口（HTTP）から読む' +
-          '（issue #783 段0）。`claimPending()` ではなく `peekPending()` を使うので、' +
-          '呼んでも `deliveries`（器の入れ替え回数）は1つも進まない。集計は' +
-          '`@alteroid/core` の同じ関数を通すので、クローンの道具と違う数を返すことは無い。',
-        responses: {
-          200: jsonResponse(
-            '受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く' +
-              '（値を作らない。`InboxStore.pending` と同じ作法）。読めない行が1件でも在るときだけ' +
-              '`unreadable`（id・受信時刻・不正な欄名。本文は載せない）が載る。`total` は読めた行の数で、' +
-              '読めない行は入っていない。**`total: 0` で `unreadable` が無いときだけ「未処理の合図は無い」。**',
-            inboxBacklogResponseSchema,
-          ),
-        },
-      }),
-      async (c) => {
-        const peek = await stores.inbox.peekPending();
-        return c.json(
-          inboxBacklogResponseSchema.parse(
-            summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
-          ),
-        );
-      },
-    )
-
-    // `limit` のクエリ引数は無い: 帳面自体が `RECENT_TRACE_LIMIT` で上限を持つので、HTTP の口はいつも全件を返す（人間はブラウザで扱えるので締めると能力が落ちる。予算を持つのはエージェント向けの `self_dropped` だけ）。跡が0件でも 200 を返し、404 やエラーにしない: 「握り潰しが1件も無かった」わけではなく、プロセスの生存中だけの記憶で再起動で消える。
-    .get(
-      '/dropped',
-      describeRoute({
-        tags: ['dropped'],
-        summary: '握り潰しの跡を読む',
-        description:
-          'デーモンのプロセス（クローンを含む）が残した跡だけを返す。別プロセスの ' +
-          'runner が残した跡はここには出ない。跡が0件でも 200 を返す — 0件は ' +
-          '「握り潰しが1件も無かった」ことを意味しない（プロセスの生存中だけの ' +
-          '記憶で、再起動・デプロイの入れ替えで消える）。`limit` のクエリ引数は ' +
-          '無い（帳面自体が `limit` 件で上限を持つので、常に全件を返す）。',
-        responses: {
-          200: jsonResponse('帳面の全件（古い順、末尾が最新）。', droppedResponseSchema),
-        },
-      }),
-      async (c) => {
-        const traces = recentDroppedTraces();
-        return c.json(
-          droppedResponseSchema.parse({
-            origin: 'daemon',
-            since: droppedTraceLedgerSince(),
-            limit: RECENT_TRACE_LIMIT,
-            total: traces.length,
-            traces,
-          }),
-        );
-      },
-    )
-
-    // 取れない行を 0 に丸めない: `unreadable` はストアが返したまま core へ渡す（Task は閉じた行を刈らないので、刈りの件数は無い）。`github` は観測の記録を返すだけ（デーモンは GitHub を見に行かない）。
-    .get(
-      '/progress',
-      describeRoute({
-        tags: ['progress'],
-        summary: '作業の進捗（積み上がり・実施中・片付いた速度・見込み）',
-        description:
-          'Task（待ち行列の行。`GET /tasks`）と委譲（Job）の行を数え直した集計。`windowHours`（既定 ' +
-          `${DEFAULT_PROGRESS_WINDOW_HOURS}）は速度と見込みを数える窓の長さ（時間、有限の正数）。` +
-          '**率（%）は出さない**（task に総量が無く、分母が定まらない）。' +
-          '`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず ' +
-          '`null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。' +
-          '`github` は観測の記録（道具 `github_observation_record` の記録）を返すだけで、デーモンは GitHub を見に行かない。' +
-          '記録が無ければ `not_observed`（0 件ではない）。' +
-          '中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。',
-        responses: {
-          200: jsonResponse('進捗の集計。', progressResponseSchema),
-          400: errorResponse('`windowHours` が有限の正数でない（空文字・非数・0以下・非有限）。'),
-        },
-      }),
-      queryParams(progressQuery),
-      async (c) => {
-        const { windowHours: rawWindowHours } = c.req.valid('query');
-        // 「渡されなかった」と「空文字が渡された」を分ける: `Number('')` は 0 で、core の窓の検査に任せると意図の読めない 400 になる。
-        let windowHours = DEFAULT_PROGRESS_WINDOW_HOURS;
-        if (rawWindowHours !== undefined) {
-          if (rawWindowHours.trim() === '') {
-            return c.json({ error: PROGRESS_WINDOW_HOURS_INVALID_MESSAGE }, 400);
-          }
-          windowHours = Number(rawWindowHours);
-        }
-
-        let view: Awaited<ReturnType<typeof readProgress>>;
-        try {
-          view = await readProgress(stores, { now: new Date(), windowHours });
-        } catch (error) {
-          // `windowHours` の検査だけを 400 にする: ストアの `RangeError` は握らない。
-          if (error instanceof InvalidProgressWindowError) {
-            return c.json({ error: PROGRESS_WINDOW_HOURS_INVALID_MESSAGE }, 400);
-          }
-          throw error;
-        }
-
-        return c.json(progressResponseSchema.parse(view));
-      },
-    )
-
-    // 宣言された成功応答（200/202）はすべて宣言スキーマの `.parse()` を通す（エラー応答はその場のリテラルなので通さない）: `resolver()` は spec を作るだけでハンドラの戻り値を検査しないので、通していない経路では宣言に無いフィールドが黙って外へ出る。応答スキーマ（`accountViewSchema` 系）は core の永続化スキーマから独立させてあり、account の行が増えても外へは載らない。
-    .post(
-      '/auth/login',
-      describeRoute({
-        tags: ['auth'],
-        summary: 'ログインを始める',
-        description:
-          'ブラウザで開く認可 URL と、結果を引き取るための秘密（`claimSecret`）を返す。' +
-          '**この経路は認証を要求しない** — ログインの前に持っている資格が無いのは当たり前で、' +
-          'ここを閉じると誰も入れない。得られるのはアカウントの作成までで、' +
-          '使う許可は別に人間が与える（`alteroid access grant`）。',
-        security: [],
-        responses: {
-          200: jsonResponse('ログインを開始した。', loginStartResponseSchema),
-          400: errorResponse('未知のログイン手段、または手段が1つも設定されていない。'),
-        },
-      }),
-      jsonBody(loginBody, invalidWith('provider/label の形が不正')),
-      async (c) => {
-        const { provider, label } = c.req.valid('json');
-        if (authPlan.providers.length === 0) {
-          return c.json({ error: 'ログイン手段が設定されていない' as const }, 400);
-        }
-        const known = authPlan.providers.some((it) => it.id === provider);
-        if (!known) return c.json({ error: `未知のログイン手段: ${provider}` }, 400);
-
-        const started = await authService.startLogin({
-          provider,
-          label: label ?? '',
-          redirectUri: callbackUrl(provider),
-        });
-        return c.json(loginStartResponseSchema.parse(started));
-      },
-    )
-
-    .get(
-      '/auth/:provider/callback',
-      describeRoute({
-        tags: ['auth'],
-        summary: 'プロバイダからの戻り先',
-        description:
-          'ブラウザがここへ戻ってくる。応答は人間が読む HTML で、端末（CLI）側が ' +
-          '`/auth/login/{requestId}/claim` で結果を引き取る。**トークンはここでは返さない** ' +
-          '— ブラウザの履歴や Referer に鍵を載せないため。',
-        security: [],
-        responses: {
-          200: {
-            description: 'ログインの成否を人間に伝える画面。',
-            content: { 'text/html': { schema: resolver(z.string()) } },
-          },
-          400: {
-            description:
-              'プロバイダ側が拒否した（`?error=`）／`code`・`state` が足りない／' +
-              '`completeLogin` がエラーを返した、のいずれか。応答は人間が読む HTML。',
-            content: { 'text/html': { schema: resolver(z.string()) } },
-          },
-        },
-      }),
-      async (c) => {
-        const denied = c.req.query('error');
-        if (denied !== undefined && denied.length > 0) {
-          return c.html(
-            callbackPage('ログインを中止しました', `プロバイダからの応答: ${denied}`),
-            400,
-          );
-        }
-
-        const code = c.req.query('code');
-        const state = c.req.query('state');
-        if (code === undefined || state === undefined) {
-          return c.html(
-            callbackPage('ログインに失敗しました', 'code と state が足りません。'),
-            400,
-          );
-        }
-
-        const result = await authService.completeLogin({ state, code });
-        if (result.status === 'error') {
-          return c.html(
-            callbackPage('ログインに失敗しました', loginErrorDetail(result.reason)),
-            400,
-          );
-        }
-        return c.html(
-          callbackPage(
-            'ログインしました',
-            result.granted
-              ? 'この画面は自動で閉じます。閉じない場合は手動で閉じて端末に戻ってください。'
-              : 'この画面は自動で閉じます。閉じない場合は手動で閉じて端末に戻ってください。なお、このアカウントにはまだ alteroid を使う許可がありません（alteroid access grant で付与します）。',
-            true,
-          ),
-        );
-      },
-    )
-
-    .post(
-      '/auth/login/:requestId/claim',
-      describeRoute({
-        tags: ['auth'],
-        summary: 'ログイン結果を引き取る',
-        description:
-          'ブラウザ側が終わっていればアクセストークンを返す。**返るのはこの1回だけ**で、' +
-          'ストアには sha256 しか残らない。まだ終わっていなければ 202 と `pending`。',
-        security: [],
-        responses: {
-          200: jsonResponse('トークンを発行した。', loginClaimResponseSchema),
-          202: jsonResponse(
-            'まだブラウザ側が終わっていない。少し待って再試行する。',
-            loginClaimResponseSchema,
-          ),
-          400: errorResponse('秘密が違う、期限切れ、または既に引き取り済み。'),
-        },
-      }),
-      jsonBody(claimBody, invalidWith('claimSecret の形が不正')),
-      async (c) => {
-        const result = await authService.claim({
-          requestId: c.req.param('requestId'),
-          claimSecret: c.req.valid('json').claimSecret,
-        });
-        if (result.status === 'pending') {
-          return c.json(loginClaimResponseSchema.parse({ status: 'pending' as const }), 202);
-        }
-        if (result.status === 'error')
-          return c.json({ error: claimErrorDetail(result.reason) }, 400);
-        return c.json(
-          loginClaimResponseSchema.parse({
-            status: 'ready' as const,
-            token: result.token,
-            account: result.account,
-            granted: isAccountGranted(result.account),
-          }),
-        );
-      },
-    )
-
-    .get(
-      '/auth/me',
-      describeRoute({
-        tags: ['auth'],
-        summary: 'いま自分が誰として認識されているか',
-        responses: {
-          200: jsonResponse('認証を通った相手。', meResponseSchema),
-          401: errorResponse('資格が無い。'),
-          403: errorResponse(
-            '連携の鍵（`altk_`）では呼べない（連携の鍵は外部イベントの口にしか入れない）。',
-          ),
-        },
-      }),
-      (c) => {
-        const principal = c.get('principal');
-        if (principal.kind === 'operator') {
-          return c.json(meResponseSchema.parse({ kind: 'operator' as const }));
-        }
-        // 連携の鍵は `authenticate` が既定で拒否するのでここへ来ない: 来たら二重の門で断る。
-        if (principal.kind === 'integration') {
-          return c.json({ error: '連携の鍵では、この操作はできない' as const }, 403);
-        }
-        return c.json(
-          meResponseSchema.parse({
-            kind: 'account' as const,
-            account: principal.account,
-            granted: isAccountGranted(principal.account),
-          }),
-        );
-      },
-    )
-
-    // 提示している1本だけを失効させ、同じアカウントの他のトークンは触らない（アカウントごと締め出すのは `POST /access/:accountId/revoke`）。operator の資格では失効させられない: `AccessTokenRecord` を持たず、失効させる対象が無い別の種類の資格なので 4xx で断り `alteroid access revoke` へ誘導する。応答にトークンの値も sha256 も載せない。
-    .post(
-      '/auth/logout',
-      describeRoute({
-        tags: ['auth'],
-        summary: 'いま提示しているアクセストークンを失効させる',
-        description:
-          '同じアカウントの他のトークンは巻き込まない。**operator の資格（状態ファイルの ' +
-          'token）では呼べない**——失効させる対象（アクセストークン）を持たないため。',
-        requestBody: emptyJsonPostRequestBody('ログアウトさせられないため'),
-        responses: {
-          200: jsonResponse('失効させた（既に失効済みだった場合を含む）。', okResponseSchema),
-          400: errorResponse('operator の資格では失効させられない。'),
-          401: errorResponse('資格が無い、またはトークンが既に無効。'),
-          ...noBodyPostResponses(),
-        },
-      }),
-      deliberateClient,
-      async (c) => {
-        const principal = c.get('principal');
-        if (principal.kind === 'operator') {
-          return c.json(
-            {
-              error:
-                '実行環境の持ち主の資格ではログアウトできない（アクセストークンを持たない）。' +
-                '特定のアカウントを締め出すなら alteroid access revoke を使う',
-            },
-            400,
-          );
-        }
-        // bearer が無いことは無いはずだが、型では narrow できないため防御的に扱う。
-        const bearer = bearerOf(c.req.header('authorization'));
-        if (bearer === null) {
-          return c.json({ error: 'ログインが要る（alteroid login）' as const }, 401);
-        }
-        const result = await authService.logout(bearer);
-        if (result.status === 'not_found') {
-          return c.json({ error: 'トークンが無効か期限切れ（alteroid login をやり直す）' }, 401);
-        }
-        return c.json(okResponseSchema.parse({ ok: true }));
-      },
-    )
-
-    // 持つのは許可されているか否かの2値だけ: 「chat は可・記憶の編集は不可」のような行為別のスコープを足すと、PRD「権限境界」が禁じている「確認が要る行為の一覧」と同じ形になり、クローンの判断を設定で置き換えることになる。
-    .get(
-      '/access',
-      describeRoute({
-        tags: ['access'],
-        summary: 'ログインしたアカウントと許可の一覧',
-        description:
-          'alteroid を使う許可があれば読める（実行環境の持ち主と同格。2026-09-06 の' +
-          'オーナー決定）。メールと identity が並ぶ一覧である点は変わらない。',
-        responses: {
-          200: jsonResponse(
-            'アカウントの一覧。読めない行（型に合わない形で入っているアカウント）が1件でも在るときだけ ' +
-              '`rowsUnreadable`（件数と id・不正な欄名。email などの中身は載せない）が付く。id を ' +
-              '`POST /access/unreadable/remove` に渡して消せる。',
-            accessListResponseSchema,
-          ),
-          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
-        },
-      }),
-      async (c) => {
-        const accounts = await stores.auth.listAccounts();
-        // 0件なら鍵ごと無い。email などの中身は載せない（id と不正な欄名だけ）。
-        const rowsUnreadable = toRowsUnreadable(await stores.auth.listUnreadableAccounts());
-        return c.json(
-          accessListResponseSchema.parse({
-            accounts: await Promise.all(accounts.map((account) => accountView(stores, account))),
-            ...(rowsUnreadable === undefined ? {} : { rowsUnreadable }),
-          }),
-        );
-      },
-    )
-
-    // 許可は伝播する（A が B を、B が C を通せる）: 代わりに下の日誌が「誰が誰を通したか」を毎回残し、それが伝播を事後に追える唯一の場所になる。
-    .post(
-      '/access/:accountId/grant',
-      describeRoute({
-        tags: ['access'],
-        summary: 'alteroid を使う許可を与える',
-        description:
-          'ログインしただけでは使えない。ここで初めて使えるようになる。運ぶ情報は無い' +
-          '（`{}` を送る）。\n\n' +
-          '**許可できるアカウントの数に上限は無い**（2026-09-09 のオーナー決定。それ' +
-          '以前は高々1つで、2人目は 409 だった）。同じ人間が複数のログイン手段から' +
-          '入れる。**利用者ごとにデータは分けない** — 許可を持つ全員が同じ1組の記憶・' +
-          '日誌・会話を見る（マルチユーザー / チーム利用は docs/PRD.md「スコープ外」の' +
-          'ままである）。\n\n' +
-          '**この口は許可を持つアカウントからも叩ける**（2026-09-06 のオーナー決定で' +
-          '実行環境の持ち主と同格）。⟹ 許可は伝播する。誰が誰を通したかは日誌に残る。',
-        requestBody: emptyJsonPostRequestBody('持ち主を足されないため'),
-        responses: {
-          200: jsonResponse(
-            '許可した（既に許可済みでも 200。その場合、日誌には「付与していない（既に許可済みだった）」の打ち消しが残り、`grantedBy` は先の許可者のまま）。',
-            accessAccountResponseSchema,
-          ),
-          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
-          404: errorResponse('該当するアカウントが無い。'),
-          ...noBodyPostResponses(),
-        },
-      }),
-      deliberateClient,
-      async (c) => {
-        const accountId = c.req.param('accountId');
-        // 対象を先に引く（門前払い。無ければ 404 で日誌は書かない）: 早期の検査でしかなく、実際に許可される保証は `authService.grant` の結果でしか取れない。
-        const before = await stores.auth.getAccount(accountId);
-        if (before === null) return c.json({ error: 'not found' as const }, 404);
-        const retract = (decision: string, grounds: string) =>
-          appendJournalOrDrop(
-            stores,
-            { type: 'decision', decision, grounds },
-            'アクセス許可付与の打ち消しの日誌',
-            `accountId=${accountId}`,
-          );
-
-        // `describeActor` を省いて `operator` 固定にしない: 許可は人間の手を経ずに伝播しうるので、ここが唯一の歯止め。日誌を先に書き、書けなければ状態を変えずに 500: 状態変更の後に書いて `appendJournalOrDrop` で握ると「記録の無い許可」を作ってしまう。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `アクセス許可を付与: ${describeAccount(before)}`,
-          grounds: `${describeActor(c.get('principal'))}（alteroid access grant）`,
-        });
-
-        let result: GrantResult;
-        try {
-          result = await authService.grant(accountId, actorOf(c.get('principal')));
-        } catch (error) {
-          // 日誌には「付与した」が残っているので打ち消す: 記録が多すぎる側の穴は「記録の無い許可」より安全側。
-          await retract(
-            `アクセス許可を付与できなかった: ${describeAccount(before)}`,
-            `${describeActor(c.get('principal'))}（alteroid access grant、状態の変更が失敗）`,
-          );
-          throw error;
-        }
-        if (result.status === 'not_found') {
-          // 対象を引いてから状態を変えるまでの間に消えた: 同じ理由で打ち消す。
-          await retract(
-            `アクセス許可を付与できなかった: ${describeAccount(before)}`,
-            `${describeActor(c.get('principal'))}（alteroid access grant、対象が消えていた）`,
-          );
-          return c.json({ error: 'not found' as const }, 404);
-        }
-        // 先に読んだ許可と結果が同じなら、この呼びでは何も変わっていない: 先に書いた「付与」を打ち消す。`grantedBy` は先の許可者のままなので、打ち消さないと日誌が操作者を誤って指す。
-        if (
-          before.grantedAt !== null &&
-          result.account.grantedAt === before.grantedAt &&
-          result.account.grantedBy === before.grantedBy
-        ) {
-          await retract(
-            `アクセス許可を付与していない（既に許可済みだった）: ${describeAccount(before)}`,
-            `${describeActor(c.get('principal'))}（alteroid access grant、` +
-              `${before.grantedBy ?? '不明'} が ${before.grantedAt} に許可済み）`,
-          );
-        }
-        return c.json(
-          accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
-        );
-      },
-    )
-
-    .post(
-      '/access/:accountId/revoke',
-      describeRoute({
-        tags: ['access'],
-        summary: 'alteroid を使う許可を取り消す',
-        description:
-          '発行済みトークンは消さない。**許可はリクエストごとに見ているので、' +
-          'これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。運ぶ情報は' +
-          '無い（`{}` を送る）。',
-        requestBody: emptyJsonPostRequestBody('持ち主の許可を落とされないため'),
-        responses: {
-          200: jsonResponse(
-            '取り消した（既に未許可でも 200。その場合、日誌には「アクセス許可の取り消し（読んだ時点で既に未許可だった）」と残る）。',
-            accessAccountResponseSchema,
-          ),
-          403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION),
-          404: errorResponse('該当するアカウントが無い。'),
-          409: errorResponse(
-            '該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
-              '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
-              '読めないアカウントは認可を通らない。消すには ' +
-              '`POST /access/unreadable/remove`（issue #2440）。',
-          ),
-          ...noBodyPostResponses(),
-        },
-      }),
-      deliberateClient,
-      async (c) => {
-        // 読めない行は「無い」（404）ではなく「読めない形で在る」（409）と言い分ける。
-        let account: Awaited<ReturnType<typeof authService.revoke>>;
-        // 日誌の書き分けのためだけに取り消す前の状態を読む: 取り消し自体はこの読みに依らず、`authService.revoke` の型は変えない（`/permission-grants/:id/revoke` の `revokedBefore` と同じ形）。読んでから書くまでに別の人が許可すると、実際には取り消したのに「読んだ時点で未許可」と出るので、「取り消していない」とは言い切らない文言にする。状態はこの読みで狂わない。読めない行は `null` になるが、下の `revoke` が 409 で止める。
-        const revokedBefore =
-          (await stores.auth.getAccount(c.req.param('accountId')))?.grantedAt === null;
-        try {
-          account = await authService.revoke(c.req.param('accountId'));
-        } catch (error) {
-          if (!(error instanceof UnreadableAccountError)) throw error;
-          return c.json(
-            {
-              error:
-                `アカウント ${error.id} は読めない形で入っている（消されたのでも、許可が落ちたのでもない）。` +
-                '取り消しはこの口ではできない。本文はここでは取れない。' +
-                '消すには `POST /access/unreadable/remove`（alteroid access remove-unreadable <id>）を使う。',
-            },
-            409,
-          );
-        }
-        if (account === null) return c.json({ error: 'not found' as const }, 404);
-        // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない（`appendJournalOrDrop`。狭める側の扱い）。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: revokedBefore
-              ? `アクセス許可の取り消し（読んだ時点で既に未許可だった）: ${describeAccount(account)}`
-              : `アクセス許可を取り消し: ${describeAccount(account)}`,
-            grounds: `${describeActor(c.get('principal'))}（alteroid access revoke${revokedBefore ? '、取り消す前から未許可' : ''}）`,
-          },
-          'アクセス許可取り消しの日誌',
-          `accountId=${account.id}`,
-        );
-        return c.json(
-          accessAccountResponseSchema.parse({ account: await accountView(stores, account) }),
-        );
-      },
-    )
-
-    // `:accountId` と取り違えないよう別の語（`unreadable`）の下に置く。
-    .post(
-      '/access/unreadable/remove',
-      ...unreadableRowsRemoveHandlers({
-        stores,
-        path: '/access/unreadable/remove',
-        tag: 'access',
-        summary: '読めないアカウントの行を、id を指して消す',
-        description:
-          '読めない（型に合わない形で入っている）アカウントの行だけを、id を指して消す。読める' +
-          'アカウントには触れない。id が取れない行はこの口では消せない（`auth.json` を手で直す）。' +
-          '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
-          '（行の中身は残さない）。pg はアカウントを列で持つので読めない行が無く、常に 404。',
-        extraResponses: { 403: errorResponse(LOGGED_IN_WITHOUT_GRANT_DESCRIPTION) },
-        subject: 'アカウント',
-        noun: 'アカウント',
-        hint: '`GET /access` の `rowsUnreadable.rows[].id`（alteroid access list）',
-        remove: (ids, options) => authService.removeUnreadableAccounts(ids, options),
-      }),
-    )
-
-    // 資格は `authenticate` だけで `requireOperator` は付けない: 基準は「壊すかどうか」ではなく、鍵そのものを扱う口だけが一段上の強さを持つ。ここは鍵を扱わず記憶も台帳も消さず、止めた後に起動し直せば元に戻る（`POST /reset` とは取り返しのつき方が違う）。`deliberateClient` は資格の門ではない（ブラウザの単純リクエストを止めるもの）ので、資格の門が見当たらないのを「付け忘れ」と読まないこと。
-    .post(
-      '/shutdown',
-      describeRoute({
-        tags: ['system'],
-        summary: 'デーモンを止める',
-        description: '`daemon stop` の受け口。運ぶ情報は無い（`{}` を送る）。',
-        requestBody: emptyJsonPostRequestBody('デーモンを止められないため'),
-        responses: {
-          200: jsonResponse('停止を受け付けた（実際の停止は少し遅れる）。', okResponseSchema),
-          ...noBodyPostResponses(),
-        },
-      }),
-      deliberateClient,
-      (c) => {
-        setTimeout(() => deps.shutdown(), 10);
-        return c.json({ ok: true });
-      },
-    )
-
-    // `confirm: true` を必須にする: 確認ダイアログは呼ぶ前の話で、この口自体にも確認の印を要求して確認を経ない直接の呼び出し（スクリプト等）を 400 で止める。`access grant` だけのアカウントに記憶そのものを消せる資格までは渡さない。
-    .post(
-      '/reset',
-      describeRoute({
-        tags: ['system'],
-        summary: 'トークン情報以外のワークスペースを全部消す',
-        // `describeResetTargets()` から組み立てる（CLI の確認の文と同じ出所）: 手で書き写すとここだけ古くなる。
-        description:
-          `${describeResetTargets()}を全部消す。` +
-          '**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の' +
-          'ログインアカウントは消さない。** 取り消せない。',
-        responses: {
-          200: jsonResponse('消した件数の内訳。', resetResponseSchema),
-          400: errorResponse('`confirm: true` を伴っていない。'),
-          403: errorResponse(NO_ACCESS_GRANT_DESCRIPTION),
-          503: errorResponse(
-            '添付の中身を置き場から消せなかったので、添付は消していない（添付より前の順に消すものは消えている。#4814）。本文の `error` に理由。もう一度リセットすると再試行する。',
-          ),
-        },
-      }),
-      jsonBody(resetRequestSchema, () => ({
-        error: '`confirm: true` を伴っていない（取り消せない操作なので確認を必須にしてある）',
-      })),
-      async (c) => {
-        let cleared: Awaited<ReturnType<typeof resetWorkspaceState>>;
-        try {
-          cleared = await resetWorkspaceState(stores, {
-            ...(deps.clearSessionLog === undefined
-              ? {}
-              : { clearSessionLog: deps.clearSessionLog }),
-          });
-        } catch (error) {
-          if (!(error instanceof AttachmentContentRemoveError)) throw error;
-          // 添付は最後のほうに消す: ここへ来た時点で、記憶・日誌などは消えている（途中で止まった）。500 で理由を隠さず、残ったものと再試行できることを言う。
-          await appendJournalOrDrop(
-            stores,
-            {
-              type: 'decision',
-              decision:
-                'ワークスペースのリセットが途中で止まった（添付の中身を置き場から消せなかった。添付と、それより後の消去は済んでいない）',
-              grounds: `${describeActor(c.get('principal'))}（POST /reset）。理由: ${error.reason}。もう一度リセットすると再試行する。`,
-            },
-            'ワークスペースリセットの断りの日誌',
-            `id=${error.id}`,
-          );
-          return c.json(
-            {
-              error: `添付の中身を置き場から消せなかったので、リセットが途中で止まった（添付は消していない。それ以前の消去は済んでいる）。理由: ${error.reason}。もう一度リセットすると再試行する`,
-            },
-            503,
-          );
-        }
-        // 写しは置き場の外のファイルなのでここで消す。消せなくても 500 にしない: 本体はもう消えており、申告の `cleared` を失わない。
-        if (deps.attachmentCopiesDir !== undefined) {
-          await rm(deps.attachmentCopiesDir, { recursive: true, force: true }).catch(
-            (error: unknown) => {
-              writeStderrLine(
-                `alteroidd: リセットで添付の写しを消せなかった: ${reasonOf(error)}\n`,
-              );
-            },
-          );
-        }
-        // 日誌が落ちても 500 を返さない（特に重要）: `cleared` は取り消せない操作の唯一の申告で、500 にすると実際には消えている件数が応答から失われる。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: 'ワークスペースをリセットした（トークン情報以外を全部消した）',
-            grounds: `${describeActor(c.get('principal'))}（POST /reset。confirm 済み）`,
-          },
-          'ワークスペースリセットの日誌',
-          `cleared=${JSON.stringify(cleared)}`,
-        );
-        return c.json(resetResponseSchema.parse({ cleared }));
-      },
-    );
+    .route('/', adminRoutes(ctx, deps));
 
   // チェーンに載せない: `.get(...)` を差し込むと以降の型引数が積み重なり `AppType`（CLI の `hc<AppType>` が依存する型）の推論が壊れかねない。`exclude` は describeRoute の無い経路が spec に載らない動作を明示する二重の安全策。
   app.get(

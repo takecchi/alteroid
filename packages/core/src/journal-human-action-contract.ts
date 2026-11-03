@@ -2,7 +2,7 @@ import type { HumanAction } from './schema.js';
 import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
-export type JournalStoreHumanActionContractSubject = Pick<JournalStore, 'append' | 'list'>;
+type JournalStoreHumanActionContractSubject = Pick<JournalStore, 'append' | 'list'>;
 
 const SAMPLES: readonly HumanAction[] = [
   { kind: 'manager_message', target: 'mgr-1', via: { kind: 'operator', auth: 'operator-token' } },

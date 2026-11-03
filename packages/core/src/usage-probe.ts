@@ -5,7 +5,7 @@ import { redactEnvSecrets } from './redact-env-secrets.js';
 
 // 実セッションに相乗りしない: ターンを回した直後のセッションへ usage 要求を出すと `ProcessTransport is not ready for writing` で失敗するため
 // プロンプトを1つも送らない: 送ると推論が走ってトークンを消費するため
-export const USAGE_PROBE_TIMEOUT_MS = 20_000;
+const USAGE_PROBE_TIMEOUT_MS = 20_000;
 
 // error.message をそのまま出さない: 値の出所を選べないので redactEnvSecrets を最後の網として必ず通す。`reasonOf` ではなく `redactErrorText` を使う: 1行目に畳む形（`name: message`）を保つため
 export function describeProbeError(error: unknown, env: NodeJS.ProcessEnv | undefined): string {
@@ -24,7 +24,7 @@ export type UsageProbeQuery = (params: {
   options: Options;
 }) => UsageProbeHandle;
 
-export interface UsageProbeOptions {
+interface UsageProbeOptions {
   cwd: string;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -40,7 +40,7 @@ export interface UsageProbeOptions {
 // 待ちは abort で解く: 決して解決しない Promise だと `.return()` が完了せず、離れる側が永久に待つため
 // yield が無いことがこの関数の要件そのもの（1つでも送ったら推論が走る）。
 // eslint-disable-next-line require-yield
-export async function* idleUsagePrompt(signal: AbortSignal): AsyncGenerator<SDKUserMessage> {
+async function* idleUsagePrompt(signal: AbortSignal): AsyncGenerator<SDKUserMessage> {
   await new Promise<void>((resolve) => {
     if (signal.aborted) {
       resolve();
@@ -74,15 +74,14 @@ export async function settleWithin<T>(
   }
 }
 
-export type UsageProbeFailureKind = 'exception' | 'timeout' | 'aborted';
+type UsageProbeFailureKind = 'exception' | 'timeout' | 'aborted';
 
 export interface UsageProbeFailure {
   kind: UsageProbeFailureKind;
   reason: string;
 }
 
-export type UsageProbeOutcome<T> =
-  { ok: true; value: T } | { ok: false; failure: UsageProbeFailure };
+type UsageProbeOutcome<T> = { ok: true; value: T } | { ok: false; failure: UsageProbeFailure };
 
 function buildProbeEnv(options: UsageProbeOptions): NodeJS.ProcessEnv {
   const env = { ...process.env, ...options.env };

@@ -15,7 +15,7 @@ const TURN_END_PROBE_BACKOFF_MS = 60_000;
 /** 旗が立っている相手のほうを長くする: 生ログの末尾が動かない限り助言は変わらない。 */
 const TURN_END_PROBE_BACKOFF_FLAGGED_MS = 5 * 60_000;
 
-export interface TurnEndWatchDeps {
+interface TurnEndWatchDeps {
   /** 走査の起点。`Pool` の像（`#records`）そのもの。 */
   records: ReadonlyMap<string, ManagerRecord>;
   /** 背景処理の完了待ちで畳んだ報告の件数だけ読む（`Pool#withheldReports` そのもの）。 */

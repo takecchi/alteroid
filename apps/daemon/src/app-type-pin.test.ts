@@ -10,8 +10,11 @@ import type { AppType } from './app.js';
 // `app-routes-pin.json` と一緒に作り直すこと（`/openapi.json`・`/docs` は鎖に載せないので型には無い）。
 
 // `any` は hono 自身の `Client<T>`（hono/client の型）と同じ引き方: `never` だと条件が成り立たず `Schema` が `never` になる。
+// `.route()` で組むと `AppType` のスキーマは「鎖の型 | MergeSchemaPath<…>」の和になり、和に `keyof` を取ると共通キーだけになる:
+// `hc` の `UnionToIntersection` と同じに、和を交差へ直してから取り出す（固定する中身は変えない）。
+type U2I<U> = (U extends unknown ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Schema = AppType extends HonoBase<any, infer S, any> ? S : never;
+type Schema = AppType extends HonoBase<any, infer S, any> ? U2I<S> : never;
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type IsAny<T> = 0 extends 1 & T ? true : false;

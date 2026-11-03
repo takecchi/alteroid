@@ -2,10 +2,7 @@ import type { JournalEntry } from './schema.js';
 import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg は `@alteroid/core` を実行時の依存として読むので、`expect` で書くとその依存を2パッケージへ持ち込む。
-export type JournalStoreConversationIdContractSubject = Pick<
-  JournalStore,
-  'append' | 'list' | 'listPage'
->;
+type JournalStoreConversationIdContractSubject = Pick<JournalStore, 'append' | 'list' | 'listPage'>;
 
 const MARKER = 'journal-conversation-id-contract';
 

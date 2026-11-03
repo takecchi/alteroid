@@ -12,7 +12,7 @@ const usageCursorSchema = z.object({
   tiedAtAsOf: z.array(z.object({ label: z.string(), cost: z.number() })).optional(),
 });
 
-export type UsageCursor = z.infer<typeof usageCursorSchema>;
+type UsageCursor = z.infer<typeof usageCursorSchema>;
 
 export const { encode: encodeUsageCursor, decode: decodeUsageCursor } =
   cursorCodec(usageCursorSchema);
@@ -35,7 +35,7 @@ function isAfterAnchor(
   return entry.label.localeCompare(anchor.label) > 0;
 }
 
-export type UsageCursorTie = { label: string; cost: number };
+type UsageCursorTie = { label: string; cost: number };
 
 export function findUsageCursorTies<T extends UsageCursorEntry>(
   entries: readonly T[],
@@ -49,7 +49,7 @@ export function findUsageCursorTies<T extends UsageCursorEntry>(
     .map((entry) => ({ label: entry.label, cost: entry.cost }));
 }
 
-export type ResolveUsageCursorResult<T> =
+type ResolveUsageCursorResult<T> =
   { kind: 'malformed' } | { kind: 'wrong-axis' } | { kind: 'ok'; page: T[]; risen: T[] };
 
 // malformed / wrong-axis を黙って先頭へ倒さない: 別の文脈の cursor を使い回すと、壊れた頁が黙って返るため
