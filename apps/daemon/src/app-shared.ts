@@ -2,6 +2,7 @@ import type { JournalEntry, JournalEntryInput, Stores } from '@alteroid/core';
 import {
   UnreadableJournalEntryError,
   noteDroppedRecord,
+  stripNul,
   type AnswerApprovalVia,
   type HumanAction,
   type HumanActionKind,
@@ -396,3 +397,9 @@ export function describePluginDelivery(
   const text = runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
   return text.length === 0 ? '配る先なし' : text;
 }
+
+// 「空」は NUL を落とした後で見る: ストアは NUL を落とすので、落とす前の長さで見ると NUL だけの値が空のまま届く。`nonBlankString`（空白だけも弾く）とは別物。
+export const nonNulString = z
+  .string()
+  .min(1)
+  .refine((value) => stripNul(value).length > 0);

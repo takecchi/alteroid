@@ -4,7 +4,6 @@ import {
   managerModelsOf,
   codePointBoundary,
   redactSecretsInBody,
-  stripNul,
   noteDroppedRecord,
   reasonOf,
   reportRunnerRevision,
@@ -42,13 +41,8 @@ import {
   journalWriteFailedBody,
   kindOfError,
   humanActionOf,
+  nonNulString,
 } from './app-shared.js';
-
-// 「空」は NUL を落とした後で見る: ストアは NUL を落とすので、落とす前の長さで見ると NUL だけの値が空のまま届く。`nonBlankString`（空白だけも弾く）とは別物。
-export const nonNulString = z
-  .string()
-  .min(1)
-  .refine((value) => stripNul(value).length > 0);
 
 const managerMessageBody = z.object({
   // NUL だけの text が空の追加指示として届かないよう `nonNulString` で見る。
