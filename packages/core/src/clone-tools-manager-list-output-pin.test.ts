@@ -755,7 +755,7 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
       throw new Error('台帳が読めない');
     };
   } else {
-    const rows =
+    const rows: LedgerRow[] =
       scenario.ledger ??
       state.managers.map((manager) => ({
         id: manager.managerId,
