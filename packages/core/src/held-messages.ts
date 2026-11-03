@@ -40,7 +40,7 @@ export interface StaleHoldStuck {
  * 預かりの届け直しが `Pool#send` へ渡す届け方（`SendDelivery` の `mode === 'held-delivery'` の形）。
  * 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
  */
-export interface HeldDelivery {
+interface HeldDelivery {
   mode: 'held-delivery';
   // 届けた断り書きが畳んだ背景処理（peer を除く）の本数を呼び手へ返す（#4902）: 起こし直しが成功した回だけクローンへ知らせるため
   onFoldNoticeDelivered: (backgroundTasks: number) => void;
@@ -71,7 +71,7 @@ function composeHeldStuckNotice(
   return lines.join('\n');
 }
 
-export interface HeldMessagesDeps {
+interface HeldMessagesDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   load: (managerId: string) => Promise<ManagerRecord | null>;
   persist: (record: ManagerRecord) => Promise<void>;

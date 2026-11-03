@@ -11,7 +11,7 @@ export const MCP_SERVER_UNKNOWN = 'unknown';
 // 上限を超えた分の行の名前。実在のサーバ名と取り違えないよう、括弧で包んだ固定の印にする。
 export const MCP_SERVER_OTHER = '(other)';
 
-export interface McpToolsOfServer {
+interface McpToolsOfServer {
   name: string;
   count: number;
   tokens: number;

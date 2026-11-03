@@ -6,15 +6,15 @@ import { assertNoNul, stripNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
 // `scopes: [...]` のような選べる許可の一覧を持たない: 持った瞬間に `permissions.yaml` と同じ形になるため
-export const INTEGRATION_KEY_PREFIX = 'altk_';
+const INTEGRATION_KEY_PREFIX = 'altk_';
 
-export const DEFAULT_INTEGRATION_MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_INTEGRATION_MAX_BODY_BYTES = 1024 * 1024;
 
-export const DEFAULT_INTEGRATION_RATE_PER_MINUTE = 60;
+const DEFAULT_INTEGRATION_RATE_PER_MINUTE = 60;
 
-export const INTEGRATION_KEY_LAST_USED_THROTTLE_MS = 60_000;
+const INTEGRATION_KEY_LAST_USED_THROTTLE_MS = 60_000;
 
-export const INTEGRATION_SOURCE_PATTERN = /^[a-z0-9._-]{1,64}$/;
+const INTEGRATION_SOURCE_PATTERN = /^[a-z0-9._-]{1,64}$/;
 
 const isoDateTime = z.string().datetime({ offset: true });
 
@@ -74,7 +74,7 @@ export function integrationKeyFingerprint(sha256: string): string {
 }
 
 // 期限は「期限より前なら開く」向きで比べる: `NaN` との比較はどれも偽になり、閉じる側へ落ちるため
-export function isIntegrationKeyUsable(key: IntegrationKeyRecord, now: Date): boolean {
+function isIntegrationKeyUsable(key: IntegrationKeyRecord, now: Date): boolean {
   if (key.revokedAt !== null) return false;
   if (key.expiresAt === null) return true;
   const expiresAt = Date.parse(key.expiresAt);

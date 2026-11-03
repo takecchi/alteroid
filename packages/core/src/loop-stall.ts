@@ -185,15 +185,15 @@ export interface LoopStall {
  * 計算で1秒以上塞いだなら CPU は窓の大半を占める。1 割にも満たない（本番で見た 1% 前後を含む）なら、プロセスは眠っていて、
  * 塞いだのは計算ではない。5% は、見張りや GC など止まっていても動く小さな仕事の揺れより十分大きく、計算での停止より十分小さい値。
  */
-export const ASLEEP_CPU_SHARE = 0.05;
+const ASLEEP_CPU_SHARE = 0.05;
 
 /** `/proc/stat` の先頭 `cpu` 行の steal（8番目の値。USER_HZ 単位）。 */
-export interface StealSample {
+interface StealSample {
   readonly stealTicks: number;
 }
 
 /** `/proc/self/schedstat` の1つ目（CPU で走った時間）と2つ目（実行待ちの時間）。単位は ns。 */
-export interface SchedstatSample {
+interface SchedstatSample {
   readonly runNs: number;
   readonly waitNs: number;
 }
@@ -234,7 +234,7 @@ export function readSelfSchedstat(path = '/proc/self/schedstat'): SchedstatSampl
 }
 
 /** `process.resourceUsage()` の2点の差分のうち、止まりの切り分けに使う6つ。 */
-export interface ResourceUsageDelta {
+interface ResourceUsageDelta {
   readonly majorPageFault: number;
   readonly minorPageFault: number;
   readonly fsRead: number;
@@ -250,7 +250,7 @@ export interface CpuThrottleSample {
 }
 
 /** PSI の1ファイルの `some` / `full` の `total`（µs）。`cpu.pressure` の `full` は無いカーネルがある。 */
-export interface PressureTotals {
+interface PressureTotals {
   readonly someUsec: number;
   readonly fullUsec?: number;
 }
@@ -270,7 +270,7 @@ export interface MemoryEventsSample {
   readonly oomKill: number;
 }
 
-export interface LoopStallWatchOptions {
+interface LoopStallWatchOptions {
   readonly onStall: (stall: LoopStall) => void;
   /** 見張りの周期。 */
   readonly intervalMs?: number;
