@@ -388,3 +388,11 @@ export function humanActionOf(
   if (principal.kind === 'integration') return {};
   return { humanAction: { kind, target, via: answerApprovalViaOf(principal) } };
 }
+
+// runner への配布結果を日誌の文にする（plugin・プロファイル・MCP サーバ・環境変数の全部が同じ書式）。値も `error` の本文も載せない。
+export function describePluginDelivery(
+  runners: readonly { readonly runnerId: string; readonly ok: boolean }[],
+): string {
+  const text = runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
+  return text.length === 0 ? '配る先なし' : text;
+}
