@@ -481,7 +481,7 @@ describe('認証が有効なとき', () => {
     );
   });
 
-  // 文言は `app.ts` から import せずここへ複製する: import すると自己整合して、ずれてもこの歯が落ちなくなるため。
+  // 文言は HTTP の口（`app-shared.ts` の `describeActor` と `app-routes-auth.ts`）から import せずここへ複製する: import すると自己整合して、ずれてもこの歯が落ちなくなるため。
   describe('日誌の「誰が」', () => {
     async function lastGrounds(): Promise<string> {
       const entries = await stores.journal.list({ types: ['decision'] });

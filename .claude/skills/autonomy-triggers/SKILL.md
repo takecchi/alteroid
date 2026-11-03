@@ -37,7 +37,7 @@ description: 自律の起点4つ（日報・発意 tick・スケジュール・�
 - **外部イベントの入口は HTTP の `POST /events`**（`{source, payload}`）。送り元の形を変えられない webhook 用に `POST /events/:source`（本文まるごとが payload）もある。chat からは `/event <source> <本文>`
   - 送り直しを見分けたい送り手は、`POST /events` の本文に `idempotencyKey` を付ける（#3531）。同じ送り手・同じ source・同じ目印の2件目は積まず、1件目の id を `duplicate: true` で返す。目印は受信箱ではなく `Stores.eventReceipts` に7日持つ（受信箱の行は処理し終えると消えるので、そこには持たせられない）。`POST /events/:source` には付けられない（本文まるごとが payload のため）
   - 開いているのは 127.0.0.1 だけ。外から叩かせるならトンネル・リバースプロキシ側に境界を置く（ここで認証を足す前に、それが方針か境界かを考える）
-  - **127.0.0.1 で待つことはブラウザからの保護にならない。** 人間が開いた任意のページが単純リクエスト（`text/plain` や form の POST）を投げられ、応答が読めなくても送信は成立する。状態を変える POST を足すときは、`validator('json', ...)`（`hono-openapi` の validator。#22 で `@hono/zod-validator` の `zValidator` から差し替えた）を付けるか、本文の無い経路なら `deliberateClient`（`apps/daemon/src/app.ts`）を必ず通すこと — でないと他人がクローンのターンを起こせる。塞ぐのは能力側ではなく実行環境の境界である
+  - **127.0.0.1 で待つことはブラウザからの保護にならない。** 人間が開いた任意のページが単純リクエスト（`text/plain` や form の POST）を投げられ、応答が読めなくても送信は成立する。状態を変える POST を足すときは、`validator('json', ...)`（`hono-openapi` の validator。#22 で `@hono/zod-validator` の `zValidator` から差し替えた）を付けるか、本文の無い経路なら `deliberateClient`（`apps/daemon/src/app-shared.ts`）を必ず通すこと — でないと他人がクローンのターンを起こせる。塞ぐのは能力側ではなく実行環境の境界である
   - MCP 経由のポーリングは**別機構にしない**。「Slack を見に行く」は定期ジョブ＋マネージャーへの委譲で足りる（マネージャーは人間と同じ `.mcp.json` を持つ）
 - **4つの起点はどれも受信箱（`packages/core/src/inbox.ts` と `clone.ts` の `post()`）へ落ちる。合図の生死をまたぐ約束が3つあり、どれを動かしても #58 で塞いだ穴が開く**（守っているのは `packages/core/src/inbox-persistence.test.ts`。形は上の `claimRun` / `completeRun` と同じで、**印を残す時点と基準を進める時点を1つにまとめると必ず壊れる**）
   - **未読として書き出すのは「受理した時点」**（`post()` の `#remember`）。**「queue に入った時点」へ動かさないこと** — クローンが暇なときに届いた合図は `Inbox#push` の waiter 経路を通って queue を素通りするので、queue を吐き出す形の永続化はその経路を1件も救わない

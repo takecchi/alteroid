@@ -23,7 +23,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-// `app.ts` の応答の本文・日誌の行の「文」を1字ずつ固定する（重複の整理で文が変わらないことの歯）。
+// HTTP の口（`app.ts` と族のファイル `app-routes-*.ts`）の応答の本文・日誌の行の「文」を1字ずつ固定する（重複の整理で文が変わらないことの歯）。
 // 期待値は、整理の前の `app.ts` で出た文をそのまま書き写している。
 
 const AT = '2026-10-01T00:00:00.000Z';

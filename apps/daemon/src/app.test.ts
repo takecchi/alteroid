@@ -9955,7 +9955,7 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
   }
 
   // 原文を読む: 型でも実行時でもこの不変条件を表せない（`validator` は公開 API で import を禁じられない）から。
-  it("app.ts に validator('json' の直書きが1件も無い（jsonBody の中の1箇所を除く）", () => {
+  it("HTTP の口（app.ts と族のファイル）に validator('json' の直書きが1件も無い（jsonBody の中の1箇所を除く）", () => {
     const source = readAppSource();
     const bare = source
       .split('\n')

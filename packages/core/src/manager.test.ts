@@ -10211,7 +10211,7 @@ describe('runner にセッションが無い相手への manager_send（#563）'
 
     const result = await s.pool.send(attachedJob.id, '続きを頼む');
 
-    // `'unknown'` へ畳まない: `app.ts` が 404 を返し、台帳に在る委譲が「そんなものは無い」としか読めなくなるため。
+    // `'unknown'` へ畳まない: daemon の `app-routes-managers.ts` が 404 を返し、台帳に在る委譲が「そんなものは無い」としか読めなくなるため。
     expect(result.outcome).toBe('session_missing');
     expect(result.outcome).not.toBe('unknown');
 

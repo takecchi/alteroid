@@ -137,7 +137,7 @@ export class PushLedger {
     await this.#pushSetting(specs.agentToken, runner);
   }
 
-  // 日誌の行はここでは書かない: 即時の配布の失敗を日誌へ残すのは呼び出し元（`app.ts` / `tools.ts`）で、ここでも書くと二重になる。
+  // 日誌の行はここでは書かない: 即時の配布の失敗を日誌へ残すのは呼び出し元（daemon の `app-routes-profile.ts`・`app-routes-plugins.ts`・`app-routes-credentials.ts` / `tools.ts`）で、ここでも書くと二重になる。
   recordDirectPushResults(
     kind: DirectPushKind,
     results: readonly { runnerId: string; ok: boolean; error?: string }[],

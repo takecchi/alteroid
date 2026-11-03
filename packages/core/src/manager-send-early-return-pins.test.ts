@@ -18,7 +18,7 @@ import { createMemoryStores } from './testing.js';
 // `Pool#send`（`#send`）の早い return のうち、既存の試験が1本も縛っていなかったものを、
 // 外から見える結果（戻り値の outcome / detail と runner への命令）だけで縛る。段（非公開メソッド）へ分けるときに
 // 早い return や戻り値を取り違えると落ちる。
-//   - 読めない行への送信を「居ない」と言い換えない（unreadable と unknown は app.ts で 409 / 404 に分かれる）
+//   - 読めない行への送信を「居ない」と言い換えない（unreadable と unknown は daemon の `app-routes-managers.ts` で 409 / 404 に分かれる）
 //   - 大きいファイルを下ろせなかった回は、命令を送らずに unknown で断る
 //   - 取り直している最中に重なった2本目の送信は、resume を重ねずに busy で断る
 //   - 送っている最中に止められた委譲は、台帳を running に書き戻さず session_missing（止めた意思を優先）を返す

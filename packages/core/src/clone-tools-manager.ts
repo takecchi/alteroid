@@ -526,7 +526,7 @@ async function describeMissingReport(
   );
 }
 
-// app.ts の人間の直接送信の行（`excerptLine(text, 200)`）に合わせる
+// daemon の `app-routes-managers.ts` の人間の直接送信の行（`excerptLine(text, 200)`）に合わせる
 const MANAGER_ANSWER_MESSAGE_EXCERPT = 200;
 
 // 長さの上限もエスケープも掛けない: journal 側に無い制約をここにだけ足す理由が無いため

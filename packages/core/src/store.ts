@@ -1635,7 +1635,7 @@ export interface UsageStore {
    * `aggregate()` の `rows` から作らない: 全件を毎回読み直す高コストな経路になる。器（fs / pg）の索引や集合演算で答える別の口として持つ。
    * 基準（`usage_baseline`）ではなく行（`usage_daily`）を見る: 基準はゼロだけのスナップショットからでも作られうる（`foldUsageSnapshot`）ので、基準の有無で数えると「記録が無い」と「$0.00 使った」が混ざる。
    *
-   * 使うのは `ManagerPool.list()` の全委譲との突き合わせ（{@link findUnrecordedManagers}、`usage-format.ts`）だけ。`UsageStore` は `ManagerPool` を知らないので突き合わせは呼び出し側（`app.ts` / `tools.ts`）が行う。
+   * 使うのは `ManagerPool.list()` の全委譲との突き合わせ（{@link findUnrecordedManagers}、`usage-format.ts`）だけ。`UsageStore` は `ManagerPool` を知らないので突き合わせは呼び出し側（daemon の `app-routes-journal.ts` の `GET /usage` / `clone-tools-usage.ts`）が行う。
    */
   recordedManagerIds(): Promise<Set<string>>;
 
