@@ -225,10 +225,10 @@ describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
     'runner.ts': ['./codex-manager-driver.js', './codex-auth-mirror.js'],
     'store.ts': ['./codex-chatgpt-auth.js'],
     'testing.ts': ['./codex-chatgpt-auth.js'],
-    // tools.ts を族のファイル（clone-tools-<族>.ts。命名規則は clone-tools-sources.test-support.ts）へ分けたとき:
-    // `codexChatgptAuthStatusOf` / `describeCodexChatgptAuth` を import する族（self_status を持つファイル）は、
-    // そのファイル名で './codex-chatgpt-auth.js' だけをここへ名指しで足す（広いパターンにしない）。tools.ts から import が消えたら tools.ts の行は外す。
-    'tools.ts': ['./codex-chatgpt-auth.js'],
+    // tools.ts は族のファイル（clone-tools-<族>.ts。命名規則は clone-tools-sources.test-support.ts）へ分けた。
+    // `codexChatgptAuthStatusOf` / `describeCodexChatgptAuth` を import するのは self_status を持つ clone-tools-self.ts だけで、
+    // tools.ts からは import が消えたので、行を差し替えた。別の族が増えて同じ import をするときも、そのファイル名で名指しで足す（広いパターンにしない）。
+    'clone-tools-self.ts': ['./codex-chatgpt-auth.js'],
     'index.ts': [
       './codex-chatgpt-auth-contract.js',
       './codex-chatgpt-auth.js',
