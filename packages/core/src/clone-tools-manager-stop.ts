@@ -11,7 +11,7 @@ import { isEmptyCompleteUnpushedWorkObservation } from './unpushed-work-observat
 import { text, tool, NO_POOL } from './clone-tools-common.js';
 import type { ToolContext } from './clone-tools-context.js';
 
-// `LIST_REPORT_EXCERPT` を使い回さない: 用途ごとに別に置く
+// `LIST_REPORT_EXCERPT`（`clone-tools-manager-list.ts`）を使い回さない: 用途ごとに別に置く
 const MANAGER_STOP_FOLDED_TURN_EXCERPT = 240;
 
 // 短めに切る: `manager_stop` 自体の応答が長々と待たされるほうが実害で、`pool.unpushedWork()` は失敗しても構わない設計のため
