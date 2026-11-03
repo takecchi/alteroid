@@ -163,19 +163,15 @@ export async function memoryEditCommand(slug: string): Promise<void> {
       const theirs = join(dir, `${slug}.current.md`);
       if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
       stdout.write(
-        [
-          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-          `  あなたの編集（残してあります）: ${path}`,
-          error.current === null
-            ? '  いまの記憶: 無い（消されています）'
-            : `  いまの記憶: ${theirs}`,
-          ...(error.current === null
-            ? []
-            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
-          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
-          '',
-        ].join('\n'),
+        describeEditConflict({
+          command: 'memory',
+          noun: '記憶',
+          slug,
+          path,
+          theirs,
+          currentMissing: error.current === null,
+          replaceNote: '（クローンの書き込みを消します）',
+        }),
       );
       throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
         cause: error,
@@ -203,10 +199,7 @@ export async function memorySetCommand(
       io,
     );
   }
-  const content =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  const content = await readBodyArg(options.file, stdin);
   if (options.allowEmpty !== true && content.trim().length === 0) {
     throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
   }
