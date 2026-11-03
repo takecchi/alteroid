@@ -17,11 +17,18 @@ export const APP_ENTRY_FILE = 'app.ts';
 
 export const APP_CONTEXT_FILE = 'app-context.ts';
 
+export const APP_SHARED_FILE = 'app-shared.ts';
+
 const FAMILY_FILE = /^app-routes-[a-z0-9-]+\.ts$/;
 
 /** ファイル名（ディレクトリを含まない）が、HTTP の口のソースか。 */
 export function isAppSourceName(name: string): boolean {
-  return name === APP_ENTRY_FILE || name === APP_CONTEXT_FILE || FAMILY_FILE.test(name);
+  return (
+    name === APP_ENTRY_FILE ||
+    name === APP_CONTEXT_FILE ||
+    name === APP_SHARED_FILE ||
+    FAMILY_FILE.test(name)
+  );
 }
 
 /** リポジトリの根からの相対パス（`apps/daemon/src/...`）が、HTTP の口のソースか。 */

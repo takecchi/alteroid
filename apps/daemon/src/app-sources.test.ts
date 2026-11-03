@@ -17,6 +17,7 @@ describe('app-sources.test-support（HTTP の口のソースを文字列で読�
   it('app.ts と app-routes-<族>.ts を数え、テスト・補助・JSON は数えない', () => {
     expect(isAppSourceName('app.ts')).toBe(true);
     expect(isAppSourceName('app-context.ts')).toBe(true);
+    expect(isAppSourceName('app-shared.ts')).toBe(true);
     expect(isAppSourceName('app-routes-memory.ts')).toBe(true);
     expect(isAppSourceName('app-routes-integration-keys.ts')).toBe(true);
     expect(isAppSourceName('app.test.ts')).toBe(false);
