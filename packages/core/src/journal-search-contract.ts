@@ -2,7 +2,7 @@ import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。食い違ったら throw する。
 // 契約4（`%` / `_` はワイルドカードではない）は pg の `ILIKE` でだけ落ちうるが、3実装すべてで測る: pg でだけ測ると、照合を SQL から引き上げたときに誰も測らなくなる。
-export type JournalStoreSearchContractSubject = Pick<JournalStore, 'append' | 'list'>;
+type JournalStoreSearchContractSubject = Pick<JournalStore, 'append' | 'list'>;
 
 const TAG = 'journal-search-contract';
 

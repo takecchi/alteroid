@@ -8,7 +8,7 @@ export const JOURNAL_FOLD_MAX_SPAN_MS = 5 * 60_000;
 // 件数でも切る: 間隔が極端に詰まった暴走で、落ちたときの損失が数千件になるため
 export const JOURNAL_FOLD_MAX_SUPPRESSED = 100;
 
-export interface JournalFoldRun {
+interface JournalFoldRun {
   readonly signature: string;
   // 畳んだ本文そのものを持たせる: 要約に回数しか無いと、後から何が N 回起きたのかを別の場所から探すことになるため
   readonly text: string;
@@ -22,7 +22,7 @@ export interface JournalFoldRun {
   };
 }
 
-export interface JournalFoldVerdict {
+interface JournalFoldVerdict {
   readonly write: boolean;
   // 要約は `write` の行より先に書く: 日誌が時系列で読まれ、次の1件目より後ろに出ると係り先がずれるため
   readonly flush?: JournalFoldRun;

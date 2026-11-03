@@ -27,7 +27,7 @@ import type { JournalStore } from './store.js';
  *
  * `append` した行は呼び出し側のストアへ実際に残る（後始末はしない）。使い捨てのストアを渡すこと。
  */
-export type JournalStoreDeletedConversationContractSubject = Pick<
+type JournalStoreDeletedConversationContractSubject = Pick<
   JournalStore,
   'append' | 'list' | 'listPage' | 'get' | 'oldestAt'
 >;
