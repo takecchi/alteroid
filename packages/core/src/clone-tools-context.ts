@@ -107,3 +107,15 @@ export interface ToolContext {
   attachmentCopiesDir?: string;
   attachmentLimits?: AttachmentLimits;
 }
+
+/**
+ * `createCloneTools` が構築時に検査・解決した値のうち、族のファイル（`clone-tools-<族>.ts`）へ渡すもの。
+ * `memoryCause` / `conversationId` の `typeof` 検査と `workConversationId ?? conversationId` の解決は
+ * `createCloneTools` に残る（族の関数は検査済みの値を受け取る）。いずれも関数のまま渡す（ハンドラの中で呼ぶ）。
+ */
+export interface CloneToolsShared {
+  stores: Stores;
+  memoryCause: ToolContext['memoryCause'];
+  getConversationId: ToolContext['conversationId'];
+  getWorkConversationId: () => string | undefined;
+}
