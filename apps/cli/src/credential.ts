@@ -13,7 +13,7 @@ import {
 } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
-import { readAllText, readInputFile } from './input-errors.js';
+import { readBodyArg } from './input-errors.js';
 
 interface CredentialFingerprint {
   name: string;
@@ -124,10 +124,7 @@ export async function credentialSetCommand(
     );
   }
 
-  const raw =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  const raw = await readBodyArg(options.file, stdin);
   // `trim()` しない: 内側の空白は値の一部でありうる（末尾の改行だけ落とす）
   const value = raw.replace(/\r?\n$/, '');
   if (value.length === 0) {

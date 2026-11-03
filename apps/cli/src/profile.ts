@@ -17,12 +17,7 @@ import {
   resolveTarget,
   type Target,
 } from './target.js';
-import {
-  keepDraftOnFailure,
-  openEditorKeepingEdits,
-  readAllText,
-  readInputFile,
-} from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits, readBodyArg } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 const ERROR_LIMIT = 512;
@@ -215,10 +210,7 @@ export async function profileSetCommand(
       io,
     );
   }
-  const script =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  const script = await readBodyArg(options.file, stdin);
   if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
   await put(name, script, target, scope, readVersionOf(profile, name));
 }
