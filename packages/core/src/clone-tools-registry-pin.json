@@ -30,9 +30,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "slug"
-      ],
+      "required": ["slug"],
       "additionalProperties": false
     }
   },
@@ -60,11 +58,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "slug",
-        "content",
-        "summary"
-      ],
+      "required": ["slug", "content", "summary"],
       "additionalProperties": false
     }
   },
@@ -88,11 +82,7 @@
           "description": "何を追記したかの一行要約（日誌に残る）"
         }
       },
-      "required": [
-        "slug",
-        "content",
-        "summary"
-      ],
+      "required": ["slug", "content", "summary"],
       "additionalProperties": false
     }
   },
@@ -116,10 +106,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "slug",
-        "summary"
-      ],
+      "required": ["slug", "summary"],
       "additionalProperties": false
     }
   },
@@ -155,10 +142,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "slug",
-        "summary"
-      ],
+      "required": ["slug", "summary"],
       "additionalProperties": false
     }
   },
@@ -176,10 +160,7 @@
         "side": {
           "description": "予算に入りきらないとき、どちら側を出すか。head（既定。渡さなければ従来と同じ出力）は先頭から詰めて末尾側を落とす。tail は末尾から詰めて先頭側を落とす。⚠中央はどちらでも出ない。offset を渡すときは見ない。",
           "type": "string",
-          "enum": [
-            "head",
-            "tail"
-          ]
+          "enum": ["head", "tail"]
         },
         "q": {
           "description": "見出しをこの文字列で絞り込む（1文字以上。大文字小文字を区別しない部分一致。正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。side と併用できる（絞り込んだ結果をどちらから詰めるか）。一致0件と、一致はあるが予算で切れた場合は別の文言で返る。",
@@ -190,9 +171,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "slug"
-      ],
+      "required": ["slug"],
       "additionalProperties": false
     }
   },
@@ -215,10 +194,7 @@
           "description": "開く節の節id（複数可。1件以上）。焼き込みのカードか memory_outline に出ているもの"
         }
       },
-      "required": [
-        "slug",
-        "sections"
-      ],
+      "required": ["slug", "sections"],
       "additionalProperties": false
     }
   },
@@ -249,12 +225,7 @@
           "description": "なぜ移したかの一行要約（日誌に残る。本文は残らない）"
         }
       },
-      "required": [
-        "fromSlug",
-        "sections",
-        "toSlug",
-        "summary"
-      ],
+      "required": ["fromSlug", "sections", "toSlug", "summary"],
       "additionalProperties": false
     }
   },
@@ -286,17 +257,12 @@
                 "type": "string"
               }
             },
-            "required": [
-              "id",
-              "reason"
-            ],
+            "required": ["id", "reason"],
             "additionalProperties": false
           }
         }
       },
-      "required": [
-        "decision"
-      ],
+      "required": ["decision"],
       "additionalProperties": false
     }
   },
@@ -354,11 +320,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "human",
-              "manager",
-              "self"
-            ]
+            "enum": ["human", "manager", "self"]
           }
         },
         "id": {
@@ -380,10 +342,7 @@
         "order": {
           "description": "返す順序。既定 desc（新しい順）、asc で古い順。afterId / afterAt の「次」は返る順序の次なので、asc で読み継ぐときは order=asc も揃えて渡す。**q とは組めない**（q は新しい側から遡る検索で、asc を指定すると断られる。古い側から読むなら since / until で窓を閉じる）",
           "type": "string",
-          "enum": [
-            "asc",
-            "desc"
-          ]
+          "enum": ["asc", "desc"]
         }
       },
       "additionalProperties": false
@@ -439,10 +398,7 @@
                       "type": "boolean"
                     }
                   },
-                  "required": [
-                    "id",
-                    "label"
-                  ],
+                  "required": ["id", "label"],
                   "additionalProperties": false
                 }
               },
@@ -453,11 +409,7 @@
                 "type": "boolean"
               }
             },
-            "required": [
-              "id",
-              "prompt",
-              "options"
-            ],
+            "required": ["id", "prompt", "options"],
             "additionalProperties": false
           }
         },
@@ -470,9 +422,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "question"
-      ],
+      "required": ["question"],
       "additionalProperties": false
     }
   },
@@ -506,12 +456,7 @@
           "description": "なぜこの許可が要るか。人間が承認画面で読む理由文"
         }
       },
-      "required": [
-        "rule",
-        "allows",
-        "denies",
-        "reason"
-      ],
+      "required": ["rule", "allows", "denies", "reason"],
       "additionalProperties": false
     }
   },
@@ -546,9 +491,7 @@
           "description": "承認の id（approvals_list や日誌の escalation に出ている id）"
         }
       },
-      "required": [
-        "id"
-      ],
+      "required": ["id"],
       "additionalProperties": false
     }
   },
@@ -568,10 +511,7 @@
           "description": "なぜ取り下げるか（不要になった経緯・自分で答えを見つけた等。1文字以上）。人間はこれを読んで後から否定する"
         }
       },
-      "required": [
-        "id",
-        "reason"
-      ],
+      "required": ["id", "reason"],
       "additionalProperties": false
     }
   },
@@ -591,9 +531,7 @@
           "description": "日報の本文（Markdown）"
         }
       },
-      "required": [
-        "body"
-      ],
+      "required": ["body"],
       "additionalProperties": false
     }
   },
@@ -619,19 +557,12 @@
         "layer": {
           "description": "誰が使った分だけ（clone / manager）",
           "type": "string",
-          "enum": [
-            "clone",
-            "manager"
-          ]
+          "enum": ["clone", "manager"]
         },
         "site": {
           "description": "どこで使った分だけ（session / distill / peer）",
           "type": "string",
-          "enum": [
-            "session",
-            "distill",
-            "peer"
-          ]
+          "enum": ["session", "distill", "peer"]
         },
         "tokenId": {
           "description": "この認証トークンで使った分だけ（token_list の id。1文字以上）",
@@ -640,14 +571,7 @@
         "axis": {
           "description": "この軸だけを出す（まとめ表示・他の軸・アカウント全体の残りは出ない）。省略すると先頭から",
           "type": "string",
-          "enum": [
-            "date",
-            "manager",
-            "model",
-            "layer",
-            "site",
-            "token"
-          ]
+          "enum": ["date", "manager", "model", "layer", "site", "token"]
         },
         "cursor": {
           "description": "axis と一緒に使う。その軸の続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から",
@@ -708,10 +632,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "kind",
-        "request"
-      ],
+      "required": ["kind", "request"],
       "additionalProperties": false
     }
   },
@@ -727,9 +648,7 @@
           "description": "schedule_list に出ている kind"
         }
       },
-      "required": [
-        "kind"
-      ],
+      "required": ["kind"],
       "additionalProperties": false
     }
   },
@@ -778,12 +697,7 @@
         "to": {
           "description": "置き場所（front=先頭 / back=末尾 / before・after=anchorId の直前・直後）。省くと既定の位置",
           "type": "string",
-          "enum": [
-            "front",
-            "back",
-            "before",
-            "after"
-          ]
+          "enum": ["front", "back", "before", "after"]
         },
         "anchorId": {
           "description": "to が before / after のときの基準の task の id（開いている件だけ指せる）",
@@ -794,10 +708,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "title",
-        "body"
-      ],
+      "required": ["title", "body"],
       "additionalProperties": false
     }
   },
@@ -814,12 +725,7 @@
         },
         "to": {
           "type": "string",
-          "enum": [
-            "front",
-            "back",
-            "before",
-            "after"
-          ],
+          "enum": ["front", "back", "before", "after"],
           "description": "置き場所"
         },
         "anchorId": {
@@ -827,10 +733,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "taskId",
-        "to"
-      ],
+      "required": ["taskId", "to"],
       "additionalProperties": false
     }
   },
@@ -847,13 +750,7 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "queued",
-            "waiting",
-            "needs_decision",
-            "done",
-            "cancelled"
-          ],
+          "enum": ["queued", "waiting", "needs_decision", "done", "cancelled"],
           "description": "移す先の状態"
         },
         "reason": {
@@ -861,10 +758,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "taskId",
-        "status"
-      ],
+      "required": ["taskId", "status"],
       "additionalProperties": false
     }
   },
@@ -884,10 +778,7 @@
           "description": "true で立てる、false で外す"
         }
       },
-      "required": [
-        "taskId",
-        "keep"
-      ],
+      "required": ["taskId", "keep"],
       "additionalProperties": false
     }
   },
@@ -984,13 +875,7 @@
                       "type": "boolean"
                     }
                   },
-                  "required": [
-                    "pulls",
-                    "success",
-                    "failure",
-                    "pending",
-                    "checks"
-                  ],
+                  "required": ["pulls", "success", "failure", "pending", "checks"],
                   "additionalProperties": false
                 },
                 "ciUnavailable": {
@@ -999,12 +884,7 @@
                   "maxLength": 1000
                 }
               },
-              "required": [
-                "status",
-                "openIssues",
-                "openPulls",
-                "truncated"
-              ],
+              "required": ["status", "openIssues", "openPulls", "truncated"],
               "additionalProperties": false
             },
             {
@@ -1020,21 +900,14 @@
                   "maxLength": 1000
                 }
               },
-              "required": [
-                "status",
-                "reason"
-              ],
+              "required": ["status", "reason"],
               "additionalProperties": false
             }
           ],
           "description": "観測の結果。ok のときだけ件数（openIssues / openPulls / truncated と、任意で ci または ciUnavailable）、取れなかったときは failed と reason（数は持たない）"
         }
       },
-      "required": [
-        "repo",
-        "query",
-        "result"
-      ],
+      "required": ["repo", "query", "result"],
       "additionalProperties": false
     }
   },
@@ -1049,12 +922,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "human",
-              "manager",
-              "external",
-              "self"
-            ]
+            "enum": ["human", "manager", "external", "self"]
           },
           "description": "例 {\"origin\":[\"self\"]}。配列で渡し、値は引用符で囲む。対象の起点（必須。1件以上）。在る起点を全部（human / manager / external / self）並べると断られる。"
         },
@@ -1075,10 +943,7 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "done",
-            "cancelled"
-          ],
+          "enum": ["done", "cancelled"],
           "description": "移す先の状態（done=終わった / cancelled=取りやめた。閉じる状態だけ）"
         },
         "reason": {
@@ -1094,11 +959,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "origin",
-        "status",
-        "reason"
-      ],
+      "required": ["origin", "status", "reason"],
       "additionalProperties": false
     }
   },
@@ -1113,13 +974,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "distill",
-              "timer",
-              "external",
-              "self_initiative",
-              "manager_message"
-            ]
+            "enum": ["distill", "timer", "external", "self_initiative", "manager_message"]
           },
           "description": "例 {\"types\":[\"manager_message\"]}。配列で渡し、値は引用符で囲む。消す対象の種類（必須。1件以上）。選べる5種類 (distill / timer / external / self_initiative / manager_message) を全部並べると断られる。人間起点の human_message / human_answer はここに無い——選べない（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。例: 委譲先の429の写しを畳むなら manager_message だけを狙う"
         },
@@ -1147,10 +1002,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "types",
-        "reason"
-      ],
+      "required": ["types", "reason"],
       "additionalProperties": false
     }
   },
@@ -1248,11 +1100,7 @@
         "scope": {
           "description": "撒く先。all=クローン（あなた）と runner の両方 / app=クローンだけ / runner=runner（マネージャー・作業者）だけ。省略は「既存の行の撒く先を保つ」（新しい行なら all）",
           "type": "string",
-          "enum": [
-            "all",
-            "app",
-            "runner"
-          ]
+          "enum": ["all", "app", "runner"]
         },
         "script": {
           "type": "string",
@@ -1267,10 +1115,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "script",
-        "summary"
-      ],
+      "required": ["script", "summary"],
       "additionalProperties": false
     }
   },
@@ -1294,10 +1139,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "name",
-        "summary"
-      ],
+      "required": ["name", "summary"],
       "additionalProperties": false
     }
   },
@@ -1327,9 +1169,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "slug"
-      ],
+      "required": ["slug"],
       "additionalProperties": false
     }
   },
@@ -1345,9 +1185,7 @@
           "description": "やり方のスラッグ（practice_list に出ている slug）"
         }
       },
-      "required": [
-        "slug"
-      ],
+      "required": ["slug"],
       "additionalProperties": false
     }
   },
@@ -1379,12 +1217,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "slug",
-        "kind",
-        "title",
-        "content"
-      ],
+      "required": ["slug", "kind", "title", "content"],
       "additionalProperties": false
     }
   },
@@ -1404,9 +1237,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "slug"
-      ],
+      "required": ["slug"],
       "additionalProperties": false
     }
   },
@@ -1426,9 +1257,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "document"
-      ],
+      "required": ["document"],
       "additionalProperties": false
     }
   },
@@ -1502,9 +1331,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "request"
-      ],
+      "required": ["request"],
       "additionalProperties": false
     }
   },
@@ -1534,10 +1361,7 @@
         "decision": {
           "description": "許可確認への回答のとき必須。それ以外では不要",
           "type": "string",
-          "enum": [
-            "allow",
-            "deny"
-          ]
+          "enum": ["allow", "deny"]
         },
         "requestId": {
           "description": "どの確認への回答かを示す id（受信箱に届いた requestId）。1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること。⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。受信箱に届いていない確認に、生ログから答える手段は無い",
@@ -1556,18 +1380,12 @@
                 "type": "string"
               }
             },
-            "required": [
-              "id",
-              "reason"
-            ],
+            "required": ["id", "reason"],
             "additionalProperties": false
           }
         }
       },
-      "required": [
-        "managerId",
-        "message"
-      ],
+      "required": ["managerId", "message"],
       "additionalProperties": false
     }
   },
@@ -1591,9 +1409,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "managerId"
-      ],
+      "required": ["managerId"],
       "additionalProperties": false
     }
   },
@@ -1609,14 +1425,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "running",
-              "waiting_human",
-              "done",
-              "failed",
-              "lost",
-              "stopped"
-            ]
+            "enum": ["running", "waiting_human", "done", "failed", "lost", "stopped"]
           }
         },
         "q": {
@@ -1649,10 +1458,7 @@
         "part": {
           "description": "report=直近の報告（既定） / request=依頼文",
           "type": "string",
-          "enum": [
-            "report",
-            "request"
-          ]
+          "enum": ["report", "request"]
         },
         "offset": {
           "description": "何文字目から読むか（0以上の整数）。前回の応答が示した続きの位置を渡す",
@@ -1667,9 +1473,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "managerId"
-      ],
+      "required": ["managerId"],
       "additionalProperties": false
     }
   },
@@ -1697,9 +1501,7 @@
           }
         }
       },
-      "required": [
-        "taskId"
-      ],
+      "required": ["taskId"],
       "additionalProperties": false
     }
   },
@@ -1725,9 +1527,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "path"
-      ],
+      "required": ["path"],
       "additionalProperties": false
     }
   },
@@ -1745,13 +1545,7 @@
         "from": {
           "description": "上げた主体の分類（人間・クローン・マネージャー・連携の鍵・不明）",
           "type": "string",
-          "enum": [
-            "human",
-            "clone",
-            "manager",
-            "integration",
-            "unknown"
-          ]
+          "enum": ["human", "clone", "manager", "integration", "unknown"]
         },
         "conversationId": {
           "description": "この会話に結ばれた添付だけ（完全な id か、1つの会話に決まる 8 文字以上の先頭）",
@@ -1789,10 +1583,7 @@
           "description": "true＝保存の印を付ける・false＝外す"
         }
       },
-      "required": [
-        "id",
-        "keep"
-      ],
+      "required": ["id", "keep"],
       "additionalProperties": false
     }
   },
@@ -1809,9 +1600,7 @@
           "description": "消す添付の id（file_list / file_put の応答）"
         }
       },
-      "required": [
-        "id"
-      ],
+      "required": ["id"],
       "additionalProperties": false
     }
   },
@@ -1832,9 +1621,7 @@
           "description": "添える添付の id（file_put の応答の id）。1件以上"
         }
       },
-      "required": [
-        "ids"
-      ],
+      "required": ["ids"],
       "additionalProperties": false
     }
   },
@@ -1851,9 +1638,7 @@
           "description": "添付の id（通知行の id=… / conversation_read の添付行）"
         }
       },
-      "required": [
-        "id"
-      ],
+      "required": ["id"],
       "additionalProperties": false
     }
   },
@@ -1875,11 +1660,7 @@
         "speaker": {
           "description": "既定 both。human で人間自身の発言だけ（clone はクローンの返答だけ）",
           "type": "string",
-          "enum": [
-            "human",
-            "clone",
-            "both"
-          ]
+          "enum": ["human", "clone", "both"]
         },
         "since": {
           "description": "ISO 8601。この時刻以降だけ返す（例 2026-08-15T09:00:00Z）",
@@ -1949,9 +1730,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "managerId"
-      ],
+      "required": ["managerId"],
       "additionalProperties": false
     }
   },
@@ -1975,10 +1754,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "archiveId",
-        "summary"
-      ],
+      "required": ["archiveId", "summary"],
       "additionalProperties": false
     }
   },
@@ -2013,9 +1789,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "summary"
-      ],
+      "required": ["summary"],
       "additionalProperties": false
     }
   },
