@@ -193,6 +193,7 @@ import {
   describeSituation,
   describeSituationUnavailable,
   readAtLabel,
+  TASK_QUEUE_HEAD_KEY,
   type SituationExplained,
 } from './situation.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
@@ -1016,6 +1017,11 @@ class Clone implements CloneHost {
    * 組んだ時点では控えへ書かない: 入力が SDK へ入らない回（二重配達の `human_answer`・計画の無い定期の起点・`#ensureQuery` の失敗）の全文は捨てられ、控えだけが「出した」と言い張って、会話に一度も載っていない全文を畳んでしまうため。
    */
   #situationExplainedStaged: SituationExplained | null = null;
+  /**
+   * 今回の断り書きで全文を出した待ち行列の先頭の材料（`TASK_QUEUE_HEAD_KEY` の控えに書き足す予定のもの）。`#situationExplainedStaged` と同じ流れ:
+   * `#taskQueueNotice` が組み、`#commitSituationExplained` が入力を SDK へ入れた後に確定する。別の持ち物にする理由: `#situationNoticeFor` が毎回の頭で `#situationExplainedStaged` を捨てるため
+   */
+  #taskQueueHeadStaged: string | null = null;
   #situationExplainedSessionId: string | undefined;
   #situationTurnsSinceFull = 0;
   /**
@@ -2456,6 +2462,7 @@ class Clone implements CloneHost {
         this.#notices.clearTurn();
         // 入力が入らなかった回の全文は控えへ移さず捨てる
         this.#situationExplainedStaged = null;
+        this.#taskQueueHeadStaged = null;
         this.#digestDelta.discardStaged();
         // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする
         if (this.#pumpTurnFailed) this.#resetDigestDelta('full', 'turn_failed');
@@ -3409,6 +3416,8 @@ class Clone implements CloneHost {
   // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
   // 見出しは「いつ数えた値か」を名乗る: この節は会話履歴へ連結されてターンの数だけ並び、時刻が無いと古い節と新しい節が見分けられないため
   async #taskQueueNoticeFor(events: InboxEvent[]): Promise<string> {
+    // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
+    this.#taskQueueHeadStaged = null;
     const event = events[0];
     if (event === undefined) return '';
 
@@ -3518,6 +3527,8 @@ class Clone implements CloneHost {
       taskList = await this.#stores.tasks.list();
     } catch (error) {
       noteDroppedRecord('待ち行列の読み出し', inboxEventShape(event), error);
+      // 読めなかった回は先頭を出していない: 控えを消して、次に読めた回は全文にする
+      this.#situationExplained.delete(TASK_QUEUE_HEAD_KEY);
       return {
         head: [
           `[system] **待ち行列を読めなかった（${readAtLabel(Date.now())} に試みた材料。理由: ${reasonOf(error)}）。** ` +
@@ -3529,19 +3540,50 @@ class Clone implements CloneHost {
       };
     }
     if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
-    const head = [
-      `[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`,
-      ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
-    ];
-    return { head, placed: placedLines, failed: failedLines };
+    return {
+      head: this.#foldedTaskQueueHead(
+        describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
+        placed.map((pending) => pending.id),
+      ),
+      placed: placedLines,
+      failed: failedLines,
+    };
+  }
+
+  // 前のターンに全文を出した先頭の行と1文字も違わなければ、見出しを含む全体を1行にする（`describeSituation` の「前のターンと変化なし」と同じ型）。
+  // 比べるのは先頭の行だけ: 見出しの時刻は毎回変わるので材料に入れない（時刻は、会話に並んだ古い節と新しい節を見分けるために見出しへ入れてある）。
+  // 全文へ戻す条件は `#situationNoticeFor` と同じ（会話が変わった・要約が走りうる・周期）。確定は入力を SDK へ入れた後（`#commitSituationExplained`）
+  // いま積んだ発言の task の行は材料から除く: 人間の task は先頭に載るので、入れると毎回別の id になり、人間の発言のターンでは1度も一致しないため（その task は「いま積んだ」の行が名乗る）
+  #foldedTaskQueueHead(rows: readonly string[], placedIds: readonly string[]): string[] {
+    const at = Date.now();
+    const full = [`[system] 待ち行列（${readAtLabel(at)} に数えた材料）`, ...rows];
+    if (!this.#tokenSaving.foldFixedText) return full;
+    const kept = rows.filter((row) => !placedIds.some((id) => row.startsWith(`- ${id}（`)));
+    const materials = kept.join('\n');
+    const mayFold =
+      this.#fullReasonThisTurn() === null &&
+      this.#situationTurnsSinceFull + 1 < SITUATION_FULL_EVERY_TURNS;
+    if (mayFold && this.#situationExplained.get(TASK_QUEUE_HEAD_KEY) === materials) {
+      // 先頭から除いた行があるときは、それを言う: 新しい task が先頭に加わっているのに「変化なし」とだけ書くと嘘になるため
+      const excluded = kept.length < rows.length ? 'いま積んだ task を除くと、' : '';
+      return [
+        `[system] 待ち行列: ${excluded}前のターンと変化なし（${readAtLabel(at)} に数え直した）。`,
+      ];
+    }
+    this.#taskQueueHeadStaged = materials;
+    return full;
   }
 
   // 入力を SDK へ押し込めた直後にだけ呼ぶ: 全文が会話に載ったと言えるのはそのときだけのため
   #commitSituationExplained(): void {
+    const headStaged = this.#taskQueueHeadStaged;
+    this.#taskQueueHeadStaged = null;
     const staged = this.#situationExplainedStaged;
-    if (staged === null) return;
     this.#situationExplainedStaged = null;
-    for (const [key, text] of staged) this.#situationExplained.set(key, text);
+    if (staged !== null) {
+      for (const [key, text] of staged) this.#situationExplained.set(key, text);
+    }
+    if (headStaged !== null) this.#situationExplained.set(TASK_QUEUE_HEAD_KEY, headStaged);
   }
 
   // 1本のメソッドにする: 式 `this.#delivery.inbox.size + this.#delivery.deferredCount` を毎ターンの状況の節と `manager_list` の2箇所に書き写すと、どちらかだけ直して2つの数字が食い違いうるため

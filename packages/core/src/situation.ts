@@ -28,7 +28,14 @@ const SITUATION_HEAD = '[system] いまの全体';
  * 本文が1バイトでも違えば全文を出し直す。同じなら要点の1文だけを残して畳む: 毎ターン同じ説明が約5千字ずつ会話に積もり、文脈を食うため（2026-10-11、#4476）。
  * 数の行は畳まない。控えを空にするのは呼び手（会話の始まり・文脈の要約・一定ターンごと）: 会話の中に全文が1つも残っていない状態で参照だけを出さないため。
  */
-export type SituationExplained = Map<SituationExplanationKey | typeof MATERIALS_KEY, string>;
+export type SituationExplained = Map<
+  SituationExplanationKey | typeof MATERIALS_KEY | typeof TASK_QUEUE_HEAD_KEY,
+  string
+>;
+
+// 断り書きの待ち行列の先頭を前回出した形のまま控える鍵。`describeSituation` は読み書きしない（断り書き側 `#taskQueueNotice` が使う）。
+// 同じ控えに同居させる理由は `MATERIALS_KEY` と同じ: 空にする条件・入力が SDK へ入った後にだけ確定する仕組みを、別の控えを作らず使うため
+export const TASK_QUEUE_HEAD_KEY = 'taskQueueHead';
 
 type SituationExplanationKey =
   'lost' | 'lastFailure' | 'usageStopped' | 'runnerVanished' | 'readings' | 'tokenInvariant';
