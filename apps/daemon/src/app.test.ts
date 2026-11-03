@@ -69,6 +69,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
+import { readAppSource, readAppSources } from './app-sources.test-support.js';
 import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
@@ -6689,6 +6690,33 @@ function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): Rou
   return mismatches;
 }
 
+// `findRouteStatusMismatches` が見た経路の本数。0 件なら「見ていない」のであって「合っている」ではない。
+function countAuditedRoutes(sourceText: string, fileName: string): number {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let count = 0;
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      HTTP_METHOD_NAMES_FOR_STATUS_AUDIT.has(node.expression.name.text)
+    ) {
+      const firstArg = node.arguments[0];
+      if (firstArg !== undefined && ts.isStringLiteral(firstArg) && firstArg.text.startsWith('/')) {
+        count += 1;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return count;
+}
+
 describe('OpenAPI', () => {
   it('GET /auth/:provider/callback: 実際に返る 400 が openapi.json の宣言にも現れる（issue #1633）', async () => {
     const response = await app.request('/auth/fake/callback');
@@ -6705,10 +6733,20 @@ describe('OpenAPI', () => {
     ).toContain('400');
   });
 
+  it('ステータスの突き合わせが、経路を実際に読んでいる（経路が別ファイルへ移って 0 件のまま緑になる空振りを防ぐ）', () => {
+    const audited = readAppSources().reduce(
+      (total, { name, source }) => total + countAuditedRoutes(source, name),
+      0,
+    );
+    // 鎖の 110 本＋ `/openapi.json`・`/docs`
+    expect(audited).toBeGreaterThanOrEqual(112);
+  });
+
   // 正規表現で3桁の数字を拾わない: コメントや説明文中の数字を宣言・応答と誤読するため、AST で読む。
   it('describeRoute の宣言ステータスと、ハンドラが実際に返すリテラルのステータスが一致する（#1633 再発防止）', () => {
-    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
-    const mismatches = findRouteStatusMismatches(source);
+    const mismatches = readAppSources().flatMap(({ name, source }) =>
+      findRouteStatusMismatches(source, name),
+    );
     expect(
       mismatches,
       '【赤の意味】以下の経路で、ハンドラが実際に返すステータスが describeRoute の ' +
@@ -9918,7 +9956,7 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
 
   // 原文を読む: 型でも実行時でもこの不変条件を表せない（`validator` は公開 API で import を禁じられない）から。
   it("app.ts に validator('json' の直書きが1件も無い（jsonBody の中の1箇所を除く）", () => {
-    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+    const source = readAppSource();
     const bare = source
       .split('\n')
       .map((line, index) => ({ line: index + 1, text: line }))

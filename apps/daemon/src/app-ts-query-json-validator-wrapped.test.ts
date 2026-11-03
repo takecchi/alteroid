@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
-
 import { describe, expect, it } from 'vitest';
 
+import { readAppSource } from './app-sources.test-support.js';
+
 describe("app.ts に validator('json'|'query', ...) の直接呼び出しが増えていない（付け忘れ防止の歯）", () => {
-  const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+  const source = readAppSource();
 
   const codeLines = source.split('\n').filter((line) => !/^\s*(\*|\/\/)/.test(line));
 
