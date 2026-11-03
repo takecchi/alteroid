@@ -11,16 +11,16 @@ import {
 // 外部サービスの線は連携の鍵で受け付けたものだけにする: 外部から呼んだわけではないものを外部として光らせると、観測が嘘になるため。
 // 日誌の `external_event` からは拾わない: `at` が受信箱から取り出して書いた時刻で受け付けた時刻ではなく、拾うと同じ呼び出しで線が2度光るため。
 
-export type LinkDirection = 'down' | 'up' | 'activity';
+type LinkDirection = 'down' | 'up' | 'activity';
 
-export interface LinkActivity {
+interface LinkActivity {
   key: string;
   lastDownAt?: string;
   lastUpAt?: string;
   lastActivityAt?: string;
 }
 
-export interface WorkerActivity {
+interface WorkerActivity {
   managerId: string;
   agentType: string;
   lastTool?: string;
@@ -32,7 +32,7 @@ export interface WorkerActivity {
   model?: string;
 }
 
-export interface ExternalActivity {
+interface ExternalActivity {
   keyId: string;
   name: string;
   source: string;
@@ -95,13 +95,13 @@ export function peerAgentType(provider: string): string {
   return `peer:${provider}`;
 }
 
-export interface LinkTouch {
+interface LinkTouch {
   key: string;
   direction: LinkDirection;
   at: string;
 }
 
-export interface WorkerTouch {
+interface WorkerTouch {
   managerId: string;
   agentType: string;
   at: string;
@@ -119,12 +119,12 @@ export interface ExternalTouch {
   at: string;
 }
 
-export interface EntryMapping {
+interface EntryMapping {
   links: LinkTouch[];
   workers: WorkerTouch[];
 }
 
-export function managerIdOfActor(actor: string): string | undefined {
+function managerIdOfActor(actor: string): string | undefined {
   if (!actor.startsWith('manager:')) return undefined;
   const id = actor.slice('manager:'.length);
   return id.length === 0 ? undefined : id;
@@ -312,9 +312,9 @@ function later(current: string | undefined, next: string): string {
   return b > a ? next : current;
 }
 
-export const TOPOLOGY_TOOL_TOMBSTONE_CAP = 1000;
+const TOPOLOGY_TOOL_TOMBSTONE_CAP = 1000;
 
-export const TOPOLOGY_ACTIVITY_CAP = 2000;
+const TOPOLOGY_ACTIVITY_CAP = 2000;
 
 export interface TopologyActivityTracker {
   record(entry: JournalEntry): void;

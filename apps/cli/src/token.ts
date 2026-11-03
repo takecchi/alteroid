@@ -65,7 +65,7 @@ interface AgentTokenInput {
 export const SETTINGS_UNREADABLE_FIX_COMMAND =
   'alteroid token policy <free_exhausted|overage_exhausted|off> --cooldown-ms <ミリ秒>';
 
-export function describeSettingsUnreadable(reason: string | undefined): string {
+function describeSettingsUnreadable(reason: string | undefined): string {
   return (
     `回転の設定は読めない（消えたのではなく、読めない形で入っている）: ${reason ?? '理由不明'}\n` +
     `直すには、回す契機と冷却の既定の両方を指定して保存し直す（片方だけでは保存できない）:\n` +
@@ -88,9 +88,7 @@ export function describeActive(view: TokensView): string {
   return '';
 }
 
-export function describeRowsUnreadable(
-  unreadable: TokensView['rowsUnreadable'] | undefined,
-): string {
+function describeRowsUnreadable(unreadable: TokensView['rowsUnreadable'] | undefined): string {
   if (unreadable === undefined || unreadable.count === 0) return '';
   const lines = unreadable.rows.map((row) => {
     const identity =
@@ -115,7 +113,7 @@ export function describeRowsUnreadable(
   );
 }
 
-export function describeCarriedOver(view: PutTokensView): string {
+function describeCarriedOver(view: PutTokensView): string {
   // 件数を言わない: 読み直しに失敗しており、「持ち越した行は無い」と読めてしまうため
   if (view.viewUnavailable !== undefined) {
     return (

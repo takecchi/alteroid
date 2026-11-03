@@ -32,7 +32,7 @@ export async function droppedCommand(): Promise<void> {
   stdout.write(`${renderDropped(await response.json())}\n`);
 }
 
-export interface DroppedView {
+interface DroppedView {
   origin: DroppedTraceOrigin;
   since: string;
   limit: number;

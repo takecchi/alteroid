@@ -18,7 +18,7 @@ export function normalizeCommandWord(line: string): string {
   return line.replace(/^\/(?!\/)\S+/, (word) => word.toLowerCase());
 }
 
-export type ParsedCount = { ok: true; value: number } | { ok: false; message: string };
+type ParsedCount = { ok: true; value: number } | { ok: false; message: string };
 
 // `Number()` に任せず `/^\d+$/` で読む: `1e1`・`0x10`・`+5`・`1.0` を数として通さないため。`max` が無ければ上限はデーモンに任せる
 export function parseCountArg(token: string, max?: number): ParsedCount {

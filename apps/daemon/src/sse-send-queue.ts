@@ -2,7 +2,7 @@
 export const SSE_SEND_QUEUE_MAX_ITEMS = 5_000;
 export const SSE_SEND_QUEUE_MAX_CHARS = 16_000_000;
 
-export interface QueuedSseItem<T> {
+interface QueuedSseItem<T> {
   readonly value: T;
   /** 書き出す `data`。積むときに1回だけ直列化し、字数の勘定と書き出しで使い回す。 */
   readonly data: string;

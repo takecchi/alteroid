@@ -17,7 +17,7 @@ import {
 import { redactBody } from './redact.js';
 import { resolveTarget } from './target.js';
 
-export interface PermissionListOptions {
+interface PermissionListOptions {
   all?: boolean;
   now?: Date;
 }

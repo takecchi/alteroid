@@ -47,7 +47,7 @@ async function readAllForRead(): Promise<CredentialFile> {
   return current.value;
 }
 
-export function credentialKey(baseUrl: string): string {
+function credentialKey(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 

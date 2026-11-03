@@ -7,7 +7,7 @@ import { describeFailedResponse } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { resolveTarget } from './target.js';
 
-export interface TopologyView {
+interface TopologyView {
   observedAt: string;
   clone: { state: string; turn?: { conversationId?: string; kind: string } };
   storage: { label?: string; state: string; checkedAt?: string; error?: string };
@@ -233,7 +233,7 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
   return lines.join('\n');
 }
 
-export interface TopologyOptions {
+interface TopologyOptions {
   json?: boolean;
   watch?: boolean;
 }

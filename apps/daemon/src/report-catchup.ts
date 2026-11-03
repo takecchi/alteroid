@@ -7,7 +7,7 @@ import {
 } from '@alteroid/core';
 import type { InboxEvent, JournalEntryInput, JournalStore, TimeOfDay } from '@alteroid/core';
 
-export interface DailyReportCatchupOptions {
+interface DailyReportCatchupOptions {
   journal: Pick<JournalStore, 'listPage' | 'append'>;
   at: TimeOfDay;
   lookbackDays: number;

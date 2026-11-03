@@ -1,11 +1,11 @@
-export const PORT_ENV_KEY = 'ALTEROID_PORT';
+const PORT_ENV_KEY = 'ALTEROID_PORT';
 export const DEFAULT_PORT = 4517;
-export const MIN_PORT = 1;
-export const MAX_PORT = 65535;
+const MIN_PORT = 1;
+const MAX_PORT = 65535;
 
 const MAX_SHOWN_CHARS = 40;
 
-export type PortResolution = { ok: true; port: number } | { ok: false; message: string };
+type PortResolution = { ok: true; port: number } | { ok: false; message: string };
 
 function showSafely(raw: string): string {
   const chars = Array.from(raw);

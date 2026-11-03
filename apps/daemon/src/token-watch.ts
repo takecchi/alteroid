@@ -25,9 +25,9 @@ export interface TokenRotationWatch {
 export const TOKEN_WATCH_TICK_MS = 60_000;
 
 // 連打を畳む: `PUT /tokens` の連打で probe を何周も焼かないため。
-export const MIN_RECONSIDER_GAP_MS = 5_000;
+const MIN_RECONSIDER_GAP_MS = 5_000;
 
-export interface TokenRotationWatchOptions {
+interface TokenRotationWatchOptions {
   rotator: TokenRotator;
   onOutcome: (outcome: TokenRotationOutcome) => Promise<void>;
   tickMs?: number;

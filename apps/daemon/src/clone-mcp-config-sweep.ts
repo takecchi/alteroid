@@ -17,7 +17,7 @@ import { startPeriodicRun, type PeriodicRun } from './periodic-runner.js';
 // 元は core の `DEFAULT_SCRATCH_SWEEP_INTERVAL_MS`（10 分）。別の値を置くと片方だけ残る時間が延びる
 export const CLONE_MCP_CONFIG_SWEEP_EVERY_MS = DEFAULT_SCRATCH_SWEEP_INTERVAL_MS;
 
-export interface CloneMcpConfigSweeperOptions {
+interface CloneMcpConfigSweeperOptions {
   readonly journal: Pick<JournalStore, 'append'>;
   readonly sweep?: (options: CloneMcpConfigSweepOptions) => Promise<CloneMcpConfigSweepResult>;
   readonly now?: () => number;
@@ -29,7 +29,7 @@ export interface CloneMcpConfigSweeperOptions {
 }
 
 /** `refresh` は1回掃く（掃きの失敗では投げない）。走っている間は、その回を返す */
-export type CloneMcpConfigSweeper = PeriodicRun<void>;
+type CloneMcpConfigSweeper = PeriodicRun<void>;
 
 // 失敗の同一性の鍵: 同じ失敗を毎周期書かないため（runner の掃きの `#mcpConfigSweepFailedNotified` と同じ作法）
 const failureKey = (name: string, reason: string): string => `${name}\u0000${reason}`;

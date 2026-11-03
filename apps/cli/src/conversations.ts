@@ -45,7 +45,7 @@ export type ConversationMessage = Omit<LogicConversationMessage, 'attachments'> 
   attachments?: Pick<MessageAttachment, 'id' | 'name' | 'mediaType' | 'size'>[];
 };
 
-export interface ConversationsListOptions {
+interface ConversationsListOptions {
   limit?: string;
   scan?: string;
   cursor?: string;
@@ -103,7 +103,7 @@ export async function fetchUnreadTotalLine(client: DaemonClient): Promise<string
   }
 }
 
-export type ConversationsListPage = Omit<ConversationsResponse, 'conversations'> & {
+type ConversationsListPage = Omit<ConversationsResponse, 'conversations'> & {
   conversations: ConversationSummary[];
 };
 
@@ -115,7 +115,7 @@ export interface ConversationsListHints {
   show: string;
 }
 
-export const CONVERSATIONS_LIST_HINTS: ConversationsListHints = {
+const CONVERSATIONS_LIST_HINTS: ConversationsListHints = {
   scan: '--scan',
   limit: '--limit',
   next: (cursor) => `alteroid conversations list --cursor ${cursor}`,
@@ -179,7 +179,7 @@ export function unreadMark(unreadCount: number | undefined): string {
   return unreadCount !== undefined && unreadCount > 0 ? `  未読 ${unreadCount}` : '';
 }
 
-export interface ConversationsShowOptions {
+interface ConversationsShowOptions {
   scan?: string;
   includeSuperseded?: boolean;
 }

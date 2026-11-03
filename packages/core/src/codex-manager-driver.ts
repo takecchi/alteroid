@@ -93,7 +93,7 @@ import { redactErrorText, redactSecretsInBody } from './redact.js';
 import type { UsageTotals } from './usage.js';
 
 // Codex のサンドボックスを使わない: 器の中で動かない（bwrap が NG）ため、境界はコンテナと別 UID に任せる
-export const CODEX_SANDBOX: CodexSandboxMode = 'danger-full-access';
+const CODEX_SANDBOX: CodexSandboxMode = 'danger-full-access';
 
 // ChatGPT ログインのときは付けない: ephemeral は auth.json を読まず、既存の ChatGPT ログインが見えなくなるため
 export const CODEX_EPHEMERAL_AUTH_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
@@ -137,14 +137,14 @@ const TOOL_NAME_FILE_CHANGE = 'fileChange';
 
 const DEFAULT_CLOSE_GRACE_MS = 1500;
 
-export interface CodexManagerDriverOptions {
+interface CodexManagerDriverOptions {
   closeGraceMs?: number;
   /** runner に降りた ChatGPT ログイン。無ければ今までどおり（`CODEX_HOME` に触らない）。 */
   chatgptAuth?: CodexChatgptAuthHandle;
 }
 
 // CODEX_API_KEY を子の env に残さない: 鍵は account/login/start で渡すので子に要らず、モデルが実行するシェルから読めてしまうため
-export function childEnvOf(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+function childEnvOf(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...env };
   delete out[CODEX_API_KEY_ENV_NAME];
   return out;
@@ -839,7 +839,7 @@ export function isUnauthorizedCodexError(info: unknown): boolean {
 }
 
 // 画像を一時ファイル（localImage）にしない: 書き出しと後片付けが要らず、app-server が別のファイル系にいても届き、ターンの途中で落ちても残骸が出ないため
-export function toCodexInput(next: AgentUserInput): CodexUserInput[] {
+function toCodexInput(next: AgentUserInput): CodexUserInput[] {
   return [
     { type: 'text', text: next.text, text_elements: [] },
     ...(next.images ?? []).map((image): CodexUserInput => ({

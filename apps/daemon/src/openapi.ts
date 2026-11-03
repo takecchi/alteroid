@@ -80,14 +80,14 @@ export const attachmentMetaSchema = z.object({
   releasedAt: z.string().optional(),
 });
 
-export const attachmentFromSchema = z.enum(['human', 'clone', 'manager', 'integration', 'unknown']);
+const attachmentFromSchema = z.enum(['human', 'clone', 'manager', 'integration', 'unknown']);
 
 const attachmentUsageBucketSchema = z.object({
   count: z.number().int(),
   totalBytes: z.number().int(),
 });
 
-export const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
+const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
   byFrom: z.object({
     human: attachmentUsageBucketSchema,
     clone: attachmentUsageBucketSchema,
@@ -235,7 +235,7 @@ export const accountWithIdentitiesSchema = accountViewSchema.extend({
 });
 
 // 1件でも在るときだけ鍵ごと載せる: `{ count: 0 }` や空配列を作ると「読めない行は無い」と読めてしまうため。行の中身は載せない（id と不正な欄名だけ）。
-export const rowsUnreadableSchema = z.object({
+const rowsUnreadableSchema = z.object({
   count: z.number().int().positive(),
   rows: z.array(z.object({ id: z.string(), reason: z.string() })),
 });
@@ -248,7 +248,7 @@ export const accessListResponseSchema = z.object({
 export const accessAccountResponseSchema = z.object({ account: accountWithIdentitiesSchema });
 
 // 値（`altk_...`）も sha256 の全体も返さない: 見分けるための先頭12桁だけ。
-export const integrationKeyViewSchema = z.object({
+const integrationKeyViewSchema = z.object({
   id: z.string(),
   name: z.string(),
   source: z.string(),
@@ -425,7 +425,7 @@ export const practiceVersionListResponseSchema = z.object({
 });
 export const practiceVersionReadResponseSchema = z.object({ version: practiceVersionSchema });
 
-export const journalNextSchema = z.object({ id: z.string(), at: isoDateTimeSchema }).nullable();
+const journalNextSchema = z.object({ id: z.string(), at: isoDateTimeSchema }).nullable();
 
 export const journalListResponseSchema = z.object({
   entries: z.array(journalEntrySchema),
@@ -716,7 +716,7 @@ export const managersListResponseSchema = z.object({
 export const managerDetailResponseSchema = z.object({ manager: managerSummarySchema });
 
 // `managerSummarySchema` を再利用しない: あちらは `ManagerSummary` を丸ごと写す形で、ここに要るのは判定に使った3フィールドだけのため。
-export const unrecordedManagerSchema = z.object({
+const unrecordedManagerSchema = z.object({
   managerId: z.string(),
   status: jobStatusSchema,
   startedAt: z.string(),
@@ -861,7 +861,7 @@ export const runnersListResponseSchema = z.object({
 });
 
 // 「分からない」を表す値（`unknown`）を持つ: 配線されていない・聞きに行けない軸に `ok` / `idle` を作ると「確かめた」と読めるため。
-export const topologyCloneSchema = z.object({
+const topologyCloneSchema = z.object({
   state: z.enum(['idle', 'busy', 'usage_blocked', 'unknown']),
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
@@ -869,7 +869,7 @@ export const topologyCloneSchema = z.object({
   model: z.string().optional(),
 });
 
-export const topologyStorageSchema = z.object({
+const topologyStorageSchema = z.object({
   // 接続情報は載せない。
   label: z.string().optional(),
   state: z.enum(['ok', 'unreachable', 'unknown']),
@@ -986,7 +986,7 @@ const profileComposedFingerprintSchema = z.object({
 });
 
 // 本文を返す: 人間が自分で書いたものを読み直せないと typo ひとつ直せないため。
-export const profileEntrySchema = z.object({
+const profileEntrySchema = z.object({
   name: z.string(),
   script: z.string(),
   scope: profileScopeSchema,
@@ -998,7 +998,7 @@ export const profileEntrySchema = z.object({
 });
 
 // 本文は載せない: 値は送った本人が持っており、応答に載せる理由が無い口で鍵を往復させないため。
-export const profileEntrySummarySchema = profileEntrySchema.omit({ script: true });
+const profileEntrySummarySchema = profileEntrySchema.omit({ script: true });
 
 // 本文を返す口は実行環境の持ち主だけが通る（`/access` とは資格が違う）: 鍵をまるごと運ぶ口のため。
 export const profileResponseSchema = z.object({
@@ -1110,7 +1110,7 @@ const pluginSourceViewSchema = z.object({
 const pluginPathReasonSchema = z.object({ path: z.string(), reason: z.string() });
 const pluginPresenceSchema = z.object({ present: z.boolean(), paths: z.array(z.string()) });
 
-export const pluginPreviewSummarySchema = z.object({
+const pluginPreviewSummarySchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   source: pluginSourceViewSchema,
@@ -1161,7 +1161,7 @@ export const pluginInstallRequestSchema = z.strictObject({
   enableMcp: z.boolean().default(false),
 });
 
-export const pluginSummaryViewSchema = z.object({
+const pluginSummaryViewSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   source: pluginSourceViewSchema,
@@ -1334,7 +1334,7 @@ export const tokensPolicyUpdateRequestSchema = z.object({
 });
 
 // ここで zod の形にする: core の `dropped-record.ts` は stderr へ出す文字列とプレーンな TS の型しか持たず、zod スキーマが無いため。
-export const droppedTraceOriginSchema = z.literal('daemon');
+const droppedTraceOriginSchema = z.literal('daemon');
 
 export const droppedResponseSchema = z.object({
   origin: droppedTraceOriginSchema,
@@ -1462,7 +1462,7 @@ export const progressResponseSchema = z.object({
 });
 
 // `storedBytes` はデーモンの永続化層をまたいで比較してはならない: 置き場（pg / fs）がこの行に実際に使っている量で、生ログの文字数ではないため。
-export const archiveEntrySchema = z.object({
+const archiveEntrySchema = z.object({
   id: z.string(),
   sessionId: z.string(),
   at: z.string(),
@@ -1482,7 +1482,7 @@ export const archiveEntrySchema = z.object({
 export const archiveListResponseSchema = z.object({ entries: z.array(archiveEntrySchema) });
 
 // `absent` と `unknown` は別物: `unknown` は判定はできたが直前の行に指紋が無かった、`absent` はその行自体が判定の門より前に積まれた。
-export const archiveSessionSummarySchema = z.object({
+const archiveSessionSummarySchema = z.object({
   sessionId: z.string(),
   rows: z.number().int(),
   storedBytes: z.number().int(),
