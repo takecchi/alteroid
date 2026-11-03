@@ -35,20 +35,20 @@ export const CODEX_RPC_ERROR_CODES = {
   internalError: -32603,
 } as const;
 
-export type FieldMap<T> = {
+type FieldMap<T> = {
   readonly [K in keyof T]-?: Partial<Pick<T, K>> extends Pick<T, K> ? 'optional' : 'required';
 };
 
-export const CODEX_APPROVAL_POLICIES = ['untrusted', 'on-request', 'never'] as const;
+const CODEX_APPROVAL_POLICIES = ['untrusted', 'on-request', 'never'] as const;
 export type CodexApprovalPolicy = (typeof CODEX_APPROVAL_POLICIES)[number];
 
-export const CODEX_SANDBOX_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
+const CODEX_SANDBOX_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
 
-export const CODEX_TURN_STATUSES = ['completed', 'interrupted', 'failed', 'inProgress'] as const;
-export type CodexTurnStatus = (typeof CODEX_TURN_STATUSES)[number];
+const CODEX_TURN_STATUSES = ['completed', 'interrupted', 'failed', 'inProgress'] as const;
+type CodexTurnStatus = (typeof CODEX_TURN_STATUSES)[number];
 
-export const CODEX_COMMAND_APPROVAL_DECISIONS = [
+const CODEX_COMMAND_APPROVAL_DECISIONS = [
   'accept',
   'acceptForSession',
   'decline',
@@ -56,7 +56,7 @@ export const CODEX_COMMAND_APPROVAL_DECISIONS = [
 ] as const;
 export type CodexCommandApprovalDecision = (typeof CODEX_COMMAND_APPROVAL_DECISIONS)[number];
 
-export const CODEX_FILE_CHANGE_APPROVAL_DECISIONS = [
+const CODEX_FILE_CHANGE_APPROVAL_DECISIONS = [
   'accept',
   'acceptForSession',
   'decline',
@@ -64,11 +64,11 @@ export const CODEX_FILE_CHANGE_APPROVAL_DECISIONS = [
 ] as const;
 export type CodexFileChangeApprovalDecision = (typeof CODEX_FILE_CHANGE_APPROVAL_DECISIONS)[number];
 
-export const CODEX_PERMISSION_GRANT_SCOPES = ['turn', 'session'] as const;
-export type CodexPermissionGrantScope = (typeof CODEX_PERMISSION_GRANT_SCOPES)[number];
+const CODEX_PERMISSION_GRANT_SCOPES = ['turn', 'session'] as const;
+type CodexPermissionGrantScope = (typeof CODEX_PERMISSION_GRANT_SCOPES)[number];
 
-export const CODEX_ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const;
-export type CodexElicitationAction = (typeof CODEX_ELICITATION_ACTIONS)[number];
+const CODEX_ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const;
+type CodexElicitationAction = (typeof CODEX_ELICITATION_ACTIONS)[number];
 
 export const CODEX_ITEM_TYPES = [
   'userMessage',
@@ -110,13 +110,8 @@ export const CODEX_NON_TOOL_ITEM_TYPES = [
   'contextCompaction',
 ] as const;
 
-export const CODEX_COMMAND_EXECUTION_STATUSES = [
-  'inProgress',
-  'completed',
-  'failed',
-  'declined',
-] as const;
-export type CodexCommandExecutionStatus = (typeof CODEX_COMMAND_EXECUTION_STATUSES)[number];
+const CODEX_COMMAND_EXECUTION_STATUSES = ['inProgress', 'completed', 'failed', 'declined'] as const;
+type CodexCommandExecutionStatus = (typeof CODEX_COMMAND_EXECUTION_STATUSES)[number];
 
 export interface CodexClientInfo {
   name: string;
@@ -129,7 +124,7 @@ export interface CodexInitializeCapabilities {
   optOutNotificationMethods?: string[] | null;
 }
 
-export interface CodexInitializeParams {
+interface CodexInitializeParams {
   clientInfo: CodexClientInfo;
   capabilities?: CodexInitializeCapabilities | null;
 }
@@ -140,27 +135,27 @@ export interface CodexInitializeResponse {
   platformOs: string;
 }
 
-export interface CodexUserInputText {
+interface CodexUserInputText {
   type: 'text';
   text: string;
   text_elements?: unknown[];
 }
 
-export interface CodexUserInputImage {
+interface CodexUserInputImage {
   type: 'image';
   url: string;
 }
 
 export type CodexUserInput = CodexUserInputText | CodexUserInputImage;
 
-export interface CodexThread {
+interface CodexThread {
   id: string;
   cwd: string;
   /** [UNSTABLE] Path to the thread on disk（会話の記録 rollout の置き場）。無いことも null のこともある。 */
   path?: string | null;
 }
 
-export interface CodexTurnError {
+interface CodexTurnError {
   message: string;
   additionalDetails?: string | null;
   codexErrorInfo?: unknown;
@@ -173,7 +168,7 @@ export interface CodexTurn {
   error?: CodexTurnError | null;
 }
 
-export interface CodexThreadStartParams {
+interface CodexThreadStartParams {
   cwd?: string | null;
   model?: string | null;
   approvalPolicy?: CodexApprovalPolicy | null;
@@ -185,13 +180,13 @@ export interface CodexThreadStartParams {
   serviceName?: string | null;
 }
 
-export interface CodexThreadStartResponse {
+interface CodexThreadStartResponse {
   thread: CodexThread;
   model: string;
   approvalPolicy: CodexApprovalPolicy;
 }
 
-export interface CodexThreadResumeParams {
+interface CodexThreadResumeParams {
   threadId: string;
   cwd?: string | null;
   model?: string | null;
@@ -202,13 +197,13 @@ export interface CodexThreadResumeParams {
   config?: Record<string, unknown> | null;
 }
 
-export interface CodexThreadResumeResponse {
+interface CodexThreadResumeResponse {
   thread: CodexThread;
   model: string;
   approvalPolicy: CodexApprovalPolicy;
 }
 
-export interface CodexTurnStartParams {
+interface CodexTurnStartParams {
   threadId: string;
   input: CodexUserInput[];
   cwd?: string | null;
@@ -216,29 +211,29 @@ export interface CodexTurnStartParams {
   approvalPolicy?: CodexApprovalPolicy | null;
 }
 
-export interface CodexTurnStartResponse {
+interface CodexTurnStartResponse {
   turn: CodexTurn;
 }
 
-export interface CodexTurnInterruptParams {
+interface CodexTurnInterruptParams {
   threadId: string;
   turnId: string;
 }
 
-export interface CodexAgentMessageItem {
+interface CodexAgentMessageItem {
   type: 'agentMessage';
   id: string;
   text: string;
 }
 
-export interface CodexReasoningItem {
+interface CodexReasoningItem {
   type: 'reasoning';
   id: string;
   summary?: string[];
   content?: string[];
 }
 
-export interface CodexCommandExecutionItem {
+interface CodexCommandExecutionItem {
   type: 'commandExecution';
   id: string;
   command: string;
@@ -247,14 +242,14 @@ export interface CodexCommandExecutionItem {
   exitCode?: number | null;
 }
 
-export interface CodexFileChangeItem {
+interface CodexFileChangeItem {
   type: 'fileChange';
   id: string;
   status: CodexCommandExecutionStatus;
 }
 
 // type を CODEX_ITEM_TYPES の範囲に限らない: 知らない種類が来ても壊れないよう文字列で受けるため
-export interface CodexOtherItem {
+interface CodexOtherItem {
   type: string;
   id: string;
 }
@@ -266,33 +261,33 @@ export type CodexThreadItem =
   | CodexFileChangeItem
   | CodexOtherItem;
 
-export interface CodexThreadStartedNotification {
+interface CodexThreadStartedNotification {
   thread: CodexThread;
 }
 
-export interface CodexTurnStartedNotification {
+interface CodexTurnStartedNotification {
   threadId: string;
   turn: CodexTurn;
 }
 
-export interface CodexTurnCompletedNotification {
+interface CodexTurnCompletedNotification {
   threadId: string;
   turn: CodexTurn;
 }
 
-export interface CodexItemStartedNotification {
+interface CodexItemStartedNotification {
   threadId: string;
   turnId: string;
   item: CodexThreadItem;
 }
 
-export interface CodexItemCompletedNotification {
+interface CodexItemCompletedNotification {
   threadId: string;
   turnId: string;
   item: CodexThreadItem;
 }
 
-export interface CodexAgentMessageDeltaNotification {
+interface CodexAgentMessageDeltaNotification {
   threadId: string;
   turnId: string;
   itemId: string;
@@ -307,41 +302,41 @@ export interface CodexTokenUsageBreakdown {
   totalTokens: number;
 }
 
-export interface CodexThreadTokenUsage {
+interface CodexThreadTokenUsage {
   total: CodexTokenUsageBreakdown;
   last: CodexTokenUsageBreakdown;
   modelContextWindow?: number | null;
 }
 
-export interface CodexThreadTokenUsageUpdatedNotification {
+interface CodexThreadTokenUsageUpdatedNotification {
   threadId: string;
   turnId: string;
   tokenUsage: CodexThreadTokenUsage;
 }
 
-export interface CodexThreadCompactedNotification {
+interface CodexThreadCompactedNotification {
   threadId: string;
   turnId: string;
 }
 
-export interface CodexErrorNotification {
+interface CodexErrorNotification {
   threadId: string;
   turnId: string;
   error: CodexTurnError;
   willRetry: boolean;
 }
 
-export interface CodexWarningNotification {
+interface CodexWarningNotification {
   message: string;
   threadId?: string | null;
 }
 
-export interface CodexServerRequestResolvedNotification {
+interface CodexServerRequestResolvedNotification {
   threadId: string;
   requestId: CodexRequestId;
 }
 
-export interface CodexModelReroutedNotification {
+interface CodexModelReroutedNotification {
   threadId: string;
   turnId: string;
   fromModel: string;
@@ -355,14 +350,14 @@ export interface CodexRateLimitWindow {
   resetsAt?: number | null;
 }
 
-export const CODEX_RATE_LIMIT_REACHED_TYPES = [
+const CODEX_RATE_LIMIT_REACHED_TYPES = [
   'rate_limit_reached',
   'workspace_owner_credits_depleted',
   'workspace_member_credits_depleted',
   'workspace_owner_usage_limit_reached',
   'workspace_member_usage_limit_reached',
 ] as const;
-export type CodexRateLimitReachedType = (typeof CODEX_RATE_LIMIT_REACHED_TYPES)[number];
+type CodexRateLimitReachedType = (typeof CODEX_RATE_LIMIT_REACHED_TYPES)[number];
 
 export interface CodexRateLimitSnapshot {
   limitId?: string | null;
@@ -373,11 +368,11 @@ export interface CodexRateLimitSnapshot {
   spendControlReached?: boolean | null;
 }
 
-export interface CodexAccountRateLimitsUpdatedNotification {
+interface CodexAccountRateLimitsUpdatedNotification {
   rateLimits: CodexRateLimitSnapshot;
 }
 
-export interface CodexAccountUpdatedNotification {
+interface CodexAccountUpdatedNotification {
   authMode?: string | null;
   planType?: string | null;
 }
@@ -388,7 +383,7 @@ export interface CodexAccountLoginCompletedNotification {
   error?: string | null;
 }
 
-export interface CodexCommandExecutionApprovalParams {
+interface CodexCommandExecutionApprovalParams {
   threadId: string;
   turnId: string;
   itemId: string;
@@ -402,7 +397,7 @@ export interface CodexCommandExecutionApprovalResponse {
   decision: CodexCommandApprovalDecision;
 }
 
-export interface CodexFileChangeApprovalParams {
+interface CodexFileChangeApprovalParams {
   threadId: string;
   turnId: string;
   itemId: string;
@@ -414,7 +409,7 @@ export interface CodexFileChangeApprovalResponse {
   decision: CodexFileChangeApprovalDecision;
 }
 
-export interface CodexPermissionsApprovalParams {
+interface CodexPermissionsApprovalParams {
   threadId: string;
   turnId: string;
   itemId: string;
@@ -428,12 +423,12 @@ export interface CodexPermissionsApprovalResponse {
   scope?: CodexPermissionGrantScope | null;
 }
 
-export interface CodexUserInputQuestionOption {
+interface CodexUserInputQuestionOption {
   label: string;
   description: string;
 }
 
-export interface CodexUserInputQuestion {
+interface CodexUserInputQuestion {
   id: string;
   header: string;
   question: string;
@@ -442,7 +437,7 @@ export interface CodexUserInputQuestion {
   options?: CodexUserInputQuestionOption[] | null;
 }
 
-export interface CodexToolUserInputParams {
+interface CodexToolUserInputParams {
   threadId: string;
   turnId: string;
   itemId: string;
@@ -450,15 +445,15 @@ export interface CodexToolUserInputParams {
   questions: CodexUserInputQuestion[];
 }
 
-export interface CodexToolUserInputAnswer {
+interface CodexToolUserInputAnswer {
   answers: string[];
 }
 
-export interface CodexToolUserInputResponse {
+interface CodexToolUserInputResponse {
   answers: Record<string, CodexToolUserInputAnswer>;
 }
 
-export interface CodexMcpElicitationParams {
+interface CodexMcpElicitationParams {
   threadId: string;
   serverName: string;
   turnId?: string | null;
@@ -469,25 +464,25 @@ export interface CodexMcpElicitationResponse {
   content?: unknown;
 }
 
-export interface CodexGetAccountParams {
+interface CodexGetAccountParams {
   refreshToken?: boolean;
 }
 
-export interface CodexAccountApiKey {
+interface CodexAccountApiKey {
   type: 'apiKey';
 }
 
-export interface CodexAccountChatgpt {
+interface CodexAccountChatgpt {
   type: 'chatgpt';
   email: string | null;
   planType: string;
 }
 
-export interface CodexAccountOther {
+interface CodexAccountOther {
   type: string;
 }
 
-export type CodexAccount = CodexAccountApiKey | CodexAccountChatgpt | CodexAccountOther;
+type CodexAccount = CodexAccountApiKey | CodexAccountChatgpt | CodexAccountOther;
 
 export interface CodexGetAccountResponse {
   requiresOpenaiAuth: boolean;
@@ -499,55 +494,55 @@ export interface CodexLoginApiKeyParams {
   apiKey: string;
 }
 
-export interface CodexLoginChatgptParams {
+interface CodexLoginChatgptParams {
   type: 'chatgpt';
 }
 
-export interface CodexLoginChatgptDeviceCodeParams {
+interface CodexLoginChatgptDeviceCodeParams {
   type: 'chatgptDeviceCode';
 }
 
-export type CodexLoginAccountParams =
+type CodexLoginAccountParams =
   CodexLoginApiKeyParams | CodexLoginChatgptParams | CodexLoginChatgptDeviceCodeParams;
 
-export interface CodexLoginApiKeyResponse {
+interface CodexLoginApiKeyResponse {
   type: 'apiKey';
 }
 
-export interface CodexLoginChatgptResponse {
+interface CodexLoginChatgptResponse {
   type: 'chatgpt';
   authUrl: string;
   loginId: string;
 }
 
-export interface CodexLoginChatgptDeviceCodeResponse {
+interface CodexLoginChatgptDeviceCodeResponse {
   type: 'chatgptDeviceCode';
   loginId: string;
   userCode: string;
   verificationUrl: string;
 }
 
-export type CodexLoginAccountResponse =
+type CodexLoginAccountResponse =
   CodexLoginApiKeyResponse | CodexLoginChatgptResponse | CodexLoginChatgptDeviceCodeResponse;
 
-export interface CodexCancelLoginParams {
+interface CodexCancelLoginParams {
   loginId: string;
 }
 
-export const CODEX_CANCEL_LOGIN_STATUSES = ['canceled', 'notFound'] as const;
-export type CodexCancelLoginStatus = (typeof CODEX_CANCEL_LOGIN_STATUSES)[number];
+const CODEX_CANCEL_LOGIN_STATUSES = ['canceled', 'notFound'] as const;
+type CodexCancelLoginStatus = (typeof CODEX_CANCEL_LOGIN_STATUSES)[number];
 
-export interface CodexCancelLoginResponse {
+interface CodexCancelLoginResponse {
   status: CodexCancelLoginStatus;
 }
 
-export interface CodexModelListParams {
+interface CodexModelListParams {
   cursor?: string | null;
   limit?: number | null;
   includeHidden?: boolean | null;
 }
 
-export interface CodexModel {
+interface CodexModel {
   id: string;
   model: string;
   displayName: string;
@@ -555,7 +550,7 @@ export interface CodexModel {
   hidden: boolean;
 }
 
-export interface CodexModelListResponse {
+interface CodexModelListResponse {
   data: CodexModel[];
   nextCursor?: string | null;
 }
@@ -678,7 +673,7 @@ export const CODEX_SERVER_REQUESTS = {
   },
 } as const satisfies Record<CodexServerRequestMethod, { params: string; result: string }>;
 
-export interface CodexSchemaUse {
+interface CodexSchemaUse {
   readonly def: string;
   readonly variant?: { readonly key: string; readonly value: string };
   readonly direction: 'send' | 'receive';
@@ -1044,7 +1039,7 @@ export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
   }),
 ];
 
-export interface CodexSchemaEnum {
+interface CodexSchemaEnum {
   readonly def: string;
   readonly values: readonly string[];
 }
