@@ -1174,7 +1174,7 @@ interface ManagerPoolStopOptions {
  * 理由の記録は呼び出し側の仕事で、ここは `allowed-with-override` に `managerId` と `reason` を載せるだけ。
  *
  * override を持つのは単発の口（`archive_remove` / `DELETE /archive/:id`）だけで、一括の口は
- * `undefined` を渡す（逐語は `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined' packages/core/src/tools.ts`）:
+ * `undefined` を渡す（逐語は `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined' packages/core/src/clone-tools-ops.ts`）:
  * 理由1本で全件を開けると「どの1件をなぜ開けたか」が記録から消える。一括だから速い経路を別に引かない:
  * 引いた瞬間に退避を守る方針が片方の口からだけ消える。
  *
