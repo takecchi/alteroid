@@ -6,6 +6,7 @@
  */
 
 import type { ConversationReadView } from './conversation-read.js';
+import { reasonOf } from './dropped-record.js';
 import { clipWithEllipsis, codePointBoundary } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry, TurnFailureKind } from './schema.js';
@@ -263,7 +264,7 @@ export async function lookupWithdrawnForMessages(
   try {
     return { kind: 'ok', ids: await readWithdrawnClientMessageIds(journal, conversationId, since) };
   } catch (error) {
-    return { kind: 'unknown', reason: error instanceof Error ? error.message : String(error) };
+    return { kind: 'unknown', reason: reasonOf(error) };
   }
 }
 

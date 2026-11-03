@@ -1,5 +1,6 @@
 import { AttachmentContentRemoveError } from './attachment.js';
 import { lookupConversation, type ConversationLookup } from './conversation-lookup.js';
+import { reasonOf } from './dropped-record.js';
 import { removeInboxEventsAndStopDelivery } from './inbox-backlog.js';
 import { scanJournalPages } from './journal-scan.js';
 import type { Stores } from './store.js';
@@ -149,7 +150,7 @@ export async function deleteConversation(
     try {
       return await run();
     } catch (error) {
-      incomplete.push(`${what}（${error instanceof Error ? error.message : String(error)}）`);
+      incomplete.push(`${what}（${reasonOf(error)}）`);
       return fallback;
     }
   };

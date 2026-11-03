@@ -17,6 +17,7 @@ import type {
 import type { AgentProviderId } from './agent-ports.js';
 import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
+import { reasonOf } from './dropped-record.js';
 import { noteEnvValueNotUsed } from './env-value-not-used.js';
 import { excerptLine } from './excerpt.js';
 import { InputQueue } from './input-queue.js';
@@ -393,7 +394,7 @@ class PeerSession {
         () => this.#end('セッションが閉じた'),
         (error: unknown) =>
           this.#end(
-            `セッションが落ちた: ${error instanceof Error ? error.message : String(error)}`,
+            `セッションが落ちた: ${reasonOf(error)}`,
           ),
       );
   }
@@ -558,7 +559,7 @@ class PeerSession {
       entry.settle(
         {
           behavior: 'deny',
-          message: `承認を上げられなかったので拒否した: ${error instanceof Error ? error.message : String(error)}`,
+          message: `承認を上げられなかったので拒否した: ${reasonOf(error)}`,
         },
         'auto',
       );
@@ -704,7 +705,7 @@ class PeerSession {
       this.#workdirChanges = {
         dir,
         paths: [],
-        truncated: `作業場を探せなかった: ${error instanceof Error ? error.message : String(error)}`,
+        truncated: `作業場を探せなかった: ${reasonOf(error)}`,
       };
     }
   }
@@ -830,7 +831,7 @@ class PeerSession {
       });
     } catch (error) {
       this.#deps.onNote(
-        `peer（${this.provider}）[${this.id}] の消費を読めなかった: ${error instanceof Error ? error.message : String(error)}`,
+        `peer（${this.provider}）[${this.id}] の消費を読めなかった: ${reasonOf(error)}`,
       );
     }
   }
@@ -1085,7 +1086,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     try {
       session = new PeerSession(sessionId, id, deps, model);
     } catch (error) {
-      return `peer のセッションを開けなかった: ${error instanceof Error ? error.message : String(error)}`;
+      return `peer のセッションを開けなかった: ${reasonOf(error)}`;
     }
     session.lastUsedMs = nowMs();
     sessions.set(sessionId, session);
@@ -1135,7 +1136,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
         onStop(result);
       } catch (error) {
         deps.onNote(
-          `peer（${session.provider}）[${session.id}] の止まりどころを知らせられなかった: ${error instanceof Error ? error.message : String(error)}`,
+          `peer（${session.provider}）[${session.id}] の止まりどころを知らせられなかった: ${reasonOf(error)}`,
         );
       }
     });
@@ -1159,7 +1160,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       await deps.prepareResume?.(sessionId);
     } catch (error) {
       deps.onNote(
-        `peer（${known.provider}）[${sessionId}] を続きから起こせなかった（記録を戻せない）: ${error instanceof Error ? error.message : String(error)}`,
+        `peer（${known.provider}）[${sessionId}] を続きから起こせなかった（記録を戻せない）: ${reasonOf(error)}`,
       );
       return undefined;
     }
@@ -1174,7 +1175,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     try {
       session = new PeerSession(sessionId, resumable.provider, deps, undefined, resumable.threadId);
     } catch (error) {
-      return `peer のセッションを続きから開けなかった: ${error instanceof Error ? error.message : String(error)}`;
+      return `peer のセッションを続きから開けなかった: ${reasonOf(error)}`;
     }
     session.lastUsedMs = nowMs();
     sessions.set(sessionId, session);

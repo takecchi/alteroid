@@ -448,10 +448,7 @@ interface HeldPlugin {
 // 400 ではなく 500 で返す: 検査は通っており、入力の不正ではなく runner 側の事情のため
 export class RunnerPluginExtractError extends Error {
   constructor(cause: unknown) {
-    super(
-      `plugin を展開できなかった（置いていない）: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause },
-    );
+    super(`plugin を展開できなかった（置いていない）: ${reasonOf(cause)}`, { cause });
     this.name = 'RunnerPluginExtractError';
   }
 }

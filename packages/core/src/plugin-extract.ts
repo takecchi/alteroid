@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from './auth.js';
+import { reasonOf } from './dropped-record.js';
 import { pluginDirName, validatePluginFilePath, type StoredPlugin } from './plugins.js';
 import type { PluginStore } from './store.js';
 
@@ -736,13 +737,13 @@ export async function pruneRunnerPluginsOnBoot(
   try {
     await ensurePluginsDir(root, options);
   } catch (error) {
-    write(`alteroid-runner: plugin の置き場を信頼できないので、片づけない: ${messageOf(error)}\n`);
+    write(`alteroid-runner: plugin の置き場を信頼できないので、片づけない: ${reasonOf(error)}\n`);
     return undefined;
   }
   try {
     return await pruneExtractedPluginDirs(root, new Set());
   } catch (error) {
-    write(`alteroid-runner: 前の器の plugin の展開物を消せませんでした: ${messageOf(error)}\n`);
+    write(`alteroid-runner: 前の器の plugin の展開物を消せませんでした: ${reasonOf(error)}\n`);
     return undefined;
   }
 }
@@ -750,10 +751,6 @@ export async function pruneRunnerPluginsOnBoot(
 export interface PrunePluginsResult {
   readonly removed: string[];
   readonly failed: { entry: string; message: string }[];
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -775,7 +772,7 @@ export async function pruneExtractedPluginDirs(
       await removeTree(join(pluginsDir, entry));
       result.removed.push(entry);
     } catch (error) {
-      result.failed.push({ entry, message: messageOf(error) });
+      result.failed.push({ entry, message: reasonOf(error) });
     }
   }
   return result;
@@ -828,7 +825,7 @@ export async function extractPluginsForScopes(options: {
   try {
     summaries = await store.list();
   } catch (error) {
-    out.failures.push({ name: null, stage: 'list', message: messageOf(error) });
+    out.failures.push({ name: null, stage: 'list', message: reasonOf(error) });
     return out;
   }
   for (const summary of summaries) {
@@ -848,7 +845,7 @@ export async function extractPluginsForScopes(options: {
     try {
       plugin = await store.get(summary.name);
     } catch (error) {
-      out.failures.push({ name: summary.name, stage: 'get', message: messageOf(error) });
+      out.failures.push({ name: summary.name, stage: 'get', message: reasonOf(error) });
       continue;
     }
     if (plugin === null) {
@@ -867,7 +864,7 @@ export async function extractPluginsForScopes(options: {
         out.rebuilt.push({ name: plugin.name, ...extracted.rebuilt });
       }
     } catch (error) {
-      out.failures.push({ name: summary.name, stage: 'extract', message: messageOf(error) });
+      out.failures.push({ name: summary.name, stage: 'extract', message: reasonOf(error) });
     }
   }
   return out;

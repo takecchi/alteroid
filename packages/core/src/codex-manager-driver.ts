@@ -87,6 +87,7 @@ import { toCodexMcpServersConfig } from './codex-mcp-config.js';
 import { foldCodexRateLimits } from './codex-rate-limits.js';
 import { isCodexToolItem, toCodexToolAudit } from './codex-tool-audit.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
+import { reasonOf } from './dropped-record.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { redactErrorText, redactSecretsInBody } from './redact.js';
 import type { UsageTotals } from './usage.js';
@@ -309,7 +310,7 @@ class CodexManagerSession implements AgentManagerSession {
         codexHome = await handle.prepare();
       } catch (error) {
         const reason = this.#sanitizeText(
-          `ChatGPT ログインを CODEX_HOME へ書き出せなかった: ${error instanceof Error ? error.message : String(error)}`,
+          `ChatGPT ログインを CODEX_HOME へ書き出せなかった: ${reasonOf(error)}`,
         );
         this.#note(`Codex: ${reason}`);
         handle.reportFailure(reason);
@@ -641,7 +642,7 @@ class CodexManagerSession implements AgentManagerSession {
     } catch (error) {
       // 投げ直さない: 観測の失敗でセッションを止めないため
       this.#note(
-        `Codex: 道具の実行の記録（${item.type}）でフックが失敗した: ${error instanceof Error ? error.message : String(error)}`,
+        `Codex: 道具の実行の記録（${item.type}）でフックが失敗した: ${reasonOf(error)}`,
       );
     }
   }

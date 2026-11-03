@@ -1,6 +1,7 @@
 import {
   credentialNamesShadowedByProfile,
   fingerprintOf,
+  reasonOf,
   ROTATABLE_CREDENTIAL_KEYS,
   runnerDeclaredEnvNames,
   type RunnerRegistry,
@@ -162,9 +163,9 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
   };
 }
 
+// `reasonOf` は1行目だけを採り、伏せ字を通す（`null` / `undefined` では空文字を返すので、その場合だけ固定文言）
 function firstLine(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.split('\n')[0] ?? '理由不明';
+  return reasonOf(error) || '理由不明';
 }
 
 // 箱がまだ何も撒いていなければ何もしない: 器の環境変数へのフォールバックはどの経路にも残さないため。
