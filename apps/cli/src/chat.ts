@@ -1374,7 +1374,9 @@ export async function runSlashCommand(
   };
   // 書いて・失敗として渡して・会話を続ける。書き込み系の HTTP の失敗も失敗として渡す（#5240）: 渡さないと、非対話で止まらず終了コードも 0 になる。
   const fail = (message: string): 'ok' => {
-    return fail(message);
+    stdout.write(`${message}\n`);
+    onFailed(message);
+    return 'ok';
   };
 
   // 参照を省いて `scan=500` のように書くと、キーを id と取り違えてデーモンへ飛ばしてしまう。飛ばす前に断る。
