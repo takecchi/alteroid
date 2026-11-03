@@ -2517,6 +2517,27 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(read()).toContain('使い方: /answers');
   });
 
+  // 語の途中に引用符がある入力の割れ方。回答として送られた語を固定する。
+  // 旧（`/answers` 専用の tokenizeQuoted。引用符が語の先頭にあるときだけ効く）の割れ方:
+  //   `1 q2="a b"` → `q2="a` と `b"`（語が奇数になり使い方の誤りで何も送らない）
+  //   `1 "a"b`     → `a` と `b`（同上）
+  //   `1 "abc`     → 閉じない引用符は文字として残り、`"abc` が回答として送られた
+  // 新（`parseStructuredAnswer` と同じ tokenizeWithQuotes）の割れ方は下の期待値。
+  it.each([
+    { input: '/answers 1 q2="a b"', sent: 'q2=a b' },
+    { input: '/answers 1 "a"b', sent: 'ab' },
+    { input: '/answers 1 "abc', sent: 'abc' },
+  ])('語の途中の引用符: $input', async ({ input, sent }) => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(input, ...slashArgs(client, listedApprovals(['approval-1'])));
+
+    const answerCalls = calls.filter((call) => call.route === 'POST /approvals/answer');
+    const body = (answerCalls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(body).toEqual([{ id: 'approval-1', answer: sent }]);
+  });
+
   it('/help に /answers が載っている', async () => {
     const read = captureStdout();
     const { client } = stubClient();

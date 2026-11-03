@@ -16,6 +16,7 @@ import {
   type TokenTrialPort,
   writeStderrLine,
 } from '@alteroid/core';
+import { startPeriodicRun } from './periodic-runner.js';
 
 export const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
 
@@ -59,9 +60,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
   const now = options.now ?? (() => Date.now());
   const tickMs = options.tickMs ?? TOKEN_TRIAL_WATCH_TICK_MS;
 
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
   const lastTriedAt = new Map<string, number>();
   const failureCount = new Map<string, number>();
   const intervalOverride = new Map<string, number>();
@@ -70,15 +68,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
 
   const intervalMsFor = (tokenId: string): number =>
     intervalOverride.get(tokenId) ?? TOKEN_TRIAL_INTERVAL_MS;
-
-  const stop = (): void => {
-    stopped = true;
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  options.signal?.addEventListener('abort', stop, { once: true });
 
   function confirmPendingSuccesses(at: number): void {
     for (const [tokenId, successAt] of pendingConfirmation) {
@@ -136,7 +125,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
   }
 
   async function tickBody(): Promise<void> {
-    if (stopped) return;
     const at = now();
     confirmPendingSuccesses(at);
     const tokens = await options.stores.tokens.list();
@@ -168,30 +156,23 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       intervalMsFor,
     });
     if (target === undefined || target.value === undefined) return;
-    try {
-      await runOneTrial(target);
-    } catch (error) {
-      writeStderrLine(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
-    }
+    await runOneTrial(target);
   }
 
-  // 例外は全部ここで握る: reject のまま出ると `void tick().finally(schedule)` が未処理の拒否になり、デーモンごと落ちるため。
-  async function tick(): Promise<void> {
-    try {
+  // 骨組みは起動時にすぐ1回走らせるが、この監視は従来どおり最初の回を `tickMs` 後にする（起動直後に試さない）ため、最初の1回は空で返す。
+  // 投げた失敗は骨組みが stderr に1行残して次の回を予約する（未処理の拒否にならない）。
+  let skipFirst = true;
+  const periodic = startPeriodicRun({
+    intervalMs: tickMs,
+    signal: options.signal,
+    run: async () => {
+      if (skipFirst) {
+        skipFirst = false;
+        return;
+      }
       await tickBody();
-    } catch (error) {
-      writeStderrLine(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
-    }
-  }
-
-  const schedule = (): void => {
-    if (stopped) return;
-    timer = setTimeout(() => {
-      void tick().finally(schedule);
-    }, tickMs);
-    timer.unref?.();
-  };
-  schedule();
+    },
+  });
 
   return {
     noteRejection: (tokenId, at) => {
@@ -202,6 +183,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       pendingConfirmation.delete(tokenId);
       intervalOverride.set(tokenId, doubledTrialIntervalMs(intervalMsFor(tokenId)));
     },
-    stop,
+    stop: periodic.stop,
   };
 }

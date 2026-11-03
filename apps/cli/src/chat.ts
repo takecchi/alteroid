@@ -1374,6 +1374,12 @@ export async function runSlashCommand(
     onFailed(`使い方の誤り（${command ?? ''}）`);
     return 'ok';
   };
+  // 書いて・失敗として渡して・会話を続ける。書き込み系の HTTP の失敗も失敗として渡す（#5240）: 渡さないと、非対話で止まらず終了コードも 0 になる。
+  const fail = (message: string): 'ok' => {
+    stdout.write(`${message}\n`);
+    onFailed(message);
+    return 'ok';
+  };
 
   // 参照を省いて `scan=500` のように書くと、キーを id と取り違えてデーモンへ飛ばしてしまう。飛ばす前に断る。
   if (command !== undefined && REFERENCE_FIRST_COMMANDS.has(command)) {
@@ -1478,10 +1484,7 @@ export async function runSlashCommand(
           '仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません。cron 式なら書式も確かめてください）',
           created,
         );
-        stdout.write(`${failure}\n`);
-        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
-        onFailed(failure);
-        return 'ok';
+        return fail(failure);
       }
       if (rest.length > 0) {
         return usageError('使い方: /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼の本文>\n');
@@ -1563,10 +1566,7 @@ export async function runSlashCommand(
         response.status === 404
           ? `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）`
           : await withDetail(`${kind} を外せませんでした`, response);
-      stdout.write(`${failure}\n`);
-      // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
-      onFailed(failure);
-      return 'ok';
+      return fail(failure);
     }
 
     case '/run': {
@@ -1583,10 +1583,7 @@ export async function runSlashCommand(
         response.status === 404
           ? `${kind} という定期ジョブはありません`
           : await withDetail(`${kind} を起こせませんでした`, response);
-      stdout.write(`${failure}\n`);
-      // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
-      onFailed(failure);
-      return 'ok';
+      return fail(failure);
     }
 
     case '/event': {
@@ -1604,10 +1601,7 @@ export async function runSlashCommand(
         return 'ok';
       }
       const failure = await withDetail('届けられませんでした', response);
-      stdout.write(`${failure}\n`);
-      // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
-      onFailed(failure);
-      return 'ok';
+      return fail(failure);
     }
 
     case '/quit':
@@ -1921,10 +1915,8 @@ export async function runSlashCommand(
       const owningConversationId = listed.messagesConversationId;
       if (owningConversationId === null) {
         const notOpened = '先に /conversation <番号|id> でその発言が含まれる会話を開いてください';
-        stdout.write(`${notOpened}\n`);
         // 送る前に止めた回も失敗として渡す（#5240）
-        onFailed(notOpened);
-        return 'ok';
+        return fail(notOpened);
       }
       const carried = (listed.messageAttachments[id] ?? []).map((a) => a.id);
       await sendMessage(target, text, owningConversationId, id, {
@@ -2014,10 +2006,8 @@ export async function runSlashCommand(
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
         const missing = `[${reference}] は /managers の一覧にありません`;
-        stdout.write(`${missing}\n`);
         // 書き込み系なので失敗として渡す（#4795。`/answer` と同じ）: 渡さないと、非対話で止まらず終了コードも 0 になるため
-        onFailed(missing);
-        return 'ok';
+        return fail(missing);
       }
       if (
         !(await confirm(
@@ -2038,10 +2028,7 @@ export async function runSlashCommand(
           response.status === 404
             ? `そのマネージャーは見つかりませんでした: ${id}`
             : await errorDetail(response);
-        stdout.write(`${failure}\n`);
-        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
-        onFailed(failure);
-        return 'ok';
+        return fail(failure);
       }
       reportOutcome(await response.json(), STOPPED_OUTCOMES, onFailed);
       return 'ok';
@@ -2086,10 +2073,8 @@ export async function runSlashCommand(
       const id = resolveListedId(reference, listed.managers);
       if (id === null) {
         const missing = `[${reference}] は /managers の一覧にありません`;
-        stdout.write(`${missing}\n`);
         // 書き込み系なので失敗として渡す（#4795。`/answer` と同じ）: 渡さないと、非対話で止まらず終了コードも 0 になるため
-        onFailed(missing);
-        return 'ok';
+        return fail(missing);
       }
       let attachmentIds: string[] | undefined;
       let sentFiles: DraftFile[] = [];
@@ -2141,10 +2126,8 @@ export async function runSlashCommand(
       }
       const target = await resolveWaitingTarget(reference, listed.waiting, client);
       if (!target.ok) {
-        stdout.write(`${target.message}\n`);
         // 送っていないので失敗として渡す（#4795）
-        onFailed(target.message);
-        return 'ok';
+        return fail(target.message);
       }
       const response = await client.managers[':id'].messages.$post({
         param: { id: target.managerId },
@@ -2155,10 +2138,7 @@ export async function runSlashCommand(
           response.status === 404
             ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
             : await errorDetail(response);
-        stdout.write(`${failure}\n`);
-        // 書き込み系の HTTP の失敗も失敗として渡す（#5240）
-        onFailed(failure);
-        return 'ok';
+        return fail(failure);
       }
       reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
@@ -2175,10 +2155,8 @@ export async function runSlashCommand(
       if (rest.length === 0) {
         const target = await resolveDecisionOnlyManager(client);
         if (!target.ok) {
-          stdout.write(`${target.message}\n`);
           // 送っていないので失敗として渡す（#4795）
-          onFailed(target.message);
-          return 'ok';
+          return fail(target.message);
         }
         const response = await client.managers[':id'].messages.$post({
           param: { id: target.managerId },
@@ -2189,9 +2167,7 @@ export async function runSlashCommand(
             response.status === 404
               ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
               : await errorDetail(response);
-          stdout.write(`${failure}\n`);
-          onFailed(failure);
-          return 'ok';
+          return fail(failure);
         }
         reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
         return 'ok';
@@ -2201,10 +2177,8 @@ export async function runSlashCommand(
       const reason = rawTail(line, 2);
       const target = await resolveWaitingTarget(reference ?? '', listed.waiting, client);
       if (!target.ok) {
-        stdout.write(`${target.message}\n`);
         // 送っていないので失敗として渡す（#4795）
-        onFailed(target.message);
-        return 'ok';
+        return fail(target.message);
       }
       const response = await client.managers[':id'].messages.$post({
         param: { id: target.managerId },
@@ -2219,9 +2193,7 @@ export async function runSlashCommand(
           response.status === 404
             ? `そのマネージャーは見つかりませんでした: ${target.managerId}`
             : await errorDetail(response);
-        stdout.write(`${failure}\n`);
-        onFailed(failure);
-        return 'ok';
+        return fail(failure);
       }
       reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
@@ -2271,23 +2243,17 @@ export async function runSlashCommand(
         // 書き込み系の HTTP の失敗も失敗として渡す（#5240）。表示した文のまま
         if (response.status === 404) {
           const failure = 'その生ログはありません';
-          stdout.write(`${failure}\n`);
-          onFailed(failure);
-          return 'ok';
+          return fail(failure);
         }
         if (response.status === 409) {
           const failure =
             `${await errorDetail(response)}\n` +
             `理由を付けて上書きするには: /archive remove ${removeId} <理由>`;
-          stdout.write(`${failure}\n`);
-          onFailed(failure);
-          return 'ok';
+          return fail(failure);
         }
         if (!response.ok) {
           const failure = await errorDetail(response);
-          stdout.write(`${failure}\n`);
-          onFailed(failure);
-          return 'ok';
+          return fail(failure);
         }
         const result = await response.json();
         const overrideNote =
@@ -2582,9 +2548,7 @@ export async function runSlashCommand(
       const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
         const missing = `[${reference}] は /approvals の一覧にありません`;
-        stdout.write(`${missing}\n`);
-        onFailed(missing);
-        return 'ok';
+        return fail(missing);
       }
       // 取れなかったときに黙って自由文へ倒さない: 設問つきの承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまう。
       let structured: ReturnType<typeof parseStructuredAnswer> | null = null;
@@ -2599,9 +2563,7 @@ export async function runSlashCommand(
               '承認待ちを読めなかったので、回答を送っていません',
               lookup,
             );
-            stdout.write(`${failure}\n`);
-            onFailed(failure);
-            return 'ok';
+            return fail(failure);
           }
           const { approvals } = await lookup.json();
           target = approvals.find((entry) => entry.id === id);
@@ -2612,17 +2574,13 @@ export async function runSlashCommand(
               '承認待ちを読めなかったので、回答を送っていません',
               lookup,
             );
-            stdout.write(`${failure}\n`);
-            onFailed(failure);
-            return 'ok';
+            return fail(failure);
           }
           target = lookup.ok ? (await lookup.json()).approval : undefined;
         }
         if (target === undefined) {
           const missing = `[${reference}] （${id}）は見つからなかったので、回答を送っていません`;
-          stdout.write(`${missing}\n`);
-          onFailed(missing);
-          return 'ok';
+          return fail(missing);
         }
         if (target.questions !== undefined && target.questions.length > 0) {
           structured = parseStructuredAnswer(rawTail(line, 2));
@@ -2630,9 +2588,7 @@ export async function runSlashCommand(
       }
       if (structured !== null && 'error' in structured) {
         const failure = redactError(structured.error);
-        stdout.write(`${failure}\n`);
-        onFailed(failure);
-        return 'ok';
+        return fail(failure);
       }
       const answer = structured === null ? rawTail(line, 2) : structured.supplement;
       if (answer.length === 0 && structured === null) {
@@ -2654,16 +2610,14 @@ export async function runSlashCommand(
         return 'ok';
       }
       const failure = await withDetail('回答に失敗しました', response);
-      stdout.write(`${failure}\n`);
-      onFailed(failure);
-      return 'ok';
+      return fail(failure);
     }
 
     // `/answer` に相乗りしない: 複数件を1行に混ぜると自由文との区切りが決められない（引用符を要求すると今の使い方を壊す）。
     case '/answers': {
       // `line` は `/\s+/` 分割済みで引用符の中の空白が保てないので、生の文字列から読み直す。
       const argsText = line.replace(/^\S+\s*/, '');
-      const tokens = tokenizeQuoted(argsText);
+      const tokens = tokenizeWithQuotes(argsText).map((token) => token.value);
       const pairs = parseAnswerPairs(tokens);
       if (pairs === null) {
         return usageError(
@@ -3645,17 +3599,8 @@ async function resolveDecisionOnlyManager(
   return { ok: true, managerId: only.managerId };
 }
 
-// `line.split(/\s+/)` では引用符の中の空白ごと割れてしまうので、`/answers` の処理でだけこちらを使う（他のコマンドの単純な空白分割は変えない）。
-function tokenizeQuoted(text: string): string[] {
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  const tokens: string[] = [];
-  for (const match of text.matchAll(pattern)) {
-    tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
-  }
-  return tokens;
-}
-
-// `tokenizeQuoted` は引用符が語の先頭にあるときだけ効くので、`設問id=文`（`--other q2="ただし 来週"`）の形には使えない。
+// `line.split(/\s+/)` では引用符の中の空白ごと割れてしまうので、`/answers` と `parseStructuredAnswer` でだけこちらを使う（他のコマンドの単純な空白分割は変えない）。
+// 引用符は語の途中でも効く: `設問id=文`（`--other q2="ただし 来週"`）が1語になる。`/answers` も同じ割れ方に揃えてある。
 function tokenizeWithQuotes(text: string): QuotedToken[] {
   const tokens: QuotedToken[] = [];
   let current = '';
