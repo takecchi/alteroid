@@ -5,9 +5,9 @@ import { fingerprintOf } from './credentials.js';
 // 環境変数の袋（`credentials`）に入れない: 袋の値は子プロセスの環境変数として降りてしまうし、袋の口は全文置換で版を持たず compare-and-swap できないため。
 // auth.json の値は秘密。外へ出してよいのは CodexChatgptAuthStatus だけ。
 
-export const CODEX_CHATGPT_AUTH_MAX_BYTES = 64 * 1024;
+const CODEX_CHATGPT_AUTH_MAX_BYTES = 64 * 1024;
 
-export interface CodexChatgptAuthFailure {
+interface CodexChatgptAuthFailure {
   at: string;
   /** 鍵の値を含めない。 */
   reason: string;

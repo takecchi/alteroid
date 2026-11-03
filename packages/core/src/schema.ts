@@ -29,7 +29,7 @@ export const memorySlugSchema = z
   .max(MEMORY_SLUG_RULE.maxLength)
   .regex(MEMORY_SLUG_RULE.pattern, MEMORY_SLUG_RULE.message);
 
-export const memoryFrontmatterStateSchema = z.discriminatedUnion('kind', [
+const memoryFrontmatterStateSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none') }),
   // `none` に畳まない: 人間が textarea で編集する以上 frontmatter は壊れ、壊れたときに文書ごと記憶から消えるのが最悪の形なため
   z.object({ kind: z.literal('malformed') }),
@@ -43,10 +43,10 @@ export const memoryFrontmatterStateSchema = z.discriminatedUnion('kind', [
 export type MemoryFrontmatterState = z.infer<typeof memoryFrontmatterStateSchema>;
 
 // `fact` や `indexed` を既定にしない: 区分の判定を誤ると文書が黙って縮み、クローンが気づけないため
-export const memoryDocKindSchema = z.enum(['premise', 'fact', 'indexed']);
+const memoryDocKindSchema = z.enum(['premise', 'fact', 'indexed']);
 export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
 
-export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
+const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('measured'),
     describedBytes: z.number().int().nonnegative(),
@@ -68,7 +68,7 @@ export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
 ]);
 export type MemoryDescriptionDrift = z.infer<typeof memoryDescriptionDriftSchema>;
 
-export const memoryDescriptionFreshnessSchema = z.discriminatedUnion('kind', [
+const memoryDescriptionFreshnessSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('fresh') }),
   z.object({
     kind: z.literal('stale'),
@@ -130,7 +130,7 @@ export type AnsweredVia = z.infer<typeof answeredViaSchema>;
 export { describeAnsweredVia } from './answered-via.js';
 
 // 値を足すときは書き手（`apps/daemon/src/app.ts`）と同じ変更で足す。`.catch` で未知の値を畳まない: 他の enum 欄（`turnFailureKind` など）と同じく、版のずれで読めない行は「読めない行」として数えられる側に倒す（黙って別の種類に読み替えない）
-export const humanActionKindSchema = z.enum([
+const humanActionKindSchema = z.enum([
   'manager_message',
   'commitment_close',
   'commitment_reopen',
@@ -145,7 +145,7 @@ export const humanActionKindSchema = z.enum([
 
 export type HumanActionKind = z.infer<typeof humanActionKindSchema>;
 
-export const humanActionSchema = z.object({
+const humanActionSchema = z.object({
   kind: humanActionKindSchema,
   // 委譲の id・task の id（古い日誌の `commitment_*` は廃止した台帳の行の id）・定期の依頼の kind・やり方の slug。種類ごとに指すものが違うので、型を分けず文字列で持つ
   target: z.string().min(1),
@@ -165,7 +165,7 @@ export type _AssertAnsweredViaMatchesLikeType = AssertTrue<
     : false
 >;
 
-export const approvalOptionSchema = z.object({
+const approvalOptionSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   description: z.string().optional(),
@@ -208,7 +208,7 @@ export const attachmentRefSchema = z.object({
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
 // 担い手の報告に添えて受け取れなかったファイルの、名前と理由。黙って落とさず、報告と日誌に残すため
-export const rejectedAttachmentSchema = z.object({ name: z.string(), reason: z.string() });
+const rejectedAttachmentSchema = z.object({ name: z.string(), reason: z.string() });
 
 export type RejectedAttachment = z.infer<typeof rejectedAttachmentSchema>;
 
@@ -1181,7 +1181,7 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
 // `source` を持つ: 時刻だけだと、器の入れ替えで見失った後に前のターンの観測が「止まる直前にも0件だった」と誤読されるため。無いことをどれかの経路だと見なさない
 // 「常に最新の枝が分かる」とは読まない: 報告の前に落ちた委譲は、`git push` も枝作成も `closed` も `shutdown_unpushed_work` も届かなければ拾えないため
 // 「成果が届いたか」は含めない: この欄が答えるのは見るべき枝までで、push 済みか・PR が在るかは別の答えのため
-export const unpushedWorkObservationSourceSchema = z.enum([
+const unpushedWorkObservationSourceSchema = z.enum([
   'stop-refusal',
   'report',
   'tool_use',
@@ -1218,7 +1218,7 @@ export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
 export type LastUnpushedWorkObservation = z.infer<typeof lastUnpushedWorkObservationSchema>;
 
 // 理由は分類で、git の生の文面を運ばない: stderr にはパスや URL の断片が混ざりうるため
-export const rescueNotPushedReasonSchema = z.enum([
+const rescueNotPushedReasonSchema = z.enum([
   'nothing-tracked',
   'secret-like',
   'too-large',
@@ -1230,7 +1230,7 @@ export const rescueNotPushedReasonSchema = z.enum([
 ]);
 export type RescueNotPushedReason = z.infer<typeof rescueNotPushedReasonSchema>;
 
-export const rescueRemovalReasonSchema = z.enum([
+const rescueRemovalReasonSchema = z.enum([
   // 内容が origin の枝に入っていた（runner が `landedAt` を付けた）
   'landed',
   'done',
@@ -1239,7 +1239,7 @@ export const rescueRemovalReasonSchema = z.enum([
 ]);
 export type RescueRemovalReason = z.infer<typeof rescueRemovalReasonSchema>;
 
-export const rescueRemovalFailureKindSchema = z.enum([
+const rescueRemovalFailureKindSchema = z.enum([
   'auth',
   'network',
   'timeout',
@@ -1250,7 +1250,7 @@ export const rescueRemovalFailureKindSchema = z.enum([
 ]);
 export type RescueRemovalFailureKind = z.infer<typeof rescueRemovalFailureKindSchema>;
 
-export const rescueRemovalSchema = z.object({
+const rescueRemovalSchema = z.object({
   at: isoDateTime,
   reason: rescueRemovalReasonSchema,
   failureKind: rescueRemovalFailureKindSchema.optional(),
@@ -1304,7 +1304,7 @@ export const rescueWorktreeSchema = z.object({
 });
 export type RescueWorktree = z.infer<typeof rescueWorktreeSchema>;
 
-export const lastRescueSchema = z.object({
+const lastRescueSchema = z.object({
   at: isoDateTime,
   worktrees: z.array(rescueWorktreeSchema),
   // 猶予は `max(at, terminal.seenAt)` から数える: `at` だけだと、`lost` のまま長く放置されたものが `stopped` へ畳まれた瞬間に猶予ゼロで消えるため
@@ -1319,7 +1319,7 @@ export type LastRescue = z.infer<typeof lastRescueSchema>;
  * 退避 ref は公開 repo へ送らないので、未追跡の中身はこちらにしか無い。取り戻すときは `attachmentId` で添付ストアから引く。
  * 同じ (worktree, path) は1件だけ持つ（新しい中身が来たら古い添付を消して差し替える）。
  */
-export const rescueStashEntrySchema = z.object({
+const rescueStashEntrySchema = z.object({
   /** 作業ツリーの、担当の作業場からの相対パス（`RescueWorktree.relativePath`）。 */
   worktree: z.string(),
   /** 作業ツリーの中の相対パス。 */
@@ -1357,7 +1357,7 @@ export type ExternalOutput = z.infer<typeof externalOutputSchema>;
  * `manager_send` が届けられずに預かった伝言（1通）。
  * 数と長さの上限は預かる側（`ManagerPool`）が持つ: ここで締めると、上限を変えた後に古い行を持つ委譲の記録ごと読めなくなるため。
  */
-export const heldMessageSchema = z.object({
+const heldMessageSchema = z.object({
   text: z.string(),
   heldAt: isoDateTime,
   /** 預かった時点で届けられなかった理由（`declined` の detail）。 */
@@ -1541,7 +1541,7 @@ export type _AssertCgroupEventsDeltaMatchesLikeType = AssertTrue<
     : false
 >;
 
-export const permissionRequestSchema = z.object({
+const permissionRequestSchema = z.object({
   rule: z.string(),
   allows: z.array(z.string()),
   denies: z.array(z.string()),
@@ -1600,7 +1600,7 @@ export function approvalUpdatedAt(
 export { PERMISSION_GRANT_CONSENT_PHRASE } from './permission-grant-consent.js';
 
 // `principalKind` は `'account'` の1値にする: `operator` 経路の回答は `PermissionGrant` を作らない不変条件を型で運ぶため
-export const permissionGrantRouteSchema = z.object({
+const permissionGrantRouteSchema = z.object({
   principalKind: z.literal('account'),
   accountId: z.string(),
 });
