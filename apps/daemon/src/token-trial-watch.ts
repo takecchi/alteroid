@@ -18,7 +18,7 @@ import {
 } from '@alteroid/core';
 import { startPeriodicRun } from './periodic-runner.js';
 
-export const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
+const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
 
 // `transition === 'rejected'` だけを見ない: 試しはデーモンの中の1ターンで `#rateLimits` の記憶が書き換わらず、同じ鍵の再拒否は `statusNow: 'rejected'` だけで届くため。
 // 世代の照合（`freshness === 'current'`）は要求しない: 古い観測が紛れても間隔が伸びるだけで、倒れる向きは安全側（試す回数が減る）のため。
@@ -31,7 +31,7 @@ export function isRejectionForTrialBackoff(observation: {
   return observation.transition === 'rejected' || observation.statusNow === 'rejected';
 }
 
-export interface TokenTrialWatchOptions {
+interface TokenTrialWatchOptions {
   stores: Stores;
   trial: TokenTrialPort;
   recordTrialVerdict: TokenRotator['recordTrialVerdict'];

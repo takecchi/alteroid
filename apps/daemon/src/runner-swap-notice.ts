@@ -2,10 +2,9 @@ import { reasonOf, type Job } from '@alteroid/core';
 
 // 「起こさない」を選ぶのは影響が0本と積極的に数え切れたときだけにする: 起こしすぎるコストはクローンの1ターンだが、拾い損ねた委譲は人間が気づくまで宙に浮くため。
 // `'affected'` 以外の3つの理由を1つへ畳まない: 日誌の `grounds` を読む人間・クローンが、本当に影響があって起こしたのか、数え切れず安全側に倒しただけなのかを区別できなくなるため。
-export type RunnerSwapNoticeReason =
-  'affected' | 'none-affected' | 'runner-unnamed' | 'ledger-unreadable';
+type RunnerSwapNoticeReason = 'affected' | 'none-affected' | 'runner-unnamed' | 'ledger-unreadable';
 
-export interface RunnerSwapNoticeDecision {
+interface RunnerSwapNoticeDecision {
   readonly wake: boolean;
   readonly reason: RunnerSwapNoticeReason;
   /** 数え切れたときだけ本数。数えられなかったときは undefined。 */

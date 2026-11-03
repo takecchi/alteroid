@@ -41,7 +41,7 @@ export function createAgentTokenHolder(): AgentTokenHolder {
   };
 }
 
-export interface TokenSpreadOptions {
+interface TokenSpreadOptions {
   runners: RunnerRegistry;
   clone: AgentTokenHolder;
   /** runner へ渡るプロファイル（scope が `runner` / `all` の行）が宣言する名前。撒いた鍵が上書きされるかは、ここで決まる。 */
@@ -58,13 +58,13 @@ export async function runnerProfileEnvNames(stores: Pick<Stores, 'profile'>): Pr
 
 // 撒くのは runner が先、クローンが後: 逆順だと runner が落ちたときにクローンだけが新しいトークンを持つ層のずれが残るため。
 // 畳んで1つの成否にしない: runner が2台で1台だけ落ちる場合があり、台ごとに返して呼ぶ側が日誌へ全部載せる。
-export interface RunnerTokenPushResult {
+interface RunnerTokenPushResult {
   runnerId: string;
   ok: boolean;
   error?: string;
 }
 
-export interface TokenSpread extends TokenSpreadPort {
+interface TokenSpread extends TokenSpreadPort {
   /**
    * runner へ撒いた結果を受け取る（#4725）。デーモンはこれを `ManagerPool` の帳面へ渡し、落ちた runner へ撒き直させる。
    * 撒く先が1台も無かった回（`selfHealing`）は渡さない: 繋がってきた runner には繋ぎの時に降ろすため。

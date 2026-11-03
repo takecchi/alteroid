@@ -8,7 +8,7 @@ import { decideRunnerSwapNotice } from './runner-swap-notice.js';
 /** 窓を「器が名乗らなくなるまでの時間」（core の `HEARTBEAT_LOST_MS`）に揃える。写さずに読む: ずれたら片方だけ直る形を作らないため */
 export const RUNNER_LOST_COALESCE_MS = HEARTBEAT_LOST_MS;
 
-export interface RunnerLostEntry {
+interface RunnerLostEntry {
   readonly label: string;
   readonly runnerId?: string | undefined;
   /** 秘匿済みの理由。 */
@@ -37,7 +37,7 @@ export function describeRunnerLost(entry: RunnerLostEntry): string {
 }
 
 /** 窓の中の台をクローンへ送る1通にする。1台なら `describeRunnerLost` と同じ。 */
-export function composeRunnerLostNotice(entries: readonly RunnerLostEntry[]): string {
+function composeRunnerLostNotice(entries: readonly RunnerLostEntry[]): string {
   const [only] = entries;
   if (only === undefined) return '';
   if (entries.length === 1) return describeRunnerLost(only);
@@ -62,7 +62,7 @@ const RELOCATION_STILL_TRIED =
   '（移したとすれば貸し出しを持たない委譲だけで、移し終えた委譲は元の器へ戻らない）。';
 
 /** 送る時点で名乗り直している台を、本文の末尾で言う。1台も戻っていなければ何も足さない。 */
-export function describeRunnersBack(
+function describeRunnersBack(
   entries: readonly RunnerLostEntry[],
   back: readonly RunnerLostEntry[],
 ): string {
@@ -77,7 +77,7 @@ export function describeRunnersBack(
   return `\n送る時点では、${scope}名乗り直している（connected）。${RELOCATION_STILL_TRIED}`;
 }
 
-export interface RunnerLostSkipDecision {
+interface RunnerLostSkipDecision {
   readonly skip: boolean;
   /** 日誌の `grounds` に載せる、なぜそう判定したかの文。 */
   readonly grounds: string;
@@ -87,7 +87,7 @@ export interface RunnerLostSkipDecision {
  * 送る必要が無いのは、全台が名乗り直していて、どの器にも未了の委譲が 0 本と数え切れたときだけ（倒れ側は「送る」）。
  * 数える部品は `decideRunnerSwapNotice`（器の入れ替えの知らせ）と同じ。移送そのものは別の restored の知らせが担う。
  */
-export function decideRunnerLostNoticeSkip(input: {
+function decideRunnerLostNoticeSkip(input: {
   readonly entries: readonly RunnerLostEntry[];
   readonly back: readonly RunnerLostEntry[];
   readonly jobs: readonly Job[] | undefined;
@@ -108,7 +108,7 @@ export function decideRunnerLostNoticeSkip(input: {
   return { skip: true, grounds: grounds.join(' / ') };
 }
 
-export interface RunnerLostNoticeDeps {
+interface RunnerLostNoticeDeps {
   readonly send: (text: string) => void;
   /** 送る時点で、その器がまた名乗っているか。省略時は確かめない（何も足さない）。 */
   readonly isBackNow?: (entry: RunnerLostEntry) => boolean;
@@ -131,7 +131,7 @@ interface InflightNotice {
   settled: boolean;
 }
 
-export interface RunnerLostNotice {
+interface RunnerLostNotice {
   add(entry: RunnerLostEntry): void;
   /** 窓の中の分をすぐ送り、タイマーを止める。空なら何も送らない。 */
   flush(): void;
