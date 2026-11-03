@@ -11,7 +11,7 @@ import {
 } from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
-export type JournalSummaryStyle = 'raw' | 'localized';
+type JournalSummaryStyle = 'raw' | 'localized';
 
 // 一行に出す名前の数。超えた分は件数だけにする（一行が際限なく伸びないため。全件は行を開くか journal_read id=<id>）
 const ATTACHMENT_NOTE_NAMES = 3;

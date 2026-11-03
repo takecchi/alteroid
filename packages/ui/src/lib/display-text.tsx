@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 
-export interface DisplayText {
+interface DisplayText {
   body: (text: string) => string;
   error: (text: string) => string;
 }

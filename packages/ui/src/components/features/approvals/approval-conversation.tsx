@@ -13,10 +13,10 @@ export interface ApprovalConversationMessage {
 }
 
 /** 既定で出す直近の発言の数。 */
-export const APPROVAL_CONVERSATION_RECENT = 3;
+const APPROVAL_CONVERSATION_RECENT = 3;
 /** 1発言を畳むまでの行数と文字数。 */
-export const APPROVAL_MESSAGE_MAX_LINES = 4;
-export const APPROVAL_MESSAGE_MAX_CHARS = 200;
+const APPROVAL_MESSAGE_MAX_LINES = 4;
+const APPROVAL_MESSAGE_MAX_CHARS = 200;
 
 /**
  * 長い本文の頭だけを返す。行数と文字数のどちらかを超えたら切る。

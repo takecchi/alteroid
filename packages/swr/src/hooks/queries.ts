@@ -24,13 +24,13 @@ export interface UsageQuery {
   tokenId?: string;
 }
 
-export interface ManagersQuery {
+interface ManagersQuery {
   status?: readonly ManagerStatus[];
   limit?: number;
   after?: { managerId: string; startedAt: string };
 }
 
-export interface AttachmentsQuery {
+interface AttachmentsQuery {
   kept?: boolean;
   from?: AttachmentFrom;
   conversationId?: string;
@@ -681,7 +681,7 @@ export function useArchiveSessions() {
   return useSWR(KEY.archiveSessions, () => api.api.GET('/archive/sessions').then(unwrap));
 }
 
-export type ArchiveBody =
+type ArchiveBody =
   { kind: 'body'; body: string } | { kind: 'removed'; removedAt: string; bytes: number };
 
 // 退避の本文を消した 410 を、アーカイブの本文と生ログで同じに読む: 片方だけ「removed」の素の語で出さないため

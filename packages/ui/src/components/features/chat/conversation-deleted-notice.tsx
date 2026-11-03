@@ -1,6 +1,6 @@
 // `ChatHeader` の `notice`（`<p role="status">`）へ入れるので、`p` の中に置ける要素（span）だけで組む。
 // 消えてしまうトーストにしない: 「消せなかったもの」（`remainsIn`）と「後始末の失敗」（`incomplete`）は、読んで判断する材料のため
-export interface ConversationDeletedSummary {
+interface ConversationDeletedSummary {
   hiddenCount: number;
   attachmentsRemoved: number;
   incomplete: readonly string[];

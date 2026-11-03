@@ -10,7 +10,7 @@ export interface SectionTab {
 }
 
 // リンクを描く口を受ける: この層はルーターを知らないため
-export type SectionTabRenderLink = (
+type SectionTabRenderLink = (
   tab: SectionTab,
   slot: { className: (isActive: boolean) => string; children: ReactNode },
 ) => ReactNode;

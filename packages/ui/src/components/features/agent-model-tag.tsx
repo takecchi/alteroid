@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-export interface AgentModelTagProps {
+interface AgentModelTagProps {
   model?: string | undefined;
   className?: string;
 }

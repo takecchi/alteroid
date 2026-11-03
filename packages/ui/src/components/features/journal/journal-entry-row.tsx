@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { Badge } from '../../common';
 import { CodeBlock } from '../code-block';
 
-export type JournalEntryTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
+type JournalEntryTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
 
 // ボタンの中にリンクを入れず、リンクは開いた後の領域に置く
 export function JournalEntryRow({

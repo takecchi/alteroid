@@ -5,7 +5,7 @@ export const USAGE_MANAGER_ID_PARAM = 'managerId';
 /** 画面の既定の期間（日。今日を含む）。`from` が URL に無いときに使う。API の既定（全期間）とは別 */
 export const USAGE_DEFAULT_DAYS = 30;
 
-export interface UsageHrefFilter {
+interface UsageHrefFilter {
   from?: string;
   to?: string;
   managerId?: string;

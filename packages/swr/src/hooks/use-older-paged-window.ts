@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export interface OlderPagedWindowState<T> {
+interface OlderPagedWindowState<T> {
   items: T[];
   hasMore: boolean;
   isLoadingOlder: boolean;
@@ -8,7 +8,7 @@ export interface OlderPagedWindowState<T> {
   loadOlder: () => void;
 }
 
-export interface OlderPagedWindowInput<T> {
+interface OlderPagedWindowInput<T> {
   /** 先頭の頁（SWR が取り直す）。並べ直さない: 並びはデーモンが決める */
   readonly page: readonly T[];
   readonly limit: number;

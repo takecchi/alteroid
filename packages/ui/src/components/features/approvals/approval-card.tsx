@@ -18,10 +18,10 @@ function questionHead(question: string): string {
   return text.length > 30 ? `${text.slice(0, 30)}…` : text;
 }
 
-export type ApprovalState = 'unanswered' | 'answered' | 'withdrawn';
+type ApprovalState = 'unanswered' | 'answered' | 'withdrawn';
 
 // 文言を変えない: 回答の記録が変わるため
-export const APPROVAL_QUICK_ANSWERS = {
+const APPROVAL_QUICK_ANSWERS = {
   allow: 'はい、進めてよい',
   deny: 'いいえ、やらないで',
 } as const;

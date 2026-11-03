@@ -3,7 +3,7 @@ import { matchesJournalSearch } from '@alteroid/core/journal-search';
 
 import type { JournalEntry } from './types.js';
 
-export interface MergeResult {
+interface MergeResult {
   entries: JournalEntry[];
   freshCount: number;
 }
@@ -98,7 +98,7 @@ export function olderPageQuery(
   return cursor ? { afterId: cursor.id, afterAt: cursor.at } : undefined;
 }
 
-export interface PageApplication {
+interface PageApplication {
   entries: JournalEntry[];
   outcome: OlderOutcome;
   freshCount: number;

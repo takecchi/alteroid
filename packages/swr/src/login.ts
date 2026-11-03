@@ -23,7 +23,7 @@ function isTransient(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500;
 }
 
-export interface LoginStart {
+interface LoginStart {
   requestId: string;
   authorizationUrl: string;
   claimSecret: string;

@@ -1,4 +1,4 @@
-export type LoadErrorKind =
+type LoadErrorKind =
   | 'network'
   | 'server'
   | 'unauthorized'
@@ -8,7 +8,7 @@ export type LoadErrorKind =
   | 'unreadable'
   | 'unknown';
 
-export interface LoadErrorInfo {
+interface LoadErrorInfo {
   kind: LoadErrorKind;
   summary: string;
   hint: string | undefined;

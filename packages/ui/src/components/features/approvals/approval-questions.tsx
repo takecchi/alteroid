@@ -7,7 +7,7 @@ import { useDisplayText } from '@/lib/display-text';
 import { Badge, Button, FieldHint, Input, SubmitHint, Textarea } from '../../common';
 
 // API の型を import せず構造だけ持つ: ui は logic を import しないため
-export interface ApprovalOptionView {
+interface ApprovalOptionView {
   id: string;
   label: string;
   description?: string;
@@ -22,7 +22,7 @@ export interface ApprovalQuestionView {
   allowOther?: boolean;
 }
 
-export interface ApprovalSelectionView {
+interface ApprovalSelectionView {
   questionId: string;
   optionIds: string[];
   other?: string;

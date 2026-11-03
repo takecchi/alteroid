@@ -19,7 +19,7 @@ export interface AppSidebarItem {
 }
 
 // リンクを描く口を受ける: この層はルーターを知らないため
-export type AppSidebarRenderLink = (
+type AppSidebarRenderLink = (
   item: AppSidebarItem,
   slot: { className: (isActive: boolean) => string; children: ReactNode },
 ) => ReactNode;
@@ -100,7 +100,7 @@ function SectionStart({ label, inDrawer }: { label: string | undefined; inDrawer
   );
 }
 
-export function sidebarLinkClassName({
+function sidebarLinkClassName({
   isActive,
   inDrawer,
 }: {

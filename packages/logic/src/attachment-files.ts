@@ -32,7 +32,7 @@ export function isAttachmentFrom(value: string | null | undefined): value is Att
   return ATTACHMENT_FROM_ORDER.some((from) => from === value);
 }
 
-export interface AttachmentLifetime {
+interface AttachmentLifetime {
   kept: boolean;
   text: string;
 }

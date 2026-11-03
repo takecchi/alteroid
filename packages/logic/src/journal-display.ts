@@ -2,7 +2,7 @@ import { JOURNAL_SEARCH_UNSEARCHABLE_TYPES } from '@alteroid/core/journal-search
 
 import type { JournalEntryType } from './types.js';
 
-export type JournalTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
+type JournalTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
 
 // 宣言順が表示順の正本: core の `JOURNAL_ENTRY_TYPES` から導かないのは、宣言順が違うため。
 // 色は種別ごとに1つしか選べないので、複数の状態を持つ種別はいちばん重い側に合わせる。

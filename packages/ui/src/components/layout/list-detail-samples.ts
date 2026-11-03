@@ -1,4 +1,4 @@
-export interface SampleEntry {
+interface SampleEntry {
   id: string;
   title: string;
   date: string;

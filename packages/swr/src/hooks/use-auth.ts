@@ -6,7 +6,7 @@ import { redactError, type StoredAccount } from '@alteroid/logic';
 
 export type LogoutResult = { ok: true } | { ok: false; message: string };
 
-export type AuthStatus = 'checking' | 'open' | 'anonymous' | 'ungranted' | 'ready';
+type AuthStatus = 'checking' | 'open' | 'anonymous' | 'ungranted' | 'ready';
 
 export interface AuthProvider {
   id: string;
@@ -14,7 +14,7 @@ export interface AuthProvider {
   kind: string;
 }
 
-export interface AuthState {
+interface AuthState {
   status: Exclude<AuthStatus, 'checking'>;
   providers: AuthProvider[];
   account: StoredAccount | null;

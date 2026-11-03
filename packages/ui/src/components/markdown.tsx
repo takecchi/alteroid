@@ -81,7 +81,7 @@ function heading(tag: HeadingTag) {
 
 const HEADING_TAGS: readonly HeadingTag[] = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
 
-export function offsetHeadings(components: Components, offset?: number): Components {
+function offsetHeadings(components: Components, offset?: number): Components {
   if (offset === undefined || !Number.isFinite(offset)) return components;
   const steps = Math.trunc(offset);
   if (steps <= 0) return components;

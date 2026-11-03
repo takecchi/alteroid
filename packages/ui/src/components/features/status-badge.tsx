@@ -1,6 +1,6 @@
 import { Badge } from '../common';
 
-export type StatusTone = 'ok' | 'warn' | 'danger' | 'neutral' | 'accent';
+type StatusTone = 'ok' | 'warn' | 'danger' | 'neutral' | 'accent';
 
 export type StatusMap<S extends string> = Record<S, { tone: StatusTone; label: string }>;
 
