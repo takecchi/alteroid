@@ -1,4 +1,4 @@
-export interface ReopenResultView {
+interface ReopenResultView {
   outcome: 'now' | 'deferred' | 'unsupported';
   previousSessionId?: string | null | undefined;
   runningManagers?: number | undefined;

@@ -84,7 +84,7 @@ export type UsageSite = UsageRow['site'];
 export type AccountUsageState = UsageAggregate['account'];
 export type UnrecordedManager = UsageAggregate['unrecordedManagers'][number];
 
-export type TokensState = Ok<paths['/tokens']['get']>;
+type TokensState = Ok<paths['/tokens']['get']>;
 export type AgentTokenView = TokensState['tokens'][number];
 export type TokenRotationSettings = NonNullable<TokensState['settings']>;
 export type TokensRowsUnreadable = NonNullable<TokensState['rowsUnreadable']>;
@@ -93,13 +93,13 @@ export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready'
 export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
 export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
 
-export type AccessState = Ok<paths['/access']['get']>;
+type AccessState = Ok<paths['/access']['get']>;
 export type AccessAccount = AccessState['accounts'][number];
 
-export type PermissionGrantsState = Ok<paths['/permission-grants']['get']>;
+type PermissionGrantsState = Ok<paths['/permission-grants']['get']>;
 export type PermissionGrant = PermissionGrantsState['grants'][number];
 
-export type CredentialsState = Ok<paths['/credentials']['get']>;
+type CredentialsState = Ok<paths['/credentials']['get']>;
 /** Codex の ChatGPT ログインの状態。値は持たない。 */
 export type CodexAuthStatusView = Ok<paths['/codex/auth']['get']>;
 /** デバイスコードのログイン1本の状態。 */
@@ -120,7 +120,7 @@ export type McpServers = McpServersState['mcpServers'];
 export type McpServerEntry = McpServers[string];
 export type McpServersUpdateResult = Ok<paths['/mcp-servers']['put']>;
 
-export type PluginsState = Ok<paths['/plugins']['get']>;
+type PluginsState = Ok<paths['/plugins']['get']>;
 export type PluginRow = PluginsState['plugins'][number];
 export type PluginPreviewRequest = NonNullable<
   paths['/plugins/preview']['post']['requestBody']
@@ -133,12 +133,12 @@ export type PluginScope = PluginRow['scope'];
 
 export type DroppedState = Ok<paths['/dropped']['get']>;
 
-export type ArchiveListState = Ok<paths['/archive']['get']>;
+type ArchiveListState = Ok<paths['/archive']['get']>;
 export type ArchiveEntry = ArchiveListState['entries'][number];
-export type ArchiveSessionsState = Ok<paths['/archive/sessions']['get']>;
+type ArchiveSessionsState = Ok<paths['/archive/sessions']['get']>;
 export type ArchiveSessionSummary = ArchiveSessionsState['sessions'][number];
 
-export type InboxRemoveManyRequestBody = NonNullable<
+type InboxRemoveManyRequestBody = NonNullable<
   paths['/inbox/remove']['post']['requestBody']
 >['content']['application/json'];
 export type InboxEventType = InboxRemoveManyRequestBody['types'][number];
@@ -148,7 +148,7 @@ export type InboxBacklog = Ok<paths['/inbox']['get']>;
 
 export type TopologySnapshotManager = TopologySnapshot['managers'][number];
 
-export type IntegrationKeysState = Ok<paths['/integration-keys']['get']>;
+type IntegrationKeysState = Ok<paths['/integration-keys']['get']>;
 export type IntegrationKeyView = IntegrationKeysState['keys'][number];
 export type IntegrationKeyIssued = Ok<paths['/integration-keys']['post']>;
 export type IntegrationKeyInput = NonNullable<

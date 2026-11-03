@@ -31,7 +31,7 @@ const WINDOW_KIND_LABELS: Record<string, string> = {
   overage: '超過分',
 };
 
-export interface AccountUsageView {
+interface AccountUsageView {
   headline?: string;
   tone: 'info' | 'warn' | 'ok';
   action?: string;

@@ -11,7 +11,7 @@ import {
   writeStored,
 } from './session-store.js';
 
-export interface LeftoverQuestion {
+interface LeftoverQuestion {
   id: string;
   prompt: string;
   multiple?: boolean;
@@ -28,7 +28,7 @@ export interface ApprovalLeftoverSource {
   questions?: readonly LeftoverQuestion[];
 }
 
-export interface SentDraft {
+interface SentDraft {
   text: string;
   questions?: StoredQuestionsDraft;
 }

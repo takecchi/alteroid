@@ -1,4 +1,4 @@
-export type GithubCiCountKey = 'success' | 'failure' | 'pending';
+type GithubCiCountKey = 'success' | 'failure' | 'pending';
 
 export const GITHUB_CI_COUNT_LABEL = {
   success: '成功',
@@ -8,7 +8,7 @@ export const GITHUB_CI_COUNT_LABEL = {
 
 export const GITHUB_CI_COUNT_ORDER: readonly GithubCiCountKey[] = ['success', 'failure', 'pending'];
 
-export const GITHUB_OBSERVED_BY_LABEL: Readonly<Record<string, string>> = {
+const GITHUB_OBSERVED_BY_LABEL: Readonly<Record<string, string>> = {
   clone: 'クローン',
 };
 

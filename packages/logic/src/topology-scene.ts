@@ -5,22 +5,22 @@ export const FLOW_WINDOW_MS = 5_000;
 export const WORKER_RUNNING_WINDOW_MS = 30_000;
 
 // 場面の型をここで定義する: logic は ui を import できないため。構造は `SystemTopology` の props に合わせる。
-export type SceneStatus =
+type SceneStatus =
   'idle' | 'running' | 'awaiting' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
-export type SceneFlow = 'idle' | 'down' | 'up' | 'both';
+type SceneFlow = 'idle' | 'down' | 'up' | 'both';
 
-export interface SceneDetail {
+interface SceneDetail {
   label: string;
   value: string;
   mono?: boolean;
 }
 
 // 欄が無いことは「不明」: 既定のモデルで埋めない
-export interface SceneAgent {
+interface SceneAgent {
   model?: string;
 }
 
-export interface SceneWorker {
+interface SceneWorker {
   id: string;
   label: string;
   task?: string;
@@ -30,7 +30,7 @@ export interface SceneWorker {
   agent?: SceneAgent;
 }
 
-export interface SceneManager {
+interface SceneManager {
   id: string;
   runner?: string;
   label: string;
@@ -43,14 +43,14 @@ export interface SceneManager {
   group?: boolean;
 }
 
-export interface SceneRunner {
+interface SceneRunner {
   id: string;
   label: string;
   status: SceneStatus;
 }
 
 // `status` を持たない: 観測できるのは最後に呼ばれた時刻だけで、外部サービスの状態は観測していないため。
-export interface SceneExternal {
+interface SceneExternal {
   id: string;
   label: string;
   task?: string;
@@ -58,7 +58,7 @@ export interface SceneExternal {
   details?: readonly SceneDetail[];
 }
 
-export interface TopologySceneData {
+interface TopologySceneData {
   human: { flow: SceneFlow };
   externals: readonly SceneExternal[];
   clone: {
@@ -91,7 +91,7 @@ function within(iso: string | undefined, nowMs: number, windowMs: number): boole
   return age >= -1_000 && age <= windowMs;
 }
 
-export function flowOfLink(link: Link | undefined, nowMs: number): SceneFlow {
+function flowOfLink(link: Link | undefined, nowMs: number): SceneFlow {
   if (link === undefined) return 'idle';
   const down = within(link.lastDownAt, nowMs, FLOW_WINDOW_MS);
   const up = within(link.lastUpAt, nowMs, FLOW_WINDOW_MS);
@@ -375,7 +375,7 @@ function storageScene(storage: TopologySnapshot['storage'], nowMs: number) {
 }
 
 // `connecting` / `unreachable` / `unusable` / `lost` は出さない: まだ開けていない・名乗りが止まった器を「居る」と描かないため。
-export function liveRunnersOf(runners: TopologySnapshot['runners']): SceneRunner[] {
+function liveRunnersOf(runners: TopologySnapshot['runners']): SceneRunner[] {
   const out = new Map<string, SceneRunner>();
   for (const runner of runners) {
     if (runner.state !== 'connected' && runner.state !== 'vacating') continue;
@@ -399,7 +399,7 @@ function isCollapsible(manager: SceneManager): boolean {
   return manager.status === 'idle' && manager.workers.length === 0 && manager.flow === 'idle';
 }
 
-export function collapseIdleManagers(
+function collapseIdleManagers(
   managers: readonly SceneManager[],
   groupKey: string,
 ): readonly SceneManager[] {

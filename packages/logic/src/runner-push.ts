@@ -1,8 +1,8 @@
-export interface RunnerPushOutcomeLike {
+interface RunnerPushOutcomeLike {
   ok: boolean;
 }
 
-export interface RunnerPushesLike<T extends RunnerPushOutcomeLike = RunnerPushOutcomeLike> {
+interface RunnerPushesLike<T extends RunnerPushOutcomeLike = RunnerPushOutcomeLike> {
   runners?: readonly T[];
 }
 

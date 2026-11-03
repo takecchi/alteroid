@@ -2,7 +2,7 @@ import { APPROVAL_DRAFTS_KEY, chatDraftEpoch } from './chat-drafts.js';
 import { isRecord, readStoredRecord, writeStored } from './session-store.js';
 
 // `@alteroid/ui` の `ApprovalQuestionsDraft` と同じ形を写す: logic は ui を import できないため。
-export interface StoredQuestionDraft {
+interface StoredQuestionDraft {
   chosen: string[];
   other: string;
   otherOn: boolean;
@@ -20,7 +20,7 @@ export interface ApprovalDrafts {
 
 const KEY = APPROVAL_DRAFTS_KEY;
 
-export function emptyApprovalDrafts(): ApprovalDrafts {
+function emptyApprovalDrafts(): ApprovalDrafts {
   return { texts: {}, questions: {} };
 }
 

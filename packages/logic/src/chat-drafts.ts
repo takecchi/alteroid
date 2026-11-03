@@ -146,7 +146,7 @@ export function savePendingAttachmentsNote(
   );
 }
 
-export interface StoredEditDraft {
+interface StoredEditDraft {
   text: string;
   attachments: MessageAttachment[];
   lostNames?: string[];

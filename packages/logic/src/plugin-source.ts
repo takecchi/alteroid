@@ -16,8 +16,7 @@ export function emptyPluginSourceForm(): PluginSourceForm {
   return { kind: 'marketplace', plugin: '', url: '', path: '', ref: '', sha: '' };
 }
 
-export type PluginSourceParse =
-  { ok: true; request: PluginPreviewRequest } | { ok: false; error: string };
+type PluginSourceParse = { ok: true; request: PluginPreviewRequest } | { ok: false; error: string };
 
 const BAD_SOURCE =
   '取り元は https の URL か、公式 marketplace の plugin 名で指定すること（何も送っていない）';

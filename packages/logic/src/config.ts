@@ -189,7 +189,7 @@ export function migrateSelectionIntoStoredEndpoints(): void {
   storeEndpoints([...list, { url: selected }]);
 }
 
-export interface ConnectionName {
+interface ConnectionName {
   name: string;
   title: string;
 }
