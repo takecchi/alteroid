@@ -20,7 +20,7 @@ export function dropBareDashDash(argv) {
 }
 
 // 範囲を位置引数でなく named 引数で渡す: vitest の位置引数は OR で効き、利用者が足した絞り込みよりパッケージ全体の範囲が常に勝つため。
-export const SCOPE_FLAG = '--scope';
+const SCOPE_FLAG = '--scope';
 
 export function extractScope(argv) {
   const scopePrefix = SCOPE_FLAG + '=';
@@ -179,7 +179,7 @@ export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScop
 }
 
 // 歯Bの走査（`readIncludeGlobs` / `collectMatchingTestFiles`）を二重実装しない。`include` を読めない・空なら `EXIT_SCAN_EMPTY` と混ぜず空配列を返す。
-export async function listScopeTestFiles(root, scope) {
+async function listScopeTestFiles(root, scope) {
   let includeGlobs;
   try {
     includeGlobs = await readIncludeGlobs(root);
