@@ -11,10 +11,10 @@ import { withErrorReason, describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
 import { type Target } from './target.js';
 import {
+  describeEditConflict,
   keepDraftOnFailure,
   openEditorKeepingEdits,
-  readAllText,
-  readInputFile,
+  readBodyArg,
 } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
@@ -219,19 +219,15 @@ export async function practiceEditCommand(
       const theirs = join(dir, `${slug}.current.md`);
       if (error.current !== null) await writeFile(theirs, error.current.content, 'utf8');
       stdout.write(
-        [
-          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-          `  あなたの編集（残してあります）: ${path}`,
-          error.current === null
-            ? '  いまのやり方: 無い（消されています）'
-            : `  いまのやり方: ${theirs}`,
-          ...(error.current === null
-            ? []
-            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
-          `  取り込んだら \`alteroid practice edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${shellQuote(path)}\`（先の書き込みを消します）。`,
-          '',
-        ].join('\n'),
+        describeEditConflict({
+          command: 'practice',
+          noun: 'やり方',
+          slug,
+          path,
+          theirs,
+          currentMissing: error.current === null,
+          replaceNote: '（先の書き込みを消します）',
+        }),
       );
       throw new Error(`やり方が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
         cause: error,
@@ -271,10 +267,7 @@ export async function practiceSetCommand(
     throw new Error(missingKindTitleMessage('set', slug, unreadable));
   }
 
-  const content =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  const content = await readBodyArg(options.file, stdin);
   if (options.allowEmpty !== true && content.trim().length === 0) {
     throw new Error(emptyBodyMessage(slug));
   }

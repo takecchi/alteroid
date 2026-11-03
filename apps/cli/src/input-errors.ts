@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
+import { shellQuote } from './shell-quote.js';
 
 // 1 チャンクずつ文字列にしない: チャンクの境目で割れた多バイト文字が化けるため
 export async function readAllText(input: AsyncIterable<Uint8Array>): Promise<string> {
@@ -27,6 +28,38 @@ export async function readInputFile(path: string, flag: string, how: string): Pr
       cause: error,
     });
   }
+}
+
+// `--file` 未指定か `-` なら標準入力から、それ以外ならそのファイルから本文を読む
+export async function readBodyArg(
+  file: string | undefined,
+  input: AsyncIterable<Uint8Array>,
+): Promise<string> {
+  return file === undefined || file === '-'
+    ? await readAllText(input)
+    : await readInputFile(file, '--file', '--file <path>、または標準入力（-）');
+}
+
+// edit が 409 で書き換えなかったときに stdout へ出す文面（`memory edit` / `practice edit` で共通）
+export function describeEditConflict(options: {
+  command: 'memory' | 'practice';
+  noun: string;
+  slug: string;
+  path: string;
+  theirs: string;
+  currentMissing: boolean;
+  replaceNote: string;
+}): string {
+  const { command, noun, slug, path, theirs, currentMissing, replaceNote } = options;
+  return [
+    `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+    `  あなたの編集（残してあります）: ${path}`,
+    currentMissing ? `  いまの${noun}: 無い（消されています）` : `  いまの${noun}: ${theirs}`,
+    ...(currentMissing ? [] : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
+    `  取り込んだら \`alteroid ${command} edit ${slug}\` で開き直して直してください。`,
+    `  そのまま置き換えてよいなら \`alteroid ${command} set ${slug} --file ${shellQuote(path)}\`${replaceNote}。`,
+    '',
+  ].join('\n');
 }
 
 export function describeEditorFailure(

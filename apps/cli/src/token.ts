@@ -10,7 +10,7 @@ import {
 } from './target.js';
 import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
-import { readAllText, readInputFile } from './input-errors.js';
+import { readBodyArg } from './input-errors.js';
 
 interface AgentTokenView {
   id: string;
@@ -280,10 +280,7 @@ export async function tokenAddCommand(options: { label: string; file?: string })
   // 標準入力を読む前に断る: 読み切ってから落ちると、渡した値が無駄になり理由も遅れるため
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
-  const raw =
-    options.file === undefined || options.file === '-'
-      ? await readAllText(stdin)
-      : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
+  const raw = await readBodyArg(options.file, stdin);
   const value = raw.trim();
   if (value.length === 0) {
     throw new Error('値が空である（ファイルか標準入力から、空でない値を渡す）');
