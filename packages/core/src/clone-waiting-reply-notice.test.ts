@@ -201,6 +201,22 @@ describe('人間の返事が来た会話の返事待ち（waiting）の task を
     await s.clone.stop();
   });
 
+  it('発意 tick（self_initiative）の束でも出さない。待ち行列の先頭も出さない（A の変更）', async () => {
+    const stores = createMemoryStores();
+    await stores.tasks.add(waitingTask('w1'));
+    const s = boot(stores);
+    const input = await turn(s, {
+      type: 'self_initiative',
+      id: 'init-1',
+      at: new Date().toISOString(),
+      reason: 'test',
+    });
+    expect(input).not.toContain(WAITING_MARK);
+    expect(input).not.toContain(QUEUE_HEAD);
+    expect(await statusOf(stores, 'w1')).toBe('waiting');
+    await s.clone.stop();
+  });
+
   it('tick（timer）の束では出さない。waiting の task があっても', async () => {
     const stores = createMemoryStores();
     await stores.tasks.add(waitingTask('w1'));
