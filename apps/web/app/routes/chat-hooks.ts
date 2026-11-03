@@ -1,18 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 
-import { useMarkConversationRead } from '@alteroid/swr';
+import { useConversationApprovals, useMarkConversationRead } from '@alteroid/swr';
 import {
   chatDraftEpoch,
+  describeApprovalLeftover,
   loadPendingAttachmentsNote,
   saveChatDraft,
   savePendingAttachmentsNote,
 } from '@alteroid/logic';
 import type { ConversationDetail, PendingAttachmentsNote } from '@alteroid/logic';
 
-import { useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import { useIsMounted, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
+import {
+  usePersistApprovalDrafts,
+  usePersistApprovalLeftoverSources,
+  type useApprovalDraftState,
+} from '~/lib/use-approval-draft-state';
 import { usePageVisible } from '~/lib/use-page-visible';
 
-import { sizedOf, applyFocusIntent, type PendingAttachment, type FocusIntent } from './chat-lines';
+import {
+  sizedOf,
+  applyFocusIntent,
+  isSettledApproval,
+  type PendingAttachment,
+  type FocusIntent,
+} from './chat-lines';
 
 // chat.tsx の編集下書きの遅延保存も同じ間隔を使う
 export const DRAFT_SAVE_DELAY_MS = 400;
@@ -135,6 +155,61 @@ export function useChatAttachmentHolding(
     shownLostPending,
     dismissLostPending,
   };
+}
+
+export function useChatConversationApprovals(
+  shownId: string | undefined,
+  approvalDraftState: ReturnType<typeof useApprovalDraftState>,
+) {
+  const { drafts: approvalDrafts, leftoverSources } = approvalDraftState;
+  // exchange だけでは復元できない: ask_human の日誌エントリは conversationId を持たず窓にも入らず、質問・回答は承認の台帳にしか無い
+  const conversationApprovals = useConversationApprovals(shownId ?? null);
+  // 消すのは、この会話の承認の一覧を読めていて決着済みと分かった id だけ: 読めていないときやほかの会話の書きかけは残す
+  const settledApprovalIds = useMemo(
+    () =>
+      new Set(
+        (conversationApprovals.data?.approvals ?? [])
+          .filter(isSettledApproval)
+          .map((approval) => approval.id),
+      ),
+    [conversationApprovals.data],
+  );
+  const keepApprovalDraft = useCallback(
+    (id: string) => !settledApprovalIds.has(id) || id in leftoverSources,
+    [settledApprovalIds, leftoverSources],
+  );
+  usePersistApprovalDrafts(approvalDraftState, keepApprovalDraft);
+  usePersistApprovalLeftoverSources(leftoverSources, approvalDrafts);
+  const leftovers = useMemo(
+    () =>
+      Object.entries(leftoverSources)
+        .filter(([id]) => settledApprovalIds.has(id))
+        .map(([id, source]) => ({
+          id,
+          source,
+          text: describeApprovalLeftover(source, approvalDrafts, id),
+        }))
+        .filter((entry) => entry.text !== ''),
+    [leftoverSources, settledApprovalIds, approvalDrafts],
+  );
+  const discardLeftover = approvalDraftState.discard;
+  const refetchApprovalsRef = useRef<() => void>(() => {});
+  const mountedRef = useIsMounted();
+  // commit の直後に毎回差し替える（render 中には書かない）: 読むのは受信のハンドラだけで、どれも render の外で非同期に呼ばれる。
+  // 同期の render では render と layout effect の間に非同期の処理は割り込めないので、ハンドラから見える値は render 中に書くのと同じ。
+  // 途中で譲る render（遷移）では、まだ commit していない render の関数ではなく、画面に出ている render の関数を指す
+  useLayoutEffect(() => {
+    refetchApprovalsRef.current = () => {
+      if (!mountedRef.current) return;
+      try {
+        // 失敗は conversationApprovals.error に出る（下の ErrorNote）ので、ここでは未処理にしないだけ。
+        void Promise.resolve(conversationApprovals.mutate()).catch(() => undefined);
+      } catch {
+        // 同上。
+      }
+    };
+  });
+  return { conversationApprovals, leftovers, discardLeftover, refetchApprovalsRef };
 }
 
 export function useMarkShownConversationRead(
