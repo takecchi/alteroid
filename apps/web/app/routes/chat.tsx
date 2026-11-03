@@ -110,6 +110,7 @@ import {
   useChatAttachmentHolding,
   useChatConversationApprovals,
   useChatDraftAutosave,
+  useEndConversationAction,
   useFocusIntentReturn,
   useMarkShownConversationRead,
 } from './chat-hooks';
@@ -324,13 +325,6 @@ export function ChatPane({
   >(undefined);
   // 送信経路の failures へ合流させず、会話 id ごとの Map にもしない: 「呼べた」と「呼べなかった」で切り替え後の扱いが割れるため、interruptNotice と同じ「切り替えたら消える」で揃える
   const [interruptFailure, setInterruptFailure] = useState<
-    { conversationId: string; error: unknown } | undefined
-  >(undefined);
-  const [endingConversation, setEndingConversation] = useState<
-    { conversationId: string } | undefined
-  >(undefined);
-  const [endNotice, setEndNotice] = useState<{ fromId: string } | undefined>(undefined);
-  const [endFailure, setEndFailure] = useState<
     { conversationId: string; error: unknown } | undefined
   >(undefined);
   // deleteResult は消えたあとの /chat に残す（トーストにしない）: 消せなかったものと後始末の失敗は、読んで判断する材料のため
@@ -1967,26 +1961,13 @@ export function ChatPane({
     [interruptClone, giveBack],
   );
 
-  const handleEndConversation = useCallback(
-    async (pressedConversationId: string) => {
-      focusIntentRef.current = { kind: 'end' };
-      setEndingConversation({ conversationId: pressedConversationId });
-      setEndFailure(undefined);
-      setEndNotice(undefined);
-      try {
-        await endConversation(pressedConversationId);
-        if (shownIdRef.current === pressedConversationId) {
-          setEndNotice({ fromId: pressedConversationId });
-          navigate('/chat');
-        }
-      } catch (caught) {
-        setEndFailure({ conversationId: pressedConversationId, error: caught });
-      } finally {
-        setEndingConversation(undefined);
-      }
-    },
-    [endConversation, navigate],
-  );
+  const {
+    handleEndConversation,
+    setEndNotice,
+    visibleEnding,
+    visibleEndFailure,
+    visibleEndNotice,
+  } = useEndConversationAction({ shownId, endConversation, navigate, focusIntentRef, shownIdRef });
 
   const handleDeleteConversation = useCallback(
     async (pressedConversationId: string) => {
@@ -2056,6 +2037,7 @@ export function ChatPane({
       deletedConversationIds,
       pendingDraftSave,
       setAttachmentDrafts,
+      setEndNotice,
     ],
   );
 
@@ -2063,8 +2045,6 @@ export function ChatPane({
   const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
   const visibleDeleting =
     deletingConversation !== undefined && deletingConversation.conversationId === shownId;
-  const visibleEnding =
-    endingConversation !== undefined && endingConversation.conversationId === shownId;
   useFocusIntentReturn(focusIntentRef, editingKey, visibleEnding);
   const visibleInterruptNotice =
     interruptNotice !== undefined && interruptNotice.conversationId === shownId
@@ -2073,10 +2053,6 @@ export function ChatPane({
   const visibleInterruptFailure =
     interruptFailure !== undefined && interruptFailure.conversationId === shownId
       ? interruptFailure.error
-      : undefined;
-  const visibleEndFailure =
-    endFailure !== undefined && endFailure.conversationId === shownId
-      ? endFailure.error
       : undefined;
   // has で存在を確かめてから読む: throw undefined のような例外だと、get が undefined を返しただけでは「無い」と「積まれている値が undefined」を区別できない
   const storedFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
@@ -2099,9 +2075,6 @@ export function ChatPane({
     visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure ?? visibleDeleteFailure;
   const hasShownFailure = shownFailure !== undefined && shownFailure !== null;
 
-  if (endNotice !== undefined && shownId !== undefined && shownId !== endNotice.fromId) {
-    setEndNotice(undefined);
-  }
   if (deleteResult !== undefined && shownId !== undefined && shownId !== deleteResult.fromId) {
     setDeleteResult(undefined);
   }
@@ -2109,10 +2082,6 @@ export function ChatPane({
     deleteResult !== undefined && shownId === undefined ? (
       <ConversationDeletedNotice result={deleteResult.result} />
     ) : undefined;
-  const visibleEndNotice =
-    endNotice !== undefined && shownId === undefined
-      ? '会話を終えました。ここまでの学びを記憶にまとめます。終えた会話は左の一覧に残っていて、開けば続きを話せます。'
-      : undefined;
 
   // 先頭に届いていないときは「以降」「以上」と言う: 遡った窓の中でしか数えていないので、実際の開始を言い切らない
   const headerSubtitle = (() => {

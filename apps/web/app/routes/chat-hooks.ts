@@ -7,8 +7,13 @@ import {
   useState,
   type RefObject,
 } from 'react';
+import type { useNavigate } from 'react-router';
 
-import { useConversationApprovals, useMarkConversationRead } from '@alteroid/swr';
+import {
+  useConversationApprovals,
+  useMarkConversationRead,
+  type useEndConversation,
+} from '@alteroid/swr';
 import {
   chatDraftEpoch,
   describeApprovalLeftover,
@@ -223,6 +228,71 @@ export function useMarkShownConversationRead(
     if (!pageVisible || shownId === undefined || historyData === undefined) return;
     markRead(shownId, historyData);
   }, [pageVisible, shownId, historyData, markRead]);
+}
+
+export function useEndConversationAction({
+  shownId,
+  endConversation,
+  navigate,
+  focusIntentRef,
+  shownIdRef,
+}: {
+  shownId: string | undefined;
+  endConversation: ReturnType<typeof useEndConversation>;
+  navigate: ReturnType<typeof useNavigate>;
+  focusIntentRef: RefObject<FocusIntent | undefined>;
+  shownIdRef: RefObject<string | undefined>;
+}) {
+  const [endingConversation, setEndingConversation] = useState<
+    { conversationId: string } | undefined
+  >(undefined);
+  const [endNotice, setEndNotice] = useState<{ fromId: string } | undefined>(undefined);
+  const [endFailure, setEndFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
+
+  const handleEndConversation = useCallback(
+    async (pressedConversationId: string) => {
+      focusIntentRef.current = { kind: 'end' };
+      setEndingConversation({ conversationId: pressedConversationId });
+      setEndFailure(undefined);
+      setEndNotice(undefined);
+      try {
+        await endConversation(pressedConversationId);
+        if (shownIdRef.current === pressedConversationId) {
+          setEndNotice({ fromId: pressedConversationId });
+          navigate('/chat');
+        }
+      } catch (caught) {
+        setEndFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setEndingConversation(undefined);
+      }
+    },
+    [endConversation, navigate, focusIntentRef, shownIdRef],
+  );
+
+  const visibleEnding =
+    endingConversation !== undefined && endingConversation.conversationId === shownId;
+  const visibleEndFailure =
+    endFailure !== undefined && endFailure.conversationId === shownId
+      ? endFailure.error
+      : undefined;
+  if (endNotice !== undefined && shownId !== undefined && shownId !== endNotice.fromId) {
+    setEndNotice(undefined);
+  }
+  const visibleEndNotice =
+    endNotice !== undefined && shownId === undefined
+      ? '会話を終えました。ここまでの学びを記憶にまとめます。終えた会話は左の一覧に残っていて、開けば続きを話せます。'
+      : undefined;
+
+  return {
+    handleEndConversation,
+    setEndNotice,
+    visibleEnding,
+    visibleEndFailure,
+    visibleEndNotice,
+  };
 }
 
 export function useFocusIntentReturn(
