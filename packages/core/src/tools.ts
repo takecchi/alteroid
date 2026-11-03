@@ -414,6 +414,7 @@ import {
   formatIntRangeJa,
   formatStringLengthJa,
 } from './tool-arg-checks.js';
+import { CLONE_TOOL_NAMES, type CloneToolName } from './clone-tools-names.js';
 import type { ToolContext } from './clone-tools-context.js';
 
 const MISSING_ARG_HINT =
@@ -484,6 +485,8 @@ function stringifyToolResponseForValidationCheck(toolResponse: unknown): string 
 import { MCP_SERVER_NAME } from './mcp-server-name.js';
 
 export { MCP_SERVER_NAME };
+export { CLONE_TOOL_NAMES } from './clone-tools-names.js';
+export type { CloneToolName } from './clone-tools-names.js';
 export type { ReplyAttachments, ToolContext } from './clone-tools-context.js';
 
 const MANAGER_ATTACHMENTS_DESCRIPTION =
@@ -499,72 +502,6 @@ export function qualifiedToolName(name: string): string {
 
 // モデルの引数からは受けない: 名乗りを引数に任せると「誰の観測か」が申告の申告になるため
 export const GITHUB_OBSERVATION_CLONE_OBSERVER = 'clone';
-
-export const CLONE_TOOL_NAMES = [
-  'memory_list',
-  'memory_read',
-  'memory_write',
-  'memory_append',
-  'memory_delete',
-  'memory_frontmatter_set',
-  'memory_outline',
-  'memory_section_read',
-  'memory_section_move',
-  'journal_write',
-  'journal_read',
-  'conversation_read',
-  'attachment_fetch',
-  'file_put',
-  'file_list',
-  'file_keep',
-  'file_delete',
-  'reply_attach',
-  'ask_human',
-  'request_permission',
-  'approvals_list',
-  'approval_trace',
-  'approval_withdraw',
-  'daily_report_write',
-  'usage_read',
-  'schedule_list',
-  'schedule_create',
-  'schedule_remove',
-  'task_list',
-  'task_add',
-  'task_move',
-  'task_set_status',
-  'task_set_status_many',
-  'task_keep',
-  'task_say',
-  'progress_read',
-  'github_observation_record',
-  'inbox_remove_many',
-  'profile_read',
-  'profile_write',
-  'profile_remove',
-  'practice_list',
-  'practice_read',
-  'practice_history',
-  'practice_write',
-  'practice_remove',
-  'token_list',
-  'permission_grant_list',
-  'account_list',
-  'self_read',
-  'self_status',
-  'self_dropped',
-  'manager_start',
-  'manager_send',
-  'manager_stop',
-  'manager_list',
-  'manager_report',
-  'manager_transcript',
-  'archive_remove',
-  'archive_remove_many',
-  'runner_list',
-] as const;
-
-export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
 
 export const SELF_JOURNALING_CLONE_TOOLS = [
   'github_observation_record',
