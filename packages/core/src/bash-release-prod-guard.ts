@@ -3,7 +3,7 @@ import { stripDataHeredocsForWaitForms } from './bash-wait-guard.js';
 // 見分けるだけで守りではない: 文字列しか見ないので、スクリプトファイルの中・変数で組んだ `gh`・`eval`・数値 ID 指定・`curl` は拾えない
 // `ALTEROID_BASH_GUARD=off` でも確認に残す: 取り返しがつきにくい操作を黙って通す設定にしないため
 
-export type ReleaseProdVerdict =
+type ReleaseProdVerdict =
   { matched: false } | { matched: true; form: 'gh-release-prod'; reason: string };
 
 const REASON =

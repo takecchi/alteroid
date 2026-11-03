@@ -13,7 +13,7 @@ export interface AnthropicRouteLayer {
   env: NodeJS.ProcessEnv;
 }
 
-export interface AnthropicRouteInspection {
+interface AnthropicRouteInspection {
   /** 置かれていなければ省く。`origin` が `null` なら URL として解析できなかった値。 */
   baseUrl?: { origin: string | null; source: string };
   /** 置かれている接続先用の鍵の名前と出所。**値は持たない。** */
@@ -24,12 +24,12 @@ export interface AnthropicRouteInspection {
   modelAliases: { name: string; value: string; source: string }[];
 }
 
-export const ANTHROPIC_BASE_URL_ENV = 'ANTHROPIC_BASE_URL';
+const ANTHROPIC_BASE_URL_ENV = 'ANTHROPIC_BASE_URL';
 export const ANTHROPIC_ENDPOINT_KEY_ENV_NAMES = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_API_KEY',
 ] as const;
-export const CLAUDE_LOGIN_TOKEN_ENV = 'CLAUDE_CODE_OAUTH_TOKEN';
+const CLAUDE_LOGIN_TOKEN_ENV = 'CLAUDE_CODE_OAUTH_TOKEN';
 const ANTHROPIC_MODEL_ENV = 'ANTHROPIC_MODEL';
 const ANTHROPIC_DEFAULT_MODEL_ENV_PATTERN = /^ANTHROPIC_DEFAULT_([A-Z0-9]+)_MODEL$/;
 
@@ -94,7 +94,7 @@ export function inspectAnthropicRoute(
   };
 }
 
-export const ENABLE_TOOL_SEARCH_ENV = 'ENABLE_TOOL_SEARCH';
+const ENABLE_TOOL_SEARCH_ENV = 'ENABLE_TOOL_SEARCH';
 const TOOL_SEARCH_OFF_ENV_NAMES = [
   'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS',
   'CLAUDE_CODE_USE_BEDROCK',
@@ -107,7 +107,7 @@ const FIRST_PARTY_ORIGIN = 'https://api.anthropic.com';
  * 値の意味（`0` を偽と読むか等）は推し量らず、空でない値が置かれていれば「置かれている」とする:
  * 判定は CLI の版で変わりうるので、ここで真偽を決めると、外れたときに観測ごと誤るため。
  */
-export interface ToolSearchInspection {
+interface ToolSearchInspection {
   enableToolSearch?: { source: string };
   offSwitches: { name: string; source: string }[];
   /** `ANTHROPIC_BASE_URL` が first-party の origin 以外を指している。 */

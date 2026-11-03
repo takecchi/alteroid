@@ -11,9 +11,9 @@ const COMPACT_FLAG_RE = /(?:^|[ \t])--compact(?:[ \t]|$)/;
 
 const INTERVAL_FLAG_RE = /(?:^|[ \t])(?:--interval(?:[ \t=]|$)|-i)/;
 
-export const RUN_WATCH_DEFAULT_INTERVAL_SECONDS = 30;
+const RUN_WATCH_DEFAULT_INTERVAL_SECONDS = 30;
 
-export interface RunWatchCompactRewrite {
+interface RunWatchCompactRewrite {
   readonly command: string;
   readonly addedCompact: boolean;
   readonly addedInterval: boolean;

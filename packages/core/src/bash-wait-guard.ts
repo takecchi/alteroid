@@ -1,4 +1,4 @@
-export type WaitGuardForm =
+type WaitGuardForm =
   'until-sleep' | 'while-sleep' | 'for-sleep' | 'tail-f' | 'gh-run-watch-background';
 
 /** 待ちの歯が断る形ごとの要約（プロンプトに載せる一覧の元）。型で全部の形を網羅させる: 形を足して要約を書き忘れると typecheck が落ちる（#5017）。 */
@@ -33,8 +33,7 @@ export function waitGuardPromptLines(): string {
     .join('\n');
 }
 
-export type WaitGuardVerdict =
-  { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
+type WaitGuardVerdict = { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
 
 // 代替なしで弾かない: 弾いた先に道が無いと、素通りする形へ逃げるため
 const ALTERNATIVES =
@@ -288,7 +287,7 @@ function stripQuoteCharacters(command: string): string {
 export const LOOP_RE =
   /\b(until|while)\b([\s\S]*?)(?<=^|[\s;&|])do\b([\s\S]*?)(?<=^|[\s;&|])done\b/g;
 
-export interface LoopMatch {
+interface LoopMatch {
   readonly keyword: 'until' | 'while' | 'for';
   readonly cond: string;
   readonly body: string;
@@ -556,7 +555,7 @@ export function stripHeredocs(command: string): string {
   return out + command.slice(cursor);
 }
 
-export interface HeredocSpan {
+interface HeredocSpan {
   readonly start: number;
   readonly end: number;
   readonly bodyStart: number;
@@ -810,7 +809,7 @@ function joinLineContinuations(command: string): string {
     : command;
 }
 
-export interface BashInvocation {
+interface BashInvocation {
   readonly backgrounded?: boolean;
 }
 

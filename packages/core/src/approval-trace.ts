@@ -40,7 +40,7 @@ export function stampingJournal(
 // 無制限にしない: 受信箱が詰まると答えのターンが遠くなり、その間の `tool_use` が数百行になりうるため
 export const APPROVAL_TRACE_SCAN_LIMIT = 5000;
 
-export const APPROVAL_TRACE_ACTION_LIMIT = 500;
+const APPROVAL_TRACE_ACTION_LIMIT = 500;
 
 export const APPROVAL_TRACE_STATES = [
   'unanswered',
@@ -208,7 +208,7 @@ export async function traceApproval(
 
 export { describeTraceAction } from './trace-action.js';
 
-export interface ApprovalTraceRenderOptions {
+interface ApprovalTraceRenderOptions {
   budget: number | null;
   summaryLimit: number | null;
   detailHint: string;

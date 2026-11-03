@@ -19,7 +19,7 @@ import { toSdkInput } from './claude-user-content.js';
 import { stageCloneMcpServers, type CloneMcpConfigFile } from './clone-mcp-config-file.js';
 import { readSessionUsage } from './usage.js';
 
-export type ClaudeCloneQueryFn = typeof query;
+type ClaudeCloneQueryFn = typeof query;
 
 export function toClaudeMcpServerConfig(tools: AgentCloneTools): McpServerConfig {
   return tools.server as McpServerConfig;

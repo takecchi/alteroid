@@ -27,17 +27,17 @@ export async function contextUsageWithin<T>(answer: Promise<T>, ms: number): Pro
 // 分類は kind だけで行い、name の英語の文字列を見ない:
 // > [sdk-verbatim SDKControlGetContextUsageResponse.categories.kind]
 // > Classify on this, never on the English name.
-export const CONTEXT_CATEGORY_KINDS = ['used', 'free', 'buffer', 'deferred'] as const;
+const CONTEXT_CATEGORY_KINDS = ['used', 'free', 'buffer', 'deferred'] as const;
 
-export type ContextCategoryKind = (typeof CONTEXT_CATEGORY_KINDS)[number];
+type ContextCategoryKind = (typeof CONTEXT_CATEGORY_KINDS)[number];
 
-export interface ContextCategoryTotals {
+interface ContextCategoryTotals {
   // 素の number にしない: 文字数（HeuristicChars）をトークンとして読み替える経路を tsc に落とさせるため
   tokens: ExactTokens;
   count: number;
 }
 
-export interface ContextCategorySummary {
+interface ContextCategorySummary {
   // free / buffer / deferred / unclassified を used に混ぜない: used は「毎ターン払っている量」として読まれるため
   used: ContextCategoryTotals;
   free: ContextCategoryTotals;

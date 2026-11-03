@@ -11,8 +11,8 @@ export const DEFAULT_BASH_GUARD: BashGuardMode = 'ask';
 // Bash の形の歯（`bash-shape-guard.ts`。#4947・#4949）の入り切り。`ALTEROID_BASH_GUARD` とは独立
 export const BASH_SHAPE_GUARD_ENV = 'ALTEROID_BASH_SHAPE_GUARD';
 
-export const BASH_SHAPE_GUARD_VALUES = ['on', 'off'] as const;
-export type BashShapeGuardMode = (typeof BASH_SHAPE_GUARD_VALUES)[number];
+const BASH_SHAPE_GUARD_VALUES = ['on', 'off'] as const;
+type BashShapeGuardMode = (typeof BASH_SHAPE_GUARD_VALUES)[number];
 
 // 既定は掛けない: 作者の運用スタイルを要件にしない（north_star 禁止2）。掛けたい器が env かプロファイルで開ける
 export const DEFAULT_BASH_SHAPE_GUARD: BashShapeGuardMode = 'off';

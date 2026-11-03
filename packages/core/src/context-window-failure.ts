@@ -10,7 +10,7 @@ export const CONTEXT_WINDOW_FAILURE_KINDS = [
   'model_context_window_exceeded',
 ] as const;
 
-export type ContextWindowFailureKind = (typeof CONTEXT_WINDOW_FAILURE_KINDS)[number];
+type ContextWindowFailureKind = (typeof CONTEXT_WINDOW_FAILURE_KINDS)[number];
 
 export interface ContextWindowFailure {
   kind: ContextWindowFailureKind;

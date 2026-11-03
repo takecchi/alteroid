@@ -42,7 +42,7 @@ function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
 
 type PidsReading = { readonly current: number; readonly max: number };
 
-export interface AutoFoldDeps {
+interface AutoFoldDeps {
   runners: RunnerRegistry;
   now: () => number;
   stopped: () => boolean;

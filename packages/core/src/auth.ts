@@ -9,7 +9,7 @@ import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './
 
 const isoDateTime = z.string().datetime({ offset: true });
 
-export const authProviderIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/);
+const authProviderIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/);
 
 // 外部 identity とは別の層に置く: 後からパスワード認証を足すと identity 表に入るねじれが出て、Google と Discord の両方で入ったときに同一人物へ束ねられなくなるため
 export const authAccountSchema = z.object({
