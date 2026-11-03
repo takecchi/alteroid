@@ -32,6 +32,13 @@ import {
 import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 
+export const MANAGER_ATTACHMENTS_DESCRIPTION =
+  '人間の添付を担い手にも見せたいときに、その添付の id（通知行の id=… / conversation_read の添付行）を渡す。' +
+  '渡したものは担い手の手元にファイルとして置かれ（通知行にパスが付くので Read で開ける）、画像は画像としても見える。' +
+  '渡さない添付は担い手には見えない。**記憶には写らない**（日誌に残るのは渡した添付の参照だけで、中身は残らない）。' +
+  '見つからない添付（保持期限切れ・id の誤り）があれば、何も送らずにエラーを返す。個数・合計には人間の発言と同じ上限がある。' +
+  '確認への回答（requestId / decision）には載せられない。';
+
 const LIST_DENIED_TOOLS = 3;
 
 // 長さの上限もエスケープも掛けない: journal 側に無い制約をここにだけ足す理由が無いため
