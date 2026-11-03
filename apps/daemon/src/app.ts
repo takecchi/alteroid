@@ -363,6 +363,7 @@ import {
 } from './reports.js';
 import { createAppContext, principalRefOf } from './app-context.js';
 
+// 外から叩かせるなら境界は手前（リバースプロキシ・トンネル・認証）に置く: 能力側で絞らず実行環境の境界で守る（north_star 禁止2）。
 export interface AppDeps {
   clone: CloneHost;
   stores: Stores;
