@@ -3421,7 +3421,19 @@ class Clone implements CloneHost {
     );
     const failedTaskIds = new Set(failedTaskEvents.map((pending) => pending.id));
     const placedTaskEvents = taskEvents.filter((pending) => !failedTaskIds.has(pending.id));
-    const taskQueue = await this.#taskQueueNotice(event, placedTaskEvents, failedTaskEvents);
+    const taskQueue = await this.#taskQueueNotice(
+      event,
+      placedTaskEvents,
+      failedTaskEvents,
+      tickDigestCarriesTaskQueueHead(events),
+    );
+
+    // 待ち行列の先頭を要約に任せた回（`head` が空）は、固定の1文も出さない: 1文が指す先頭の行が、この断り書きには無いため。
+    // 積んだ・積めなかった行が残る回（tick では出ない）にだけ、全体の区切りを付ける
+    if (taskQueue.head.length === 0) {
+      const rest = [...taskQueue.placed, ...taskQueue.failed];
+      return rest.length === 0 ? '' : [...rest, '', '---', ''].join('\n');
+    }
 
     // 固定の1文は同じ会話で1回だけ全文（#4937）
     const tailText = this.#digestDelta.fixed(
@@ -3446,6 +3458,8 @@ class Clone implements CloneHost {
     event: InboxEvent,
     placed: readonly HumanMessage[],
     failed: readonly HumanMessage[],
+    // 要約が同じ待ち行列の先頭を載せる回は、読めたときの先頭を出さない（読めなかった断りは要約に無いので残す）
+    leaveHeadToDigest: boolean,
   ): Promise<{ head: string[]; placed: string[]; failed: string[] }> {
     const idsOf = (list: readonly HumanMessage[]): string =>
       excerptLine(list.map((pending) => `\`${pending.id}\``).join(', '), CLONE_ID_LIST_EXCERPT);
@@ -3484,6 +3498,7 @@ class Clone implements CloneHost {
         failed: failedLines,
       };
     }
+    if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
     const head = [
       `[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`,
       ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
@@ -9192,6 +9207,19 @@ export function externalBatchPrompt(
     '',
     body,
   ].join('\n');
+}
+
+/**
+ * この束の本文が、要約（digest）に「待ち行列の先頭」の節を載せるか。載せる回は断り書きの側で同じ先頭を重ねて出さない。
+ * 発意 tick（`renderDigest`）と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
+ * 件数の1行しか載せず先頭の3件は無いので、断り書きの側に残す。tick は束ねられない（`#mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
+ */
+function tickDigestCarriesTaskQueueHead(events: readonly InboxEvent[]): boolean {
+  if (events.length !== 1) return false;
+  const [event] = events;
+  if (event === undefined) return false;
+  if (event.type === 'self_initiative') return true;
+  return event.type === 'timer' && event.kind === DAILY_REPORT_KIND;
 }
 
 /** 中身を持たない「見に行け」の合図か（読まれる前の重複には情報が無い）。 */
