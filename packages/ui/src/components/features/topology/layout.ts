@@ -49,7 +49,7 @@ export interface TopologyExternal {
   details?: readonly TopologyDetail[];
 }
 
-export interface TopologyRunner {
+interface TopologyRunner {
   id: string;
   label: string;
   status: TopologyStatus;
@@ -114,7 +114,7 @@ export interface LaidEdge {
   reverse: boolean;
 }
 
-export type ContainerState = 'ok' | 'unknown' | 'offline';
+type ContainerState = 'ok' | 'unknown' | 'offline';
 
 function containerState(status: TopologyStatus): ContainerState {
   return status === 'offline' ? 'offline' : status === 'unknown' ? 'unknown' : 'ok';
@@ -140,13 +140,13 @@ export interface TopologyLayout {
 }
 
 // 利用者に見える名前は日本語にする: 内部の呼び名（alteroidd・db）を出さないため
-export const DB_CONTAINER_LABEL = '記憶の置き場';
-export const DAEMON_CONTAINER_LABEL = 'alteroid 本体';
+const DB_CONTAINER_LABEL = '記憶の置き場';
+const DAEMON_CONTAINER_LABEL = 'alteroid 本体';
 // 短くする: 細い札（スマホ幅で 120 幅）に収まらなくなるため
 const HUMAN_TASK = '画面・端末';
 
-export const UNKNOWN_RUNNER_KEY = 'unknown-runner';
-export const UNKNOWN_RUNNER_LABEL = '器の分からないマネージャー';
+const UNKNOWN_RUNNER_KEY = 'unknown-runner';
+const UNKNOWN_RUNNER_LABEL = '器の分からないマネージャー';
 
 interface RunnerGroup {
   key: string;

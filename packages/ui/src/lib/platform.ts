@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-export interface PlatformSource {
+interface PlatformSource {
   userAgentData?: { platform?: string };
   platform?: string;
 }
