@@ -13,7 +13,7 @@ const PHASE_LABELS: Record<string, string> = {
   finalize: '書き戻し（result の後の後始末）',
 };
 
-export function turnTimingPhaseLabel(phase: string): string {
+function turnTimingPhaseLabel(phase: string): string {
   const known = PHASE_LABELS[phase];
   if (known !== undefined) return known;
   const dot = phase.indexOf('.');
@@ -33,7 +33,7 @@ function formatTokens(value: number): string {
 }
 
 /** 入力として読んだ量（素の入力＋キャッシュの読み＋キャッシュの書き）。モデルが毎要求で読み直す前置きの重さ */
-export function turnInputTokens(entry: Pick<TurnTimingEntry, 'tokens'>): number | undefined {
+function turnInputTokens(entry: Pick<TurnTimingEntry, 'tokens'>): number | undefined {
   const tokens = entry.tokens;
   if (tokens === undefined) return undefined;
   return tokens.input + tokens.cacheRead + tokens.cacheCreation;
@@ -48,7 +48,7 @@ function describeTokens(tokens: NonNullable<TurnTimingEntry['tokens']>): string 
 }
 
 /** 親の段（`.` の無い段）を長い順に並べる。内訳（`.` 付き）は親に含まれるので混ぜない */
-export function topLevelPhases(entry: Pick<TurnTimingEntry, 'phases'>): Array<[string, number]> {
+function topLevelPhases(entry: Pick<TurnTimingEntry, 'phases'>): Array<[string, number]> {
   return Object.entries(entry.phases)
     .filter(([name]) => !name.includes('.'))
     .sort((a, b) => b[1] - a[1]);
@@ -64,7 +64,7 @@ function subPhases(
 }
 
 /** その段が遅かった「なぜ」の材料を1文にする。材料が無ければ空文字 */
-export function describeTurnTimingReason(entry: TurnTimingEntry, phase: string): string {
+function describeTurnTimingReason(entry: TurnTimingEntry, phase: string): string {
   if (phase === 'queue') {
     return entry.batchSize > 1 ? `束ねた合図 ${String(entry.batchSize)} 件` : '';
   }
@@ -144,7 +144,7 @@ const BUNDLE_KEY = '束';
 const IDLE_CHECK_TRIGGERS = ['self_initiative', 'timer'];
 
 /** 数える鍵: 種別が1つならその名前、複数種が束ねられていれば「束」（全種に重複計上しない）、無ければ `?` */
-export function turnTriggerKey(entry: Pick<TurnTimingEntry, 'triggers'>): string {
+function turnTriggerKey(entry: Pick<TurnTimingEntry, 'triggers'>): string {
   const distinct = [...new Set(entry.triggers)];
   if (distinct.length === 0) return '?';
   if (distinct.length > 1) return BUNDLE_KEY;

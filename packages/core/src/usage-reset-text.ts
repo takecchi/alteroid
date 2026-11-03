@@ -166,7 +166,7 @@ export function parseNoticeResetDatedAt(
   return undefined;
 }
 
-export interface ParseNoticeResetOptions {
+interface ParseNoticeResetOptions {
   at: number;
   withinMs: number;
 }

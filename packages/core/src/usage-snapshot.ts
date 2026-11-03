@@ -12,7 +12,7 @@ import {
 // 取れなかったものを 0 にしない: `rate_limits_available: true` でも `rate_limits` が `null` のことがあり、`utilization` が付かない枠もあるため
 // 時刻は epoch ミリ秒だけを持つ: `/usage` は ISO 8601、`rate_limit_event` は Unix 秒で、混ぜると事故るため
 // 実セッションに相乗りせず使い捨ての probe を立てる: ターン直後の usage 要求は `ProcessTransport is not ready for writing` で失敗するため
-export const usageWindowKindSchema = z.enum([
+const usageWindowKindSchema = z.enum([
   'five_hour',
   'seven_day',
   'seven_day_opus',
@@ -21,10 +21,10 @@ export const usageWindowKindSchema = z.enum([
   'overage',
 ]);
 
-export type UsageWindowKind = z.infer<typeof usageWindowKindSchema>;
+type UsageWindowKind = z.infer<typeof usageWindowKindSchema>;
 
 // 欠けたものを 0 や「いま」で埋めない: utilization と resetsAt は実測でどちらも欠けることがあるため
-export const usageWindowSchema = z.object({
+const usageWindowSchema = z.object({
   kind: usageWindowKindSchema,
   utilization: z.number().nonnegative().optional(),
   resetsAt: z.number().int().positive().optional(),
@@ -34,7 +34,7 @@ export const usageWindowSchema = z.object({
 export type UsageWindow = z.infer<typeof usageWindowSchema>;
 
 // 通貨が分からないときは金額として整形しない: 型宣言は単位を言わず USD かクレジットか未実測で、`$` を付けると嘘の単位を名乗るため
-export const extraUsageSchema = z.object({
+const extraUsageSchema = z.object({
   enabled: z.boolean(),
   monthlyLimit: z.number().nonnegative().optional(),
   usedCredits: z.number().nonnegative().optional(),
@@ -42,7 +42,7 @@ export const extraUsageSchema = z.object({
   currency: z.string().optional(),
 });
 
-export type ExtraUsage = z.infer<typeof extraUsageSchema>;
+type ExtraUsage = z.infer<typeof extraUsageSchema>;
 
 // 値を許可リストで絞る: `AccountInfo.apiKeySource` は SDK 上 string としか宣言されず形の保証が無く、`GET /usage` はアクセストークンで読める面なので、素通しにすると鍵に関する自由文字列が外へ配られうるため
 // [sdk-verbatim AccountInfo.apiKeySource]
@@ -65,7 +65,7 @@ export const accountApiKeySourceSchema = z.enum([
 
 export type AccountApiKeySource = z.infer<typeof accountApiKeySourceSchema>;
 
-export const accountApiProviderSchema = z.enum([
+const accountApiProviderSchema = z.enum([
   'firstParty',
   'bedrock',
   'vertex',
@@ -77,13 +77,13 @@ export const accountApiProviderSchema = z.enum([
   'unrecognized',
 ]);
 
-export type AccountApiProvider = z.infer<typeof accountApiProviderSchema>;
+type AccountApiProvider = z.infer<typeof accountApiProviderSchema>;
 
 // 値を運ばず状態だけにする: `AccountInfo.tokenSource` は SDK 側に値の一覧が無い自由文字列で、許可リストを作れないため
 // [sdk-verbatim AccountInfo.tokenSource]
 // > tokenSource?: string;
 // 欄が無いのは「この版が送らない」の1通り: 同じプロセスで作る限り3値のどれかが入る。既定値で埋めない: 「送らなかった」と「試して not_returned だった」が区別できなくなるため
-export const tokenSourcePresenceSchema = z.enum(['not_returned', 'present', 'empty']);
+const tokenSourcePresenceSchema = z.enum(['not_returned', 'present', 'empty']);
 
 export type TokenSourcePresence = z.infer<typeof tokenSourcePresenceSchema>;
 
@@ -111,15 +111,11 @@ export type AccountUsage = z.infer<typeof accountUsageSchema>;
 // > Active API backend. Anthropic OAuth login only applies when "firstParty"; for 3P providers the other fields are absent and auth is external (AWS creds, gcloud ADC, etc.). "gateway" means the CLI is authenticated against an enterprise gateway.
 // [sdk-verbatim SDKControlGetUsageResponse.subscription_type]
 // > Claude.ai subscription type ('pro', 'max', 'team', 'enterprise') or null for API key / 3P provider sessions.
-export const limitsUnavailableCauseSchema = z.enum([
-  'not_logged_in',
-  'non_first_party',
-  'undetermined',
-]);
+const limitsUnavailableCauseSchema = z.enum(['not_logged_in', 'non_first_party', 'undetermined']);
 export type LimitsUnavailableCause = z.infer<typeof limitsUnavailableCauseSchema>;
 
 // 保っている `ok` に失敗を添える: 保つだけで失敗を隠すと、取れていない値を取れているように見せるため。値（鍵・応答の中身）は載せない
-export const accountUsageRefreshFailureSchema = z.object({
+const accountUsageRefreshFailureSchema = z.object({
   since: z.string().datetime({ offset: true }),
   at: z.string().datetime({ offset: true }),
   reason: z.string(),
@@ -344,7 +340,7 @@ export function isNotLoggedIn(tokenSourceRaw: string | undefined): boolean {
   return tokenSourceRaw === 'none';
 }
 
-export const ACCOUNT_INFO_KEYS_LIMIT = 32;
+const ACCOUNT_INFO_KEYS_LIMIT = 32;
 
 // 識別子の形でない名前は落とす: 名前の位置に自由文が来る形を、外へ出る面へ運ばないため
 export function accountInfoKeysOf(accountJson: unknown): string[] | undefined {
@@ -368,7 +364,7 @@ export function hasAccountUsageDetail(usage: AccountUsage): boolean {
   return hasPlanName(usage) || usage.windows.length > 0 || usage.extraUsage !== undefined;
 }
 
-export const ACCOUNT_USAGE_READ_TIMEOUT_MS = 10_000;
+const ACCOUNT_USAGE_READ_TIMEOUT_MS = 10_000;
 
 // export する: `fetchAccountUsage` 経由では timeout / aborted を作れず（読み取りが常に外側の締め切りより先に終わる）、直接呼ぶ単体テストで両方の分岐を確かめるため
 export function describeOuterFailure(failure: UsageProbeFailure): string {

@@ -53,7 +53,7 @@ interface UsageNoticeMemory {
  * 起こし直しの側（`UsageWake` など）が同じ参照を読む。`tokenIdentities` は呼ぶたびに引く（読み直さずに1回だけ引く所は本体に注釈がある）。
  * 関数の口は async の皮で包まずに渡す（`await` の数と順を変えないため）。
  */
-export interface UsageReceiverPorts {
+interface UsageReceiverPorts {
   /** `usage` だけを読む。差し替わりうるので、欄ではなく入れ物の参照を受けて呼ぶたびに引く。 */
   stores: { readonly usage: Stores['usage'] };
   now: () => number;
