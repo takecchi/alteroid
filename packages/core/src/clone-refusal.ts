@@ -21,7 +21,7 @@ export const REFUSAL_AUTO_REOPEN_ACTOR = 'クローンの自動判定（safeguar
  */
 export const REFUSAL_AUTO_REOPEN_ENV = 'ALTEROID_REFUSAL_AUTO_REOPEN';
 
-export interface RefusalAutoReopenSetting {
+interface RefusalAutoReopenSetting {
   readonly enabled: boolean;
   /** 読めなかった綴り（既定の有効へ倒した）。判断の行に残して、置いたのに効かないを黙らせない。 */
   readonly unrecognized?: string;
@@ -65,7 +65,7 @@ export function describeRefusalFailureMark(category: string | null): string {
 export type RefusalAutoReopenState = 'enabled' | 'disabled' | 'halted';
 
 /** 人間へ出す、開き直す口の案内。 */
-export const REFUSAL_REOPEN_DOORS =
+const REFUSAL_REOPEN_DOORS =
   '開き直す口: `alteroid reopen` / 設定画面の「クローンのセッションを開き直す」 / `POST /clone/session/reopen`';
 
 export function describeRefusalReopened(streak: number, category: string | null): string {

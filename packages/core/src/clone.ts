@@ -349,7 +349,7 @@ export {
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
 /** SSE の `text` には入れない: Web の `pendingOwnLines` がこの区切りありとなしの両方で照合するため。 */
-export const REPLY_MESSAGE_SEPARATOR = '\n\n';
+const REPLY_MESSAGE_SEPARATOR = '\n\n';
 
 /** 未書き込みの分だけを見る: ターンの先頭や承認カードで割った直後（`replyWritten`）に区切りを置くと、行頭に空行が付くため。 */
 function appendReply(turn: Turn, text: string): void {
@@ -427,7 +427,7 @@ export function compactionLikelyThisTurn(
  * 使用量の観測から固定文を全文へ戻す理由のラベル（日誌の計測用。#4941）。`compactionLikelyThisTurn` の見込みに加えて、見込みの材料が取れない回（使用量の観測が無い・閾値や量が不明・自動要約の有無が不明）も戻す（安全側）。戻さない回は null。
  * 自動要約が無効と分かっている回（`isAutoCompactEnabled === false`）は、要約が走らないので null。
  */
-export type DigestUsageResetReason =
+type DigestUsageResetReason =
   'usage_null' | 'usage_error' | 'usage_threshold_missing' | 'compaction_likely';
 
 export function digestUsageResetReason(
@@ -452,7 +452,7 @@ export function digestUsageResetReason(
 }
 
 /** 固定文を全文へ戻した理由（日誌の計測用）。 */
-export type DigestResetLabel =
+type DigestResetLabel =
   | DigestUsageResetReason
   | 'query_null'
   | 'recycle_window'
@@ -532,7 +532,7 @@ export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
 ];
 
 // 使い切っても諦めず、最後の間隔で拾えるまで続ける: 起動時の読み直しは1回きりで、諦めると前の器の未読（人間の発言・報告）が次の再起動まで誰にも配られないため
-export const RESTORE_UNREAD_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 15_000, 60_000];
+const RESTORE_UNREAD_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 15_000, 60_000];
 
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
@@ -711,7 +711,7 @@ const SCHEDULE_CLAIM_ROUNDS = 3;
 // 短い形にも残す: 「ここに出ていない文書は変わっていない」（無いと、載っていない文書を消えた・壊れたと読む）と、節の本文が載っていないので `memory_section_read` で開くこと。
 // 畳むのは「載っている文書も変わった範囲だけ」「システムプロンプトの記憶はセッションを組んだ時点の索引」という説明。
 // 索引の載せ直し（要約が走った直後）の頭は畳まない: 要約の直後は全文へ戻る条件に当たり、そもそも畳まれない上、文面が別のため。
-export const MEMORY_UPDATE_HEAD =
+const MEMORY_UPDATE_HEAD =
   '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。' +
   '**変わった文書だけを載せる。ここに出ていない文書は変わっていない。**' +
   '載っている文書も、大きく変わっていなければ**変わった範囲だけ**が載る' +
@@ -719,7 +719,7 @@ export const MEMORY_UPDATE_HEAD =
   'システムプロンプトの「現在の記憶」は**このセッションを組んだ時点の索引**（要旨と節の目次）であり、' +
   'それに続けてこれらの差分を当てたものが現在の索引である。' +
   '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**';
-export const MEMORY_UPDATE_HEAD_REF =
+const MEMORY_UPDATE_HEAD_REF =
   '[system] 記憶が更新された（読み方は前の更新と同じ。会話の上にある）。' +
   '**ここに出ていない文書は変わっていない。**' +
   '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**';
@@ -967,7 +967,7 @@ export class InvalidApprovalSelectionsError extends Error {
 }
 
 // id はランダムにしない: `#reconcileUndeliveredAnswers` が同じ入力から同じ id を再現し、`InboxStore#put` の上書きで二重配達を避けるため
-export function humanAnswerEventId(approvalId: string, answeredAt: string): string {
+function humanAnswerEventId(approvalId: string, answeredAt: string): string {
   return `human-answer-${approvalId}-${answeredAt}`;
 }
 
@@ -8726,8 +8726,7 @@ export function mixedSignalBatchPrompt(
 }
 
 /** 起点の違う合図の束の1項目。文字列は1件、`parts` は同じ担当の報告が連続した塊（見出しと注意が付く）。 */
-export type MixedBatchItem =
-  string | { readonly managerId: string; readonly parts: readonly string[] };
+type MixedBatchItem = string | { readonly managerId: string; readonly parts: readonly string[] };
 
 /** 人間の発言のターンの入力の先頭に置く、会話の名乗り。セッションが1本なので、名乗らないと別の会話の件を混ぜる。 */
 // 同じ会話が続く回は id の1行だけにする: いちばん多い普通の一往復で、読ませるものを増やさないため（`humanTurnText` の doc）
@@ -8891,7 +8890,7 @@ export const REPORT_FOLLOW_UP_GUIDE =
 export const REPORT_FOLLOW_UP_GUIDE_REF = '（応じ方の案内は前の報告と同じ。会話の上にある）';
 
 /** 束ねた報告への応じ方の案内。 */
-export const BATCH_REPORT_FOLLOW_UP_GUIDE =
+const BATCH_REPORT_FOLLOW_UP_GUIDE =
   '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。\n' +
   '学びや判断の基準になったことがあれば記憶へ移すこと。';
 
@@ -8986,7 +8985,7 @@ function managerPrompt(
  * `missing` / `unreadable` を「起点の会話が無い」（`job` の `conversationId: null`）に畳まない: 起点が在るかもしれないのに「起点の会話: 無し」と名乗ることになるため。
  * `conversationId` はどの種類にも置く: ターンを起点の会話に結ぶ呼び手（`#runInternal` へ渡す4か所）が種類を見ずに読めるようにするため。分からないときは結ばない（`null`）。
  */
-export type ManagerOrigin =
+type ManagerOrigin =
   | { kind: 'job'; conversationId: string | null; taskId?: string }
   | { kind: 'missing'; conversationId: null }
   | { kind: 'unreadable'; conversationId: null; reason: string };
@@ -8994,11 +8993,11 @@ export type ManagerOrigin =
 // 「必要なら」で写すかを任せない（#5125 c30-2）: 承認への答えは人間の判断の合図で最も濃いのに、基準として記憶へ写されず、同じ種類の確認を何度も人間へ上げていたため
 // 同じ会話の2回目から参照にする（#5301）。ただし「拒否・条件付き・理由付きの答えは基準として記憶へ書く」「読み取れなければ訊く」は、人間の答えを受けたターンの基本動作なので短い形にも残す。
 // 畳むのは「材料である」という説明と、書き方の言い換えの詳細だけ。
-export const HUMAN_ANSWER_CRITERIA_GUIDE =
+const HUMAN_ANSWER_CRITERIA_GUIDE =
   'この回答は、同じ種類の確認が次に来たときにあなたが自分で決めるための材料である。' +
   '拒否・条件付き・理由付きの答えなら、結論だけでなく理由と条件を、どの種類の確認に効く基準かが分かる言葉に言い換えて記憶へ書くこと。' +
   '基準が読み取れないなら、推測で書かずに人間に訊くこと。';
-export const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
+const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
   '（扱いは前の回答と同じ。会話の上にある）拒否・条件付き・理由付きの答えは、理由と条件を基準として記憶へ書くこと。読み取れなければ人間に訊くこと。';
 
 /**
@@ -9008,13 +9007,13 @@ export const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
 export const ORIGIN_NO_TASK_GUIDE =
   '（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。' +
   '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）';
-export const ORIGIN_NO_TASK_GUIDE_REF =
+const ORIGIN_NO_TASK_GUIDE_REF =
   '（扱いは前に出した案内と同じ: task_list で探した task へ task_say で書く。無ければ task_add。知らせるだけの task は done にする）';
 
 /** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */
-export const ORIGIN_TASK_GUIDE =
+const ORIGIN_TASK_GUIDE =
   '（人間へ知らせるなら、結び付いた task へ `task_say` で書く。書いたら、知らせるだけの task は task_set_status で done にする）';
-export const ORIGIN_TASK_GUIDE_REF =
+const ORIGIN_TASK_GUIDE_REF =
   '（扱いは前に出した案内と同じ: 結び付いた task へ task_say で書き、知らせるだけの task は done にする）';
 
 /** 委譲が task に結び付いているときだけ出す1行（#5469 P3）。委譲が終わった task は判断待ち（needs_decision）に戻っているので、結果の扱いはその task の上で決める。 */

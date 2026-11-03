@@ -46,7 +46,7 @@ export type WaitingKind = z.infer<typeof waitingKindSchema>;
  * `kind` と `askedAt` は必須（#346 以前の runner は送らず、`HttpRunner#list()` の `safeParse` が要素ごと捨てる）。
  * デーモン側で既定値は作らない（`askedAt` を「取れなければいま」で埋めると値の意味が経路で変わる）。
  */
-export const runnerWaitingSchema = z.object({
+const runnerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
   kind: waitingKindSchema,
@@ -136,7 +136,7 @@ export type RunnerManagerState = z.infer<typeof runnerManagerStateSchema>;
  * lease を必須にしない: 名乗らない古いデーモンや、lease を知らない `runner-local.ts` のような呼び出しを壊さないため。
  * runner は最後に受け取った `fence` より古い世代の命令を拒む（`RunnerFenceError`）。
  */
-export const runnerLeaseSchema = z.object({
+const runnerLeaseSchema = z.object({
   fence: z.number().int().nonnegative(),
   ttlMs: z.number().int().positive(),
 });
@@ -372,7 +372,7 @@ export const runnerPermissionRulesResultSchema = z.object({
 export type RunnerPermissionRulesResult = z.infer<typeof runnerPermissionRulesResultSchema>;
 
 /** この層では形を緩く運ぶ: 検査の正本は `parseRunnerPlugin` で、受けた runner が検める。 */
-export const runnerPluginFileWireSchema = z.object({
+const runnerPluginFileWireSchema = z.object({
   path: z.string(),
   executable: z.boolean(),
   /** base64（RFC 4648 の標準の綴り・padding あり）。 */
@@ -662,7 +662,7 @@ export const RUNNER_CAPABILITIES: readonly string[] = [
 ];
 
 /** 中身は載せない（取りに行く先は `GET /managers/:id/rescue-files/:fileId`）。 */
-export const runnerRescueFileSchema = z.object({
+const runnerRescueFileSchema = z.object({
   fileId: z.string().min(1),
   /** 作業ツリーの中の相対パス。 */
   path: z.string().min(1),
@@ -676,14 +676,14 @@ export type RunnerRescueFile = z.infer<typeof runnerRescueFileSchema>;
  * `empty` / `hardlink` / `not-owner` / `changed` / `unreadable`。デーモンは知らない値も日誌へそのまま運ぶ（`z.string()`）。
  * `patterns` は `secret-like` のときの規則の名前だけ（値は載せない）。
  */
-export const runnerRescueSkippedSchema = z.object({
+const runnerRescueSkippedSchema = z.object({
   path: z.string(),
   reason: z.string(),
   patterns: z.array(z.string()).optional(),
 });
 export type RunnerRescueSkipped = z.infer<typeof runnerRescueSkippedSchema>;
 /** 中身は載せない（取りに行く先は `GET /managers/:id/outbox/:fileId`）。 */
-export const runnerOutboxFileSchema = z.object({
+const runnerOutboxFileSchema = z.object({
   fileId: z.string().min(1),
   name: z.string().min(1),
   mediaType: z.string().min(1),
@@ -692,17 +692,17 @@ export const runnerOutboxFileSchema = z.object({
 });
 export type RunnerOutboxFile = z.infer<typeof runnerOutboxFileSchema>;
 
-export const runnerOutboxRejectedFileSchema = z.object({ name: z.string(), reason: z.string() });
+const runnerOutboxRejectedFileSchema = z.object({ name: z.string(), reason: z.string() });
 export type RunnerOutboxRejectedFile = z.infer<typeof runnerOutboxRejectedFileSchema>;
 
-export const runnerManagerPeerSchema = z.object({
+const runnerManagerPeerSchema = z.object({
   provider: z.string().min(1),
   models: z.array(z.string().min(1)).optional(),
 });
 
 export type RunnerManagerPeer = z.infer<typeof runnerManagerPeerSchema>;
 
-export const runnerManagerPeerClosedSchema = z.object({
+const runnerManagerPeerClosedSchema = z.object({
   provider: z.string().min(1),
   reason: z.string().min(1),
 });
@@ -1889,7 +1889,7 @@ export interface RunnerRegistry {
 }
 
 /** 自動配置の1件の判断（#5113）。 */
-export interface PlacementCandidate {
+interface PlacementCandidate {
   readonly runnerId: string;
   /** 点数の前の段。小さい段が勝つ（`chooseByResources` の doc）。 */
   readonly tier: 'healthy' | 'unreachable' | 'pids-saturated';
@@ -3198,9 +3198,9 @@ function chooseByResources(
 }
 
 /** どちらも構造化された値から立てる（文言は読まない）。 */
-export type PidsSaturationSign = 'eagain' | 'fork-denied';
+type PidsSaturationSign = 'eagain' | 'fork-denied';
 
-export type PidsSaturationBasis =
+type PidsSaturationBasis =
   | { readonly kind: 'at-limit'; readonly current: number; readonly max: number }
   | { readonly kind: PidsSaturationSign; readonly count: number };
 

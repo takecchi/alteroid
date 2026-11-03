@@ -31,7 +31,7 @@ export interface ReopenRecord {
 }
 
 /** 焼いた時点との差の文書の slug（本文は持たない）。 */
-export interface BakedMemoryDiff {
+interface BakedMemoryDiff {
   readonly changed: readonly string[];
   readonly added: readonly string[];
   readonly removed: readonly string[];

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 
-export interface SplitMcpServers {
+interface SplitMcpServers {
   inProcess: Record<string, McpServerConfig>;
   external: Record<string, McpServerConfig>;
 }
