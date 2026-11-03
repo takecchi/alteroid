@@ -499,7 +499,7 @@ describe('token-trial-watch: tick 全体の失敗で未処理の拒否を出さ�
   }
 
   function fallenLines(lines: string[]): string[] {
-    return lines.filter((line) => line.includes('認証トークンの試しが落ちました'));
+    return lines.filter((line) => line.includes('定期処理の回が失敗しました'));
   }
 
   it('stores.tokens.list() が投げても未処理の拒否にならず、stderr へ1行出して次の周期へ進む', async () => {
@@ -755,5 +755,86 @@ describe('isRejectionForTrialBackoff（issue #1543）', () => {
     ).toBe(false);
     expect(isRejectionForTrialBackoff({ statusNow: 'rejected' })).toBe(false);
     expect(isRejectionForTrialBackoff({ statusNow: 'rejected', observedBy: {} })).toBe(false);
+  });
+});
+
+// startPeriodicRun へ載せ替えても、間隔・初回・停止が変わらないことの歯。
+describe('token-trial-watch: 周期（骨組みへ載せ替えた後も同じ）', () => {
+  async function seedCooling(): Promise<Stores> {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    return stores;
+  }
+
+  function startWith(
+    stores: Stores,
+    trial: TokenTrialPort,
+    extra: { signal?: AbortSignal; recordTrialSuccess?: TokenRotator['recordTrialSuccess'] } = {},
+  ): ReturnType<typeof startTokenTrialWatch> {
+    return startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial,
+      recordTrialSuccess: extra.recordTrialSuccess ?? (() => Promise.resolve(RECOVERED)),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 100,
+      now: () => AT,
+      ...(extra.signal === undefined ? {} : { signal: extra.signal }),
+    });
+  }
+
+  it('起動直後には試さず、tickMs が経った最初の回で試す', async () => {
+    const stores = await seedCooling();
+    const trial = fakeTrial({ verdict: 'usable' });
+    const watch = startWith(stores, trial.port);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(trial.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(trial.calls).toEqual(['a']);
+    watch.stop();
+  });
+
+  it('終わってから tickMs 待って次の回が来る（毎回 tickMs 間隔）', async () => {
+    const stores = await seedCooling();
+    let reads = 0;
+    const realList = stores.tokens.list.bind(stores.tokens);
+    stores.tokens.list = () => {
+      reads += 1;
+      return realList();
+    };
+    const watch = startWith(stores, fakeTrial({ verdict: 'undecidable', reason: 'x' }).port);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads).toBe(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads).toBe(2);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads).toBe(3);
+    watch.stop();
+  });
+
+  it('signal が abort されたら、予約済みの回も走らない', async () => {
+    const stores = await seedCooling();
+    const trial = fakeTrial({ verdict: 'usable' });
+    const controller = new AbortController();
+    startWith(stores, trial.port, { signal: controller.signal });
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(trial.calls).toEqual([]);
+  });
+
+  it('試しの後の記録が投げても、骨組みの1行を stderr に残して次の回へ進む', async () => {
+    const stores = await seedCooling();
+    const trial = fakeTrial({ verdict: 'usable' });
+    const lines = await captureStderr(async () => {
+      const watch = startWith(stores, trial.port, {
+        recordTrialSuccess: () => Promise.reject(new Error('記録が書けない（テスト用）')),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      watch.stop();
+    });
+    expect(lines).toEqual([
+      'alteroidd: 定期処理の回が失敗しました（次の回は予約します）: Error: 記録が書けない（テスト用）\n',
+    ]);
   });
 });
