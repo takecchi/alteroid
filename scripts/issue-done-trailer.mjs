@@ -9,6 +9,7 @@ import process from 'node:process';
 
 import { evaluateIssueDoneTrailer, formatEvaluation } from './issue-done-trailer-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { errorDetail } from './small-helpers-core.mjs';
 
 function parseArgs(argv) {
   const result = {};
@@ -55,11 +56,7 @@ function fetchPr(prNumber, repo) {
     );
     return { data: JSON.parse(stdout), error: null };
   } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { data: null, error: detail };
+    return { data: null, error: errorDetail(error) };
   }
 }
 
@@ -72,11 +69,7 @@ function fetchIssue(issueNumber, repo) {
     });
     return { data: JSON.parse(stdout), error: null };
   } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { data: null, error: detail };
+    return { data: null, error: errorDetail(error) };
   }
 }
 
@@ -89,11 +82,7 @@ function closeIssue(issueNumber, repo, comment) {
     );
     return { ok: true, error: null };
   } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { ok: false, error: detail };
+    return { ok: false, error: errorDetail(error) };
   }
 }
 

@@ -3,7 +3,6 @@
 // 既定は dry-run: `--apply`（または `MAIN_CI_ALARM_APPLY=1`）が無い限り `gh issue create` / `gh issue comment` を呼ばず、手元で誤って叩いても Issue が生えないため。
 // 警報の警報は置かない: ここは意図的に1段で止める。
 
-import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
 import {
@@ -18,6 +17,7 @@ import {
   shouldAlarm,
 } from './main-ci-alarm-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { gh } from './small-helpers-core.mjs';
 
 function parseArgs(argv) {
   const out = {};
@@ -41,23 +41,6 @@ function isApplyRequested(args) {
   if (args.apply === true) return true;
   const envValue = process.env.MAIN_CI_ALARM_APPLY;
   return envValue === '1' || envValue === 'true';
-}
-
-function gh(argv, { input } = {}) {
-  try {
-    const stdout = execFileSync('gh', argv, {
-      encoding: 'utf8',
-      input,
-      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-    });
-    return { stdout, error: null };
-  } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { stdout: null, error: detail };
-  }
 }
 
 // `gh search` を使わない: 検索インデックスの反映が遅れ、立てた直後の Issue が見つからないと同じ鍵で2本目が生えるため。

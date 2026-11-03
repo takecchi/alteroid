@@ -16,6 +16,7 @@ import {
   runAlreadyMentioned,
   runMention,
 } from '../../scripts/main-ci-alarm-core.mjs';
+import { gh } from '../../scripts/small-helpers-core.mjs';
 import {
   buildRecordComment,
   buildRecordLine,
@@ -62,23 +63,6 @@ function lsRemoteProdSha() {
     return sha;
   } catch (error) {
     return { error: String(error) };
-  }
-}
-
-function gh(argv, { input } = {}) {
-  try {
-    const stdout = execFileSync('gh', argv, {
-      encoding: 'utf8',
-      input,
-      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-    });
-    return { stdout, error: null };
-  } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { stdout: null, error: detail };
   }
 }
 

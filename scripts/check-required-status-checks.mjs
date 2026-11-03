@@ -13,6 +13,7 @@ import {
   resolveLiveRequiredChecks,
 } from './check-required-status-checks-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { errorDetail } from './small-helpers-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const DECLARATION_PATH = join(ROOT, '.github', 'required-status-checks.json');
@@ -28,10 +29,7 @@ function ghGet(path, { allowAbsent }) {
     });
     return { status: 'ok', body: JSON.parse(stdout) };
   } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
+    const detail = errorDetail(error);
     if (allowAbsent && isBranchNotProtected(detail)) return { status: 'absent' };
     return { status: 'error', detail };
   }

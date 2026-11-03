@@ -12,6 +12,7 @@ import {
   parseGitGrepMatches,
 } from './branch-deletable-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { errorDetail } from './small-helpers-core.mjs';
 
 const MAIN_REV = 'origin/main';
 
@@ -53,11 +54,7 @@ function runCapture(cmd, args) {
     if (cmd === 'git' && status === 1) {
       return { stdout, error: null };
     }
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { stdout: null, error: detail };
+    return { stdout: null, error: errorDetail(error) };
   }
 }
 

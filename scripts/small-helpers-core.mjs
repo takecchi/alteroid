@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+
 // `test-guard-core.mjs` と `verify-core.mjs`（と、バイト数を出す2つの check script）が同じ中身で持っていた小関数。
 
 // マッチの前に ANSI を剥がす: GitHub Actions では集計行が色付きで出て、`^\s*Test Files` が行頭の SGR に一致せず、完走して緑でも「1本も走っていない」「判定できない」に化けるため。
@@ -18,4 +20,25 @@ export function isFlagLike(arg) {
 
 export function formatBytes(n) {
   return n.toLocaleString('en-US') + ' B';
+}
+
+// `execFileSync` が投げたエラーから失敗理由を取り出す: 子の stderr があればその trim、無ければ `String(error)`。gh / git を呼ぶ script の catch 節が同じ4行を9か所で持っていたものを1つにした。
+export function errorDetail(error) {
+  return error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
+    ? String(error.stderr).trim()
+    : String(error);
+}
+
+// `gh` を1回呼ぶ薄い包み（main-ci-alarm と record-release-prod-ci が逐語で同じ本体を持っていたもの）。投げず、`{ stdout, error }` のどちらか一方だけが null でない。
+export function gh(argv, { input } = {}) {
+  try {
+    const stdout = execFileSync('gh', argv, {
+      encoding: 'utf8',
+      input,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    });
+    return { stdout, error: null };
+  } catch (error) {
+    return { stdout: null, error: errorDetail(error) };
+  }
 }

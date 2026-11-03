@@ -18,6 +18,7 @@ import {
   pickLatestRunPerWorkflow,
 } from './check-pr-green-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { errorDetail } from './small-helpers-core.mjs';
 
 const DECLARATION_PATH = join(import.meta.dirname, '..', '.github', 'required-status-checks.json');
 
@@ -62,11 +63,7 @@ function ghApiJson(path) {
     });
     return { data: JSON.parse(stdout), error: null };
   } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { data: null, error: detail };
+    return { data: null, error: errorDetail(error) };
   }
 }
 

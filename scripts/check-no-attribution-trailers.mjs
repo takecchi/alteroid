@@ -11,6 +11,7 @@ import {
   formatVerdict,
 } from './check-no-attribution-trailers-core.mjs';
 import { log, logError } from './cli-log.mjs';
+import { errorDetail } from './small-helpers-core.mjs';
 
 function parseArgs(argv) {
   const result = {};
@@ -44,11 +45,7 @@ function fetchPr(prNumber, repo) {
     );
     return { data: JSON.parse(stdout), error: null };
   } catch (error) {
-    const detail =
-      error !== null && typeof error === 'object' && 'stderr' in error && error.stderr
-        ? String(error.stderr).trim()
-        : String(error);
-    return { data: null, error: detail };
+    return { data: null, error: errorDetail(error) };
   }
 }
 
