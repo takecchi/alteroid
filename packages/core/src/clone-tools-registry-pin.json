@@ -1,0 +1,2045 @@
+[
+  {
+    "name": "memory_list",
+    "description": "記憶の文書一覧を返す。中身は返さない。 各行は `[premise|fact|indexed] slug: title (作成: createdAt / 更新: updatedAt) — 要旨` の形。 作成は書き込まれた瞬間にその場で分かる。「不明」と出るのは、この配線より前に作られ、 日誌にも根拠（最初の書き込み）が無い古い記憶だけである（ファイルの mtime は使わない）。 premise はプロンプトへ要旨と節の目次（節id・見出し・文字数）だけが焼かれ、本文は載らない （節id を memory_section_read に渡せば開ける）。indexed は要旨だけが焼かれ、節の目次は焼かれない （節id を確かめるにはまず memory_outline を呼ぶこと）。fact は目次の1行だけがプロンプトに載るので、 中身が要るなら memory_read で開くこと。要旨の前には状態が必ず付く （要旨は本文より<期間>古い（本文は<変化量>変わった） / 要旨を書いた時刻が記録されていない / 要旨の後に本文は動いていない）—— description が最後の本文変更より前に書かれた可能性の 代理指標であって、本文と合っている保証ではない。「<期間>古い」だけでは、頻繁に手が入って いる文書ほど新しく見える（1時間前に古くなった文書と30日放置された文書が同じ「古い」に 見える）ので、その間に本文が実際どれだけ変わったか（バイト数・割合）を変化量として併記する （変化量が記録されていない古い記憶は「記録されていない」とだけ言い、0とは扱わない）。 階層は frontmatter の parent から組み立てた木で、インデントで表す。 一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "description": "続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から。",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_read",
+    "description": "記憶の文書を1つ読む。 長ければ切れて出る（続きの取り方が出力に付く）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "文書のスラッグ（拡張子なし）"
+        },
+        "offset": {
+          "description": "何文字目から読むか（0以上の整数。既定 0）",
+          "type": "number"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_write",
+    "description": "記憶の文書を全文置換する（無ければ作る）。 **既存の文書を書き換えるときは、先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと。焼き込みの索引（プロンプトに載った premise のカード等）だけでは書けない**（版が無ければ何も書かずに断る。読んだ後に人間や別のターンが書いていたら、何も書かずに「その間に変わった」と返す。読み直して判断し直すこと）。**新しい文書の作成は版なしで通る。** 人間がこのファイルを直接開いて読むことを前提に、Markdown として読みやすく書くこと。 人間が手で書いた記述を、整形の都合で消さないこと。 先頭に frontmatter を置ける（無くてもよい。無ければ premise として扱う——安全側の既定）。 形は `---` で始まり `---` で閉じ、各行は `key: value`。使えるキーは description（要旨。目次の1行に載る）・ type（premise・indexed・fact のいずれか。premise は「要旨＋節の目次」が焼かれ、indexed は要旨だけが焼かれて節の目次は焼かれない（特定の作業でしか使わない記憶向け。節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる。 どれも本文は焼かれない——premise / indexed の節の本文は memory_section_read で開く。判断の前提なら premise、 事実の蓄積で毎回全文を読む必要が無いものなら fact）・parent（親文書の slug。階層を作る）の3つだけ。 ネスト・複数行・引用符の解釈は無い（値は文字列としてそのまま読む）。狭い形から外れると malformed として 扱われ、文書は消えずに premise のまま残る（本文はプロンプトには載らず、memory_section_read で開く）。 **統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない** （断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。 成功すると差分の要約が返る——前後の文字数（バイトではない）と、この書き込みで消えた見出しの名指し。 **「消えた見出し: なし」を全幅で信じないこと**——同じ見出しが他所に1つでも残っていれば、その節を丸ごと消しても「なし」になる。 見出しは行頭の `#`〜`######`（ATX）だけ（setext の下線は数えない）で、コードフェンスの中は除外しない（過剰に拾う側へ倒してある）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "文書のスラッグ（英小文字・数字・-・_）"
+        },
+        "content": {
+          "type": "string",
+          "description": "Markdown 全文"
+        },
+        "summary": {
+          "type": "string",
+          "description": "何を更新したかの一行要約（日誌に残る）"
+        },
+        "base_version": {
+          "description": "読んだ時点の版（memory_read / memory_outline / 直前の memory_write の応答に出る base_version）。**既存の文書を書き換えるときは必須**。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "content",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_append",
+    "description": "記憶の文書の末尾に追記する（無ければ作る）。既存の記述を消したくないときはこちら。 成功すると memory_write と同じ差分の要約が返る（前後の文字数と、消えた見出しの名指し。見出しの数え方も同じ）。 追記は既存を消さないので、消えた見出しは常に 0 件のはずである——0 件でなければ異常を疑うこと。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "文書のスラッグ"
+        },
+        "content": {
+          "type": "string",
+          "description": "追記する Markdown（1文字以上。空白だけは断る）"
+        },
+        "summary": {
+          "type": "string",
+          "description": "何を追記したかの一行要約（日誌に残る）"
+        }
+      },
+      "required": [
+        "slug",
+        "content",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_delete",
+    "description": "記憶の文書を1つ、文書ごと消す（部分削除ではない。一部を変えたいだけなら memory_write を使う）。 無いスラッグを渡しても成功にはならず、そう返る。 **先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと（必須）。焼き込みの索引だけでは消せない**——版が無ければ何も消さずに断る。読んだ後に人間や別のターンが書いていたら、何も消さずに「その間に変わった」と返す（読んでいない内容まで消さないため）。 消した事実は日誌に残る（スラッグと直前の文字数のみ。本文は残らない）。 **統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書は消せない** （断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の削除は通る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "記憶のスラッグ（拡張子なし）"
+        },
+        "summary": {
+          "type": "string",
+          "description": "なぜ消したかの一行要約（日誌に残る。本文は残らない）"
+        },
+        "base_version": {
+          "description": "読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_frontmatter_set",
+    "description": "記憶の frontmatter（description・type・parent）のうち、渡したキーだけを差し替える／追加する。 本文には一切触れない——本文はストアから読んだ古い content からそのまま取るので、1バイトも失われない。 この道具の呼び出しの中に本文が現れることは無いので、本文が途中で切れることも構造的に起こりえない。 description・type・parent の値に改行（\\n / \\r）を含む値は渡せない（断る）——値から本文へ文字列が混ざる経路を構造的に無くすため。 既に在る文書にしか使えない（存在しない slug には断る。新規作成は memory_write を使うこと）。 **先に memory_read（または memory_outline）で読んで、応答に出る base_version を渡すこと（必須）。焼き込みの索引（プロンプトに載った premise のカード等）だけでは書けない**——版が無ければ何も書かずに断る。読んだ後に人間が要旨などを直していたら、何も書かずに「その間に変わった」と返す（渡したキーで人間の直しを上書きしないため）。 frontmatter が無い文書には、先頭に新しく frontmatter を作って足す（type を渡さなければ premise のまま——載り方は変わらない）。 frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。 memory_write で全文を書き直すか、人間に確認を通すこと。 description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。 type に渡せるのは premise・indexed・fact のいずれかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。 premise は「要旨＋節の目次」がプロンプトへ焼かれ、indexed は要旨だけが焼かれて節の目次は焼かれない（節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる（どれも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。 **統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない** （断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "文書のスラッグ（拡張子なし）"
+        },
+        "description": {
+          "description": "要旨（目次の1行に載る）。渡さなければ既存の値のまま",
+          "type": "string"
+        },
+        "type": {
+          "description": "premise・indexed・fact のいずれかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）",
+          "type": "string"
+        },
+        "parent": {
+          "description": "親文書の slug（階層）。渡さなければ既存の値のまま",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "description": "何を直したかの一行要約（日誌に残る）"
+        },
+        "base_version": {
+          "description": "読んだ時点の版（memory_read / memory_outline / 直前の書き込みの応答に出る base_version）。**必須**。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_outline",
+    "description": "記憶の文書の目次を返す（読むだけ。1文字も書き換えない）。 各行は `[節id] 見出し行 — N 文字` で、インデントが見出しの深さを表す。文字数は入れ子の子を含むので、その節を動かしたときに動く量がそのまま出る。 本文は1文字も返さない（本文が要るなら memory_read）。frontmatter の行も出ない。 節id は memory_section_move の指し先であると同時に、その節の版の照合でもある——中身が変われば id も変わるので、目次を読んでから移すまでの間に誰かがその節を書き換えていたら断られる。移す直前に取り直すこと。 中身まで同一の節が2つあると id が衝突する。その行には印が付き、その id では動かせない。 目次は文字数の予算で切る。既定（side を渡さない）では先頭から詰めるので、落ちるのは末尾側である——大きな文書では新しく積んだ節の節id が出てこない。side=tail を渡すと末尾から詰め、落ちるのは先頭側になる。⚠どちらの向きでも中央は出ない（side だけでは届かない）。 中央へ届く道は2つある。q=<文字列> は見出しをその文字列で絞り込む（大文字小文字を区別しない部分一致。正規表現ではない）——一致した節がそのまま目次と同じ形で出るので memory_section_read / memory_section_move へ渡せる。offset=<N> は先頭から N 節飛ばしてから予算を埋める——応答が返す次の offset の値ぶんずつ進めれば、文書がどれだけ大きくても有限回で全節に届く。offset を渡すと side は見ない。q も offset も渡さなければ出力は今までと同じ。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "文書のスラッグ（拡張子なし）"
+        },
+        "side": {
+          "description": "予算に入りきらないとき、どちら側を出すか。head（既定。渡さなければ従来と同じ出力）は先頭から詰めて末尾側を落とす。tail は末尾から詰めて先頭側を落とす。⚠中央はどちらでも出ない。offset を渡すときは見ない。",
+          "type": "string",
+          "enum": [
+            "head",
+            "tail"
+          ]
+        },
+        "q": {
+          "description": "見出しをこの文字列で絞り込む（1文字以上。大文字小文字を区別しない部分一致。正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。side と併用できる（絞り込んだ結果をどちらから詰めるか）。一致0件と、一致はあるが予算で切れた場合は別の文言で返る。",
+          "type": "string"
+        },
+        "offset": {
+          "description": "先頭から何節を飛ばしてから予算を埋めるか（0以上の整数。0起点）。応答が返す次の offset ぶんずつ進めれば、有限回の呼び出しで全節に届く（中央へ届くことを保証する側）。渡すと side は見ない。q と併用でき、その場合は絞り込んだ結果に対して窓を開く。範囲外（節数以上）なら断る。",
+          "type": "number"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_section_read",
+    "description": "記憶の文書の、節id で指した節の本文を開く（読むだけ。1文字も書き換えない）。 節id は毎ターンの焼き込み（premise のカード）と memory_outline に出ている——目次を取り直さなくてもそのまま渡せる。 複数の節id を1回で渡せる。返る順序は文書に現れる順である。 読めなかった節id は理由ごとに分けて言う（古い＝誰かが書き換えた／同一の節が複数／そもそも無い）。読めた節は返る。 入れ子の子は親に含まれる（親の節id を渡せば子も一緒に開く）。 応答は文字数の予算で切る。切ったらそう言う。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "文書のスラッグ（拡張子なし）"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "開く節の節id（複数可。1件以上）。焼き込みのカードか memory_outline に出ているもの"
+        }
+      },
+      "required": [
+        "slug",
+        "sections"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_section_move",
+    "description": "memory_outline が出した節id（複数可）で指した節を、別の文書の末尾へまとめて移す（切り取って足す）。移し先が無ければ作る。 本文はこの呼び出しにも応答にも一度も現れない（0文字）——これがこの道具の存在理由である。大きな文書を割るのに本文を作り直さなくてよい。 節の範囲は見出し行から「同じ深さ以下の次の見出しの直前」までで、入れ子の子は一緒に動く。frontmatter は節ではないので指せない。 先に移し先へ足し、後から出どころを消す——途中で落ちれば同じ節が両方に残る（重複するが、失われない）。そのときはそう返る。 断るのは: from と to が同じ／出どころの文書がそもそも無い（slug の打ち間違い）／出どころの frontmatter が壊れている／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／指定した節どうしの範囲が重なっている（親子関係や同じ id の重複）。 ⭐1つでも断りに当たれば、1節も動かさない——一部だけ動いて残りが断られる、ということは起きない。 **⭐この口だけは、統合の走行（distill）からでも、人間が一度でも書いた文書・履歴の無い文書に対して通る** （2026-09-08 に緩めた。全文置換・削除・frontmatter の更新はいまも断る。移動は先に移し先へ足してから出どころを消すので、どの瞬間にも本文がどこかに在る＝失われない。だから保護状態を見ずに通す）。移し先には歯が掛からない（追記なので）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "fromSlug": {
+          "type": "string",
+          "description": "節を切り取る側の文書のスラッグ"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "memory_outline が出した節id（`[...]` の中身）。複数渡せる——1回で全部移る（1件以上）。渡す順ではなく文書に現れる順で移し先の末尾に並ぶ"
+        },
+        "toSlug": {
+          "type": "string",
+          "description": "節を足す側の文書のスラッグ（無ければ作る）"
+        },
+        "summary": {
+          "type": "string",
+          "description": "なぜ移したかの一行要約（日誌に残る。本文は残らない）"
+        }
+      },
+      "required": [
+        "fromSlug",
+        "sections",
+        "toSlug",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "journal_write",
+    "description": "判断を日誌に残す（追記専用）。 人間に聞かずに実行した判断は必ずここに残すこと。 人間が後から読んで否定できることが、最終承認の実体である。 grounds を省くと、根拠は「呼び出しに届かなかった」として記録される（「根拠なし」とは区別される）。根拠が記憶に無いと判断したなら、省かずに「根拠なし」と書いて渡す。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "description": "何を判断し、何をしたか"
+        },
+        "grounds": {
+          "description": "記憶のどこに根拠があったか。無いなら「根拠なし」と書く。省いた呼び出しも記録は通るが、根拠は「届かなかった」として残る",
+          "type": "string"
+        },
+        "closes": {
+          "description": "任意。この呼びで片付いた task を、id と理由で done にする（返事だけでは閉じない）",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "journal_read",
+    "description": "日誌を新しい順に読む。過去の一点を掘るには since/until で窓を閉じること （新しい順に返るので、until を指定しないと最新分しか見えない）。 一覧の本文は抜粋で、全文が要る1件は id を渡して取る。 q で本文を語で探せる（他の絞りと併用できる）。 q で探すときは新しい側から1日ずつ遡り、時間の予算（8 秒）を使い切ったら、どこまで探したかと続きの until を最初の行で名乗って止まる。 文脈窓超過の失敗は本文に `context_window_failure` を含むので、q で引ける。 **q が当たらないことは「日誌にその語が無い」を意味しない** — tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・http_timing・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない。 with で exchange の相手を絞れる（他の絞りと併用できる）。 **with を指定すると exchange 以外の種別は1件も返らない** — types で別途除く必要はない。 応答に「続きは journal_read afterId=… afterAt=…」と出たら、その2つをそのまま渡すと その行の次（新しい順なら、より古い側）から読み継げる（ほかの絞りは同じものを渡す）。 頁の行が全部読めない形だったときも、これで読めない区間の向こうへ進める。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "limit": {
+          "description": "件数（1以上200以下の整数。既定 20）",
+          "type": "number"
+        },
+        "since": {
+          "description": "ISO 8601。この時刻以降だけ返す（例 2026-08-15T09:00:00Z）",
+          "type": "string"
+        },
+        "until": {
+          "description": "ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する",
+          "type": "string"
+        },
+        "types": {
+          "description": "例 {\"types\":[\"escalation\"]}。配列で渡し、値は引用符で囲む。種別で絞る。省略すると全種別",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "exchange",
+              "decision",
+              "escalation",
+              "tool_use",
+              "memory_update",
+              "daily_report",
+              "external_event",
+              "worker_wait",
+              "turn_usage",
+              "token_rotation",
+              "subagent_stall",
+              "context_usage",
+              "turn_timing",
+              "http_timing",
+              "inbox_flow",
+              "github_observation",
+              "conversation_deleted"
+            ]
+          }
+        },
+        "q": {
+          "description": "語で探す（大文字小文字を区別しない部分一致）。他の絞りと併用できる",
+          "type": "string"
+        },
+        "with": {
+          "description": "exchange の相手（human/manager/self）で絞る。省略すると絞らない",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "self"
+            ]
+          }
+        },
+        "id": {
+          "description": "この1件を全文で読む（一覧に出ている id）。他の条件は無視される",
+          "type": "string"
+        },
+        "offset": {
+          "description": "id で全文を読むとき、何文字目から読むか（0以上の整数）",
+          "type": "number"
+        },
+        "afterId": {
+          "description": "続きの位置の id。応答に出た「続きは journal_read afterId=… afterAt=…」の値をそのまま渡す。afterAt と必ず対で渡す。この行の次から読む",
+          "type": "string"
+        },
+        "afterAt": {
+          "description": "続きの位置の時刻（ISO 8601）。afterId と必ず対で渡す。応答に出た値をそのまま渡すこと",
+          "type": "string"
+        },
+        "order": {
+          "description": "返す順序。既定 desc（新しい順）、asc で古い順。afterId / afterAt の「次」は返る順序の次なので、asc で読み継ぐときは order=asc も揃えて渡す。**q とは組めない**（q は新しい側から遡る検索で、asc を指定すると断られる。古い側から読むなら since / until で窓を閉じる）",
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "ask_human",
+    "description": "人間に確認する。記憶に根拠が無いことだけをここへ回す。 これは承認待ちキューに積むだけで、人間の応答を待たない。 止まるのはこの件だけであり、他の仕事は進めてよい。 回答は後から受信箱に届く。 不要になったら approval_withdraw で理由付きで取り下げられる（未回答のうちだけ）。 複数の案から選んでもらうときは、question の本文に (a)(b)(c) を書くより questions を使うほうが人間が答えやすい（選択肢を押して答えられる）。 questions は任意で、question（全体の前置き・背景）は必須のまま。 各設問は { id, prompt, options: [{ id, label, description?, recommended? }], multiple?, allowOther? }。 id は設問が承認待ちの中で、選択肢は設問の中で一意にする。multiple: true で複数選択、allowOther は既定 true（選択肢の最後に自由入力の「その他」が付く）。 あなたの推しの選択肢には recommended: true を付ける。 例: question: \"デプロイ先を決めたい\"、questions: [{ id: \"target\", prompt: \"デプロイ先は？\", options: [{ id: \"railway\", label: \"Railway\", recommended: true }, { id: \"fly\", label: \"Fly.io\" }] }, { id: \"notify\", prompt: \"通知する先（複数可）\", multiple: true, allowOther: false, options: [{ id: \"slack\", label: \"Slack\" }, { id: \"mail\", label: \"メール\" }] }]。 人間の回答は「Q1 デプロイ先は？: (a) Railway［推奨］ / その他: …」のような文に畳まれて届き、構造（設問 id → 選んだ選択肢 id）も添えられる。未回答の設問は「未回答」と出る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "人間への質問。何を判断してほしいかを具体的に"
+        },
+        "context": {
+          "description": "判断に必要な背景",
+          "type": "string"
+        },
+        "questions": {
+          "description": "選んで答えてほしい設問（任意）。設問の id は一意、選択肢の id は設問の中で一意（重複は断られる）。複数案の提示は question に (a)(b)(c) を書かずこちらへ",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "options": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "recommended": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "multiple": {
+                "type": "boolean"
+              },
+              "allowOther": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "prompt",
+              "options"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "managerId": {
+          "description": "マネージャーからの確認を人間に回す場合、その manager_id",
+          "type": "string"
+        },
+        "requestId": {
+          "description": "マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと。⚠️ 通るのは受信箱に確認として届いた requestId だけである（生ログから拾った id は通らない。形の詳細は manager_send の requestId）",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "request_permission",
+    "description": "特定の Bash コマンドの規則を、以降は聞かずに通してよいか人間に確認する。 rule は Bash(<完全なコマンド>) の完全一致か、Bash(<前方一致>:*) の前方一致（語境界で切る）。 allows にはその規則が通すべき具体例、denies には通ってはならない具体例を挙げる—— 両方とも検算する（allows が1つでも規則に一致しない・denies が1つでも一致してしまうなら、 この道具はキューに積む前に拒否する）。 積むだけで人間の応答は待たない。人間が定型文でちょうど答えなければ許可は記録されない。 質問文には、同じ道具・同じ先頭の語の直前の拒否（器が返した理由の原文・時刻）が自動で添えられる（コマンドの値は添えない）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "rule": {
+          "type": "string",
+          "description": "Bash(<完全な文字列>) または Bash(<前方一致>:*) の形の規則"
+        },
+        "allows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "この規則が通すべき具体的なコマンド例（1件以上、全部が規則に一致すること）"
+        },
+        "denies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "この規則が拒むべき具体的なコマンド例（1件以上、1件も規則に一致しないこと）"
+        },
+        "reason": {
+          "type": "string",
+          "description": "なぜこの許可が要るか。人間が承認画面で読む理由文"
+        }
+      },
+      "required": [
+        "rule",
+        "allows",
+        "denies",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "approvals_list",
+    "description": "いま人間の回答を待っている件の一覧。 人間が席に居ないあいだに溜まる。溜まっていても他の仕事は進めてよい。 一覧の質問は抜粋で、全文が要る1件は id を渡して取る。 一覧の各件は作成時刻だけを出す（回答待ちだけの一覧なので、更新はいつも作成と同じ）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "この1件を全文で読む（一覧に出ている id）。他の条件は無視される",
+          "type": "string"
+        },
+        "offset": {
+          "description": "id で全文を読むとき、何文字目から読むか（0以上の整数）",
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "approval_trace",
+    "description": "承認への人間の答えと、その答えを受けたターンで自分が取った行動（判断・記憶の更新・道具・返答）を対で並べる。 答えの後で自分が何をしたか、答えと行動が食い違っていないかを確かめるための口で、解釈や一般化は足さない。 対が無いときは、まだ答えが無い／ターンが無い／記録を始める前の答え／記録が動いていない疑い、を分けて言う。 行動は抜粋で、全文は日誌の id を journal_read に渡して取る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "承認の id（approvals_list や日誌の escalation に出ている id）"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "approval_withdraw",
+    "description": "未回答の承認待ちを、理由付きで取り下げる。行は消えず、取り下げた事実と理由が残る。 回答済みの件は取り下げられない（先に answered ならここでは断られる）。 ⚠️ マネージャーからの許可確認を人間へ回した件（jobId/requestId 付き）を取り下げても、 そのマネージャーは自動では解放されない——待ったままなら manager_send（decision 付き）で 自分から答えること。ここでの取り下げは「人間の承認キューから消す」だけである。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "approvals_list に出ている id"
+        },
+        "reason": {
+          "type": "string",
+          "description": "なぜ取り下げるか（不要になった経緯・自分で答えを見つけた等。1文字以上）。人間はこれを読んで後から否定する"
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "daily_report_write",
+    "description": "その日の日報を残す。人間が普段読むのはこれだけである。 今日何をしたか・何が決まったか・何が保留か、が読んだだけで分かるように書くこと。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "date": {
+          "description": "対象日 YYYY-MM-DD（省略時は今日。締めの指示に書かれた日付を使うこと）",
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "日報の本文（Markdown）"
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "usage_read",
+    "description": "アカウント全体の残り枠と支出上限（claude.ai 側の値）と、alteroid が使った分（トークンと費用）を台帳から読む。 軸（axis）を渡したときは、その軸だけを出す——アカウント全体の残りもまとめ表示も他の軸も出ない。 軸は6つ — date（日）・manager（誰の分か）・model（どのモデルで）・layer（誰が: clone / manager）・site（どこで: session / distill / peer）・token（どの認証トークンで）。 token の軸に「（トークンの帰属が無い分）」が出るのは、プールを使っていない構成では正常である（0 でも既定値でもなく、取れていない）。 **推定値であり請求明細ではない。**「取れなかった」と「0」は分けて出るので、読み替えないこと。 記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。 まとめ表示は軸ごとに打ち切る。続きは axis と cursor で辿れる（打ち切りの行にそのまま書いてある。cursor は前回の応答に出たものをそのまま渡す——自分で組み立てない）。 続きの応答に「順位が上がった、または既に見せた行が伸びた可能性がある行」が別枠で出ることがある（前回の呼び出し以降に記録が増えて起きる。通常の続きの頁と重複しない）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "この日から（YYYY-MM-DD）。省略すると台帳の全期間",
+          "type": "string"
+        },
+        "to": {
+          "description": "この日まで（YYYY-MM-DD）",
+          "type": "string"
+        },
+        "managerId": {
+          "description": "この actor の分だけ（マネージャーの id か \"clone\"）",
+          "type": "string"
+        },
+        "layer": {
+          "description": "誰が使った分だけ（clone / manager）",
+          "type": "string",
+          "enum": [
+            "clone",
+            "manager"
+          ]
+        },
+        "site": {
+          "description": "どこで使った分だけ（session / distill / peer）",
+          "type": "string",
+          "enum": [
+            "session",
+            "distill",
+            "peer"
+          ]
+        },
+        "tokenId": {
+          "description": "この認証トークンで使った分だけ（token_list の id。1文字以上）",
+          "type": "string"
+        },
+        "axis": {
+          "description": "この軸だけを出す（まとめ表示・他の軸・アカウント全体の残りは出ない）。省略すると先頭から",
+          "type": "string",
+          "enum": [
+            "date",
+            "manager",
+            "model",
+            "layer",
+            "site",
+            "token"
+          ]
+        },
+        "cursor": {
+          "description": "axis と一緒に使う。その軸の続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "schedule_list",
+    "description": "仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻・次に動く時刻が分かる。 既定の定期ジョブ（daily_report / self_initiative / memory_tidy）はここには出ない（あれは設定で回っているもの）。 一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。 一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "この1件の依頼本文を全文で読む（一覧に出ている kind）",
+          "type": "string"
+        },
+        "offset": {
+          "description": "kind で全文を読むとき、何文字目から読むか（0以上の整数）",
+          "type": "number"
+        },
+        "cursor": {
+          "description": "一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から。kind を渡す全文モードでは他の条件と同じく無視される。",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "schedule_create",
+    "description": "その場で終わらない依頼を、時間起点として仕込む。 時刻が来れば必ずあなたの受信箱へ届き、そのとき依頼の本文と前回動いた時刻が一緒に渡る。 記憶に書くのは判断の根拠であって、記憶は時計を持たない。継続する依頼はここにも置くこと。 同じ kind で呼べば置き換わる（周期や本文の直しはこれで行う）。 置き換えたときは、応答が置き換え前の本文と周期を言い、置き換え前の本文は日誌にも逐語で残る。 既定の定期ジョブの名前（daily_report / self_initiative / memory_tidy）は使えない——別の名前を付けること。 既定の刻みそのもの（締め時刻・間隔）はデーモンの設定で決まる（daily_report は `ALTEROID_DAILY_REPORT_AT` / self_initiative は `ALTEROID_INITIATIVE_EVERY` / memory_tidy は `ALTEROID_MEMORY_TIDY_AT`）ので、変えたいなら人間に頼むこと。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "この依頼の名前（英小文字・数字・. _ -）。後から直す・消すときの識別子"
+        },
+        "request": {
+          "type": "string",
+          "description": "依頼の本文。時刻が来たときのあなたが読んで、そのまま動ける粒度で書く（対象・狙い・どこまでやるか。人間から頼まれた言葉そのものも残すとよい）"
+        },
+        "dailyAt": {
+          "description": "毎日この時刻に起こす（ローカル時刻の HH:MM）。周期はどれか1つだけ渡す",
+          "type": "string"
+        },
+        "everyMinutes": {
+          "description": "この分数ごとに起こす（1以上525600以下の整数。1年より長い周期は cron か単発で書く）。周期はどれか1つだけ渡す",
+          "type": "number"
+        },
+        "cron": {
+          "description": "cron 式で起こす（ローカル時刻。分 時 日 月 曜の5欄だけ。例: 毎週月曜 10:00 なら `0 10 * * 1`）。曜日や月の指定が要るときはこれを使う。周期はどれか1つだけ渡す",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "request"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "schedule_remove",
+    "description": "継続中の依頼を片付ける。済んだ依頼・もう要らない依頼はここで外す。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "schedule_list に出ている kind"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_list",
+    "description": "task（順序と状態を持つ待ち行列）の一覧。**先頭が先にやるもの**で、並びは器が持つ（数値の優先度・締切は無い）。 各件はタイトルと本文の抜粋だけを出す。1件の全文（本文と、閉じたなら理由）が要るなら id を渡す。閉じた件も id で読める。 既定は開いている件（queued / waiting / needs_decision）だけ。includeClosed で閉じた件（done / cancelled）を後ろに足す。 引き受けた仕事の器はこれだけ。人間の発言は、届いた時点で自動的に載る（queued）。人間の承認への回答・マネージャーの報告・外部イベントは自動では載らない。自分で引き受けるもの・手を付けない気づき・未了の問いは task_add で足す。 人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（閉じたものは includeClosed で読み返せる。止めるなら task_keep）。ただし、答えの無い問い（ask_human・request_permission。前のターンのものを含む）が残っている会話の task（不要になった問いは approval_withdraw で取り下げると対象に戻る）、結び付いた委譲（manager_start の taskId）が走っている（running / waiting_human）task は閉じない。 一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "この1件を全文で読む（一覧に出ている id）。閉じた件も読める。他の条件は無視される",
+          "type": "string"
+        },
+        "offset": {
+          "description": "id で全文を読むとき、何文字目から読むか（文字数。0以上の整数）",
+          "type": "number"
+        },
+        "includeClosed": {
+          "description": "閉じた件（done / cancelled）も後ろに足す（既定は開いている件だけ）",
+          "type": "boolean"
+        },
+        "cursor": {
+          "description": "一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。includeClosed は揃えること",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_add",
+    "description": "順序と状態を持つ task を1件足す。起点は自分（self）として載る。 起点の会話は、いまのターンの会話か、報告を読んでいる委譲の起点に自動で結ばれる。どちらも無ければ新しい会話ができる（task_say の宛先になる）。 知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、その会話への返答で器が自動で done にしないよう、task_keep で「続く」の印を付ける。 置き場所を省くと既定の位置に入る（自分で足した件は末尾）。to で先頭・末尾・特定の task の前後を指せる。 手を付けない気づき・人間へ出したまま答えを得ていない問い（問いの全文と選択肢を逐語で）もここへ足す。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "一行のタイトル（1文字以上200文字以下。改行は使えない）。一覧にはこれと本文の抜粋だけが出る"
+        },
+        "body": {
+          "type": "string",
+          "description": "何をするか。後日のあなたが読んでそのまま動ける粒度で、要約せず逐語で書く（1文字以上）"
+        },
+        "to": {
+          "description": "置き場所（front=先頭 / back=末尾 / before・after=anchorId の直前・直後）。省くと既定の位置",
+          "type": "string",
+          "enum": [
+            "front",
+            "back",
+            "before",
+            "after"
+          ]
+        },
+        "anchorId": {
+          "description": "to が before / after のときの基準の task の id（開いている件だけ指せる）",
+          "type": "string"
+        },
+        "source": {
+          "description": "関係する相手や出所（マネージャー id など。分かるときだけ）",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_move",
+    "description": "開いている task の並びを変える。先頭が先にやるもの。 to=front（先頭）/ back（末尾）/ before・after（anchorId の直前・直後）。 閉じた件は動かせない（並びから外れている）。開き直したいなら task_set_status で queued にする。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "description": "task_list に出ている、開いている件の id"
+        },
+        "to": {
+          "type": "string",
+          "enum": [
+            "front",
+            "back",
+            "before",
+            "after"
+          ],
+          "description": "置き場所"
+        },
+        "anchorId": {
+          "description": "to が before / after のときの基準の task の id（開いている件だけ。自分自身は不可）",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "to"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_set_status",
+    "description": "task の状態を変える。queued / waiting / needs_decision（開いている3つ）は互いに行き来できる。 done / cancelled（閉じる）へはどの状態からも行ける。**閉じるときは reason が要る**（何をもって終わりとしたか、なぜ取りやめたか。人間が読んで後から否定する）。 閉じた件から戻せるのは queued だけ（開き直し。閉じた記録は行から外れ、日誌へ逐語で残る）。同じ状態への変更は何もしない。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "description": "task_list に出ている id（開き直すなら includeClosed で出る閉じた件）"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "waiting",
+            "needs_decision",
+            "done",
+            "cancelled"
+          ],
+          "description": "移す先の状態"
+        },
+        "reason": {
+          "description": "理由（1文字以上）。done / cancelled では必須、開き直し（閉じた件を queued にする）でも日誌に残すので付ける",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_keep",
+    "description": "task に「続く」の印を立てる（keep=true）／外す（keep=false）。 人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。 返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。 印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。 自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときは taskId を渡すこと。渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "description": "task_list に出ている id（閉じた件にも立てられる。開き直したときに効く）"
+        },
+        "keep": {
+          "type": "boolean",
+          "description": "true で立てる、false で外す"
+        }
+      },
+      "required": [
+        "taskId",
+        "keep"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "progress_read",
+    "description": "作業の進捗を、task（待ち行列の行）と委譲の行から数え直して読む。 積み上がり（未了の task の件数・起点別・齢）・実施中（委譲）・窓の中の消化・見込みを返す。 **率（%）は出さない**（task に総量が無く、分母が定まらない）。取れないものは 0 にせず、状態か理由で言う。 **GitHub（Issue / PR / CI）は観測していない**——出力にある「観測していない」は 0 件という意味ではない。 観測した側が数を記録していれば（`github_observation_record`）、その数が出る。 観測時刻を出力に含む。人間が `alteroid progress` や GET /progress で見るものと同じ数・同じ文である。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "windowHours": {
+          "description": "速度と見込みを数える窓の長さ（時間。有限の正数。省略時は 168）",
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "github_observation_record",
+    "description": "自分（または委譲先）が GitHub を見て数えた open Issue / open PR の件数を、日誌へ記録する。 `progress_read` / `GET /progress` の「GitHub」欄はこの記録を返す（デーモンは GitHub を見に行かない。値は観測した側の申告）。 **取れなかった回は数を作らない。** `result: { status: \"failed\", reason }` で、取れなかったことと理由を記録する（0 件と書かない）。 `query` には**母集合を切った引数を含める**（例: `gh issue list --state open --limit 200`）。`limit` を付けたなら `limit` にも同じ値を入れ、 件数が `limit` に達したときは `truncated: true`（数は下限）にする。 **CI の数え方**: ok のとき、open PR の CI を見たなら `result.ci: { pulls, success, failure, pending, checks }` を付ける（`pulls` は CI を見た PR の数。1つの PR は success / failure / pending のどれか1つに数え、チェックが1件も無い PR はどれにも数えない。3つの和は `pulls` 以下）。 **何を数えたかを `checks` に書く**（例「必須チェックだけ」・check の名前の列挙。500字まで）。`query` が母集合の切り方を持つのと同じで、これが無いと数は読めない。打ち切ったら `ci.truncated: true`。 **CI を取れなかったら `ci` を置かず `result.ciUnavailable` に理由を書く**（`ci` と同時には置けない。0 を書かない）。CI を見ていないなら両方とも省く（読み手には「観測していない」と出る）。 観測者はあなた（clone）として器が記録する（引数では指定できない）。いつ観測するかはここでは決まらない。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "観測した repo（`owner/name`）"
+        },
+        "query": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "何をどう数えたか（母集合を切る引数を含めたコマンド・条件）"
+        },
+        "limit": {
+          "description": "母集合を切った件数の上限（あれば）",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "const": "ok"
+                },
+                "openIssues": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "openPulls": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "ci": {
+                  "type": "object",
+                  "properties": {
+                    "pulls": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "success": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "failure": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "pending": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "checks": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "pulls",
+                    "success",
+                    "failure",
+                    "pending",
+                    "checks"
+                  ],
+                  "additionalProperties": false
+                },
+                "ciUnavailable": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                }
+              },
+              "required": [
+                "status",
+                "openIssues",
+                "openPulls",
+                "truncated"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "const": "failed"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                }
+              },
+              "required": [
+                "status",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "観測の結果。ok のときだけ件数（openIssues / openPulls / truncated と、任意で ci または ciUnavailable）、取れなかったときは failed と reason（数は持たない）"
+        }
+      },
+      "required": [
+        "repo",
+        "query",
+        "result"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_set_status_many",
+    "description": "開いている task（queued / waiting / needs_decision）を、**絞り込みを渡してまとめて done / cancelled にする**。1件ずつの `task_set_status` では手に負えない数の task が溜まったときの口である。**既定は試算で、1件も変えない。** 実際に変えるには `dryRun: false` を明示すること —— 閉じた task は `task_set_status` で queued へ1件ずつ開き直せるが、まとめて開き直す口は無いので、撃ち間違えは実質戻せない。**`origin` は必須で、在る起点（human / manager / external / self）を全部並べた呼びは断る**（「全部閉じる」を1回で撃てる形は作らない）。**変えた id は全部日誌に残る。** 閉じる理由（reason）は task の行にも残り、人間はこれを読んで後から否定する。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "external",
+              "self"
+            ]
+          },
+          "description": "例 {\"origin\":[\"self\"]}。配列で渡し、値は引用符で囲む。対象の起点（必須。1件以上）。在る起点を全部（human / manager / external / self）並べると断られる。"
+        },
+        "source": {
+          "description": "例 {\"source\":[\"mgr-1\"]}。配列で渡し、値は引用符で囲む。出所の**完全一致**（配列は1件以上、各要素は1文字以上）。q の部分一致とは別物",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "q": {
+          "description": "タイトル・本文・出所への部分一致（大文字小文字を区別しない。1文字以上）",
+          "type": "string"
+        },
+        "until": {
+          "description": "この時刻までに積んだ（createdAt）task だけを対象にする（ISO8601。1文字以上。その瞬間ちょうどの task は含む）。元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-11T19:00:00Z。時差の無い形は断る）。変えている最中に積まれた新しい task を巻き込まないために使う",
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "done",
+            "cancelled"
+          ],
+          "description": "移す先の状態（done=終わった / cancelled=取りやめた。閉じる状態だけ）"
+        },
+        "reason": {
+          "type": "string",
+          "description": "何をもってこの絞り込みに当たる task を閉じてよいとするか（1文字以上）。人間はこれを読んで後から否定する"
+        },
+        "dryRun": {
+          "description": "省略すると true（何件当たるかを数えるだけで1件も変えない）。実際に変えるときだけ false を明示する",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "1回の呼びで変える上限（1以上2000以下の整数。省略すると 500）。**古い側から**変える。残りは同じ絞り込みでもう一度呼べば続けられる",
+          "type": "number"
+        }
+      },
+      "required": [
+        "origin",
+        "status",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "inbox_remove_many",
+    "description": "受信箱（`InboxStore`）の未読を、**絞り込みを渡してまとめて畳む（消す）**。1件ずつ消す道具（内部の `remove()`）はこの器から呼べない——同じ失敗の写しが数千件積もると、1ターン1件のペースでの排出それ自体が文脈窓を食い潰す。**既定は試算（dryRun）で、1件も消さない。** 実際に消すには `dryRun: false` を明示すること——消した合図を戻す道具はこの器に無いので、撃ち間違えは道具では戻せない。**`types` は必須で、選べる5種類（distill / timer / external / self_initiative / manager_message）を全部並べた呼びは断る**（「全部消す」を1回で撃てる形は作らない——それは `POST /reset` の役目である）。**人間起点の合図（`human_message` / `human_answer`）はそもそも選べない。**あなたは自分の側の都合で溜まった合図だけを畳める——人間から届いた合図を自分の判断で畳む口は、この道具には無い（オーナー判断）。**行は消える。** `task_set_status_many` の「閉じる（closedAt を付けるだけで行は残る）」とは違い、受信箱は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない（`InboxStore` の doc）。**消した id は全部日誌に残る。**",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "distill",
+              "timer",
+              "external",
+              "self_initiative",
+              "manager_message"
+            ]
+          },
+          "description": "例 {\"types\":[\"manager_message\"]}。配列で渡し、値は引用符で囲む。消す対象の種類（必須。1件以上）。選べる5種類 (distill / timer / external / self_initiative / manager_message) を全部並べると断られる。人間起点の human_message / human_answer はここに無い——選べない（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。例: 委譲先の429の写しを畳むなら manager_message だけを狙う"
+        },
+        "sources": {
+          "description": "例 {\"sources\":[\"external:token-pool\"]}。配列で渡し、値は引用符で囲む。送信元の**完全一致**（配列は1件以上、各要素は1文字以上）。`manager_list` の内訳（送信元）に出る表記（例 \"external:token-pool\" / \"manager:mgr-xxx\"）をそのまま渡す。送信元を言えない種類（distill / timer / self_initiative）の行は、これを渡すと必ず対象から外れる",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "before": {
+          "description": "この時刻**以前**（ISO8601、その瞬間ちょうども含む。1文字以上）に積まれた行だけを対象にする。元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-15T00:00:00Z。時差の無い形は断る）。消している最中に届いた新しい行を巻き込まないために使う",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "description": "何をもってこの絞り込みに当たる行を畳んでよいとしたか（1文字以上）。人間はこれを読んで後から否定する"
+        },
+        "dryRun": {
+          "description": "省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "1回の呼びで消す上限（1以上2000以下の整数。省略すると 500）。**古い側から**消す。残りは同じ絞り込みでもう一度呼べば続けられる",
+          "type": "number"
+        }
+      },
+      "required": [
+        "types",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "profile_read",
+    "description": "実行環境プロファイル（人間の ~/.zprofile / /etc/profile.d に当たるもの）を読む。 プロファイルは**名前付きの行**の集まりで、行ごとに本文（何行でもよい）と撒く先（all / app / runner）を持つ。 name を省略すると行の一覧（名前・撒く先・バイト数・更新時刻。**本文は載らない**）、 name を渡すとその行の本文を返す。 行は名前のコード単位順（辞書順）につなげられて、撒く先が掛かる側（あなた自身／マネージャーと作業者）へ効く。 **本文には鍵が入っている。読んだ中身を記憶や日誌へ書き写さないこと** （記憶はあなたのシステムプロンプトに載るし、人間がいつでも開く場所である）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "読む行の名前。省略すると行の一覧を返す（本文は載らない）",
+          "type": "string"
+        },
+        "offset": {
+          "description": "何文字目から読むか（name を渡したときだけ。0以上の整数。既定 0）",
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "token_list",
+    "description": "認証トークンのプールを読む（枠に当たったとき実装が回す候補の一覧）。 **値は返らない。** 出るのは id・ラベル・指紋・状態だけである。 **この道具に書き込みは無い。** 回すのは実装であってあなたの判断ではないし、 登録・無効化は人間の手（alteroid token / PUT /tokens）に属する。 枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。 回った履歴のほうは journal_read types=token_rotation で引ける。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "description": "続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から。",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "permission_grant_list",
+    "description": "人間が承認した Bash 許可の記録の一覧（読むだけ）。 取り消し済みの行も出る（状態の札で分かる）。生きている許可だけが Bash 呼び出しを自動で通す。 **この道具に書き込みは無い。** 取り消しも、読めない行を消すことも人間の手に属する。 一覧の本文（規則・回答・allows / denies）は抜粋で、全文が要る1件は id を渡して取る。 切れたときは from で続きを取る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "この1件を全文で読む（一覧に出ている id）。他の条件は無視される",
+          "type": "string"
+        },
+        "from": {
+          "description": "一覧で、grantedAt 昇順の何件目から出すか（0以上の整数、0 起点）",
+          "type": "number"
+        },
+        "offset": {
+          "description": "id で全文を読むとき、何文字目から読むか（0以上の整数）",
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_list",
+    "description": "alteroid にログインしたアカウントと、使う許可の状態の一覧（読むだけ）。 出るのは id・許可の状態（許可済み / 未許可、許可した時刻と者）・時刻だけ。 **個人の情報（email・表示名）は出さない**（identity・アクセストークンも出ない）。人間が決めたら変わりうる。 **この道具に書き込みは無い。** 許可の付与も取り消しも、読めない行を消すことも人間の手に属する。 1件だけ読むときは id を渡す。切れたときは from で続きを取る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "この1件だけを読む（一覧に出ている id）。他の条件は無視される",
+          "type": "string"
+        },
+        "from": {
+          "description": "一覧で、createdAt 昇順の何件目から出すか（0以上の整数、0 起点）",
+          "type": "number"
+        },
+        "offset": {
+          "description": "id で読むとき、何文字目から読むか（0以上の整数）",
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "profile_write",
+    "description": "実行環境プロファイルの**1行**（名前付き）を全文置換する（無ければ作る）。 プロファイルは名前付きの行の集まりで、行ごとに本文（シェルスクリプト。何行でもよい）と撒く先を持つ。 行は名前のコード単位順（辞書順）につなげられる（/etc/profile.d と同じ）。 人間から「このトークンを使って」「PATH にこれを足して」のように**実行環境そのもの**を 渡されたら、会話の中に置いたままにせずここへ移すこと — 会話は要約に潰れ、器は作り直される。 記憶（判断の根拠）とは別の器である。鍵や PATH を記憶に書かないこと。 置く前に実際に読めるかを確かめるので、読めなければ保存も配布もされず理由が返る （scope=runner の行だけは、あなたの側では評価できないので runner が評価し、読めなければ配布結果に出る）。 **行の全文置換なので、足すだけのつもりなら先に profile_read name=<名前> で今の本文を取ること。** 撒く先は scope で選ぶ（all=あなたと runner の両方 / app=あなた（デーモン）だけ / runner=マネージャー・作業者だけ。 省略すると既存の行の撒く先を保つ。新しい行なら all）。 runner だけに要る環境（runner に入れた道具の PATH など）を all で置くと、あなた自身にも届いてしまう。 行を外すのは profile_remove。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "行の名前（^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$。英数字で始まり、英数字と . _ - が使える。64字まで。省略すると default）",
+          "type": "string"
+        },
+        "scope": {
+          "description": "撒く先。all=クローン（あなた）と runner の両方 / app=クローンだけ / runner=runner（マネージャー・作業者）だけ。省略は「既存の行の撒く先を保つ」（新しい行なら all）",
+          "type": "string",
+          "enum": [
+            "all",
+            "app",
+            "runner"
+          ]
+        },
+        "script": {
+          "type": "string",
+          "description": "この行のシェルスクリプト全文（`export FOO=bar` / `export PATH=\"$HOME/bin:$PATH\"` / `eval \"$(tool env)\"` など。何行でもよい）。空にはできない（外すなら profile_remove）"
+        },
+        "summary": {
+          "type": "string",
+          "description": "何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）"
+        },
+        "base_version": {
+          "description": "読んだ時点の行の版（profile_read name=<名前> の応答に出る base_version）。渡すと、読んだ後に人間や別のターンがこの行を変えていたら何も変えずに断る。省略すると比べずに置き換える",
+          "type": "string"
+        }
+      },
+      "required": [
+        "script",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "profile_remove",
+    "description": "実行環境プロファイルの1行を外す。他の行は変えない（全部外すときは行を1つずつ外す）。 外した行がクローンと runner のどちらかの最後の1行だったなら、その側からは環境が外れる（空が降りる）。 無い名前を渡しても何も変わらない。行の名前は profile_read（name を省略）で取れる。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "外す行の名前"
+        },
+        "summary": {
+          "type": "string",
+          "description": "何を外したかの一行要約（日誌に残る。**値そのものは書かない**）"
+        },
+        "base_version": {
+          "description": "読んだ時点の行の版（profile_read name=<名前> の応答に出る base_version）。渡すと、読んだ後に人間や別のターンがこの行を変えていたら外さずに断る。省略すると比べずに外す",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "practice_list",
+    "description": "仕事のやり方の一覧を返す（本文は返さない。slug・種類・題・文字数・作成/更新時刻だけ）。 やり方はあなたが読んで従うかどうかを毎回自分で決める素材であって、実行される定義ではない （従わせる道具はここには無い）。 **読めない行が無いのにやり方が1件も無いのは正常な状態である。** やり方が書かれていない仕事も普通に進む—— 空を「まだ設定されていない」という異常として読まないこと。 読めない行が在るときは、応答の末尾にその件数と slug が出る（壊れた行であって、消されたやり方ではない）。 中身が要るなら practice_read slug=<slug> で開くこと。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "practice_read",
+    "description": "仕事のやり方を1件、本文まで読む。無ければ、その旨を返す（例外で落とさない）。 version を指定すると、いまの本文ではなく過去の版（practice_history に出ている version）を 読む——version を省く既定は、いまのやり方（全文置換の最新の姿）を読む。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "やり方のスラッグ（practice_list に出ている slug）"
+        },
+        "version": {
+          "description": "省略時はいまの本文。指定すると practice_history にある過去の版を読む（1以上の整数）",
+          "type": "number"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "practice_history",
+    "description": "やり方1件の、追記専用の版の履歴を返す（本文は返さない。版番号・種類・題・ 文字数・書かれた時刻だけ）。 **write のたびに版が1つ増える。remove しても版は消えない**——消した slug を 同じ名前で作り直しても、版番号は消える前の続きから振られる。 中身が要るなら practice_read slug=<slug> version=<版番号> で開くこと。 各版は作成時刻だけを出す（版は追記専用なので、更新はいつも作成と同じ）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "やり方のスラッグ（practice_list に出ている slug）"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "practice_write",
+    "description": "仕事のやり方を書く（全文置換。無ければ作る）。 kind は仕事の種類（実装・調査・相談・レビュー・日報・外部サービスの確認…）を自由文字列で書く （**列挙ではない**。知らない種類のやり方を弾かない。表記ゆれは束ねる側の負担として引き受ける）。 これは実行される定義ではない——読んで従うかどうかは、そのときのあなたが決める（従わせる道具はここには無い）。人間もこの3入口のどこからでも同じものを読み書きできる。 本文の末尾改行は正規化される（無ければ足す。既に在れば増やさない）。 **既存のやり方を書き換えるときは、先に practice_read で読んで、応答に出る base_version を渡すこと。焼き込みの索引だけでは書けない**（版が無ければ何も書かずに断る。読んだ後に人間や別のターンが書いていたら、何も書かずに「その間に変わった」と返す。読み直して判断し直すこと）。**新規作成は版なしで通る。**",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "やり方のスラッグ（英小文字・数字・. _ - のみ）"
+        },
+        "kind": {
+          "type": "string",
+          "description": "仕事の種類（自由文字列。例: 実装・調査・相談・レビュー・日報）"
+        },
+        "title": {
+          "type": "string",
+          "description": "一覧で見る短い題"
+        },
+        "content": {
+          "type": "string",
+          "description": "本文（人間もこのまま読む。Markdown を想定）"
+        },
+        "base_version": {
+          "description": "読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**既存のやり方を書き換えるときは必須**。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "kind",
+        "title",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "practice_remove",
+    "description": "仕事のやり方を1件消す。 **無い slug を指定しても失敗しない（冪等）**——その場合は何もしていないとだけ返す。 **既存のやり方を消すときは、先に practice_read で読んで、応答に出る base_version を渡すこと（必須）。焼き込みの索引だけでは消せない**——版が無ければ何も消さずに断る。読んだ後に人間や別のターンが書いていたら、何も消さずに「その間に変わった」と返す（読んでいない内容まで消さないため）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "やり方のスラッグ（practice_list に出ている slug）"
+        },
+        "base_version": {
+          "description": "読んだ時点の版（practice_read / 直前の practice_write の応答に出る base_version）。**必須**。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "self_read",
+    "description": "自分自身（alteroid）の正典を1つ読む。 自分が何で出来ているか・何が要件か・どう設計されているか・何が未着手かはここにある。 ビルド時に焼き込んだ写しなので、実装の最新が要るならマネージャーにリポジトリを読ませること。 長いので切れて出る（続きの取り方が出力に付く）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string",
+          "description": "正典の名前。読めるのは north_star / prd / architecture（上ほど優先順位が高い）"
+        },
+        "offset": {
+          "description": "何文字目から読むか（0以上の整数。既定 0）",
+          "type": "number"
+        }
+      },
+      "required": [
+        "document"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "self_status",
+    "description": "いま自分が何で走っているかを返す（自分がいま走っているコードのリビジョン・このイメージが焼かれた時刻とそこからの経過・宣言されたモデル帯・SDK が実際に報告したモデル id・effort（実効値）・effort（alteroid が明示的に渡したもの）・Claude Code の版・認証の出所（値ではなく名前）・許可モード（SDK が報告した実効値）・許可モード（alteroid が渡したもの）・MCP サーバ・SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）・resume 元のセッション id・システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）・システムプロンプト全体の文字数（毎ターン払っている入力の土台）・直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）・同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸））。 これに加えて、いまの記憶の大きさと、台帳との突き合わせも出る。 **effort はこのセッションで最初の道具呼び出しでは取れない**（前の道具呼び出しの結果として 観測するため）。モデルが effort に対応していない場合もずっと取れない。 取れない値は「まだ分からない」と出る（既定値では埋めない）。 台帳との突き合わせの内訳は14件で打ち切る。続きは ledgerCursor で辿れる（打ち切りの行にそのまま書いてある。ledgerCursor を渡すとその節だけを出す。前回の呼び出し以降に記録が増えていたら、順位が上がった行が別枠で出ることがある）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "ledgerCursor": {
+          "description": "台帳との突き合わせの内訳の続きを読む位置。前回の応答の断り書きに出た ledgerCursor をそのまま渡す（自分で組み立てない。実行時の事実・記憶の大きさは出ない）",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "self_dropped",
+    "description": "自分（クローン）が記録・読み出しをしそこねた跡（`noteDroppedRecord` 等が stderr へ残す行）を、このプロセスの中から読み戻す。 器の外（Railway 等のホスティング先のログ）へ出ている生の stderr の代わりではない ——そちらは既に人間が読める。ここは、器の中からは1行も遡れなかった 穴を塞ぐためのものである。 このプロセスが生きているあいだの直近の分だけを持つ（帳面の保持件数は 200 件。それより古い分はこのプロセスの中には無く、器の外の stderr を見るしかない）。再起動・デプロイの入れ替えでも消える。 予算で切れた古い側は offset で読み進められる（limit を上げても境界は動かない）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "limit": {
+          "description": "一度に対象にする件数（1以上200以下の整数。既定 50、最大 200＝帳面が保持している件数そのもの）。⚠️ 予算（文字数）が先に尽きることがあり、そのときはこれを上げても実際に載る内容は動かない——古い側へ進むには`offset` を使うこと。",
+          "type": "number"
+        },
+        "offset": {
+          "description": "直近から数えて何件をスキップしてから見るか（0以上200以下の整数。既定 0＝最新から）。前回の応答の断り書きに出た offset をそのまま渡せば、予算や limit で切れて省略された古い側へ実際に進める。",
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manager_start",
+    "description": "マネージャー（あなたが起こす Claude Code）に仕事を任せる。 起動して即返るので、完了を待たずに次の判断へ移ってよい。同時に何本走らせてもよい。 依頼できるのは実装だけではない。調査・設計の相談・外部サービスの確認・レビューも同じように頼める。 Codex に作業を頼めるマネージャーの器があれば（runner_list の peer の行）、依頼文に「Codex にやらせて」と書けば、マネージャーが peer で Codex に頼む。その器を runnerId で名指しできる。 置き先は資源で自動配置される（runner_list の説明を参照）。新しいプロセスを起こせない（pids 飽和）と判定された器は、飽和していない器が居れば自動配置から外れる。全台が飽和でも、runnerId で名指ししても断らず起こす——置き先が飽和と判定されていれば応答に「⚠ 置き先の runner は pids 飽和と判定されている: 材料」の行が付くので、落ちる前提で読むこと。 failed / lost の前任の後継を立てるときは supersedes に前任の managerId を渡すこと。渡さないと、鍵の回転で前任が起き上がって二重になりうる。前任が終わっていない（running / waiting_human / 生きている done）と断られる——先に manager_stop で止めること。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "string",
+          "description": "依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く（1文字以上。空白だけは断る）"
+        },
+        "cwd": {
+          "description": "作業ディレクトリ。省略時はデーモンの既定",
+          "type": "string"
+        },
+        "attachments": {
+          "description": "人間の添付を担い手にも見せたいときに、その添付の id（通知行の id=… / conversation_read の添付行）を渡す。渡したものは担い手の手元にファイルとして置かれ（通知行にパスが付くので Read で開ける）、画像は画像としても見える。渡さない添付は担い手には見えない。**記憶には写らない**（日誌に残るのは渡した添付の参照だけで、中身は残らない）。見つからない添付（保持期限切れ・id の誤り）があれば、何も送らずにエラーを返す。個数・合計には人間の発言と同じ上限がある。確認への回答（requestId / decision）には載せられない。",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "runnerId": {
+          "description": "置き先の器を名指しで指名する（runner_list / manager_list が出す runnerId）。これは配置の指名であって本数の制限ではない——省略すれば資源による自動配置。指名した器が名簿に無い・使えない・名前が重複のときは失敗し、他の器へは自動で落とさない（返ってきた文言をそのまま読むこと）。",
+          "type": "string"
+        },
+        "supersedes": {
+          "description": "前任の managerId（manager_list に出ている id）。failed / lost の前任の後継を立てるときに渡す。前任の枠で止まった印を下ろし、自動の起こし直しの対象から外す。前任が終わっていなければ断られる（先に manager_stop で止めること）。",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。人間の依頼の task のために委譲するときは渡すこと。渡さないと task に結び付かず、起点の会話へ返答した時点で、器が task を自動で done にする。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manager_send",
+    "description": "走行中のマネージャーへ追加指示を送る、または止まっている質問・許可確認に答える。 requestId か decision を付けたときだけ回答として扱う（止まっていたその仕事だけが再開する）。 どちらも無い本文は、相手が返事待ちでも回答にはならず追加指示として届く。 許可確認への回答では decision を必ず付けること。 許可確認は2種類（分類器の拒否の確認は requestId が toolu_… の形、それ以外は UUID の形）で、答えたあとが違う。答え方の細則は、届いた確認の本文が言う。allow のあとに撃ち直し方を伝えるときは、decision を付けない追加指示で送ること。 確認として届かない拒否の合図（拒否の報告だけが届いた回）には requestId が無く、許可として答える口は無い。requestId 無しの decision は付けないこと（待っている別の確認へ当たりうる）。答え方は報告の本文が言う。 manager_list が [running] と出していても、runner の側でセッションが畳まれていることがある（その合図が届かなかった窓）。そのときは resume から入り直して届けるので、返り値にそう書いてある。入り直せなかったときも「そんな id は無い」ではなく「セッションが無い」と返る——委譲そのものは台帳に在るので、manager_start で起こし直す前に、返ってきた文言をそのまま読むこと。 返り値の「届けた」が保証するのは、runner の resume の口を叩いて成功が返ったところまでで、相手がこの本文を読んだかは見ていない。黙った器に載っている委譲へも送信は実際に届くので、直後の manager_list が lost／セッション切断のままでも「届かなかった」とは読まず、同じ本文で新しい委譲を立てないこと（同じ仕事が2本になる）。 セッションが無いことは、その仕事が失われたことを意味しない——完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形になる。委譲し直す前に必ず manager_report を見ること（報告が空でも、生ログから「生成されたが配られていない」報告を拾える）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "managerId": {
+          "type": "string",
+          "description": "manager_start が返した id"
+        },
+        "message": {
+          "type": "string",
+          "description": "マネージャーへの本文。deny のときは、なぜ駄目でどうしてほしいかを書く"
+        },
+        "attachments": {
+          "description": "人間の添付を担い手にも見せたいときに、その添付の id（通知行の id=… / conversation_read の添付行）を渡す。渡したものは担い手の手元にファイルとして置かれ（通知行にパスが付くので Read で開ける）、画像は画像としても見える。渡さない添付は担い手には見えない。**記憶には写らない**（日誌に残るのは渡した添付の参照だけで、中身は残らない）。見つからない添付（保持期限切れ・id の誤り）があれば、何も送らずにエラーを返す。個数・合計には人間の発言と同じ上限がある。確認への回答（requestId / decision）には載せられない。",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "decision": {
+          "description": "許可確認への回答のとき必須。それ以外では不要",
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "requestId": {
+          "description": "どの確認への回答かを示す id（受信箱に届いた requestId）。1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること。⚠️ 通るのは受信箱に確認として届いた requestId だけである。分類器の拒否の確認では toolu_… の形のことがあるが、生ログから拾った toolu_…（tool_use_id）や req_…（API の request id）は、確認として届いていなければ通らない。受信箱に届いていない確認に、生ログから答える手段は無い",
+          "type": "string"
+        },
+        "closes": {
+          "description": "任意。この呼びで片付いた task を、id と理由で done にする（返事だけでは閉じない）",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "managerId",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manager_stop",
+    "description": "マネージャーを止める。人間が Web UI から押す停止と同じもので、その1本だけが止まる。 暴走しているとき、報告を出したのに終わらないとき、依頼自体が要らなくなったときに使う。 止めたあと本当に止まったかを確かめて返すので、返ってきた状態まで読むこと。 ⚠️ いまターンの途中（running）の委譲は既定では止めない——畳むと進行中の作業が失われるため。それでも止めるなら force: true を渡すこと。止める前に一覧を読めなかったときも、走行中かどうか判定できないので同じく断る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "managerId": {
+          "type": "string",
+          "description": "manager_list に出ている id"
+        },
+        "reason": {
+          "description": "なぜ止めたか。日誌と、その仕事の記録に残る。後から辿れるように書く",
+          "type": "string"
+        },
+        "force": {
+          "description": "いまターンの途中（status: running）の委譲でも止める。既定（false/省略）だと、running の委譲は abort を呼ばずに断って理由を返す——畳むと、そのターンが抱えている進行中の作業（起こした作業者など。作業ツリーが見つかれば未 push の実装・監視中の CI も）が失われるため。止める前に一覧を読めなかったとき（走行中か判定できない）も同じく断る。断りを読んだうえで、それでも畳んでよいと判断したら true で呼び直すこと。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "managerId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manager_list",
+    "description": "マネージャーの一覧と状態を見る。何が走っていて、何が返事待ちかが分かる。 状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。 done/背景処理待ち×N は、そのマネージャーが自分で起こした背景処理（run_in_background の子）や作業者への委譲の完了を待って畳んだだけで、手が空いたのではないという意味である。N は器が名乗った背景タスクの在り高であって、握り潰した報告の本数ではない（同じ1本が3つのタスクを待ちながら2回畳めば、在り高3・握り潰し2になる）。握り潰した報告の中身は manager_report と日誌（decision）に在る。**この印は器が名乗った分にだけ立つ** — この欄を送らない古い器では、背景処理を待っていても立たない。だから **印が無いことを「手が空いている」と読まないこと。** 背景処理待ち×N の直後に「（<時刻> から）」が付くことがある。それはこの委譲が最初に背景処理待ちへ入った時刻（ISO 8601、UTC）で、経過時間そのもの（「N時間」等）ではない——ここは呼ばれるたびに答えが変わる計算をしない場所なので、経過はいまの時刻と見比べて自分で出すこと。時刻が付かないのは「そう名乗られていない」場合であって「待ち始めていない」ではない（この印が立つ条件は直前の断りと同じ）。 依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。 同じ会話で前回に全文で出した行と1字も変わらない行は「- <managerId> 前回と同じ」の1行に畳む（⚠・lost・失敗の行は畳まない）。畳んだ件数は一覧に出る。全部を全文で引き直すなら refetch: true。 「runner にセッションが無い」は、10秒ごとの生存確認が runner に一覧を聞いて観測する（走行中・返事待ちのものだけを見る）。誰かが manager_send を打つのを待たない。ただし観測できた回にだけ立つので、**行が出ないことを「セッションは在る」と読まないこと** — 器に聞けなかっただけの回もある。待機中（done）のものはこの観測の対象外である（完遂してセッションを畳んだ回と区別が付かず、区別できないものに ⚠ を付けると本当に困っている1本が埋もれる）。 器（runner）側の未送出の滞留は、runner_list を resources: true で明示的に呼んだとき、または10秒ごとの生存確認が対応する runner から自動で拾ったときに、それぞれキャッシュされる（それ以外の経路では更新されない）。生存確認からの自動更新に対応しない古い runner・LocalRunner は、runner_list を resources: true で呼ばない限り一度も warm しない——この一覧に行が出ないことを「滞留0」と読まないこと。0件だったか、まだ観測していないかのどちらかである。出ている行も観測した時点の値であって現在値ではないので、最新の値が要るなら runner_list をresources: true で呼び直すこと。 生ログの末尾が stop_reason: tool_use のまま対応する tool_result が無く、かつ返事待ちが空のものには ⚠ の行が出る（道具を回しているなら、その応答を待っているのはデーモンのはずなので、これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。 「畳む候補」の ⚠ は、status が done で背景処理待ちの印が無く、状態の判定がactive で、最後のターン終了から一定時間が経った委譲に出す印である。ただし、器が「背景処理待ちの印を送る版」だと名乗った（runner の hello の能力）委譲にしか出ない——名乗らない古い器や、名乗りをまだ受けていない器の委譲には出ない（出ていないことを「畳む候補が無い」と読まないこと）。この道具（manager_list）自身は畳まない——ここは表示だけである。畳むのは runner_list を resources: true で呼んだときだけで、その器の pids が逼迫していれば（上限の80%以上）、同じ候補の判定を満たす委譲をデーモンが自動で畳む（未 push の実装・未コミットの変更が無いことも確かめたうえで）。何を畳んだ・見送ったかは runner_list の応答と日誌（journal_read、decision）に出る。 走行中・返事待ち（running / waiting_human）を先に出し、次に lost（前のセッションへ戻れなかったもの。成果がリモートに届いているかを誰も確かめていない＝判断待ちである）、そのあとに残りの終端（done / failed / stopped）を出す。各群の中は startedAt の新しい順である。 q で依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前を部分一致で探せる（依頼文の札や語、持っている PR の番号、作業中の枝で担当を探すとき。大文字小文字・全角半角は区別しない）。status と併用できる。各行の退避 ref は件数と最新の1件だけで、全部は manager_report を rescueAll: true で呼ぶと、退避 ref を作業ツリーごとに全部出す。 絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。 認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。⚠ が付いていれば世代が食い違っている——回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら、起こし直すこと。⚠ 止める前に、その委譲がターンの途中かどうかを manager_stop の断り（未 push・未コミットの実物が出る）で確かめること。そのうえで manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で走る）。⚠ 失われるのは会話だけではない——そのターンで進行中だった作業も失われる。世代が測れていないときも行は出る——「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を名乗る。再起動をまたいだ場合だけ manager_stop → manager_start が効く。 429 で落ちたとき、SDK が返す文言に書かれていた resets 時刻を、認証トークンのプールの各鍵の冷却期限と突き合わせた行も出ることがある。「世代ずれの疑い」なら、この委譲は現役ではない古い鍵を掴んだまま走っている可能性が高い——鍵が通る状態へ戻っても、このセッション自身は起こし直すまで戻らない。「待てば戻る」なら、現役の鍵自身がいま冷却中なだけで世代ずれではなく、対処は要らない。行が出ないのは「健全」ではなく「まだ判定できない」という意味である——429 の通知がまだ届いていないか、文言・プールのどちらとも一致しなかったかのどちらか。上の世代番号の比較が既に食い違いを名指ししているときは、二重に鳴らさないのでこの行は出ない。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "例 {\"status\":[\"waiting_human\"]}。配列で渡し、値は引用符で囲む。状態（running / waiting_human / done / failed / lost / stopped の6つ。`waiting` ではなく `waiting_human`）で絞る。省略すると絞らない。走っているものだけを見たいなら [\"running\",\"waiting_human\"]。空の配列 [] も絞らない（渡さなかったのと同じ全件が出て、応答に「絞らずに全件を出した」と書く）。**journal_read の types とは倒し方が違う**（あちらは [] を0件として扱う）。先頭の件数の行は絞る前の全体を出す",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "running",
+              "waiting_human",
+              "done",
+              "failed",
+              "lost",
+              "stopped"
+            ]
+          }
+        },
+        "q": {
+          "description": "依頼文の全文・managerId・直近の報告の本文・未 push の観測にある枝の名前に部分一致で絞る（例: 依頼文の札 \"WORLDBUILD-7\"、PR の番号 \"6387\"、枝 \"feat/mob-add-kinds\"）。大文字小文字は区別せず、全角と半角は NFKC で揃えて比べる（【】と [] のような別の字は揃わない）。status と併用できる（両方に当たるものだけが出る）。省略・空文字・空白だけは絞らない（応答にその旨が出る）。先頭の件数の行は絞る前の全体を出す。0件のときは q の値つきでそう言う",
+          "type": "string"
+        },
+        "cursor": {
+          "description": "一覧の続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から。status と q はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。",
+          "type": "string"
+        },
+        "refetch": {
+          "description": "真なら、前回と変わらず「前回と同じ」に畳まれる行・受信箱の内訳も全文で出し直す（会話の上の全文を見失ったとき）",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manager_report",
+    "description": "マネージャーの依頼文・直近の報告を全文で読む。 manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。 manager_list の行は退避 ref を件数と最新の1件しか出さない。ここ（manager_report）も報告の本文の前に、退避 ref を既定では種類ごとの本数に畳んで出す: 生きている退避 ref（最新の1件つき）・消し終えた ref（消した理由ごと）・生きている間に消えた作業ツリー・送るもの無しは本数だけで、 退避できていない（失われうる）作業ツリー（未追跡・submodule・送れなかった失敗）は、本数と代表の1本の行を必ず出す。 全部（ref 名・退避できていない作業ツリーのすべて）は rescueAll: true で作業ツリーごとに読む。 長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。 それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。 直近の報告の全文が既にあなたの発言（会話の上）に載っているときは、本文を繰り返さず、載っている時刻を示す注記だけを返す。引き直したいときは refetch: true を付ける（offset で頁を送る・依頼文は影響を受けない）。 全文が載っている報告に未 push などの状態の注記だけが要るなら、引き直さず manager_list の行を見る。 report が「まだ無い」と返ったときは、内部で生ログも見ている（#323）—— 「まだ書いていない」のか「書いたのに配られていない」のかを、応答の文言（⚠ の有無）で見分けられる。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "managerId": {
+          "type": "string",
+          "description": "manager_list に出ている id"
+        },
+        "part": {
+          "description": "report=直近の報告（既定） / request=依頼文",
+          "type": "string",
+          "enum": [
+            "report",
+            "request"
+          ]
+        },
+        "offset": {
+          "description": "何文字目から読むか（0以上の整数）。前回の応答が示した続きの位置を渡す",
+          "type": "number"
+        },
+        "rescueAll": {
+          "description": "真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、種類ごとの本数と、退避できていない作業ツリーの本数・代表の1本だけ）",
+          "type": "boolean"
+        },
+        "refetch": {
+          "description": "真なら、報告の全文が既に会話の上に載っていても本文を必ず返す（既定は、載っているときは注記だけ返す）",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "managerId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_say",
+    "description": "task の起点の会話へ1通書く。宛先は task の起点の会話に固定で、会話 id は選べない。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。 閉じた task にも書ける（報告を後から出すため）。 task が無い、または起点の会話を持たない古い task なら、何も書かずに断る（古い task は task_add で足し直す）。 いまのターンの会話へは書けない（そこへは普通に返答すれば届く。添付なら reply_attach）。 知らせるだけで、答えは待たない。確認や承認が要るなら ask_human を使うこと。 人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。 添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。 知らせるためだけに足した task は、書いたら done にして閉じる。続ける仕事の task は、書いた会話が返答に数えられて器が自動で done にしないよう、task_keep で「続く」の印を付ける（queued で印の無い task は、このターンの終わりに自動で done になりうる）。 日誌には人間との往復（あなたの発言）として残る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "description": "書く先の task の id（task_list に出ている id。閉じた件も可。1文字以上）"
+        },
+        "text": {
+          "description": "人間へ届ける本文（添付が無いとき必須。1文字以上。添付があれば省略か空でもよい）",
+          "type": "string"
+        },
+        "attachments": {
+          "description": "添える添付の id（file_put の応答の id）。1発言に添えられる個数・合計には人間の発言と同じ上限がある。どこにも結ばれていない添付は、この発言の会話へ結ばれる",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "file_put",
+    "description": "あなたの手元（デーモンの側）のファイルを、添付の置き場へ入れる。人間へファイルを渡す最初の段で、 返る id を reply_attach（いまのターンの返信に添える）か task_say の attachments（task の起点の会話へ書く）に渡すと、人間の画面に添付として出る。 返信に添えるまで、この添付はどこにも結ばれていないので **1時間で消える**。入れたらすぐ添えること。 後で使うために取っておくなら keep: true で入れる（保存の印つき。期限なし・1時間の掃除にも掛からない。消えるのは file_delete したときだけ）。入れた後から付けるなら file_keep、置き場の一覧は file_list。 通常のファイルだけ入れられる（ディレクトリ・特殊ファイルは断る）。大きさの上限は人間の添付と同じ（その他の上限を超えるものは読まずに断る）。画像の上限を超える画像は、画像ではなくファイル（application/octet-stream）として入れる（人間はダウンロードして開く）。 画像は中身（先頭の印）が拡張子の種類と一致しないと断る。種類は拡張子から推す（分からなければ application/octet-stream）。 **資格・鍵を含むファイルは入れない**: ALTEROID_CREDENTIAL_DIR の配下と、名前が _FILE で終わる環境変数が指すファイルは断る。 人間に送ってよい内容かは、入れる前に自分で確かめること。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "入れるファイルの絶対パス（デーモンの側のファイル）"
+        },
+        "name": {
+          "description": "人間の画面に出す名前。省略するとファイル名。種類もこの名前の拡張子から推す",
+          "type": "string",
+          "minLength": 1
+        },
+        "keep": {
+          "description": "true なら保存の印つきで入れる（期限なし・1時間の掃除にも掛からない）。既定 false",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "file_list",
+    "description": "添付の置き場の控えの一覧（新しい順）と、置き場の使用量（合計と出所ごと）を返す。**中身は読まない**（中身は attachment_fetch で取り出して Read で開ける）。 1行に id・名前・種類・大きさ・出所・保存中か期限・作成日時が出る。 絞り込み: kept（true＝保存中だけ・false＝保存していないものだけ）、from（human / clone / manager / integration / unknown。上げた主体の分類）、conversationId、query（名前の部分一致）。 文字数の予算で締めるので、切れたら末尾に「続きは file_list cursor=…」が出る。その cursor を同じ絞り込みでそのまま渡すと続きが読める。 期限切れで消えたものは出ない。保存した添付に期限も全体の容量の上限も無いので、使用量を見て要らないものは file_delete で消すこと。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kept": {
+          "description": "true＝保存中だけ・false＝保存していないものだけ",
+          "type": "boolean"
+        },
+        "from": {
+          "description": "上げた主体の分類（人間・クローン・マネージャー・連携の鍵・不明）",
+          "type": "string",
+          "enum": [
+            "human",
+            "clone",
+            "manager",
+            "integration",
+            "unknown"
+          ]
+        },
+        "conversationId": {
+          "description": "この会話に結ばれた添付だけ（完全な id か、1つの会話に決まる 8 文字以上の先頭）",
+          "type": "string",
+          "minLength": 1
+        },
+        "query": {
+          "description": "名前の部分一致（大文字小文字を問わない）",
+          "type": "string",
+          "minLength": 1
+        },
+        "cursor": {
+          "description": "続きの位置。前回の応答の「続きは file_list cursor=…」をそのまま渡す",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "file_keep",
+    "description": "添付に保存の印を付ける／外す。保存中の添付は保持期限（既定30日）でも、未結び付け1時間の掃除でも消えない（期限なし。全体の容量の上限も無い）。 keep: true で付ける。keep: false で外す（外した時刻から保持日数後に期限が入る。応答にいつ消えるかが出る）。 無い id（期限切れで消えた・id の誤り）は「無い」と返る。 人間が保存した添付の印も外せるが、人間の持ち物を変える行為なので、外すのは要らないと判断できるときだけ。この操作（道具の使用と id）は日誌に残る。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "添付の id（file_list / file_put の応答）"
+        },
+        "keep": {
+          "type": "boolean",
+          "description": "true＝保存の印を付ける・false＝外す"
+        }
+      },
+      "required": [
+        "id",
+        "keep"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "file_delete",
+    "description": "添付の中身と控えを消す。**保存の印が付いていても消える。取り戻せない。** 人間の持ち物でも消せるので、要らないと判断できるときだけ。 その id を attachment_fetch で取り出した写しも消す。すでに会話へ添えた添付を消すと、画面の添付は開けなくなる。 **消す前に**、その控え（id・名前・種類・大きさ・sha256・出所・保存中だったか。中身は書かない）を日誌へ書く。日誌に書けなければ何も消さない（やり直してよい）。 控えが読めなかった無い id（期限切れで消えた・id の誤り）は「無い」と返り、日誌には何も書かない。控えを読んだ後に消えていたときは、消す行と打ち消しの行が日誌に残る。 外部の置き場に預けた中身は先に消す。置き場から消せなかったときは「消していない」と理由が返り（控えも写しも残る）、日誌に断った旨の行が足される。もう一度呼ぶと再試行する。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "消す添付の id（file_list / file_put の応答）"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "reply_attach",
+    "description": "**いまのターンの返信**に添付を添える。人間の発言で起きたターン（会話のあるターン）で使い、返信の本文とは別に、画面の返信に添付が付く。 ids は file_put の応答の id（または人間が添えた添付の id）。1件以上。 同じターンで複数回呼んでも、個数・合計は合わせて数える（人間の1発言と同じ上限）。1つでも検査に落ちたら、何も添えずに、どれがなぜかを返す。 どこにも結ばれていない添付はこの会話へ結ばれる。すでに別の会話に結ばれている添付は結び直さず、そのまま添える。 本文が空で添付だけの返信でも、返信として残る。 いまのターンに会話が無いとき（定期の仕事・外部イベントが起点で返信先が無い）は使えない。task の起点の会話へ渡すなら task_say の attachments を使う。 資格・鍵を含むファイルは添えないこと。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "ids": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "添える添付の id（file_put の応答の id）。1件以上"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attachment_fetch",
+    "description": "人間が会話に添えた添付（画像・動画・PDF・ログなど）の中身を、デーモンの手元のファイルへ取り出す。 id は発言の通知行（[添付] id=…）か conversation_read の [添付 n件] にある。 返るパスを **Read で開ける**（クローンの作業ディレクトリの中に置く）。動画は置いて取り出せるところまで（コマ切り出しはしない）。 同じ中身（sha256 が同じ）の写しが既にあれば書き直さず使い回す。 **取り出したものは写し**で、正本ではない。器が作り直される・一定時間（24時間）たつと消えうる。必要なら再度取り出す。 添付は保持期限（既定30日）を過ぎる・未結び付けのまま1時間たつと消える。そのときは「見つからない」と返る。 **中身は記憶にも日誌にも写さない**（日誌に残るのは道具の使用の記録だけ）。要る事実は自分の言葉で記憶へ書く。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "添付の id（通知行の id=… / conversation_read の添付行）"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "conversation_read",
+    "description": "人間との会話を日誌から読み返す。要約に潰された後でも逐語はここに残っている。 conversationId を指定するとその会話の中身を古い順に読める。 q だけを指定すると窓の中を語で探す（新しい順）。 何も指定しなければ会話の一覧（新しい順）。 一覧が limit・文字数の予算・scan の窓で切れたら、末尾に「続きを読むには: conversation_read cursor=…」が出るので、その cursor をそのまま渡すと続き（limit の上限 200 や窓の外も含む）から読める。続きが無ければ出ない。GET /conversations（人間の口）と同じ cursor である。 人間自身の発言だけを見るなら speaker: \"human\" を指定する （既定 both は人間とクローンの両方の発言を含む）。 一覧の本文は抜粋で、全文が要る1件は id を渡して取る。 人間は送信済みの発言を編集できる（チャットの「メッセージを編集する」機能）。conversationId を指定した既定の応答は編集後の版だけを返すが、畳まれた版が在れば件数を注記する。旧版と旧版への応答も読むには includeSuperseded: true を指定する。 人間が送ったあとクローンへ届く前に取り下げた発言は、conversationId・q の読みでは外さず「（取り下げた発言。クローンへは届いていない）」と付けて出す（依頼として扱わない。会話の一覧の件数はこれを除く）。取り下げの印を読めなかった回は、有無を判定できなかったと言う。 **ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）: ① **ask_human への人間の回答は、この道具では出ない。** 回答の本文は日誌の escalation にしか無いので journal_read types=[\"escalation\"] で読むこと （approvals_list の一覧モードは**まだ答えが来ていない件**だけを出すが、id を渡す全文モードは答えが付いた件も開けて、回答の本文もそこに出る）。 ② 人間がマネージャーへ直接話しかけた発言も出ない （日誌には with:\"manager\" として載り、あなた自身の指示と見分けが付かない）。 **ここに出るもの**: 発言に添付があれば「[添付 n件]」と各添付の id・name・type・size（メタデータだけ）。 **添付の中身はここには出ない**（画像は届いたターンでだけ画像として渡される）。 画像・動画・PDF・ログなど**どの添付も、attachment_fetch id=<添付の id> で手元に取り出して Read で開ける**（動画は置いて取り出せるところまで）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "description": "この会話の中身を古い順に読む（一覧に出ている conversationId か、1つの会話に決まる 8 文字以上の先頭）",
+          "type": "string"
+        },
+        "q": {
+          "description": "語で探す（大文字小文字を区別しない部分一致）。conversationId と併用できる",
+          "type": "string"
+        },
+        "speaker": {
+          "description": "既定 both。human で人間自身の発言だけ（clone はクローンの返答だけ）",
+          "type": "string",
+          "enum": [
+            "human",
+            "clone",
+            "both"
+          ]
+        },
+        "since": {
+          "description": "ISO 8601。この時刻以降だけ返す（例 2026-08-15T09:00:00Z）",
+          "type": "string"
+        },
+        "until": {
+          "description": "ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する",
+          "type": "string"
+        },
+        "scan": {
+          "description": "人間との往復を何件遡るか（1以上10000以下の整数。既定 2000。マネージャーとの往復・内部ターンは数えない。conversationId を指定したときは、その会話の人間との往復だけを数える）。遡り切れたかは応答の注記で分かる",
+          "type": "number"
+        },
+        "limit": {
+          "description": "一覧モードで返す会話の本数（1以上200以下の整数。既定 20）。conversationId / q のときは効かない",
+          "type": "number"
+        },
+        "cursor": {
+          "description": "一覧モードの続きを読む位置。前回の応答の末尾「続きを読むには」に出た cursor をそのまま渡す（自分で組み立てない。GET /conversations の nextCursor と同じもの）。同じ since / until を付けて呼ぶこと。conversationId / q のときは効かない",
+          "type": "string"
+        },
+        "id": {
+          "description": "この発言1件を全文で読む（一覧に出ている id）。他の条件は無視される",
+          "type": "string"
+        },
+        "offset": {
+          "description": "id で全文を読むとき、何文字目から読むか（0以上の整数）",
+          "type": "number"
+        },
+        "includeSuperseded": {
+          "description": "既定 false。true にすると、チャットで編集され既定ビューから畳まれた旧発言・それに対する応答も conversationId のときに含めて返す（各発言に supersedes / supersededBy が付く）。false のままでも、畳まれた版が在れば件数を注記する",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manager_transcript",
+    "description": "マネージャーのセッションそのものの生ログを読む（JSONL、1行1イベント）。 manager_report の報告は要約された最終報告でしかない——それでも足りないとき、 実際に何が起きたか（どの道具をどう呼んだか等）を確かめるにはここまで降りる。 走行中なら runner のディスクから、畳まれていれば退避済みアーカイブから、 それも無ければ預かったセッションの生ログから返る（3段のどこかにあれば返る）。 長ければ続きの取り方が末尾に出るので、最後まで読み切ること。 大きな生ログを何百ページもめくらずに探せるよう、絞りを4つ渡せる （どれも省略できる。1つも渡さなければ出力は絞らないときと1文字も 変わらない）——since/until（ISO 8601。各行の timestamp 欄がこの窓に 入る行だけ残す。since は含む・until は含まない）、type（行の type 欄。 カンマ区切りで複数指定できる）、contains（行の生の文字列の部分一致。 例 contains='\"stop_reason\":\"tool_use\"'。JSON として読めない行にも 掛かる）。絞ったときは先頭に「全X行のうちY行が当たった」を出し、 時刻の窓を渡したときは timestamp の無い行・JSON として読めない行を （窓の判定ができないので）除いた数も出す——黙って捨てない。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "managerId": {
+          "type": "string",
+          "description": "manager_list に出ている id"
+        },
+        "offset": {
+          "description": "何文字目から読むか（0以上の整数）。前回の応答が示した続きの位置を渡す",
+          "type": "number"
+        },
+        "since": {
+          "description": "絞り: ISO 8601。各行の timestamp 欄がこの時刻以降（含む）の行だけ残す（例 2026-08-15T09:00:00Z）。until と組み合わせて窓を作る",
+          "type": "string"
+        },
+        "until": {
+          "description": "絞り: ISO 8601。timestamp 欄がこの時刻より前（含まない）の行だけ残す",
+          "type": "string"
+        },
+        "type": {
+          "description": "絞り: 行の type 欄で絞る。カンマ区切りで複数指定できる（例 assistant,result）",
+          "type": "string"
+        },
+        "contains": {
+          "description": "絞り: 行の生の文字列にこの部分文字列を含む行だけ残す（例 \"stop_reason\":\"tool_use\"）。JSON として読めない行にも掛かる",
+          "type": "string"
+        }
+      },
+      "required": [
+        "managerId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "archive_remove",
+    "description": "アーカイブ済みセッション生ログの本文を1件消す（tombstone。行そのものは残る—— archive の一覧には引き続き出る。DELETE ではない）。 無い id を渡しても成功にはならず、そう返る。 走行中のマネージャーの退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。 それでも消す必要があるなら overrideReason にその理由を書く——渡すと通り、 「override で消した」事実と理由が日誌に残る（黙って通る経路は無い）。 消した事実は日誌に残る（archive id と直前のバイト数のみ。本文は残らない）。 id は manager_transcript の応答に載る（「この本文を読んだ archive id」）—— 読んだ直後にそこから渡せる。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "archiveId": {
+          "type": "string",
+          "description": "manager_transcript が出す archive id"
+        },
+        "summary": {
+          "type": "string",
+          "description": "なぜ消したかの一行要約（日誌に残る。本文は残らない）"
+        },
+        "overrideReason": {
+          "description": "走行中のマネージャーの退避を、それでも消す理由。渡さなければ拒否される（省略時は既定の拒否のまま）。渡すと「override で消した」として理由ごと日誌に残る。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "archiveId",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "archive_remove_many",
+    "description": "アーカイブ済みセッション生ログの本文を、絞り込んでまとめて消す（tombstone。 行そのものは残る——archive の一覧には引き続き出る。DELETE ではない）。 **既定は試算（dryRun を省略すると true）で、1件も消さない。** sessionIds / before / minStoredBytes のどれも渡さない呼びは断る—— 絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。 3つは AND で効く（全部渡せば全部に当たった行だけが対象になる）。 セッションの最新行・含有が証明できない行・墓標（まだ記憶へ蒸留していない区間）は 既定で守る。 走行中のマネージャーが使っている退避は一括では消せない（拒む。skipped.inUse に数える）—— ここに override は無い。それでも消す必要があるなら、その id を manager_transcript の 応答か、この道具の下見（dryRun）が返す対象一覧から見つけて、 archive_remove（単発）に overrideReason を渡し1件ずつ名指しで消すこと。 消した id は全部日誌に残る（塊に分けて書く。応答には先頭だけを出す）。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sessionIds": {
+          "description": "対象セッションの完全一致（配列は1件以上、各要素は1文字以上）。省略すると全セッションが対象になりうる",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "before": {
+          "description": "この時刻より前（ISO8601、排他。1文字以上）に積まれた行だけを対象にする（例 2026-09-15T00:00:00.000Z）",
+          "type": "string"
+        },
+        "minStoredBytes": {
+          "description": "storedBytes がこれ以上の行だけを対象にする（0以上の整数）",
+          "type": "number"
+        },
+        "summary": {
+          "type": "string",
+          "description": "なぜ消したかの一行要約（日誌に残る。本文は残らない。1文字以上）"
+        },
+        "dryRun": {
+          "description": "省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runner_list",
+    "description": "委譲先の器（runner のコンテナ）がいくつあり、それぞれで何本のマネージャーが走っているかを見る。manager_start の runnerId に渡す名前もここで分かる。 peer の行は、その器のマネージャーが Codex などのもう一方の provider に作業を頼めること（と名指しできるモデル）を示す。開いている peer が無い器には行が出ない。「不明」は名乗らない旧い runner で、頼めないとは限らない。 ここで数えている本数はデーモンの台帳から見た数である。新しいマネージャーをどこへ置くか（資源による自動配置）の判断が使う本数は runner 自身が /health で名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。 state は6値（connecting/connected/unreachable/unusable/lost/vacating）のまま出る。unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。vacating は「意図して空けている最中」（drain）で、黙ったのではなく空けると決めた側である——lost と同じく新しい委譲の置き先からは外れるが、走っていた仕事ごと黙ったわけではない。 各器の「この状態になった」（since）は、その器がいまの state に変わった時刻である（作成時刻・更新時刻ではない）。名簿（Registry）はインメモリで永続化するストアを持たないので、デーモンを再起動すると名簿ごと作り直され、全 runner の since が現在時刻へ巻き戻る——ずっと保持されている記録ではない。 器ごとの内訳に出るマネージャーの状態は manager_list と同じ字面である（running / running/セッション切断 / running/セッション不明 / done/背景処理待ち×N）。「背景処理待ち」は、そのマネージャーが自分で起こした背景処理や作業者の完了を待って畳んだだけで、手が空いたのではないという意味である（器が名乗った分だけ出る——この欄を送らない古い器では、待っていても出ない）。「セッション切断」は、このデーモンがその委譲の宛先をいま開けていないという観測であって、送っても届かないことの証明ではない（manager_send は resume を試みる）。仕事が終わったという意味でもない。 マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている。回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら起こし直すこと。⚠ 止める前に、その委譲がターンの途中かどうかを manager_stop の断り（未 push・未コミットの実物が出る）で確かめること。そのうえで manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で走る）。⚠ 失われるのは会話だけではない——そのターンで進行中だった作業も失われる。詳しい文面は manager_list に出る。一致している・材料が無い（プールを使っていない構成）ときはこの印自体が出ない。 デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。デーモンと runner は別々にデプロイされるので、同じ main から起こしていても別のコミットで走る窓がある——調べ物で「コードはこうなっている」と言う前に、いま走っている版がその主張と同じかを見ること。 版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。state が lost の器の版は黙る前に聞いた古い値である。鍵・プロファイル・MCP の登録の指紋（fingerprints: true）も、聞いていない（繋がっていないので聞いていない）／聞いたが失敗した／聞いて0件・無しだった、を同じ文言に潰さない——「確かめていない」と出たときは鍵が配られていない証拠にはならず、「確かめられなかった」と出たときは配り直しでは直らないことがある（器そのものに訊けなかった）。MCP の登録だけは、もう1つ「この runner は口を持たない（古い版）」という状態も持つ——こちらは runner を上げないと直らない。 「直近の押し込み」は、その器へプロファイル・環境変数・認証トークンを配る（`#connectTo`/繋ぎ直しのたびに必ず試みる）処理が、直近どうだったかである。state が connected でもこれが1つでも「失敗」なら、その種類はまだ古い値のままで走っている——manager_start する前にここを見て気づける。「失敗」は自分から諦めずに挑み直すので、次に見たときには直っていることがある（人間が手で繋ぎ直す必要は無い）。まだ一度も試みていない種類は行ごと出ない。 resources: true を渡すと器ごとの pids（プロセス数）の現在値/上限も出る。**pids の現在値/上限そのものは今も器の合計である**——何がその数を持っているかはこの2つの数字からは分からない。空き（上限 − 現在値）も、次に何本置けるかを意味しない——実測では vitest が1本立ち上がるだけで pids が +131 跳ねている。**対応している runner なら、その合計の内訳（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢）が別行で出る**——対応していない runner（古い版）ではこの内訳の行自体が出ない。pids が出ない器は、理由ごとに別の文言で出る——「確かめていない」（繋がっていないので聞いていない）・「訊いたが失敗した: 理由」（resources() が落ちた）・「確かめられない」（この runner は口を持たない古い版）・「訊けたが pids が読めない」（cgroup を持たない器）。どれも数字が出ない点は同じだが、疑う先（接続・器の RPC・runner の版・器の cgroup 構成）が違う。**そしてこの pids は、いまは配置の材料でもある**（点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」で、最後の項の分母には抱えている本数に加えて直近に起動が失敗した本数も足すので、落ちた直後の器は空いて見えても選ばれにくい）——pids が枯れた器は自動配置で選ばれにくくなる。**ただし断る材料ではない**——枯れていても置き先としては返るので、「置けない」と読まないこと。**加えて、新しいプロセスを起こせない器（pids 飽和）は、飽和していない器が1台でも居れば自動配置の候補から外れる**（点数を見ずに後ろへ回る）。**全台が飽和なら断らず、その中の最良を返す**（飽和は応答で分かる）。飽和の判定は構造化された値だけ——現在値が上限に達している（resources: true のときだけ分かる・一瞬の値）、直近5分に spawn が EAGAIN で失敗した、直近5分に fork が pids 上限で拒まれた委譲が終わった。後ろ2つは resources を付けなくても、connected の器の行に「pids 飽和: 新しい委譲を置けない（材料）」として出る。**この行が無いことは「飽和ではない」を意味しない**（材料が無いだけ）。manager_start で器を名指しした場合も断らず、飽和なら応答にこの行が付く。 resources: true を渡した結果、いずれかの器の pids が逼迫していれば（現在値が上限の80%以上）、その器に割り当てられた委譲のうち「畳む候補」（manager_list の ⚠ と同じ5条件——done・背景処理待ちの印なし・器がその印を送る版だと名乗っている・状態の判定が active・最後のターン終了から一定時間経過）を、デーモンが自動で manager_stop 相当（非 force）で畳む。**未 push の実装・未コミットの変更が1件でもある（または確認できなかった）委譲は畳まない**——安全側に倒す。何を畳んだ・見送ったかはこの応答の先頭に出て、日誌にも decision として残る（journal_read）。**新しい周期処理ではない**——この道具をこの引数で呼んだ、まさにこの1回の中だけで判定と実行が完結する。呼ばなければ何も起きない。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "fingerprints": {
+          "description": "鍵とプロファイルの指紋（sha256）まで出すか。既定は出さない——要らないものを文脈へ載せない側に倒してある。人間は Web UI の設定画面で常に見られるので、必要になったらここを true にして開くこと。",
+          "type": "boolean"
+        },
+        "resources": {
+          "description": "器ごとの pids（プロセス数）と、対応している runner ならその内訳（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢）を出すか。既定は出さない——このためにネットワーク往復を足さない側に倒してある。頼んだときだけ各 runner の /health を叩く。",
+          "type": "boolean"
+        },
+        "cursor": {
+          "description": "続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す（自分で組み立てない）。省略すると先頭から。",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+]
