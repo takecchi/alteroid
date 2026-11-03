@@ -1,7 +1,7 @@
 import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
 import { CODEX_TOOL_ITEM_TYPES, type CodexThreadItem } from './codex-protocol.js';
 
-export type CodexToolAudit =
+type CodexToolAudit =
   | { readonly outcome: 'success'; readonly record: AgentToolAuditRecord }
   | { readonly outcome: 'failure'; readonly record: AgentToolAuditFailureRecord }
   | { readonly outcome: 'declined' };

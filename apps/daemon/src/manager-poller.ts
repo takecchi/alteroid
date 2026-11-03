@@ -3,9 +3,9 @@ import { notePhase, reasonOf, writeStderrLine, type ManagerPool } from '@alteroi
 import { startPeriodicRun } from './periodic-runner.js';
 
 // `Registry#beat()` に相乗りしない: 生ログは最大 1.7MB で読みに行くコストが heartbeat と桁違いに重いため。
-export const MANAGER_POLL_INTERVAL_MS = 60_000;
+const MANAGER_POLL_INTERVAL_MS = 60_000;
 
-export interface ManagerPollerOptions {
+interface ManagerPollerOptions {
   managers: ManagerPool;
   intervalMs?: number;
   signal?: AbortSignal;

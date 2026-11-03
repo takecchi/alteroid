@@ -1,4 +1,4 @@
-export type IntegrationRouteVerdict =
+type IntegrationRouteVerdict =
   | { allowed: true; via: 'body-source' }
   | { allowed: true; via: 'path-source' }
   | { allowed: true; via: 'attachment-upload' }
@@ -29,9 +29,9 @@ export function judgeIntegrationRoute(
 const WINDOW_MS = 60_000;
 const PRUNE_THRESHOLD = 1024;
 
-export type RateVerdict = { ok: true } | { ok: false; retryAfterSeconds: number };
+type RateVerdict = { ok: true } | { ok: false; retryAfterSeconds: number };
 
-export interface FixedWindowRateLimiter {
+interface FixedWindowRateLimiter {
   consume(keyId: string, limitPerMinute: number): RateVerdict;
 }
 

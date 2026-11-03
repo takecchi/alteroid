@@ -7,7 +7,7 @@ import {
 } from './env-every-minutes.js';
 import { startPeriodicRun } from './periodic-runner.js';
 
-export const ATTACHMENT_PRUNE_EVERY_ENV = 'ALTEROID_ATTACHMENT_PRUNE_EVERY';
+const ATTACHMENT_PRUNE_EVERY_ENV = 'ALTEROID_ATTACHMENT_PRUNE_EVERY';
 
 export const DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES = 60;
 
@@ -17,7 +17,7 @@ export const MIN_ATTACHMENT_PRUNE_EVERY_MINUTES = 1;
 /** 控えの無い blob の掃除（バケットの列挙）は、前回から 24 時間経つまで呼ばない。 */
 export const ATTACHMENT_BLOB_SWEEP_EVERY_MS = 24 * 60 * 60_000;
 
-export type AttachmentPruneConfig = EveryMinutesConfig;
+type AttachmentPruneConfig = EveryMinutesConfig;
 
 export function readAttachmentPruneConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -37,7 +37,7 @@ export function reportAttachmentPruned(pruned: number): void {
   writeStderrLine(`alteroidd: 添付の期限掃除: 期限を過ぎた ${pruned} 件を消した\n`);
 }
 
-export interface AttachmentPrunerOptions {
+interface AttachmentPrunerOptions {
   readonly stores: Pick<Stores, 'attachments'>;
   readonly everyMinutes: number | null;
   readonly copiesDir?: string;
@@ -47,7 +47,7 @@ export interface AttachmentPrunerOptions {
   readonly onResult?: (pruned: number) => void;
 }
 
-export interface AttachmentPruner {
+interface AttachmentPruner {
   refresh(): Promise<number | null>;
   stop(): void;
 }

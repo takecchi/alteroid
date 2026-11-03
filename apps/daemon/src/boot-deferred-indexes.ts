@@ -28,7 +28,7 @@ export function describeDeferredIndexes(outcomes: readonly DeferredIndexOutcome[
   );
 }
 
-export interface DeferredIndexesReporter {
+interface DeferredIndexesReporter {
   /** 日誌が使えるようになったら渡す。それより前に結果が来ていれば、渡したときに書く */
   attach(journal: Pick<Stores['journal'], 'append'>): void;
   note(outcomes: readonly DeferredIndexOutcome[]): void;

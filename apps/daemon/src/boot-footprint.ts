@@ -91,7 +91,7 @@ function describeHeap(heap: HeapSnapshot): string {
   return `heap(limit=${mb(heap.heapSizeLimitBytes)} used=${mb(heap.heapUsedBytes)} rss=${mb(heap.rssBytes)})`;
 }
 
-export interface BootFootprintReport {
+interface BootFootprintReport {
   line: string;
   summary: string;
 }

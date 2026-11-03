@@ -8,22 +8,22 @@ import type {
 import { isCodexServerRequestMethod } from './codex-protocol.js';
 
 // 中立の AgentPermissionDecision に足さない: Codex の cancel（拒否してターンも止める）は allow / deny で表せないため、この層の中だけの入力にする
-export interface CodexApprovalInterrupt {
+interface CodexApprovalInterrupt {
   readonly behavior: 'interrupt';
 }
 
 export type CodexApprovalJudgement = AgentPermissionDecision | CodexApprovalInterrupt;
 
 // acceptForSession を返さない: alteroid の許可は今回の1件だけのため
-export type CodexMappedApprovalDecision = Exclude<
+type CodexMappedApprovalDecision = Exclude<
   CodexCommandApprovalDecision & CodexFileChangeApprovalDecision,
   'acceptForSession'
 >;
 
-export type CodexApprovalUnmappableReason =
+type CodexApprovalUnmappableReason =
   'unknown-request' | 'unknown-judgement' | 'allow-not-expressible' | 'no-decline-value';
 
-export type CodexApprovalMapping<M extends CodexServerRequestMethod = CodexServerRequestMethod> =
+type CodexApprovalMapping<M extends CodexServerRequestMethod = CodexServerRequestMethod> =
   | { readonly ok: true; readonly response: CodexServerRequestMap[M]['result'] }
   | { readonly ok: false; readonly reason: CodexApprovalUnmappableReason };
 

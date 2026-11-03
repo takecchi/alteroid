@@ -51,7 +51,7 @@ export type CodexAppServerClientError =
   | { kind: 'notification-handler-threw'; method: string; cause: unknown }
   | { kind: 'write-failed'; cause: unknown };
 
-export interface CodexAppServerClientOptions {
+interface CodexAppServerClientOptions {
   // line は先頭だけにする: 秘密が載りうるため
   onError?: (error: CodexAppServerClientError) => void;
 }
@@ -61,17 +61,17 @@ export interface CodexNotification {
   readonly params: unknown;
 }
 
-export interface CodexServerRequestContext<P> {
+interface CodexServerRequestContext<P> {
   readonly id: CodexRequestId;
   readonly params: P;
   readonly signal: AbortSignal;
 }
 
-export type CodexServerRequestHandler<M extends CodexServerRequestMethod> = (
+type CodexServerRequestHandler<M extends CodexServerRequestMethod> = (
   context: CodexServerRequestContext<CodexServerRequestMap[M]['params']>,
 ) => CodexServerRequestMap[M]['result'] | Promise<CodexServerRequestMap[M]['result']>;
 
-export interface CodexRequestOptions {
+interface CodexRequestOptions {
   signal?: AbortSignal;
 }
 

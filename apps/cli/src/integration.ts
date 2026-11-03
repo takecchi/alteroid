@@ -24,7 +24,7 @@ interface IntegrationKeyView {
   limits: { maxBodyBytes: number; ratePerMinute: number };
 }
 
-export type IntegrationKeyStatus = 'active' | 'revoked' | 'expired';
+type IntegrationKeyStatus = 'active' | 'revoked' | 'expired';
 
 export function integrationKeyStatus(
   key: Pick<IntegrationKeyView, 'revokedAt' | 'expiresAt'>,
@@ -100,7 +100,7 @@ export async function integrationListCommand(now: number = Date.now()): Promise<
   stdout.write(renderIntegrationList(keys, now, rowsUnreadable));
 }
 
-export function renderIntegrationList(
+function renderIntegrationList(
   keys: IntegrationKeyView[],
   now: number,
   rowsUnreadable?: RowsUnreadable,
@@ -138,7 +138,7 @@ export function renderIntegrationList(
   return `${unreadableNote}${lines.join('\n')}\n`;
 }
 
-export interface IntegrationCreateOptions {
+interface IntegrationCreateOptions {
   name: string;
   source: string;
   expires?: string;
@@ -194,11 +194,7 @@ export async function integrationCreateCommand(
 }
 
 // 値を書くのはここの1か所だけ: 値が2回出ると、端末のログから拾える場所が増えるため
-export function renderIntegrationCreated(
-  key: IntegrationKeyView,
-  value: string,
-  baseUrl: string,
-): string {
+function renderIntegrationCreated(key: IntegrationKeyView, value: string, baseUrl: string): string {
   const lines = [
     `連携の鍵を発行しました: ${key.name}（source=${key.source}）`,
     `  id: ${key.id}`,
@@ -222,7 +218,7 @@ export function renderIntegrationCreated(
   return `${lines.join('\n')}\n`;
 }
 
-export interface IntegrationRevokeOptions {
+interface IntegrationRevokeOptions {
   yes?: boolean;
   io?: ConfirmIo;
 }

@@ -37,10 +37,7 @@ function originOf(raw: string): string | null {
   }
 }
 
-export function describeConnectionFailure(
-  error: TypeError,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+function describeConnectionFailure(error: TypeError, env: NodeJS.ProcessEnv = process.env): string {
   const reason = reasonOf(causeCodeOf(error));
   const remote = (env[REMOTE_URL_ENV] ?? '').trim();
   if (remote.length > 0) {

@@ -15,15 +15,15 @@ import { redactErrorText } from './denial-input-head.js';
 export const CODEX_FILE_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="file"';
 
 // 15分は OpenAI のデバイスコードの寿命に合わせた見込みで、実測ではない。
-export const CODEX_DEVICE_LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
+const CODEX_DEVICE_LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
  * 開始（`initialize` と `account/login/start`）の応答を待つ上限（ms。#4765）。上の 15 分の計時は開始の応答の後で始まるので、ここに別の期限が要る。
  * 起動と2往復だけなので普段は数秒で済む。無期限にしない: 起きたまま答えない app-server でログインの開始が返らず、子プロセスと一時ディレクトリが押し直しのたびに溜まるため。
  */
-export const CODEX_DEVICE_LOGIN_START_TIMEOUT_MS = 60_000;
+const CODEX_DEVICE_LOGIN_START_TIMEOUT_MS = 60_000;
 
-export interface CodexDeviceLoginStarted {
+interface CodexDeviceLoginStarted {
   loginId: string;
   userCode: string;
   verificationUrl: string;
@@ -53,7 +53,7 @@ const defaultFs: CodexDeviceLoginFs = {
   rm: (path) => rm(path, { recursive: true, force: true }),
 };
 
-export interface CodexDeviceLoginOptions {
+interface CodexDeviceLoginOptions {
   env: NodeJS.ProcessEnv;
   spawnProcess?: AgentSpawnProcess;
   tmpRoot?: string;

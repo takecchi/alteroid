@@ -65,7 +65,7 @@ export async function mcpListCommand(): Promise<void> {
   stdout.write(renderMcpList(view));
 }
 
-export function renderMcpList(view: McpServersView): string {
+function renderMcpList(view: McpServersView): string {
   const names = Object.keys(view.mcpServers).sort();
   if (names.length === 0) {
     return 'MCP サーバの登録はありません。\n置くには: alteroid mcp edit\n';
@@ -206,7 +206,7 @@ export function parseMcpJson(text: string): McpServers {
   return servers as McpServers;
 }
 
-export function maskMcpServers(servers: McpServers): McpServers {
+function maskMcpServers(servers: McpServers): McpServers {
   const masked: McpServers = {};
   for (const [name, entry] of Object.entries(servers)) {
     const copy: McpServerEntry = { ...entry };
@@ -260,7 +260,7 @@ async function put(
 }
 
 // runner ごとの成否を畳まない: 配り損ねた runner を小さく出すと、古い登録のまま走り続けることに誰も気づけないため
-export function renderMcpUpdate(result: McpServersUpdateView, beforeNames: string[]): string {
+function renderMcpUpdate(result: McpServersUpdateView, beforeNames: string[]): string {
   const before = new Set(beforeNames);
   const after = new Set(result.names);
   const added = result.names.filter((name) => !before.has(name));

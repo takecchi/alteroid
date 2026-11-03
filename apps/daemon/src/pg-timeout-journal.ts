@@ -11,14 +11,14 @@ import type { PgTimeoutEvent } from '@alteroid/storage-pg';
 /** 日誌の `external_event` の source。`q` は `summary` に当たるので、引くときは文言（「以内に返らなかった」など）で引く。 */
 export const PG_TIMEOUT_JOURNAL_SOURCE = 'pg-timeout';
 
-export function describePgTimeout(event: PgTimeoutEvent): string {
+function describePgTimeout(event: PgTimeoutEvent): string {
   return event.kind === 'query'
     ? `PostgreSQL の問い合わせが ${String(event.timeoutMs)}ms 以内に返らなかったので、接続ごと切った（#4655）: ` +
         (event.sql ?? '（本文なし）')
     : `PostgreSQL へ ${String(event.timeoutMs)}ms 以内に繋げなかった（新しく繋ぐか、プールの空きを待つ間。#4655）`;
 }
 
-export interface PgTimeoutJournal {
+interface PgTimeoutJournal {
   /** 日誌が使えるようになったら渡す。それまで（マイグレーションの間）の打ち切りは標準エラーにだけ出す。 */
   attach(journal: Pick<Stores['journal'], 'append'>): void;
   note(event: PgTimeoutEvent): void;

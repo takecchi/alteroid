@@ -3,7 +3,7 @@ import { JournalFoldWindow, foldedRunText } from '@alteroid/core';
 // 上限を超えた新しいキーは畳まない: Map を無限に太らせないため。畳まない側へ倒すのは、書かなかった行は戻らないが、余分に書いた行は後から減らせるため。
 export const RUNNER_EVENT_JOURNAL_FOLD_MAX_KEYS = 256;
 
-export interface RunnerEventJournalFoldVerdict {
+interface RunnerEventJournalFoldVerdict {
   readonly write: boolean;
   // `foldedRunText` で作った要約の本文。先に書く（日誌は時系列で読まれ、次の1件目より後ろに出ると係り先がずれるため）。
   readonly summary?: string;
@@ -44,14 +44,14 @@ export interface RunnerEventJournalEntry {
   readonly summary: string;
 }
 
-export interface RunnerEventJournalDropped {
+interface RunnerEventJournalDropped {
   // `entry` = 1件目の行、`folded` = 畳んだ要約の行。
   readonly kind: 'entry' | 'folded';
   readonly summary: string;
   readonly error: unknown;
 }
 
-export interface RunnerEventJournalWriter {
+interface RunnerEventJournalWriter {
   write(key: string, summary: string): Promise<void>;
   flushAll(): Promise<void>;
 }

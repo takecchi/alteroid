@@ -16,7 +16,7 @@ export interface ConversationApproval {
   withdrawnReason?: string | null;
 }
 
-export interface ConversationApprovalUnreadable {
+interface ConversationApprovalUnreadable {
   id?: string;
   reason: string;
 }
@@ -28,7 +28,7 @@ export interface ConversationApprovalsRead {
   failure?: string;
 }
 
-export type TimelineItem<M> =
+type TimelineItem<M> =
   { kind: 'message'; message: M } | { kind: 'approval'; approval: ConversationApproval };
 
 export async function fetchConversationApprovals(
