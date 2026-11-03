@@ -102,7 +102,7 @@ export function syncTerminalMark(
  * 退避の時刻（runner の時計）と観測の時刻（デーモンの時計）を比べるときの余裕。時計のずれで、観測の往復の最中に作られて退避された作業ツリーへ
  * 印を付けないため。余裕の内側で付け損ねても、次の観測でまた判定する。
  */
-export const RESCUE_GONE_CLOCK_MARGIN_MS = 60_000;
+const RESCUE_GONE_CLOCK_MARGIN_MS = 60_000;
 
 /**
  * 退避した器が生きているうちに、全部を見た観測でその作業ツリーが無かった項目へ `goneAt` を付ける（#4985）。変わらなければ `null`。

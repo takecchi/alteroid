@@ -15,7 +15,7 @@ import type { ToolUseIdProbe } from './subagent-caller-gauge.js';
 import type { CloneToolName } from './clone-tools-names.js';
 import type { ToolContext } from './clone-tools-context.js';
 
-export const MISSING_ARG_HINT =
+const MISSING_ARG_HINT =
   '引数が届いていない（received undefined ＝ 呼び出しの JSON にその鍵が最初から無かった。道具が受け取ってから落としたのではない）。書いたつもりなら、まず呼び出しの生の形を疑うこと —— タグの接頭辞の脱落など、呼び出しの組み立てが壊れていると引数は静かに落ちる。決定的な対照: 引数の並びも長さも1文字も変えず、タグだけ正しく書いて1回送り直す。それで通れば、原因は呼び出しの形であって、この道具でも引数の中身でもない';
 
 // `.describe()` を貼り直す: `clone()` で説明が落ち、モデルが読む道具の意味が削れるため
@@ -96,8 +96,7 @@ export function text(body: string) {
 export type ToolText = ReturnType<typeof text>;
 
 // 一律に「完了した」と書かない: 記録そのものが行為の道具では「やり直すな」が嘘になり、やり直すべきときに止めてしまうため
-export type JournalFailureOutcome =
-  'act-completed' | 'act-not-performed' | 'act-partially-completed';
+type JournalFailureOutcome = 'act-completed' | 'act-not-performed' | 'act-partially-completed';
 
 // ガードで握り潰して成功として返さない: `isError: true` は依頼者がその場で気づける唯一の合図のため、跡を残してから投げ直す
 export class JournalNotRecordedError extends Error {
@@ -118,7 +117,7 @@ export class JournalNotRecordedError extends Error {
   }
 }
 
-export function formatJournalNotRecordedMessage(
+function formatJournalNotRecordedMessage(
   tool: CloneToolName,
   entry: JournalEntryInput,
   outcome: JournalFailureOutcome,

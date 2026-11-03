@@ -16,7 +16,7 @@ import {
 } from './tool-arg-checks.js';
 
 // `manager_send` / `journal_write` の任意引数 `closes` の上限: 1回の呼びで片付く行の数として十分で、引数が肥大しない大きさ
-export const CLOSES_MAX = 5;
+const CLOSES_MAX = 5;
 
 // 説明文は2道具で同じ1文にする（道具定義は毎ターン読み直されるため、長くしない）
 export const CLOSES_SCHEMA = z
@@ -41,7 +41,7 @@ export function describeClosesViolation(
 
 // `closes` の1件分: Task を done にする。`task_set_status` と同じ作法（遷移は `setStatus` が持ち、日誌は `taskStatusChangeEntry`）
 // `via`: どの呼びで閉じたか。日誌の grounds にそのまま書く
-export async function closeTaskBody(
+async function closeTaskBody(
   stores: Stores,
   id: string,
   reason: string,

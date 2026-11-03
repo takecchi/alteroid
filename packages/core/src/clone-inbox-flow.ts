@@ -42,7 +42,7 @@ export class CloneInboxFlow {
   }
 }
 
-export type InboxFlowByTypeCount = {
+type InboxFlowByTypeCount = {
   total: number;
   byType: { type: InboxEvent['type']; count: number }[];
 };

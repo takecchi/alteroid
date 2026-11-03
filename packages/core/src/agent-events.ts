@@ -54,7 +54,7 @@ export interface AgentTurnUsage {
   };
 }
 
-export interface AgentSessionStarted {
+interface AgentSessionStarted {
   type: 'session_started';
   sessionId: string;
   runtime: AgentRuntimeFacts;
@@ -66,28 +66,28 @@ export interface AgentSessionStarted {
 }
 
 // 別の枝にしない: 層が消費を積む前に読むか後に読むかを自分で決めており、揃えると日誌へ書く順が変わるため
-export interface AgentPermissionDeniedEvent {
+interface AgentPermissionDeniedEvent {
   type: 'permission_denied';
   via: 'live';
   denial: AgentPermissionDenial;
 }
 
-export interface AgentUsageNoticeEvent {
+interface AgentUsageNoticeEvent {
   type: 'usage_notice';
   notice: UsageLimitNotice;
 }
 
-export interface AgentRateLimitEvent {
+interface AgentRateLimitEvent {
   type: 'rate_limit';
   facts: RateLimitFacts;
 }
 
-export interface AgentTextDelta {
+interface AgentTextDelta {
   type: 'text_delta';
   text: string;
 }
 
-export interface AgentAssistantMessage {
+interface AgentAssistantMessage {
   type: 'assistant_message';
   parentToolUseId: string | null;
   blocks: readonly AgentContentBlock[];
@@ -95,7 +95,7 @@ export interface AgentAssistantMessage {
   errorCode?: string;
 }
 
-export interface AgentToolResult {
+interface AgentToolResult {
   type: 'tool_result';
   // 結果が答えた `tool_use` の id（#5086）。読めたものだけを並べ、読めなければ省く
   toolUseIds?: readonly string[];
@@ -122,12 +122,12 @@ export interface AgentDelegationNotified {
   outputFile?: string;
 }
 
-export interface AgentBackgroundTasksEvent {
+interface AgentBackgroundTasksEvent {
   type: 'background_tasks';
   tasks: readonly { id: string; taskType: string }[];
 }
 
-export interface AgentCompactionEvent {
+interface AgentCompactionEvent {
   type: 'compaction';
   trigger: 'manual' | 'auto';
   preTokens: number;
@@ -135,20 +135,20 @@ export interface AgentCompactionEvent {
 }
 
 // 要約（compaction）が始まった合図（#5086）。終わりは `compaction`。間の時間を要約に掛かった時間として測る
-export interface AgentCompactionStarted {
+interface AgentCompactionStarted {
   type: 'compaction_started';
 }
 
 // 生ログのミラー（SessionStore への書き込み）が、リトライの後に1束を捨てた合図。`sessionId` はそのログの会話。
 // 預け先の生ログは、その会話について欠けている（読み戻した控えが指す全文が載っているとは言えない）
-export interface AgentTranscriptMirrorFailed {
+interface AgentTranscriptMirrorFailed {
   type: 'transcript_mirror_failed';
   sessionId: string;
 }
 
 // 安全分類器などによる拒否の合図。`category` は provider が付けた分類（'cyber' 等）で、付かなければ null。
 // `fellBack` は降格して再試行した回（true）か、再試行せずに終わった回（false）か
-export interface AgentRefusalEvent {
+interface AgentRefusalEvent {
   type: 'refusal';
   category: string | null;
   explanation?: string;

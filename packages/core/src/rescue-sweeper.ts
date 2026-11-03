@@ -32,7 +32,7 @@ const RESCUE_REMOVAL_REASON_JOURNAL: Record<RescueRemovalReason, string> = {
   stopped: '委譲が stopped のまま猶予（14日）を過ぎたため',
 };
 
-export interface RescueSweeperDeps {
+interface RescueSweeperDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   stores: Pick<Stores, 'jobs' | 'attachments'>;
   now: () => number;
