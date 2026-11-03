@@ -7,7 +7,10 @@ import {
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { INTEGRATION_ATTACHMENT_NOTICE_BYTES, noteIntegrationAttachmentUsage } from './app.js';
+import {
+  INTEGRATION_ATTACHMENT_NOTICE_BYTES,
+  noteIntegrationAttachmentUsage,
+} from './app-shared.js';
 
 // 連携の鍵の添付の預かりが閾値を越えたら、日誌とクローンへ1回知らせる（#4005）。上げることは断らない。
 

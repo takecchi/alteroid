@@ -1,5 +1,9 @@
-import type { JournalEntry, JournalEntryInput, Stores } from '@alteroid/core';
+import { randomUUID } from 'node:crypto';
+
+import type { InboxEvent, JournalEntry, JournalEntryInput, Stores } from '@alteroid/core';
 import {
+  ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT,
+  DAEMON_ATTACHMENT_USAGE_SOURCE,
   UnreadableJournalEntryError,
   noteDroppedRecord,
   stripNul,
@@ -401,6 +405,57 @@ export function describePluginDelivery(
 ): string {
   const text = runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
   return text.length === 0 ? '配る先なし' : text;
+}
+
+/**
+ * 連携の鍵1本あたりの、期限内の添付の預かりがこれを越えたら知らせる（#4005。オーナーの判断で 1GiB から始める）。
+ * 既定値。実際の値は `ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES` で変えられる（`readIntegrationAttachmentNoticeBytes`）
+ */
+export const INTEGRATION_ATTACHMENT_NOTICE_BYTES = ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT;
+
+/**
+ * 連携の鍵が上げた添付で、その鍵の預かり（期限内）が閾値を越えたら、日誌とクローンへ1回知らせる（#4005）。
+ * 断らない: 枠を置かないのがオーナーの決定で、これは決め直すための材料と契機である。
+ * 状態を持たず「この1件で越えたか」だけを見る（上げる前は閾値未満・上げた後は閾値以上）: 越えるのは一度きりで、デーモンの再起動をまたいでも二度鳴らないため。
+ * 掃除で下がってからもう一度越えれば、もう一度鳴る。
+ */
+export async function noteIntegrationAttachmentUsage(
+  stores: Pick<Stores, 'attachments' | 'journal'>,
+  post: (event: InboxEvent) => void,
+  keyId: string,
+  addedBytes: number,
+  threshold: number = INTEGRATION_ATTACHMENT_NOTICE_BYTES,
+): Promise<void> {
+  let total: number;
+  try {
+    total = (await stores.attachments.usage()).byIntegrationKey[keyId]?.totalBytes ?? 0;
+  } catch (error) {
+    noteDroppedRecord('連携の鍵の添付の使用量', `keyId=${keyId}`, error);
+    return;
+  }
+  const before = total - addedBytes;
+  if (!(before < threshold && total >= threshold)) return;
+  const text =
+    `連携の鍵 ${keyId} が上げた添付の預かり（期限内）が ${String(total)} バイトになり、` +
+    `閾値 ${String(threshold)} バイトを越えた。上げることは断っていない。` +
+    '鍵ごとの内訳は GET /attachments の usage.byIntegrationKey で見られる。止めるなら、その鍵を失効させる。';
+  await appendJournalOrDrop(
+    stores,
+    {
+      type: 'decision',
+      decision: text,
+      grounds: `keyId=${keyId} totalBytes=${String(total)} threshold=${String(threshold)}`,
+    },
+    '連携の鍵の添付の閾値の知らせ',
+    `keyId=${keyId}`,
+  );
+  post({
+    type: 'external',
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    source: DAEMON_ATTACHMENT_USAGE_SOURCE,
+    payload: { text, keyId, totalBytes: total },
+  });
 }
 
 // 「空」は NUL を落とした後で見る: ストアは NUL を落とすので、落とす前の長さで見ると NUL だけの値が空のまま届く。`nonBlankString`（空白だけも弾く）とは別物。
