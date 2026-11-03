@@ -251,7 +251,6 @@ import { credentialsRoutes } from './app-routes-credentials.js';
 import { managersRoutes } from './app-routes-managers.js';
 
 export { humanActionOf } from './app-shared.js';
-export { MANAGER_LIST_TEXT_HEAD } from './app-routes-managers.js';
 // 外から叩かせるなら境界は手前（リバースプロキシ・トンネル・認証）に置く: 能力側で絞らず実行環境の境界で守る（north_star 禁止2）。
 export interface AppDeps {
   clone: CloneHost;

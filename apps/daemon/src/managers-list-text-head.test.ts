@@ -2,7 +2,8 @@ import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@al
 import type { CloneHost, Job, Stores } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { createApp, MANAGER_LIST_TEXT_HEAD } from './app.js';
+import { MANAGER_LIST_TEXT_HEAD } from './app-routes-managers.js';
+import { createApp } from './app.js';
 
 // GET /managers（一覧）は依頼文と報告を先頭だけに切り、全文は GET /managers/:id で返す（#5089）
 
