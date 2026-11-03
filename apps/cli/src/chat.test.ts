@@ -2517,6 +2517,27 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(read()).toContain('使い方: /answers');
   });
 
+  // 語の途中に引用符がある入力の割れ方。回答として送られた語（送られなければ null。使い方の誤りで止まった）を固定する。
+  it.each([
+    { input: '/answers 1 q2="a b"', sent: null },
+    { input: '/answers 1 "a"b', sent: null },
+    { input: '/answers 1 "abc', sent: '"abc' },
+  ])('語の途中の引用符: $input', async ({ input, sent }) => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(input, ...slashArgs(client, listedApprovals(['approval-1'])));
+
+    const answerCalls = calls.filter((call) => call.route === 'POST /approvals/answer');
+    if (sent === null) {
+      expect(answerCalls).toEqual([]);
+      expect(read()).toContain('使い方: /answers');
+    } else {
+      const body = (answerCalls[0]?.args as { json: AnswersRequest }).json.answers;
+      expect(body).toEqual([{ id: 'approval-1', answer: sent }]);
+    }
+  });
+
   it('/help に /answers が載っている', async () => {
     const read = captureStdout();
     const { client } = stubClient();
