@@ -5,18 +5,32 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type RefObject,
+  type SetStateAction,
 } from 'react';
+import type { useNavigate } from 'react-router';
 
-import { useConversationApprovals, useMarkConversationRead } from '@alteroid/swr';
+import {
+  useConversationApprovals,
+  useMarkConversationRead,
+  type useDeleteConversation,
+  type useEndConversation,
+  type useInterruptClone,
+} from '@alteroid/swr';
 import {
   chatDraftEpoch,
   describeApprovalLeftover,
   loadPendingAttachmentsNote,
+  newClientMessageId,
   saveChatDraft,
   savePendingAttachmentsNote,
 } from '@alteroid/logic';
-import type { ConversationDetail, PendingAttachmentsNote } from '@alteroid/logic';
+import type {
+  ConversationDeleteResult,
+  ConversationDetail,
+  PendingAttachmentsNote,
+} from '@alteroid/logic';
 
 import { useIsMounted, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import {
@@ -29,7 +43,10 @@ import { usePageVisible } from '~/lib/use-page-visible';
 import {
   sizedOf,
   applyFocusIntent,
+  describeCloneInterruptOutcome,
   isSettledApproval,
+  type EditDraft,
+  type Line,
   type PendingAttachment,
   type FocusIntent,
 } from './chat-lines';
@@ -253,4 +270,337 @@ export function useFocusIntentReturn(
     const done = applyFocusIntent(intent);
     if (done) focusIntentRef.current = undefined;
   });
+}
+
+export function useConversationActionStates() {
+  const [interrupting, setInterrupting] = useState<{ conversationId: string } | undefined>(
+    undefined,
+  );
+  // 押した時点の会話 id を持ち、描画の時点の shownId と突き合わせる: shownIdRef は受動効果の中でしか進まず、切り替え直後の窓で別の会話に前の会話の「止めた」を出していた
+  const [interruptNotice, setInterruptNotice] = useState<
+    { conversationId: string; text: string } | undefined
+  >(undefined);
+  // 送信経路の failures へ合流させず、会話 id ごとの Map にもしない: 「呼べた」と「呼べなかった」で切り替え後の扱いが割れるため、interruptNotice と同じ「切り替えたら消える」で揃える
+  const [interruptFailure, setInterruptFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
+  const [endingConversation, setEndingConversation] = useState<
+    { conversationId: string } | undefined
+  >(undefined);
+  const [endNotice, setEndNotice] = useState<{ fromId: string } | undefined>(undefined);
+  const [endFailure, setEndFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
+  // deleteResult は消えたあとの /chat に残す（トーストにしない）: 消せなかったものと後始末の失敗は、読んで判断する材料のため
+  const [deletingConversation, setDeletingConversation] = useState<
+    { conversationId: string } | undefined
+  >(undefined);
+  const [deleteResult, setDeleteResult] = useState<
+    { fromId: string; result: ConversationDeleteResult } | undefined
+  >(undefined);
+  const [deleteFailure, setDeleteFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
+  return {
+    interrupting,
+    setInterrupting,
+    interruptNotice,
+    setInterruptNotice,
+    interruptFailure,
+    setInterruptFailure,
+    endingConversation,
+    setEndingConversation,
+    endNotice,
+    setEndNotice,
+    endFailure,
+    setEndFailure,
+    deletingConversation,
+    setDeletingConversation,
+    deleteResult,
+    setDeleteResult,
+    deleteFailure,
+    setDeleteFailure,
+  };
+}
+
+type ConversationActionStates = ReturnType<typeof useConversationActionStates>;
+
+// chat.tsx の Stream のうち、止める・終える・消すが読む形だけ
+interface RunningStream {
+  controller: AbortController;
+  id: string | undefined;
+  turn?: {
+    clientMessageId: string;
+    text: string;
+    lineKey: string;
+    supersedes: string | undefined;
+    attachments: PendingAttachment[];
+  };
+  resumeTarget?: string | null;
+}
+
+interface ConversationActionHandlersDeps<Retry> {
+  setInterrupting: ConversationActionStates['setInterrupting'];
+  setInterruptNotice: ConversationActionStates['setInterruptNotice'];
+  setInterruptFailure: ConversationActionStates['setInterruptFailure'];
+  setEndingConversation: ConversationActionStates['setEndingConversation'];
+  setEndNotice: ConversationActionStates['setEndNotice'];
+  setEndFailure: ConversationActionStates['setEndFailure'];
+  setDeletingConversation: ConversationActionStates['setDeletingConversation'];
+  setDeleteResult: ConversationActionStates['setDeleteResult'];
+  setDeleteFailure: ConversationActionStates['setDeleteFailure'];
+  streamRef: RefObject<RunningStream | undefined>;
+  followUpIdsRef: RefObject<Map<string, Set<string>>>;
+  replayControllerRef: RefObject<AbortController | undefined>;
+  shownIdRef: RefObject<string | undefined>;
+  focusIntentRef: RefObject<FocusIntent | undefined>;
+  allRef: RefObject<Line[]>;
+  editOriginals: RefObject<Map<string, Line>>;
+  pendingEditSave: RefObject<{ drafts: ReadonlyMap<string, EditDraft>; epoch: number } | null>;
+  pendingDraftSave: ReturnType<typeof useChatDraftAutosave>['pendingDraftSave'];
+  deletedConversationIds: ReturnType<typeof useChatDraftAutosave>['deletedConversationIds'];
+  giveBack: (
+    key: string | undefined,
+    text: string,
+    lineKey: string,
+    supersedes: string | undefined,
+    attachments: PendingAttachment[] | undefined,
+    clientMessageId: string,
+    unconfirmed?: true,
+    conversationId?: string,
+  ) => void;
+  dropEditDraft: (key: string) => void;
+  setEditingKey: Dispatch<SetStateAction<string | undefined>>;
+  setRetries: Dispatch<SetStateAction<Map<string | undefined, Retry>>>;
+  setPending: Dispatch<SetStateAction<PendingAttachment[]>>;
+  setAttachmentDrafts: ReturnType<typeof useChatAttachmentHolding>['setAttachmentDrafts'];
+  interruptClone: ReturnType<typeof useInterruptClone>;
+  endConversation: ReturnType<typeof useEndConversation>;
+  deleteConversation: ReturnType<typeof useDeleteConversation>;
+  navigate: ReturnType<typeof useNavigate>;
+}
+
+export function useConversationActionHandlers<Retry>(deps: ConversationActionHandlersDeps<Retry>) {
+  const {
+    setInterrupting,
+    setInterruptNotice,
+    setInterruptFailure,
+    setEndingConversation,
+    setEndNotice,
+    setEndFailure,
+    setDeletingConversation,
+    setDeleteResult,
+    setDeleteFailure,
+    streamRef,
+    followUpIdsRef,
+    replayControllerRef,
+    shownIdRef,
+    focusIntentRef,
+    allRef,
+    editOriginals,
+    pendingEditSave,
+    pendingDraftSave,
+    deletedConversationIds,
+    giveBack,
+    dropEditDraft,
+    setEditingKey,
+    setRetries,
+    setPending,
+    setAttachmentDrafts,
+    interruptClone,
+    endConversation,
+    deleteConversation,
+    navigate,
+  } = deps;
+  // 押した会話 id を呼び出し元（その render の shownId）から直接受ける: shownIdRef は受動効果の中でしか進まず、切り替え直後の窓で別の会話に前の会話の「止めた」が出ていた。
+  // ここでは出す/出さないを判断せず、描画側が shownId と突き合わせる。リクエスト自体は切り替えても最後まで送る（変えるのは表示だけ）。
+  // failures には触れない: 「止める」は送れていない発言を何も変えない
+  const handleInterrupt = useCallback(
+    async (pressedConversationId: string) => {
+      setInterrupting({ conversationId: pressedConversationId });
+      setInterruptNotice(undefined);
+      setInterruptFailure(undefined);
+      // 対象を省かない: 省くと、順番待ちの間に押しても先客のターンを止めてしまう。決められないときは呼ばずに言う
+      const running = streamRef.current;
+      const here =
+        running !== undefined && running.id === pressedConversationId ? running : undefined;
+      const turn = here?.turn;
+      const resumeTarget = here?.resumeTarget;
+      if (resumeTarget === null) {
+        setInterruptNotice({
+          conversationId: pressedConversationId,
+          text: '止める対象が分からないので、何も止めていません（走っているのが、この会話の別の起点のターンかもしれません）。',
+        });
+        setInterrupting(undefined);
+        return;
+      }
+      const followUpTarget =
+        turn === undefined && here === undefined
+          ? followUpIdsRef.current.get(pressedConversationId)?.values().next().value
+          : undefined;
+      const targetId = turn?.clientMessageId ?? resumeTarget ?? followUpTarget;
+      try {
+        const outcome = await interruptClone(
+          targetId === undefined
+            ? undefined
+            : { conversationId: pressedConversationId, clientMessageId: targetId },
+        );
+        const withdrawnReplay =
+          outcome === 'withdrawn' &&
+          turn === undefined &&
+          (here !== undefined || followUpTarget !== undefined);
+        if (outcome === 'withdrawn' && turn === undefined && targetId !== undefined) {
+          const waiting = followUpIdsRef.current.get(pressedConversationId);
+          if (waiting?.delete(targetId) === true && waiting.size === 0) {
+            replayControllerRef.current?.abort();
+          }
+        }
+        if (outcome === 'withdrawn' && turn !== undefined && running !== undefined) {
+          // 取り下げた発言の SSE には終端が流れないので閉じる。文は新しい id で積み直す: 同じ id で送ると重複扱いで配られない
+          running.controller.abort();
+          giveBack(
+            pressedConversationId,
+            turn.text,
+            turn.lineKey,
+            turn.supersedes,
+            turn.attachments,
+            newClientMessageId(),
+          );
+        } else if (withdrawnReplay) {
+          here?.controller.abort();
+        }
+        setInterruptNotice({
+          conversationId: pressedConversationId,
+          text: withdrawnReplay
+            ? '順番待ちだった発言を取り下げました（送っていません）。本文は手元に無いので、入力欄へは戻していません。先客のターンには触れていません。'
+            : describeCloneInterruptOutcome(outcome),
+        });
+      } catch (caught) {
+        setInterruptFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setInterrupting(undefined);
+      }
+    },
+    [
+      interruptClone,
+      giveBack,
+      setInterrupting,
+      setInterruptNotice,
+      setInterruptFailure,
+      streamRef,
+      followUpIdsRef,
+      replayControllerRef,
+    ],
+  );
+
+  const handleEndConversation = useCallback(
+    async (pressedConversationId: string) => {
+      focusIntentRef.current = { kind: 'end' };
+      setEndingConversation({ conversationId: pressedConversationId });
+      setEndFailure(undefined);
+      setEndNotice(undefined);
+      try {
+        await endConversation(pressedConversationId);
+        if (shownIdRef.current === pressedConversationId) {
+          setEndNotice({ fromId: pressedConversationId });
+          navigate('/chat');
+        }
+      } catch (caught) {
+        setEndFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setEndingConversation(undefined);
+      }
+    },
+    [
+      endConversation,
+      navigate,
+      focusIntentRef,
+      setEndingConversation,
+      setEndFailure,
+      setEndNotice,
+      shownIdRef,
+    ],
+  );
+
+  const handleDeleteConversation = useCallback(
+    async (pressedConversationId: string) => {
+      setDeletingConversation({ conversationId: pressedConversationId });
+      setDeleteFailure(undefined);
+      setDeleteResult(undefined);
+      setEndNotice(undefined);
+      try {
+        const result = await deleteConversation(pressedConversationId);
+        deletedConversationIds.current.add(pressedConversationId);
+        if (pendingDraftSave.current?.id === pressedConversationId) {
+          pendingDraftSave.current = null;
+        }
+        // 添えかけ・送れなかった発言の控えも捨てる: 残すと、消した会話のための確認が出続け、控えが書き戻される
+        setAttachmentDrafts((previous) => {
+          if (!previous.has(pressedConversationId)) return previous;
+          const next = new Map(previous);
+          next.delete(pressedConversationId);
+          return next;
+        });
+        setRetries((previous) => {
+          if (!previous.has(pressedConversationId)) return previous;
+          const next = new Map(previous);
+          next.delete(pressedConversationId);
+          return next;
+        });
+        savePendingAttachmentsNote(pressedConversationId, undefined);
+        // その会話の発言を編集していた書きかけも捨てる: 鍵は発言 id で会話 id を持たないので、その会話の行（表示中の行と、編集を開いた時点の写し）から集める。
+        // 残すと、消した会話の本文がどこからも開けないまま端末に平文で残る（送信前の下書きを消す理由と同じ）
+        const editKeys = new Set<string>();
+        for (const line of allRef.current)
+          if (line.of === pressedConversationId) editKeys.add(line.key);
+        for (const [key, line] of editOriginals.current) {
+          if (line.of === pressedConversationId) editKeys.add(key);
+        }
+        if (editKeys.size > 0) {
+          const waiting = pendingEditSave.current;
+          if (waiting !== null && [...editKeys].some((key) => waiting.drafts.has(key))) {
+            const kept = new Map(waiting.drafts);
+            for (const key of editKeys) kept.delete(key);
+            pendingEditSave.current = { ...waiting, drafts: kept };
+          }
+          for (const key of editKeys) {
+            dropEditDraft(key);
+            editOriginals.current.delete(key);
+          }
+          setEditingKey((current) =>
+            current !== undefined && editKeys.has(current) ? undefined : current,
+          );
+        }
+        if (shownIdRef.current === pressedConversationId) {
+          setPending([]);
+          setDeleteResult({ fromId: pressedConversationId, result });
+          navigate('/chat');
+        }
+      } catch (caught) {
+        setDeleteFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setDeletingConversation(undefined);
+      }
+    },
+    [
+      deleteConversation,
+      navigate,
+      dropEditDraft,
+      allRef,
+      deletedConversationIds,
+      pendingDraftSave,
+      setAttachmentDrafts,
+      setDeletingConversation,
+      setDeleteFailure,
+      setDeleteResult,
+      setEndNotice,
+      setRetries,
+      editOriginals,
+      pendingEditSave,
+      setEditingKey,
+      shownIdRef,
+      setPending,
+    ],
+  );
+  return { handleInterrupt, handleEndConversation, handleDeleteConversation };
 }
