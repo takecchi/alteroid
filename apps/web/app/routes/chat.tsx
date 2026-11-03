@@ -24,7 +24,6 @@ import {
   useInterruptClone,
   useRecordOwnMessage,
   useConversation,
-  useConversationApprovals,
   findConversationByClientMessageId,
   getChatStream,
   postChat,
@@ -42,7 +41,6 @@ import {
   formatDateTime,
   isPreviewableImage,
   chatDraftEpoch,
-  describeApprovalLeftover,
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
@@ -63,14 +61,10 @@ import {
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import { errorText } from '~/lib/error-text';
-import { LeaveGuardScope, useIsMounted } from '~/lib/leave-guard';
+import { LeaveGuardScope } from '~/lib/leave-guard';
 import { useFollowScroll } from '~/lib/use-follow-scroll';
 import { useLatest } from '~/lib/use-latest';
-import {
-  useApprovalDraftState,
-  usePersistApprovalDrafts,
-  usePersistApprovalLeftoverSources,
-} from '~/lib/use-approval-draft-state';
+import { useApprovalDraftState } from '~/lib/use-approval-draft-state';
 
 import {
   sizedOf,
@@ -114,6 +108,7 @@ import { ConversationList } from './chat-conversation-list';
 import {
   DRAFT_SAVE_DELAY_MS,
   useChatAttachmentHolding,
+  useChatConversationApprovals,
   useChatDraftAutosave,
   useFocusIntentReturn,
   useMarkShownConversationRead,
@@ -268,7 +263,7 @@ export function ChatPane({
   const [sending, setSending] = useState(false);
   // 承認カードの下書き・残った下書きの控えの持ち方（epoch・畳み方）は承認の画面と同じ `useApprovalDraftState` が持つ
   const approvalDraftState = useApprovalDraftState();
-  const { drafts: approvalDrafts, leftoverSources } = approvalDraftState;
+  const { drafts: approvalDrafts } = approvalDraftState;
   /**
    * 回答を送っている途中の承認 id。カードの送信中の印（busy・sendingRef）はカードの中にしか無く、
    * 会話を移るとカードごと作り直されて消える。戻ったときに同じ承認へ2本目を送らないよう、画面の側でも持つ（承認の画面の sendingIds と同じ役目）。
@@ -492,48 +487,8 @@ export function ChatPane({
     shownId !== undefined &&
     !startedHere.has(shownId);
 
-  // exchange だけでは復元できない: ask_human の日誌エントリは conversationId を持たず窓にも入らず、質問・回答は承認の台帳にしか無い
-  const conversationApprovals = useConversationApprovals(shownId ?? null);
-  // 消すのは、この会話の承認の一覧を読めていて決着済みと分かった id だけ: 読めていないときやほかの会話の書きかけは残す
-  const settledApprovalIds = useMemo(
-    () =>
-      new Set(
-        (conversationApprovals.data?.approvals ?? [])
-          .filter(isSettledApproval)
-          .map((approval) => approval.id),
-      ),
-    [conversationApprovals.data],
-  );
-  const keepApprovalDraft = useCallback(
-    (id: string) => !settledApprovalIds.has(id) || id in leftoverSources,
-    [settledApprovalIds, leftoverSources],
-  );
-  usePersistApprovalDrafts(approvalDraftState, keepApprovalDraft);
-  usePersistApprovalLeftoverSources(leftoverSources, approvalDrafts);
-  const leftovers = useMemo(
-    () =>
-      Object.entries(leftoverSources)
-        .filter(([id]) => settledApprovalIds.has(id))
-        .map(([id, source]) => ({
-          id,
-          source,
-          text: describeApprovalLeftover(source, approvalDrafts, id),
-        }))
-        .filter((entry) => entry.text !== ''),
-    [leftoverSources, settledApprovalIds, approvalDrafts],
-  );
-  const discardLeftover = approvalDraftState.discard;
-  const refetchApprovalsRef = useRef<() => void>(() => {});
-  const mountedRef = useIsMounted();
-  refetchApprovalsRef.current = () => {
-    if (!mountedRef.current) return;
-    try {
-      // 失敗は conversationApprovals.error に出る（下の ErrorNote）ので、ここでは未処理にしないだけ。
-      void Promise.resolve(conversationApprovals.mutate()).catch(() => undefined);
-    } catch {
-      // 同上。
-    }
-  };
+  const { conversationApprovals, leftovers, discardLeftover, refetchApprovalsRef } =
+    useChatConversationApprovals(shownId, approvalDraftState);
 
   useMarkShownConversationRead(shownId, history.data);
 
@@ -1037,166 +992,169 @@ export function ChatPane({
   );
 
   // send と再生が同じ分岐を共有する: 別々に書くと、ask_human の文面など履歴由来の行と1文字でも違えた瞬間に pendingOwnLines の照合が当たらず二重に出る
-  const createStreamWriter = useCallback((stream: Stream, controller: AbortController) => {
-    // owns() と stopped() を writable() に混ぜない扱い: 「止まったか」と混ぜると、受信をやめたときに進行中の合図を片付ける処理まで飛ばして、本文に合図が残り続ける。
-    // owns() は shownIdRef と controller の同期が1つの effect に乗り続ける前提が崩れたときの保険（いまは stopped() が締めるので単独の効きは測れない）
-    const owns = () => stream.id === shownIdRef.current;
-    const stopped = () => controller.signal.aborted;
-    const writable = () => owns() && !stopped();
+  const createStreamWriter = useCallback(
+    (stream: Stream, controller: AbortController) => {
+      // owns() と stopped() を writable() に混ぜない扱い: 「止まったか」と混ぜると、受信をやめたときに進行中の合図を片付ける処理まで飛ばして、本文に合図が残り続ける。
+      // owns() は shownIdRef と controller の同期が1つの effect に乗り続ける前提が崩れたときの保険（いまは stopped() が締めるので単独の効きは測れない）
+      const owns = () => stream.id === shownIdRef.current;
+      const stopped = () => controller.signal.aborted;
+      const writable = () => owns() && !stopped();
 
-    let replyKey: string | undefined;
-    const ownReplyKeys = new Set<string>();
-    let replyCount = 0;
-    const replyGroup = `g-${Date.now()}-${(replyGroupSeq += 1)}`;
-    const markFailedTurn = (kind: 'failed' | 'held') => {
-      const baseline = owns()
-        ? historyLinesRef.current.filter((line) => line.turnFailure === kind).length
-        : undefined;
-      setFailedTurns((previous) =>
-        previous.has(replyGroup)
-          ? previous
-          : new Map(previous).set(replyGroup, { of: stream.id, kind, baseline }),
-      );
-    };
-    const endReply = () => {
-      replyKey = undefined;
-    };
-    const dropTransients = (previous: Line[]) =>
-      previous.filter((line) => !(line.transient === true && line.of === stream.id));
-    // 書き先の key は呼んだ時点で取る: 更新関数の中で replyKey を読むと、同じ塊で届いた tool が先に endReply して前の行の末尾が落ち、日誌の本文と食い違った行が末尾に居座る
-    const append = (chunk: string) => {
-      if (!writable()) return;
-      const key = replyKey;
-      setLines((previous) => {
-        const index = previous.findIndex((line) => line.key === key);
-        if (index === -1) return previous;
-        const next = [...previous];
-        const current = next[index];
-        if (current === undefined) return previous;
-        next[index] = { ...current, text: current.text + chunk, transient: false };
-        return next;
-      });
-    };
+      let replyKey: string | undefined;
+      const ownReplyKeys = new Set<string>();
+      let replyCount = 0;
+      const replyGroup = `g-${Date.now()}-${(replyGroupSeq += 1)}`;
+      const markFailedTurn = (kind: 'failed' | 'held') => {
+        const baseline = owns()
+          ? historyLinesRef.current.filter((line) => line.turnFailure === kind).length
+          : undefined;
+        setFailedTurns((previous) =>
+          previous.has(replyGroup)
+            ? previous
+            : new Map(previous).set(replyGroup, { of: stream.id, kind, baseline }),
+        );
+      };
+      const endReply = () => {
+        replyKey = undefined;
+      };
+      const dropTransients = (previous: Line[]) =>
+        previous.filter((line) => !(line.transient === true && line.of === stream.id));
+      // 書き先の key は呼んだ時点で取る: 更新関数の中で replyKey を読むと、同じ塊で届いた tool が先に endReply して前の行の末尾が落ち、日誌の本文と食い違った行が末尾に居座る
+      const append = (chunk: string) => {
+        if (!writable()) return;
+        const key = replyKey;
+        setLines((previous) => {
+          const index = previous.findIndex((line) => line.key === key);
+          if (index === -1) return previous;
+          const next = [...previous];
+          const current = next[index];
+          if (current === undefined) return previous;
+          next[index] = { ...current, text: current.text + chunk, transient: false };
+          return next;
+        });
+      };
 
-    const setTransient = (text: string) => {
-      if (!writable()) return;
-      setLines((previous) => {
-        const withoutTransient = previous.filter((line) => line.transient !== true);
-        return [
-          ...withoutTransient,
-          { key: `t-${Date.now()}`, role: 'system', text, transient: true, of: stream.id },
-        ];
-      });
-    };
-    const settleReply = () => {
-      if (stream.id === undefined) return;
-      const unfinished = unfinishedReplyRef.current.get(stream.id);
-      if (unfinished === undefined) return;
-      for (const key of ownReplyKeys) unfinished.delete(key);
-      if (unfinished.size === 0) unfinishedReplyRef.current.delete(stream.id);
-    };
-    const startReply = () => {
-      if (replyKey !== undefined) return;
-      if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
-      replyCount += 1;
-      const key = `c-${Date.now()}-${replyCount}`;
-      replyKey = key;
-      ownReplyKeys.add(key);
-      if (stream.id !== undefined) {
-        const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
-        unfinished.add(key);
-        unfinishedReplyRef.current.set(stream.id, unfinished);
-      }
-      setActiveReplyKeys((keys) => new Set(keys).add(key));
-      setLines((previous) => [
-        ...dropTransients(previous),
-        { key, role: 'clone', text: '', of: stream.id, replyGroup },
-      ]);
-    };
-    const apply = (event: ChatStreamEvent) => {
-      switch (event.type) {
-        // 返信の行をここで分ける:デーモンは人間の発言を記録するとき、それまでの返信を先に日誌へ書く。続きを同じ行へ足すと、その発言より上に出るうえ、日誌の本文とも合わない
-        case 'queued':
-          endReply();
-          setTransient('順番を待っている…');
-          break;
-        case 'thinking':
-          setTransient('考えている…');
-          break;
-        case 'tool':
-          endReply();
-          setTransient(`${event.tool} を実行中…`);
-          break;
-        case 'text':
-          startReply();
-          append(event.text);
-          break;
-        case 'attachments': {
-          startReply();
-          const key = replyKey;
-          if (!writable() || key === undefined) break;
-          setLines((previous) =>
-            previous.map((line) =>
-              line.key === key
-                ? { ...line, attachments: [...(line.attachments ?? []), ...event.attachments] }
-                : line,
-            ),
-          );
-          break;
+      const setTransient = (text: string) => {
+        if (!writable()) return;
+        setLines((previous) => {
+          const withoutTransient = previous.filter((line) => line.transient !== true);
+          return [
+            ...withoutTransient,
+            { key: `t-${Date.now()}`, role: 'system', text, transient: true, of: stream.id },
+          ];
+        });
+      };
+      const settleReply = () => {
+        if (stream.id === undefined) return;
+        const unfinished = unfinishedReplyRef.current.get(stream.id);
+        if (unfinished === undefined) return;
+        for (const key of ownReplyKeys) unfinished.delete(key);
+        if (unfinished.size === 0) unfinishedReplyRef.current.delete(stream.id);
+      };
+      const startReply = () => {
+        if (replyKey !== undefined) return;
+        if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
+        replyCount += 1;
+        const key = `c-${Date.now()}-${replyCount}`;
+        replyKey = key;
+        ownReplyKeys.add(key);
+        if (stream.id !== undefined) {
+          const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
+          unfinished.add(key);
+          unfinishedReplyRef.current.set(stream.id, unfinished);
         }
-        case 'ask_human':
-          endReply();
-          setLines((previous) => [
-            ...previous.filter((line) => line.transient !== true),
-            {
-              key: `a-${event.approvalId}`,
-              role: 'system',
-              of: stream.id,
-              text: event.question,
-              approval: approvalFromAskEvent(event.approvalId, event.question),
-            },
-          ]);
-          if (owns()) refetchApprovalsRef.current();
-          break;
-        // setTransient にしない: done と finally が transient な行を残らず消すが、枠が閉じたことは人間があとから追うべき事実。
-        // 文言は要約しない: event.message をそのまま出さないと usage-limits.ts が約束している「人間が検索できる形」が崩れる。保持されていることを添えないと、人間が「届いていない」と誤解して送り直す
-        case 'usage_limited':
-          endReply();
-          markFailedTurn('held');
-          setLines((previous) => [
-            ...previous.filter((line) => line.transient !== true),
-            {
-              key: `u-${Date.now()}`,
-              role: 'system',
-              of: stream.id,
-              replyGroup,
-              text: `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
-            },
-          ]);
-          break;
-        // writable() で締めない: 一度しか起きない終端の事実で、弾くと人間に一度も見せないまま消える。
-        // 代わりに stream.id をキーに積み、出すかどうかは描画の時点の shownId で引く（切り替え直後の窓に届いた A の error が B の画面に出ないように）
-        case 'error':
-          settleReply();
-          markFailedTurn('failed');
-          setFailures((prev) =>
-            new Map(prev).set(
-              stream.id,
-              new TurnFailedError(event.message, event.kind, replyGroup),
-            ),
-          );
-          if (owns()) refetchApprovalsRef.current();
-          break;
-        case 'done':
-          settleReply();
-          if (owns()) setLiveNote({ id: stream.id, text: '返信が終わった' });
-          setLines((previous) => previous.filter((line) => line.transient !== true));
-          if (owns()) refetchApprovalsRef.current();
-          break;
-      }
-    };
-    return { setTransient, apply };
-  }, []);
+        setActiveReplyKeys((keys) => new Set(keys).add(key));
+        setLines((previous) => [
+          ...dropTransients(previous),
+          { key, role: 'clone', text: '', of: stream.id, replyGroup },
+        ]);
+      };
+      const apply = (event: ChatStreamEvent) => {
+        switch (event.type) {
+          // 返信の行をここで分ける:デーモンは人間の発言を記録するとき、それまでの返信を先に日誌へ書く。続きを同じ行へ足すと、その発言より上に出るうえ、日誌の本文とも合わない
+          case 'queued':
+            endReply();
+            setTransient('順番を待っている…');
+            break;
+          case 'thinking':
+            setTransient('考えている…');
+            break;
+          case 'tool':
+            endReply();
+            setTransient(`${event.tool} を実行中…`);
+            break;
+          case 'text':
+            startReply();
+            append(event.text);
+            break;
+          case 'attachments': {
+            startReply();
+            const key = replyKey;
+            if (!writable() || key === undefined) break;
+            setLines((previous) =>
+              previous.map((line) =>
+                line.key === key
+                  ? { ...line, attachments: [...(line.attachments ?? []), ...event.attachments] }
+                  : line,
+              ),
+            );
+            break;
+          }
+          case 'ask_human':
+            endReply();
+            setLines((previous) => [
+              ...previous.filter((line) => line.transient !== true),
+              {
+                key: `a-${event.approvalId}`,
+                role: 'system',
+                of: stream.id,
+                text: event.question,
+                approval: approvalFromAskEvent(event.approvalId, event.question),
+              },
+            ]);
+            if (owns()) refetchApprovalsRef.current();
+            break;
+          // setTransient にしない: done と finally が transient な行を残らず消すが、枠が閉じたことは人間があとから追うべき事実。
+          // 文言は要約しない: event.message をそのまま出さないと usage-limits.ts が約束している「人間が検索できる形」が崩れる。保持されていることを添えないと、人間が「届いていない」と誤解して送り直す
+          case 'usage_limited':
+            endReply();
+            markFailedTurn('held');
+            setLines((previous) => [
+              ...previous.filter((line) => line.transient !== true),
+              {
+                key: `u-${Date.now()}`,
+                role: 'system',
+                of: stream.id,
+                replyGroup,
+                text: `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
+              },
+            ]);
+            break;
+          // writable() で締めない: 一度しか起きない終端の事実で、弾くと人間に一度も見せないまま消える。
+          // 代わりに stream.id をキーに積み、出すかどうかは描画の時点の shownId で引く（切り替え直後の窓に届いた A の error が B の画面に出ないように）
+          case 'error':
+            settleReply();
+            markFailedTurn('failed');
+            setFailures((prev) =>
+              new Map(prev).set(
+                stream.id,
+                new TurnFailedError(event.message, event.kind, replyGroup),
+              ),
+            );
+            if (owns()) refetchApprovalsRef.current();
+            break;
+          case 'done':
+            settleReply();
+            if (owns()) setLiveNote({ id: stream.id, text: '返信が終わった' });
+            setLines((previous) => previous.filter((line) => line.transient !== true));
+            if (owns()) refetchApprovalsRef.current();
+            break;
+        }
+      };
+      return { setTransient, apply };
+    },
+    [refetchApprovalsRef],
+  );
 
   const followUpIdsRef = useRef(new Map<string, Set<string>>());
   const replayControllerRef = useRef<AbortController | undefined>(undefined);
