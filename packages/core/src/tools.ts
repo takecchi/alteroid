@@ -72,14 +72,16 @@ import { MCP_SERVER_NAME } from './mcp-server-name.js';
 export { MCP_SERVER_NAME };
 export {
   isFoldedTurnReport,
-  describeReportDriftMark,
-  describeTurnEnd,
-  describeToolUseStall,
   describeHeldMessages,
   describeExternalOutputs,
   describeRescueStash,
   describeRescue,
-} from './clone-tools-manager.js';
+} from './clone-tools-manager-describe.js';
+export {
+  describeReportDriftMark,
+  describeTurnEnd,
+  describeToolUseStall,
+} from './clone-tools-manager-list.js';
 export { renderPeerReach } from './clone-tools-self.js';
 export { formatPracticeKindRangeJa } from './clone-tools-practice.js';
 export {
