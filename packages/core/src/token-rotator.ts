@@ -153,7 +153,7 @@ export interface TokenRotatorObservation {
   succeeded?: true;
 }
 
-export interface TokenRotatorOptions {
+interface TokenRotatorOptions {
   stores: Stores;
   probe: TokenProbePort;
   spread: TokenSpreadPort;
@@ -197,7 +197,7 @@ export interface TokenRotator {
 }
 
 // 件数ではなく時間で切る: probe は1本あたり最大20秒待つので、件数の上限では占有時間を縛れないため
-export const CANDIDATE_SWEEP_BUDGET_MS = 60_000;
+const CANDIDATE_SWEEP_BUDGET_MS = 60_000;
 
 interface CandidateSweep {
   chosen?: { token: AgentToken; verdict: TokenCandidateVerdict };

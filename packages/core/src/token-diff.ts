@@ -19,7 +19,7 @@ function surplus(a: Map<string, number>, b: Map<string, number>): string[] {
   return out.sort();
 }
 
-export interface TokenDiff {
+interface TokenDiff {
   removed: string[];
   added: string[];
 }

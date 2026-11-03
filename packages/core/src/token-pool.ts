@@ -145,7 +145,7 @@ export const agentTokenInputSchema = z.object({
 });
 export type AgentTokenInput = z.infer<typeof agentTokenInputSchema>;
 
-export interface NormalizeTokenPoolOptions {
+interface NormalizeTokenPoolOptions {
   now: () => Date;
   newId: () => string;
 }

@@ -26,7 +26,7 @@ import type { CloneToolsShared, ToolContext } from './clone-tools-context.js';
 export const MCP_INPUT_VALIDATION_ERROR_MARKER =
   'Input validation error: Invalid arguments for tool ';
 
-export interface McpInputValidationFailure {
+interface McpInputValidationFailure {
   readonly message: string;
   readonly fields: readonly string[];
 }

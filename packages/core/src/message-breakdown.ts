@@ -10,7 +10,7 @@ export const MESSAGE_BREAKDOWN_TOOLS_LIMIT = 12;
 export const MESSAGE_BREAKDOWN_TOOL_OTHER = '(other)';
 
 /** 描画（人が読む1行）に出す道具の数。 */
-export const MESSAGE_BREAKDOWN_TOP_TOOLS_SHOWN = 3;
+const MESSAGE_BREAKDOWN_TOP_TOOLS_SHOWN = 3;
 
 export interface MessageBreakdownToolRow {
   name: string;
@@ -18,7 +18,7 @@ export interface MessageBreakdownToolRow {
   resultTokens: number;
 }
 
-export interface MessageBreakdownObservation {
+interface MessageBreakdownObservation {
   toolCallTokens: number;
   toolResultTokens: number;
   attachmentTokens: number;
@@ -28,7 +28,7 @@ export interface MessageBreakdownObservation {
 }
 
 /** SDK の `getContextUsage()` が返す `messageBreakdown` のうち、日誌へ写す欄。 */
-export interface MessageBreakdownSource {
+interface MessageBreakdownSource {
   toolCallTokens: number;
   toolResultTokens: number;
   attachmentTokens: number;

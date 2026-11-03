@@ -27,7 +27,7 @@ import {
 } from './usage.js';
 import { compareCodeUnits } from './code-unit-order.js';
 
-export interface DigestWindow {
+interface DigestWindow {
   since: Date;
   // 省略時だけ 1ms 足す: たったいま書かれた記録が落ちないようにするため
   until?: Date;
@@ -120,7 +120,7 @@ type TerminatedAtFields = Pick<
  * 最大を取るのは、どれか1つだけでは足りないため: `closed(failed)` は `lastReportAt` を進めず、done は `report` で終端して貸し出しの返却を伴わない。
  * `failed` は終端そのものを刻む欄（返却・失敗・システムエラー）が1つも無ければ取れない扱い: `lastReportAt` だけでは、長く走った担当が今日落ちた回を古く見積もる。
  */
-export function managerTerminatedAtMs(job: TerminatedAtFields): number | undefined {
+function managerTerminatedAtMs(job: TerminatedAtFields): number | undefined {
   const stamps = [
     job.lease?.releasedAt,
     job.lastFailure?.at,
@@ -135,7 +135,7 @@ export function managerTerminatedAtMs(job: TerminatedAtFields): number | undefin
   return all.length === 0 ? undefined : Math.max(...all);
 }
 
-export type ManagerDigestFold = 'listed' | 'idle' | 'old-failed';
+type ManagerDigestFold = 'listed' | 'idle' | 'old-failed';
 
 /**
  * 要約のマネージャーの節での扱い（#4938 の案1: 手が止まっている担当は1本ずつ出さず、本数と id だけの行に畳む）。
@@ -144,7 +144,7 @@ export type ManagerDigestFold = 'listed' | 'idle' | 'old-failed';
  * `listed`（1本ずつ）に残すもの: 走行中・返事待ち・lost・窓の中で終端したもの・背景処理を待っているもの・終端した時刻が取れないもの。
  * 窓の判定は `updatedAt` ではなく `managerTerminatedAtMs`。
  */
-export function classifyManagerForDigest(
+function classifyManagerForDigest(
   job: TerminatedAtFields,
   awaitingBackground: ManagerAwaitingBackground | undefined,
   since: Date,
@@ -166,7 +166,7 @@ export function classifyManagerForDigest(
  */
 export type DigestShape = 'full' | 'counts';
 
-export interface ActivityDigestOptions {
+interface ActivityDigestOptions {
   /** 省略は `full`。 */
   shape?: DigestShape;
   /**
@@ -183,7 +183,7 @@ export const DIGEST_COUNTS_TOOLS_NOTE =
   '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
 
 /** 手が止まっている担当の行の次に出す固定の1行（依頼と直近の報告を載せていないことを名乗る）。 */
-export const DIGEST_IDLE_MANAGERS_NOTE =
+const DIGEST_IDLE_MANAGERS_NOTE =
   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
 
 /**
@@ -270,7 +270,7 @@ export function foldDigestCountsLine(line: string): string | null {
 
 export type UnobservedReportState = 'none' | 'failure-wrapped' | 'delivered';
 
-export type JudgementRank = 0 | 1 | 2;
+type JudgementRank = 0 | 1 | 2;
 
 // 新しい値（`3`）を与えない: 群2の中に「`failed` 全部 → `done`/`stopped` 全部」という4つ目の群を黙って作るため
 export const JUDGEMENT_RANK_NOT_APPLICABLE = 2 satisfies JudgementRank;
@@ -281,7 +281,7 @@ export interface UnobservedOutcomeInput {
   lastFailure?: Job['lastFailure'];
 }
 
-export interface UnobservedOutcome {
+interface UnobservedOutcome {
   reportState: UnobservedReportState;
   rank: JudgementRank;
 }

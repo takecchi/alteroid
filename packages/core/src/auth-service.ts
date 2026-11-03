@@ -20,7 +20,7 @@ import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { hasNul } from './nul-guard.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
-export interface AuthServiceOptions {
+interface AuthServiceOptions {
   store: AuthStore;
   providers: AuthProviderRegistry;
   now?: () => Date;
@@ -29,27 +29,27 @@ export interface AuthServiceOptions {
   tokenTtlDays?: number | null;
 }
 
-export interface StartLoginInput {
+interface StartLoginInput {
   provider: string;
   redirectUri: string;
   label?: string;
 }
 
-export interface StartLoginResult {
+interface StartLoginResult {
   requestId: string;
   authorizationUrl: string;
   claimSecret: string;
   expiresAt: string;
 }
 
-export type CompleteLoginResult =
+type CompleteLoginResult =
   | { status: 'ok'; accountId: string; granted: boolean }
   | { status: 'error'; reason: CompleteLoginError };
 
-export type CompleteLoginError =
+type CompleteLoginError =
   'invalid_state' | 'expired' | 'already_used' | 'unknown_provider' | 'exchange_failed';
 
-export type ClaimResult =
+type ClaimResult =
   | { status: 'pending' }
   | { status: 'ready'; token: string; account: AuthAccount }
   | { status: 'error'; reason: 'invalid_request' | 'invalid_secret' | 'expired' | 'failed' };

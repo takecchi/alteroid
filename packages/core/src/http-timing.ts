@@ -25,7 +25,7 @@ export interface HttpTimingSample {
   bytes?: number;
 }
 
-export interface HttpTimingRouteSummary {
+interface HttpTimingRouteSummary {
   route: string;
   count: number;
   errors: number;
@@ -39,7 +39,7 @@ export interface HttpTimingRouteSummary {
   maxBytes: number;
 }
 
-export interface HttpTimingSlowSample {
+interface HttpTimingSlowSample {
   route: string;
   status: number;
   at: string;
@@ -57,7 +57,7 @@ export interface HttpTimingSlowSample {
 }
 
 /** 日誌の `http_timing` の行（`type`・`id`・`at` を除く） */
-export interface HttpTimingWindowRecord {
+interface HttpTimingWindowRecord {
   windowStartedAt: string;
   windowMs: number;
   requests: number;

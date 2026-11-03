@@ -3,7 +3,7 @@ export const SUBAGENT_HOOK_GAUGE_PHRASE = 'サブエージェント呼びの確�
 export const CALLER_VERDICT_GAUGE_PHRASE = '呼び手の判定';
 
 /** hook の PreToolUse で見た道具の種類。名前そのものは行に出さない（種類だけで足りる）。 */
-export type ToolKind = 'mcp-alteroid' | 'mcp-他' | '組込み';
+type ToolKind = 'mcp-alteroid' | 'mcp-他' | '組込み';
 
 /** handler が `extra._meta['claudecode/toolUseId']` をどう読めたか。値は持たない。 */
 export type ToolUseIdProbe = 'present' | 'missing' | 'wrongType';

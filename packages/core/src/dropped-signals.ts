@@ -18,7 +18,7 @@ export interface DroppedSignalDigest {
 }
 
 /** 本文の冒頭を何字まで添えるか。合図の見分けがつく長さで、全文は日誌・台帳から読み直せる。 */
-export const DROPPED_SIGNAL_HEAD_CHARS = 200;
+const DROPPED_SIGNAL_HEAD_CHARS = 200;
 
 /** 次のターンへ添える要旨の上限（件）。超えた分は件数だけ言う。 */
 export const DROPPED_SIGNAL_NOTICE_MAX = 20;

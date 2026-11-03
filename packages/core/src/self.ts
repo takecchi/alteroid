@@ -83,7 +83,7 @@ export interface CloneRuntimeFacts {
   runnerAnthropicRoutes?: readonly string[];
 }
 
-export const RUNNER_MODELS_HEADING = '## 接続中の runner が名乗ったモデル（マネージャー・作業者）';
+const RUNNER_MODELS_HEADING = '## 接続中の runner が名乗ったモデル（マネージャー・作業者）';
 export const ANTHROPIC_ROUTE_HEADING =
   '## SDK の接続先とモデルの別名（環境変数。クローン自身の層）';
 export const RUNNER_ANTHROPIC_ROUTES_HEADING =
@@ -151,7 +151,7 @@ function describeLastTurnContextUsage(lastContextUsage: ContextUsageObservation 
 export const CLONE_RUNTIME_ITEM_LABELS: readonly string[] = Object.values(CLONE_RUNTIME_ITEMS);
 
 /** 固定の文言を、同じ会話の2回目から参照にする口（`ToolContext.foldFixed` と同じ型）。 */
-export type FixedFoldFn = (id: string, full: string, ref: string) => string;
+type FixedFoldFn = (id: string, full: string, ref: string) => string;
 /** 畳まない口。HTTP・CLI・蒸留など、参照が指す先（会話の上の全文）が無い面はこれ。 */
 export const NO_FOLD: FixedFoldFn = (_id, full) => full;
 

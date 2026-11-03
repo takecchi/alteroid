@@ -16,7 +16,7 @@ import { excerpt } from './excerpt.js';
 import type { RenderedMemory } from './memory.js';
 import { buildSelfKnowledge, type SelfFacts } from './self.js';
 
-export interface CloneSystemPromptInput {
+interface CloneSystemPromptInput {
   memory: RenderedMemory;
   /** 省略時は環境の節を落とす: 無い事実を埋めると、クローンは自分の環境について嘘を確信する。 */
   self?: SelfFacts;
@@ -161,7 +161,7 @@ ${memory.trim().length > 0 ? memory : '（まだ何も無い。人間との会�
  * 統合（重複の掃除・要旨と区分の整備）の指示もここに乗せる: 区分が無い文書は `premise` が既定なので、
  * 蒸留が要旨と区分を書いて重複を畳まない限り、毎ターンの焼き込みは軽くならない。
  */
-export interface DistillPromptOptions {
+interface DistillPromptOptions {
   /**
    * いま毎ターンの焼き込みに収まっていない文書の一覧（`describeMemoryTidyTargets` の出力そのまま）。
    * 定期の棚卸し（`reason: 'scheduled'`）だけが渡す: 会話終了・PreCompact は会話を記憶へ移すのが
@@ -274,7 +274,7 @@ const DISTILL_CONSOLIDATION = `## 統合（このターンでできることが�
 export const PROMPT_CHARACTER_BUDGET = 47_500;
 
 /** 日報の指示。何を書くかは要件だが、何を良しとするかは書かない（評価の基準はクローンの記憶にある）。 */
-export interface DailyReportPromptInput {
+interface DailyReportPromptInput {
   /** 対象日（`YYYY-MM-DD`、ローカル日付）。 */
   date: string;
   /** その日に何が起きたかの要約（digest.ts）。 */
@@ -309,7 +309,7 @@ ${digest}`,
  * 「ただし、動いている委譲が無い器があるなら…」は強制形（「必ず出せ」等）にしない:
  * 「無理に仕事を作らないこと」と衝突するので、空いている理由を先に確かめるところまでに留める。
  */
-export interface SelfInitiativePromptInput {
+interface SelfInitiativePromptInput {
   reason: string;
   digest: string;
   /** 固定の指示文の代わりに出す文（#4937）。同じ会話で全文を出していれば、clone が短い参照を渡す。省略は全文（`SELF_INITIATIVE_INSTRUCTIONS`）。 */
@@ -351,7 +351,7 @@ ${digest}`,
  * 外部イベントの指示。何が届いたら何をするかの対応表を書かない:
  * 書くと「webhook で起動する自動化」になり、人による違いが潰れる。
  */
-export interface ExternalEventPromptInput {
+interface ExternalEventPromptInput {
   source: string;
   body: string;
   viaKeyNames?: readonly string[];
@@ -386,15 +386,15 @@ export function externalViaLine(
  * `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）はここに含めない: 毎回出す。
  * 短い形にも「根拠が無く放っておけないなら `ask_human`、聞かずに動いたなら `journal_write`」は残す（失敗に直結するため）。
  */
-export const EXTERNAL_EVENT_INSTRUCTION =
+const EXTERNAL_EVENT_INSTRUCTION =
   '中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。\n' +
   '判断の根拠が記憶に無く、しかも放っておけないことなら `ask_human` に積む。聞かずに動いたなら `journal_write` に残せ。';
-export const EXTERNAL_EVENT_INSTRUCTION_REF =
+const EXTERNAL_EVENT_INSTRUCTION_REF =
   '（判断の仕方は前の出来事と同じ。会話の上にある）根拠が無く放っておけないなら `ask_human`、聞かずに動いたなら `journal_write`。';
-export const EXTERNAL_EVENT_INSTRUCTION_FOLD_ID = 'external-event-instruction';
+const EXTERNAL_EVENT_INSTRUCTION_FOLD_ID = 'external-event-instruction';
 
 /** 固定文の畳み（`clone.ts` の `FixedTextFold` と同じ形。循環を避けてここでも型を持つ）。 */
-export type ExternalInstructionFold = (id: string, full: string, ref: string) => string;
+type ExternalInstructionFold = (id: string, full: string, ref: string) => string;
 
 export function externalEventInstruction(fold?: ExternalInstructionFold): string {
   return fold === undefined
@@ -430,7 +430,7 @@ ${body}`;
  * 「記憶を見て思い出せ」では、頼まれた仕事を思い出せるかどうかの賭けになる。
  * `digest` は担当の節・継続中の依頼の節と他の節の件数の行の形（#4938 の案2。`buildActivityDigest` の `shape: 'counts'`）を渡す。
  */
-export interface TimerPromptInput {
+interface TimerPromptInput {
   kind: string;
   target?: string;
   request?: string;
@@ -533,7 +533,7 @@ ${digest}`,
  * 作業者（`buildWorkerPrompt`）にも指示文書・バックグラウンド・auto-memory を短く置く:
  * 固定のプロンプトしか持たず、リポジトリの規則へ届く経路が他に無い。
  */
-export interface ManagerSystemPromptInput {
+interface ManagerSystemPromptInput {
   managerId: string;
   workerName: string;
   /** 省けばプロンプトは1文字も増えない。`models` は人間が開けた、名指しできるモデル。 */

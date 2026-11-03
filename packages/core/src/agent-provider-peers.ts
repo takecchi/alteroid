@@ -17,7 +17,7 @@ import type { AgentProviderId } from './agent-ports.js';
 export const PEER_PROVIDER_IDS: readonly AgentProviderId[] = ['codex'];
 
 /** runner に届いている資格（**値は持たない**。在るかどうかだけ）。 */
-export interface PeerCredentialPresence {
+interface PeerCredentialPresence {
   /** 袋の `CODEX_API_KEY`（空・空白だけは「無い」）。 */
   readonly codexApiKey: boolean;
   /** デーモンの正本から降りた ChatGPT ログイン。 */
@@ -25,7 +25,7 @@ export interface PeerCredentialPresence {
 }
 
 /** 閉じている peer と、その理由（人が読む文。runner_list・self_status・Web にそのまま出る）。 */
-export interface PeerClosed {
+interface PeerClosed {
   readonly provider: AgentProviderId;
   readonly reason: string;
 }
@@ -100,10 +100,10 @@ export function parsePeerModels(raw: string | undefined, key: string): string[] 
  * 持ち主は各 provider の記述子（`AgentProvider.defaultPeerModels`）で、呼び出し側が `agentProviderOf` から渡す。
  * ここで記述子の登録簿を import しない: 束ねた core で循環になり、登録簿が初期化前に読まれるため。
  */
-export type PeerDefaultModelsOf = (provider: AgentProviderId) => readonly string[] | undefined;
+type PeerDefaultModelsOf = (provider: AgentProviderId) => readonly string[] | undefined;
 
 /** 名指しできるモデルの一覧が、環境変数から来たか既定から来たか。 */
-export type PeerModelsSource = 'env' | 'default';
+type PeerModelsSource = 'env' | 'default';
 
 /** 1つの provider の一覧と、その出所。環境変数も既定も無ければ `undefined`。 */
 export function resolvePeerModelsOf(

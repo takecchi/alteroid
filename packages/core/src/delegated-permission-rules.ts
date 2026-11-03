@@ -29,7 +29,7 @@ import type { Stores } from './store.js';
  * 許可 id と規則の名前で日誌に残し、クローンが追えるようにする（`autoModeStripsDelegatedRule`。判定は SDK 0.3.312 の写し）。
  */
 
-export interface DelegatedPermissionRuleSet {
+interface DelegatedPermissionRuleSet {
   /** 重複は1つにした規則の一覧。 */
   readonly rules: string[];
   /** 載せた許可の id（日誌に載せるのは規則の本文ではなくこちら。例外は `autoModeStripped`）。 */
@@ -134,7 +134,7 @@ export interface DelegatedPermissionRuleService {
   ): () => void;
 }
 
-export interface DelegatedPermissionRuleServiceOptions {
+interface DelegatedPermissionRuleServiceOptions {
   stores: Pick<Stores, 'permissionGrants' | 'journal'>;
   runners?: RunnerRegistry;
 }

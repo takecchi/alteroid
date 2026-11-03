@@ -21,13 +21,13 @@ export type TokenRotationSignal =
   | 'stranded'
   | 'settings_unreadable';
 
-export interface TokenRotationDecision {
+interface TokenRotationDecision {
   rotate: boolean;
   signal: TokenRotationSignal;
   why: string;
 }
 
-export interface TokenRotationObservation {
+interface TokenRotationObservation {
   // 生の文言を直接渡さない: classifyUsageNotice は部分一致で、クローンが日報に「上限に当たった」と書いた瞬間に誤判定するため
   notice?: UsageLimitNotice;
   facts?: RateLimitFacts;
@@ -219,7 +219,7 @@ export type TokenSelection =
       why: string;
     };
 
-export interface SelectNextTokenOptions {
+interface SelectNextTokenOptions {
   at: number;
   // 降りたトークンを外す: 外さないと過ぎた resetsAt で ready に見え、自分自身へ回して日誌には「回した」と残るのに撒いた先は変わらないため。
   // 記録ではなくその場の集合で外す: resetsAt が既に過去なら、印を付けた直後でも ready に見えるため

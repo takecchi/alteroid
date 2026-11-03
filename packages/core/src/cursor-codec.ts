@@ -2,7 +2,7 @@ import type { z } from 'zod';
 
 // 一覧の続きを指すカーソルの共通の符号化: JSON を base64url にし、読むときは zod で検める。
 // 種類ごとの違い（スキーマ・encode 前の整形・錨の探し方）は各 `*-cursor.ts` に残す。
-export type DecodeCursorResult<T> = { ok: true; cursor: T } | { ok: false };
+type DecodeCursorResult<T> = { ok: true; cursor: T } | { ok: false };
 
 // キーの並びは渡した値の並びのまま（出回っているカーソルの文字列を変えない）。
 export function encodeCursor(value: unknown): string {

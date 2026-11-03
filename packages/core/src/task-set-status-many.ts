@@ -15,9 +15,9 @@ import { UnreadableTaskError } from './store.js';
 
 /** まとめて移せる先。閉じる状態だけ（開き直し・開いている状態どうしの移動は1件ずつの `task_set_status`）。 */
 export const TASK_STATUS_MANY_TARGETS = ['done', 'cancelled'] as const;
-export type TaskStatusManyTarget = (typeof TASK_STATUS_MANY_TARGETS)[number];
+type TaskStatusManyTarget = (typeof TASK_STATUS_MANY_TARGETS)[number];
 
-export interface TaskStatusManyInput extends CloseManyFilterInput {
+interface TaskStatusManyInput extends CloseManyFilterInput {
   status: TaskStatusManyTarget;
   reason: string;
   dryRun?: boolean | undefined;
@@ -35,7 +35,7 @@ export function describeTaskStatusManyViolation(input: TaskStatusManyInput): str
   return describeCloseManyViolation(input, 'task の待ち行列');
 }
 
-export interface TaskStatusManySelection {
+interface TaskStatusManySelection {
   /** 開いている全 Task（読めた分）。0件の理由を段で言うために段ごとの行を持つ */
   openEntries: readonly Task[];
   afterOrigin: readonly Task[];

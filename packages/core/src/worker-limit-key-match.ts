@@ -22,7 +22,7 @@ export interface RememberedWindow {
   resetsAt: number;
 }
 
-export interface WorkerLimitKeyMatchInput {
+interface WorkerLimitKeyMatchInput {
   raw: string;
   at: number;
   /** `undefined` はプールを読めなかったこと（空配列は「読めたが鍵が無い」）。 */

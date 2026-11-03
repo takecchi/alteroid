@@ -20,10 +20,10 @@ import { excerptLine, renderListing, renderListingEntry } from './excerpt.js';
  */
 
 /** 1回の呼び出しで置き場から取る件数。表示は {@link FILE_LIST_BUDGET} で別に締める。 */
-export const FILE_LIST_PAGE = 50;
+const FILE_LIST_PAGE = 50;
 
 // 他の一覧の予算と値が同じでも使い回さない: 片方だけ直したくなったときに一緒に動くため
-export const FILE_LIST_BUDGET = 6_000;
+const FILE_LIST_BUDGET = 6_000;
 
 // 名前・種類は人間やマネージャーが決める文字列なので、出す側で締める
 const FILE_LIST_NAME_EXCERPT = 80;
@@ -37,14 +37,14 @@ const FROM_LABELS: Readonly<Record<AttachmentFromClass, string>> = {
   unknown: '不明',
 };
 
-export function formatAttachmentSize(bytes: number): string {
+function formatAttachmentSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 /** 保存中か、いつ消えるか。 */
-export function describeAttachmentRetention(meta: AttachmentMeta): string {
+function describeAttachmentRetention(meta: AttachmentMeta): string {
   if (meta.keptAt !== undefined) return '保存中（期限なし）';
   if (meta.releasedAt === undefined && !isAttachmentBound(meta)) {
     const sweepAt = new Date(Date.parse(meta.createdAt) + ATTACHMENT_UNBOUND_TTL_MS).toISOString();
@@ -94,7 +94,7 @@ export function renderFileUsage(usage: AttachmentUsage): string {
   return lines.join('\n');
 }
 
-export interface FileListInput {
+interface FileListInput {
   readonly kept?: boolean | undefined;
   readonly from?: AttachmentFromClass | undefined;
   readonly conversationId?: string | undefined;

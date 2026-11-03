@@ -29,7 +29,7 @@ export interface CredentialService {
   vaultSnapshot(): readonly StoredCredential[];
 }
 
-export interface CredentialServiceOptions {
+interface CredentialServiceOptions {
   stores: Stores;
   runners?: RunnerRegistry;
   // 省略可能にしない: 渡し忘れると検査が消えるため
@@ -188,7 +188,7 @@ function changedCloneNames(
   return [...names].filter((name) => was.get(name) !== now.get(name)).sort();
 }
 
-export function overlongCredentialNames(rows: readonly StoredCredential[]): string[] {
+function overlongCredentialNames(rows: readonly StoredCredential[]): string[] {
   return rows.map((row) => row.name).filter((name) => name.length > CREDENTIAL_NAME_MAX_LENGTH);
 }
 

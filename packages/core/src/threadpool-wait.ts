@@ -20,7 +20,7 @@ export interface ThreadpoolWait {
   readonly settled: boolean;
 }
 
-export interface MeasureThreadpoolWaitOptions {
+interface MeasureThreadpoolWaitOptions {
   /** 返らないときに待つのをやめる上限（ms）。上限を切らずに待ち続けると、期限切れの知らせ自体が遅れる。 */
   readonly capMs?: number;
   /** 枠を使う軽い処理。既定は `fs.promises.stat('/')`（名前解決を挟まない）。試験で差し替える。 */

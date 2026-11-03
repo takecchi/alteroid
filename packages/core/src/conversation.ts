@@ -245,7 +245,7 @@ export async function readWithdrawnClientMessageIds(
  * 取り下げうる発言が1つも無ければ印を引かない（引いても結果は変わらない）。
  * 印を引けなかったときは `unknown`: 空の集合へ倒すと「取り下げていない」と断定することになる。
  */
-export type WithdrawnLookup =
+type WithdrawnLookup =
   { kind: 'ok'; ids: ReadonlySet<string> } | { kind: 'unknown'; reason: string };
 
 export async function lookupWithdrawnForMessages(

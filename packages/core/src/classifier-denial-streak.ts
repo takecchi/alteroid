@@ -9,7 +9,7 @@
  */
 
 /** CLI の上限（SDK 0.3.296 の `{maxConsecutive:3,maxTotal:20}`）。SDK を上げたら確かめ直す。 */
-export const CLI_CLASSIFIER_DENIAL_LIMITS = { consecutive: 3, total: 20 } as const;
+const CLI_CLASSIFIER_DENIAL_LIMITS = { consecutive: 3, total: 20 } as const;
 
 /**
  * 分類器の拒否の確認（runner の `#onPermissionDenied`）の、alteroid が組んだ固定の1段落（#4943）。変わる値を1つも含まない。
@@ -55,7 +55,7 @@ interface StreakState {
   lastNoticeAt: number | undefined;
 }
 
-export interface DenialStreakView {
+interface DenialStreakView {
   readonly consecutive: number;
   readonly total: number;
   readonly firstReason: string | undefined;
@@ -98,7 +98,7 @@ function reasonHead(reason: string | undefined): string | undefined {
   return chars.length > REASON_HEAD ? `${chars.slice(0, REASON_HEAD).join('')}…` : chars.join('');
 }
 
-export function overDenialLimit(view: DenialStreakView): boolean {
+function overDenialLimit(view: DenialStreakView): boolean {
   return (
     view.consecutive >= CLI_CLASSIFIER_DENIAL_LIMITS.consecutive ||
     view.total >= CLI_CLASSIFIER_DENIAL_LIMITS.total

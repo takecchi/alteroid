@@ -43,7 +43,7 @@ const nonEmptyAfterNul = z
   .min(1)
   .refine((value) => stripNul(value).length > 0, { message: MCP_NUL_ONLY_RULE });
 
-export const mcpStdioServerConfigSchema = z.strictObject({
+const mcpStdioServerConfigSchema = z.strictObject({
   type: z.literal(MCP_TYPE_STDIO).optional(),
   command: nonEmptyAfterNul,
   args: z.array(z.string()).optional(),
@@ -51,21 +51,21 @@ export const mcpStdioServerConfigSchema = z.strictObject({
   ...commonFields,
 });
 
-export const mcpHttpServerConfigSchema = z.strictObject({
+const mcpHttpServerConfigSchema = z.strictObject({
   type: z.literal(MCP_TYPE_HTTP),
   url: nonEmptyAfterNul,
   headers: stringMapSchema.optional(),
   ...commonFields,
 });
 
-export const mcpSseServerConfigSchema = z.strictObject({
+const mcpSseServerConfigSchema = z.strictObject({
   type: z.literal(MCP_TYPE_SSE),
   url: nonEmptyAfterNul,
   headers: stringMapSchema.optional(),
   ...commonFields,
 });
 
-export const mcpServerConfigSchema = z.union([
+const mcpServerConfigSchema = z.union([
   mcpStdioServerConfigSchema,
   mcpHttpServerConfigSchema,
   mcpSseServerConfigSchema,

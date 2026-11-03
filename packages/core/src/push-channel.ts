@@ -2,7 +2,7 @@ import { reasonOf } from './dropped-record.js';
 import type { RunnerClient, RunnerRegistry } from './runner-protocol.js';
 import { createSerialQueue, type SerialQueue } from './serial-queue.js';
 
-export interface PushChannel<R> {
+interface PushChannel<R> {
   serial: SerialQueue['run'];
   onPushed(listener: (results: readonly R[]) => void): () => void;
   // 購読者の例外は握る: 帳面に積めなかっただけで、配布の結果そのものは呼び手が返す。
@@ -31,7 +31,7 @@ export function createPushChannel<R>(): PushChannel<R> {
   };
 }
 
-export interface RunnerPushResultBase {
+interface RunnerPushResultBase {
   runnerId: string;
   ok: boolean;
   error?: string;

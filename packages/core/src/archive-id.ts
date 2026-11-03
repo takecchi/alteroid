@@ -19,7 +19,7 @@ export function archiveIdCandidate(base: string, attempt: number): string {
   return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
 }
 
-export interface ArchiveIdStampMatch {
+interface ArchiveIdStampMatch {
   readonly suffix: string;
   readonly stamp: string;
   readonly branch: number;

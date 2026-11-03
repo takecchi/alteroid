@@ -4,7 +4,7 @@ import type { ArchiveContinuityTally } from './store.js';
 
 export type ArchiveContinuity = 'first' | 'continues' | 'diverged' | 'unknown';
 
-export interface ArchiveBodyFingerprint {
+interface ArchiveBodyFingerprint {
   // pg の `length()`（コードポイント数）と混ぜない: ここは UTF-16 コード単位で数えているため
   readonly bodyChars: number;
   readonly bodyMd5: string;

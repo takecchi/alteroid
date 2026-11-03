@@ -21,8 +21,8 @@ export function isArchiveRefId(id: string): boolean {
 /** 取りに来ないまま残った本文を捨てるまでの時間。デーモンが居ない間（器の入れ替え・再起動）も、この間は待つ。 */
 export const ARCHIVE_STASH_TTL_MS = 60 * 60_000;
 /** 預かる本数と文字数の上限。超えたら古いものから捨てる（runner のメモリを退避で食い尽くさないため）。 */
-export const ARCHIVE_STASH_MAX_ENTRIES = 32;
-export const ARCHIVE_STASH_MAX_CHARS = 256 * 1024 * 1024;
+const ARCHIVE_STASH_MAX_ENTRIES = 32;
+const ARCHIVE_STASH_MAX_CHARS = 256 * 1024 * 1024;
 
 interface StashedArchive {
   readonly managerId: string;

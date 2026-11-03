@@ -6,7 +6,7 @@ import type { JournalStore } from './store.js';
 // 「始めた」ではなく「成功で終わった」を印にする: 開始の印は `#runInternal` の前に書かれ、途中でプロセスが消えた回が「蒸留した」と読めてしまうため
 export const DISTILL_SUCCEEDED_DECISION_PREFIX = '蒸留が成功で終わった:';
 
-export type DistillReason = 'conversation_end' | 'shutdown' | 'pre_compact' | 'scheduled';
+type DistillReason = 'conversation_end' | 'shutdown' | 'pre_compact' | 'scheduled';
 
 export function distillSucceededEntry(reason: DistillReason): JournalEntryInput {
   return {
@@ -20,7 +20,7 @@ export function distillSucceededEntry(reason: DistillReason): JournalEntryInput 
   };
 }
 
-export function isDistillSucceededEntry(entry: JournalEntry): boolean {
+function isDistillSucceededEntry(entry: JournalEntry): boolean {
   return entry.type === 'decision' && entry.decision.startsWith(DISTILL_SUCCEEDED_DECISION_PREFIX);
 }
 
@@ -66,7 +66,7 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
 export const DISTILL_GAP_ACTIVITY_SCAN_LIMIT = 500;
 
 // 1分: 並行の追記の遅れ（ミリ秒〜数秒）と時計の小さな巻き戻りを呑める幅で、窓の行数は1分ぶんしか増えないため
-export const DISTILL_GAP_SINCE_SLACK_MS = 60_000;
+const DISTILL_GAP_SINCE_SLACK_MS = 60_000;
 
 export interface DistillGap {
   lastDistilledAt: string | null;

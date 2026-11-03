@@ -13,9 +13,9 @@ export const TASK_PAGE = 8_000;
 export const UNREADABLE_TASK_IDS_SHOWN = 20;
 
 export const TASK_PLACEMENT_TARGETS = ['front', 'back', 'before', 'after'] as const;
-export type TaskPlacementTarget = (typeof TASK_PLACEMENT_TARGETS)[number];
+type TaskPlacementTarget = (typeof TASK_PLACEMENT_TARGETS)[number];
 
-export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   queued: '待ち行列',
   waiting: '待ち（外の返事・時間待ち）',
   needs_decision: '決めてほしい',
@@ -142,7 +142,7 @@ export function describeTaskQueueHead(list: TaskList, options: { limit: number }
 
 // task の並びは行の欄ではなくストアが持つ位置（rank）で、rank は読む側に出ない。続きの錨は「最後に出した件の id」にする:
 // 並べ替えで錨の位置が動いても錨の直後から続き、錨が一覧から外れたら黙って別の続きにせず明示のエラーにする
-export interface TaskCursor {
+interface TaskCursor {
   id: string;
   includeClosed: boolean;
 }
@@ -164,7 +164,7 @@ function decodeTaskCursor(raw: string): TaskCursor | null {
   }
 }
 
-export type TaskCursorOutcome =
+type TaskCursorOutcome =
   | { kind: 'ok'; view: Task[] }
   | { kind: 'malformed' }
   | { kind: 'includeClosed-mismatch'; cursorIncludeClosed: boolean }

@@ -370,7 +370,7 @@ export function summarizeInboxBacklog(
 // 固定の言い回しを畳む口（`ToolContext.foldFixed` と同じ形）。無ければ全文のまま（situation・CLI は畳まない）。
 // この関数群の中では、数・時刻・種類の内訳は畳まず固定の言い回しだけを `fold` に包む。
 // 内訳そのものの「前回と同じ」は呼び出し側（tools.ts の `describeInboxBacklog`）が、内訳の指紋で畳む
-export type InboxBacklogFold = (id: string, full: string, ref: string) => string;
+type InboxBacklogFold = (id: string, full: string, ref: string) => string;
 const NO_INBOX_FOLD: InboxBacklogFold = (_id, full) => full;
 
 const INBOX_OLDEST_NOTE_FULL =

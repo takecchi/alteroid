@@ -29,7 +29,7 @@ export function roundDownToMinute(ms: number): number {
   return ms - (ms % 60_000);
 }
 
-export interface MatchNoticeResetOptions {
+interface MatchNoticeResetOptions {
   at: number;
 }
 

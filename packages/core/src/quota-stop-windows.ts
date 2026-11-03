@@ -13,7 +13,7 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import type { QuotaStopWindow, SynthesizedNoticeWindow } from './synthesized-notice.js';
 
-export interface QuotaStopWindowsDeps {
+interface QuotaStopWindowsDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   /** `Pool#journalExchange` を束ねたもの（呼び出しの形は `exchange-kind-coverage.test.ts` が数える）。 */
   journalExchange: (role: 'inbound' | 'outbound', text: string) => Promise<void>;

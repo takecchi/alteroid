@@ -11,11 +11,11 @@ import { resolveEnumEnv } from './placed-env.js';
 
 export const REPORT_LANGUAGE_ENV = 'ALTEROID_REPORT_LANGUAGE';
 
-export const REPORT_LANGUAGE_VALUES = ['ja', 'off'] as const;
+const REPORT_LANGUAGE_VALUES = ['ja', 'off'] as const;
 export type ReportLanguageMode = (typeof REPORT_LANGUAGE_VALUES)[number];
 
 // 既定は掛けない: 作者の運用スタイルを要件にしない（north_star 禁止2）
-export const DEFAULT_REPORT_LANGUAGE: ReportLanguageMode = 'off';
+const DEFAULT_REPORT_LANGUAGE: ReportLanguageMode = 'off';
 
 // 綴り違いは黙って既定へ倒さず投げる: 持ち主が気づけないままにならないため（受け手が知らせない側へ倒して note に残す）
 export function resolveReportLanguage(env: NodeJS.ProcessEnv = process.env): ReportLanguageMode {
@@ -225,7 +225,7 @@ export function findEnglishSentences(text: string): string[] {
 export const REPORT_LANGUAGE_NOTICE_INTERVAL_MS = 10 * 60_000;
 
 /** 知らせ・日誌に載せる例の長さ。 */
-export const REPORT_LANGUAGE_EXAMPLE_MAX_CHARS = 80;
+const REPORT_LANGUAGE_EXAMPLE_MAX_CHARS = 80;
 
 export function excerptExample(sentence: string): string {
   return clipWithEllipsis(sentence, REPORT_LANGUAGE_EXAMPLE_MAX_CHARS);

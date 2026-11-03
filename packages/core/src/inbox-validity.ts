@@ -3,7 +3,7 @@ import type { InboxEvent, JobStatus } from './schema.js';
 
 // この述語の戻り値で行を消さない: 決めるのは添える言葉だけで、消すなら `inbox-staleness.ts` の側で合図の性質だけで決めるため
 // `unclaimed` と `unknowable` を `unchanged` に混ぜない: 「変わっていない」と「確かめられなかった」が読む側から同じ顔になるため
-export type InboxEventValidity =
+type InboxEventValidity =
   | { readonly kind: 'unchanged'; readonly status: JobStatus }
   | { readonly kind: 'changed'; readonly claimed: JobStatus; readonly now: JobStatus }
   | { readonly kind: 'unclaimed' }

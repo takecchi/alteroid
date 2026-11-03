@@ -1,4 +1,4 @@
-export interface RecentMapOptions {
+interface RecentMapOptions {
   limit: number;
   /** 黙って落とさない: 忘れた id の再送はもう一度表に出るので、忘れたことが記録に無いと原因へ辿れない。 */
   onForget?: (ids: string[]) => void;

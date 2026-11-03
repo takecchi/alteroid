@@ -18,7 +18,7 @@ import {
 } from './synthesized-notice.js';
 import type { WithheldReportsStore } from './withheld-reports-store.js';
 
-export interface SynthesizedNoticeWindowsDeps {
+interface SynthesizedNoticeWindowsDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   /** 抱えているトークン（`Pool#tokenIdentities`）。積む時点で読む。 */
   tokenIdentities: ReadonlyMap<string, { tokenId: string }>;

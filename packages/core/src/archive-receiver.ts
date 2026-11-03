@@ -13,7 +13,7 @@ const ARCHIVE_REF_OUTCOMES_MAX = 512;
  * `Pool` が口として渡すもの。関数の口は async の皮で包まずに渡す（`await` の数と順を変えないため）。
  * `stores` は差し替わりうるので、欄ではなく入れ物の参照を受けて呼ぶたびに引く。
  */
-export interface ArchiveReceiverPorts {
+interface ArchiveReceiverPorts {
   stores: Pick<Stores, 'archive' | 'sessionStore'>;
   /** `SessionLoaders#fetchArchiveRetrying` を束ねたもの。 */
   fetchArchiveRetrying: SessionLoaders['fetchArchiveRetrying'];

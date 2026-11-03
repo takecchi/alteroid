@@ -1,7 +1,7 @@
 import type { Stores } from './store.js';
 
 /** 発意 tick のターンを回した印になる日誌の行の頭（`turn-input.ts` の `describeTurnInput` が `turnInputEntry` で書く、ターンの入力の行）。 */
-export const SELF_INITIATIVE_TURN_INPUT_PREFIX = 'ターンの入力: self_initiative ';
+const SELF_INITIATIVE_TURN_INPUT_PREFIX = 'ターンの入力: self_initiative ';
 
 /** 1日1回の点検の間隔（#5469 P6a）。 */
 export const INITIATIVE_DAILY_CHECK_MS = 24 * 60 * 60 * 1000;
@@ -17,7 +17,7 @@ export type InitiativeGateDecision =
       readonly lastTickAt: string | null;
     };
 
-export type InitiativeRunReason = 'manual' | 'movable_task' | 'daily_check' | 'read_failed';
+type InitiativeRunReason = 'manual' | 'movable_task' | 'daily_check' | 'read_failed';
 
 /**
  * 発意 tick をモデルのターンとして回すかを決める（#5469 P6a）。回すのは次のどれか:

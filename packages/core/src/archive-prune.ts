@@ -29,7 +29,7 @@ export function matchesArchiveRemoveManyFilter(
   return true;
 }
 
-export interface ArchiveRemovalSelectionOptions {
+interface ArchiveRemovalSelectionOptions {
   readonly requireContainment?: boolean;
   readonly limit?: number;
   // 「墓標」の概念を持ち込まない: 他の「守るべき id」の理由からも再利用できるようにするため

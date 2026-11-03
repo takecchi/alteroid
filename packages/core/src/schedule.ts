@@ -56,7 +56,7 @@ export interface Scheduler {
   settled(): Promise<void>;
 }
 
-export interface SchedulerOptions {
+interface SchedulerOptions {
   entries: ScheduleEntry[];
   post: (event: InboxEvent) => void;
   now?: () => Date;
@@ -86,7 +86,7 @@ function dueFromSeed(entry: ScheduleEntry, seed: Date, now: Date): { at: Date; c
   };
 }
 
-export const SCHEDULE_RETRY_MS = 60_000;
+const SCHEDULE_RETRY_MS = 60_000;
 
 export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
@@ -478,7 +478,7 @@ export function localDate(at: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export function startOfLocalDay(at: Date): Date {
+function startOfLocalDay(at: Date): Date {
   return new Date(at.getFullYear(), at.getMonth(), at.getDate(), 0, 0, 0, 0);
 }
 
@@ -686,7 +686,7 @@ export function scheduledRequestEntry(plan: ScheduledRequest): ScheduleEntry {
   };
 }
 
-export interface MissingDailyReportsInput {
+interface MissingDailyReportsInput {
   journal: JournalStore;
   at: TimeOfDay;
   now: Date;

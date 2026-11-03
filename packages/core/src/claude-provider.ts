@@ -65,7 +65,7 @@ import { isSuccessResult, modelUsageOf } from './usage.js';
 // SDK の既定値に頼らず matcher に明示する: 既定値は未確認のため
 export const SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS =
   Math.ceil(SUBAGENT_BACKGROUND_WAIT_MS / 1000) + 120;
-export const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
+const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
 
 export const CLAUDE_PROVIDER: AgentProvider = {
   id: 'claude',
@@ -403,7 +403,7 @@ function cloneMcpOptions(
   };
 }
 
-export interface ClonePluginRequest {
+interface ClonePluginRequest {
   path: string;
   skipMcpDiscovery: boolean;
 }
@@ -621,7 +621,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
   };
 }
 
-export interface CloneDistillOptionsRequest extends CloneOptionsRequestBase {
+interface CloneDistillOptionsRequest extends CloneOptionsRequestBase {
   onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
 }
 
@@ -643,7 +643,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
   };
 }
 
-export interface ManagerSessionOptionsRequest {
+interface ManagerSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   systemPromptAppend: string;

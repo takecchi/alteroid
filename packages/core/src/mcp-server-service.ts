@@ -27,7 +27,7 @@ export interface McpServerService {
   onPushed?(listener: (results: readonly McpServersRunnerResult[]) => void): () => void;
 }
 
-export interface McpServerServiceOptions {
+interface McpServerServiceOptions {
   stores: Stores;
   runners?: RunnerRegistry;
 }

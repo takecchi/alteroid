@@ -44,7 +44,7 @@ type SessionMaterial =
   /** **引きに行って失敗した。** 待てば直りうるので、恒久の結論に変えない。 */
   | { kind: 'unreadable' };
 
-export interface SessionLoadersDeps {
+interface SessionLoadersDeps {
   /** `sessionStore` は呼ぶたびに読む（構築時に控えない）。 */
   stores: Pick<Stores, 'sessionStore'>;
   runners: Pick<RunnerRegistry, 'get'>;

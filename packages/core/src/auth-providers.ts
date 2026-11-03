@@ -6,13 +6,13 @@ export interface OAuthProfile {
   displayName: string | null;
 }
 
-export interface AuthorizationRequest {
+interface AuthorizationRequest {
   state: string;
   codeChallenge: string;
   redirectUri: string;
 }
 
-export interface ExchangeRequest {
+interface ExchangeRequest {
   code: string;
   codeVerifier: string;
   redirectUri: string;
@@ -27,7 +27,7 @@ export interface OAuthProvider {
 }
 
 // `oauth2` の枠に押し込まない: パスワードは「外部の identity」ではなく「本人が持つ資格情報」で、概念が違うため
-export interface PasswordProvider {
+interface PasswordProvider {
   readonly kind: 'password';
   readonly id: string;
   readonly label: string;
@@ -53,7 +53,7 @@ export function createAuthProviderRegistry(providers: AuthProvider[]): AuthProvi
   };
 }
 
-export interface OAuthProviderConfig {
+interface OAuthProviderConfig {
   clientId: string;
   clientSecret: string;
   fetchImpl?: typeof fetch;
@@ -64,7 +64,7 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 const GOOGLE_SCOPES = 'openid email profile';
 
-export const GOOGLE_PROVIDER_ID = 'google';
+const GOOGLE_PROVIDER_ID = 'google';
 
 // ID トークンの署名検証をしない: 認可コードを交換したのは我々自身で、応答は TLS で Google のトークン端点から直接来るため（代わりに userinfo を引く）
 export function createGoogleProvider(config: OAuthProviderConfig): OAuthProvider {

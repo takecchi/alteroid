@@ -25,7 +25,7 @@ const UNIT_MS: Readonly<Record<string, number>> = {
   d: 86_400_000,
 };
 
-export interface BashToolTimeoutRaise {
+interface BashToolTimeoutRaise {
   readonly fromMs: number | undefined;
   readonly toMs: number;
   readonly commandTimeoutTotalMs: number | undefined;

@@ -8,7 +8,7 @@ import { describeSkippedRow } from './invalid-row.js';
 
 const CREDENTIAL_BATCH_LIST_EXCERPT = 400;
 
-export const DEFAULT_CREDENTIAL_DIR = '/run/alteroid/credentials';
+const DEFAULT_CREDENTIAL_DIR = '/run/alteroid/credentials';
 
 // 環境変数を総なめにしない: 何が鍵かを推測で決めると、鍵でないものを晒すか鍵を取りこぼすため
 export const ROTATABLE_CREDENTIAL_KEYS = [
@@ -98,7 +98,7 @@ export interface CredentialStore {
   readonly lastWriteError: string | undefined;
 }
 
-export interface CredentialStoreOptions {
+interface CredentialStoreOptions {
   dir?: string;
   seed?: NodeJS.ProcessEnv;
   names?: readonly string[];

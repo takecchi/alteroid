@@ -30,7 +30,7 @@ const SITUATION_HEAD = '[system] いまの全体';
  */
 export type SituationExplained = Map<SituationExplanationKey | typeof MATERIALS_KEY, string>;
 
-export type SituationExplanationKey =
+type SituationExplanationKey =
   'lost' | 'lastFailure' | 'usageStopped' | 'runnerVanished' | 'readings' | 'tokenInvariant';
 
 // 材料の行（委譲・器・受信箱・鍵）を前回出した形のまま控える鍵（#5295）。説明文ではないので `SituationExplanationKey`（要点の表を持つ型）には混ぜず、同じ控えに同居させる:
@@ -127,7 +127,7 @@ const RUNNER_VANISHED_NOTICE =
 // lastTurnFailed / usageStopped を区分にしない: done のまま座るのは仕様で、idle から外すと「置けない」と読まれるため。
 // lastUnreported / lastSystemError を lastTurnFailed に畳まない: 別の軸で、畳むと本数と ⚠ 行がまた食い違うため。
 // *Idle に割る: 食い違いが起きるのは「手が空いている」と並んだときだけのため
-export interface ManagerSituationCounts {
+interface ManagerSituationCounts {
   readonly total: number;
   readonly running: number;
   readonly waitingHuman: number;

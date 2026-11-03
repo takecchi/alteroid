@@ -19,7 +19,7 @@ import type { AttachmentRef } from './schema.js';
  * 読む前でなければ意味が無いもの（通常ファイルか・上限・資格の置き場）だけにする。
  */
 
-export interface CredentialSources {
+interface CredentialSources {
   readonly dir?: string;
   readonly files: ReadonlyMap<string, string>;
 }
@@ -66,11 +66,11 @@ export async function resolveCredentialSources(env: NodeJS.ProcessEnv): Promise<
   };
 }
 
-export type PutLocalFileResult =
+type PutLocalFileResult =
   | { readonly ok: true; readonly ref: AttachmentRef; readonly note?: string }
   | { readonly ok: false; readonly message: string };
 
-export interface PutLocalFileOptions {
+interface PutLocalFileOptions {
   readonly limits: AttachmentLimits;
   readonly env: NodeJS.ProcessEnv;
 }

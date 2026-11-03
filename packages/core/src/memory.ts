@@ -38,7 +38,7 @@ export interface MemoryPart {
   descriptionFreshness?: MemoryDescriptionFreshness;
 }
 
-export interface PremiseOutlineFit {
+interface PremiseOutlineFit {
   slug: string;
   total: number;
   shown: number;
@@ -268,7 +268,7 @@ export function memoryBodyStart(content: string): number {
   return Math.min(offset, content.length);
 }
 
-export interface MemoryFrontmatterPatch {
+interface MemoryFrontmatterPatch {
   description?: string;
   type?: string;
   parent?: string;
@@ -284,7 +284,7 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
   return lines.join('\n');
 }
 
-export interface MemoryFrontmatterLineBreak {
+interface MemoryFrontmatterLineBreak {
   position: number;
   char: '\n' | '\r';
   excerpt: string;
@@ -1375,7 +1375,7 @@ function buildMemoryDocumentSections(
   };
 }
 
-export interface RenderMemoryDocumentsOptions {
+interface RenderMemoryDocumentsOptions {
   // 型は slug の集合ではなく文書そのもの: 循環の検出（`detectCycle`）が記憶の全体を辿るには、在否だけでなく parent（frontmatter）まで引ける必要があるため
   presentInMemory?: readonly MemoryPart[];
   seenContent?: ReadonlyMap<string, string>;
@@ -1454,7 +1454,7 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
   };
 }
 
-export interface MemoryListingEntry {
+interface MemoryListingEntry {
   slug: string;
   title: string;
   kind: MemoryDocKind;
@@ -1530,7 +1530,7 @@ export function renderMemoryListing(
 }
 
 // 本文そのものは載せない: 載せるのは見出しの文字列と数だけ（AGENTS.md「秘密の扱い」）
-export const MEMORY_MISSING_HEADINGS_BUDGET = 600;
+const MEMORY_MISSING_HEADINGS_BUDGET = 600;
 
 function formatMemoryCharCount(value: number): string {
   return value.toLocaleString('en-US');
@@ -1905,7 +1905,7 @@ export interface MemorySection {
   chars: number;
 }
 
-export interface MemorySectionScan {
+interface MemorySectionScan {
   bodyStart: number;
   sections: MemorySection[];
 }
@@ -2058,7 +2058,7 @@ export function findOverlappingMemorySections(
   return null;
 }
 
-export interface MemorySectionHierarchyJump {
+interface MemorySectionHierarchyJump {
   readonly section: MemorySection;
   readonly parent: MemorySection;
   readonly gap: number;
@@ -2136,7 +2136,7 @@ export const MEMORY_OUTLINE_BUDGET = 8_000;
 // `side` を窓（オフセット）にしない: 予算は文字数なので何節入るかは見出しの長さで動き、末尾の N 節を添字で当てる材料が呼び手の手元に無いため
 export const MEMORY_OUTLINE_SIDES = ['head', 'tail'] as const;
 
-export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
+type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
 
 // 予算と省略の文言は共有しない: 道具は `side` で反対側を出せるが焼き込みは1回しか描かず、省いたときに何をすればよいかが違うため
 // 重複は `allSections`（文書の全節）で数える: 出す範囲（offset・q の窓）の中だけで数えると、窓の外に同じ id の節があっても印が付かず、
@@ -2187,7 +2187,7 @@ function renderMemoryOutlineBudgetNote(): string {
   return `${scope} ${sibling} ${family}`;
 }
 
-export interface MemoryOutlineOptions {
+interface MemoryOutlineOptions {
   side?: MemoryOutlineSide;
   q?: string;
   offset?: number;

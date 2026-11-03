@@ -31,8 +31,7 @@ export type BashShapeForm =
   | 'pipe-trim'
   | 'pipe-masks-exit';
 
-export type BashShapeVerdict =
-  { blocked: false } | { blocked: true; form: BashShapeForm; reason: string };
+type BashShapeVerdict = { blocked: false } | { blocked: true; form: BashShapeForm; reason: string };
 
 // 理由の文は、最初の1文で「何を止めたか」と「代わりにどう書けば通るか」を言う（#4989）: 「使えない」とだけ言うと禁止の宣言として読まれ、担当が手を止めて依頼者の指示を待つため。
 // 管（`| tail`）で絞ることは勧めない（#4990）: 終了コードが管の後ろのものになり、前のコマンドの失敗が成功に見えるため
@@ -952,7 +951,7 @@ function splitPipelines(command: string, outside: readonly boolean[]): string[][
   return statements;
 }
 
-export type PipeExitMasking =
+type PipeExitMasking =
   { kind: 'mutating'; name: string } | { kind: 'checker'; name: string; last: string };
 
 /**

@@ -5,7 +5,7 @@ import type { AuthAccount, AuthStore } from './auth.js';
 import type { Stores } from './store.js';
 
 // 書き手の口を足さない: 許可の付与・取り消し・読めない行を消す口は人間の手に限るため
-export type AccountReader = Pick<AuthStore, 'listAccounts' | 'listUnreadableAccounts'>;
+type AccountReader = Pick<AuthStore, 'listAccounts' | 'listUnreadableAccounts'>;
 
 // 他の一覧の定数を使い回さない: 値が同じでも由来が違うため
 const ACCOUNT_LIST_BUDGET = 6_000;

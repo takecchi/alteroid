@@ -55,7 +55,7 @@ function describeSynthesizedNoticeLabel(label: SynthesizedNoticeLabel): string {
  * **本文が1バイトでも違えば別の断片として残す**（代表を選べない）。
  * **通数そのものは捨てない**: 「4通が3通に減ったのか、1回が3回に増えたのか」を区別する材料になる。
  */
-export interface SynthesizedNoticeFragment {
+interface SynthesizedNoticeFragment {
   label: SynthesizedNoticeLabel;
   text: string;
   /** 1以上。 */

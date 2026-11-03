@@ -44,7 +44,7 @@ export function commandHeadWord(value: string): string | undefined {
   return head;
 }
 
-export function denialCommandHeadWord(input: unknown): string | undefined {
+function denialCommandHeadWord(input: unknown): string | undefined {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const keys = Object.keys(input as Record<string, unknown>);
   const commandKey = keys.find((key) => COMMAND_KEYS.has(key));

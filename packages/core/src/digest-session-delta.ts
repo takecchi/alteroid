@@ -70,7 +70,7 @@ interface ReportShown {
  * この長さに満たない報告は控えない。引き直しても得が小さく、短い本文は別の箇所の文字列と偶然一致しやすいため。
  * 控えないだけで安全側（引き直せば全文が返る）。
  */
-export const REPORT_SHOWN_MIN_CHARS = 1_000;
+const REPORT_SHOWN_MIN_CHARS = 1_000;
 
 interface Staged {
   sections: SectionRecord | null;
@@ -89,7 +89,7 @@ export interface DigestDeltaState {
   reports: [string, { key: string; chars: number; at: string }][];
 }
 
-export interface RenderedDigest {
+interface RenderedDigest {
   /** モデルへ渡す形（差分にしたもの）。 */
   readonly text: string;
   /** 差分にする前の全文の長さ。 */
@@ -184,7 +184,7 @@ function standingRowKind(item: string): string | null {
   return open > 2 ? head.slice(2, open) : null;
 }
 
-export interface DigestSessionDeltaOptions {
+interface DigestSessionDeltaOptions {
   /**
    * 真なら何も畳まず、何も控えない: 全入口が毎回の全文を返す（`ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT` が無効の既定）。
    * 入口ごとに分岐を足さず、控えの書き込み口（`#stage` / `#committed` への書き込み）を持つ入口をここで止める: 控えが空のままなら、
