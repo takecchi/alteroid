@@ -14,21 +14,21 @@ import {
   type ReaddirFn,
 } from './unpushed-work.js';
 
-export const SCRATCH_SWEEP_GRACE_MS_ENV_KEY = 'ALTEROID_SCRATCH_SWEEP_GRACE_MS';
-export const SCRATCH_SWEEP_INTERVAL_MS_ENV_KEY = 'ALTEROID_SCRATCH_SWEEP_INTERVAL_MS';
+const SCRATCH_SWEEP_GRACE_MS_ENV_KEY = 'ALTEROID_SCRATCH_SWEEP_GRACE_MS';
+const SCRATCH_SWEEP_INTERVAL_MS_ENV_KEY = 'ALTEROID_SCRATCH_SWEEP_INTERVAL_MS';
 
 export const DEFAULT_SCRATCH_SWEEP_GRACE_MS = 2 * 60 * 60_000;
 export const DEFAULT_SCRATCH_SWEEP_INTERVAL_MS = 10 * 60_000;
-export const MIN_SCRATCH_SWEEP_INTERVAL_MS = 1000;
-export const MAX_SCRATCH_SWEEP_MS = 2_147_483_647;
+const MIN_SCRATCH_SWEEP_INTERVAL_MS = 1000;
+const MAX_SCRATCH_SWEEP_MS = 2_147_483_647;
 
-export const SCRATCH_SWEEP_UNTRACKED_NAMES_LIMIT = 20;
-export const SCRATCH_SWEEP_NAME_MAX_LENGTH = 200;
+const SCRATCH_SWEEP_UNTRACKED_NAMES_LIMIT = 20;
+const SCRATCH_SWEEP_NAME_MAX_LENGTH = 200;
 // 深さを実質外す値にする: `.git` を見落として「無い」と判定しないため。それでも降りなかった枝は「判定できない」で残す
-export const SCRATCH_SWEEP_MAX_DEPTH = 12;
-export const SCRATCH_SWEEP_CONTENT_SCAN_LIMIT = 1000;
-export const SCRATCH_SWEEP_NODE_MODULES_LIMIT = 100;
-export const SCRATCH_SWEEP_GIT_TIMEOUT_MS = 15_000;
+const SCRATCH_SWEEP_MAX_DEPTH = 12;
+const SCRATCH_SWEEP_CONTENT_SCAN_LIMIT = 1000;
+const SCRATCH_SWEEP_NODE_MODULES_LIMIT = 100;
+const SCRATCH_SWEEP_GIT_TIMEOUT_MS = 15_000;
 
 // 範囲へ挟まず既定へ戻す（`clamp` を付けない）・知らせも出さない: 猶予は短すぎる値で作業場を早く消す向きに効くため
 function resolveMs(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -59,7 +59,7 @@ export interface ScratchDirEntry {
   isSymbolicLink(): boolean;
 }
 
-export interface ScratchSweepStatfs {
+interface ScratchSweepStatfs {
   readonly bsize: number;
   readonly blocks: number;
   readonly bfree: number;

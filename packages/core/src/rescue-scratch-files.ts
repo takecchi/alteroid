@@ -14,7 +14,7 @@ export const SCRATCH_FILES_LIMIT = 2000;
 export const SCRATCH_DEPTH_LIMIT = 12;
 
 /** 依存と生成物の置き場。ファイル名でも同じ名前は除く。 */
-export const SCRATCH_EXCLUDED_NAMES: ReadonlySet<string> = new Set([
+const SCRATCH_EXCLUDED_NAMES: ReadonlySet<string> = new Set([
   'node_modules',
   '.git',
   '.pnpm-store',
@@ -38,7 +38,7 @@ export type ScratchReaddirFn = (dir: string) => Promise<readonly ScratchDirEntry
 
 const defaultReaddir: ScratchReaddirFn = (dir) => readdir(dir, { withFileTypes: true });
 
-export interface ScratchListing {
+interface ScratchListing {
   /** 置き場の根からの相対の名前（区切りは OS のもの）。 */
   readonly names: string[];
   /** 預けなかった分の知らせ（`stashUntrackedFiles` の `skipped` と同じ形）。 */

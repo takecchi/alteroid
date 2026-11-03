@@ -105,7 +105,7 @@ async function indexIsReadable(file: string): Promise<boolean> {
   return (await stat(file).catch(() => undefined)) !== undefined;
 }
 
-export const RESCUE_UNTRACKED_PATHS_LIMIT = 20;
+const RESCUE_UNTRACKED_PATHS_LIMIT = 20;
 /**
  * 退避で探す作業ツリーの本数の上限（#4953）。`manager_stop` の表示の上限（`DEFAULT_MAX_WORKTREES`）から切り離した。
  * 表示の上限を使い回すと、作業ツリーを20本以上抱える担当で、打ち切られた分の未 push の変更が器の入れ替えで消えるため。
@@ -115,15 +115,15 @@ export const RESCUE_MAX_WORKTREES = 40;
 const PATH_NAME_MAX_LENGTH = 200;
 const SECRET_FILES_LIMIT = 5;
 /** テキストの差分（`git log -p`・`git diff-tree -p`）の上限。バイナリはここに数えない（#5117）。 */
-export const RESCUE_DIFF_MAX_BYTES = 2 * 1024 * 1024;
+const RESCUE_DIFF_MAX_BYTES = 2 * 1024 * 1024;
 /**
  * 1作業ツリーの1回の退避で読む、未 push のバイナリの blob の合計の上限（#5117）。
  * テキストの差分と予算を分ける: バイナリは判定に使う規則が少ない（`secretPatternsInBody` の `binary`）のに、
  * 差分に丸ごと載せると 2 MiB を食い、絵の担当の未 push が積もっただけで `too-large` になって退避が止まるため。
  */
-export const RESCUE_BINARY_MAX_BYTES = 64 * 1024 * 1024;
+const RESCUE_BINARY_MAX_BYTES = 64 * 1024 * 1024;
 /** バイナリの blob 1本の上限。超えたら判定しきれないとして `too-large` に倒す。 */
-export const RESCUE_BINARY_BLOB_MAX_BYTES = 16 * 1024 * 1024;
+const RESCUE_BINARY_BLOB_MAX_BYTES = 16 * 1024 * 1024;
 // 塊ごとに判定し、境目は重ねる: blob を丸ごと文字列に溜めず、メモリを塊の大きさで頭打ちにするため。
 // 重ねは規則の最長（接頭辞つきの形で 315 文字ほど）よりずっと大きく取る: 環境変数の鍵の値は長さが決まっていないため
 const BINARY_SCAN_WINDOW_CHARS = 1024 * 1024;
@@ -488,7 +488,7 @@ export function rescueRefName(managerId: string, repoRoot: string, relativePath:
   return `${RESCUE_REF_PREFIX}${id}/${base === '' ? 'tree' : base}-${hash}`;
 }
 
-export interface SecretLikeHit {
+interface SecretLikeHit {
   readonly file: string;
   readonly patterns: readonly SecretPatternName[];
 }
@@ -654,7 +654,7 @@ export class RescueMemory {
   }
 }
 
-export interface RunRescueOptions {
+interface RunRescueOptions {
   readonly managerId: string;
   readonly spawn: ProcessSpawnFn;
   readonly env: Record<string, string | undefined>;
@@ -685,7 +685,7 @@ export interface RunRescueOptions {
   readonly scratchReaddirFn?: ScratchReaddirFn;
 }
 
-export interface RescueStashHook {
+interface RescueStashHook {
   readonly stagedRoot: string;
   readonly expectedUid: number | undefined;
   readonly secretEnv: NodeJS.ProcessEnv;
@@ -884,7 +884,7 @@ async function stashScratchDirs(
   return kept;
 }
 
-export const RESCUE_LANDED_SCAN_COMMITS = 300;
+const RESCUE_LANDED_SCAN_COMMITS = 300;
 
 async function treeIsInOrigin(
   spawn: ProcessSpawnFn,
@@ -1317,7 +1317,7 @@ export type RescueRefDeleteResult =
       readonly kind: 'auth' | 'network' | 'timeout' | 'moved' | 'no-remote' | 'other';
     };
 
-export interface DeleteRescueRefOptions {
+interface DeleteRescueRefOptions {
   readonly spawn: ProcessSpawnFn;
   readonly env: Record<string, string | undefined>;
   readonly remote: string;

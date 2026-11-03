@@ -17,7 +17,7 @@ export type ProcessSpawnFn = (options: {
 }) => ChildProcess;
 
 // readdir を差し替え可能にする: `chmod 000` は root で走る CI では効かず、権限に触れずに読み失敗を再現するため
-export interface DirEntryLike {
+interface DirEntryLike {
   readonly name: string;
   isDirectory(): boolean;
 }
@@ -28,11 +28,11 @@ const defaultReaddirFn: ReaddirFn = (dir) => readdir(dir, { withFileTypes: true 
 
 export const DEFAULT_MAX_DEPTH = 3;
 export const DEFAULT_MAX_WORKTREES = 20;
-export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 3_000;
+const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 3_000;
 
 // 起点そのものの読み失敗を別の欄で名乗る: 見つかった分だけを正としてよいという前提が崩れ、0本と探索できなかったが同じ形になるため
 // 子ディレクトリの読み失敗は黙って諦めるが件数は数える: 0本と見分けが付かず、自動畳みの安全弁が未 push の実装を見落とすため
-export interface FindGitDirsResult {
+interface FindGitDirsResult {
   readonly paths: readonly string[];
   readonly truncatedAtCount?: number;
   readonly rootUnreadable?: string;
@@ -174,7 +174,7 @@ export function isManagerScratchDirName(name: string): boolean {
   return MANAGER_SCRATCH_DIR_NAME_PATTERN.test(name);
 }
 
-export interface FindManagerScratchRootsResult {
+interface FindManagerScratchRootsResult {
   readonly paths: readonly string[];
   readonly unknownReason?: string;
 }
@@ -286,7 +286,7 @@ async function findGitDirsAcrossRoots(
   };
 }
 
-export interface GitRunResult {
+interface GitRunResult {
   readonly stdout: string;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
@@ -463,7 +463,7 @@ async function probeUncommittedChangeCount(
   return { uncommittedChangeCount: count };
 }
 
-export interface ComputeUnpushedWorkOptions {
+interface ComputeUnpushedWorkOptions {
   spawn: ProcessSpawnFn;
   env: Record<string, string | undefined>;
   maxDepth?: number;

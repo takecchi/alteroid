@@ -23,14 +23,14 @@ import type { RunnerRescueFile, RunnerRescueSkipped } from './runner-protocol.js
 
 export const RESCUE_STASH_FILE_MAX_BYTES = 25 * 1024 * 1024;
 /** 1周期（1回の退避）に退避先へ写す合計の上限。超えた分は次の周期へ回す。 */
-export const RESCUE_STASH_CYCLE_MAX_BYTES = 200 * 1024 * 1024;
+const RESCUE_STASH_CYCLE_MAX_BYTES = 200 * 1024 * 1024;
 /**
  * 退避先（1委譲ぶん）に溜めておける合計の上限。デーモンが取りに来ない（旧い daemon・繋がらない）間に退避先が器のディスクを食わないため。
  * 取りに来れば `DELETE` で減り、来なくても24時間の掃除が消す。
  */
-export const RESCUE_STASH_STAGED_MAX_BYTES = 512 * 1024 * 1024;
+const RESCUE_STASH_STAGED_MAX_BYTES = 512 * 1024 * 1024;
 /** 1回の呼び出しで中身を読みに進む名前の上限（記憶で飛ばす名前は数えない）。超えた分は `cycle-budget` として1件にまとめて知らせる。 */
-export const RESCUE_STASH_NAMES_PER_CYCLE = 1000;
+const RESCUE_STASH_NAMES_PER_CYCLE = 1000;
 
 const SKIPPED_PATH_MAX_LENGTH = 200;
 const COPY_CHUNK_BYTES = 64 * 1024;
@@ -96,7 +96,7 @@ export function newRescueStashCycle(): RescueStashCycle {
   return { bytesLeft: RESCUE_STASH_CYCLE_MAX_BYTES };
 }
 
-export interface RescueStashOptions {
+interface RescueStashOptions {
   readonly managerId: string;
   readonly stagedRoot: string;
   /** 所有者の検査。出し箱と同じ: ハードリンクや他人のファイルで、runner の持ち物を読まされないため。`undefined` は uid を持たない環境。 */
