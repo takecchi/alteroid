@@ -32,6 +32,9 @@ type JsonResponse = {
 // `app.ts` の経路が複数の族にまたがって使う共有物（応答ヘルパ・検証の包み・日誌ヘルパ・未読行の削除など）。
 // `openapi.ts` の値を最上位で評価しない（`app.ts` ↔ `openapi.ts` は循環 import）。`app.ts` を値で import しない。
 
+// 書き込みの `ifMatch`: 省略は後勝ち、`null` は「まだ無いこと」を前提にする（読んだ版を前提にする書き込みの共通の欄）。
+export const ifMatchField = z.string().nullable().optional();
+
 // `ifMatch` の省略は 428 で断るが形の検査では必須にしない: スラッグ不正 400・無い 404 を先に返すためハンドラで 404 の後に断る。`null` は受けない（無いものを消す意味が無い）。
 // やり方の削除も同じ形（読めない形で入っている行だけは版なしで消せる）。
 export const ifMatchDeleteQuery = z.object({ ifMatch: z.string().min(1).optional() });
