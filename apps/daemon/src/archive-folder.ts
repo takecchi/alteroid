@@ -29,7 +29,7 @@ export const ARCHIVE_FOLD_GRACE_MS = 10 * 60_000;
 // 下限は 1 分: これを許すと `0.00001` のような値で `setTimeout` が 1ms へ倒れ、畳み込みが全行走査を休みなく回すため。切り上げて採るのではなく既定へ倒す（添付の掃除の読み取りと同じ作法）。
 export const MIN_ARCHIVE_FOLD_EVERY_MINUTES = 1;
 
-export type ArchiveFoldConfig = EveryMinutesConfig;
+type ArchiveFoldConfig = EveryMinutesConfig;
 
 export function readArchiveFoldConfig(env: NodeJS.ProcessEnv = process.env): ArchiveFoldConfig {
   return readEveryMinutes(env, ARCHIVE_FOLD_EVERY_ENV, {
@@ -55,7 +55,7 @@ export interface FoldArchiveOnceResult {
   readonly journalDroppedIds: readonly string[];
 }
 
-export interface FoldArchiveOnceOptions {
+interface FoldArchiveOnceOptions {
   readonly stores: Pick<Stores, 'archive' | 'sessions' | 'journal'>;
   // 判定所は `guardArchiveRemoval` の1箇所だけにする: ここで新しい保護ロジックを書かない。
   readonly managers:
@@ -182,7 +182,7 @@ export async function foldArchiveOnce(
   };
 }
 
-export interface ArchiveFolderOptions {
+interface ArchiveFolderOptions {
   readonly stores: Pick<Stores, 'archive' | 'sessions' | 'journal'>;
   readonly managers:
     Pick<ManagerPool, 'runningManagerOwning' | 'runningManagerPinning'> | undefined;
@@ -194,7 +194,7 @@ export interface ArchiveFolderOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface ArchiveFolder {
+interface ArchiveFolder {
   refresh(): Promise<FoldArchiveOnceResult | null>;
   stop(): void;
 }

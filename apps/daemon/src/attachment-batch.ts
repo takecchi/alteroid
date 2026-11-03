@@ -11,7 +11,7 @@ import {
   type AttachmentStore,
 } from '@alteroid/core';
 
-export type AttachmentBatchFailure = {
+type AttachmentBatchFailure = {
   ok: false;
   status: 400 | 413;
   body: {
@@ -26,7 +26,7 @@ export type AttachmentBatchFailure = {
 
 export type AttachmentBatchResult = { ok: true; refs: AttachmentRef[] } | AttachmentBatchFailure;
 
-export interface AttachmentBatchOptions {
+interface AttachmentBatchOptions {
   readonly store: Pick<AttachmentStore, 'getMeta'>;
   readonly limits: AttachmentLimits;
   readonly bind: (ids: readonly string[]) => Promise<AttachmentBindResult>;

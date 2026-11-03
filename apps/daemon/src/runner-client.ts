@@ -93,7 +93,7 @@ export interface RunnerUnknownReport {
 // `onUnknown` を借りない: あちらは「こちらが投げた呼びが期限内に返らなかった」で、主語が違うため
 // 本文は載せない（載せるのは `type` とバイト数だけ）: ここへ来るフレームにはマネージャーの報告が入りうるため
 // `handler-failed`: フレームは読めたが、受ける側（`onEvent`）が投げた。壊れたフレームと取り違えない（#5950）
-export type RunnerDroppedReason = 'unparsable' | 'unknown-shape' | 'handler-failed';
+type RunnerDroppedReason = 'unparsable' | 'unknown-shape' | 'handler-failed';
 
 export type RunnerDroppedEventReport =
   | {
@@ -216,7 +216,7 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 // 繋ぎに行くのをデーモンだけにする: 逆向きのコールバック URL を足すと、runner の中のマネージャーがその経路でデーモンの API（＝記憶）へ届くようになるため
-export interface HttpRunnerOptions {
+interface HttpRunnerOptions {
   baseUrl: string;
   // 素の値を持つのはデーモンだけ: runner 側は sha256 だけなので、マネージャーが `/proc/1/environ` を読めてもこの鍵は作れず、自分宛の許可確認に自分で `allow` を返す経路を塞げるため
   token: string;

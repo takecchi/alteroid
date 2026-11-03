@@ -16,7 +16,7 @@ import { routePath } from 'hono/route';
 // - 窓（既定 10 分）ごとに経路で束ね、日誌へ `http_timing` を1行書く。要求ごとには書かない: 記録自体を重くしないため
 // - 遅い要求（`HTTP_TIMING_SLOW_MS` 以上）は、その場で stderr へ1行出す
 
-export const HTTP_TIMING_WINDOW_MS = 10 * 60_000;
+const HTTP_TIMING_WINDOW_MS = 10 * 60_000;
 /** 1つの窓で stderr へ出す遅い要求の行の上限。超えた分は窓を閉じるときに数だけ言う */
 const SLOW_LINES_PER_WINDOW = 30;
 
@@ -106,7 +106,7 @@ export function httpTimingMiddleware(
   };
 }
 
-export interface HttpTimingCollector extends HttpTimingRecorder {
+interface HttpTimingCollector extends HttpTimingRecorder {
   /** 窓を閉じて日誌へ書く。要求が無ければ書かない */
   flush(): Promise<void>;
   stop(): Promise<void>;

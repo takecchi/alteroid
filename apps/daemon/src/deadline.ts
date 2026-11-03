@@ -34,11 +34,11 @@ export class RunnerUnknownError extends Error {
   }
 }
 
-export type LateSettleListener<T> = (
+type LateSettleListener<T> = (
   result: { ok: true; value: T } | { ok: false; error: unknown },
 ) => void;
 
-export type Settled<T> =
+type Settled<T> =
   | { readonly outcome: 'settled'; readonly value: T }
   | { readonly outcome: 'failed'; readonly error: unknown }
   | { readonly outcome: 'unknown'; readonly waitedMs: number };

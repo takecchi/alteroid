@@ -2,7 +2,7 @@ import { localDate } from '@alteroid/core';
 import type { PendingApproval } from '@alteroid/core';
 
 // 取り下げ済みも決着として数える: 外すと、従来見えていた取り下げ済みが Web から見えなくなるため。
-export function approvalSettledAt(
+function approvalSettledAt(
   approval: Pick<PendingApproval, 'answeredAt' | 'withdrawnAt'>,
 ): string | undefined {
   return approval.answeredAt ?? approval.withdrawnAt ?? undefined;
@@ -20,7 +20,7 @@ export function approvalSettledDate(
 }
 
 // 同時刻は id の降順にする: 並びをストアの生の並びに乗せないため。
-export function compareSettledNewestFirst(
+function compareSettledNewestFirst(
   a: Pick<PendingApproval, 'id' | 'answeredAt' | 'withdrawnAt'>,
   b: Pick<PendingApproval, 'id' | 'answeredAt' | 'withdrawnAt'>,
 ): number {
@@ -39,7 +39,7 @@ export function approvalsSettledOn<
     .sort(compareSettledNewestFirst);
 }
 
-export interface AnsweredDate {
+interface AnsweredDate {
   date: string;
   count: number;
 }

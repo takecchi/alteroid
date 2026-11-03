@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { stripNulWellFormed } from '@alteroid/core';
 
-export interface ClientMessageContent {
+interface ClientMessageContent {
   readonly text: string;
   readonly attachmentIds?: readonly string[] | undefined;
   readonly supersedes?: string | undefined;
