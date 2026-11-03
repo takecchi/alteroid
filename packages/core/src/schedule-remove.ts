@@ -6,9 +6,9 @@ import type { Stores } from './store.js';
 import { ScheduleConflictError, UnreadableScheduleError } from './store.js';
 
 /** 外す前に読んだ行。読めない形で入っていた行は `'unreadable'`（本文は持ち回らない）。 */
-export type ScheduleRemoveTarget = ScheduledRequest | 'unreadable';
+type ScheduleRemoveTarget = ScheduledRequest | 'unreadable';
 
-export type JournalFirstScheduleRemoveResult =
+type JournalFirstScheduleRemoveResult =
   | { readonly kind: 'removed'; readonly removed: ScheduleRemoveTarget }
   | { readonly kind: 'not-found' }
   /** 見た版と合わなかった（外していない）。`current` はいまの依頼（読めないときは `null`）。 */

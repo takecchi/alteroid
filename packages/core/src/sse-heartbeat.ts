@@ -4,7 +4,7 @@ export const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 export const HEARTBEAT_FRAME = ': hb\n\n';
 
 // hono の型を import しない: core は hono に依存しない層のため
-export interface SseHeartbeatStream {
+interface SseHeartbeatStream {
   readonly aborted: boolean;
   readonly closed: boolean;
   write(input: string): Promise<unknown>;

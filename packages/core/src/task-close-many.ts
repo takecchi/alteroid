@@ -31,7 +31,7 @@ export interface CloseManyFilterInput {
   until?: string | undefined;
 }
 
-export interface CloseManyInput extends CloseManyFilterInput {
+interface CloseManyInput extends CloseManyFilterInput {
   reason: string;
   dryRun?: boolean | undefined;
   limit?: number | undefined;
@@ -95,14 +95,14 @@ export function describeCloseManyFilter(filter: CloseManyFilterInput): string {
   ].join(' / ');
 }
 
-export interface CloseManyChunk {
+interface CloseManyChunk {
   /** 1 起点 */
   number: number;
   total: number;
   ids: readonly string[];
 }
 
-export interface CloseManyChunkHooks {
+interface CloseManyChunkHooks {
   /** 塊を閉じる前。投げれば、その塊を閉じずに全体を止める（投げた例外はそのまま呼び手へ出る） */
   before?: (chunk: CloseManyChunk) => Promise<void>;
   /** `closeMany` が投げたとき。ここで打ち消しなどを書いてよい。例外はそのまま呼び手へ出る */

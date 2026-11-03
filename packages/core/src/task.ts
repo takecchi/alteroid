@@ -34,7 +34,7 @@ export function taskStatusForJob(status: JobStatus): TaskStatus {
   return status === 'running' || status === 'waiting_human' ? 'waiting' : 'needs_decision';
 }
 
-export type TaskTransition =
+type TaskTransition =
   /** 状態が変わる。 */
   | { readonly kind: 'allowed' }
   /** 同じ状態への遷移。何も書かない（失敗にもしない: 二重に届いた指示を冪等にするため）。 */
@@ -70,7 +70,7 @@ export interface TaskRankRow {
   readonly origin: TaskOrigin;
 }
 
-export type TaskPlacementResult =
+type TaskPlacementResult =
   | {
       readonly kind: 'placed';
       readonly rank: number;

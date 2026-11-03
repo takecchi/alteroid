@@ -49,7 +49,7 @@ export function describeResetTargets(): string {
   return RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
 }
 
-export interface ResetWorkspaceStateOptions {
+interface ResetWorkspaceStateOptions {
   clearSessionLog?: () => Promise<number>;
 }
 

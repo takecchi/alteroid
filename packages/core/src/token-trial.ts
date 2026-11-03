@@ -25,7 +25,7 @@ export function doubledTrialIntervalMs(current: number): number {
   return Math.min(current * 2, TOKEN_TRIAL_BACKOFF_CAP_MS);
 }
 
-export interface SelectTokenForTrialInput {
+interface SelectTokenForTrialInput {
   tokens: readonly AgentToken[];
   active: ActiveAgentToken | null;
   at: number;
@@ -74,13 +74,13 @@ export interface TokenTrialPort {
   trial(token: { id: string } & TokenCredential): Promise<TokenCandidateVerdict>;
 }
 
-export const TOKEN_TRIAL_PROMPT_TEXT = 'ping';
+const TOKEN_TRIAL_PROMPT_TEXT = 'ping';
 
 // クローン・マネージャーの人格を継がない: 認証が生きているかだけを確かめる機械的な1ターンのため
-export const TOKEN_TRIAL_SYSTEM_PROMPT =
+const TOKEN_TRIAL_SYSTEM_PROMPT =
   'This is an automated authentication check, not a real conversation. Reply with a single short word.';
 
-export const TOKEN_TRIAL_TIMEOUT_MS = 30_000;
+const TOKEN_TRIAL_TIMEOUT_MS = 30_000;
 
 export type TokenTrialQuery = (params: {
   prompt: AsyncIterable<SDKUserMessage>;
@@ -95,7 +95,7 @@ async function* singleTrialPrompt(): AsyncGenerator<SDKUserMessage> {
   };
 }
 
-export interface RunTokenTrialOptions {
+interface RunTokenTrialOptions {
   cwd: string;
   token: string;
   model: string;

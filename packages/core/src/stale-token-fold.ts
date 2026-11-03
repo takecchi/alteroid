@@ -13,7 +13,7 @@ import { UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS } from './unpushed-work-observatio
  * その時点の値を読むので値では渡さない。`rotationFoldDueAt` は書く側（`UsageWake` が同じ参照を読む）。
  * `tokenIdentity`・`tokenAvailability`・`lastStaleDecline` は呼ぶたびに引く。
  */
-export interface StaleTokenFoldPorts {
+interface StaleTokenFoldPorts {
   resumedCount: ReadonlyMap<string, number>;
   rotationFoldDueAt: Map<string, number>;
   tokenIdentities: ReadonlyMap<string, { tokenId: string; generation: number }>;
@@ -33,7 +33,7 @@ export interface StaleTokenFoldPorts {
   ) => Promise<unknown>;
 }
 
-export interface StaleTokenFoldOptions {
+interface StaleTokenFoldOptions {
   foldBackgroundAfterWait?: boolean;
   /** 鍵の回転・枠の起こし直しの回だけ真（#4850）。抱えている古い鍵が ready でなければ、背景処理ごと畳む。ready なら今までどおり旧セッションへ届ける。 */
   foldBackgroundIfHeldTokenNotReady?: boolean;
@@ -46,7 +46,7 @@ export interface StaleTokenFoldOptions {
   skipUnchangedDeclineRecord?: boolean;
 }
 
-export interface StaleTokenFoldResult {
+interface StaleTokenFoldResult {
   /** 背景処理ごと畳んだ本数（待ちの上限 `HELD_FORCE_FOLD_AFTER_MS` を過ぎた回か、鍵の回転の回）。 */
   foldedBackground?: number;
   /** 畳まずに預けた peer の本数（`foldedBackground` には含めない。#4881） */

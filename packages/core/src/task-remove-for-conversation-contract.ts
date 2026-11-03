@@ -1,7 +1,7 @@
 import type { Task } from './schema.js';
 import type { TaskStore } from './store.js';
 
-export interface TaskRemoveForConversationContractOptions {
+interface TaskRemoveForConversationContractOptions {
   /**
    * 読めない行（`taskSchema` に合わない生の値）を、指定した id・指定した欄で器に直接仕込む。
    * 渡さない実装（メモリ: `taskSchema` を通った行しか持てない）では「読めない行」の歯だけを飛ばす。

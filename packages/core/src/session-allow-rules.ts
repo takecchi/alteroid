@@ -6,9 +6,9 @@
  */
 
 /** 規則を作れない command の理由。日誌に載る。 */
-export type SessionAllowRuleRefusal = 'command が文字列でない' | '`*` を含む' | '改行を含む';
+type SessionAllowRuleRefusal = 'command が文字列でない' | '`*` を含む' | '改行を含む';
 
-export type SessionAllowRuleShape =
+type SessionAllowRuleShape =
   | { readonly kind: 'rule'; readonly rule: string; readonly command: string }
   | { readonly kind: 'not-bash' }
   | { readonly kind: 'unruleable'; readonly reason: SessionAllowRuleRefusal };
@@ -52,7 +52,7 @@ export interface SessionAllowRuleGrant {
   readonly inputHead: string | undefined;
 }
 
-export interface SessionAllowRuleUse {
+interface SessionAllowRuleUse {
   readonly grant: SessionAllowRuleGrant;
   /** 規則に当たる入力を撃った担い手。規則を足させた担い手と違うことがある。 */
   readonly useActor: string;

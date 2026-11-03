@@ -4,7 +4,7 @@ import type { Task, TaskStatus } from './schema.js';
 
 // vitest に依存しない素の関数にする（storage-fs / storage-pg へ vitest を持ち込まないため）。
 // 空のストアを渡すこと。Task の並び・状態遷移・closed の扱い・読めない行の分離の契約を、メモリ・fs・pg の3実装で揃える（#5469 P2）。
-export interface TaskStoreContractOptions {
+interface TaskStoreContractOptions {
   /**
    * 読めない行を器に直接仕込む（スキーマに合わない生の値を、指定した id で入れる）。
    * 渡さない実装（メモリ: `taskSchema` を通った行しか持てない）では「読めない行」の歯だけを飛ばす。

@@ -26,7 +26,7 @@ import type { CloneToolsShared, ToolContext } from './clone-tools-context.js';
 export const MCP_INPUT_VALIDATION_ERROR_MARKER =
   'Input validation error: Invalid arguments for tool ';
 
-export interface McpInputValidationFailure {
+interface McpInputValidationFailure {
   readonly message: string;
   readonly fields: readonly string[];
 }
@@ -181,13 +181,13 @@ type TracelessCloneTool = (typeof TRACELESS_CLONE_TOOLS)[number];
 
 type AssertTrue<T extends true> = T;
 
-export type _AssertCloneToolPartitionIsExhaustive = AssertTrue<
+export type _AssertCloneToolPartitionIsExhaustive =AssertTrue<
   [Exclude<CloneToolName, SelfJournalingCloneTool | TracelessCloneTool>] extends [never]
     ? true
     : false
 >;
 
-export type _AssertCloneToolPartitionIsExclusive = AssertTrue<
+export type _AssertCloneToolPartitionIsExclusive =AssertTrue<
   [Extract<SelfJournalingCloneTool, TracelessCloneTool>] extends [never] ? true : false
 >;
 

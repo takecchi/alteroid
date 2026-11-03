@@ -139,11 +139,11 @@ export function selectTasksToAutoClose(tasks: readonly Task[], trace: TurnReplyT
   });
 }
 
-export function autoCloseReason(conversationId: string): string {
+function autoCloseReason(conversationId: string): string {
   return `起点の会話へ返答したので自動で閉じた（会話 ${conversationId}）。人間・クローンが否定するなら task_set_status で queued に開き直すこと`;
 }
 
-export interface AutoCloseOutcome {
+interface AutoCloseOutcome {
   readonly closed: readonly Task[];
   /** 閉じられなかった・日誌を書けなかったもの（id と、例外の型名。本文は載せない）。 */
   readonly failed: readonly { readonly id: string; readonly step: 'close' | 'journal' }[];

@@ -18,7 +18,7 @@ export const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
   timeout: '期限で打ち切られた（次の周期でまた試す）',
 };
 
-export type HintCount =
+type HintCount =
   | { readonly kind: 'known'; readonly n: number }
   | { readonly kind: 'unknown'; readonly reason: string }
   | undefined;

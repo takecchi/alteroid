@@ -6,21 +6,21 @@ import {
   type YieldingSteps,
 } from './loop-yield.js';
 
-export interface TranscriptFilterInput {
+interface TranscriptFilterInput {
   since?: string;
   until?: string;
   types?: readonly string[];
   contains?: string;
 }
 
-export interface TranscriptFilterCounts {
+interface TranscriptFilterCounts {
   totalLines: number;
   matchedLines: number;
   noTimestampLines: number;
   unparsableLines: number;
 }
 
-export interface TranscriptFilterResult {
+interface TranscriptFilterResult {
   body: string;
   counts: TranscriptFilterCounts;
 }

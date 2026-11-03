@@ -3,7 +3,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { TurnFailureKind } from './schema.js';
 
 // 応答かどうかを文言で判定しない: `classifyUsageNotice` は部分一致なので、クローンが日報に「上限に当たった」と書いた瞬間に上限と誤判定するため
-export type SdkFailureVia = 'assistant_error' | 'result_subtype' | 'result_is_error';
+type SdkFailureVia = 'assistant_error' | 'result_subtype' | 'result_is_error';
 
 export interface SdkFailure {
   via: SdkFailureVia;

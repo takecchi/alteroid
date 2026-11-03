@@ -22,7 +22,7 @@ import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-
 
 // settings を既定値で埋めない: 「無い」と「読めない」の区別が潰れ、off にしてあった回転を黙って戻すため。
 // rowsUnreadable は1件でも在るときだけ載せる: { count: 0 } は「読めない行は無いと確かめた」と読めてしまうため
-export type TokenPoolView = (
+type TokenPoolView = (
   | { tokens: AgentTokenView[]; settings: TokenRotationSettings; settingsUnreadable?: undefined }
   | {
       tokens: AgentTokenView[];
@@ -31,13 +31,13 @@ export type TokenPoolView = (
     }
 ) & { rowsUnreadable?: TokenRowsUnreadable; version?: string };
 
-export interface TokenRowsUnreadable {
+interface TokenRowsUnreadable {
   count: number;
   rows: UnreadableToken[];
   carriedOver?: true;
 }
 
-export interface ReplaceOptions {
+interface ReplaceOptions {
   // 渡す行は値を持つ（正本）: 日誌へ値を書かない
   beforeSave?: (change: {
     before: readonly AgentToken[];
@@ -50,24 +50,24 @@ export interface ReplaceOptions {
   ifMatch?: string;
 }
 
-export interface SetSettingsOptions {
+interface SetSettingsOptions {
   beforeWrite?: (change: {
     before: TokenRotationSettings | undefined;
     after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>;
   }) => Promise<void>;
 }
 
-export interface RemoveUnreadableOptions {
+interface RemoveUnreadableOptions {
   beforeRemove?: (ids: readonly string[]) => Promise<void>;
 }
 
-export type RemoveUnreadableResult =
+type RemoveUnreadableResult =
   | { kind: 'removed'; ids: string[]; view: TokenPoolView }
   // cause をそのまま外へ出さない: メッセージに行の中身が載りうるため。消したことは確かなので「消せなかった」として扱わない
   | { kind: 'removedViewFailed'; ids: string[]; cause: unknown }
   | { kind: 'unknown'; count: number };
 
-export type ReplaceResult =
+type ReplaceResult =
   | { kind: 'replaced'; view: TokenPoolView }
   // cause をそのまま外へ出さない: メッセージに行の中身が載りうるため。保存したことは確かなので「保存できなかった」として扱わない
   | { kind: 'replacedViewFailed'; cause: unknown };
@@ -96,7 +96,7 @@ export interface TokenPoolService {
   noteUsable(id: string): Promise<AgentTokenView | undefined>;
 }
 
-export interface TokenPoolServiceOptions {
+interface TokenPoolServiceOptions {
   stores: Stores;
   now?: () => Date;
   newId?: () => string;

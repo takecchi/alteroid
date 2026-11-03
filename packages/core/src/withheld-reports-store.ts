@@ -32,7 +32,7 @@ export type WithheldReportMemory = NonNullable<Job['withheldReports']>;
 // - `taskCount`: **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。
 // - `flushedAt`: 経過時間の出所にしない（いつから待っているかは `firstAt` だけが持つ）。`withhold` はこの欄を持ち越す: 持ち越さないと印が消えて「エピソードにつき1本だけ」が壊れる。
 
-export interface WithheldReportsStoreDeps {
+interface WithheldReportsStoreDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   persist: (record: ManagerRecord) => Promise<void>;
   now: () => number;
