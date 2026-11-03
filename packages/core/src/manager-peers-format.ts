@@ -7,7 +7,7 @@ export type ManagerPeersView =
     }
   | { status: 'unknown' };
 
-export function peerProviderLabel(provider: string): string {
+function peerProviderLabel(provider: string): string {
   return provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude' : provider;
 }
 

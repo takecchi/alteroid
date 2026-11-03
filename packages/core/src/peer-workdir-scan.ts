@@ -14,14 +14,14 @@ import { join } from 'node:path';
  */
 
 /** 見る項目（ファイルとディレクトリ）の上限。 */
-export const PEER_WORKDIR_SCAN_MAX_ENTRIES = 20_000;
+const PEER_WORKDIR_SCAN_MAX_ENTRIES = 20_000;
 
 /** 降りる深さの上限（作業場の直下が 1 段目）。 */
-export const PEER_WORKDIR_SCAN_MAX_DEPTH = 8;
+const PEER_WORKDIR_SCAN_MAX_DEPTH = 8;
 
 const SKIPPED_DIRS: ReadonlySet<string> = new Set(['.git', 'node_modules']);
 
-export interface PeerWorkdirScan {
+interface PeerWorkdirScan {
   /** 更新時刻が `sinceMs` 以降の通常ファイル（絶対パス。見つけた順）。 */
   readonly paths: readonly string[];
   /** 打ち切った理由（打ち切っていなければ無い）。 */

@@ -51,24 +51,24 @@ export function peerSystemPromptAppend(workdir: string): string {
   );
 }
 
-export const PEER_APPROVAL_DECISIONS = ['allow', 'deny', 'escalate'] as const;
-export type PeerApprovalDecision = (typeof PEER_APPROVAL_DECISIONS)[number];
+const PEER_APPROVAL_DECISIONS = ['allow', 'deny', 'escalate'] as const;
+type PeerApprovalDecision = (typeof PEER_APPROVAL_DECISIONS)[number];
 
 /** `auto` は閉じる側に倒した拒否。 */
-export type PeerApprovalAnswerer = 'manager' | 'clone' | 'auto';
+type PeerApprovalAnswerer = 'manager' | 'clone' | 'auto';
 
-export interface PeerApprovalRecord {
+interface PeerApprovalRecord {
   readonly toolName: string;
   readonly by: PeerApprovalAnswerer;
 }
 
-export interface PeerPendingApproval {
+interface PeerPendingApproval {
   readonly approvalId: string;
   readonly toolName: string;
   readonly summary: string;
 }
 
-export const PEER_APPROVAL_SUMMARY_LIMIT = 1200;
+const PEER_APPROVAL_SUMMARY_LIMIT = 1200;
 
 /** 確認待ちの peer が残り続けているとき、担当の道具の結果に知らせを添え始めるまでの待ち（#4886）。確認自体に期限は無い。 */
 export const PEER_APPROVAL_STALE_AFTER_MS = 10 * 60_000;
@@ -160,12 +160,12 @@ export interface PeerLimits {
   readonly idleMs: number;
 }
 
-export const DEFAULT_PEER_MAX_SESSIONS = 4;
-export const MIN_PEER_MAX_SESSIONS = 1;
-export const MAX_PEER_MAX_SESSIONS = 64;
-export const DEFAULT_PEER_IDLE_MINUTES = 30;
-export const MIN_PEER_IDLE_MINUTES = 1;
-export const MAX_PEER_IDLE_MINUTES = 1440;
+const DEFAULT_PEER_MAX_SESSIONS = 4;
+const MIN_PEER_MAX_SESSIONS = 1;
+const MAX_PEER_MAX_SESSIONS = 64;
+const DEFAULT_PEER_IDLE_MINUTES = 30;
+const MIN_PEER_IDLE_MINUTES = 1;
+const MAX_PEER_IDLE_MINUTES = 1440;
 export const PEER_MAX_SESSIONS_ENV_KEY = 'ALTEROID_PEER_MAX_SESSIONS';
 export const PEER_IDLE_MINUTES_ENV_KEY = 'ALTEROID_PEER_IDLE_MINUTES';
 
@@ -266,14 +266,14 @@ export interface PeerTurnResult {
   readonly workdirChanges?: PeerWorkdirChanges;
 }
 
-export interface PeerWorkdirChanges {
+interface PeerWorkdirChanges {
   readonly dir: string;
   readonly paths: readonly string[];
   readonly truncated?: string;
   readonly unreadable?: number;
 }
 
-export const PEER_FILES_LISTED_MAX = 50;
+const PEER_FILES_LISTED_MAX = 50;
 
 /** `{ type: 'add' }` の形と、文字列の形のどちらも読む。 */
 function changeKindOf(kind: unknown): string | undefined {
@@ -834,13 +834,13 @@ class PeerSession {
   }
 }
 
-export interface PeerRunOptions {
+interface PeerRunOptions {
   readonly model?: string;
   readonly signal?: AbortSignal;
   readonly background?: boolean;
 }
 
-export interface PeerBackgroundStarted {
+interface PeerBackgroundStarted {
   readonly background: true;
   readonly sessionId: string;
   readonly provider: AgentProviderId;

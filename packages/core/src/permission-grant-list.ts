@@ -10,7 +10,7 @@ import type { PermissionGrantStore, Stores } from './store.js';
  * `permission-grant-list.test.ts` がこのファイルが書き手の口に触れないことを固定する。
  * 取り消し・読めない行を消す口は足さない（人間の手に限る）。
  */
-export type PermissionGrantReader = Pick<PermissionGrantStore, 'list' | 'listUnreadable'>;
+type PermissionGrantReader = Pick<PermissionGrantStore, 'list' | 'listUnreadable'>;
 
 /** `TOKEN_LIST_BUDGET` を使い回さない（値が同じでも由来が違う。許可の本文は長さの上限が無い）。 */
 const PERMISSION_GRANT_LIST_BUDGET = 6_000;

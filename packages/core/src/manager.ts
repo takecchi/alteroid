@@ -686,7 +686,7 @@ export interface RunnerOverview {
   managerPeers?: RunnerManagerPeers;
 }
 
-export type RunnerManagerPeers =
+type RunnerManagerPeers =
   | { status: 'named'; peers: RunnerManagerPeer[]; closed?: RunnerManagerPeerClosed[] }
   | { status: 'unknown' };
 
@@ -757,7 +757,7 @@ export interface RunnerBacklogSnapshot {
   legState?: RunnerLegState;
 }
 
-export type ManagerDecision = 'allow' | 'deny';
+type ManagerDecision = 'allow' | 'deny';
 
 /**
  * 「届けた」を4値以上で言う（`ManagerAbortResult` と同じ形: `outcome` だけを見ると嘘を受け取る）。
@@ -870,7 +870,7 @@ export interface ManagerAbortResult {
  * `vacate()` が停止の握手を飛ばした理由。`runner_unreadable` は名簿に居ない回（`null`）とは別
  * （居ないなら握手する相手が無い）。
  */
-export type VacateHandshakeSkipReason = 'runner_unreadable' | 'jobs_unreadable';
+type VacateHandshakeSkipReason = 'runner_unreadable' | 'jobs_unreadable';
 
 /**
  * `handshakeSkipped` は握手を飛ばした回にだけ載る: 空の値を載せると「飛ばさなかった」と
@@ -1183,7 +1183,7 @@ interface ManagerPoolStopOptions {
  * 前提で、`false` / `undefined` で狭めると証明の無い行を走行中の委譲から奪う。
  * `runningManagerPinning` を持たない像は安全側（広い保護）へ倒す。
  */
-export type ArchiveRemovalGuard =
+type ArchiveRemovalGuard =
   | { readonly kind: 'allowed' }
   | { readonly kind: 'allowed-with-override'; readonly managerId: string; readonly reason: string }
   | { readonly kind: 'denied'; readonly managerId: string }

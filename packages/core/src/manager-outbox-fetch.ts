@@ -50,14 +50,14 @@ export function outboxFetchTotalDeadlineMs(fileDeadlinesMs: readonly number[]): 
   return Math.min(ATTACHMENT_REQUEST_TIMEOUT_MS, OUTBOX_FETCH_TOTAL_TIMEOUT_MS + extension);
 }
 
-export const OUTBOX_DELETE_TIMEOUT_MS = 5_000;
+const OUTBOX_DELETE_TIMEOUT_MS = 5_000;
 
 export interface ManagerReportFiles {
   readonly attachments: AttachmentRef[];
   readonly rejected: { name: string; reason: string }[];
 }
 
-export interface FetchManagerOutboxInput {
+interface FetchManagerOutboxInput {
   readonly runner: RunnerClient;
   readonly runnerNamesOutbox: boolean;
   readonly managerId: string;

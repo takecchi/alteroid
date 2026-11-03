@@ -83,7 +83,7 @@ const PEER_CLOSE_REASON_LABELS = {
   failed: '担当のセッションが終わった（落ちた・失効した）',
 } as const;
 
-export type PeerCloseReason = keyof typeof PEER_CLOSE_REASON_LABELS;
+type PeerCloseReason = keyof typeof PEER_CLOSE_REASON_LABELS;
 
 export interface PeerCloseNotice {
   reason: PeerCloseReason;
@@ -333,7 +333,7 @@ export function abortTextsOf(input: {
 export type RestartCause = 'daemon' | 'runner' | 'relocated';
 
 // 判定の持ち主を1つにする: `restartNudge` と `#notifyRestored` が同じ `job.workspace` から引くので、2箇所に書くと片方だけ直る。
-export type WorkspaceAfterSwap =
+type WorkspaceAfterSwap =
   | { kind: 'kept'; path: string }
   | { kind: 'rebuild'; repository: string; ref: string }
   | {

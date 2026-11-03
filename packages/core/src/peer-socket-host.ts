@@ -13,7 +13,7 @@ import { createCloneToolRelayHost, type CloneToolRelayHost } from './clone-tool-
 export const DEFAULT_PEER_SOCKET_DIR = '/run/alteroid/peer';
 export const PEER_SOCKET_FILENAME = 'peer.sock';
 
-export const PEER_TOKEN_TIMEOUT_MS = 30_000;
+const PEER_TOKEN_TIMEOUT_MS = 30_000;
 
 export type PeerSocketHost = CloneToolRelayHost;
 

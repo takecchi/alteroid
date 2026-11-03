@@ -28,7 +28,7 @@ import {
 } from './schema.js';
 import type { Stores } from './store.js';
 
-export interface ManagerRescueStashDeps {
+interface ManagerRescueStashDeps {
   stores: Pick<Stores, 'attachments'>;
   attachmentLimits: AttachmentLimits | undefined;
   /** `Pool#runnerOrNull` を束ねたもの。async の皮で包まない（await の回数・順を変えない）。 */

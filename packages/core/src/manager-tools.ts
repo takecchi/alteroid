@@ -35,7 +35,7 @@ function renderReportAttachResults(results: readonly ReportAttachResult[]): stri
   ].join('\n');
 }
 
-export interface RescueRestoreInput {
+interface RescueRestoreInput {
   paths?: string[];
   from?: string;
 }
@@ -73,7 +73,7 @@ export async function createManagerToolsSocketHost(options: {
   };
 }
 
-export type OutputRecordInput = Omit<ExternalOutput, 'at'>;
+type OutputRecordInput = Omit<ExternalOutput, 'at'>;
 
 /**
  * `record` は記録を runner のイベントとして送るだけで、外へは何も出さない（許可の確認を足さない理由）。
