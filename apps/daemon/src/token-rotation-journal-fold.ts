@@ -8,7 +8,7 @@ export const TOKEN_ROTATION_JOURNAL_FOLD_IDLE_GAP_MS = TOKEN_WATCH_TICK_MS * 2.5
 // maxSpan を既定の5分にしない: 5時間の冷却で約60本の要約行が出て、行を減らす目的に合わないため。
 export const TOKEN_ROTATION_JOURNAL_FOLD_MAX_SPAN_MS = 60 * 60_000;
 
-export interface TokenRotationJournalFoldVerdict {
+interface TokenRotationJournalFoldVerdict {
   readonly write: boolean;
   readonly summary?: TokenRotationEntry;
 }

@@ -29,10 +29,10 @@ export const TOPOLOGY_EXTERNALS_MAX = 5;
 // 古い観測では居座らせない: `/managers` だけが詰まると前の観測が残るため。
 export const TOPOLOGY_RUNNER_LISTING_FRESH_MS = 60 * 1000;
 export const TOPOLOGY_REQUEST_LIMIT = 200;
-export const TOPOLOGY_WAITING_SUMMARY_LIMIT = 160;
+const TOPOLOGY_WAITING_SUMMARY_LIMIT = 160;
 export const TOPOLOGY_WAITING_PER_MANAGER = 5;
 export const TOPOLOGY_RUNNING_TOOL_MAX_MS = 2 * 60 * 60 * 1000;
-export const TOPOLOGY_WORKERS_PER_MANAGER = 20;
+const TOPOLOGY_WORKERS_PER_MANAGER = 20;
 // 件数ではなく文字数で締める: 件数 × 1行の長さは何件で溢れるかが運任せになるため。
 export const TOPOLOGY_MANAGERS_CHAR_BUDGET = 40_000;
 
@@ -54,14 +54,14 @@ function isListedOnRunner(manager: ManagerSummary, nowMs: number): boolean {
   return nowMs - listed <= TOPOLOGY_RUNNER_LISTING_FRESH_MS;
 }
 
-export function isStoppedByUsage(manager: ManagerSummary): boolean {
+function isStoppedByUsage(manager: ManagerSummary): boolean {
   if (manager.usageStoppedAt === undefined) return false;
   return manager.status !== 'lost' && manager.status !== 'failed' && manager.status !== 'stopped';
 }
 
 // 背景処理待ちは終端の窓に関係なく載せる: 台帳の `status` が `done` でも仕事の途中で、窓で落とすと作業者ごと地図から消えるため。
 // runner の一覧に載っている委譲・枠で止まっている委譲も窓に関係なく載せる: 窓で落とすと、器の上に居ること・枠で止まっていることが図から消えるため。
-export function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
+function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
   if (isActiveStatus(manager.status)) return true;
   if (isStoppedByUsage(manager)) return true;
   if (manager.awaitingBackground !== undefined) return true;
@@ -151,7 +151,7 @@ function rank(manager: ManagerSummary): number {
   return 2;
 }
 
-export type StorageHealth = TopologySnapshot['storage'];
+type StorageHealth = TopologySnapshot['storage'];
 
 export interface TopologyInputs {
   nowMs: number;
@@ -268,8 +268,8 @@ export function topologySignature(snapshot: TopologySnapshot): string {
   return JSON.stringify({ ...snapshot, observedAt: undefined });
 }
 
-export const STORAGE_PROBE_INTERVAL_MS = 15_000;
-export const STORAGE_PROBE_TIMEOUT_MS = 3_000;
+const STORAGE_PROBE_INTERVAL_MS = 15_000;
+const STORAGE_PROBE_TIMEOUT_MS = 3_000;
 
 // 理由は種別だけにする: 接続エラーの文面には接続先（host:port）が載りうるため。
 export function describeProbeError(error: unknown): string {
@@ -282,11 +282,11 @@ export function describeProbeError(error: unknown): string {
   return 'error';
 }
 
-export interface StorageHealthTracker {
+interface StorageHealthTracker {
   current(): StorageHealth;
 }
 
-export interface StorageHealthOptions {
+interface StorageHealthOptions {
   label: string | undefined;
   probe: (() => Promise<void>) | undefined;
   now: () => number;
@@ -347,7 +347,7 @@ export function createStorageHealthTracker(options: StorageHealthOptions): Stora
   };
 }
 
-export interface TopologyServiceDeps {
+interface TopologyServiceDeps {
   clone: Pick<CloneHost, 'usageBlocked' | 'activeTurn'> & {
     managers: { list(): Promise<ManagerSummary[]> };
   };
@@ -360,12 +360,12 @@ export interface TopologyServiceDeps {
   now?: () => number;
 }
 
-export interface TopologySnapshotOptions {
+interface TopologySnapshotOptions {
   // 日誌の追記を受けた再計算と `GET /topology` は 0 のままにする: 直前の出来事を取りこぼさないため。
   maxAgeMs?: number;
 }
 
-export interface TopologyService {
+interface TopologyService {
   snapshot(options?: TopologySnapshotOptions): Promise<TopologySnapshot>;
 }
 

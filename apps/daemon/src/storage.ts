@@ -53,7 +53,7 @@ export interface Storage {
   probe: () => Promise<void>;
 }
 
-export interface StoragePlan {
+interface StoragePlan {
   kind: 'fs' | 'pg';
   root: string | undefined;
   databaseUrl: string | undefined;

@@ -12,7 +12,7 @@ import {
 
 import { readEveryMinutes } from './env-every-minutes.js';
 
-export interface ScheduleConfig {
+interface ScheduleConfig {
   dailyReportAt: TimeOfDay | null;
   initiativeEveryMinutes: number | null;
   // 日報と別の時刻にする: 同じ時刻だと片方が受信箱で待ち、日報の中身が棚卸しの報告で薄まるため。
@@ -21,7 +21,7 @@ export interface ScheduleConfig {
   notes: string[];
 }
 
-export const DEFAULT_DAILY_REPORT_AT = '22:00';
+const DEFAULT_DAILY_REPORT_AT = '22:00';
 // 人間が話しかけてくる時間帯を避ける: 棚卸しは記憶を書き換えるターンで、走っている間は受信箱の他の仕事が待つため。
 export const DEFAULT_MEMORY_TIDY_AT = '03:00';
 /**
@@ -35,7 +35,7 @@ export const DEFAULT_INITIATIVE_EVERY_MINUTES = 55;
 export const MIN_INITIATIVE_EVERY_MINUTES = 1;
 export const DEFAULT_REPORT_LOOKBACK_DAYS = 3;
 // 後追いで遡る日数の上限（#4723）: 上限が無いと、遡る起点の日付が Invalid Date になり後追いが壊れるため。1年より前の日報を後から書かせる理由は無い
-export const MAX_REPORT_LOOKBACK_DAYS = 365;
+const MAX_REPORT_LOOKBACK_DAYS = 365;
 
 // 「HH:MM または off」の環境変数。未設定なら既定、off なら null、読めなければ注意を足して既定
 function readTimeOfDayEnv(
