@@ -21,7 +21,7 @@ export const MEMORY_INDEX_REINJECTED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFI
 /** 要約後に記憶の索引を載せ直さなかった回に clone が残す観測の1行の頭。行動ではないので承認の追跡は数えない。 */
 export const MEMORY_INDEX_NOT_REINJECTED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}${MEMORY_INDEX_NOT_REINJECTED_PHRASE}`;
 
-export type ExchangeKind = 'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge';
+type ExchangeKind = 'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge';
 
 export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{
   readonly kind: ExchangeKind;

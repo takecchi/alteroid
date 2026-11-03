@@ -5,23 +5,16 @@ import { placedEnvValue } from './placed-env.js';
 // 大文字小文字は問わない。知らない綴りは既定へ倒し、倒したことを呼び手へ返す。
 // 門（`ALTEROID_MEMORY_GUARD`・`ALTEROID_BASH_GUARD` ほか）はここへ寄せない: 綴り違いを落として、守っているつもりの持ち主に気づかせる
 // 作法（`resolveEnumEnv`）を持ち、ここの「受け付ける綴りを広げる」読み方だと、`false` / `OFF` で黙って門が外れる側に変わるため。
-export const ENV_SWITCH_ON_SPELLINGS: readonly string[] = ['on', '1', 'true', 'yes', 'enabled'];
+const ENV_SWITCH_ON_SPELLINGS: readonly string[] = ['on', '1', 'true', 'yes', 'enabled'];
 // 「止める」の綴りはここだけ（周期の環境変数と on/off の環境変数で共有する）: 綴りが割れると、片方で効かない綴りを人間が覚えることになるため
-export const ENV_SWITCH_OFF_SPELLINGS: readonly string[] = [
-  'off',
-  'none',
-  'false',
-  '0',
-  'no',
-  'disabled',
-];
+const ENV_SWITCH_OFF_SPELLINGS: readonly string[] = ['off', 'none', 'false', '0', 'no', 'disabled'];
 
 /** `placedEnvValue` を通した値が「止める」綴りか。大文字小文字は問わない。 */
 export function isEnvOffSpelling(value: string): boolean {
   return ENV_SWITCH_OFF_SPELLINGS.includes(value.toLowerCase());
 }
 
-export interface EnvSwitchReading {
+interface EnvSwitchReading {
   readonly enabled: boolean;
   /** 読めなかった綴り（小文字にした値）。既定へ倒したときだけ載る。 */
   readonly unrecognized?: string;

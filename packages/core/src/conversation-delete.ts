@@ -21,7 +21,7 @@ import { isTaskOfConversation } from './task.js';
  *
  * **本文はどこにも写さない**（墓標にも、戻り値にも）。
  */
-export interface DeleteConversationDeps {
+interface DeleteConversationDeps {
   stores: Pick<
     Stores,
     'journal' | 'attachments' | 'tasks' | 'inbox' | 'conversationReads' | 'jobs'
@@ -32,7 +32,7 @@ export interface DeleteConversationDeps {
   forgetConversation?: (conversationId: string) => void;
 }
 
-export type DeleteConversationResult =
+type DeleteConversationResult =
   | { deleted: false; lookup: Extract<ConversationLookup, { found: false }> }
   | {
       deleted: true;
@@ -58,7 +58,7 @@ export type DeleteConversationResult =
  * 消した会話の中身が残りうる場所。**どれもこの削除では消していない。**
  * 生ログは会話 id で引けず、途中を抜くと resume が壊れうるので、外科的には消さない。
  */
-export const CONVERSATION_DELETE_REMAINS: readonly string[] = [
+const CONVERSATION_DELETE_REMAINS: readonly string[] = [
   'クローンのセッションの生ログとアーカイブ、いま続いているセッションの文脈には、この会話の発言が残っている（会話の単位では消せない）。秘密を書いたのなら、設定の「クローンのセッションを開き直す」で開き直し、その鍵を作り直すこと',
   '既に蒸留された記憶と、書き終えた日報に写っている可能性がある。記憶と日報を確かめること',
   'この会話に結び付いた承認（クローンからの質問と、許可の求め）の問いと答えの本文は消していない（決着の記録なので外さない）。承認待ちの一覧と各承認の画面で確かめること',

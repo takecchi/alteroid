@@ -18,7 +18,7 @@ const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
   WITHHELD_REPORT_FLUSH_MS,
 ];
 
-export interface DenialRenotifierDeps {
+interface DenialRenotifierDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   now: () => number;
   stopped: () => boolean;

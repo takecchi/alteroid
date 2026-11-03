@@ -100,7 +100,7 @@ function formatLine(line: string): string | null {
 }
 
 /** 末尾の窓の先頭の行が途中から始まっているかもしれない（呼び出し側が切り詰めた）ときは、読めない先頭行を捨てる。 */
-export interface FormatOptions {
+interface FormatOptions {
   readonly startsMidLine: boolean;
 }
 

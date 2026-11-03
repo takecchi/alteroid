@@ -15,9 +15,9 @@ export function noteEnvValueNotUsed(name: string, raw: string, what: string): vo
   writeStderrLine(`alteroid: ${name}="${raw}" は${what}\n`);
 }
 
-export type EnvNumberProblem = 'not-number' | 'non-positive' | 'out-of-range' | 'clamped';
+type EnvNumberProblem = 'not-number' | 'non-positive' | 'out-of-range' | 'clamped';
 
-export interface EnvNumberSpec {
+interface EnvNumberSpec {
   readonly fallback: number;
   /** 下限・上限（含む）。 */
   readonly min?: number;

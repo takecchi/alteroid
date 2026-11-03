@@ -4,7 +4,7 @@ export const CRON_EXPRESSION_MAX = 120;
 
 const CRON_FIELD_COUNT = 5;
 
-export interface CronSchedule {
+interface CronSchedule {
   nextAfter(after: Date): Date | null;
 }
 

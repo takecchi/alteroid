@@ -31,7 +31,7 @@ export type ConversationLookup =
       moreCandidates: boolean;
     };
 
-export const CONVERSATION_CANDIDATE_LIMIT = 5;
+const CONVERSATION_CANDIDATE_LIMIT = 5;
 
 export async function lookupConversation(
   journal: Pick<JournalStore, 'listPage' | 'conversationIdsWithPrefix'>,
@@ -82,9 +82,9 @@ export async function lookupConversation(
 }
 
 /** クローンの道具が前方一致を受け付ける、会話 id の先頭の最短の長さ（#5130）。 */
-export const CONVERSATION_PREFIX_MIN_LENGTH = 8;
+const CONVERSATION_PREFIX_MIN_LENGTH = 8;
 
-export type ConversationResolution =
+type ConversationResolution =
   /** 渡された id の会話がそのまま在った。 */
   | { readonly kind: 'exact'; readonly id: string }
   /** 渡された id は先頭で、それで始まる会話がちょうど1つ在った。 */

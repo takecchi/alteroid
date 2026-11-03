@@ -206,7 +206,7 @@ export function noteBackgroundFailure(what: string, detail: string, error: unkno
 }
 
 /** 日誌の読み出しが行を飛ばす理由。`unparsable` は構造すら持たず、`unknown-shape` は JSON としては正しいがスキーマに合わない。 */
-export type DroppedJournalRowReason = 'unparsable' | 'unknown-shape';
+type DroppedJournalRowReason = 'unparsable' | 'unknown-shape';
 
 /**
  * 読めなかった日誌の行から、本文を含まずに安全に取り出せる `type` らしき文字列。

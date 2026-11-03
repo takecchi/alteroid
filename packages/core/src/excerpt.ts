@@ -77,13 +77,13 @@ export interface Page {
   more: boolean;
 }
 
-export interface ListingBudget {
+interface ListingBudget {
   budget: number;
   // 続きの取り方を書けるのは、呼び手の側に続きを取る口が実在するときだけ: 口が無いまま断り書きだけを出すと、落ちた分に呼び手から到達できないため
   omitted: (part: { rest: number; shown: number; total: number }) => string;
 }
 
-export interface ListingFill {
+interface ListingFill {
   lines: string[];
   shown: number;
   rest: number;
@@ -150,7 +150,7 @@ export function renderListing(
   return lines.join('\n');
 }
 
-export interface ListingEntryFields {
+interface ListingEntryFields {
   id: string;
   // 概要の先頭 n 文字にしない: `summary` が既に出していて、欄が増えただけで情報は増えないため
   title: string;

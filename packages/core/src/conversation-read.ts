@@ -239,13 +239,13 @@ export async function verifyConversationReadStoreContract(
   }
 }
 
-export interface UnreadConversationCount {
+interface UnreadConversationCount {
   count: number;
   capped: boolean;
   readStateUnreadable?: string;
 }
 
-export const UNREAD_CONVERSATION_COUNT_CAP = 99;
+const UNREAD_CONVERSATION_COUNT_CAP = 99;
 const INDEX_CHUNK = 500;
 const INDEX_MAX_CHUNKS = 40;
 // 取り込み済みの印を「いま」より手前に置く: 書き込みの完了が at より遅れても取りこぼさないため
