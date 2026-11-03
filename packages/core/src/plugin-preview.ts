@@ -163,14 +163,14 @@ export function summarizeFetchedPlugin(fetched: FetchedPlugin): PluginPreviewSum
   };
 }
 
-export interface PluginPreviewStoreOptions {
+interface PluginPreviewStoreOptions {
   ttlMs?: number;
   maxEntries?: number;
   maxBytes?: number;
   now?: () => number;
 }
 
-export interface PluginPreviewStore {
+interface PluginPreviewStore {
   /** `existingSha`: プレビューの時点で入れてあった同じ名前の plugin の SHA（無ければ null）。確定の時点の値と突き合わせる（#4797）。 */
   put(
     fetched: FetchedPlugin,
@@ -182,7 +182,7 @@ export interface PluginPreviewStore {
   discard(previewId: string): void;
 }
 
-export const PLUGIN_PREVIEW_TTL_MS = 10 * 60 * 1000;
+const PLUGIN_PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 export function createPluginPreviewStore(
   options: PluginPreviewStoreOptions = {},

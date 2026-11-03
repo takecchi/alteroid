@@ -19,7 +19,7 @@ import type { PluginStore } from './store.js';
  */
 
 /** ホワイトリストの版。許す形を変えたら上げる（展開済みのものを作り直させる）。 */
-export const PLUGIN_ALLOWLIST_VERSION = 3;
+const PLUGIN_ALLOWLIST_VERSION = 3;
 
 /** frontmatter で残すキー。ツールの許可・権限・サブプロセスの起動を宣言できるキーと未知のキーは通さない。 */
 const FRONTMATTER_ALLOWED_KEYS: ReadonlySet<string> = new Set([
@@ -62,12 +62,12 @@ export function defaultRunnerPluginsRoot(): string {
   return join(tmpdir(), 'alteroid-plugins');
 }
 
-export type ExtractablePlugin = Pick<
+type ExtractablePlugin = Pick<
   StoredPlugin,
   'name' | 'files' | 'enableHooks' | 'enableMcp' | 'contentSha256'
 > & { source: { sha: string; [other: string]: unknown } };
 
-export interface ExtractPluginOptions {
+interface ExtractPluginOptions {
   readonly dirMode?: number;
   /** root と `plugins/` の所有者がこの uid であること。違えば展開せずに拒む。 */
   readonly expectedUid?: number;
@@ -75,7 +75,7 @@ export interface ExtractPluginOptions {
 
 export const PLUGIN_SCOPES_FOR_CLONE: readonly PluginScope[] = ['all', 'app'];
 
-export type RemovedReason =
+type RemovedReason =
   | 'not-allowlisted'
   | 'hooks-disabled'
   | 'hooks-not-extracted'
@@ -98,7 +98,7 @@ export interface RemovedItem {
  * `manifest-missing`: 一覧が無い・読めない（この確認より前に展開されたもの、または一覧が壊されたもの）。files は空。
  * `content-differs`: files は違った・足された・消えたファイルの相対パス（辞書順）。
  */
-export interface PluginRebuild {
+interface PluginRebuild {
   readonly reason: 'content-differs' | 'manifest-missing';
   readonly files: readonly string[];
 }
@@ -124,7 +124,7 @@ interface Marker {
   readonly enableMcp: boolean;
 }
 
-export interface ExtractIdentity {
+interface ExtractIdentity {
   readonly name: string;
   readonly source: { readonly sha: string };
   readonly contentSha256: string;
@@ -748,7 +748,7 @@ export async function pruneRunnerPluginsOnBoot(
   }
 }
 
-export interface PrunePluginsResult {
+interface PrunePluginsResult {
   readonly removed: string[];
   readonly failed: { entry: string; message: string }[];
 }
@@ -793,19 +793,19 @@ export async function pruneExtractedPluginsAgainstStore(
   return pruneExtractedPluginDirs(root, keep);
 }
 
-export interface ExtractedPluginRef {
+interface ExtractedPluginRef {
   readonly name: string;
   readonly path: string;
   readonly skipMcpDiscovery: boolean;
 }
 
-export interface PluginExtractFailure {
+interface PluginExtractFailure {
   readonly name: string | null;
   readonly stage: 'list' | 'get' | 'extract';
   readonly message: string;
 }
 
-export interface ExtractForScopesResult {
+interface ExtractForScopesResult {
   readonly plugins: ExtractedPluginRef[];
   readonly removed: RemovedItem[];
   readonly failures: PluginExtractFailure[];

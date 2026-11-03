@@ -29,7 +29,7 @@ import { compareCodeUnits } from './code-unit-order.js';
  * symlink と submodule は拒まず含めない: 拒むと、使わない場所に symlink を持つ plugin が入れられなくなるから。
  */
 
-export type PluginFetchErrorKind = 'invalid' | 'unavailable' | 'unconfigured';
+type PluginFetchErrorKind = 'invalid' | 'unavailable' | 'unconfigured';
 
 /** 文言に環境変数や資格は載せない: 呼び手へ漏れるから。 */
 export class PluginFetchError extends Error {
@@ -41,7 +41,7 @@ export class PluginFetchError extends Error {
   }
 }
 
-export type PluginRequest =
+type PluginRequest =
   | { kind: 'url'; url: string; path?: string; ref?: string; sha?: string }
   | { kind: 'marketplace'; plugin: string };
 
@@ -62,7 +62,7 @@ export interface PluginFetcher {
   fetch(request: PluginRequest): Promise<FetchedPlugin>;
 }
 
-export interface PluginFetcherOptions {
+interface PluginFetcherOptions {
   marketplaceUrl?: string;
   marketplaceRef?: string;
   marketplaceIndexPath?: string;

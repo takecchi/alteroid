@@ -35,7 +35,7 @@ export function profileScopeAppliesTo(
   return normalized === 'app' ? target === 'clone' : target === 'runner';
 }
 
-export type ProfileComposeTarget = 'clone' | 'runner' | 'all';
+type ProfileComposeTarget = 'clone' | 'runner' | 'all';
 
 /**
  * 見出しは入れない: 1行だけのとき合成が元の本文とバイトまで一致し、アップグレードで指紋が変わらない。
@@ -81,7 +81,7 @@ export function runnerDeclaredEnvNames(entries: readonly EnvProfileEntry[]): str
   return declaredProfileEnvNames(composeProfileScript(entries, 'runner'));
 }
 
-export interface ComposedFingerprint {
+interface ComposedFingerprint {
   sha256?: string;
   bytes?: number;
 }
@@ -178,7 +178,7 @@ export class ProfileVersionMismatchError extends Error {
  * 書き込みの前提にする版。`string` はその版の行が在ること、`null` は行が無いこと（無いときだけ作る）。
  * 省けば今までどおり比べない。比べるのは更新の列（`serial`）の中: 列の外で比べると、比べてから書くまでに別の書き手が入れる。
  */
-export interface ProfileWriteOptions {
+interface ProfileWriteOptions {
   ifMatch?: string | null;
 }
 
@@ -196,7 +196,7 @@ function assertProfileVersion(
   if (!matches) throw new ProfileVersionMismatchError(name, current);
 }
 
-export interface ProfileServiceOptions {
+interface ProfileServiceOptions {
   stores: Stores;
   applier?: ProfileApplier;
   runners?: RunnerRegistry;

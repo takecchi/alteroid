@@ -9,7 +9,7 @@ import { isIPv4 } from 'node:net';
  * 拒否の文言に解決したアドレスを載せない: 内部の構成を呼び手へ漏らさないため。
  */
 
-export type SourceGuardErrorKind = 'blocked' | 'invalid' | 'unavailable';
+type SourceGuardErrorKind = 'blocked' | 'invalid' | 'unavailable';
 
 export class SourceGuardError extends Error {
   readonly kind: SourceGuardErrorKind;
@@ -159,20 +159,20 @@ export function pinnedLookup(addresses: string[]) {
 
 export type Resolver = (host: string) => Promise<string[]>;
 
-export interface ProbeTarget {
+interface ProbeTarget {
   url: URL;
   addresses: string[];
   timeoutMs: number;
 }
 
-export interface ProbeReply {
+interface ProbeReply {
   status: number;
   location?: string;
 }
 
 export type Probe = (target: ProbeTarget) => Promise<ProbeReply>;
 
-export const defaultResolver: Resolver = async (host) => {
+const defaultResolver: Resolver = async (host) => {
   const found = await dnsLookup(host, { all: true, verbatim: true });
   return found.map((entry) => entry.address);
 };
@@ -180,7 +180,7 @@ export const defaultResolver: Resolver = async (host) => {
 const bareHost = (url: URL) => url.hostname.replace(/^\[|\]$/g, '');
 
 // agent: false にする: 環境変数のプロキシを拾う共有エージェントを避けるため。
-export const defaultProbe: Probe = ({ url, addresses, timeoutMs }) =>
+const defaultProbe: Probe = ({ url, addresses, timeoutMs }) =>
   new Promise<ProbeReply>((resolve, reject) => {
     const host = bareHost(url);
     const req = httpsRequest(
@@ -213,14 +213,14 @@ export const defaultProbe: Probe = ({ url, addresses, timeoutMs }) =>
     req.end();
   });
 
-export interface Vetted {
+interface Vetted {
   host: string;
   port: number;
   addresses: string[];
   literal: boolean;
 }
 
-export interface GuardDeps {
+interface GuardDeps {
   resolver?: Resolver;
   probe?: Probe;
   remainingMs?: () => number;
@@ -258,7 +258,7 @@ function repoUrlFrom(url: URL): string {
   return `${url.origin}${path}`;
 }
 
-export interface GuardedSource extends Vetted {
+interface GuardedSource extends Vetted {
   repoUrl: string;
 }
 

@@ -1,8 +1,8 @@
 import type { RemovedItem } from './plugin-extract.js';
 import { compareCodeUnits } from './code-unit-order.js';
 
-export const REMOVED_JOURNAL_MAX_PATHS = 20;
-export const REMOVED_JOURNAL_MAX_PATH_LENGTH = 120;
+const REMOVED_JOURNAL_MAX_PATHS = 20;
+const REMOVED_JOURNAL_MAX_PATH_LENGTH = 120;
 
 // `_` などへ置き換えない: 置き換えた文字が別の path に見えるから。
 function cleanForJournal(raw: string): string {

@@ -40,7 +40,7 @@ import { redactErrorText } from './denial-input-head.js';
 export const PROFILE_SOURCED_ENV_KEY = 'ALTEROID_PROFILE_SOURCED';
 
 /** プロファイルの所在を子へ知らせる環境変数。 */
-export const PROFILE_FILE_ENV_KEY = 'ALTEROID_PROFILE_FILE';
+const PROFILE_FILE_ENV_KEY = 'ALTEROID_PROFILE_FILE';
 
 /** runner の器での既定の置き場。`Dockerfile` が用意するディレクトリと揃える。 */
 export const DEFAULT_PROFILE_PATH = '/run/alteroid/profile/profile.sh';
@@ -67,14 +67,14 @@ export function normalizeProfileScript(script: string): string {
 }
 
 /** 置いてあるプロファイルの同一性。本文は出さない。 */
-export interface ProfileFingerprint {
+interface ProfileFingerprint {
   /** 人間が書いた本文の sha256（16進）先頭12桁。器が足した行は含めない。 */
   sha256: string;
   bytes: number;
   updatedAt: string;
 }
 
-export interface ProfileVesselOptions {
+interface ProfileVesselOptions {
   path: string;
   /** SDK 子プロセスを別 UID へ降ろしているなら、その UID。渡さなければ chown しない。 */
   reader?: { uid: number; gid: number };
@@ -105,7 +105,7 @@ export interface ProfileVessel {
   readonly lastWriteError: string | undefined;
 }
 
-export interface StagedProfile {
+interface StagedProfile {
   /** 評価に使う仮の置き場。まだ誰にも配られていない。 */
   path: string;
   commit(): Promise<ProfileFingerprint | undefined>;
@@ -277,14 +277,14 @@ class Vessel implements ProfileVessel {
 }
 
 /** runner は別 UID へ降ろすので差し替えられる。 */
-export type ProfileSpawn = (options: {
+type ProfileSpawn = (options: {
   command: string;
   args: string[];
   env: Record<string, string | undefined>;
   signal: AbortSignal;
 }) => ChildProcess;
 
-export interface ProfileEvaluation {
+interface ProfileEvaluation {
   /** 元の env から変わった分だけ。 */
   env: Record<string, string>;
   /** プロファイルが出した出力（人間が原因を見るための窓）。 */
@@ -298,7 +298,7 @@ export interface ProfileEvaluation {
   leaked: string[];
 }
 
-export interface EvaluateProfileOptions {
+interface EvaluateProfileOptions {
   path: string;
   /** 重ねる前の env。 */
   baseEnv: NodeJS.ProcessEnv;
@@ -462,7 +462,7 @@ function tail(text: string, limit = PROFILE_FAILURE_TEXT_LIMIT): string {
 
 const TAIL_MARK = '…（前略）\n';
 
-export const PROFILE_FAILURE_TEXT_LIMIT = 4_000;
+const PROFILE_FAILURE_TEXT_LIMIT = 4_000;
 
 /** 巨大な stderr を丸ごと正規表現に掛けない（末尾側を残す）。 */
 const PROFILE_REDACT_INPUT_LIMIT = 100_000;
@@ -521,7 +521,7 @@ export interface PreparedProfile extends ProfileApplyResult {
   discard(): Promise<void>;
 }
 
-export interface ProfileApplierOptions {
+interface ProfileApplierOptions {
   vessel: ProfileVessel;
   /** 実際に配るものと同じ env を渡すこと。 */
   baseEnv: () => NodeJS.ProcessEnv;

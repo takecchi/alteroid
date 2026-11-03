@@ -84,7 +84,7 @@ const versionSchema = z
   // eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査
   .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), { message: '制御文字を含む' });
 
-export const PLUGIN_DESCRIPTION_MAX_LENGTH = 1024;
+const PLUGIN_DESCRIPTION_MAX_LENGTH = 1024;
 
 const pluginDescriptionSchema = z
   .string()
@@ -110,7 +110,7 @@ export function normalizePluginDescription(raw: unknown): string | undefined {
   return text === '' ? undefined : text;
 }
 
-export const pluginSourceSchema = z.discriminatedUnion('kind', [
+const pluginSourceSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('url'),
     url: httpsUrlSchema,
@@ -133,7 +133,7 @@ export type PluginSource = z.infer<typeof pluginSourceSchema>;
 
 export const pluginScopeSchema = z.enum(ENV_PROFILE_SCOPES);
 
-export const pluginFileSchema = z.strictObject({
+const pluginFileSchema = z.strictObject({
   path: relativePathSchema,
   executable: z.boolean(),
   content: z
@@ -202,9 +202,9 @@ const pluginFields = {
   installedBy: installedBySchema,
 };
 
-export const pluginInputSchema = z.strictObject(pluginFields);
+const pluginInputSchema = z.strictObject(pluginFields);
 
-export const storedPluginSchema = z.strictObject({
+const storedPluginSchema = z.strictObject({
   ...pluginFields,
   contentSha256: z.string().regex(/^[0-9a-f]{64}$/, '小文字64桁の16進で書くこと'),
 });
@@ -213,7 +213,7 @@ export type PluginInput = z.input<typeof pluginInputSchema>;
 export type StoredPlugin = z.output<typeof storedPluginSchema>;
 
 // files を含まない。要約の行だけを読む器（pg）も、このスキーマで検査する。
-export const pluginSummarySchema = storedPluginSchema.omit({ files: true }).extend({
+const pluginSummarySchema = storedPluginSchema.omit({ files: true }).extend({
   fileCount: z.number().int().nonnegative(),
   totalBytes: z.number().int().nonnegative(),
 });
@@ -315,7 +315,7 @@ export function pluginDirName(name: string, sha: string): string {
 }
 
 // `app` を含めない: クローン（daemon）側が持つから。
-export const PLUGIN_SCOPES_FOR_RUNNER = ['all', 'runner'] as const;
+const PLUGIN_SCOPES_FOR_RUNNER = ['all', 'runner'] as const;
 
 export function isPluginScopeForRunner(
   scope: StoredPlugin['scope'],

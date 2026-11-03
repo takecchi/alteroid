@@ -23,12 +23,12 @@ export interface PluginDistributionService {
   onPushed?(listener: (results: readonly PluginsRunnerResult[]) => void): () => void;
 }
 
-export interface PluginDistributionServiceOptions {
+interface PluginDistributionServiceOptions {
   stores: Stores;
   runners?: RunnerRegistry;
 }
 
-export interface PluginsRunnerResult {
+interface PluginsRunnerResult {
   runnerId: string;
   ok: boolean;
   plugins?: RunnerPluginsFingerprint;
