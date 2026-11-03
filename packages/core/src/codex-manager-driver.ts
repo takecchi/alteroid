@@ -641,9 +641,7 @@ class CodexManagerSession implements AgentManagerSession {
       else if (audit?.outcome === 'failure') await this.#spec.onPostToolUseFailure(audit.record);
     } catch (error) {
       // 投げ直さない: 観測の失敗でセッションを止めないため
-      this.#note(
-        `Codex: 道具の実行の記録（${item.type}）でフックが失敗した: ${reasonOf(error)}`,
-      );
+      this.#note(`Codex: 道具の実行の記録（${item.type}）でフックが失敗した: ${reasonOf(error)}`);
     }
   }
 

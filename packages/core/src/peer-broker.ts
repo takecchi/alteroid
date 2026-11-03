@@ -392,10 +392,7 @@ class PeerSession {
       .readEvents((event) => this.#onEvent(event))
       .then(
         () => this.#end('セッションが閉じた'),
-        (error: unknown) =>
-          this.#end(
-            `セッションが落ちた: ${reasonOf(error)}`,
-          ),
+        (error: unknown) => this.#end(`セッションが落ちた: ${reasonOf(error)}`),
       );
   }
 
