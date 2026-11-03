@@ -107,7 +107,6 @@ export const memoryDocumentSchema = memoryDocumentMetaSchema.extend({
   content: z.string(),
 });
 
-export type MemorySlug = z.infer<typeof memorySlugSchema>;
 export type MemoryDocumentMeta = z.infer<typeof memoryDocumentMetaSchema>;
 export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
 
@@ -172,8 +171,6 @@ const approvalOptionSchema = z.object({
   recommended: z.boolean().optional(),
 });
 
-export type ApprovalOption = z.infer<typeof approvalOptionSchema>;
-
 export const approvalQuestionSchema = z.object({
   id: z.string().min(1),
   prompt: z.string().min(1),
@@ -209,8 +206,6 @@ export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
 // 担い手の報告に添えて受け取れなかったファイルの、名前と理由。黙って落とさず、報告と日誌に残すため
 const rejectedAttachmentSchema = z.object({ name: z.string(), reason: z.string() });
-
-export type RejectedAttachment = z.infer<typeof rejectedAttachmentSchema>;
 
 export const inboxEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -990,7 +985,6 @@ export const scheduledRequestSchema = z.object({
   pendingRun: z.object({ at: isoDateTime, cause: z.enum(['schedule', 'manual']) }).optional(),
 });
 
-export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
 export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
 
@@ -1174,8 +1168,6 @@ export const observedWorktreeBranchSchema = z.object({
   // 在るときは `branch`（と、この観測で取れなかった `remoteOrigin`）がこの時刻の観測から引き継いだもの: 観測の `at` の枝名として読ませないため
   branchCarriedFromAt: isoDateTime.optional(),
 });
-
-export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;
 
 // `unavailable` と欄ごとの `undefined` を混ぜない: 確かめようとして取れなかったのと、一度もこの分岐を通っていないのは別のため
 // `source` を持つ: 時刻だけだと、器の入れ替えで見失った後に前のターンの観測が「止まる直前にも0件だった」と誤読されるため。無いことをどれかの経路だと見なさない
@@ -1605,8 +1597,6 @@ const permissionGrantRouteSchema = z.object({
   accountId: z.string(),
 });
 
-export type PermissionGrantRoute = z.infer<typeof permissionGrantRouteSchema>;
-
 // 行は消さず `revokedAt` を立てる: 終端は別の状態であって削除ではないため
 export const permissionGrantSchema = z.object({
   id: z.string(),
@@ -1718,7 +1708,6 @@ export const practiceSchema = practiceMetaSchema.extend({
   content: z.string(),
 });
 
-export type PracticeSlug = z.infer<typeof practiceSlugSchema>;
 export type PracticeMeta = z.infer<typeof practiceMetaSchema>;
 export type Practice = z.infer<typeof practiceSchema>;
 
