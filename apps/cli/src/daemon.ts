@@ -15,12 +15,12 @@ export type { DaemonRuntimeInfo };
 // boolean にしない: 「確かめられなかった」が黙って「居ない」側へ倒れるため
 export type Presence = 'present' | 'absent' | 'unknown';
 
-export interface DaemonStatus {
+interface DaemonStatus {
   presence: Presence;
   info: DaemonRuntimeInfo | null;
 }
 
-export type StopOutcome =
+type StopOutcome =
   | 'stopped'
   | 'not-running'
   | 'stale'
@@ -79,7 +79,7 @@ async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
   }
 }
 
-export interface StatusDetails {
+interface StatusDetails {
   storage: string | null;
   sessionRefusal: SessionRefusal | null;
 }
@@ -118,7 +118,7 @@ function daemonEntrypoint(): string {
 }
 
 // 呼び出し側が「起こした」と「既に居た」を言い分けられるように、どちらかを返す
-export type StartOutcome =
+type StartOutcome =
   | { kind: 'already-present'; info: DaemonRuntimeInfo }
   | { kind: 'started'; info: DaemonRuntimeInfo };
 
@@ -303,7 +303,7 @@ function pidAppearsAlive(pid: number): boolean | null {
   }
 }
 
-export type StartWithRecoveryOutcome =
+type StartWithRecoveryOutcome =
   | { kind: 'already-present'; info: DaemonRuntimeInfo }
   | { kind: 'started'; info: DaemonRuntimeInfo }
   | {

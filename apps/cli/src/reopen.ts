@@ -7,13 +7,13 @@ import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeFailedResponse } from './format.js';
 import { resolveTarget, type Target } from './target.js';
 
-export interface ReopenOptions {
+interface ReopenOptions {
   yes?: boolean;
   distill?: boolean;
   reason?: string;
 }
 
-export interface ReopenResult {
+interface ReopenResult {
   outcome: 'now' | 'deferred' | 'unsupported';
   previousSessionId?: string | null | undefined;
   runningManagers?: number | undefined;
@@ -48,7 +48,7 @@ export function buildReopenConfirmMessage(options: ReopenOptions): string {
   );
 }
 
-export async function requestReopen(
+async function requestReopen(
   client: DaemonClient,
   target: Target,
   options: ReopenOptions,

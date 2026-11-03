@@ -73,7 +73,7 @@ export interface DraftFile {
   readonly carried?: true;
 }
 
-export type DraftResult = { ok: true; file: DraftFile } | { ok: false; reason: string };
+type DraftResult = { ok: true; file: DraftFile } | { ok: false; reason: string };
 
 export class AttachmentDraft {
   private readonly files: DraftFile[] = [];
@@ -223,7 +223,7 @@ function errnoOf(error: unknown): string {
   return typeof code === 'string' ? code : error instanceof Error ? error.message : String(error);
 }
 
-export interface UploadedAttachment {
+interface UploadedAttachment {
   id: string;
   name: string;
   mediaType: string;
@@ -231,12 +231,12 @@ export interface UploadedAttachment {
   sha256: string;
 }
 
-export interface FileOnDisk {
+interface FileOnDisk {
   readonly path: string;
   readonly length: number;
 }
 
-export interface AttachmentUploadFile {
+interface AttachmentUploadFile {
   name: string;
   mediaType: string;
   bytes: Uint8Array | FileOnDisk;
@@ -354,7 +354,7 @@ export function expireUploads(sent: readonly DraftFile[], message: string): stri
   );
 }
 
-export type UploadDraftResult =
+type UploadDraftResult =
   | {
       ok: true;
       uploaded: UploadedAttachment[];
@@ -457,7 +457,7 @@ const FROM_LABEL: Readonly<Record<AttachmentFromClass, string>> = {
   unknown: '不明',
 };
 
-export interface ListedAttachment {
+interface ListedAttachment {
   id: string;
   name: string;
   mediaType: string;
@@ -469,7 +469,7 @@ export interface ListedAttachment {
 }
 
 // 保存中は期限を持たない: 期限が無いまま「期限 undefined」と出さない
-export function keptStateOf(meta: {
+function keptStateOf(meta: {
   keptAt?: string | undefined;
   expiresAt?: string | undefined;
 }): string {
@@ -477,14 +477,14 @@ export function keptStateOf(meta: {
   return meta.expiresAt === undefined ? '期限不明' : `${meta.expiresAt} に消える`;
 }
 
-export function renderAttachmentRow(meta: ListedAttachment): string {
+function renderAttachmentRow(meta: ListedAttachment): string {
   return (
     `${meta.id}  ${meta.name}  (${meta.mediaType}, ${formatBytes(meta.size)})  ` +
     `${FROM_LABEL[classifyAttachmentFrom(meta.uploadedBy)]}  ${keptStateOf(meta)}  ${meta.createdAt}`
   );
 }
 
-export interface UsageBucket {
+interface UsageBucket {
   count: number;
   totalBytes: number;
 }
@@ -594,12 +594,12 @@ export async function attachmentsListCommand(options: AttachmentsListOptions): P
 }
 
 // CLI（/keep・/unkeep・/rm）で同じ文にする
-export function attachmentNotFoundMessage(id: string): string {
+function attachmentNotFoundMessage(id: string): string {
   return `そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`;
 }
 
 // 確認の見出しも CLI（rm・/rm）で同じ文にする
-export function attachmentRemoveSummary(id: string): string {
+function attachmentRemoveSummary(id: string): string {
   return `添付を消します（保存中のものも消えます）: ${id}`;
 }
 

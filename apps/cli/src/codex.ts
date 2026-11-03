@@ -25,7 +25,7 @@ interface CodexLoginView {
   error: string | null;
 }
 
-export function describeCodexAuthStatus(status: CodexAuthStatus): string {
+function describeCodexAuthStatus(status: CodexAuthStatus): string {
   if (!status.loggedIn) {
     return (
       'Codex の ChatGPT ログイン: なし\n' +
@@ -59,7 +59,7 @@ export async function codexStatusCommand(): Promise<void> {
   stdout.write(describeCodexAuthStatus(status));
 }
 
-export interface CodexLoginOptions {
+interface CodexLoginOptions {
   pollMs?: number;
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;

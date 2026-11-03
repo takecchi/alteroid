@@ -14,7 +14,7 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
 import { shellQuote } from './shell-quote.js';
 
-export interface InboxRemoveOptions {
+interface InboxRemoveOptions {
   types: string;
   sources?: string;
   before?: string;
