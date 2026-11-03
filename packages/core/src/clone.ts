@@ -60,6 +60,7 @@ import {
   type DigestShape,
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
+  TASK_QUEUE_SECTION_HEADING_HEAD,
 } from './digest.js';
 import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
@@ -6044,7 +6045,28 @@ class Clone implements CloneHost {
         { shape, trimHistory: this.#tokenSaving.excerpt },
       );
     } catch (error) {
-      return `（直近の状況をまとめられなかった: ${reasonOf(error)}）`;
+      // 件数の形（定期の依頼の tick）は断り書き側が先頭を持つので足さない
+      const head = shape === 'full' ? await this.#taskQueueHeadAfterDigestFailure() : '';
+      return `（直近の状況をまとめられなかった: ${reasonOf(error)}）${head}`;
+    }
+  }
+
+  /**
+   * 要約が組めなかった回に、待ち行列の先頭だけを添える。
+   * 発意・日報の tick は、要約が先頭を載せる前提で断り書き側の先頭を出さない（`tickDigestCarriesTaskQueueHead`）ので、要約が失敗するとどこにも載らなくなるため。
+   * 読めなかったときは 0 件と書かず、読めなかったと名乗る。要約が組めた回は呼ばれず、入力は変わらない。
+   */
+  async #taskQueueHeadAfterDigestFailure(): Promise<string> {
+    try {
+      const taskList = await this.#stores.tasks.list();
+      return [
+        '',
+        '',
+        TASK_QUEUE_SECTION_HEADING_HEAD,
+        ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
+      ].join('\n');
+    } catch (error) {
+      return `\n\n${TASK_QUEUE_SECTION_HEADING_HEAD}\n- 待ち行列を読めなかった（理由: ${reasonOf(error)}）。開いている仕事が 0 件だったのではない。読み直す手は \`task_list\` である。`;
     }
   }
 
@@ -6138,7 +6160,10 @@ class Clone implements CloneHost {
         ? await this.#recentDigestBare()
         : await buildActivityDigest(this.#stores, range, axes.liveness, axes.awaitingBackground, {
             trimHistory: this.#tokenSaving.excerpt,
-          }).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
+          }).catch(
+            async (error: unknown) =>
+              `（この日の記録をまとめられなかった: ${reasonOf(error)}）${await this.#taskQueueHeadAfterDigestFailure()}`,
+          );
 
     // digest の全文は日誌に書かない（`turn-input.ts` の doc）。
     await this.#journal(turnInputEntry({ type: 'daily_report', date, cause, digest }));
