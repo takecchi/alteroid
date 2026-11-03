@@ -1,8 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { readAppSources } from '../../../apps/daemon/src/app-sources.test-support.js';
-
 import { readCloneToolsSources } from './clone-tools-sources.test-support.js';
 import {
   DAEMON_RUNNER_REGISTRY_SOURCE,
@@ -1449,14 +1447,11 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
   it('removeMany を直に呼ぶ本番コードは、この共有ヘルパの中だけである', () => {
     const targets = ['../../../packages/core/src/clone.ts'];
 
-    // 道具の実装ソース（tools.ts と clone-tools-*.ts）と HTTP の口（app.ts と app-routes-*.ts）は全部読む。
-    // 入口は clone-tools-sources.test-support.ts と apps/daemon/src/app-sources.test-support.ts
+    // 道具の実装ソース（tools.ts と clone-tools-*.ts）は全部読む。
+    // 入口は clone-tools-sources.test-support.ts
+    // HTTP の口（app.ts と app-routes-*.ts）を読む検査は daemon 側の inbox-remove-route-source.test.ts へ移した
     const sources = [
       ...readCloneToolsSources().map((entry) => ({ rel: entry.name, source: entry.source })),
-      ...readAppSources().map((entry) => ({
-        rel: `apps/daemon/src/${entry.name}`,
-        source: entry.source,
-      })),
       ...targets.map((rel) => ({
         rel,
         source: readFileSync(new URL(rel, import.meta.url), 'utf8'),
