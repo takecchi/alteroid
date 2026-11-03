@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 // 「HTTP の口（`app.ts`）のソースを文字列で読む試験」の入口を1つに揃える。
 // `app.ts` を族ごとのファイルへ分けても、読む対象が自動で増えるようにするため:
 //   - `app.ts` 本体
+//   - `app-context.ts`（`createApp` の先頭の局所。ミドルウェアの一部・SSE・添付の上限の応答を持つ）
 //   - `app-routes-<族>.ts`（経路の族のファイル。命名規則はこの1本が持つ）
 // 数えないもの: テスト（`*.test.ts`）・この種の補助（`*.test-support.ts`）・JSON。
 // 空振りさせない: 対象が1本も無い・`app.ts` が入っていない・読んだ本文が空のときは、黙って通さず投げる。
@@ -14,11 +15,13 @@ const SRC_REL = 'apps/daemon/src/';
 
 export const APP_ENTRY_FILE = 'app.ts';
 
+export const APP_CONTEXT_FILE = 'app-context.ts';
+
 const FAMILY_FILE = /^app-routes-[a-z0-9-]+\.ts$/;
 
 /** ファイル名（ディレクトリを含まない）が、HTTP の口のソースか。 */
 export function isAppSourceName(name: string): boolean {
-  return name === APP_ENTRY_FILE || FAMILY_FILE.test(name);
+  return name === APP_ENTRY_FILE || name === APP_CONTEXT_FILE || FAMILY_FILE.test(name);
 }
 
 /** リポジトリの根からの相対パス（`apps/daemon/src/...`）が、HTTP の口のソースか。 */
