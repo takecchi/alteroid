@@ -2661,7 +2661,7 @@ export async function runSlashCommand(
     case '/answers': {
       // `line` は `/\s+/` 分割済みで引用符の中の空白が保てないので、生の文字列から読み直す。
       const argsText = line.replace(/^\S+\s*/, '');
-      const tokens = tokenizeQuoted(argsText);
+      const tokens = tokenizeWithQuotes(argsText).map((token) => token.value);
       const pairs = parseAnswerPairs(tokens);
       if (pairs === null) {
         return usageError(
@@ -3643,17 +3643,8 @@ async function resolveDecisionOnlyManager(
   return { ok: true, managerId: only.managerId };
 }
 
-// `line.split(/\s+/)` では引用符の中の空白ごと割れてしまうので、`/answers` の処理でだけこちらを使う（他のコマンドの単純な空白分割は変えない）。
-function tokenizeQuoted(text: string): string[] {
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  const tokens: string[] = [];
-  for (const match of text.matchAll(pattern)) {
-    tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
-  }
-  return tokens;
-}
-
-// `tokenizeQuoted` は引用符が語の先頭にあるときだけ効くので、`設問id=文`（`--other q2="ただし 来週"`）の形には使えない。
+// `line.split(/\s+/)` では引用符の中の空白ごと割れてしまうので、`/answers` と `parseStructuredAnswer` でだけこちらを使う（他のコマンドの単純な空白分割は変えない）。
+// 引用符は語の途中でも効く: `設問id=文`（`--other q2="ただし 来週"`）が1語になる。`/answers` も同じ割れ方に揃えてある。
 function tokenizeWithQuotes(text: string): QuotedToken[] {
   const tokens: QuotedToken[] = [];
   let current = '';
