@@ -3,6 +3,7 @@ import { taskSchema } from './schema.js';
 import type { TaskOrigin, JobStatus, Task, TaskClosedBy, TaskStatus } from './schema.js';
 import { compareIsoInstant } from './iso-instant.js';
 import { compareCodeUnits } from './code-unit-order.js';
+import { isManagerInFlight } from './job-status-running.js';
 
 // Task の状態遷移と並びの規則。純関数だけを置き、メモリ・fs・pg の3実装が同じものを呼ぶ。
 // 3実装が規則をそれぞれ持つと必ずずれる。pg も「全行を読む → ここの関数で次の行を作る → 変わった行だけ書く」の形で、規則を SQL に書き直さない。
@@ -31,7 +32,8 @@ export function isTaskClosed(status: TaskStatus): boolean {
  * 結果をどうするか（次の委譲・人間への報告・閉じる）はクローンが決める。`done` でも task は閉じない。
  */
 export function taskStatusForJob(status: JobStatus): TaskStatus {
-  return status === 'running' || status === 'waiting_human' ? 'waiting' : 'needs_decision';
+  // 未知の値（版のずれ）は `waiting`: 走っているかもしれない委譲の task を判断待ちへ落とすと、クローンが二重に手を出すため
+  return isManagerInFlight(status) ? 'waiting' : 'needs_decision';
 }
 
 type TaskTransition =

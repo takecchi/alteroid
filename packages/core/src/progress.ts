@@ -27,6 +27,11 @@ import {
 /**
  * `running` / `waiting_human` は含めない: どちらもまだ続く可能性がある。
  * `switch` で書く: `jobStatusSchema` に値が増えたとき、黙って「非終端」側へ落ちて数え上げから消えないよう `tsc` で落とす。
+ * 未知の値（型の上では来ない。別デプロイの版のずれ）は false: 終端と決めつけない（以前は default の無い switch が `undefined` を返していた。呼び出しは `!` と `&&` だけで、結果は変わらない）。
+ *
+ * 名前と実態がずれている（名前は付け替えない）:
+ *   - `done` は終端として true を返すが、idle を兼ねて再び走り出せる。「もう動かない」ではない。
+ *   - `stopped` は true を返すが、`isManagerAwaitingJudgement`（判断待ち = lost）にも `isManagerOutcomeUnobserved`（lost / failed）にも入らない。
  */
 export function isTerminalJobStatus(status: JobStatus): boolean {
   switch (status) {
@@ -38,6 +43,11 @@ export function isTerminalJobStatus(status: JobStatus): boolean {
     case 'lost':
     case 'stopped':
       return true;
+    default: {
+      const exhaustive: never = status;
+      void exhaustive;
+      return false;
+    }
   }
 }
 

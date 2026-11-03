@@ -1,3 +1,4 @@
+import { isManagerInFlight } from './job-status-running.js';
 import type {
   Job,
   LastRescue,
@@ -203,7 +204,7 @@ export function pruneRescueLedger(
   rescue: LastRescue,
   nowMs: number,
 ): LastRescue | undefined | null {
-  if (status === 'running' || status === 'waiting_human') return null;
+  if (isManagerInFlight(status)) return null;
   const quietSince = Date.parse(rescue.at);
   if (Number.isNaN(quietSince)) return null;
   const quietMs = nowMs - quietSince;

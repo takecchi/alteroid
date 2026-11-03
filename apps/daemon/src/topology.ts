@@ -1,5 +1,6 @@
 import {
   clipWithEllipsis,
+  isManagerInFlight,
   notePhase,
   type CloneHost,
   type ManagerModels,
@@ -41,7 +42,7 @@ function clipLine(text: string, limit: number): string {
 }
 
 function isActiveStatus(status: ManagerSummary['status']): boolean {
-  return status === 'running' || status === 'waiting_human';
+  return isManagerInFlight(status);
 }
 
 function isListedOnRunner(manager: ManagerSummary, nowMs: number): boolean {

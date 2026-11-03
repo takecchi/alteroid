@@ -1,4 +1,9 @@
-import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import {
+  approvalStateOf as coreApprovalStateOf,
+  describeAnsweredVia,
+  isApprovalFieldSet,
+  type ApprovalState,
+} from '@alteroid/core/answered-via';
 import { PERMISSION_GRANT_CONSENT_PHRASE } from '@alteroid/core/permission-grant-consent';
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -23,20 +28,17 @@ import {
 import type { PendingApproval } from '@alteroid/logic';
 
 export function isApprovalAnswered(approval: PendingApproval): boolean {
-  return approval.answeredAt !== undefined && approval.answeredAt !== null;
+  return isApprovalFieldSet(approval.answeredAt);
 }
 
 /** 両方 true の行が来たら取り下げを優先する。 */
 export function isApprovalWithdrawn(approval: PendingApproval): boolean {
-  return approval.withdrawnAt !== undefined && approval.withdrawnAt !== null;
+  return isApprovalFieldSet(approval.withdrawnAt);
 }
 
-/** 承認の状態は画面ごとに導かず、ここで決める。両方立った行は取り下げ（`isApprovalWithdrawn` が先）。 */
-export function approvalStateOf(
-  approval: PendingApproval,
-): 'withdrawn' | 'answered' | 'unanswered' {
-  if (isApprovalWithdrawn(approval)) return 'withdrawn';
-  return isApprovalAnswered(approval) ? 'answered' : 'unanswered';
+/** 承認の状態は画面ごとに導かず、core の 1 つの関数で決める（`@alteroid/core/answered-via`）。両方立った行は取り下げ。 */
+export function approvalStateOf(approval: PendingApproval): ApprovalState {
+  return coreApprovalStateOf(approval);
 }
 
 /** 日付なしの入口を返す。回答済み詳細の日付はデーモンの `localDate()` で決まり id だけでは組めないので、入口が正しい日へ replace で移す。 */

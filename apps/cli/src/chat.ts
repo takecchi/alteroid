@@ -4,6 +4,7 @@ import { stdin } from 'node:process';
 import { stderr, stdout } from './terminal-out.js';
 
 import {
+  approvalStateOf,
   approvalUpdatedAt,
   describeAnsweredVia,
   denialActorTag,
@@ -2421,13 +2422,14 @@ export async function runSlashCommand(
               `（/approval ${index + 1} で選択肢を読める）\n`,
           );
         }
-        if (approval.withdrawnAt) {
-          stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
+        const approvalState = approvalStateOf(approval);
+        if (approvalState === 'withdrawn') {
+          stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt ?? ''}）\n`);
           stdout.write(
             `      取り下げた理由: ${approval.withdrawnReason === undefined || approval.withdrawnReason === null ? '（理由の記録なし）' : redactBody(approval.withdrawnReason)}\n`,
           );
-        } else if (approval.answeredAt) {
-          stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
+        } else if (approvalState === 'answered') {
+          stdout.write(`      状態: 回答済み（${approval.answeredAt ?? ''}）\n`);
           if (approval.answer) stdout.write(`      回答: ${redactBody(approval.answer)}\n`);
           // 記録が無い行では出さない: 「わからない」を「operator ではない」に化けさせない。
           if (approval.answeredVia) {
@@ -2517,10 +2519,11 @@ export async function runSlashCommand(
       stdout.write(`  ${redactBody(approval.question)}\n`);
       stdout.write(`      id: ${approval.id}  作成: ${approval.createdAt}\n`);
       if (approval.context) stdout.write(`      背景: ${redactBody(approval.context)}\n`);
-      if (approval.withdrawnAt) {
-        stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
-      } else if (approval.answeredAt) {
-        stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
+      const approvalState = approvalStateOf(approval);
+      if (approvalState === 'withdrawn') {
+        stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt ?? ''}）\n`);
+      } else if (approvalState === 'answered') {
+        stdout.write(`      状態: 回答済み（${approval.answeredAt ?? ''}）\n`);
         if (approval.answer) stdout.write(`      回答: ${redactBody(approval.answer)}\n`);
         if (approval.answeredVia) {
           stdout.write(`      回答経路: ${describeAnsweredVia(approval.answeredVia)}\n`);

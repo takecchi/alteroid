@@ -1,4 +1,4 @@
-import { reasonOf, type Job } from '@alteroid/core';
+import { isManagerInFlight, reasonOf, type Job } from '@alteroid/core';
 
 // 「起こさない」を選ぶのは影響が0本と積極的に数え切れたときだけにする: 起こしすぎるコストはクローンの1ターンだが、拾い損ねた委譲は人間が気づくまで宙に浮くため。
 // `'affected'` 以外の3つの理由を1つへ畳まない: 日誌の `grounds` を読む人間・クローンが、本当に影響があって起こしたのか、数え切れず安全側に倒しただけなのかを区別できなくなるため。
@@ -52,7 +52,7 @@ export function decideRunnerSwapNotice(input: {
     total += 1;
 
     // `#reattach` と同じ境界にする: ずれると、ここが0本と言った直後に `#reattach` が実際には何本か引き取る食い違いが起きるため。
-    if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+    if (!isManagerInFlight(job.status)) continue;
     unfinished += 1;
 
     if (job.runnerId === undefined) {

@@ -49,7 +49,8 @@ function onMap(overridesOf: (status: string) => Partial<ManagerSummary>): Record
 }
 
 describe('地図に載る判定 × JobStatus（現状の挙動を固定。まとめる PR で見直す）', () => {
-  it('窓の外の古い行は、running と waiting_human だけが載る（isActiveStatus）。未知は載らない', () => {
+  it('窓の外の古い行は、running と waiting_human だけが載る（isActiveStatus）。未知は載る', () => {
+    // 反転済み（まとめる PR）: #6298 時点の未知の期待は false（載らない）。isActiveStatus を isManagerInFlight に寄せたので、未知は載る（動いているかもしれない委譲を地図から落とさない）。
     expect(onMap(() => ({}))).toEqual({
       running: true,
       waiting_human: true,
@@ -57,7 +58,7 @@ describe('地図に載る判定 × JobStatus（現状の挙動を固定。まと
       failed: false,
       lost: false,
       stopped: false,
-      bogus: false,
+      bogus: true,
     });
   });
 
@@ -85,10 +86,11 @@ describe('地図に載る判定 × JobStatus（現状の挙動を固定。まと
     });
   });
 
-  it('⚠ 未知の値の倒れ先が判定ごとに違う: isActiveStatus は載せない、isStoppedByUsage / isListedOnRunner は載せる', () => {
+  it('未知の値の倒れ先がそろった: isActiveStatus・isStoppedByUsage・isListedOnRunner のどれでも載せる', () => {
+    // 反転済み（まとめる PR）: #6298 時点は「⚠ 倒れ先が判定ごとに違う（isActiveStatus は載せない）」だった。
     const active = onMap(() => ({}));
     const usage = onMap(() => ({ usageStoppedAt: iso(-2 * 60 * 60_000) }));
-    expect(active['bogus']).toBe(false);
+    expect(active['bogus']).toBe(true);
     expect(usage['bogus']).toBe(true);
   });
 });

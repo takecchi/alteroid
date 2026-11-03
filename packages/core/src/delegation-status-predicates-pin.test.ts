@@ -36,6 +36,8 @@ describe('JobStatus の全値（現状の挙動を固定。まとめる PR で�
 
 describe('名前付きの判定 × 全値（現状の挙動を固定。まとめる PR で見直す）', () => {
   it('digest.ts isManagerInFlight: running と waiting_human だけ。未知は false', () => {
+    // 反転済み（まとめる PR）: #6298 時点の期待は「未知は false」。未知は true に倒した（下の期待）。
+    // 経緯: 別デプロイの版のずれで知らない値が来たとき、走っているかもしれない委譲を「終わった」と決めつけると、数え漏らし、結び付いた task が判断待ちに落ちて二重に手を出される。既知の値の答えは変えていない。
     expect(tableOf(isManagerInFlight)).toEqual({
       running: true,
       waiting_human: true,
@@ -43,7 +45,7 @@ describe('名前付きの判定 × 全値（現状の挙動を固定。まとめ
       failed: false,
       lost: false,
       stopped: false,
-      bogus: false,
+      bogus: true,
     });
   });
 
@@ -83,7 +85,9 @@ describe('名前付きの判定 × 全値（現状の挙動を固定。まとめ
     });
   });
 
-  it('progress.ts isTerminalJobStatus: done / failed / lost / stopped。未知は false ではなく undefined（default の無い switch が値を返さない）', () => {
+  it('progress.ts isTerminalJobStatus: done / failed / lost / stopped。未知は false', () => {
+    // 反転済み（まとめる PR）: #6298 時点の期待は「未知は false ではなく undefined（default の無い switch が値を返さない）」。明示的に false を返す。
+    // 経緯: 呼び出しは `!` と `&&` だけ（`=== false` / `=== undefined` で比べる所は無い）ので、結果は変わらない。型の上でも boolean を返す約束に実態を合わせた。
     expect(tableOf(isTerminalJobStatus)).toEqual({
       running: false,
       waiting_human: false,
@@ -91,11 +95,13 @@ describe('名前付きの判定 × 全値（現状の挙動を固定。まとめ
       failed: true,
       lost: true,
       stopped: true,
-      bogus: undefined,
+      bogus: false,
     });
   });
 
-  it('task.ts taskStatusForJob: running / waiting_human は waiting、ほかは needs_decision。未知も needs_decision', () => {
+  it('task.ts taskStatusForJob: running / waiting_human は waiting、ほかは needs_decision。未知は waiting', () => {
+    // 反転済み（まとめる PR）: #6298 時点の期待は「未知も needs_decision」。未知は waiting に倒した。
+    // 経緯: 版のずれで知らない値が来たとき、走っているかもしれない委譲の task を判断待ちへ落とすと、クローンが二重に手を出す。
     expect(tableOf(taskStatusForJob)).toEqual({
       running: 'waiting',
       waiting_human: 'waiting',
@@ -103,7 +109,7 @@ describe('名前付きの判定 × 全値（現状の挙動を固定。まとめ
       failed: 'needs_decision',
       lost: 'needs_decision',
       stopped: 'needs_decision',
-      bogus: 'needs_decision',
+      bogus: 'waiting',
     });
   });
 });
@@ -127,6 +133,7 @@ describe('インラインの綴りを、公開の関数を通して固定する�
           .length === 0,
     );
     // true = 委譲が走っているとみなされ、返事待ちの行から外れる
+    // 反転済み（まとめる PR）: #6298 時点の未知の期待は false。直書きを isManagerInFlight に寄せたので、未知は true（走っているとみなす。名乗って二重に手を出させない）。
     expect(named).toEqual({
       running: true,
       waiting_human: true,
@@ -134,7 +141,7 @@ describe('インラインの綴りを、公開の関数を通して固定する�
       failed: false,
       lost: false,
       stopped: false,
-      bogus: false,
+      bogus: true,
     });
   });
 
@@ -235,7 +242,8 @@ describe('インラインの綴りを、公開の関数を通して固定する�
         failed: false,
         lost: false,
         stopped: false,
-        bogus: false,
+        // 反転済み（まとめる PR）: #6298 時点の未知の期待は false（触る側）。直書きを isManagerInFlight に寄せたので、未知は null（動いているかもしれないので触らない）。
+        bogus: true,
       });
     });
   });
@@ -248,11 +256,12 @@ describe('判定どうしで答えが食い違う値（現状の挙動を固定�
     expect(isRunningJobStatus('waiting_human')).toBe(false);
   });
 
-  it('⚠ 未知の値: 倒れ先が割れる（isRunningJobStatus は実行中、isManagerInFlight は実行中でない、isTerminalJobStatus は undefined、taskStatusForJob は needs_decision）', () => {
+  it('未知の値: 倒れ先が「閉じない・数え漏らさない」側にそろった（isRunningJobStatus・isManagerInFlight は動いている、isTerminalJobStatus は終端でない、taskStatusForJob は waiting）', () => {
+    // 反転済み（まとめる PR）: #6298 時点は「⚠ 倒れ先が割れる」（isManagerInFlight は false、isTerminalJobStatus は undefined、taskStatusForJob は needs_decision）だった。
     expect(isRunningJobStatus(UNKNOWN)).toBe(true);
-    expect(isManagerInFlight(UNKNOWN)).toBe(false);
-    expect(isTerminalJobStatus(UNKNOWN)).toBeUndefined();
-    expect(taskStatusForJob(UNKNOWN)).toBe('needs_decision');
+    expect(isManagerInFlight(UNKNOWN)).toBe(true);
+    expect(isTerminalJobStatus(UNKNOWN)).toBe(false);
+    expect(taskStatusForJob(UNKNOWN)).toBe('waiting');
   });
 
   it('⚠ done: isTerminalJobStatus は終端だが、再び走り出せる（done は idle を兼ねる）。isManagerInFlight は false で、「終わった」と「もう動かない」が一致しない', () => {

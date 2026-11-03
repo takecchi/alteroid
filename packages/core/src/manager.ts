@@ -168,6 +168,7 @@ import type {
 } from './schema.js';
 import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
+import { isManagerInFlight } from './job-status-running.js';
 import { isTaskClosed, taskStatusForJob } from './task.js';
 import {
   carryKnownBranches,
@@ -3161,7 +3162,7 @@ class Pool implements ManagerPool {
       const runnerId = record.job.runnerId;
       if (runnerId === undefined) continue;
       const status = record.job.status;
-      if (status !== 'running' && status !== 'waiting_human') continue;
+      if (!isManagerInFlight(status)) continue;
       const observed = sessions.get(runnerId);
       if (observed === undefined) continue;
       const since = record.runnerSessionSince ?? record.job.createdAt;
@@ -3884,11 +3885,7 @@ class Pool implements ManagerPool {
       );
     }
     const status = record.job.status;
-    if (
-      status === 'running' ||
-      status === 'waiting_human' ||
-      (status === 'done' && record.attached)
-    ) {
+    if (isManagerInFlight(status) || (status === 'done' && record.attached)) {
       throw new Error(
         `前任 ${predecessorId} はまだ終わっていない（status=${status}${status === 'done' ? '・セッションが生きている' : ''}）ため、` +
           '後継を立てない。先に manager_stop で止めること（黙って止めない: 止めるのはクローンの判断）。',
@@ -4008,7 +4005,7 @@ class Pool implements ManagerPool {
         if (job.runnerId !== runnerId) continue;
         const known = this.#records.get(job.id);
         const status = known?.job.status ?? job.status;
-        if (status !== 'running' && status !== 'waiting_human') continue;
+        if (!isManagerInFlight(status)) continue;
         const record = known ?? (await this.#load(job.id));
         if (record === null) continue;
         // `runner.stop()` の直前に1回取る: 生きて答えられる最後の機会。新しい outbox イベントは足さない: 喪失の窓を持つため、台帳へ直接書く既存の経路に乗る。
@@ -4101,7 +4098,7 @@ class Pool implements ManagerPool {
       if (job.status === 'lost') continue;
 
       // 古い写し（ループ先頭の `job`）で resume を決めない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。resume しうる写しだけ像を載せる直前に読み直し、`await` の間に像が載りうるので読んだ後にもう一度 `#records` を見る。
-      const resumable = job.status === 'running' || job.status === 'waiting_human';
+      const resumable = isManagerInFlight(job.status);
       const fresh = resumable ? ((await this.#latestJobOf(job.id)) ?? job) : job;
       if (resumable && this.#records.has(job.id)) continue;
       if (fresh.status === 'lost') continue;
@@ -4109,7 +4106,7 @@ class Pool implements ManagerPool {
       const record: ManagerRecord = { job: { ...fresh }, waiting: [], attached: false };
       this.#records.set(job.id, record);
 
-      if (fresh.status !== 'running' && fresh.status !== 'waiting_human') continue;
+      if (!isManagerInFlight(fresh.status)) continue;
 
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
@@ -4936,7 +4933,7 @@ class Pool implements ManagerPool {
     // 古い写し（ループ先頭の `job`）で判定しない: 待っている間に `abort()` が `stopped` を書いて `#retire` していると、`stopped` を `running` で上書きして起こし直す。`known` が無いときは読み直した `fresh` で判定し、record も同じ行から作る。
     const current = this.#records.get(job.id) ?? known;
     const status = current?.job.status ?? fresh.status;
-    if (status !== 'running' && status !== 'waiting_human') return false;
+    if (!isManagerInFlight(status)) return false;
 
     const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
     this.#records.set(job.id, record);
@@ -5275,7 +5272,7 @@ class Pool implements ManagerPool {
     for (const job of listed) {
       if (this.#stopped) return;
       if (job.runnerId === undefined || job.runnerId === runnerId) continue;
-      if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+      if (!isManagerInFlight(job.status)) continue;
       if (this.#unresumable.has(job.id) || !this.#shouldRelocateFrom(job.runnerId)) continue;
       const known = this.#records.get(job.id);
       // 古い写し（ループ先頭の `job`）で確定しない: この間に `abort()` が `stopped` を書いていることがあるので、確定の直前に読み直した行から作る。

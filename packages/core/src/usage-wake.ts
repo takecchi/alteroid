@@ -1,5 +1,6 @@
 import { noteDroppedRecord, reasonOf } from './dropped-record.js';
 import { EXCHANGE_KIND_FAILURE_PREFIX, EXCHANGE_KIND_RECOVERY_PREFIX } from './exchange-kind.js';
+import { isManagerInFlight } from './job-status-running.js';
 import type { ManagerRecord, ManagerSendResult } from './manager.js';
 import { usageRotationNudge, workerLimitNudge } from './manager-notices.js';
 import type { Job, JournalEntryInput } from './schema.js';
@@ -105,7 +106,7 @@ export class UsageWake {
     // 印が立っていないものも借りに載せる: 古い鍵で走っていた委譲はこれから枠に落ちうるが、回転は既に終わっていて鍵の側からの契機は二度と来ない。台帳には降りない: 台帳にしか無い委譲は `restore()` が拾う。
     for (const [managerId, record] of d.records) {
       const status = record.job.status;
-      if (status === 'running' || status === 'waiting_human') d.usageWakeOwed.add(managerId);
+      if (isManagerInFlight(status)) d.usageWakeOwed.add(managerId);
     }
 
     await d.beforeWakes([...d.usageStopped, ...d.workerLimitStopped.keys()]);
@@ -600,7 +601,7 @@ export class UsageWake {
       }
       if (trigger === 'turn-ended') {
         if (!mark.preRotationKey || record.job.status !== 'done') return false;
-      } else if (record.job.status === 'running' || record.job.status === 'waiting_human') {
+      } else if (isManagerInFlight(record.job.status)) {
         // 回転の契機では回転前の鍵の印も起こす: ターンの終わりに現役が `ready` でなかった印は、ここで拾わないと次の自分のターンまで取り残されるため
         // 走っている間は起こさない（印は残す）: ターンが終われば次の回転が拾う。
         return false;

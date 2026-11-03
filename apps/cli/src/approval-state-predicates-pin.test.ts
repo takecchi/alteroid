@@ -36,7 +36,10 @@ describe('conversation-approvals.ts approvalText の状態（現状の挙動を�
     });
   });
 
-  it('⚠ 空文字・null は「立っていない」と読む（真偽で見る。コアの `!== undefined` では「立っている」になる）', () => {
+  it('空文字は「立っている」、null は「立っていない」と読む（core の `approvalStateOf` に寄せた）', () => {
+    // 反転済み（まとめる PR）: #6298 時点の期待は「⚠ 空文字・null は『立っていない』と読む（真偽で見る）」で、空文字の 3 つが
+    // emptyAnswered: unanswered / emptyWithdrawn: unanswered / emptyWithdrawnWithAnswer: answered だった。
+    // 経緯: core・logic・web は空文字を「立っている」と読む多数派。cli だけ真偽で見ていたのをそろえた。null は web と cli がもともと「立っていない」で、型の上で null が来ない core・logic に影響しないので、答えが変わらない側（立っていない）を選んだ。
     expect({
       emptyAnswered: stateOf({ answeredAt: '' }),
       nullAnswered: stateOf({ answeredAt: null }),
@@ -44,11 +47,11 @@ describe('conversation-approvals.ts approvalText の状態（現状の挙動を�
       nullWithdrawn: stateOf({ withdrawnAt: null }),
       emptyWithdrawnWithAnswer: stateOf({ answeredAt: AT, withdrawnAt: '' }),
     }).toEqual({
-      emptyAnswered: 'unanswered',
+      emptyAnswered: 'answered',
       nullAnswered: 'unanswered',
-      emptyWithdrawn: 'unanswered',
+      emptyWithdrawn: 'withdrawn',
       nullWithdrawn: 'unanswered',
-      emptyWithdrawnWithAnswer: 'answered',
+      emptyWithdrawnWithAnswer: 'withdrawn',
     });
   });
 });

@@ -183,6 +183,7 @@ import {
   type DelegatedPermissionRuleService,
 } from './delegated-permission-rules.js';
 import type { McpServers } from './mcp-servers.js';
+import { isManagerInFlight } from './job-status-running.js';
 import type { PluginDistributionService } from './plugin-distribution-service.js';
 import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
@@ -8648,10 +8649,7 @@ class Clone implements CloneHost {
       // task に結び付いた委譲（`Job.taskId`、P3）で、いま走っている（running / waiting_human）もの。前のターンで起こしたものを含む
       const activeJobTaskIds = new Set<string>();
       for (const job of await this.#stores.jobs.listJobs()) {
-        if (
-          (job.status === 'running' || job.status === 'waiting_human') &&
-          job.taskId !== undefined
-        ) {
+        if (isManagerInFlight(job.status) && job.taskId !== undefined) {
           activeJobTaskIds.add(job.taskId);
         }
       }

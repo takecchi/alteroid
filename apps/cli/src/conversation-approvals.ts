@@ -1,4 +1,9 @@
-import { describeAnsweredVia, summarizeQuestions, type AnsweredVia } from '@alteroid/core';
+import {
+  approvalStateOf,
+  describeAnsweredVia,
+  summarizeQuestions,
+  type AnsweredVia,
+} from '@alteroid/core';
 
 import type { DaemonClient } from './client.js';
 import { oneLine, withErrorReason } from './format.js';
@@ -100,21 +105,22 @@ export function approvalText(approval: ConversationApproval): string {
     oneLine(redactBody(approval.question), 80) +
     (questions.length > 0 ? `（${summarizeQuestions(questions)}）` : '');
   const head = `[${approval.createdAt}] 確認（承認待ち ${approval.id.slice(0, 8)}）: ${summary}`;
-  // 取り下げを先に見る: 回答済みと両方立っていたら取り下げを優先するため
-  if (approval.withdrawnAt) {
+  // 取り下げを先に見る（core の `approvalStateOf`）: 回答済みと両方立っていたら取り下げを優先するため。空文字は「立っている」（以前は真偽で見て「立っていない」と読んでいた）
+  const state = approvalStateOf(approval);
+  if (state === 'withdrawn') {
     const reason = approval.withdrawnReason
       ? oneLine(redactBody(approval.withdrawnReason), 120)
       : '（理由の記録なし）';
-    return `${head} → 取り下げ（${approval.withdrawnAt}）: ${reason}`;
+    return `${head} → 取り下げ（${approval.withdrawnAt ?? ''}）: ${reason}`;
   }
-  if (approval.answeredAt) {
+  if (state === 'answered') {
     const answer = approval.answer
       ? oneLine(redactBody(approval.answer), 120)
       : '（回答の記録なし）';
     const via = approval.answeredVia
       ? `（回答経路: ${describeAnsweredVia(approval.answeredVia)}）`
       : '';
-    return `${head} → 回答済み（${approval.answeredAt}）: ${answer}${via}`;
+    return `${head} → 回答済み（${approval.answeredAt ?? ''}）: ${answer}${via}`;
   }
   return `${head} → 未回答`;
 }

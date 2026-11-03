@@ -1,4 +1,5 @@
 import { excerptLine } from './excerpt.js';
+import { isManagerInFlight } from './job-status-running.js';
 import type { Job, Task } from './schema.js';
 
 // 人間の発言が届いたターンの断り書きに足す、「その会話を起点にした返事待ち（waiting）の task」の行（器は task の状態を変えない: 閉じる・戻すはクローンが決める）。
@@ -18,7 +19,7 @@ export function selectWaitingReplyTasks(
 ): Task[] {
   const delegated = new Set<string>();
   for (const job of jobs) {
-    if ((job.status === 'running' || job.status === 'waiting_human') && job.taskId !== undefined) {
+    if (isManagerInFlight(job.status) && job.taskId !== undefined) {
       delegated.add(job.taskId);
     }
   }

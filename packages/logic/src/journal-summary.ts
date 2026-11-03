@@ -1,4 +1,4 @@
-import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import { approvalStateOf, describeAnsweredVia } from '@alteroid/core/answered-via';
 import { describeGithubCi } from '@alteroid/core/github-ci-format';
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
@@ -49,8 +49,9 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       return `${entry.decision}（根拠: ${entry.grounds}）`;
     case 'escalation':
       // 取り下げを先に見る: `answeredAt` 未設定の取り下げ行が「確認:」（新しい質問）と読まれるため。
-      if (entry.withdrawnAt !== undefined) return `取り下げ済み: ${entry.question}`;
-      if (entry.answeredAt === undefined) return `確認: ${entry.question}`;
+      // 状態は core の `approvalStateOf`（取り下げが先）
+      if (approvalStateOf(entry) === 'withdrawn') return `取り下げ済み: ${entry.question}`;
+      if (approvalStateOf(entry) === 'unanswered') return `確認: ${entry.question}`;
       return entry.answeredVia === undefined
         ? `回答済: ${entry.question}`
         : `回答済: ${entry.question}（回答経路: ${describeAnsweredVia(entry.answeredVia)}）`;

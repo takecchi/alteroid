@@ -1,5 +1,7 @@
+import { approvalStateOf } from './approval-state.js';
 import { excerptLine } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
+import { isManagerInFlight } from './job-status-running.js';
 import { scanJournalPages } from './journal-scan.js';
 // 型だけを取る: `manager.ts` との間に実行時の循環を作らないため
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
@@ -93,10 +95,8 @@ export function describeSessionMissingKind(kind: SessionMissingKind | undefined)
   return '';
 }
 
-// `lost` をここへ足さない（`isManagerAwaitingJudgement` を使う）: 日報は第1キーで sort して `MAX_ITEMS` で slice するので、枠を食って最近終わった委譲が押し出されるため
-export function isManagerInFlight(status: JobStatus): boolean {
-  return status === 'running' || status === 'waiting_human';
-}
+// 定義は `job-status-running.ts`（`task.ts` から値を引けるよう、重い依存を持たない置き場に移した）。外へ出していた名前はここから変えない
+export { isManagerInFlight };
 
 // `status === 'lost'` と直に書かず名前を付ける: 使う面が2つあり、書き下ろすと `lost` だけを見ている意味論の置き場が消えるため
 export function isManagerAwaitingJudgement(status: JobStatus): boolean {
@@ -414,7 +414,7 @@ async function describeEscalationState(
   }
   if (approval !== null) {
     // 取り下げを先に見る: `withdrawnAt` の行は `answer` を持たないので、後回しにすると破損の分岐に誤って落ちるため
-    if (approval.withdrawnAt !== undefined) {
+    if (approvalStateOf(approval) === 'withdrawn') {
       return (
         `この期間の日誌には取り下げ前の行しか無いが、承認待ちキューでは既に取り下げ済み` +
         `（この期間の外で取り下げられた）: ${brief(approval.withdrawnReason ?? '（理由の記録なし）', 80)}`

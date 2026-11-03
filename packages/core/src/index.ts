@@ -108,6 +108,11 @@ export {
   describeSessionMissingKind,
   describeUnobservedOutcome,
 } from './digest.js';
+/** 承認の状態（取り下げを先に見る）の判定は 1 つの関数に寄せてある。web は軽い出口 `@alteroid/core/answered-via` から引く。 */
+export { approvalStateOf, isApprovalFieldSet } from './approval-state.js';
+export type { ApprovalState, ApprovalStateFields } from './approval-state.js';
+/** 委譲の「動いている」の判定は1つの名前付きの関数に寄せてある（`job-status-running.ts`）。daemon の地図などが書き下ろさず使う。 */
+export { isManagerInFlight } from './job-status-running.js';
 /** `GET /conversations` と `conversation_read` が同じ規則を使う: 片方だけに実装を持たせると、直したほうと忘れたほうで見えるものがずれる。 */
 export {
   computeSupersededIds,
