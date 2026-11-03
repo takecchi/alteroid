@@ -2738,7 +2738,7 @@ function writeReport(report: { date: string; body: string; unavailable?: string 
   stdout.write(renderReport(report));
 }
 
-// `GET /reports` `GET /journal` は総件数を返さない（`grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app.ts` で当たる）。
+// `GET /reports` `GET /journal` は総件数を返さない（`grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app-routes-journal.ts` で当たる）。
 // 言えるのは「返った件数が要求した上限とちょうど一致した」という、この API 自身が定めた唯一の合図だけ。
 function noteIfAtLimit(count: number, limit: string, label: string): void {
   if (count !== Number(limit)) return;
