@@ -57,8 +57,6 @@ import {
   CLOSE_MANY_SOURCES_SHOWN,
   closeManyInChunks,
   describeCloseManyFilter,
-} from './task-close-many.js';
-import {
   TASK_STATUS_MANY_TARGETS,
   describeTaskStatusManyViolation,
   selectTaskStatusManyTargets,
@@ -906,7 +904,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ origin, source, q, until, status, reason, dryRun, limit }) => {
-        // 検証は `task-close-many.ts` の `describeCloseManyViolation`（`task_set_status_many` の検証。`task-set-status-many.ts`）
+        // 検証は `task-set-status-many.ts` の `describeTaskStatusManyViolation`
         const input = { origin, source, q, until, status, reason, dryRun, limit };
         const violation = describeTaskStatusManyViolation(input);
         if (violation !== null) return text(violation);
