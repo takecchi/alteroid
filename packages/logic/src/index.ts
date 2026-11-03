@@ -24,6 +24,7 @@ export * from './reopen-display.js';
 export * from './runner-push.js';
 export * from './shared-text.js';
 export * from './sse-retry.js';
+export * from './sse.js';
 export * from './tokens-links.js';
 export * from './topology-scene.js';
 export * from './types.js';

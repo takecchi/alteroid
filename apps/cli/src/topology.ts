@@ -1,9 +1,10 @@
+import { parseSseJson, readSse } from '@alteroid/logic';
+
 import { stderr, stdout } from './terminal-out.js';
 
 import { createClient } from './client.js';
 import { describeFailedResponse } from './format.js';
 import { redactBody, redactError } from './redact.js';
-import { readSSE } from './sse-frame.js';
 import { resolveTarget } from './target.js';
 
 export interface TopologyView {
@@ -316,9 +317,9 @@ async function watchTopology(
       );
     }
     try {
-      for await (const event of readSSE(response.body)) {
-        if (event.name === 'unavailable') {
-          const body = event.json<{ error?: unknown }>();
+      for await (const event of readSse(response.body)) {
+        if (event.event === 'unavailable') {
+          const body = parseSseJson<{ error?: unknown }>(event);
           const kind = typeof body?.error === 'string' ? body.error : 'unknown';
           if (json) {
             stdout.writeRaw(`${JSON.stringify({ type: 'unavailable', error: kind })}\n`);
@@ -329,8 +330,8 @@ async function watchTopology(
           }
           continue;
         }
-        if (event.name !== 'snapshot') continue;
-        const view = event.json<TopologyView>();
+        if (event.event !== 'snapshot') continue;
+        const view = parseSseJson<TopologyView>(event);
         if (view === null) continue;
         notice = null;
         latest = view;

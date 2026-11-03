@@ -54,9 +54,12 @@ import {
 } from '@alteroid/core/unpushed-work-observation-format';
 import {
   JOURNAL_MAX_LIMIT,
+  parseSseJson,
+  readSse,
   readThroughUnreadable,
   summarizeJournalEntry,
   type JournalEntry,
+  type SseMessage,
 } from '@alteroid/logic';
 import type { InferResponseType } from 'hono/client';
 
@@ -105,7 +108,6 @@ import { EDIT_EMPTY_MESSAGE } from './edit-empty-message.js';
 import { turnFailureHint } from './turn-failure.js';
 import { withdrawnMessageText } from './withdrawn-message.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
-import { readSSE, type SSEEvent } from './sse-frame.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
 
@@ -824,7 +826,7 @@ export async function sendMessage(
   options.onAccepted?.();
   const next = await renderChatEvents(
     target,
-    readSSE(response.body),
+    readSse(response.body),
     conversationId,
     options.onFailed,
     false,
@@ -868,7 +870,7 @@ let flushRenderedText: (() => void) | null = null;
 // `sendMessage` の本体を切り出したもの。描き方を2か所に写すと、片方の伏せ字や既読の扱いだけがずれる。
 async function renderChatEvents(
   target: Target,
-  events: AsyncIterable<SSEEvent>,
+  events: AsyncIterable<SseMessage>,
   conversationId: string | null,
   onFailed: ((reason: string) => void) | undefined,
   resuming: boolean,
@@ -913,15 +915,15 @@ async function renderChatEvents(
     for await (const event of events) {
       sawEvent = true;
       clearStatus();
-      if (event.name !== 'text') flushPending();
-      if (event.name !== 'open') sawAfterOpen = true;
-      switch (event.name) {
+      if (event.event !== 'text') flushPending();
+      if (event.event !== 'open') sawAfterOpen = true;
+      switch (event.event) {
         case 'open': {
-          const data = event.json<{
+          const data = parseSseJson<{
             conversationId: string;
             pending?: unknown;
             duplicate?: boolean;
-          }>();
+          }>(event);
           if (data?.duplicate === true) duplicateOpen = true;
           if (data) {
             nextConversationId = data.conversationId;
@@ -931,7 +933,7 @@ async function renderChatEvents(
           break;
         }
         case 'text': {
-          const data = event.json<{ text: string }>();
+          const data = parseSseJson<{ text: string }>(event);
           if (data) {
             pending += data.text;
             const lineEnd = pending.lastIndexOf('\n');
@@ -944,12 +946,12 @@ async function renderChatEvents(
           break;
         }
         case 'tool': {
-          const data = event.json<{ tool: string }>();
+          const data = parseSseJson<{ tool: string }>(event);
           if (data) stdout.write(`\n  · ${data.tool}\n`);
           break;
         }
         case 'ask_human': {
-          const data = event.json<{ approvalId: string; question: string }>();
+          const data = parseSseJson<{ approvalId: string; question: string }>(event);
           if (data) {
             stdout.write(
               `\n  ? 人間への確認（${data.approvalId}）: ${redactBody(data.question)}\n`,
@@ -959,9 +961,9 @@ async function renderChatEvents(
           break;
         }
         case 'attachments': {
-          const data = event.json<{
+          const data = parseSseJson<{
             attachments: { id: string; name: string; mediaType: string; size: number }[];
-          }>();
+          }>(event);
           if (data) {
             for (const item of data.attachments) {
               stdout.write(`\n  ${redactBody(describeAttachment(item))}\n`);
@@ -972,7 +974,7 @@ async function renderChatEvents(
         }
         case 'usage_limited': {
           ended = true;
-          const data = event.json<{ message: string }>();
+          const data = parseSseJson<{ message: string }>(event);
           if (data) {
             stdout.write(`\n  ! ${redactError(data.message)}\n`);
             stdout.write(
@@ -990,7 +992,7 @@ async function renderChatEvents(
         case 'error': {
           ended = true;
           failedOrLimited = true;
-          const data = event.json<{ message: string; kind?: string }>();
+          const data = parseSseJson<{ message: string; kind?: string }>(event);
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
           // 文面からは推し量らない: 種別はデーモンが `kind` で運ぶ。
           const hint = turnFailureHint(data?.kind);
@@ -1115,9 +1117,9 @@ async function probeInProgress(
   const abort = new AbortController();
   const signal = outer === undefined ? abort.signal : AbortSignal.any([abort.signal, outer]);
   try {
-    for await (const event of readSSE(await openChatStream(target, conversationId, signal))) {
-      if (event.name === 'open') {
-        return event.json<{ inProgress?: boolean }>()?.inProgress === true;
+    for await (const event of readSse(await openChatStream(target, conversationId, signal))) {
+      if (event.event === 'open') {
+        return parseSseJson<{ inProgress?: boolean }>(event)?.inProgress === true;
       }
     }
     return false;
@@ -1224,7 +1226,7 @@ export async function runResumeCommand(
   } catch (error) {
     return fail(error);
   }
-  return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks, turn);
+  return renderChatEvents(target, readSse(body), found, onFailed, true, hooks, turn);
 }
 
 const SLASH_CONVERSATIONS_HINTS: ConversationsListHints = {
