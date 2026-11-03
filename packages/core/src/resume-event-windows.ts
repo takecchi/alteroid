@@ -96,13 +96,12 @@ export class ResumeEventWindows {
           const record = this.#records.get(managerId);
           const generation =
             record === undefined ? 'unknown' : this.#judgeSessionGeneration(record, event);
-          // 古い世代の `report` / `ask` でも、新しい世代がまだ何も出していなければ処理し直す（#5195 / #5203）: 捨てるか知らせるかは `#handleEvent` の同じ判定に任せる
+          // 古い世代の `report` でも、新しい世代がまだ何も出していなければ処理し直す（#5195 / #5203）: 捨てるか知らせるかは `#handleEvent` の同じ判定に任せる
           const trackedSilent = record !== undefined && this.#trackedGenerationSilent(record);
           if (
             !moved ||
             generation === 'current' ||
-            (event.type === 'report' && (generation === 'unknown' || trackedSilent)) ||
-            (event.type === 'ask' && trackedSilent)
+            (event.type === 'report' && (generation === 'unknown' || trackedSilent))
           ) {
             await this.#onEvent(event, fromRunnerId);
             continue;
@@ -138,7 +137,7 @@ export class ResumeEventWindows {
             ...dropped.attachments,
             text:
               `${EXCHANGE_KIND_DECISION_PREFIX}[${managerId}] （移送の最中に届いた古い runner の出来事のため無視。` +
-              `移送先は ${target ?? '不明'}、この出来事は ${fromRunnerId} から${
+              `移送先は ${target}、この出来事は ${fromRunnerId} から${
                 fromTarget ? '。移送は受理されなかった' : ''
               }）` +
               (event.type === 'closed'
