@@ -128,7 +128,7 @@ export type AnsweredVia = z.infer<typeof answeredViaSchema>;
 
 export { describeAnsweredVia } from './answered-via.js';
 
-// 値を足すときは書き手（`apps/daemon/src/app.ts`）と同じ変更で足す。`.catch` で未知の値を畳まない: 他の enum 欄（`turnFailureKind` など）と同じく、版のずれで読めない行は「読めない行」として数えられる側に倒す（黙って別の種類に読み替えない）
+// 値を足すときは書き手（daemon の HTTP の口。`apps/daemon/src/app-shared.ts` の `humanActionOf` を呼ぶ族のファイル `app-routes-*.ts`）と同じ変更で足す。`.catch` で未知の値を畳まない: 他の enum 欄（`turnFailureKind` など）と同じく、版のずれで読めない行は「読めない行」として数えられる側に倒す（黙って別の種類に読み替えない）
 const humanActionKindSchema = z.enum([
   'manager_message',
   'commitment_close',

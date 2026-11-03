@@ -1339,7 +1339,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       conversationId: {
         emit: 'never',
         why:
-          '欠落ではなく設計。呼び出し側が決める値（`app.ts` の `given ?? randomUUID()`）で、' +
+          '欠落ではなく設計。呼び出し側が決める値（daemon の `app-routes-chat.ts` の `given ?? randomUUID()`）で、' +
           '`inboxEventShape` の doc が「同じ値の扱いを2か所で変えないこと」と縛っている' +
           "（逐語は `command grep -Fn -- '同じ値の扱いを2か所で' packages/core/src/dropped-record.ts`）。" +
           '足すなら2か所同時、`tag()` は禁止。',

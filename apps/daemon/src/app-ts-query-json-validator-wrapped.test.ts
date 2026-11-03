@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { readAppSource } from './app-sources.test-support.js';
 
-describe("app.ts に validator('json'|'query', ...) の直接呼び出しが増えていない（付け忘れ防止の歯）", () => {
+describe("HTTP の口（app.ts と族のファイル）に validator('json'|'query', ...) の直接呼び出しが増えていない（付け忘れ防止の歯）", () => {
   const source = readAppSource();
 
   const codeLines = source.split('\n').filter((line) => !/^\s*(\*|\/\/)/.test(line));
@@ -15,7 +15,7 @@ describe("app.ts に validator('json'|'query', ...) の直接呼び出しが増�
   it("validator('json', ...) の直接呼び出しは jsonBody() の定義1箇所だけ", () => {
     expect(
       countDirectCalls('json'),
-      "【赤の意味】app.ts のどこかで validator('json', ...) を直接呼んでいる（jsonBody() 経由に" +
+      "【赤の意味】HTTP の口（app.ts と族のファイル）のどこかで validator('json', ...) を直接呼んでいる（jsonBody() 経由に" +
         'なっていない）。hook を渡し忘れると、その経路だけ英語の zod の JSON と本文そのものが' +
         '400 でそのまま返る（issue #424 と同じ穴）。',
     ).toBe(1);
@@ -24,7 +24,7 @@ describe("app.ts に validator('json'|'query', ...) の直接呼び出しが増�
   it("validator('query', ...) の直接呼び出しは queryParams() の定義1箇所だけ", () => {
     expect(
       countDirectCalls('query'),
-      "【赤の意味】app.ts のどこかで validator('query', ...) を直接呼んでいる（queryParams() 経由に" +
+      "【赤の意味】HTTP の口（app.ts と族のファイル）のどこかで validator('query', ...) を直接呼んでいる（queryParams() 経由に" +
         'なっていない）。hook を渡し忘れると、その経路だけ英語の zod の JSON とクエリそのものが' +
         '400 でそのまま返る（この PR が塞いだのと同じ穴に逆戻りしている）。',
     ).toBe(1);

@@ -4,7 +4,7 @@ import { notePhase } from './loop-stall.js';
 
 import { chunkIdsByChars } from './chunk-ids.js';
 
-import { CLOSE_MANY_JOURNAL_ID_CHARS, CLOSE_MANY_LIMIT_MAX } from './task-close-many.js';
+import { CLOSE_MANY_JOURNAL_ID_CHARS, CLOSE_MANY_LIMIT_MAX } from './task-set-status-many.js';
 
 import { formatArrayLengthJa, formatIntRangeJa, formatStringLengthJa } from './tool-arg-checks.js';
 import { opsTools } from './clone-tools-ops.js';
@@ -245,13 +245,13 @@ export function cloneToolCarriesSecrets(tool: string): boolean {
   return SECRET_BEARING_CLONE_TOOL_NAMES.has(tool);
 }
 
-// 定数は `task-close-many.ts` に在る。外へ出していた名前はここから変えない
+// 定数は `task-set-status-many.ts` に在る。外へ出していた名前はここから変えない
 export { CLOSE_MANY_LIMIT_MAX, CLOSE_MANY_JOURNAL_ID_CHARS };
 import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
 
 export { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX };
 
-// `task-close-many.ts` から使うため `chunk-ids.ts` へ移した（`tools.ts` を import すると循環する）。外へ出す名前はここから変えない
+// `task-set-status-many.ts` から使うため `chunk-ids.ts` へ移した（`tools.ts` を import すると循環する）。外へ出す名前はここから変えない
 export { chunkIdsByChars };
 
 /**

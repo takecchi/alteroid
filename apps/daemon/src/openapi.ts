@@ -59,7 +59,7 @@ import { z } from 'zod';
 import { createApp } from './app.js';
 
 // core が zod スキーマを持つものはここで再定義しない: 実装とドキュメントのスキーマが2つに分かれ、いつかずれて spec が嘘になるため。
-// 例外は成功応答を `.parse()` へ通す面（規則は `app.ts`）の外向き view（`accountViewSchema`）: ずれても宣言していないものが載らないだけになる。parse を外すなら view も捨てて core のスキーマへ戻す。
+// 例外は成功応答を `.parse()` へ通す面（規則は `app-routes-auth.ts` の `authRoutes` の鎖の先頭の注記）の外向き view（`accountViewSchema`）: ずれても宣言していないものが載らないだけになる。parse を外すなら view も捨てて core のスキーマへ戻す。
 // 宣言していない欄は `.parse()` で黙って落ちる: 足し忘れると CLI と Web が同時に盲目になる。
 
 export const errorResponseSchema = z.object({ error: z.string() });
@@ -722,7 +722,7 @@ const unrecordedManagerSchema = z.object({
   startedAt: z.string(),
 });
 
-// `app.ts` では組まない: `app.ts` とこのファイルは循環 import で、`app.ts` の最上位で `unrecordedManagerSchema` を使って `.extend()` すると評価順次第で未定義のまま `z.array()` へ渡り、zod が例外を投げることがあるため。
+// HTTP の口（`app.ts` と族のファイル。`GET /usage` は `app-routes-journal.ts`）では組まない: HTTP の口とこのファイルは循環 import で、その最上位で `unrecordedManagerSchema` を使って `.extend()` すると評価順次第で未定義のまま `z.array()` へ渡り、zod が例外を投げることがあるため。
 export const usageResponseSchema = usageAggregateSchema.extend({
   breakdown: usageBreakdownSchema,
   // 台帳と足さない: こちらは claude.ai 側が言っている値で、台帳は自分で数えた推定値のため。
@@ -1094,7 +1094,7 @@ export const mcpServersUpdateResponseSchema = z.object({
   ),
 });
 
-// 定義は core（plugin-source-input.ts）。web の送る前の検査も同じものを使う。app.ts が openapi.ts から取るので、ここから出す
+// 定義は core（plugin-source-input.ts）。web の送る前の検査も同じものを使う。`app-routes-plugins.ts` が openapi.ts から取るので、ここから出す
 export { pluginPreviewRequestSchema };
 
 const pluginSourceViewSchema = z.object({
@@ -1570,7 +1570,7 @@ export const inboxBacklogResponseSchema = z.object({
   unreadable: z.array(unreadableInboxEventSchema).optional(),
 });
 
-// 「在る種類を全部並べた呼びは断る」判定はハンドラ側（`app.ts`）に置く: `z.array` に特定の組み合わせを禁じる制約は素直に書けないため。
+// 「在る種類を全部並べた呼びは断る」判定はハンドラ側（`app-routes-workspace.ts` の `POST /inbox/remove`）に置く: `z.array` に特定の組み合わせを禁じる制約は素直に書けないため。
 export const inboxRemoveManyRequestSchema = z.object({
   types: z.array(z.enum(INBOX_EVENT_TYPE_ORDER)).min(1),
   sources: z.array(nulOnlyRejectedString).min(1).optional(),

@@ -15,7 +15,7 @@ import { createMemoryStores } from './testing.js';
 // `Pool#abort` の早い return のうち、既存の試験が1本も縛っていなかったもの、または文言・副作用までは縛っていなかったものを、
 // 外から見える結果（戻り値の outcome / detail 全文・日誌・受信箱への知らせ・台帳の行・runner への命令）だけで縛る。
 // 段（非公開メソッド）へ分けるときに早い return や戻り値を取り違えると落ちる。
-//   A1a 読めない形の行は「居ない」と言わず unreadable（app.ts で 409 / 404 に分かれる）。何も書かない
+//   A1a 読めない形の行は「居ない」と言わず unreadable（daemon の `app-routes-managers.ts` で 409 / 404 に分かれる）。何も書かない
 //   A1b 台帳に無い委譲は absent。何も書かない
 //   A2  宛先の runner が名簿に開いていなければ unknown（absent にしない）。何も書かない
 //   A3a 自動の畳み: 止める直前に status が done でなくなっていたら、止めずに not_stopped で取りやめる
