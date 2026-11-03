@@ -201,6 +201,40 @@ describe('tick のターンで待ち行列の先頭を1回だけ載せる', () =
     await s.clone.stop();
   });
 
+  it.each([
+    ['発意の tick', selfTick],
+    ['日報の tick', dailyReportTick],
+  ] as const)(
+    '⭐ %s: 要約が組めなかった回にも、先頭は要約の失敗の行のあとに1回だけ載る',
+    async (_name, tick) => {
+      const stores = createMemoryStores();
+      await seed(stores);
+      stores.jobs.listUnreadableJobs = async () => {
+        throw new Error('委譲の台帳が読めない');
+      };
+      const s = boot(stores);
+      const input = await tick(s);
+
+      expect(input).toContain('まとめられなかった');
+      expect(input).toContain('委譲の台帳が読めない');
+      expect(count(input, FIRST_TASK_LINE)).toBe(1);
+      expect(count(input, DIGEST_HEAD)).toBe(1);
+      expect(input).not.toContain(NOTICE_HEAD);
+      expect(input).not.toContain('待ち行列を読めなかった');
+      await s.clone.stop();
+    },
+  );
+
+  it('⭐ 要約が組めた回の入力には、失敗の行も読めなかった断りも出ない', async () => {
+    const s = boot();
+    await seed(s.stores);
+    for (const input of [await selfTick(s), await dailyReportTick(s)]) {
+      expect(input).not.toContain('まとめられなかった');
+      expect(input).not.toContain('待ち行列を読めなかった');
+    }
+    await s.clone.stop();
+  });
+
   it('⭐ 待ち行列を読めない回は、要約側に同じ断りが無いので、tick でも断り書きが「読めなかった」と名乗る', async () => {
     const stores = createMemoryStores();
     await seed(stores);
@@ -212,7 +246,9 @@ describe('tick のターンで待ち行列の先頭を1回だけ載せる', () =
 
     expect(input).toContain('待ち行列を読めなかった');
     expect(input).toContain('task 台帳が壊れている');
-    expect(input).not.toContain(DIGEST_HEAD);
+    // 要約の失敗の行のあとにも、読めなかったと名乗る（0 件と書かない）。断り書き側と合わせて2回出る
+    expect(count(input, '待ち行列を読めなかった')).toBe(2);
+    expect(input).not.toContain('開いている 0 件');
     await s.clone.stop();
   });
 });
