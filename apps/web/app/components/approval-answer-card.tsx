@@ -1,9 +1,9 @@
+import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import {
   approvalStateOf as coreApprovalStateOf,
-  describeAnsweredVia,
   isApprovalFieldSet,
   type ApprovalState,
-} from '@alteroid/core/answered-via';
+} from '@alteroid/core/approval-state';
 import { PERMISSION_GRANT_CONSENT_PHRASE } from '@alteroid/core/permission-grant-consent';
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';

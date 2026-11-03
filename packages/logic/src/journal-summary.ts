@@ -1,4 +1,5 @@
-import { approvalStateOf, describeAnsweredVia } from '@alteroid/core/answered-via';
+import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import { approvalStateOf } from '@alteroid/core/approval-state';
 import { describeGithubCi } from '@alteroid/core/github-ci-format';
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
