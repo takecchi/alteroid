@@ -369,6 +369,11 @@ export function kindOfError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
+// tsconfig の `lib` が ES2023 で `isWellFormed`（ES2024）が無いので最小の型だけ足す。
+export function isWellFormedString(value: string): boolean {
+  return (value as string & { isWellFormed(): boolean }).isWellFormed();
+}
+
 // 変換を core に置かない: `packages/core` は `apps/daemon` の `Principal` を知らない（層が逆）。`operator` の `auth` はそのまま運ぶ: `authenticate` で枝が確定しているので判定し直さない。
 export function answerApprovalViaOf(principal: Principal): AnswerApprovalVia {
   if (principal.kind === 'integration') {
