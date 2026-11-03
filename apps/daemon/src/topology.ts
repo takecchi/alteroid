@@ -365,7 +365,7 @@ interface TopologySnapshotOptions {
   maxAgeMs?: number;
 }
 
-interface TopologyService {
+export interface TopologyService {
   snapshot(options?: TopologySnapshotOptions): Promise<TopologySnapshot>;
 }
 
