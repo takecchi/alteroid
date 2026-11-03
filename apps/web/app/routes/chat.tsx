@@ -114,6 +114,7 @@ import { ConversationList } from './chat-conversation-list';
 import {
   DRAFT_SAVE_DELAY_MS,
   useChatAttachmentHolding,
+  useChatConversationApprovals,
   useChatDraftAutosave,
   useFocusIntentReturn,
   useMarkShownConversationRead,
@@ -492,48 +493,8 @@ export function ChatPane({
     shownId !== undefined &&
     !startedHere.has(shownId);
 
-  // exchange だけでは復元できない: ask_human の日誌エントリは conversationId を持たず窓にも入らず、質問・回答は承認の台帳にしか無い
-  const conversationApprovals = useConversationApprovals(shownId ?? null);
-  // 消すのは、この会話の承認の一覧を読めていて決着済みと分かった id だけ: 読めていないときやほかの会話の書きかけは残す
-  const settledApprovalIds = useMemo(
-    () =>
-      new Set(
-        (conversationApprovals.data?.approvals ?? [])
-          .filter(isSettledApproval)
-          .map((approval) => approval.id),
-      ),
-    [conversationApprovals.data],
-  );
-  const keepApprovalDraft = useCallback(
-    (id: string) => !settledApprovalIds.has(id) || id in leftoverSources,
-    [settledApprovalIds, leftoverSources],
-  );
-  usePersistApprovalDrafts(approvalDraftState, keepApprovalDraft);
-  usePersistApprovalLeftoverSources(leftoverSources, approvalDrafts);
-  const leftovers = useMemo(
-    () =>
-      Object.entries(leftoverSources)
-        .filter(([id]) => settledApprovalIds.has(id))
-        .map(([id, source]) => ({
-          id,
-          source,
-          text: describeApprovalLeftover(source, approvalDrafts, id),
-        }))
-        .filter((entry) => entry.text !== ''),
-    [leftoverSources, settledApprovalIds, approvalDrafts],
-  );
-  const discardLeftover = approvalDraftState.discard;
-  const refetchApprovalsRef = useRef<() => void>(() => {});
-  const mountedRef = useIsMounted();
-  refetchApprovalsRef.current = () => {
-    if (!mountedRef.current) return;
-    try {
-      // 失敗は conversationApprovals.error に出る（下の ErrorNote）ので、ここでは未処理にしないだけ。
-      void Promise.resolve(conversationApprovals.mutate()).catch(() => undefined);
-    } catch {
-      // 同上。
-    }
-  };
+  const { conversationApprovals, leftovers, discardLeftover, refetchApprovalsRef } =
+    useChatConversationApprovals(shownId, approvalDraftState);
 
   useMarkShownConversationRead(shownId, history.data);
 
