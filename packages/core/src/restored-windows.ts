@@ -37,7 +37,7 @@ interface ResumeConfirmation {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-export interface RestoredWindowsDeps {
+interface RestoredWindowsDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   /** `Pool#journalExchange` を束ねたもの（呼び出しの形は `exchange-kind-coverage.test.ts` が数える）。 */
   journalExchange: (role: 'inbound' | 'outbound', text: string) => Promise<void>;

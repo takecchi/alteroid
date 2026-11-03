@@ -75,7 +75,7 @@ export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
 const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
 
 /** 押し込む相手の設定の送り口。無いものは何もしない種類になる。 */
-export interface PushLedgerServices {
+interface PushLedgerServices {
   profile: ProfileService | undefined;
   credentials: CredentialService | undefined;
   mcpServers: McpServerService | undefined;
@@ -85,7 +85,7 @@ export interface PushLedgerServices {
   syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
 }
 
-export interface PushLedgerDeps {
+interface PushLedgerDeps {
   readonly services: PushLedgerServices;
   readonly runners: RunnerRegistry;
   /** `Pool` の `#journal` そのもの（日誌が落ちても投げない口）。async の皮で包まない。 */

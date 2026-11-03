@@ -11,7 +11,7 @@ type DeferrableEvent = Extract<
   { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }
 >;
 
-export interface ResumeEventWindowsDeps {
+interface ResumeEventWindowsDeps {
   records: ReadonlyMap<string, ManagerRecord>;
   /** `Pool#judgeSessionGeneration` を束ねたもの。 */
   judgeSessionGeneration: (

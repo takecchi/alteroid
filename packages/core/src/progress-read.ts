@@ -65,7 +65,7 @@ export type ProgressView = ProgressSummary & {
   github: ProgressGithub;
 };
 
-export interface ReadProgressOptions {
+interface ReadProgressOptions {
   now: Date;
   /** 省略時は `DEFAULT_PROGRESS_WINDOW_HOURS`。有限の正数でなければ `InvalidProgressWindowError`。 */
   windowHours?: number;

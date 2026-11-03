@@ -17,7 +17,7 @@ import type { RunnerExecutionResources } from './runner-protocol.js';
  */
 export const CGROUP_ROOT = '/sys/fs/cgroup';
 
-export interface ExecutionResourcesOptions {
+interface ExecutionResourcesOptions {
   cgroupRoot?: string;
   procCgroupPath?: string;
   /** 上限の無い器でだけ使う値なので、設定項目として外へ出さない。 */

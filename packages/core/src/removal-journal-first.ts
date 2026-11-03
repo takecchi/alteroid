@@ -10,7 +10,7 @@ import type { Stores } from './store.js';
 
 type ArchiveRemoval = Awaited<ReturnType<Stores['archive']['remove']>>;
 
-export type JournalFirstArchiveRemoveResult =
+type JournalFirstArchiveRemoveResult =
   | { readonly kind: 'removed'; readonly bytes: number }
   | { readonly kind: 'already'; readonly bytes: number; readonly removedAt: string }
   /** 消す前に書いた行は打ち消してある。 */
@@ -87,7 +87,7 @@ export async function removeArchiveJournalFirst(
     : { kind: 'removed', bytes: result.bytes };
 }
 
-export type JournalFirstArchiveChunkResult =
+type JournalFirstArchiveChunkResult =
   | {
       readonly kind: 'done';
       /** この呼びが実際に消した id。 */
@@ -149,7 +149,7 @@ export async function removeArchiveChunkJournalFirst(
   return { kind: 'done', removedIds, removedBytes, racedIds };
 }
 
-export type JournalFirstInboxChunkResult =
+type JournalFirstInboxChunkResult =
   | {
       readonly kind: 'done';
       readonly removedIds: string[];

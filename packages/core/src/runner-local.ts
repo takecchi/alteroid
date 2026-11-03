@@ -70,7 +70,7 @@ async function* abortableBody(
  * ローカルの既知の穴（マネージャーが同じ UID で走る）をツール削除で塞がない。
  * 塞ぐのはコンテナ構成の役目である（architecture.md）。
  */
-export interface LocalRunnerOptions {
+interface LocalRunnerOptions {
   runnerId?: string;
   workspacePath: string;
   queryFn?: typeof query;

@@ -3,7 +3,7 @@ import type { BuildRevision, RunnerRevisionReport } from './revision-format.js';
 
 const { CANON_REVISION, CANON_REVISION_SOURCE } = generatedCanon;
 
-export interface BakedCanonRevision {
+interface BakedCanonRevision {
   revision: string;
   source: string;
 }

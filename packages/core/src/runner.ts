@@ -488,7 +488,7 @@ function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean {
 // 環境変数の設定項目にしない: つまみとして外へ出すと実質の運用パラメータになるため
 const LEASE_WATCH_INTERVAL_MS = 10_000;
 
-export interface RunnerPeerOptions {
+interface RunnerPeerOptions {
   readonly host: PeerSocketHost;
   readonly peers: readonly AgentProviderId[];
   // `agent-provider-selection.js` をここで import しない: バンドルのモジュール評価順が変わり、起動時に provider の表が未初期化になるため

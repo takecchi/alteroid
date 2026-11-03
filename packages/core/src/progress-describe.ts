@@ -27,7 +27,7 @@ function at(iso: string | null, now: number): string {
  * 固定の文言を参照にする口（`ToolContext.foldFixed` と同じ型）。数・時刻・id・理由は畳まない。
  * 既定は全文を返す口: CLI・HTTP・web は同じ関数を使い、参照が指す先（会話の上の全文）を持たないため。
  */
-export type ProgressFold = (id: string, full: string, ref: string) => string;
+type ProgressFold = (id: string, full: string, ref: string) => string;
 const FULL: ProgressFold = (_id, full) => full;
 
 export function describeProgress(view: ProgressView, fold: ProgressFold = FULL): string {

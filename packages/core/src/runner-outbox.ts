@@ -164,7 +164,7 @@ interface CollectManagerOutboxOptions {
   readonly afterFirstChunk?: () => Promise<void>;
 }
 
-export interface CollectedManagerOutbox {
+interface CollectedManagerOutbox {
   readonly files: RunnerOutboxFile[];
   readonly rejectedFiles: RunnerOutboxRejectedFile[];
 }
@@ -483,7 +483,7 @@ const removeOutboxContentsAsChildAsync: OutboxContentsRemover = async (entries, 
   }
 };
 
-export const removeOutboxContentsAsChild: OutboxContentsRemover = (entries, child) => {
+const removeOutboxContentsAsChild: OutboxContentsRemover = (entries, child) => {
   for (let i = 0; i < entries.length; i += REMOVE_CHUNK) {
     spawnSync('rm', ['-rf', '--one-file-system', '--', ...entries.slice(i, i + REMOVE_CHUNK)], {
       uid: child.uid,

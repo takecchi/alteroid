@@ -40,7 +40,7 @@ export function peerIdOfSubpath(subpath: string): string {
   return subpath.slice(PEER_SUBPATH_PREFIX.length);
 }
 
-export function isPeerMetaEntry(entry: unknown): entry is PeerMetaEntry {
+function isPeerMetaEntry(entry: unknown): entry is PeerMetaEntry {
   if (typeof entry !== 'object' || entry === null) return false;
   const record = entry as Record<string, unknown>;
   return (

@@ -48,7 +48,7 @@ export const MIN_CLOSED_IN_WINDOW = 3;
 export const PROGRESS_FORECAST_METHOD = 'open / (closedInWindow / windowHours)';
 
 /** 見込みに付ける但し書き。 */
-export const PROGRESS_FORECAST_NOTICE =
+const PROGRESS_FORECAST_NOTICE =
   '推定であり約束ではない。窓の中の流入は式に入れていない（openedInWindow は並べて示すだけ）';
 
 const HOUR_MS = 3_600_000;
@@ -63,7 +63,7 @@ export interface ProgressTasks {
   unreadable: readonly UnreadableTask[];
 }
 
-export interface SummarizeProgressInput {
+interface SummarizeProgressInput {
   tasks: ProgressTasks;
   jobs: readonly Job[];
   /** 省略できない: 省略を 0 と読ませない。 */
@@ -72,13 +72,13 @@ export interface SummarizeProgressInput {
   windowHours: number;
 }
 
-export interface ProgressWindow {
+interface ProgressWindow {
   hours: number;
   from: string;
   to: string;
 }
 
-export interface ProgressAgeBuckets {
+interface ProgressAgeBuckets {
   /** `< 1h` */
   under1h: number;
   /** `1h <= 齢 < 24h` */
@@ -89,7 +89,7 @@ export interface ProgressAgeBuckets {
   over7d: number;
 }
 
-export interface ProgressBacklog {
+interface ProgressBacklog {
   /** 未了（開いている task。`closedAt` が無い）の総数。`unreadable` は含まない。 */
   total: number;
   /** `taskOriginSchema` の全値をキーに持つ。0 は「その origin の未了が無い」。 */
@@ -117,7 +117,7 @@ export interface ProgressBacklog {
   completeness: { unreadable: number; unreadableJobs: number };
 }
 
-export interface ProgressInProgress {
+interface ProgressInProgress {
   /** {@link isRunningJobStatus} が真の委譲。 */
   running: number;
   /** `waiting_human`。 */
@@ -132,7 +132,7 @@ export interface ProgressInProgress {
   };
 }
 
-export interface ProgressThroughput {
+interface ProgressThroughput {
   tasksOpened: number;
   tasksClosed: number;
   /** 近似: `Job` に終端時刻の欄が無く、終端後に `updatedAt` が動けば窓の外の終端も数える。 */
@@ -151,7 +151,7 @@ export interface ProgressForecastBasis {
   minClosedInWindow: number;
 }
 
-export type ProgressUnavailableReason = 'closed_too_few' | 'tasks_younger_than_window';
+type ProgressUnavailableReason = 'closed_too_few' | 'tasks_younger_than_window';
 
 export type ProgressForecast =
   | {

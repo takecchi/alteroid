@@ -4,7 +4,7 @@ import { compareCodeUnits } from './code-unit-order.js';
 /** 日誌から読む `github_observation` の件数の上限（新しい順）。 */
 export const GITHUB_OBSERVATION_SCAN_LIMIT = 500;
 
-export interface GithubObservationCi {
+interface GithubObservationCi {
   /** CI を見た PR の数（open PR の総数とは別）。 */
   pulls: number;
   success: number;
@@ -34,7 +34,7 @@ export interface GithubObservationOk {
   ciUnavailable?: string;
 }
 
-export interface GithubObservationFailed {
+interface GithubObservationFailed {
   observedAt: string;
   observedBy: string;
   query: string;
@@ -43,7 +43,7 @@ export interface GithubObservationFailed {
   reason: string;
 }
 
-export interface GithubRepoObservation {
+interface GithubRepoObservation {
   repo: string;
   /** その repo の最新の成功。無ければ `null`（0 件の意味ではない）。 */
   latestOk: GithubObservationOk | null;

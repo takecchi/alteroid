@@ -10,7 +10,7 @@ export interface ResumeSubagentTranscript {
 }
 
 /** 作業者の記録だけを戻す: 他の subpath（SDK が将来足すもの）は、戻し方を知らないまま置くと壊れうるので触らない。 */
-export const RESUME_SUBAGENT_SUBPATH_PREFIX = 'subagents/';
+const RESUME_SUBAGENT_SUBPATH_PREFIX = 'subagents/';
 
 /**
  * 作業者の分の合計の上限（各 entry の JSON の文字数の和）。主の記録（`entries`）には掛けない: 主を欠けさせると会話が続かないため。
