@@ -25,7 +25,6 @@ import {
   useRecordOwnMessage,
   useConversation,
   useConversationApprovals,
-  useMarkConversationRead,
   findConversationByClientMessageId,
   getChatStream,
   postChat,
@@ -78,7 +77,6 @@ import {
   usePersistApprovalDrafts,
   usePersistApprovalLeftoverSources,
 } from '~/lib/use-approval-draft-state';
-import { usePageVisible } from '~/lib/use-page-visible';
 
 import {
   sizedOf,
@@ -120,6 +118,7 @@ export {
   type FailedTurn,
 } from './chat-lines';
 import { ConversationList } from './chat-conversation-list';
+import { useMarkShownConversationRead } from './chat-hooks';
 import { ComposerNotices, TurnFailedError, turnFailureAction } from './chat-notices';
 import type { Route } from './+types/chat';
 
@@ -632,13 +631,7 @@ export function ChatPane({
     }
   };
 
-  // history だけを見る（手元の lines や transient は見ない）: 日誌の発言ではないので、返答が日誌に載る前に離れたときも既読になってしまう
-  const pageVisible = usePageVisible();
-  const markRead = useMarkConversationRead();
-  useEffect(() => {
-    if (!pageVisible || shownId === undefined || history.data === undefined) return;
-    markRead(shownId, history.data);
-  }, [pageVisible, shownId, history.data, markRead]);
+  useMarkShownConversationRead(shownId, history.data);
 
   // 編集で畳まれた返答: 表には出さないが、返答の途中で編集したとき手元に残った返答の行を引き取る照合先にする（pendingOwnLines）
   const foldedLines = useMemo<Line[]>(
