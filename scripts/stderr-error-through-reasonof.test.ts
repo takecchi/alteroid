@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { isAppSourceRelPath } from '../apps/daemon/src/app-sources.test-support.js';
 import { isCloneToolsSourceRelPath } from '../packages/core/src/clone-tools-sources.test-support.js';
 
 import { collectRepoFiles } from './repo-scan-files.js';
@@ -35,7 +36,11 @@ const REDACTORS = new Set([
   'collapseErrorCause',
 ]);
 const CLONE_SINK_NAMES = new Set(['announce', 'postToClone']);
-const HTTP_FILES = new Set(['apps/daemon/src/app.ts', 'apps/runner/src/app.ts']);
+const RUNNER_HTTP_FILE = 'apps/runner/src/app.ts';
+// daemon の HTTP の口は `app.ts` と族のファイル（`app-routes-*.ts` など）に分かれる。判定は補助の1本に揃える。
+function isHttpFile(rel: string): boolean {
+  return isAppSourceRelPath(rel) || rel === RUNNER_HTTP_FILE;
+}
 
 interface BareErrorHit {
   line: number;
@@ -442,7 +447,7 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
   if (ts.isCallExpression(node)) {
     if (isStderrWrite(node.expression)) return node.arguments;
     if (
-      HTTP_FILES.has(rel) &&
+      isHttpFile(rel) &&
       ts.isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === 'json' &&
       ts.isIdentifier(node.expression.expression) &&
@@ -460,7 +465,7 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
       return node.arguments;
     }
   }
-  if (ts.isObjectLiteralExpression(node) && HTTP_FILES.has(rel)) {
+  if (ts.isObjectLiteralExpression(node) && isHttpFile(rel)) {
     return node.properties.flatMap((p) =>
       ts.isPropertyAssignment(p) &&
       (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
@@ -495,7 +500,7 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
 const SINK_NEEDLES = ['stderr', 'writeStderrSync', ...CLONE_SINK_NAMES, 'deny'];
 
 function mayContainSink(source: string, rel: string): boolean {
-  if (HTTP_FILES.has(rel) || isCloneToolsSourceRelPath(rel)) return true;
+  if (isHttpFile(rel) || isCloneToolsSourceRelPath(rel)) return true;
   return SINK_NEEDLES.some((needle) => source.includes(needle));
 }
 
@@ -534,7 +539,7 @@ function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
     ts.forEachChild(node, inspectIndirect);
   };
   const visit = (node: ts.Node): void => {
-    if (HTTP_FILES.has(rel) && ts.isObjectLiteralExpression(node)) {
+    if (isHttpFile(rel) && ts.isObjectLiteralExpression(node)) {
       for (const p of node.properties) {
         if (
           ts.isShorthandPropertyAssignment(p) &&
@@ -724,6 +729,7 @@ describe('findBareErrorSinkWrites（純粋関数）: 型で絞った自前の例
 describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）', () => {
   const daemon = 'apps/daemon/src/app.ts';
   const runner = 'apps/runner/src/app.ts';
+  const daemonFamily = 'apps/daemon/src/app-routes-memory.ts';
   it('c.json(...) の引数の素のエラーを、対象の2ファイルだけで検出する', () => {
     const src = 'return c.json({ error: error.message }, 400);';
     expect(count(src, daemon)).toBe(1);
@@ -732,9 +738,25 @@ describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）',
     expect(count('return c.json({ error: reasonOf(error) }, 400);', daemon)).toBe(0);
     expect(count("return c.json({ error: 'not found' as const }, 404);", daemon)).toBe(0);
   });
+  it('daemon の族のファイル（app-routes-*.ts など）でも検出する（app.ts の分割で外れないこと）', () => {
+    const src = 'return c.json({ error: error.message }, 400);';
+    for (const name of [
+      'app-routes-memory.ts',
+      'app-routes-workspace.ts',
+      'app-context.ts',
+      'app-shared.ts',
+    ]) {
+      const rel = `apps/daemon/src/${name}`;
+      expect(count(src, rel)).toBe(1);
+      expect(count('return c.json({ error: String(error) }, 500);', rel)).toBe(1);
+      expect(count('return c.json({ error: reasonOf(error) }, 500);', rel)).toBe(0);
+    }
+    expect(count('results.push({ id, ok: false, error: error.message });', daemonFamily)).toBe(1);
+  });
   it('対象外のファイル・rel 無しでは c.json も error プロパティも見ない（対照）', () => {
     const src = 'return c.json({ error: error.message }, 400);';
     expect(count(src, 'apps/daemon/src/index.ts')).toBe(0);
+    expect(count(src, 'apps/daemon/src/app-routes-memory.test.ts')).toBe(0);
     expect(count(src, 'packages/core/src/tools.ts')).toBe(0);
     expect(count(src)).toBe(0);
     expect(count('results.push({ id, error: error.message });', 'apps/daemon/src/other.ts')).toBe(
@@ -1060,6 +1082,9 @@ describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を
     expect(files.length).toBeGreaterThan(100);
     // 道具の実装ソース（tools.ts と clone-tools-*.ts）が走査に入っている（text(...) の口は、その中だけを見る）
     expect(files).toContain('packages/core/src/tools.ts');
+    // daemon の HTTP の口（app.ts と族のファイル）が走査に入っている
+    expect(files).toContain('apps/daemon/src/app.ts');
+    expect(files.filter(isAppSourceRelPath).length).toBeGreaterThan(1);
     const offenders = files.flatMap((rel) =>
       findBareErrorSinkWrites(readFileSync(path.join(ROOT, rel), 'utf8'), rel).map(
         (hit) => `${rel}:${String(hit.line)}  ${hit.text}`,
