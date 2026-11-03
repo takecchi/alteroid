@@ -2,7 +2,7 @@ import type { JournalEntry } from './schema.js';
 import type { JournalCursor, JournalQuery, JournalStore } from './store.js';
 
 /** 語の検索で、新しい側から1回に問い合わせる窓の幅（#5126）。 */
-export const JOURNAL_SEARCH_SLICE_MS = 24 * 60 * 60 * 1000;
+const JOURNAL_SEARCH_SLICE_MS = 24 * 60 * 60 * 1000;
 /** 語の検索の1回の呼び出しの時間の予算（#5126）。使い切ったら、探した範囲を名乗って止める。 */
 export const JOURNAL_SEARCH_BUDGET_MS = 8_000;
 
@@ -21,7 +21,7 @@ export type JournalSearchCoverage =
   /** 時間の予算を使い切った。`from`〜`to` は探した、`from` より古い側は見ていない。 */
   | { readonly kind: 'budget'; readonly from: string; readonly to: string };
 
-export interface JournalSlicedSearchResult {
+interface JournalSlicedSearchResult {
   readonly entries: JournalEntry[];
   /** 件数が埋まって、まだ当たりがありうるときの続きの位置（`afterId` / `afterAt` に渡す）。 */
   readonly next: JournalCursor | null;

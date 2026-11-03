@@ -4,10 +4,7 @@ import { UnreadableJournalEntryError } from './store.js';
 // インメモリ実装（`testing.ts`）は対象外: `append` が形を断り、行は private な配列にしか入らないので、読めない行を持てない。
 // 読めない行は `append` では作れないので、呼ぶ側が実装ごとの手で作り、その id を返す関数を `plantUnreadableRow` として渡す。
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
-export type JournalStoreUnreadableGetContractSubject = Pick<
-  JournalStore,
-  'append' | 'list' | 'get'
->;
+type JournalStoreUnreadableGetContractSubject = Pick<JournalStore, 'append' | 'list' | 'get'>;
 
 export async function verifyJournalStoreUnreadableGetContract(
   journal: JournalStoreUnreadableGetContractSubject,

@@ -5,7 +5,7 @@ import { JournalAnchorNotFoundError } from './store.js';
 // vitest の `expect` で書かない: `storage-fs` / `storage-pg` が `@alteroid/core` を実行時の依存として読むため
 // 行の位置を錨にする: `JournalStore` は更新・削除の口を持たず、既存の行どうしの前後関係が変わらないため
 // 1. `order` 未指定 = `'desc'`（既存の挙動を1文字も変えない）
-export type JournalStoreOrderContractSubject = Pick<JournalStore, 'append' | 'list'>;
+type JournalStoreOrderContractSubject = Pick<JournalStore, 'append' | 'list'>;
 
 async function collectAllPages(
   journal: JournalStoreOrderContractSubject,

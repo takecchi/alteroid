@@ -3,7 +3,7 @@ import { JournalAnchorNotFoundError } from './store.js';
 
 // vitest の `expect` で書かない: `storage-fs` / `storage-pg` が `@alteroid/core` を実行時の依存として読むため
 // 退化した値を「絞らない」へ倒さない: 呼ぶ側が絞ったつもりの問い合わせに全件が返り、黙って広がる側に壊れるため
-export type JournalStoreQueryEdgeContractSubject = Pick<JournalStore, 'append' | 'list' | 'get'>;
+type JournalStoreQueryEdgeContractSubject = Pick<JournalStore, 'append' | 'list' | 'get'>;
 
 export async function verifyJournalStoreQueryEdgeContract(
   journal: JournalStoreQueryEdgeContractSubject,
