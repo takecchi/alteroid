@@ -9,9 +9,9 @@ import { reasonOf, writeStderrLine } from './dropped-record.js';
 import { attachmentDiskName, normalizeAttachmentName, type AttachmentStore } from './attachment.js';
 
 // cwd の外へ置かない: SDK の additionalDirectories / allowedTools を足すと、取り出し先だけでも許可の範囲が広がるため
-export const ATTACHMENT_COPIES_SUBDIR = join('state', 'attachment-copies');
+const ATTACHMENT_COPIES_SUBDIR = join('state', 'attachment-copies');
 
-export const ATTACHMENT_COPY_MAX_AGE_MS = 24 * 60 * 60_000;
+const ATTACHMENT_COPY_MAX_AGE_MS = 24 * 60 * 60_000;
 
 // 先頭を `.` にする: `SAFE_ID` は先頭が英数なので、取り出しの id とぶつからない
 const PRUNING_PREFIX = '.pruning-';
@@ -24,7 +24,7 @@ export function fallbackAttachmentCopiesDir(): string {
   return join(tmpdir(), 'alteroid-attachment-copies');
 }
 
-export interface AttachmentCopy {
+interface AttachmentCopy {
   readonly path: string;
   readonly name: string;
   readonly mediaType: string;
@@ -33,7 +33,7 @@ export interface AttachmentCopy {
   readonly reused: boolean;
 }
 
-export type AttachmentFetchResult =
+type AttachmentFetchResult =
   | { readonly ok: true; readonly copy: AttachmentCopy }
   | { readonly ok: false; readonly reason: 'not_found' | 'unsafe' | 'mismatch' };
 

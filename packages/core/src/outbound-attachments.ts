@@ -20,7 +20,7 @@ export type OutboundAttachmentResult =
     }
   | { readonly ok: false; readonly message: string };
 
-export interface OutboundAttachmentOptions {
+interface OutboundAttachmentOptions {
   readonly conversationId: string;
   readonly limits: AttachmentLimits;
   readonly alreadyAttached?: readonly AttachmentRef[];

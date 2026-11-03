@@ -132,13 +132,13 @@ export interface AttachmentBlobSweepResult {
 }
 
 export const ATTACHMENT_S3_BUCKET_ENV = 'ALTEROID_ATTACHMENT_S3_BUCKET';
-export const ATTACHMENT_S3_ENDPOINT_ENV = 'ALTEROID_ATTACHMENT_S3_ENDPOINT';
-export const ATTACHMENT_S3_ALLOW_HTTP_ENV = 'ALTEROID_ATTACHMENT_S3_ALLOW_HTTP';
-export const ATTACHMENT_S3_REGION_ENV = 'ALTEROID_ATTACHMENT_S3_REGION';
+const ATTACHMENT_S3_ENDPOINT_ENV = 'ALTEROID_ATTACHMENT_S3_ENDPOINT';
+const ATTACHMENT_S3_ALLOW_HTTP_ENV = 'ALTEROID_ATTACHMENT_S3_ALLOW_HTTP';
+const ATTACHMENT_S3_REGION_ENV = 'ALTEROID_ATTACHMENT_S3_REGION';
 export const ATTACHMENT_S3_ACCESS_KEY_ID_ENV = 'ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID';
 export const ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV = 'ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY';
-export const ATTACHMENT_S3_PREFIX_ENV = 'ALTEROID_ATTACHMENT_S3_PREFIX';
-export const ATTACHMENT_S3_FORCE_PATH_STYLE_ENV = 'ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE';
+const ATTACHMENT_S3_PREFIX_ENV = 'ALTEROID_ATTACHMENT_S3_PREFIX';
+const ATTACHMENT_S3_FORCE_PATH_STYLE_ENV = 'ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE';
 
 export interface AttachmentBlobConfig {
   readonly bucket: string;
@@ -151,7 +151,7 @@ export interface AttachmentBlobConfig {
   readonly forcePathStyle: boolean;
 }
 
-export type AttachmentBlobConfigResult =
+type AttachmentBlobConfigResult =
   | { readonly kind: 'off' }
   | { readonly kind: 'on'; readonly config: AttachmentBlobConfig }
   | { readonly kind: 'invalid'; readonly reason: string };

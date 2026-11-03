@@ -13,7 +13,7 @@ import type { RunnerAttachment, RunnerClient } from './runner-protocol.js';
  * `Pool` が口として渡すもの。`awaitHello` は「hello を受けるまで少し待つ」、`hasCapability` は名乗りの記憶を読むだけ。
  * `openAttachment` は呼ぶたびに置き場を引く（置き場を握らない: 呼び出しの時点の `stores.attachments` を使う）。
  */
-export interface AttachmentStagerPorts {
+interface AttachmentStagerPorts {
   awaitHello: (runnerId: string) => Promise<boolean>;
   hasCapability: (runnerId: string, capability: string) => boolean;
   openAttachment: (id: string) => ReturnType<AttachmentStore['open']>;

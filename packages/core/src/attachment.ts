@@ -157,7 +157,7 @@ export interface AttachmentListPage {
   readonly nextCursor?: string;
 }
 
-export interface AttachmentUsageBucket {
+interface AttachmentUsageBucket {
   readonly count: number;
   readonly totalBytes: number;
 }
@@ -296,26 +296,25 @@ export {
 export const ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT = 2048 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
 // 20 枚を超えると API は全画像に 2000px の制限を掛ける
-export const ATTACHMENT_MAX_TURN_IMAGES_DEFAULT = 20;
+const ATTACHMENT_MAX_TURN_IMAGES_DEFAULT = 20;
 // base64 で約 21.4 MB: API の 1 リクエスト 32 MB に収める
-export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT = 16 * MIB;
+const ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT = 16 * MIB;
 // 巨大な値は `new Date(...).toISOString()` が `RangeError: Invalid time value` を投げて全 `put` が 500 になる
-export const ATTACHMENT_RETENTION_DAYS_MAX = 36_500;
+const ATTACHMENT_RETENTION_DAYS_MAX = 36_500;
 export const ATTACHMENT_UNBOUND_TTL_MS = 60 * 60_000;
 
-export const ATTACHMENT_MAX_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES';
-export const ATTACHMENT_MAX_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_FILE_BYTES';
-export const ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES';
-export const ATTACHMENT_MAX_PER_MESSAGE_ENV = 'ALTEROID_ATTACHMENT_MAX_PER_MESSAGE';
-export const ATTACHMENT_MAX_TOTAL_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES';
+const ATTACHMENT_MAX_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES';
+const ATTACHMENT_MAX_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_FILE_BYTES';
+const ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES';
+const ATTACHMENT_MAX_PER_MESSAGE_ENV = 'ALTEROID_ATTACHMENT_MAX_PER_MESSAGE';
+const ATTACHMENT_MAX_TOTAL_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES';
 export const ATTACHMENT_RETENTION_DAYS_ENV = 'ALTEROID_ATTACHMENT_RETENTION_DAYS';
-export const ATTACHMENT_MAX_TURN_IMAGES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGES';
-export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES';
+const ATTACHMENT_MAX_TURN_IMAGES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGES';
+const ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES';
 
 /** 連携の鍵1本あたりの、期限内の添付の預かりがこれを越えたら知らせる（#4005。断らない）。既定 1 GiB */
 export const ATTACHMENT_INTEGRATION_NOTICE_BYTES_DEFAULT = 1024 * MIB;
-export const ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV =
-  'ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES';
+const ATTACHMENT_INTEGRATION_NOTICE_BYTES_ENV = 'ALTEROID_ATTACHMENT_INTEGRATION_NOTICE_BYTES';
 
 /**
  * 連携の鍵の預かりの知らせの閾値（バイト）を読む。未設定・空なら既定。正の整数として読めなければ、既定へ倒して `notes` に理由を1行足す
@@ -415,7 +414,7 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
 };
 
-export const DEFAULT_TURN_IMAGE_LIMITS: TurnImageLimits = {
+const DEFAULT_TURN_IMAGE_LIMITS: TurnImageLimits = {
   maxTurnImages: ATTACHMENT_MAX_TURN_IMAGES_DEFAULT,
   maxTurnImageBytes: ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
 };
@@ -491,7 +490,7 @@ export function turnImageOverNotice(
     : `（このターンの画像の合計の上限（${formatImageLimit(limits.maxTurnImageBytes)}）を超えるので画像としては渡していない。${openHint}）`;
 }
 
-export interface AttachmentLimitsConfig {
+interface AttachmentLimitsConfig {
   readonly limits: AttachmentLimits & TurnImageLimits;
   readonly notes: string[];
 }
@@ -554,7 +553,7 @@ export function applyAttachmentRequestTimeout(server: { requestTimeout: number }
   }
 }
 
-export type AttachmentRejection =
+type AttachmentRejection =
   | 'too_large'
   | 'image_dimension_too_large'
   | 'magic_mismatch'
@@ -592,7 +591,7 @@ export class AttachmentContentRemoveError extends Error {
   }
 }
 
-export const ATTACHMENT_IMAGE_MEDIA_TYPES = [
+const ATTACHMENT_IMAGE_MEDIA_TYPES = [
   'image/png',
   'image/jpeg',
   'image/webp',
@@ -601,7 +600,7 @@ export const ATTACHMENT_IMAGE_MEDIA_TYPES = [
 
 export type AttachmentImageMediaType = (typeof ATTACHMENT_IMAGE_MEDIA_TYPES)[number];
 
-export function normalizeAttachmentMediaType(raw: string): string {
+function normalizeAttachmentMediaType(raw: string): string {
   return stripNul(raw).split(';')[0]!.trim().toLowerCase();
 }
 
@@ -776,7 +775,7 @@ export function normalizeAttachmentName(raw: string): string {
 }
 
 // NAME_MAX（255）に余裕を残す
-export const ATTACHMENT_DISK_NAME_MAX_BYTES = 200;
+const ATTACHMENT_DISK_NAME_MAX_BYTES = 200;
 
 const ATTACHMENT_DISK_EXT_MAX_BYTES = 32;
 
@@ -897,7 +896,7 @@ export function prepareAttachment(
   );
 }
 
-export interface AttachmentStreamPlan {
+interface AttachmentStreamPlan {
   readonly name: string;
   readonly mediaType: string;
   readonly image: boolean;
@@ -1056,9 +1055,9 @@ export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
 export type AttachmentBindTarget =
   { conversationId: string } | { externalEventId: string } | { managerReportId: string };
 
-export type AttachmentBindKey = 'conversationId' | 'externalEventId' | 'managerReportId';
+type AttachmentBindKey = 'conversationId' | 'externalEventId' | 'managerReportId';
 
-export const ATTACHMENT_BIND_KEYS: readonly AttachmentBindKey[] = [
+const ATTACHMENT_BIND_KEYS: readonly AttachmentBindKey[] = [
   'conversationId',
   'externalEventId',
   'managerReportId',
@@ -1070,7 +1069,7 @@ export function attachmentBindKeyOf(target: AttachmentBindTarget): AttachmentBin
   return 'managerReportId';
 }
 
-export function attachmentBindValueOf(target: AttachmentBindTarget): string {
+function attachmentBindValueOf(target: AttachmentBindTarget): string {
   return (target as Record<AttachmentBindKey, string>)[attachmentBindKeyOf(target)];
 }
 

@@ -83,7 +83,7 @@ export class RunnerAttachmentStageError extends RunnerAttachmentRejectedError {
   }
 }
 
-export interface StagedAttachmentEntry {
+interface StagedAttachmentEntry {
   readonly id: string;
   readonly size: number;
   readonly sha256: string;
@@ -218,7 +218,7 @@ async function writeAttachmentFile(
   }
 }
 
-export interface StageRunnerAttachmentOptions {
+interface StageRunnerAttachmentOptions {
   readonly root: string;
   readonly managerId: string;
   readonly id: string;
@@ -439,7 +439,7 @@ export async function placeRunnerAttachments(
   return placed;
 }
 
-export function placedAttachmentNoticeLine(placed: PlacedAttachment): string {
+function placedAttachmentNoticeLine(placed: PlacedAttachment): string {
   return (
     `[添付] id=${placed.id} name=${stripNul(placed.name)} type=${placed.mediaType} ` +
     `size=${placed.size} sha256=${placed.sha256} path=${placed.path}` +

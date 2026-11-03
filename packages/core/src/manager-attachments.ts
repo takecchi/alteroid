@@ -11,11 +11,11 @@ import type { RunnerAttachment, RunnerStagedAttachmentMeta } from './runner-prot
 import type { AttachmentRef } from './schema.js';
 
 // 断るときは例外ではなく `ok: false` と文を返す: 呼び手の道具がそのまま本文にする。中身は読むだけで、記憶・日誌には写さない。
-export interface StagedManagerAttachment {
+interface StagedManagerAttachment {
   readonly meta: RunnerStagedAttachmentMeta;
 }
 
-export type LoadedManagerAttachments =
+type LoadedManagerAttachments =
   | {
       readonly ok: true;
       readonly attachments: RunnerAttachment[];

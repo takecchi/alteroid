@@ -4,7 +4,7 @@ import type { AttachmentImageMediaType } from './attachment.js';
 // API の上限（幅・高さそれぞれ 8000px）: https://platform.claude.com/docs/en/build-with-claude/vision
 export const ATTACHMENT_MAX_IMAGE_DIMENSION = 8000;
 
-export interface AttachmentImageSize {
+interface AttachmentImageSize {
   readonly width: number;
   readonly height: number;
 }

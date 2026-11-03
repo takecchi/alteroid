@@ -31,12 +31,12 @@ import type { AttachmentRef } from './schema.js';
  *
  * 中身はここで読むだけで、受信箱・日誌・記憶には写さない。
  */
-export interface ResolvedTurnAttachments {
+interface ResolvedTurnAttachments {
   readonly images: AgentInputImage[];
   readonly noticeLines: string[];
 }
 
-export const FETCH_HINT = ' （attachment_fetch で取り出して Read で開ける）';
+const FETCH_HINT = ' （attachment_fetch で取り出して Read で開ける）';
 
 const OPEN_HINT = 'attachment_fetch で取り出して Read で開ける';
 

@@ -16,7 +16,7 @@ import {
   type AttachmentStoreOptions,
 } from './attachment.js';
 
-export interface AttachmentStoreContractOptions {
+interface AttachmentStoreContractOptions {
   readonly createStore?: (
     options: AttachmentStoreOptions,
   ) => AttachmentStore | Promise<AttachmentStore>;
