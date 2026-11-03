@@ -1,16 +1,11 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+
+import { readAppSources } from '../apps/daemon/src/app-sources.test-support.js';
 
 // 正規表現ではなく TypeScript の AST を読む: 生テキストだと `requireOperator` を含む散文を配線と読み違える誤爆の工場になり、歯を弱める方向へ誘導されるため。
 // `*-core.mjs` に切り出さず `.test.ts` に直書きする: vitest 専用の突き合わせで、他から叩く理由が無いため。
 // `requireOperator` の参照数を別ルートで数えて経路数と検算する: 抽出が新しい配線の書き方を拾い損ねても、黙って緑のままになるため。
-
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const APP_TS_PATH = path.join(ROOT, 'apps/daemon/src/app.ts');
 
 const OPERATOR_MIDDLEWARE_NAME = 'requireOperator';
 
@@ -225,14 +220,19 @@ export const app = base
 `;
 
 describe('門（requireOperator）の配線が、決め打ちの一覧と一致する', () => {
-  const appTsSource = readFileSync(APP_TS_PATH, 'utf8');
+  // HTTP の口のソース全部（app.ts と族のファイル）。経路が族のファイルへ移っても見逃さない。
+  const appSources = readAppSources();
+  const findWired = (): string[] =>
+    appSources.flatMap((entry) => findOperatorWiredRoutes(entry.source, entry.name));
 
-  it('前提: apps/daemon/src/app.ts が読める', () => {
-    expect(appTsSource.length).toBeGreaterThan(0);
+  it('前提: HTTP の口のソース（apps/daemon/src/app.ts を含む）が1本以上読める', () => {
+    expect(appSources.length).toBeGreaterThanOrEqual(1);
+    expect(appSources.map((entry) => entry.name)).toContain('app.ts');
+    for (const entry of appSources) expect(entry.source.length).toBeGreaterThan(0);
   });
 
-  it('本物: 抽出した集合がリテラル一覧と一致する（ズレたら app.ts かこのテストのどちらかを直す）', () => {
-    const extracted = sorted(findOperatorWiredRoutes(appTsSource));
+  it('本物: 抽出した集合がリテラル一覧と一致する（ズレたら HTTP の口のソースかこのテストのどちらかを直す）', () => {
+    const extracted = sorted(findWired());
     const expected = sorted(EXPECTED_OPERATOR_ROUTES);
 
     const missing = expected.filter((route) => !extracted.includes(route));
@@ -259,8 +259,11 @@ describe('門（requireOperator）の配線が、決め打ちの一覧と一致�
   });
 
   it('本物: requireOperator の参照数（宣言を除く）が、経路へ紐付けられた数と一致する（抽出漏れの検算）', () => {
-    const wiredCount = findOperatorWiredRoutes(appTsSource).length;
-    const referenceCount = countRequireOperatorReferences(appTsSource);
+    const wiredCount = findWired().length;
+    const referenceCount = appSources.reduce(
+      (sum, entry) => sum + countRequireOperatorReferences(entry.source, entry.name),
+      0,
+    );
 
     expect(
       referenceCount,
