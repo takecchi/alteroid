@@ -1,6 +1,6 @@
 import type { JournalStore } from './store.js';
 
-export type JournalStorePageContractSubject = Pick<JournalStore, 'append' | 'list' | 'listPage'>;
+type JournalStorePageContractSubject = Pick<JournalStore, 'append' | 'list' | 'listPage'>;
 
 export async function verifyJournalStorePageContract(
   journal: JournalStorePageContractSubject,

@@ -4,20 +4,20 @@ import type { JournalCursor, JournalQuery, JournalStore } from './store.js';
 // 500 は実データの分布から決めた値ではなく、安全側に倒した経験則。大きすぎるとページ1枚のヒープが太り、小さすぎると往復が増える。
 export const JOURNAL_SCAN_PAGE_SIZE = 500;
 
-export interface JournalScanOptions {
+interface JournalScanOptions {
   pageSize?: number;
   // 省略時は無制限。印を見つけ次第 `onPage` が `false` を返して止める呼び出し以外は、必ずこの上限を渡すこと。
   maxScanned?: number;
 }
 
-export interface JournalScanResult {
+interface JournalScanResult {
   scanned: number;
   // 境界の1件だけ安全側に倒す: ちょうど `maxScanned` 件目で日誌が尽きていても `true` を返す。続きの有無を確かめる追加の問い合わせをしないため。
   // `onPage` が自分で止めたときは `false` のまま: 打ち切りと早期終了を同じ値に潰さない。
   truncated: boolean;
 }
 
-export type JournalScanPageHandler = (page: readonly JournalEntry[]) => void | boolean;
+type JournalScanPageHandler = (page: readonly JournalEntry[]) => void | boolean;
 
 // 終端は `listPage()` の `next === null` だけで判断する。短いページも空ページも終端と読まない: store は `LIMIT` の後に壊れた行を捨てるので、ページが丸ごと壊れていれば空で返り、その先に古い行が残る。
 export async function scanJournalPages(
