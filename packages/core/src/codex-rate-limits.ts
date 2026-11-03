@@ -20,7 +20,7 @@ function windowEvent(
   return facts === undefined ? undefined : { type: 'rate_limit', facts };
 }
 
-export interface CodexRateLimitFold {
+interface CodexRateLimitFold {
   readonly events: AgentEvent[];
   readonly reached: string | undefined;
 }

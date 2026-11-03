@@ -1,19 +1,19 @@
 import type { McpServerEntryConfig } from './mcp-servers.js';
 
-export type CodexMcpInputServer = McpServerEntryConfig | { type: 'sdk'; name?: string };
+type CodexMcpInputServer = McpServerEntryConfig | { type: 'sdk'; name?: string };
 
-export interface CodexMcpSkipped {
+interface CodexMcpSkipped {
   name: string;
   // 値を載せない: env / http_headers の値に鍵が入りうるため、reason と droppedFields には名前と欄名だけを書く
   reason: string;
 }
 
-export interface CodexMcpDropped {
+interface CodexMcpDropped {
   name: string;
   fields: string[];
 }
 
-export interface CodexMcpConfigResult {
+interface CodexMcpConfigResult {
   config: { mcp_servers: Record<string, Record<string, unknown>> } | null;
   passed: string[];
   skipped: CodexMcpSkipped[];

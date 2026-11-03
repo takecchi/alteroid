@@ -19,7 +19,7 @@ export interface CodexAuthWriteBack {
   fingerprint: string;
 }
 
-export interface CodexAuthMirrorFs {
+interface CodexAuthMirrorFs {
   mkdir(path: string): Promise<void>;
   // rename の前に一時ファイルの持ち主を変える: 走っている Codex が持ち主の違うファイルを掴む窓を作らないため。
   writeFile(path: string, data: string, owner?: { uid: number; gid: number }): Promise<void>;
@@ -55,7 +55,7 @@ const defaultFs: CodexAuthMirrorFs = {
   rm: (path) => rm(path, { force: true }),
 };
 
-export interface CodexAuthMirrorOptions {
+interface CodexAuthMirrorOptions {
   codexHome: string;
   owner?: { uid: number; gid: number };
   fs?: CodexAuthMirrorFs;

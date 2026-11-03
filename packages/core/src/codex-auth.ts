@@ -1,12 +1,12 @@
 import type { CodexGetAccountResponse, CodexLoginApiKeyParams } from './codex-protocol.js';
 
-export interface CodexAuthInput {
+interface CodexAuthInput {
   apiKey?: string | null;
   // 確定にしない: 保存先が keyring のことも auth.json に API キーだけのこともあり、確定は起動後の account/read だけができるため
   chatgptLogin: boolean;
 }
 
-export type CodexAuthChoice =
+type CodexAuthChoice =
   { kind: 'apiKey'; apiKey: string } | { kind: 'chatgpt' } | { kind: 'none'; reason: string };
 
 export const CODEX_AUTH_NONE_REASON =
@@ -24,7 +24,7 @@ export function buildCodexApiKeyLoginParams(apiKey: string): CodexLoginApiKeyPar
   return { type: 'apiKey', apiKey };
 }
 
-export type CodexAuthMode = 'apiKey' | 'chatgpt' | 'unknown';
+type CodexAuthMode = 'apiKey' | 'chatgpt' | 'unknown';
 
 export function codexAuthModeFromAccount(
   response: Pick<CodexGetAccountResponse, 'account'> | null | undefined,

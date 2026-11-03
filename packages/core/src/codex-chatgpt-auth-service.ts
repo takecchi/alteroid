@@ -38,7 +38,7 @@ export interface CodexChatgptAuthService extends CodexAuthRunnerSync {
   settled(): Promise<void>;
 }
 
-export interface CodexChatgptAuthServiceOptions {
+interface CodexChatgptAuthServiceOptions {
   store: CodexChatgptAuthStore;
   runners?: Pick<RunnerRegistry, 'list'>;
   journal: (entry: JournalEntryInput) => Promise<void>;
