@@ -1,15 +1,35 @@
+import { DEFAULT_ATTACHMENT_LIMITS } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import {
   ATTACHMENT_IMAGE_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
   ATTACHMENT_OTHER_MAX_BYTES,
+  ATTACHMENT_TOTAL_MAX_BYTES,
+  DEFAULT_ATTACHMENT_CHECK_LIMITS,
   attachmentMediaType,
   checkAttachments,
   isImageMediaType,
 } from './attachments.js';
 
 const file = (name: string, size: number, type = 'text/plain') => ({ name, size, type });
+
+describe('送る前の検査の上限の値', () => {
+  it('core の既定（サーバの契約）と同じ値で、値そのものも固定する（画像 5 MiB / その他 25 MiB / 10 個 / 合計 50 MiB）', () => {
+    const MIB = 1024 * 1024;
+    expect(ATTACHMENT_IMAGE_MAX_BYTES).toBe(5 * MIB);
+    expect(ATTACHMENT_OTHER_MAX_BYTES).toBe(25 * MIB);
+    expect(ATTACHMENT_MAX_COUNT).toBe(10);
+    expect(ATTACHMENT_TOTAL_MAX_BYTES).toBe(50 * MIB);
+    expect(DEFAULT_ATTACHMENT_CHECK_LIMITS).toEqual({
+      maxImageBytes: DEFAULT_ATTACHMENT_LIMITS.maxImageBytes,
+      maxFileBytes: DEFAULT_ATTACHMENT_LIMITS.maxFileBytes,
+      maxLargeFileBytes: 0,
+      maxPerMessage: DEFAULT_ATTACHMENT_LIMITS.maxPerMessage,
+      maxTotalBytes: DEFAULT_ATTACHMENT_LIMITS.maxTotalBytes,
+    });
+  });
+});
 
 describe('checkAttachments', () => {
   it('上限ちょうどは通し、1バイト超えは理由つきで断る（画像 5 MiB / その他 25 MiB）', () => {

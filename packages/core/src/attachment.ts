@@ -11,6 +11,10 @@ import {
   readAttachmentImageSize,
 } from './attachment-image-size.js';
 import {
+  ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
+  ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   attachmentMaxBytes,
   attachmentTooLargeMessage,
   isLargeAttachmentSize,
@@ -282,11 +286,14 @@ export function addToAttachmentUsage(
 
 const MIB = 1024 * 1024;
 
-export const ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT = 5 * MIB;
-export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
+// 画像・ファイル・個数・合計の4つの既定は軽い口（attachment-wording）が正本。Web も同じ値を使う
+export {
+  ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
+  ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
+};
 export const ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT = 2048 * MIB;
-export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
-export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
 // 20 枚を超えると API は全画像に 2000px の制限を掛ける
 export const ATTACHMENT_MAX_TURN_IMAGES_DEFAULT = 20;

@@ -10,6 +10,13 @@
 const KIB = 1024;
 const MIB = KIB * KIB;
 
+// 添付の上限の既定のうち、Web の送る前の検査（`@alteroid/logic` の `checkAttachments`）も使う4つの正本。
+// core 本体（attachment.ts）は Node の組み込みを import するので Web からは取れない。ここへ置いて attachment.ts が再 export する
+export const ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT = 5 * MIB;
+export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
+export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
+export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
+
 // 小数1桁へ丸めた値で単位を上げるか決める: 生の値で切ると 1,048,524 バイト以上が「1024.0 KiB」になる。
 function humanOneDecimal(bytes: number): string {
   if (bytes < KIB) return `${bytes} B`;

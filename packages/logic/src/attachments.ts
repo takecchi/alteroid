@@ -1,6 +1,10 @@
-// 上限の数字はサーバの契約（`apps/daemon/openapi.json`）の写し: 最終的な判定はサーバで、ここは送る前に断るだけ。
+// 上限の数字はサーバの既定（core の `ATTACHMENT_MAX_*_DEFAULT`）と同じもの: 最終的な判定はサーバで、ここは送る前に断るだけ。
 // 値は `@alteroid/core` 本体でなく軽い口から取る: 本体はサーバ専用の層ごとバンドルへ入る。
 import {
+  ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
+  ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   attachmentMaxBytes,
   attachmentTooLargeMessage,
   attachmentTooManyMessage,
@@ -9,12 +13,10 @@ import {
 } from '@alteroid/core/attachment-wording';
 import type { AttachmentLimits } from './types.js';
 
-const MIB = 1024 * 1024;
-
-export const ATTACHMENT_IMAGE_MAX_BYTES = 5 * MIB;
-export const ATTACHMENT_OTHER_MAX_BYTES = 25 * MIB;
-export const ATTACHMENT_MAX_COUNT = 10;
-export const ATTACHMENT_TOTAL_MAX_BYTES = 50 * MIB;
+export const ATTACHMENT_IMAGE_MAX_BYTES = ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT;
+export const ATTACHMENT_OTHER_MAX_BYTES = ATTACHMENT_MAX_FILE_BYTES_DEFAULT;
+export const ATTACHMENT_MAX_COUNT = ATTACHMENT_MAX_PER_MESSAGE_DEFAULT;
+export const ATTACHMENT_TOTAL_MAX_BYTES = ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT;
 
 export type AttachmentCheckLimits = Pick<
   AttachmentLimits,
