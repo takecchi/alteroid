@@ -295,7 +295,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#externalMcpServers': 'failure',
     '#foldIntoPendingCollapse': 'thinning',
     '#foldRecoveredNotice': 'thinning',
-    '#foldRecoveredQuotaNotice': 'thinning',
     '#handle': 'decision,failure,thinning',
     '#journalIncomingBody': 'reply',
     '#journalReply': 'reply',
