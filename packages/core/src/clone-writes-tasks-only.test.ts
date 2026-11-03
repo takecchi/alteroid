@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { createClone } from './clone.js';
+import { readCloneToolsSource } from './clone-tools-sources.test-support.js';
 import {
   fakeScriptedSdk,
   fakeSdk,
@@ -107,7 +108,10 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
   it.each(['prompt.ts', 'digest.ts', 'clone.ts', 'tools.ts', 'manager.ts'])(
     '%s に、消した道具の名前が残っていない',
     (file) => {
-      const source = readFileSync(`${root}${file}`, 'utf8');
+      // tools.ts は道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
+      const source =
+        file === 'tools.ts' ? readCloneToolsSource() : readFileSync(`${root}${file}`, 'utf8');
+      expect(source.length, `${file} の本文が空`).toBeGreaterThan(0);
       // 許す1種: 日誌に残っている人間の操作の種別ラベル（`HUMAN_ACTION_LABEL`。古い日誌の行を読むために残す）
       const historical = /^\s+commitment_(close|reopen): '/;
       const hits = source

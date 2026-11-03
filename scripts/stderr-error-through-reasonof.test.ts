@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { isCloneToolsSourceRelPath } from '../packages/core/src/clone-tools-sources.test-support.js';
+
 import { collectRepoFiles } from './repo-scan-files.js';
 
 // `instanceof Error` は絞りに数えない: 値を含まないと確かめた自前の例外クラス（`ALLOWED_CUSTOM_CLASSES`）だけを許可するため。
@@ -33,7 +35,6 @@ const REDACTORS = new Set([
   'collapseErrorCause',
 ]);
 const CLONE_SINK_NAMES = new Set(['announce', 'postToClone']);
-const TOOLS_FILE = 'packages/core/src/tools.ts';
 const HTTP_FILES = new Set(['apps/daemon/src/app.ts', 'apps/runner/src/app.ts']);
 
 interface BareErrorHit {
@@ -451,7 +452,11 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
     }
     const name = calleeName(node.expression);
     if (name !== undefined && CLONE_SINK_NAMES.has(name)) return node.arguments;
-    if (rel === TOOLS_FILE && ts.isIdentifier(node.expression) && node.expression.text === 'text') {
+    if (
+      isCloneToolsSourceRelPath(rel) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'text'
+    ) {
       return node.arguments;
     }
   }
@@ -490,7 +495,7 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
 const SINK_NEEDLES = ['stderr', 'writeStderrSync', ...CLONE_SINK_NAMES, 'deny'];
 
 function mayContainSink(source: string, rel: string): boolean {
-  if (HTTP_FILES.has(rel) || rel === TOOLS_FILE) return true;
+  if (HTTP_FILES.has(rel) || isCloneToolsSourceRelPath(rel)) return true;
   return SINK_NEEDLES.some((needle) => source.includes(needle));
 }
 
@@ -1053,6 +1058,8 @@ describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を
   it('stderr・announce・postToClone・tools.ts の text・deny の理由に、素の String(error) / error.message が無い（HTTP の応答は daemon / runner の app.ts、#2570）', () => {
     const files = collectRepoFiles(ROOT).filter(isScannedSource);
     expect(files.length).toBeGreaterThan(100);
+    // 道具の実装ソース（tools.ts と clone-tools-*.ts）が走査に入っている（text(...) の口は、その中だけを見る）
+    expect(files).toContain('packages/core/src/tools.ts');
     const offenders = files.flatMap((rel) =>
       findBareErrorSinkWrites(readFileSync(path.join(ROOT, rel), 'utf8'), rel).map(
         (hit) => `${rel}:${String(hit.line)}  ${hit.text}`,

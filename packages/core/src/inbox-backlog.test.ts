@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { readCloneToolsSources } from './clone-tools-sources.test-support.js';
 import {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
@@ -1444,18 +1445,26 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
   });
 
   it('removeMany を直に呼ぶ本番コードは、この共有ヘルパの中だけである', () => {
-    const targets = [
-      '../../../packages/core/src/tools.ts',
-      '../../../packages/core/src/clone.ts',
-      '../../../apps/daemon/src/app.ts',
-    ];
+    const targets = ['../../../packages/core/src/clone.ts', '../../../apps/daemon/src/app.ts'];
 
-    const offenders = targets.filter((rel) => {
-      const source = readFileSync(new URL(rel, import.meta.url), 'utf8');
-      return source
-        .split('\n')
-        .some((line) => !line.trimStart().startsWith('//') && line.includes('inbox.removeMany('));
-    });
+    // 道具の実装ソース（tools.ts と clone-tools-*.ts）は全部読む。入口は clone-tools-sources.test-support.ts
+    const sources = [
+      ...readCloneToolsSources().map((entry) => ({ rel: entry.name, source: entry.source })),
+      ...targets.map((rel) => ({
+        rel,
+        source: readFileSync(new URL(rel, import.meta.url), 'utf8'),
+      })),
+    ];
+    expect(sources.length).toBeGreaterThanOrEqual(3);
+    for (const { rel, source } of sources) expect(source.length, rel).toBeGreaterThan(0);
+
+    const offenders = sources
+      .filter(({ source }) =>
+        source
+          .split('\n')
+          .some((line) => !line.trimStart().startsWith('//') && line.includes('inbox.removeMany(')),
+      )
+      .map(({ rel }) => rel);
 
     expect(
       offenders,

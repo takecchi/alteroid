@@ -51,6 +51,7 @@ import {
 } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
+import { readCloneToolsSource } from './clone-tools-sources.test-support.js';
 import {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
@@ -4240,9 +4241,10 @@ describe('クローンの道具', () => {
   });
 
   describe('request_permission（issue #863「許可をコードではなくデータにする」）', () => {
-    it('⭐⭐ tools.ts のどのハンドラも stores.permissionGrants に触れない（issue #863 C節、歯で固定）', async () => {
-      const { readFileSync } = await import('node:fs');
-      const source = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
+    it('⭐⭐ tools.ts のどのハンドラも stores.permissionGrants に触れない（issue #863 C節、歯で固定）', () => {
+      // 道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
+      const source = readCloneToolsSource();
+      expect(source.length).toBeGreaterThan(0);
       expect(source).not.toContain('permissionGrants');
     });
 

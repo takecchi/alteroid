@@ -67,9 +67,7 @@ describe('クローンの道具の一覧の固定（名前・並び・説明・�
   it('道具ごとの入力スキーマ（JSON Schema）が固定値と同じ', () => {
     const actual = actualTools();
     for (const [index, entry] of pinned.entries()) {
-      expect(actual[index]?.inputSchema, `${entry.name} の inputSchema`).toEqual(
-        entry.inputSchema,
-      );
+      expect(actual[index]?.inputSchema, `${entry.name} の inputSchema`).toEqual(entry.inputSchema);
     }
   });
 

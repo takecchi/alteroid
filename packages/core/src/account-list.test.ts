@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { readCloneToolsSource } from './clone-tools-sources.test-support.js';
+
 describe('account-list.ts は読むだけで、個人の情報を持ち出さない（#2546。#2645 の判断待ち）', () => {
   const source = readFileSync(new URL('./account-list.ts', import.meta.url), 'utf8');
   const code = source
@@ -26,7 +28,9 @@ describe('account-list.ts は読むだけで、個人の情報を持ち出さな
 
 describe('tools.ts は stores.auth に直接触れない（account_list の本体は account-list.ts に置く）', () => {
   it('tools.ts のソースに stores.auth の字面が無い', () => {
-    const source = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
+    // 道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
+    const source = readCloneToolsSource();
+    expect(source.length).toBeGreaterThan(0);
     expect(source).not.toMatch(/stores\.auth\b/);
   });
 });
