@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-export interface FilterChipOption<V extends string> {
+interface FilterChipOption<V extends string> {
   value: V;
   label?: string;
   // 取れないなら渡さない: 0 を作らないため

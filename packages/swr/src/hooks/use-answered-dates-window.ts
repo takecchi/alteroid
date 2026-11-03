@@ -5,7 +5,7 @@ import { useOlderPagedWindow } from './use-older-paged-window';
 import { unwrap, useApi } from '../api';
 import type { AnsweredApprovalDate } from '@alteroid/logic';
 
-export interface AnsweredDatesWindow {
+interface AnsweredDatesWindow {
   first: ReturnType<typeof useAnsweredApprovalDates>;
   dates: AnsweredApprovalDate[];
   hasMore: boolean;

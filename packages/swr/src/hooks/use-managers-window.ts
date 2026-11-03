@@ -9,7 +9,7 @@ import type { ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/log
 export const MANAGERS_PAGE = 50;
 
 // `end` と `blocked` を1つに畳まない: 畳むと、進めなくなった状態が「全部読み終えた」と同じ顔で出る
-export type ManagersOlderStatus = 'progress' | 'end' | 'blocked';
+type ManagersOlderStatus = 'progress' | 'end' | 'blocked';
 
 export interface ManagersWindow {
   managers: ManagerSummary[];

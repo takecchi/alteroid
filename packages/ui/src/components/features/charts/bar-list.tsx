@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 
 import { TruncationNote } from '../../common';
 
-export interface BarListItem {
+interface BarListItem {
   label: string;
   id?: string | undefined;
   value: number;

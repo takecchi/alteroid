@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react';
 
-export function isImeConfirmEnter(event: KeyboardEvent): boolean {
+function isImeConfirmEnter(event: KeyboardEvent): boolean {
   return event.key === 'Enter' && isImeComposing(event);
 }
 

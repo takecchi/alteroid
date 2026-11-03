@@ -513,7 +513,7 @@ export function useCreateSchedule() {
 }
 
 /** `DELETE /schedule/{kind}` が 409 を返した（見た後に、その依頼がほかで書き換えられた。外していない）。投げる前に一覧を取り直してある。 */
-export class ScheduleRemoveConflictError extends ApiError {
+class ScheduleRemoveConflictError extends ApiError {
   constructor() {
     super(
       409,
@@ -995,7 +995,7 @@ export function useInterruptClone() {
   );
 }
 
-export interface ReopenCloneSessionResult {
+interface ReopenCloneSessionResult {
   outcome: 'now' | 'deferred' | 'unsupported';
   previousSessionId?: string | null | undefined;
   runningManagers?: number | undefined;
@@ -1048,7 +1048,7 @@ export function useRemoveArchive() {
   );
 }
 
-export interface InboxRemoveManyInput {
+interface InboxRemoveManyInput {
   types: readonly InboxEventType[];
   sources?: readonly string[];
   before?: string;

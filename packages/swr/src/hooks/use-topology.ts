@@ -5,7 +5,7 @@ import { useApiContext } from '../api';
 
 import type { LiveStatus } from './use-journal-live';
 
-export interface TopologyLive {
+interface TopologyLive {
   snapshot?: TopologySnapshot;
   receivedAt?: number;
   status: LiveStatus;

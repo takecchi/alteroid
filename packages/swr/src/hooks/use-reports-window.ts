@@ -5,7 +5,7 @@ import { useOlderPagedWindow } from './use-older-paged-window';
 import { unwrap, useApi } from '../api';
 import type { DailyReport } from '@alteroid/logic';
 
-export interface ReportsWindow {
+interface ReportsWindow {
   first: ReturnType<typeof useReports>;
   reports: DailyReport[];
   hasMore: boolean;

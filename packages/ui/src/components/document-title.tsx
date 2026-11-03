@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export const APP_TITLE = 'alteroid';
+const APP_TITLE = 'alteroid';
 
 export function formatDocumentTitle(screen: string): string {
   return `${screen} - ${APP_TITLE}`;

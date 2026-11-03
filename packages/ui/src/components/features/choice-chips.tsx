@@ -2,7 +2,7 @@ import { RadioGroup as RadioGroupPrimitive } from 'radix-ui';
 
 import { cn } from '@/lib/utils';
 
-export interface ChoiceChipOption<V extends string> {
+interface ChoiceChipOption<V extends string> {
   value: V;
   label?: string;
 }

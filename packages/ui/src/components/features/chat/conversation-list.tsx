@@ -21,7 +21,7 @@ export type ConversationRenderLink = (
   slot: { className: string; children: ReactNode },
 ) => ReactNode;
 
-export interface ConversationListMore {
+interface ConversationListMore {
   onClick: () => void;
   loading?: boolean;
   error?: unknown;

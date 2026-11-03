@@ -17,7 +17,7 @@ export function ChatMessageList({ children }: { children: ReactNode }) {
   );
 }
 
-export interface ChatMessageVersions {
+interface ChatMessageVersions {
   index: number;
   total: number;
   onPrevious: () => void;

@@ -141,7 +141,7 @@ export function ListDetail({
   );
 }
 
-export interface ListDetailItem {
+interface ListDetailItem {
   key: string;
   href: string;
   current: boolean;
@@ -151,7 +151,7 @@ export interface ListDetailItem {
   lead?: ReactNode;
 }
 
-export type ListDetailRenderLink = (props: {
+type ListDetailRenderLink = (props: {
   href: string;
   className: string;
   children: ReactNode;

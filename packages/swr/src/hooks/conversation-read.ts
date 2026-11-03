@@ -7,7 +7,7 @@ import type { ConversationDetail, ConversationSummary } from '@alteroid/logic';
 import { isKeyOfType } from './queries';
 
 // 一覧とは別のキーにする: 一覧は日誌を遡るので重い
-export const UNREAD_COUNT_KEY = { type: 'conversationUnreadCount' } as const;
+const UNREAD_COUNT_KEY = { type: 'conversationUnreadCount' } as const;
 
 export function useUnreadConversationCount(enabled = true) {
   const api = useApi();
