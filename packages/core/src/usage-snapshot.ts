@@ -121,8 +121,6 @@ const accountUsageRefreshFailureSchema = z.object({
   reason: z.string(),
 });
 
-export type AccountUsageRefreshFailure = z.infer<typeof accountUsageRefreshFailureSchema>;
-
 export const accountUsageStateSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('unknown') }),
   z.object({

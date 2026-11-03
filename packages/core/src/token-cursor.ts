@@ -8,8 +8,6 @@ import type { AgentToken } from './token-pool.js';
 // index.ts へ export しない: token_list にはカーソル付きの HTTP 対応物が無いため
 const tokenCursorSchema = z.object({ id: z.string().min(1), order: z.number().int() });
 
-export type TokenCursor = z.infer<typeof tokenCursorSchema>;
-
 export const { encode: encodeTokenCursor, decode: decodeTokenCursor } =
   cursorCodec(tokenCursorSchema);
 

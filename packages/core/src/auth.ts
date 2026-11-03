@@ -67,7 +67,6 @@ export type AuthAccount = z.infer<typeof authAccountSchema>;
 export type AuthIdentity = z.infer<typeof authIdentitySchema>;
 export type AccessTokenRecord = z.infer<typeof accessTokenRecordSchema>;
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
-export type LoginRequestStatus = LoginRequest['status'];
 
 export interface AuthStore {
   // 文字列の `localeCompare` で並べない: `isoDateTime` はオフセット付きの任意の表記を許すので、同じ瞬間でも文字列比較では実時刻の順が崩れる

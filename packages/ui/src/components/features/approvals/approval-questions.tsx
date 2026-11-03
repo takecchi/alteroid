@@ -39,8 +39,6 @@ interface DraftOf {
   otherOn: boolean;
 }
 
-export type ApprovalQuestionDraft = DraftOf;
-
 export interface ApprovalQuestionsDraft {
   drafts: Readonly<Record<string, DraftOf>>;
   supplement: string;

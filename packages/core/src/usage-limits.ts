@@ -10,8 +10,6 @@ import { z } from 'zod';
 // 文言のパターンを自前で書かない: 手で書いた正規表現は腐り、検知しなくなる形で静かに効かなくなるため。SDK の定数を使う
 export const usageLimitKindSchema = z.enum(['reached', 'transition', 'warning', 'org_policy']);
 
-export type UsageLimitKind = z.infer<typeof usageLimitKindSchema>;
-
 export const usageLimitNoticeSchema = z.object({
   kind: usageLimitKindSchema,
   text: z.string(),

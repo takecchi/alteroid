@@ -62,8 +62,6 @@ export function describeRefusalFailureMark(category: string | null): string {
   return `（safeguards: ${category ?? '不明'}）`;
 }
 
-export type RefusalAutoReopenState = 'enabled' | 'disabled' | 'halted';
-
 /** 人間へ出す、開き直す口の案内。 */
 const REFUSAL_REOPEN_DOORS =
   '開き直す口: `alteroid reopen` / 設定画面の「クローンのセッションを開き直す」 / `POST /clone/session/reopen`';

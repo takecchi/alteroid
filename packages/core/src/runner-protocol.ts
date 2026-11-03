@@ -40,8 +40,6 @@ const isoDateTime = z.string().datetime({ offset: true });
 // 定義を1箇所にする: `ask` イベントと `state()` が返す `waiting` の両方が同じ2値を指すようにするため。
 export const waitingKindSchema = z.enum(['question', 'permission']);
 
-export type WaitingKind = z.infer<typeof waitingKindSchema>;
-
 /**
  * `kind` と `askedAt` は必須（#346 以前の runner は送らず、`HttpRunner#list()` の `safeParse` が要素ごと捨てる）。
  * デーモン側で既定値は作らない（`askedAt` を「取れなければいま」で埋めると値の意味が経路で変わる）。
@@ -258,8 +256,6 @@ export const runnerSessionOpenResultSchema = z.object({
   sessionGeneration: sessionGenerationSchema,
 });
 
-export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSchema>;
-
 export interface RunnerResumeResult {
   cwd: string;
   reusedLiveSession?: boolean;
@@ -308,8 +304,6 @@ export const runnerSetProfileCommandSchema = z.object({
   script: z.string(),
 });
 
-export type RunnerSetProfileCommand = z.infer<typeof runnerSetProfileCommandSchema>;
-
 export const runnerProfileFingerprintSchema = z.object({
   sha256: z.string(),
   bytes: z.number(),
@@ -339,8 +333,6 @@ export const runnerSetMcpServersCommandSchema = z.object({
   mcpServers: z.record(z.string(), z.unknown()),
 });
 
-export type RunnerSetMcpServersCommand = z.infer<typeof runnerSetMcpServersCommandSchema>;
-
 /**
  * 値（`env` / `headers` / `args`）は返さない。名前は返す: 道具名としてマネージャーの文脈にも出る秘密でない値で、
  * 指紋だけでは人間が確かめる手段を持たないため。
@@ -360,8 +352,6 @@ export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerp
 export const runnerSetPermissionRulesCommandSchema = z.object({
   rules: z.array(z.string()),
 });
-
-export type RunnerSetPermissionRulesCommand = z.infer<typeof runnerSetPermissionRulesCommandSchema>;
 
 /** 規則の本文（command の全文）は返さない。件数と、前の一覧から変わったかだけ。 */
 export const runnerPermissionRulesResultSchema = z.object({
@@ -396,8 +386,6 @@ export const RUNNER_PLUGIN_RETAIN_MAX_NAMES = 1024;
 export const runnerRetainPluginsCommandSchema = z.object({
   names: z.array(z.string()).max(RUNNER_PLUGIN_RETAIN_MAX_NAMES),
 });
-
-export type RunnerRetainPluginsCommand = z.infer<typeof runnerRetainPluginsCommandSchema>;
 
 /** files の中身は返さない（名前・取り元の sha・中身の指紋だけで、どれも秘密ではない）。 */
 export const runnerPluginFingerprintEntrySchema = z.object({
@@ -596,8 +584,6 @@ export const runnerAnswerResultSchema = z.object({
   decision: z.enum(['allow', 'deny', 'unreadable']).optional(),
 });
 
-export type RunnerAnswerResult = z.infer<typeof runnerAnswerResultSchema>;
-
 /** ワイヤーの語彙（`{ ok, decision }`）と業務の語彙（`{ delivered, decision }`）を分ける: ワイヤーの形が変わっても意味が変わらないように。 */
 export interface RunnerAnswerOutcome {
   /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
@@ -763,7 +749,6 @@ const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ok'), result: unpushedWorkResultSchema }),
   z.object({ kind: z.literal('unavailable'), reason: z.string() }),
 ]);
-export type RunnerUnpushedWorkOutcome = z.infer<typeof runnerUnpushedWorkOutcomeSchema>;
 
 /** 中身（ファイルの内容）は持たない。名前と件数だけ。 */
 const scratchSweepItemSchema = z.object({

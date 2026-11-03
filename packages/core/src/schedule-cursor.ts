@@ -5,8 +5,6 @@ import type { ScheduledRequest } from './schema.js';
 
 const scheduleCursorSchema = z.object({ kind: z.string().min(1) });
 
-export type ScheduleCursor = z.infer<typeof scheduleCursorSchema>;
-
 export const { encode: encodeScheduleCursor, decode: decodeScheduleCursor } =
   cursorCodec(scheduleCursorSchema);
 

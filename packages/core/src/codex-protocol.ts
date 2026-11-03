@@ -3,31 +3,10 @@ export const CODEX_PROTOCOL_VERSION = '0.165.0';
 // "jsonrpc":"2.0" を付けない: app-server の JSONRPCMessage に jsonrpc の欄が無いため
 export type CodexRequestId = string | number;
 
-export interface CodexRpcRequest {
-  readonly id: CodexRequestId;
-  readonly method: string;
-  readonly params?: unknown;
-}
-
-export interface CodexRpcNotification {
-  readonly method: string;
-  readonly params?: unknown;
-}
-
-export interface CodexRpcResponse {
-  readonly id: CodexRequestId;
-  readonly result: unknown;
-}
-
 export interface CodexRpcErrorBody {
   readonly code: number;
   readonly message: string;
   readonly data?: unknown;
-}
-
-export interface CodexRpcErrorResponse {
-  readonly id: CodexRequestId;
-  readonly error: CodexRpcErrorBody;
 }
 
 export const CODEX_RPC_ERROR_CODES = {
@@ -82,7 +61,6 @@ export const CODEX_ITEM_TYPES = [
   'webSearch',
   'contextCompaction',
 ] as const;
-export type CodexItemType = (typeof CODEX_ITEM_TYPES)[number];
 
 export const CODEX_TOOL_ITEM_TYPES = [
   'commandExecution',
@@ -96,7 +74,6 @@ export const CODEX_TOOL_ITEM_TYPES = [
   'sleep',
   'functionCallOutput',
 ] as const;
-export type CodexToolItemType = (typeof CODEX_TOOL_ITEM_TYPES)[number];
 
 export const CODEX_NON_TOOL_ITEM_TYPES = [
   'userMessage',
