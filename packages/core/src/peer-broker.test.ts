@@ -364,7 +364,8 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
       expect(result.workdirChanges).toEqual({
         dir: '/w',
         paths: [],
-        truncated: '作業場を探せなかった: EACCES',
+        // reasonOf は先頭に `<name>: ` を付ける（理由が載ることの保証は同じ）
+        truncated: '作業場を探せなかった: Error: EACCES',
       });
       failing.broker.closeAll();
     });

@@ -83,7 +83,7 @@ describe('撒く先が両方とも出力に残る', () => {
 
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
     expect(results.find((r) => r.target === 'runner-2')?.ok).toBe(false);
-    expect(results.find((r) => r.target === 'runner-2')?.error).toBe('runner が応答しない');
+    expect(results.find((r) => r.target === 'runner-2')?.error).toBe('Error: runner が応答しない'); // reasonOf は先頭に `<name>: ` を付ける。2行目以降（値が混ざりうる行）が落ちる保証は同じ
     expect(results.find((r) => r.target === 'runner-2')?.selfHealing).not.toBe(true);
   });
 
@@ -416,7 +416,7 @@ describe('runner へ撒いた結果を担い手のプールへ渡す（#4725）'
       {
         results: [
           { runnerId: 'runner-primary', ok: true },
-          { runnerId: 'runner-2', ok: false, error: 'runner が応答しない' },
+          { runnerId: 'runner-2', ok: false, error: 'Error: runner が応答しない' },
         ],
         cloneHad: SECRET,
       },

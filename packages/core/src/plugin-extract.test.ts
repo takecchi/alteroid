@@ -814,7 +814,35 @@ describe('呼び手向けの関数', () => {
     await mkdir(join(root, 'plugins'), { recursive: true });
     const result = await extractPluginsForScopes({ root, store, scopes: ['all', 'app'] });
     expect(result.plugins.map((p) => p.name)).toEqual(['p-app']);
-    expect(result.failures).toEqual([{ name: 'p-all', stage: 'get', message: 'get failed' }]);
+    // reasonOf は先頭に `<name>: ` を付ける（失敗の理由が載ることの保証は同じ）
+    expect(result.failures).toEqual([
+      { name: 'p-all', stage: 'get', message: 'Error: get failed' },
+    ]);
+  });
+
+  it('get が cause つきで落ちたら、理由に cause の連鎖が載り、2行目以降（値が混ざりうる行）は載らない（reasonOf）', async () => {
+    const root = await newRoot();
+    const { stores } = await seed();
+    const store = {
+      list: () => stores.plugins.list(),
+      get: (name: string) =>
+        name === 'p-all'
+          ? Promise.reject(
+              new Error('get failed\nparams: secret-row-value', {
+                cause: new Error('connect ECONNREFUSED'),
+              }),
+            )
+          : stores.plugins.get(name),
+    };
+    await mkdir(join(root, 'plugins'), { recursive: true });
+    const result = await extractPluginsForScopes({ root, store, scopes: ['all', 'app'] });
+    expect(result.failures).toEqual([
+      {
+        name: 'p-all',
+        stage: 'get',
+        message: 'Error: get failed <- Error: connect ECONNREFUSED',
+      },
+    ]);
   });
 
   it('展開の失敗も個別に返す', async () => {
@@ -878,7 +906,7 @@ describe('呼び手向けの関数', () => {
     expect(result).toEqual({
       plugins: [],
       removed: [],
-      failures: [{ name: null, stage: 'list', message: 'list failed' }],
+      failures: [{ name: null, stage: 'list', message: 'Error: list failed' }],
       // 2026-10-17 #4798: 結果に rebuilt（展開し直した一覧）が加わった。以前の期待値には無かった
       rebuilt: [],
     });
