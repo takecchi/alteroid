@@ -6956,6 +6956,7 @@ class Clone implements CloneHost {
       ...this.#attachmentCopiesDirEntry(),
       ...this.#attachmentLimitsEntry(),
       conversationId: () => this.#sdkSession.turn?.conversationId ?? undefined,
+      // 人間のターンでは返信の宛先と同じ会話、内部ターンでは報告の委譲の起点（`Turn.originConversationId`。起点が複数にまたがる束では null で、無い）
       workConversationId: () => {
         const turn = this.#sdkSession.turn;
         return turn?.conversationId ?? turn?.originConversationId ?? undefined;

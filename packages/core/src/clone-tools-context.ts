@@ -30,8 +30,9 @@ export interface ToolContext {
   conversationId: () => string | undefined;
   /**
    * いまのターンの仕事が属する会話。会話のあるターンでは `conversationId` と同じで、内部ターンでは
-   * 委譲の起点（マネージャーからの一件なら、その委譲の `Job.conversationId`）。`manager_start` の起点と、
-   * `ask_human` / `request_permission` が積む承認の会話に写す。返信の宛先（`conversationId`）とは別である。
+   * 委譲の起点（マネージャーからの一件なら、その委譲の `Job.conversationId`。clone.ts の実装は `Turn.conversationId ?? Turn.originConversationId`）。
+   * `manager_start` の起点、`task_add` の起点、`ask_human` / `request_permission` が積む承認の会話に写す（`ask_human` だけは、人間のターンの会話の次に `managerId` の委譲の起点を挟む）。
+   * 返信の宛先（`conversationId`）とは別である。
    */
   // optional にする: 無い器（テストの ToolContext）は従来どおり `conversationId` だけを見る。クローン本体は必ず渡す
   workConversationId?: () => string | undefined;

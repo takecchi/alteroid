@@ -207,7 +207,9 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
           describeStringLengthViolation('question', question, { min: 1 }) ??
           describeBlankViolation('question', question);
         if (questionError !== null) return text(`承認待ちには積まなかった: ${questionError}`);
-        // 回す確認の委譲の起点を、ターンの起点より先に見る: 別の委譲の報告を読んでいるターンで回すこともあるため
+        // 宛先の会話は次の順に決める: ① 人間のターンの会話（`getConversationId()`。人間の発言・回答のターンだけが持つ）→ ② `managerId` の委譲の起点（`Job.conversationId`）→ ③ 作業会話（`getWorkConversationId()`。内部ターンでは、読んでいる報告の委譲の起点 = `Turn.originConversationId`）。
+        // ②を③（報告ターンの起点）より先に見る: 別の委譲 Y の報告を読んでいるターンで、委譲 X の確認を回すこともあるため。
+        // ①を②より先にする（Why not「委譲の起点を人間の会話より先に」）: 人間が会話 B で話している最中の確認を、別の会話で頼まれた委譲の会話に出すと、B の人が答えを見失うため（#4216。試験は clone-manager-origin-conversation.test.ts の「ask_human: 人間の会話のターンでは、これまでどおり…」）
         const conversationId =
           getConversationId() ??
           (await jobConversationOf(stores, managerId)) ??
