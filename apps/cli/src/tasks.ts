@@ -5,7 +5,7 @@ import { formatElapsedAgo } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 import { redactBody } from './redact.js';
 
-export interface TasksOptions {
+interface TasksOptions {
   all?: boolean;
 }
 
@@ -155,7 +155,7 @@ async function failedWith(
   return new Error(`${what}（HTTP ${String(response.status)}）${detail}`);
 }
 
-export function renderTaskDetail(task: TaskRowView & { editedAt?: string | undefined }): string {
+function renderTaskDetail(task: TaskRowView & { editedAt?: string | undefined }): string {
   const lines = [
     `[${task.status}] ${task.title}`,
     `  id: ${task.id}  起点: ${task.origin}${task.source === undefined ? '' : `(${task.source})`}`,

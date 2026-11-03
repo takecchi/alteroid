@@ -6,7 +6,7 @@ import { createClient } from './client.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 import { redactBody, redactError } from './redact.js';
 
-export interface ProgressOptions {
+interface ProgressOptions {
   windowHours?: string;
 }
 

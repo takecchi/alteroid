@@ -84,7 +84,7 @@ interface RemoveView {
   runners: RunnerResult[];
 }
 
-export interface PluginAddOptions {
+interface PluginAddOptions {
   path?: string;
   sha?: string;
   ref?: string;
@@ -105,7 +105,7 @@ export async function pluginListCommand(): Promise<void> {
   stdout.write(renderPluginList(body.plugins));
 }
 
-export function renderPluginList(plugins: PluginRow[]): string {
+function renderPluginList(plugins: PluginRow[]): string {
   if (plugins.length === 0) {
     return 'plugin は入っていません。\n入れるには: alteroid plugin add <url|marketplace名>\n';
   }
@@ -241,10 +241,7 @@ function presenceLine(label: string, presence: Presence, note: string): string[]
   return [`  ${label}: ${presence.paths.join(', ')}  ${note}`];
 }
 
-export function renderPluginPreview(
-  summary: PreviewSummary,
-  flags: { enableHooks: boolean },
-): string {
+function renderPluginPreview(summary: PreviewSummary, flags: { enableHooks: boolean }): string {
   const lines: string[] = [];
   lines.push(`plugin: ${summary.name}`);
   if (summary.description !== undefined) lines.push(`説明: ${summary.description}`);

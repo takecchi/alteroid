@@ -22,7 +22,7 @@ export function isRunnerContainer(env: NodeJS.ProcessEnv = process.env): boolean
   return (env[RUNNER_ID_ENV] ?? '').trim().length > 0;
 }
 
-export const RUNNER_NO_AUTOSTART_MESSAGE =
+const RUNNER_NO_AUTOSTART_MESSAGE =
   'この器は runner(委譲先)なので、手元のデーモンを暗黙には起こしません。\n' +
   '本番を見るなら ALTEROID_URL を指定して alteroid login してください。\n' +
   'どうしてもこの器にデーモンを立てるなら、明示の alteroid daemon start を使ってください。';
@@ -85,7 +85,7 @@ const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
 const NOT_GRANTED_ERROR = 'このアカウントには alteroid を使う許可が無い';
 
 // `unknown` で解決策を書かない: 当てずっぽうで片方を出すと、状況によっては必ず嘘の案内になるため
-export type ForbiddenKind = 'not_operator' | 'not_granted' | 'unknown';
+type ForbiddenKind = 'not_operator' | 'not_granted' | 'unknown';
 
 export function forbiddenKindOf(body: unknown): ForbiddenKind {
   if (typeof body !== 'object' || body === null) return 'unknown';

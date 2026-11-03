@@ -127,14 +127,14 @@ const READ_CANCELLED_NOTICE =
   '（既読付けを取り消しました。返答は表示済みです。クローンのターンには触れていません）';
 
 /** `clientMessageId` が `null` の間は Ctrl+C で対象を省かない: 省くと先客のターンを止めるため。 */
-export interface TurnHandle {
+interface TurnHandle {
   clientMessageId: string | null;
   conversationId: string | null;
   withdrawn: boolean;
   withdraw: () => void;
 }
 
-export interface ReplHooks {
+interface ReplHooks {
   toTurn?: (turn: TurnHandle) => void;
   toLocal?: (notice: string) => AbortSignal;
 }
@@ -839,7 +839,7 @@ export async function sendMessage(
 }
 
 // 404 以外の失敗は投げる: 「受け取っていない」と「確かめられなかった」を取り違えない。
-export async function findClientMessage(
+async function findClientMessage(
   target: Target,
   clientMessageId: string,
   signal: AbortSignal,
@@ -3240,7 +3240,7 @@ function parseKeyValueTokens(tokens: string[], allowedKeys: readonly string[]): 
   return { ok: true, values };
 }
 
-export type ParsedJournalSearchTokens =
+type ParsedJournalSearchTokens =
   { ok: true; limit?: string; type?: string; q?: string } | { ok: false; message: string };
 
 // `q=` はそのトークンから行末までを1つの語として扱う: 空白で割った後のトークン列では、空白を含む語で探せない。
@@ -3451,7 +3451,7 @@ export async function endConversationOnExit(
   );
 }
 
-export type ParsedManagerFilters =
+type ParsedManagerFilters =
   | {
       ok: true;
       query: { status?: string; limit?: string };
@@ -3461,7 +3461,7 @@ export type ParsedManagerFilters =
 
 // `status=` の値の集合は core の schema だけが持つ: chat 側に書き写すと札が増えたときにここだけ古くなる。
 // `limit=` は検査しない: 範囲を持つのはデーモンの側で、書き写すと片方だけ動いたときに CLI が「通るはずの値」を拒む側になる。
-export function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
+function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
   const parsed = parseKeyValueTokens(tokens, ['status', 'limit', 'after']);
   if (!parsed.ok) return parsed;
   const raw = parsed.values;
@@ -3494,7 +3494,7 @@ export function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
 
 // 言えるのは「要求した上限とちょうど同じ件数が返った」という1つの事実だけ: `GET /managers` は封筒を持たない。
 // `noteIfAtLimit` を使わない理由は、続きの打ち方まで出すこと。`status=` は打たれた字面をそのまま繰り返す: 絞りを外した命令を案内すると別の一覧へ移る。
-export function renderManagersWindowNote(
+function renderManagersWindowNote(
   count: number,
   query: { status?: string; limit?: string },
 ): string | null {
@@ -3791,7 +3791,7 @@ function summarizeText(value: string): string {
   return oneLine(redactBody(value), 80);
 }
 
-export interface EditInProgress {
+interface EditInProgress {
   readonly id: string;
   readonly conversationId: string;
 }
@@ -3799,7 +3799,7 @@ export interface EditInProgress {
 // 配列から抜かない: 後ろの番号がずれ、同じ番号が別の発言を指す。全部を無効にもしない: 続けて別の発言を編集できなくなる。
 // 並びを読み直すにはスキャン窓や `includeSuperseded` を覚えておく必要があり、通信の失敗も抱える。
 // だから位置は保ったまま、その1つだけを空にして（`resolveListedId` は空を引けないものとして扱う）、読み直しを案内する。
-export function retireListedMessage(listed: Listed, id: string): void {
+function retireListedMessage(listed: Listed, id: string): void {
   const index = listed.messages.indexOf(id);
   if (index >= 0) listed.messages[index] = '';
   delete listed.messageAttachments[id];
@@ -3810,7 +3810,7 @@ export function retireListedMessage(listed: Listed, id: string): void {
 }
 
 // 添えかけに別の添付が残っているときは始めない: 元の添付と混ざり、取り消しで巻き添えにする。
-export function runEditDraftCommand(
+function runEditDraftCommand(
   line: string,
   listed: Listed,
   draft: AttachmentDraft,
@@ -3922,7 +3922,7 @@ export async function runAttachmentCommand(
 }
 
 // Web の予定の画面・webhook と同じ解釈にする: 入口ごとに解釈が違うと、同じ `{"a":1}` でもクローンが読む本文と重複判定の鍵が入口で変わる。
-export function parseEventPayload(body: string): unknown {
+function parseEventPayload(body: string): unknown {
   try {
     return JSON.parse(body) as unknown;
   } catch {
