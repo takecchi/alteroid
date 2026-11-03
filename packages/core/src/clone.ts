@@ -63,6 +63,7 @@ import {
 } from './digest.js';
 import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
+import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingSwitches, type TokenSavingSwitches } from './token-saving-switches.js';
 import { parseFoldState, serializeFoldState, type FoldState } from './fold-state.js';
 import {
@@ -3433,11 +3434,39 @@ class Clone implements CloneHost {
       ...taskQueue.head,
       ...taskQueue.placed,
       ...taskQueue.failed,
+      ...(await this.#waitingReplyLinesFor(taskEvents)),
       tailText,
       '',
       '---',
       '',
     ].join('\n');
+  }
+
+  // 人間の発言を含む束だけ、その会話を起点にした返事待ち（waiting）の task を名乗る。該当が無ければ空（1文字も増やさない）。読めなければ名乗らない（断り書き全体を落とさない）
+  async #waitingReplyLinesFor(humanEvents: readonly HumanMessage[]): Promise<string[]> {
+    if (humanEvents.length === 0) return [];
+    try {
+      const conversationIds = new Set(humanEvents.map((pending) => pending.conversationId));
+      const { entries } = await this.#stores.tasks.list();
+      const candidates = selectWaitingReplyTasks(entries, [], conversationIds);
+      if (candidates.length === 0) return [];
+      const matched = selectWaitingReplyTasks(
+        candidates,
+        await this.#stores.jobs.listJobs(),
+        conversationIds,
+      );
+      return describeWaitingReplyLines(
+        matched,
+        this.#digestDelta.fixed(
+          'task-queue-notice-waiting-reply',
+          '返事が来たなら `task_set_status` で閉じるか queued に戻すこと（器は状態を変えない）。',
+          '（返事待ちの扱いは会話の上と同じ）',
+        ),
+      );
+    } catch (error) {
+      noteDroppedRecord('返事待ちの task の断り書き', 'waiting-reply', error);
+      return [];
+    }
   }
 
   // 断り書きの待ち行列の側（#5469 P6c）。件数と先頭の描き方は digest と同じ `describeTaskQueueHead`（写さない）
