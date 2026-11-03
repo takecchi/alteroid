@@ -91,12 +91,12 @@ export function memoryVersion(content: string): string {
 }
 
 /** 書くときの前提の版。書く瞬間の版と違えば書かず `*ConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
-export interface IfMatchWriteOptions {
+interface IfMatchWriteOptions {
   ifMatch?: string | null;
 }
 
 /** 消すときの前提の版 `ifMatch`。合わなければ消さず各 `*ConflictError`。省略は無条件。 */
-export interface IfMatchRemoveOptions {
+interface IfMatchRemoveOptions {
   ifMatch?: string;
 }
 

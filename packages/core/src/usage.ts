@@ -65,7 +65,7 @@ export const usageDateSchema = z
   .refine(isRealUsageDate, '実在する日付（YYYY-MM-DD）で書く');
 
 // 全欄 optional: 欄が無いのは「数えていない」であって 0 ではなく、同じ値で表すと取れない軸に 0 の行を作る壊れ方になるため
-export const usageUnreadableCountsSchema = z
+const usageUnreadableCountsSchema = z
   .object({
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
@@ -153,7 +153,7 @@ export const usageResetSchema = z.object({
   toSessionId: z.string().optional(),
 });
 
-export type UsageReset = z.infer<typeof usageResetSchema>;
+type UsageReset = z.infer<typeof usageResetSchema>;
 
 export interface UsageFold {
   delta: Record<string, UsageTotals>;
@@ -470,12 +470,12 @@ export function sessionModelUsageOf(response: unknown): Record<string, UsageTota
 }
 
 // 省略可能にする: 実験的な口は SDK 側で改名・削除されうるので、必須として呼ぶと SDK が1つ改名した瞬間に畳む経路が落ちるため
-export interface SessionUsageReader {
+interface SessionUsageReader {
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
 }
 
 // 締め切りを短くする: 観測であって仕事ではないうえ、もう畳むと決まった後で、runner 全体の猶予をセッション全部で分け合うため
-export const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
+const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
 
 // 層が2つとも同じこれを呼ぶ（片方を消さない）: `result` を出さずに死んだセッションの末尾は二度と積まれず、片方だけ直っていると直っていない側の欠落が「使っていない」と読めるため
 // 全部ゼロなら `undefined` を返す: 「記録が無い」が「$0.00 使った」に化けないため。`close()` より先に呼ぶ: 閉じた後の control channel からは何も取れないため
@@ -590,7 +590,7 @@ export const usageQuerySchema = z.object({
 
 export type UsageQuery = z.infer<typeof usageQuerySchema>;
 
-export const unreadableUsageRowSchema = z.object({
+const unreadableUsageRowSchema = z.object({
   table: z.enum(['usage_daily', 'usage_turns']),
   date: usageDateSchema.optional(),
   fields: z.array(z.string()),
@@ -598,7 +598,7 @@ export const unreadableUsageRowSchema = z.object({
 
 // 基準（層 × actor）ごとの数え直しの回数と最終時刻（Issue #5409）。台帳の `usage_baseline` の現在値で、日付を持たない: `from` / `to` や `site` / `tokenId` では絞らない（絞るのは `layer` / `managerId` だけ）
 // 0 回の基準も載せる（回数 0・`lastResetAt` 無し）: 「数え直しが無い」と「基準が無い」を区別するため。判定は推定で、誤って数え直しとみなす（過大）も拾えない（過少）もありうる。回数が増え続けていないかを見張る口
-export const usageResetRowSchema = z.object({
+const usageResetRowSchema = z.object({
   layer: usageLayerSchema,
   managerId: z.string(),
   resets: z.number().int().nonnegative(),
