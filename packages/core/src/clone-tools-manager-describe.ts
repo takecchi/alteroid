@@ -1,5 +1,5 @@
 // マネージャーの委譲の状態を文にする補助（`manager_list` と `manager_report` などの複数の道具が使うもの）。
-// `clone-tools-manager.ts` と `clone-tools-manager-list.ts` の両方から読むために、ここへ置く（互いを import すると循環になる）。
+// 道具のファイル（`clone-tools-manager-list.ts` / `-report.ts` など）の複数から読むために、ここへ置く（互いを import すると循環になる）。
 // このファイルから道具のファイルを import しない（一方向）。
 
 import { CGROUP_EVENTS_UNKNOWN_NOTE, formatCgroupEventsNote } from './cgroup-events.js';
@@ -31,6 +31,13 @@ import {
 } from './unpushed-work-observation-format.js';
 import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
+
+export const MANAGER_ATTACHMENTS_DESCRIPTION =
+  '人間の添付を担い手にも見せたいときに、その添付の id（通知行の id=… / conversation_read の添付行）を渡す。' +
+  '渡したものは担い手の手元にファイルとして置かれ（通知行にパスが付くので Read で開ける）、画像は画像としても見える。' +
+  '渡さない添付は担い手には見えない。**記憶には写らない**（日誌に残るのは渡した添付の参照だけで、中身は残らない）。' +
+  '見つからない添付（保持期限切れ・id の誤り）があれば、何も送らずにエラーを返す。個数・合計には人間の発言と同じ上限がある。' +
+  '確認への回答（requestId / decision）には載せられない。';
 
 const LIST_DENIED_TOOLS = 3;
 
