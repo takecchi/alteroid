@@ -143,7 +143,7 @@ export function invalidWith(prefix: string): (where: string) => { error: string 
 // 何も言わないと本文を省けると読めるため。本文が無い要求は `jsonBody` が `{}` として検査するので、全部省略可の本文には付けない（省いても通る）
 export const REQUIRED_JSON_BODY = { required: true, content: {} } as const;
 
-// `app.ts` の中で `validator('json', ...)` を直接書かない: `hook` を渡し忘れた経路だけ `@hono/standard-validator` の既定の 400（本文そのものを返す）に落ちるので、ここへ集約して付け忘れを作れなくする。`onInvalid` を上書きしてよいのも、混ぜてよいのは `where` だけで送られてきた値は混ぜない。
+// HTTP の口（`app.ts` と族のファイル `app-routes-*.ts`）の中で `validator('json', ...)` を直接書かない: `hook` を渡し忘れた経路だけ `@hono/standard-validator` の既定の 400（本文そのものを返す）に落ちるので、ここへ集約して付け忘れを作れなくする。`onInvalid` を上書きしてよいのも、混ぜてよいのは `where` だけで送られてきた値は混ぜない。
 export function jsonBody<Schema extends z.ZodTypeAny>(
   schema: Schema,
   onInvalid: (where: string) => Record<string, unknown> = invalidWith('入力の形が不正'),
@@ -154,7 +154,7 @@ export function jsonBody<Schema extends z.ZodTypeAny>(
   });
 }
 
-// `app.ts` の中で `validator('query', ...)` を直接書かない（`jsonBody` と同じ理由）: `hook` を渡さないと既定の 400 がクエリそのものと zod の issue 配列を返す。
+// HTTP の口（`app.ts` と族のファイル）の中で `validator('query', ...)` を直接書かない（`jsonBody` と同じ理由）: `hook` を渡さないと既定の 400 がクエリそのものと zod の issue 配列を返す。
 export function queryParams<Schema extends z.ZodTypeAny>(
   schema: Schema,
   onInvalid: (where: string) => Record<string, unknown> = invalidWith('入力の形が不正'),

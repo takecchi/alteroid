@@ -692,7 +692,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 以降の全経路がブラウザに止められる**（`/auth/login` と `/claim` は `content-type` しか要らない
 ので、いちばん分かりにくい壊れ方をする）。
 
-ここを緩めてはいけない理由が `deliberateClient`（`apps/daemon/src/app.ts`）にある。127.0.0.1
+ここを緩めてはいけない理由が `deliberateClient`（`apps/daemon/src/app-shared.ts`）にある。127.0.0.1
 で待つことはブラウザからの保護にならず、人間が開いた任意のページが単純リクエストを投げられる。
 本文検査の無い POST に `application/json` を要求すると preflight が必須になり、**CORS ヘッダを
 返さないから preflight が通らない**という形で塞いでいる。`*` を返した瞬間にこの前提が消え、

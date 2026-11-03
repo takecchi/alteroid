@@ -772,7 +772,7 @@ type ManagerDecision = 'allow' | 'deny';
  * | `'declined'` | 世代が食い違う done の委譲を畳んで新しい鍵で起こし直したいが、畳めない（背景処理・確認待ちが残っている・それらが分からない・畳めたと確かめられない）ので、畳まず、旧セッションへも送らなかった。預からなかった（添付付き・預かりの上限を超えた）。そのものは居る | 200 |
  * | `'held'` | `'declined'` と同じ理由でいまは届けられないので、台帳（`Job.heldMessages`）に預かった。届けられるようになったら自動で届け、日誌とクローンへ知らせる（`deliverHeldMessages`）。送り直すと二重に届く | 200 |
  *
- * `'session_missing'` を `'unknown'` へ畳まない: `app.ts` が 404 を返し、`ManagerAbortResult` の doc が
+ * `'session_missing'` を `'unknown'` へ畳まない: daemon の `app-routes-managers.ts` が 404 を返し、`ManagerAbortResult` の doc が
  * 否定した形（待てば直る状態を 404 という機械可読な終端で返す）に戻る。`sessionId` が残っていれば
  * もう一度 resume を試せる。404 は「そんなものは無い」としてしか読めず、読み手の解釈で救われない。
  * `RunnerClient.send` が `Promise<boolean>` なのは、`LocalRunner` が例外を投げず、セッションが
@@ -2990,7 +2990,7 @@ class Pool implements ManagerPool {
         };
       }
       /*
-       * `session_missing` を `'unknown'` へ畳まない（`ManagerSendResult` の doc の表）: 畳むと `app.ts` が 404 を返し、
+       * `session_missing` を `'unknown'` へ畳まない（`ManagerSendResult` の doc の表）: 畳むと daemon の `app-routes-managers.ts` が 404 を返し、
        * 「そのものは無い」としか読めなくなるが、台帳には在り、`sessionId` が残っていればもう一度 resume を試せる。
        */
       return {
@@ -4544,7 +4544,7 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、`app.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
+      // `'absent'` を返さない: マネージャーは存在し、宛先がいま開いていないだけで、daemon の `app-routes-managers.ts` が 404 にすると一時的な状態が「そんなものは無い」という終端になる。言い方は `send()` と同じものを使う: 同じ観測に2つの言い方を持たせると片方だけが直る。
       return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 

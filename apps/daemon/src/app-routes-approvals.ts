@@ -135,7 +135,7 @@ export function approvalsRoutes(ctx: AppContext, deps: AppDeps) {
             '1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md`' +
             'の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付け' +
             'ない）。並びは `order`（既定 `asc`）で、`(createdAt, id)` の比較で決める' +
-            '（ストアの生の並びには乗らない。理由は `apps/daemon/src/app.ts` の' +
+            '（ストアの生の並びには乗らない。理由は `apps/daemon/src/app-routes-approvals.ts` の' +
             '`approvalsCursorSchema` の doc）。`conversationId` を渡すと、その会話で' +
             '上がった確認だけに絞る（`pending`/`order`/`limit`/`cursor` と併用できる）。' +
             '`answeredOn=YYYY-MM-DD`（opt-in）を渡すと、**その日（デーモンの `localDate()` で決まる日。' +

@@ -89,7 +89,7 @@ function openStream(response: Response) {
   };
 }
 
-// 本番の既定（app.ts の `/topology/stream`）。周期と、出来事の後の束ね待ち
+// 本番の既定（`app-context.ts` の `topologyTickMs`・`topologyDebounceMs`。`app-routes-topology.ts` の `/topology/stream` が使う）。周期と、出来事の後の束ね待ち
 const TICK_MS = 2000;
 const DEBOUNCE_MS = 200;
 

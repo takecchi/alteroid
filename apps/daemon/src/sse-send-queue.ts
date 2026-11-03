@@ -11,7 +11,7 @@ interface QueuedSseItem<T> {
 /**
  * SSE の購読者1本ぶんの送り待ち。`/chat` 系と `/journal/stream` が同じ1つを使う（#5694）。
  * 上限を超えたら溜めた分を捨てて「溢れた」に落ち、以後は何も積まない: 読まない受け手のために出来事をメモリに溜め続けないため。
- * 溢れた購読は送り出す側（`app.ts`）が切る。理由の残し方と、受け手が続きを取り戻す道は口ごとに違う（`app.ts` の各ループの注記）。
+ * 溢れた購読は送り出す側（`/chat` 系は `app-context.ts`、`/journal/stream` は `app-routes-topology.ts`）が切る。理由の残し方と、受け手が続きを取り戻す道は口ごとに違う（それぞれのループの注記）。
  */
 export class SseSendQueue<T> {
   readonly #maxItems: number;
