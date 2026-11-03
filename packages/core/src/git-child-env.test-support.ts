@@ -1,6 +1,9 @@
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-// 本物の HOME を渡さない: 本物の `~/.gitconfig` や credential helper が効く経路を断つため
+// 正本はここ1か所。`scripts/git-child-env.ts` はここからの再 export（かつて同一内容が2か所にあった）。
+// `GIT_AUTHOR_*` を足さない: ローカルの `user.*` より優先順位が高く、渡さないことが唯一の対策のため。
+// 本物の `HOME` を渡さず空の一時ディレクトリを充てる: 本物の `~/.gitconfig` や credential helper が効く経路を断つため。
+// `HOME` は使い回す: 呼び出しのたびに作ると、何十回も `git` を起こすテストでディレクトリが積み上がるため。
 let fakeHome: string | undefined;
 
 function getFakeHome(): string {
