@@ -6,15 +6,14 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { CLONE_MCP_CONFIG_DIR_PREFIX } from './clone-mcp-config-file.js';
+import { isPidAliveBySignal, sweepCloneMcpConfigDirs } from './clone-mcp-config-sweep.js';
 import {
-  CLONE_MCP_CONFIG_SWEEP_MIN_AGE_MS,
-  isPidAliveBySignal,
-  sweepCloneMcpConfigDirs,
-} from './clone-mcp-config-sweep.js';
-import { RUNNER_MCP_CONFIG_DIR_PREFIX } from './runner-mcp-config-sweep.js';
+  RUNNER_MCP_CONFIG_DIR_PREFIX,
+  RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS,
+} from './runner-mcp-config-sweep.js';
 
 const NOW = Date.now();
-const OLD = new Date(NOW - 2 * CLONE_MCP_CONFIG_SWEEP_MIN_AGE_MS);
+const OLD = new Date(NOW - 2 * RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS);
 const OWN_PID = 4242;
 const OTHER_PID = 4343;
 

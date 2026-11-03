@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type { AgentProviderId } from './agent-ports.js';
 import {
   CODEX_PEER_CLOSED_REASON,
-  MANAGER_PEER_CODEX_MODELS_ENV_KEY,
   PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
@@ -14,6 +13,8 @@ import {
 import { agentProviderOf } from './agent-provider-selection.js';
 
 const CODEX: AgentProviderId = 'codex';
+// 本番が使う名前の組み立て（managerPeerModelsEnvKey）を通した Codex の名前。リテラルとの一致は下の「Codex の名前は固定である」が固定する
+const MANAGER_PEER_CODEX_MODELS_ENV_KEY = managerPeerModelsEnvKey(CODEX);
 const DEFAULTS: readonly string[] = ['model-a', 'model-b'];
 const defaultsOf = (provider: AgentProviderId) => (provider === CODEX ? DEFAULTS : undefined);
 
@@ -57,7 +58,7 @@ describe('peer を開く条件は Codex の資格である（#4118）', () => {
 describe('ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS の解釈（#3934）', () => {
   it('Codex の名前は固定である', () => {
     expect(managerPeerModelsEnvKey(CODEX)).toBe('ALTEROID_MANAGER_PEER_CODEX_MODELS');
-    expect(MANAGER_PEER_CODEX_MODELS_ENV_KEY).toBe(managerPeerModelsEnvKey(CODEX));
+    expect(MANAGER_PEER_CODEX_MODELS_ENV_KEY).toBe('ALTEROID_MANAGER_PEER_CODEX_MODELS');
   });
 
   it('未設定・空・空白だけは空（model 引数を出さない）', () => {

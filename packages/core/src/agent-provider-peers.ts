@@ -72,9 +72,6 @@ export function managerPeerModelsEnvKey(provider: AgentProviderId): string {
   return `ALTEROID_MANAGER_PEER_${provider.toUpperCase()}_MODELS`;
 }
 
-/** {@link managerPeerModelsEnvKey} の Codex の名前（`.env.example` / `compose.yaml` と突き合わせる）。 */
-export const MANAGER_PEER_CODEX_MODELS_ENV_KEY = 'ALTEROID_MANAGER_PEER_CODEX_MODELS';
-
 /**
  * モデル名の一覧を解く。未設定・空・空白だけは空（既定の一覧へ倒すのは {@link resolvePeerModelsOf}）。
  * **綴りの不正（空の要素）は起動時に止める**。重複は1つに畳む。

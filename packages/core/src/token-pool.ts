@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { fingerprintOf } from './credentials.js';
 import { nonBlankString } from './non-blank-string.js';
-import { limitRecoveryOf, limitRecoverySchema, type LimitRecovery } from './usage-limits.js';
+import { limitRecoveryOf, limitRecoverySchema } from './usage-limits.js';
 import { compareCodeUnits } from './code-unit-order.js';
 
 // 失効（invalidatedAt）を回す契機に含めない（人間の決定）: 現役が失効しても全層が止まったままになり、人間が手で外すまで復旧しない。「未実装」ではなくそう決めたもの
@@ -386,12 +386,6 @@ export function tokenAvailabilityAt(
   if (token.invalidatedAt !== undefined) return 'invalidated';
   if (token.cooldownUntil !== undefined && token.cooldownUntil > at) return 'cooling';
   return 'ready';
-}
-
-export function tokenRecoveryOf(token: AgentToken): LimitRecovery | undefined {
-  return token.lastRejectedReason === undefined
-    ? undefined
-    : limitRecoveryOf(token.lastRejectedReason);
 }
 
 // 現役の指名をプールの行や設定と別に持つ: 行に active: boolean を置くと2行が同時に現役だと主張する形が作れ、設定の updatedAt に混ぜると回すたびに「人間が設定を変えた」ことになるため

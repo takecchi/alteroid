@@ -10,7 +10,6 @@ import {
   normalizeTokenPool,
   toAgentTokenView,
   tokenAvailabilityAt,
-  tokenRecoveryOf,
   type AgentToken,
 } from './token-pool.js';
 
@@ -562,13 +561,13 @@ describe('markTokenUnusable / markTokenUsable', () => {
       message: MESSAGE,
       fallbackCooldownMs: FALLBACK,
     });
-    expect(tokenRecoveryOf(marked)).toBe('time');
+    expect(toAgentTokenView(marked).recovery).toBe('time');
     const paraphrased = markTokenUnusable(base, {
       at: AT,
       message: '月間の支出上限に達しました',
       fallbackCooldownMs: FALLBACK,
     });
-    expect(tokenRecoveryOf(paraphrased)).toBe('unknown');
+    expect(toAgentTokenView(paraphrased).recovery).toBe('unknown');
   });
 
   it('resetsAt が取れなければ、渡された既定で冷やす（関数の中に既定を持たない）', () => {
@@ -672,7 +671,7 @@ describe('markTokenUnusable / markTokenUsable', () => {
       message: 'Your usage allocation has been disabled by your admin',
       fallbackCooldownMs: FALLBACK,
     });
-    expect(tokenRecoveryOf(marked)).toBe('action');
+    expect(toAgentTokenView(marked).recovery).toBe('action');
     expect(marked).not.toHaveProperty('invalidatedAt');
     expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
     expect(tokenAvailabilityAt(marked, Date.parse(AT))).toBe('cooling');
