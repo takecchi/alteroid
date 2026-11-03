@@ -33,9 +33,9 @@ description: 自分（クローン・マネージャー・作業者）がいま�
   - **ここで効くのは「載ったかどうか」ではなく「誰の版が載ったか」である。** 根のチェックアウトは他人のもので、その HEAD は `main` とは限らない（実測のそれは未 push のブランチだった）。**自分がこれから clone する版とは別のものが、指示として自分の文脈に載る。** 上の**「マネージャー: … `cwd` の直下ではない。だからセッション開始時には載らない」は、`cwd` の直下に `CLAUDE.md` が無い前提の上でしか効かない**（そうなっている器で何をするかは「自分が走っている器」が持つ）
 - **⚠️ ここに書いてあるのは全部ハーネスの挙動であって、alteroid が制御しているものではない。しかも引き金の側は公開されていない。** 公開の型定義に在るのはイベント名（`InstructionsLoaded`）と `load_reason` の値までで、**何が `nested_traversal` を起こすかは、同梱の README にも CHANGELOG にも型コメントにも書かれていない**（利用者が通常目にしない CLI バイナリ内部の文字列としてのみ確認できた。そこには `trigger_file_path` を「the file Claude touched that caused the load」と説明する記述が在る）。**つまり SDK が上がれば変わりうるし、変わっても赤くならない**（届かなくなるだけである）。**この導線を前提にした設計を入れないこと** — 入れるなら、届いているかを別に観測できる形とセットにする
 
-**毎ターン再送されるかは確かめていない。** マネージャー層でも作業者層でも観測できたのは**1セッションにつき1回**で、2回目以降の `Read` では差し込まれなかった。一度載れば以降は会話履歴として残り続けるので、「毎ターン新しく送られる」のか「1回載って残るだけ」なのかは**この観測では区別できていない**（`sdk-tools.d.ts` の `FileReadOutput` の `source` 欄の doc が、CLAUDE.md が `Read` と同じ重複排除に乗ることを逐語で言っている）。
+**毎ターン再送されるかは確かめていない。** マネージャー層でも作業者層でも観測できたのは**1セッションにつき1回**で、2回目以降の `Read` では差し込まれなかった。一度載れば以降は会話履歴として残り続けるので、「毎ターン新しく送られる」のか「1回載って残るだけ」なのかは**この観測では区別できていない**（SDK 0.3.316 までの `sdk-tools.d.ts` の `FileReadOutput` には `type: "file_unchanged"` の枝があり、その `source` 欄の doc が、CLAUDE.md が `Read` と同じ重複排除に乗ることを逐語で言っていた。**0.3.317 ではこの枝ごと型定義から消えている**。挙動が変わったのか、型に出さなくなっただけなのかは分かっていない）。
 
-> [sdk-verbatim FileReadOutput.source]
+> 0.3.316 同梱の `sdk-tools.d.ts`（`FileReadOutput` の `file_unchanged` の `source?: "seeded"` の doc。**いまの版には無い。旧版の引用なので `sdk-verbatim` の印は付けない**）:
 > Set when the dedup matched a startup-seeded entry (CLAUDE.md / nested memory) rather than a prior Read tool_result
 
 **ただし compaction を跨げば読み直される** — CLI の実装が compaction のときに既読フラグ（`loadedNestedMemoryPaths`）と `readFileState` を丸ごと消しているのを、バイナリ内の文字列で確認した。**実際に起きるところは見ていない。**
