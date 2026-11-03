@@ -3557,14 +3557,17 @@ class Clone implements CloneHost {
     const at = Date.now();
     const full = [`[system] 待ち行列（${readAtLabel(at)} に数えた材料）`, ...rows];
     if (!this.#tokenSaving.foldFixedText) return full;
-    const materials = rows
-      .filter((row) => !placedIds.some((id) => row.startsWith(`- ${id}（`)))
-      .join('\n');
+    const kept = rows.filter((row) => !placedIds.some((id) => row.startsWith(`- ${id}（`)));
+    const materials = kept.join('\n');
     const mayFold =
       this.#fullReasonThisTurn() === null &&
       this.#situationTurnsSinceFull + 1 < SITUATION_FULL_EVERY_TURNS;
     if (mayFold && this.#situationExplained.get(TASK_QUEUE_HEAD_KEY) === materials) {
-      return [`[system] 待ち行列: 前のターンと変化なし（${readAtLabel(at)} に数え直した）。`];
+      // 先頭から除いた行があるときは、それを言う: 新しい task が先頭に加わっているのに「変化なし」とだけ書くと嘘になるため
+      const excluded = kept.length < rows.length ? 'いま積んだ task を除くと、' : '';
+      return [
+        `[system] 待ち行列: ${excluded}前のターンと変化なし（${readAtLabel(at)} に数え直した）。`,
+      ];
     }
     this.#taskQueueHeadStaged = materials;
     return full;

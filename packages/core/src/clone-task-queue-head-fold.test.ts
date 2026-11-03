@@ -17,7 +17,10 @@ import { createMemoryStores } from './testing.js';
 
 const AT = '2026-10-29T00:00:00.000Z';
 const HEAD = '[system] 待ち行列（';
-const FOLDED = '[system] 待ち行列: 前のターンと変化なし（';
+// 畳んだ1行は2通り: 先頭から「いま積んだ task」の行を除いて比べた回は、そう言う（新しい task が先頭に加わっているのに「変化なし」とだけ書くと嘘になるため）
+const FOLDED_PLAIN = '[system] 待ち行列: 前のターンと変化なし（';
+const FOLDED_EXCLUDING = '[system] 待ち行列: いま積んだ task を除くと、前のターンと変化なし（';
+const FOLDED = '[system] 待ち行列: ';
 const TAIL_FULL = '全文は `task_list`。並べ替えは `task_move`。';
 
 interface Boot {
@@ -27,11 +30,22 @@ interface Boot {
 }
 
 function boot(
-  options: { stores?: Stores; env?: NodeJS.ProcessEnv; compactAtInput?: number } = {},
+  options: {
+    stores?: Stores;
+    env?: NodeJS.ProcessEnv;
+    compactAtInput?: number;
+    /** 最初の query() の生成を投げさせる: 断り書きを組んだ後、入力を SDK へ入れる前に落ちる回を作る */
+    failFirstQuery?: boolean;
+  } = {},
 ): Boot {
   const stores = options.stores ?? createMemoryStores();
   const inputs: string[] = [];
+  let queryCalls = 0;
   const fn = ((params: { prompt: unknown; options?: Options }) => {
+    queryCalls += 1;
+    if (options.failFirstQuery === true && queryCalls === 1) {
+      throw new Error('query の生成に失敗した(test)');
+    }
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {
         type: 'system',
@@ -111,20 +125,25 @@ let seq = 0;
  */
 async function turn(s: Boot, conversationId = 'conv-1'): Promise<{ input: string; id: string }> {
   const before = s.inputs.length;
+  const timings = await timingCount(s);
   seq += 1;
   const id = `fold-evt-${String(seq)}`;
   s.clone.post(human(id, conversationId));
   await waitFor(() => s.inputs.length > before, `入力 ${String(before + 1)} 本目`);
-  await settle(s, before + 1);
+  await settle(s, timings + 1);
   await s.stores.tasks.setStatus(id, 'done', { reason: 'test', by: 'human', at: AT });
   return { input: s.inputs[before] ?? '', id };
+}
+
+async function timingCount(s: Boot): Promise<number> {
+  return (await s.stores.journal.list({ types: ['turn_timing'] })).length;
 }
 
 /** 次の回を投げて良い状態まで待つ: 結果が返って `turn_timing` が日誌に載ったら前のターンは終わっている。 */
 async function settle(s: Boot, count: number): Promise<void> {
   await waitFor(
-    async () => (await s.stores.journal.list({ types: ['turn_timing'] })).length >= count,
-    `ターン ${String(count)} の終わり`,
+    async () => (await timingCount(s)) >= count,
+    `ターン終わり（${String(count)} 本目）`,
   );
 }
 
@@ -136,7 +155,8 @@ function noticeLines(input: string): string[] {
   return lines.slice(start, end < 0 ? undefined : end);
 }
 
-const isFolded = (input: string): boolean => input.includes(FOLDED);
+const isFolded = (input: string): boolean =>
+  input.includes(FOLDED_PLAIN) || input.includes(FOLDED_EXCLUDING);
 
 describe('断り書きの待ち行列の先頭は、前のターンと同じなら1行に畳む', () => {
   it('⭐ 先頭の行（材料）が1文字も変わらなければ、2回目は1行になり字数が減る。placed と固定の末尾は畳まない', async () => {
@@ -150,7 +170,9 @@ describe('断り書きの待ち行列の先頭は、前のターンと同じな�
     expect(isFolded(second.input)).toBe(true);
     const fullLines = noticeLines(first.input);
     const lines = noticeLines(second.input);
-    expect(lines[0]).toMatch(/^\[system\] 待ち行列: 前のターンと変化なし（.+に数え直した）。$/);
+    expect(lines[0]).toMatch(
+      /^\[system\] 待ち行列: いま積んだ task を除くと、前のターンと変化なし（.+に数え直した）。$/,
+    );
     // 積んだ旨の行と固定の末尾は畳まない
     expect(
       lines.some((line) =>
@@ -295,6 +317,66 @@ describe('断り書きの待ち行列の先頭は、前のターンと同じな�
     // 発言の会話が変わっても、クローンの会話（SDK のセッション）は同じ。控えが指すのは SDK の会話
     expect(isFolded(folded.input)).toBe(true);
     expect(TAIL_FULL.length).toBeGreaterThan(0);
+    await s.clone.stop();
+  });
+});
+
+describe('畳んだ1行の文言は、先頭から除いた行があるかで2通り', () => {
+  it('⭐ いま積んだ task の行を除いて比べた回は「いま積んだ task を除くと、」と言う', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 12; i += 1) await stores.tasks.add(seededTask(`old-${String(i)}`));
+    const s = boot({ stores });
+    await turn(s);
+    const second = await turn(s);
+    expect(second.input).toContain(`${FOLDED_EXCLUDING}`);
+    expect(second.input).not.toContain(FOLDED_PLAIN);
+    // 除いた行は、畳んだ回には見えない。名乗るのは「いま積んだ」の行
+    expect(second.input).toContain(`いま届いたこの一件は task \`${second.id}\` として積んだ。`);
+    await s.clone.stop();
+  });
+
+  it('⭐ 除いた行が無い回（積んだ発言が無い tick）は元の「前のターンと変化なし」のまま', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 12; i += 1) await stores.tasks.add(seededTask(`old-${String(i)}`));
+    const s = boot({ stores });
+    const tick = async (id: string): Promise<string> => {
+      const before = s.inputs.length;
+      const timings = await timingCount(s);
+      s.clone.post({ type: 'timer', id, at: new Date().toISOString(), kind: 'tick' });
+      await waitFor(() => s.inputs.length > before, `入力 ${String(before + 1)} 本目`);
+      await settle(s, timings + 1);
+      return s.inputs[before] ?? '';
+    };
+    const first = await tick('tick-a');
+    const second = await tick('tick-b');
+    expect(isFolded(first)).toBe(false);
+    expect(first).toContain(HEAD);
+    expect(second).toContain(FOLDED_PLAIN);
+    expect(second).not.toContain(FOLDED_EXCLUDING);
+    await s.clone.stop();
+  });
+});
+
+describe('入力を SDK へ入れる前に落ちた回は、控えが進まない', () => {
+  it('⭐ 断り書きを組んだ後に query の生成で落ちた回の全文は「出した」扱いにならず、次の回は全文', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 12; i += 1) await stores.tasks.add(seededTask(`old-${String(i)}`));
+    const s = boot({ stores, failFirstQuery: true });
+    seq += 1;
+    const failedId = `fold-evt-${String(seq)}`;
+    s.clone.post(human(failedId));
+    // 落ちた回は失敗の行が日誌に残る（入力は SDK に入っていない）
+    await waitFor(
+      async () => (await stores.journal.list({ types: ['exchange'] })).length > 0,
+      '失敗の行',
+    );
+    expect(s.inputs).toHaveLength(0);
+    await stores.tasks.setStatus(failedId, 'done', { reason: 'test', by: 'human', at: AT });
+
+    // 落ちた回が控えを進めていたら、同じ待ち行列のこの回は畳まれてしまう
+    const next = await turn(s);
+    expect(isFolded(next.input)).toBe(false);
+    expect(next.input).toContain(HEAD);
     await s.clone.stop();
   });
 });
