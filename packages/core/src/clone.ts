@@ -1029,7 +1029,7 @@ class Clone implements CloneHost {
    * tick の要約・固定の文言・依頼の本文のうち、この会話で全文を出したものの控え（#4937）。`#situationExplained` と同じ作り:
    * 組んだ時点では確定せず（staged）、入力を SDK へ押し込めた後（`#runTurn`）に確定する。
    * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。
-   * 加えて、固定の文言の控え（`fixed`）だけは `SITUATION_FULL_EVERY_TURNS` ターンごとにも捨てる（`forgetFixed()`。`#situationNoticeFor`）: 要約の合図を取りこぼしても、全文が会話から消えたまま札だけが続く長さに上限を置く保険（以前は「20ターンごとは入れない」だった）。
+   * 加えて、固定の文言の控え（`fixed`）だけは `SITUATION_FULL_EVERY_TURNS` ターンごとにも捨てる（`forgetFixed()`。`#applyFoldPeriod`）: 要約の合図を取りこぼしても、全文が会話から消えたまま札だけが続く長さに上限を置く保険（以前は「20ターンごとは入れない」だった）。
    * 段落・報告の控えは周期の対象外（#5422 の対象外。周期が要るかは別に判断する）。
    */
   readonly #digestDelta: DigestSessionDelta;
@@ -2413,6 +2413,8 @@ class Clone implements CloneHost {
       await this.#restoreFoldStateOnce();
       // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
       this.#resetDigestDeltaIfNewConversation();
+      // 周期・会話の切り替えの全文戻しは、断り書き（待ち行列の先頭・末尾の固定1文）と「いまの全体」の両方より前に、1か所で行う
+      this.#applyFoldPeriod(batch);
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
       // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
       this.#notices.set(
@@ -2465,8 +2467,13 @@ class Clone implements CloneHost {
         this.#situationExplainedStaged = null;
         this.#taskQueueHeadStaged = null;
         this.#digestDelta.discardStaged();
-        // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする
-        if (this.#pumpTurnFailed) this.#resetDigestDelta('full', 'turn_failed');
+        // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする。
+        // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
+        // 預けた控えは `#resetDigestDelta` が `#forgetFoldState` で捨てる（成功したターンの後だけ預ける `#persistFoldStateAfterTurn` と合わせて、片方だけ残らない）
+        if (this.#pumpTurnFailed) {
+          this.#situationExplained.clear();
+          this.#resetDigestDelta('full', 'turn_failed');
+        }
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         const failedOutsideUsage = !defer && this.#pumpTurnFailed;
@@ -3553,7 +3560,7 @@ class Clone implements CloneHost {
 
   // 前のターンに全文を出した先頭の行と1文字も違わなければ、見出しを含む全体を1行にする（`describeSituation` の「前のターンと変化なし」と同じ型）。
   // 比べるのは先頭の行だけ: 見出しの時刻は毎回変わるので材料に入れない（時刻は、会話に並んだ古い節と新しい節を見分けるために見出しへ入れてある）。
-  // 全文へ戻す条件は `#situationNoticeFor` と同じ（会話が変わった・要約が走りうる・周期）。確定は入力を SDK へ入れた後（`#commitSituationExplained`）
+  // 全文へ戻す条件は `#applyFoldPeriod` が持つ（会話が変わった・要約が走りうる・周期）。確定は入力を SDK へ入れた後（`#commitSituationExplained`）
   // いま積んだ発言の task の行は材料から除く: 人間の task は先頭に載るので、入れると毎回別の id になり、人間の発言のターンでは1度も一致しないため（その task は「いま積んだ」の行が名乗る）
   #foldedTaskQueueHead(rows: readonly string[], placedIds: readonly string[]): string[] {
     const at = Date.now();
@@ -3561,10 +3568,8 @@ class Clone implements CloneHost {
     if (!this.#tokenSaving.foldFixedText) return full;
     const kept = rows.filter((row) => !placedIds.some((id) => row.startsWith(`- ${id}（`)));
     const materials = kept.join('\n');
-    const mayFold =
-      this.#fullReasonThisTurn() === null &&
-      this.#situationTurnsSinceFull + 1 < SITUATION_FULL_EVERY_TURNS;
-    if (mayFold && this.#situationExplained.get(TASK_QUEUE_HEAD_KEY) === materials) {
+    // 全文へ戻す条件（会話が変わった・要約が走りうる・周期）は、断り書きを組む前に `#applyFoldPeriod` が控えを消している
+    if (this.#situationExplained.get(TASK_QUEUE_HEAD_KEY) === materials) {
       // 先頭から除いた行があるときは、それを言う: 新しい task が先頭に加わっているのに「変化なし」とだけ書くと嘘になるため
       const excluded = kept.length < rows.length ? 'いま積んだ task を除くと、' : '';
       return [
@@ -3850,27 +3855,37 @@ class Clone implements CloneHost {
     }
   }
 
-  async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
-    // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
-    this.#situationExplainedStaged = null;
+  /**
+   * 周期と「会話が前の全文の載った会話と同じと言えない回」の全文戻しを、断り書きを組む前の1か所で行う。
+   * 以前は situation 側が `#situationNoticeFor`（断り書きの後）、digest 側の `fixed` が同じ関数の中で消えていたため、断り書きの待ち行列の先頭と末尾の固定1文が20ターンごとに1ターンずれていた（#6302 が固定した振る舞い）。
+   * 一定ターンごとに全文へ戻す: 要約の合図を取りこぼしても、全文が会話から消えたまま要点だけが続く長さに上限を置くため。
+   * セッションが閉じていればこのターンで開き直す（resume が効かなければ別の会話になる）: 全文が会話に残っているとは言えないので全文へ戻す。
+   * 自動の要約が走りうるターンも全文にする（#4489。2026-10-11 のクローン teto の決定）: 要約で文脈が潰れた直後は同じ会話とみなせず、「同じ会話の中なら畳んでよい」というオーナーの承認の外になるため。要約は入力を受けた後に走るので、要約の合図を受けてからでは間に合わない。
+   * #4941: 作り直しの窓（`inputEndedForRecycle`）と使用量の観測が取れない回も全文（`#conversationMayDifferFromLastFull`）。
+   * 蒸留には行わない（`#situationNoticeFor` と同じ。蒸留は断り書きも組まない）。
+   */
+  #applyFoldPeriod(events: InboxEvent[]): void {
     const event = events[0];
-    if (event === undefined) return '';
-    if (event.type === 'distill') return '';
-    // 一定ターンごとに全文へ戻す: 要約の合図を取りこぼしても、全文が会話から消えたまま要点だけが続く長さに上限を置くため
+    if (event === undefined || event.type === 'distill') return;
     this.#situationTurnsSinceFull += 1;
-    // セッションが閉じていればこのターンで開き直す（resume が効かなければ別の会話になる）: 全文が会話に残っているとは言えないので全文へ戻す
-    // 自動の要約が走りうるターンも全文にする（#4489。2026-10-11 のクローン teto の決定）: 要約で文脈が潰れた直後は同じ会話とみなせず、
-    // 「同じ会話の中なら畳んでよい」というオーナーの承認の外になるため。要約は入力を受けた後に走るので、要約の合図を受けてからでは間に合わない
-    // #4941: 作り直しの窓（`inputEndedForRecycle`）と使用量の観測が取れない回も全文（`#conversationMayDifferFromLastFull`）
     if (
       this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS ||
       this.#conversationMayDifferFromLastFull()
     ) {
       this.#situationExplained.clear();
       this.#situationTurnsSinceFull = 0;
-      // 固定の文言の控え（道具の応答 `manager_list` ・報告の包み）も同じ周期で全文へ戻す: 同じ線にしないと、周期の保険が situation にしか無いため
+      // 固定の文言の控え（道具の応答 `manager_list` ・報告の包み・断り書きの末尾）も同じ周期で全文へ戻す: 同じ線にしないと、周期の保険が situation にしか無いため
       this.#digestDelta.forgetFixed();
     }
+  }
+
+  async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
+    // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
+    this.#situationExplainedStaged = null;
+    const event = events[0];
+    if (event === undefined) return '';
+    if (event.type === 'distill') return '';
+    // 周期の全文戻しは `#applyFoldPeriod`（断り書きを組む前に `#pump` が呼ぶ）が済ませている
     try {
       const managers = await this.#managers.list();
       const fleet = await this.#managers.runners();

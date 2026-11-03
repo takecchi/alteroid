@@ -196,32 +196,55 @@ describe('畳みの控えの2系統（situation 側の先頭 / DigestSessionDelt
   // situation 側の控え（`#situationExplained`。先頭の鍵 `taskQueueHead` と「いまの全体」の鍵）は消えない。#4941 が digest 側に置いた
   // 「失敗したターンの入力が SDK の履歴に残るかは SDK の挙動に頼らない」は、situation 側には掛かっていない。
   // 期待値を「両方全文」に直す変更は、この歯の意図した反転である（まとめる PR で直すなら、この2本を反転する）。
-  it('⭐ 片方だけ残る: 3回目が失敗した次の回は、末尾（digest 側）だけ全文に戻り、先頭（situation 側）は畳んだまま', async () => {
+  // ⟹ 反転済み（fix/fold-state-reset-together）: `#pump` の finally が situation 側の控えも消すので、失敗したターンの次は両方全文。
+  //   旧: 'head=畳み tail=全文'（末尾だけ全文に戻り、先頭は畳んだまま）
+  it('⭐ 両方全文（反転済み。旧: 片方だけ残る）: 3回目が失敗した次の回は、末尾（digest 側）も先頭（situation 側）も全文に戻る', async () => {
     const s = boot({ stores: await seededStores(), failResultAtInput: 3 });
     expect(await turns(s, 5)).toEqual([
       'head=全文 tail=全文',
       'head=畳み tail=畳み',
       'head=畳み tail=畳み',
-      'head=畳み tail=全文',
+      'head=全文 tail=全文',
       'head=畳み tail=畳み',
     ]);
     await s.clone.stop();
   });
 
-  it('⭐ 片方だけ残る: 全文を最初に出した1回目が失敗しても、次の回の先頭（situation 側）は畳まれる（末尾は全文）', async () => {
+  // 旧: 'head=畳み tail=全文'（2回目の先頭が、失敗した1回目の入力に載っていた全文を指して畳まれていた）
+  it('⭐ 両方全文（反転済み。旧: 片方だけ残る）: 全文を最初に出した1回目が失敗した次の回も、先頭・末尾とも全文', async () => {
     const s = boot({ stores: await seededStores(), failResultAtInput: 1 });
     expect(await turns(s, 4)).toEqual([
       'head=全文 tail=全文',
-      'head=畳み tail=全文',
+      'head=全文 tail=全文',
       'head=畳み tail=畳み',
       'head=畳み tail=畳み',
     ]);
+    await s.clone.stop();
+  });
+
+  it('⭐ 失敗したターンの次は、「いまの全体」（委譲の本数の節の説明文）も全文に戻る', async () => {
+    const s = boot({ stores: await seededStores(), failResultAtInput: 3 });
+    await turns(s, 5);
+    const situationLength = (input: string): number => {
+      const lines = input.split('\n');
+      const start = lines.findIndex((line) => line.startsWith('[system] いまの全体'));
+      expect(start).toBeGreaterThanOrEqual(0);
+      const end = lines.findIndex((line, index) => index > start && line === '---');
+      return lines.slice(start, end < 0 ? undefined : end).join('\n').length;
+    };
+    const [first, second, , afterFailure, afterThat] = s.inputs.map(situationLength);
+    expect(second).toBeLessThan(first!);
+    // 失敗したターンの次は1回目と同じ長さ（説明文が全文）。その次はまた畳む
+    expect(afterFailure).toBeGreaterThan(second!);
+    expect(afterThat).toBeLessThan(afterFailure!);
     await s.clone.stop();
   });
 
   // ⚠ 周期の全文戻しは1ターンずれる: 断り書きの末尾（`#taskQueueNoticeFor`）を組んだ後に `#situationNoticeFor` が `forgetFixed()` を呼ぶため、
   // 先頭（`#foldedTaskQueueHead` が「次の周期か」を先読みする）は周期のターンで全文、末尾は次のターンで全文になる。
-  it(`⭐ 周期（${String(SITUATION_FULL_EVERY_TURNS)} ターン）: 先頭は周期のターン、末尾はその次のターンで全文へ戻る（1ターンずれる）`, async () => {
+  // ⟹ 反転済み（fix/fold-state-reset-together）: 消す呼び出しを `#applyFoldPeriod`（断り書きを組む前）の1か所にまとめ、先読みを外した。周期のターンで両方全文。
+  //   旧: result[20] = 'head=全文 tail=畳み' / result[21] = 'head=畳み tail=全文'
+  it(`⭐ 周期（${String(SITUATION_FULL_EVERY_TURNS)} ターン）: 先頭も末尾も同じターンで全文へ戻る（反転済み。旧: 1ターンずれる）`, async () => {
     const s = boot({ stores: await seededStores() });
     const result = await turns(s, SITUATION_FULL_EVERY_TURNS + 2);
     expect(result[0]).toBe('head=全文 tail=全文');
@@ -229,8 +252,8 @@ describe('畳みの控えの2系統（situation 側の先頭 / DigestSessionDelt
     for (const pair of result.slice(1, SITUATION_FULL_EVERY_TURNS)) {
       expect(pair).toBe('head=畳み tail=畳み');
     }
-    expect(result[SITUATION_FULL_EVERY_TURNS]).toBe('head=全文 tail=畳み');
-    expect(result[SITUATION_FULL_EVERY_TURNS + 1]).toBe('head=畳み tail=全文');
+    expect(result[SITUATION_FULL_EVERY_TURNS]).toBe('head=全文 tail=全文');
+    expect(result[SITUATION_FULL_EVERY_TURNS + 1]).toBe('head=畳み tail=畳み');
     await s.clone.stop();
   }, 60_000);
 
