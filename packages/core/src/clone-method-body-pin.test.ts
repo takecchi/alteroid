@@ -31,6 +31,12 @@ const MARKERS: Readonly<Record<string, readonly string[]>> = {
     'this.#timerTurnRetries.set(event.kind, {at: event.at, attempts: attempts + 1});',
     'await this.#completeScheduledRun(event.kind, event.at, cause);',
   ],
+  '#applyTurnEnded': [
+    'const mainLoop = event.usage?.mainLoopUsage;',
+    "await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');",
+    'this.#usageBlocked = null;',
+    "this.#emit(turn?.conversationId ?? null, {type: 'done'});",
+  ],
 };
 
 /** 読みやすさのために、畳んだ1行を文の終わり（`;` の後ろの空白）で切って並べる。切り方は出す前と後で同じなので、比べる中身は変わらない。 */

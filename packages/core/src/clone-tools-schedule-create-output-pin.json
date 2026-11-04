@@ -40,7 +40,7 @@
     "arg-period#12": 35,
     "arg-period#13": 31,
     "arg-period#14": 79,
-    "arg-period#15": 82,
+    "arg-period#15": 72,
     "arg-period#16": 90,
     "arg-period#17": 86,
     "arg-period#18": 82,
@@ -52,61 +52,66 @@
     "arg-period#24": 96,
     "arg-period#25": 101,
     "arg-period#26": 99,
-    "arg-spec-schema#1": 221,
-    "arg-spec-schema#2": 221,
-    "arg-spec-schema#3": 221,
-    "arg-spec-schema#4": 219,
-    "new-daily#1": 57,
-    "new-daily#2": 51,
-    "new-daily#3": 54,
-    "new-daily#4": 50,
-    "new-every#1": 47,
-    "new-every#2": 38,
-    "new-every#3": 43,
-    "new-every#4": 40,
-    "new-cron#1": 65,
-    "new-cron#2": 59,
-    "new-cron#3": 62,
-    "new-cron#4": 59,
-    "new-forms#1": 98,
-    "new-forms#2": 41,
-    "new-forms#3": 38,
-    "new-forms#4": 42,
-    "new-forms#5": 45,
-    "new-forms#6": 44,
-    "new-forms#7": 43,
-    "new-then-replace#1": 57,
-    "new-then-replace#2": 125,
-    "new-then-replace#3": 116,
-    "replace-forms#1": 109,
-    "replace-forms#2": 110,
-    "replace-forms#3": 117,
-    "replace-forms#4": 107,
-    "replace-forms#5": 136,
-    "replace-forms#6": 125,
-    "replace-keeps-run-marks": 124,
-    "replace-nul-request": 114,
-    "replace-excerpt#1": 301,
-    "replace-excerpt#2": 302,
-    "replace-excerpt#3": 350,
-    "replace-excerpt#4": 352,
-    "replace-excerpt#5": 354,
+    "arg-period#27": 43,
+    "arg-period#28": 42,
+    "arg-period#29": 80,
+    "arg-period#30": 80,
+    "arg-period#31": 46,
+    "arg-spec-schema#1": 42,
+    "arg-spec-schema#2": 42,
+    "arg-spec-schema#3": 42,
+    "arg-spec-schema#4": 199,
+    "new-daily#1": 56,
+    "new-daily#2": 50,
+    "new-daily#3": 53,
+    "new-daily#4": 49,
+    "new-every#1": 46,
+    "new-every#2": 37,
+    "new-every#3": 42,
+    "new-every#4": 39,
+    "new-cron#1": 64,
+    "new-cron#2": 58,
+    "new-cron#3": 81,
+    "new-cron#4": 58,
+    "new-forms#1": 97,
+    "new-forms#2": 40,
+    "new-forms#3": 37,
+    "new-forms#4": 41,
+    "new-forms#5": 44,
+    "new-forms#6": 43,
+    "new-forms#7": 42,
+    "new-then-replace#1": 56,
+    "new-then-replace#2": 124,
+    "new-then-replace#3": 115,
+    "replace-forms#1": 108,
+    "replace-forms#2": 109,
+    "replace-forms#3": 116,
+    "replace-forms#4": 106,
+    "replace-forms#5": 135,
+    "replace-forms#6": 124,
+    "replace-keeps-run-marks": 123,
+    "replace-nul-request": 113,
+    "replace-excerpt#1": 300,
+    "replace-excerpt#2": 301,
+    "replace-excerpt#3": 349,
+    "replace-excerpt#4": 351,
+    "replace-excerpt#5": 353,
     "unreadable-row#1": 136,
     "unreadable-row#2": 136,
     "unreadable-on-write#1": 136,
     "unreadable-on-write#2": 112,
     "unreadable-after-conflict": 136,
-    "get-unreadable-transient": 114,
+    "get-unreadable-transient": 113,
     "get-plain-error#1": 14,
     "get-plain-error#2": 14,
-    "conflict-replace-once": 120,
-    "conflict-replace-twice": 120,
+    "conflict-replace-once": 119,
+    "conflict-replace-twice": 119,
     "conflict-replace-limit": 96,
-    "conflict-new-put-race": 130,
+    "conflict-new-put-race": 129,
     "conflict-new-limit-forced": 96,
     "conflict-new-limit-put": 96,
-    "conflict-deleted": 47,
-    "conflict-long-excerpt": 360,
+    "conflict-deleted": 46,
+    "conflict-long-excerpt": 359,
     "store-write-fails#1": 14,
     "store-write-fails#2": 14,
     "store-write-fails#3": 14,
@@ -114,16 +119,17 @@
     "journal-fails-first#1": 231,
     "journal-fails-first#2": 231,
     "journal-fails-first-after-retry": 231,
-    "journal-fails-retraction": 120,
+    "journal-fails-retraction": 119,
     "journal-fails-failure-entry#1": 14,
     "journal-fails-failure-entry#2": 14,
     "journal-fails-failure-entry#3": 136,
     "journal-fails-failure-entry#4": 96,
-    "journal-fails-final#1": 39,
-    "journal-fails-final#2": 114,
-    "forget-absent#1": 39,
-    "forget-absent#2": 114,
-    "forget-throws": 11
+    "journal-fails-final#1": 38,
+    "journal-fails-final#2": 113,
+    "forget-absent#1": 38,
+    "forget-absent#2": 113,
+    "forget-throws": 119,
+    "forget-throws-replace": 186
   },
   "scenarios": {
     "arg-kind#1": {
@@ -1248,8 +1254,8 @@
     },
     "arg-period#15": {
       "output": {
-        "length": 82,
-        "text": "cron \"   \" は cron 式として読めない（分 時 日 月 曜の5欄だけ。秒つきは使えない。例: 毎週月曜 10:00 なら `0 10 * * 1`）。",
+        "length": 72,
+        "text": "cron \"   \" は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと。例: 毎週月曜 10:00 なら `0 10 * * 1`）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1582,10 +1588,150 @@
       "forgotten": [],
       "storeCalls": []
     },
+    "arg-period#27": {
+      "output": {
+        "length": 43,
+        "text": "dailyAt \" 09:00 \" は前後に空白がある（HH:MM だけを渡すこと）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "schedules": {
+        "entries": [
+          {
+            "kind": "weekly-review",
+            "spec": {
+              "type": "every",
+              "minutes": 60
+            },
+            "request": "旧い本文",
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "unreadable": []
+      },
+      "journal": [],
+      "forgotten": [],
+      "storeCalls": []
+    },
+    "arg-period#28": {
+      "output": {
+        "length": 42,
+        "text": "dailyAt \"09:00\n\" は前後に空白がある（HH:MM だけを渡すこと）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "schedules": {
+        "entries": [
+          {
+            "kind": "weekly-review",
+            "spec": {
+              "type": "every",
+              "minutes": 60
+            },
+            "request": "旧い本文",
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "unreadable": []
+      },
+      "journal": [],
+      "forgotten": [],
+      "storeCalls": []
+    },
+    "arg-period#29": {
+      "output": {
+        "length": 80,
+        "text": "cron \" 0 10 * * 1\" は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと。例: 毎週月曜 10:00 なら `0 10 * * 1`）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "schedules": {
+        "entries": [
+          {
+            "kind": "weekly-review",
+            "spec": {
+              "type": "every",
+              "minutes": 60
+            },
+            "request": "旧い本文",
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "unreadable": []
+      },
+      "journal": [],
+      "forgotten": [],
+      "storeCalls": []
+    },
+    "arg-period#30": {
+      "output": {
+        "length": 80,
+        "text": "cron \"0 10 * * 1 \" は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと。例: 毎週月曜 10:00 なら `0 10 * * 1`）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "schedules": {
+        "entries": [
+          {
+            "kind": "weekly-review",
+            "spec": {
+              "type": "every",
+              "minutes": 60
+            },
+            "request": "旧い本文",
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "unreadable": []
+      },
+      "journal": [],
+      "forgotten": [],
+      "storeCalls": []
+    },
+    "arg-period#31": {
+      "output": {
+        "length": 46,
+        "text": "dailyAt / everyMinutes / cron のうち、どれか1つだけ渡すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "schedules": {
+        "entries": [
+          {
+            "kind": "weekly-review",
+            "spec": {
+              "type": "every",
+              "minutes": 60
+            },
+            "request": "旧い本文",
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "unreadable": []
+      },
+      "journal": [],
+      "forgotten": [],
+      "storeCalls": []
+    },
     "arg-spec-schema#1": {
       "output": {
-        "length": 221,
-        "text": "周期を読めなかった: [\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^(?:[01]?\\\\d|2[0-3]):[0-5]\\\\d$/\",\n    \"path\": [\n      \"at\"\n    ],\n    \"message\": \"HH:MM（00:00〜23:59）で書く\"\n  }\n]",
+        "length": 42,
+        "text": "dailyAt \" 09:00\" は前後に空白がある（HH:MM だけを渡すこと）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1612,8 +1758,8 @@
     },
     "arg-spec-schema#2": {
       "output": {
-        "length": 221,
-        "text": "周期を読めなかった: [\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^(?:[01]?\\\\d|2[0-3]):[0-5]\\\\d$/\",\n    \"path\": [\n      \"at\"\n    ],\n    \"message\": \"HH:MM（00:00〜23:59）で書く\"\n  }\n]",
+        "length": 42,
+        "text": "dailyAt \"09:00 \" は前後に空白がある（HH:MM だけを渡すこと）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1640,8 +1786,8 @@
     },
     "arg-spec-schema#3": {
       "output": {
-        "length": 221,
-        "text": "周期を読めなかった: [\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^(?:[01]?\\\\d|2[0-3]):[0-5]\\\\d$/\",\n    \"path\": [\n      \"at\"\n    ],\n    \"message\": \"HH:MM（00:00〜23:59）で書く\"\n  }\n]",
+        "length": 42,
+        "text": "dailyAt \" 9:00 \" は前後に空白がある（HH:MM だけを渡すこと）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1668,8 +1814,8 @@
     },
     "arg-spec-schema#4": {
       "output": {
-        "length": 219,
-        "text": "周期を読めなかった: [\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_big\",\n    \"maximum\": 120,\n    \"inclusive\": true,\n    \"path\": [\n      \"expression\"\n    ],\n    \"message\": \"Too big: expected string to have <=120 characters\"\n  }\n]",
+        "length": 199,
+        "text": "cron \"0 10 * * 1                                                                                                                        \" は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと。例: 毎週月曜 10:00 なら `0 10 * * 1`）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1696,8 +1842,8 @@
     },
     "new-daily#1": {
       "output": {
-        "length": 57,
-        "text": "weekly-review を 毎日 09:00（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 56,
+        "text": "weekly-review を 毎日 09:00（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1770,8 +1916,8 @@
     },
     "new-daily#2": {
       "output": {
-        "length": 51,
-        "text": "k-short を 毎日 09:00（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 50,
+        "text": "k-short を 毎日 09:00（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1854,8 +2000,8 @@
     },
     "new-daily#3": {
       "output": {
-        "length": 54,
-        "text": "k-midnight を 毎日 00:00（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 53,
+        "text": "k-midnight を 毎日 00:00（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1948,8 +2094,8 @@
     },
     "new-daily#4": {
       "output": {
-        "length": 50,
-        "text": "k-last を 毎日 23:59（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 49,
+        "text": "k-last を 毎日 23:59（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2052,8 +2198,8 @@
     },
     "new-every#1": {
       "output": {
-        "length": 47,
-        "text": "weekly-review を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 46,
+        "text": "weekly-review を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2126,8 +2272,8 @@
     },
     "new-every#2": {
       "output": {
-        "length": 38,
-        "text": "k-min を 1 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 37,
+        "text": "k-min を 1 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2210,8 +2356,8 @@
     },
     "new-every#3": {
       "output": {
-        "length": 43,
-        "text": "k-max を 525600 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 42,
+        "text": "k-max を 525600 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2304,8 +2450,8 @@
     },
     "new-every#4": {
       "output": {
-        "length": 40,
-        "text": "k-hour を 60 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 39,
+        "text": "k-hour を 60 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2408,8 +2554,8 @@
     },
     "new-cron#1": {
       "output": {
-        "length": 65,
-        "text": "weekly-review を cron: 0 10 * * 1（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 64,
+        "text": "weekly-review を cron: 0 10 * * 1（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2482,8 +2628,8 @@
     },
     "new-cron#2": {
       "output": {
-        "length": 59,
-        "text": "k-five を cron: */5 * * * *（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 58,
+        "text": "k-five を cron: */5 * * * *（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2566,13 +2712,13 @@
     },
     "new-cron#3": {
       "output": {
-        "length": 62,
-        "text": "k-spaced を cron:  0 10 * * 1 （ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 81,
+        "text": "cron \" 0 10 * * 1 \" は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと。例: 毎週月曜 10:00 なら `0 10 * * 1`）。",
         "isError": false,
         "thrown": false,
         "errorName": null
       },
-      "wrote": true,
+      "wrote": false,
       "schedules": {
         "entries": [
           {
@@ -2584,16 +2730,6 @@
             "request": "週次の見直しをする",
             "createdAt": "2026-10-29T00:02:00.000Z",
             "updatedAt": "2026-10-29T00:02:00.000Z"
-          },
-          {
-            "kind": "k-spaced",
-            "spec": {
-              "type": "cron",
-              "expression": " 0 10 * * 1 "
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:03:00.000Z",
-            "updatedAt": "2026-10-29T00:03:00.000Z"
           },
           {
             "kind": "weekly-review",
@@ -2608,60 +2744,14 @@
         ],
         "unreadable": []
       },
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-5",
-          "at": "2026-10-29T00:03:00.000Z",
-          "decision": "定期の依頼を設定しようとしている: k-spaced: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        },
-        {
-          "type": "decision",
-          "id": "id-6",
-          "at": "2026-10-29T00:03:00.000Z",
-          "decision": "定期の依頼を仕込んだ: k-spaced（cron:  0 10 * * 1 （ローカル時刻））: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        }
-      ],
-      "forgotten": ["k-spaced"],
-      "storeCalls": [
-        {
-          "op": "editRequest",
-          "kind": "k-spaced",
-          "ifMatch": null,
-          "updatedAt": "2026-10-29T00:03:00.000Z",
-          "changes": {
-            "request": "週次の見直しをする",
-            "spec": {
-              "type": "cron",
-              "expression": " 0 10 * * 1 "
-            }
-          },
-          "outcome": "null"
-        },
-        {
-          "op": "put",
-          "kind": "k-spaced",
-          "ifMatch": null,
-          "entry": {
-            "kind": "k-spaced",
-            "spec": {
-              "type": "cron",
-              "expression": " 0 10 * * 1 "
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:03:00.000Z",
-            "updatedAt": "2026-10-29T00:03:00.000Z"
-          },
-          "outcome": "put"
-        }
-      ]
+      "journal": [],
+      "forgotten": [],
+      "storeCalls": []
     },
     "new-cron#4": {
       "output": {
-        "length": 59,
-        "text": "k-yearly を cron: 0 0 1 1 *（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 58,
+        "text": "k-yearly を cron: 0 0 1 1 *（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2678,16 +2768,6 @@
             "request": "週次の見直しをする",
             "createdAt": "2026-10-29T00:02:00.000Z",
             "updatedAt": "2026-10-29T00:02:00.000Z"
-          },
-          {
-            "kind": "k-spaced",
-            "spec": {
-              "type": "cron",
-              "expression": " 0 10 * * 1 "
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:03:00.000Z",
-            "updatedAt": "2026-10-29T00:03:00.000Z"
           },
           {
             "kind": "k-yearly",
@@ -2715,14 +2795,14 @@
       "journal": [
         {
           "type": "decision",
-          "id": "id-7",
+          "id": "id-5",
           "at": "2026-10-29T00:04:00.000Z",
           "decision": "定期の依頼を設定しようとしている: k-yearly: 週次の見直しをする",
           "grounds": "継続する依頼を時間起点として持つ判断"
         },
         {
           "type": "decision",
-          "id": "id-8",
+          "id": "id-6",
           "at": "2026-10-29T00:04:00.000Z",
           "decision": "定期の依頼を仕込んだ: k-yearly（cron: 0 0 1 1 *（ローカル時刻））: 週次の見直しをする",
           "grounds": "継続する依頼を時間起点として持つ判断"
@@ -2764,8 +2844,8 @@
     },
     "new-forms#1": {
       "output": {
-        "length": 98,
-        "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 97,
+        "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2838,8 +2918,8 @@
     },
     "new-forms#2": {
       "output": {
-        "length": 41,
-        "text": "a.b_c-d を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 40,
+        "text": "a.b_c-d を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -2922,8 +3002,8 @@
     },
     "new-forms#3": {
       "output": {
-        "length": 38,
-        "text": "1abc を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 37,
+        "text": "1abc を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3016,8 +3096,8 @@
     },
     "new-forms#4": {
       "output": {
-        "length": 42,
-        "text": "nul-body を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 41,
+        "text": "nul-body を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3120,8 +3200,8 @@
     },
     "new-forms#5": {
       "output": {
-        "length": 45,
-        "text": "spaced-body を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 44,
+        "text": "spaced-body を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3234,8 +3314,8 @@
     },
     "new-forms#6": {
       "output": {
-        "length": 44,
-        "text": "multi-body を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 43,
+        "text": "multi-body を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3358,8 +3438,8 @@
     },
     "new-forms#7": {
       "output": {
-        "length": 43,
-        "text": "long-body を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 42,
+        "text": "long-body を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3492,8 +3572,8 @@
     },
     "new-then-replace#1": {
       "output": {
-        "length": 57,
-        "text": "weekly-review を 毎日 09:00（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 56,
+        "text": "weekly-review を 毎日 09:00（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3566,8 +3646,8 @@
     },
     "new-then-replace#2": {
       "output": {
-        "length": 125,
-        "text": "weekly-review は既に在ったので置き換えた（15 分ごと で仕込み直した）。置き換え前は 毎日 09:00（ローカル時刻）、依頼本文は「最初の本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 124,
+        "text": "weekly-review は既に在ったので置き換えた（15 分ごとで仕込み直した）。置き換え前は 毎日 09:00（ローカル時刻）、依頼本文は「最初の本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3624,8 +3704,8 @@
     },
     "new-then-replace#3": {
       "output": {
-        "length": 116,
-        "text": "weekly-review は既に在ったので置き換えた（15 分ごと で仕込み直した）。置き換え前は 15 分ごと、依頼本文は「二番目の本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 115,
+        "text": "weekly-review は既に在ったので置き換えた（15 分ごとで仕込み直した）。置き換え前は 15 分ごと、依頼本文は「二番目の本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3682,8 +3762,8 @@
     },
     "replace-forms#1": {
       "output": {
-        "length": 109,
-        "text": "r-period は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「同じ本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 108,
+        "text": "r-period は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「同じ本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3790,8 +3870,8 @@
     },
     "replace-forms#2": {
       "output": {
-        "length": 110,
-        "text": "r-request は既に在ったので置き換えた（60 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 109,
+        "text": "r-request は既に在ったので置き換えた（60 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -3898,8 +3978,8 @@
     },
     "replace-forms#3": {
       "output": {
-        "length": 117,
-        "text": "r-both は既に在ったので置き換えた（毎日 07:30（ローカル時刻） で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 116,
+        "text": "r-both は既に在ったので置き換えた（毎日 07:30（ローカル時刻）で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4006,8 +4086,8 @@
     },
     "replace-forms#4": {
       "output": {
-        "length": 107,
-        "text": "r-same は既に在ったので置き換えた（60 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「同じ本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 106,
+        "text": "r-same は既に在ったので置き換えた（60 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「同じ本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4114,8 +4194,8 @@
     },
     "replace-forms#5": {
       "output": {
-        "length": 136,
-        "text": "r-daily は既に在ったので置き換えた（cron: 0 10 * * 1（ローカル時刻） で仕込み直した）。置き換え前は 毎日 09:00（ローカル時刻）、依頼本文は「同じ本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 135,
+        "text": "r-daily は既に在ったので置き換えた（cron: 0 10 * * 1（ローカル時刻）で仕込み直した）。置き換え前は 毎日 09:00（ローカル時刻）、依頼本文は「同じ本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4222,8 +4302,8 @@
     },
     "replace-forms#6": {
       "output": {
-        "length": 125,
-        "text": "r-cron は既に在ったので置き換えた（45 分ごと で仕込み直した）。置き換え前は cron: 0 10 * * 1（ローカル時刻）、依頼本文は「同じ本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 124,
+        "text": "r-cron は既に在ったので置き換えた（45 分ごとで仕込み直した）。置き換え前は cron: 0 10 * * 1（ローカル時刻）、依頼本文は「同じ本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4330,8 +4410,8 @@
     },
     "replace-keeps-run-marks": {
       "output": {
-        "length": 124,
-        "text": "weekly-review は既に在ったので置き換えた（毎日 09:00（ローカル時刻） で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 123,
+        "text": "weekly-review は既に在ったので置き換えた（毎日 09:00（ローカル時刻）で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4394,8 +4474,8 @@
     },
     "replace-nul-request": {
       "output": {
-        "length": 114,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 113,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4452,8 +4532,8 @@
     },
     "replace-excerpt#1": {
       "output": {
-        "length": 301,
-        "text": "x-199 は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 300,
+        "text": "x-199 は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4550,8 +4630,8 @@
     },
     "replace-excerpt#2": {
       "output": {
-        "length": 302,
-        "text": "x-200 は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 301,
+        "text": "x-200 は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4648,8 +4728,8 @@
     },
     "replace-excerpt#3": {
       "output": {
-        "length": 350,
-        "text": "x-201 は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（1 文字省略。全 201 文字）」だった。（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-5）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 349,
+        "text": "x-201 は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（1 文字省略。全 201 文字）」だった（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-5）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4746,8 +4826,8 @@
     },
     "replace-excerpt#4": {
       "output": {
-        "length": 352,
-        "text": "x-500 は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（300 文字省略。全 500 文字）」だった。（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-7）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 351,
+        "text": "x-500 は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「先頭。あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（300 文字省略。全 500 文字）」だった（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-7）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4844,8 +4924,8 @@
     },
     "replace-excerpt#5": {
       "output": {
-        "length": 354,
-        "text": "x-multi は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「一行目\n二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二…（104 文字省略。全 304 文字）」だった。（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-9）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 353,
+        "text": "x-multi は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「一行目\n二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二行目二…（104 文字省略。全 304 文字）」だった（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-9）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -4963,7 +5043,7 @@
           "type": "decision",
           "id": "id-1",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定しようとしている: weekly-review: 週次の見直しをする",
+          "decision": "定期の依頼を設定しようとしている（同じ kind の行が読めない形で入っているので、置き換え前の本文は残せない）: weekly-review: 週次の見直しをする",
           "grounds": "継続する依頼を時間起点として持つ判断"
         },
         {
@@ -5015,7 +5095,7 @@
           "type": "decision",
           "id": "id-3",
           "at": "2026-10-29T00:02:00.000Z",
-          "decision": "定期の依頼を設定しようとしている: weekly-review: 週次の見直しをする",
+          "decision": "定期の依頼を設定しようとしている（同じ kind の行が読めない形で入っているので、置き換え前の本文は残せない）: weekly-review: 週次の見直しをする",
           "grounds": "継続する依頼を時間起点として持つ判断"
         },
         {
@@ -5264,8 +5344,8 @@
     },
     "get-unreadable-transient": {
       "output": {
-        "length": 114,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 113,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -5291,7 +5371,7 @@
           "type": "decision",
           "id": "id-1",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定しようとしている: weekly-review: 新しい本文",
+          "decision": "定期の依頼を設定しようとしている（同じ kind の行が読めない形で入っているので、置き換え前の本文は残せない）: weekly-review: 新しい本文",
           "grounds": "継続する依頼を時間起点として持つ判断"
         },
         {
@@ -5436,8 +5516,8 @@
     },
     "conflict-replace-once": {
       "output": {
-        "length": 120,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の本文#1」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 119,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の本文#1」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -5522,8 +5602,8 @@
     },
     "conflict-replace-twice": {
       "output": {
-        "length": 120,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の本文#2」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 119,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の本文#2」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -5698,8 +5778,8 @@
           "type": "decision",
           "id": "id-6",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定できなかった: weekly-review: 新しい本文",
-          "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
+          "decision": "直前の定期の依頼の設定の行は効いていない（weekly-review は書き換えていない）。理由: 読んだ後に同じ kind が別の書き手に変えられ続け、3 回試して諦めた",
+          "grounds": "日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す"
         }
       ],
       "forgotten": [],
@@ -5750,8 +5830,8 @@
     },
     "conflict-new-put-race": {
       "output": {
-        "length": 130,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 毎日 07:00（ローカル時刻）、依頼本文は「先に作られた本文#1」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 129,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 毎日 07:00（ローカル時刻）、依頼本文は「先に作られた本文#1」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -5903,8 +5983,8 @@
           "type": "decision",
           "id": "id-6",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定できなかった: weekly-review: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
+          "decision": "直前の定期の依頼の設定の行は効いていない（weekly-review は書き換えていない）。理由: 読んだ後に同じ kind が別の書き手に変えられ続け、3 回試して諦めた",
+          "grounds": "日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す"
         }
       ],
       "forgotten": [],
@@ -6017,8 +6097,8 @@
           "type": "decision",
           "id": "id-6",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定できなかった: weekly-review: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
+          "decision": "直前の定期の依頼の設定の行は効いていない（weekly-review は書き換えていない）。理由: 読んだ後に同じ kind が別の書き手に変えられ続け、3 回試して諦めた",
+          "grounds": "日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す"
         }
       ],
       "forgotten": [],
@@ -6085,8 +6165,8 @@
     },
     "conflict-deleted": {
       "output": {
-        "length": 47,
-        "text": "weekly-review を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 46,
+        "text": "weekly-review を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -6187,8 +6267,8 @@
     },
     "conflict-long-excerpt": {
       "output": {
-        "length": 360,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の長い本文#1。いいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいい…（213 文字省略。全 413 文字）」だった。（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-3）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 359,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の長い本文#1。いいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいい…（213 文字省略。全 413 文字）」だった（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=id-3）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -6663,8 +6743,8 @@
     },
     "journal-fails-retraction": {
       "output": {
-        "length": 120,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の本文#1」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 119,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「別の書き手の本文#1」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -7018,8 +7098,8 @@
     },
     "journal-fails-final#1": {
       "output": {
-        "length": 39,
-        "text": "fresh を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 38,
+        "text": "fresh を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -7095,8 +7175,8 @@
     },
     "journal-fails-final#2": {
       "output": {
-        "length": 114,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 113,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -7156,8 +7236,8 @@
     },
     "forget-absent#1": {
       "output": {
-        "length": 39,
-        "text": "fresh を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。",
+        "length": 38,
+        "text": "fresh を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -7240,8 +7320,8 @@
     },
     "forget-absent#2": {
       "output": {
-        "length": 114,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごと で仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった。（置き換え前の本文は日誌にも残してある）時刻が来たら新しい依頼の本文とともに届く。",
+        "length": 113,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -7308,11 +7388,11 @@
     },
     "forget-throws": {
       "output": {
-        "length": 11,
-        "text": "控えを捨てる口が落ちた",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 119,
+        "text": "weekly-review を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、以前の版と同じとして畳まれることがある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": true,
       "schedules": {
@@ -7336,6 +7416,13 @@
           "id": "id-1",
           "at": "2026-10-29T00:01:00.000Z",
           "decision": "定期の依頼を設定しようとしている: weekly-review: 週次の見直しをする",
+          "grounds": "継続する依頼を時間起点として持つ判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を仕込んだ: weekly-review（30 分ごと）: 週次の見直しをする",
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
@@ -7370,6 +7457,64 @@
             "updatedAt": "2026-10-29T00:01:00.000Z"
           },
           "outcome": "put"
+        }
+      ]
+    },
+    "forget-throws-replace": {
+      "output": {
+        "length": 186,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、以前の版と同じとして畳まれることがある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "schedules": {
+        "entries": [
+          {
+            "kind": "weekly-review",
+            "spec": {
+              "type": "every",
+              "minutes": 30
+            },
+            "request": "新しい本文",
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-29T00:01:00.000Z"
+          }
+        ],
+        "unreadable": []
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を置き換えようとしている: weekly-review: 置き換え前（60 分ごと）「旧い本文」→ 置き換え後（30 分ごと）「新しい本文」",
+          "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を直した: weekly-review（30 分ごと）: 新しい本文",
+          "grounds": "継続する依頼を時間起点として持つ判断"
+        }
+      ],
+      "forgotten": ["weekly-review"],
+      "storeCalls": [
+        {
+          "op": "editRequest",
+          "kind": "weekly-review",
+          "ifMatch": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "changes": {
+            "request": "新しい本文",
+            "spec": {
+              "type": "every",
+              "minutes": 30
+            }
+          },
+          "outcome": "edited"
         }
       ]
     }
