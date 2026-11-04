@@ -188,12 +188,17 @@ const SCENARIOS: Scenario[] = [
       none(call({ everyMinutes: Number.NaN })),
       none(call({ everyMinutes: Number.POSITIVE_INFINITY })),
       none(call({ everyMinutes: 525_601 })),
+      none(call({ dailyAt: ' 09:00 ' })),
+      none(call({ dailyAt: '09:00\n' })),
+      none(call({ cron: ' 0 10 * * 1' })),
+      none(call({ cron: '0 10 * * 1 ' })),
+      none(call({ dailyAt: ' 09:00', everyMinutes: 30 })),
     ],
   },
   {
     name: 'arg-spec-schema',
     covers:
-      '周期の検査は通るが `scheduleSpecSchema` が断る: dailyAt の前後の空白（`parseTimeOfDay` は trim して読むがスキーマは読まない）・cron の前後の空白で 120 字を超える（`parseCron` は trim した長さで見る）。「周期を読めなかった: <zod の message>」。定期の依頼と日誌に触らない',
+      'dailyAt の前後の空白・cron の前後の空白で 120 字を超える式: かつては検査を通って `scheduleSpecSchema` が断り zod の JSON が応答になった。いまは検査が自前の文（前後に空白がある）で断る。定期の依頼と日誌に触らない',
     seed: [old(K, '旧い本文')],
     steps: [
       none(call({ dailyAt: ' 09:00' })),
@@ -229,12 +234,14 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'new-cron',
-    covers: '新規（cron）: 週次・5 分ごと・前後に空白のある式（そのまま保存される）・年に一度の式',
+    covers:
+      '新規（cron）: 週次・5 分ごと・前後に空白のある式（検査で断る。書き込まない）・年に一度の式',
     seed: [],
     steps: [
       { args: call({ cron: '0 10 * * 1' }), writes: 'some' },
       { args: call({ kind: 'k-five', cron: '*/5 * * * *' }), writes: 'some' },
-      { args: call({ kind: 'k-spaced', cron: ' 0 10 * * 1 ' }), writes: 'some' },
+      // 前後に空白のある式は検査で断る（かつてはそのまま保存された）
+      none(call({ kind: 'k-spaced', cron: ' 0 10 * * 1 ' })),
       { args: call({ kind: 'k-yearly', cron: '0 0 1 1 *' }), writes: 'some' },
     ],
   },
@@ -686,10 +693,18 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'forget-throws',
     covers:
-      'forgetStandingRow が投げる: 書き込みは済んでいて、最後の日誌より前に投げるので応答は例外・日誌は最初の 1 行だけ（行は書き換わったまま）',
+      'forgetStandingRow が投げる（新規・置き換え）: 例外を飲み込み、最後の日誌は普段どおり書き、成功の応答の末尾に控えを捨てられなかった注が付く（行は書き換わっている）',
     seed: [],
     forget: 'throws',
     steps: [{ args: call({ everyMinutes: 30 }), writes: 'some' }],
+  },
+  {
+    name: 'forget-throws-replace',
+    covers:
+      'forgetStandingRow が投げる（置き換え）: 置き換えの応答の末尾に注が付き、最後の日誌「直した」が書かれる',
+    seed: [old(K, '旧い本文')],
+    forget: 'throws',
+    steps: [{ args: call({ request: '新しい本文', everyMinutes: 30 }), writes: 'some' }],
   },
 ];
 
@@ -1198,8 +1213,20 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(text('arg-period#14')).toContain('cron "" は cron 式として読めない');
     expect(text('arg-period#21')).toContain('everyMinutes 0 は使えない');
     expect(text('arg-period#26')).toContain('1年（525600分）より長い周期');
-    expect(text('arg-spec-schema#1')).toContain('周期を読めなかった: ');
-    expect(text('arg-spec-schema#4')).toContain('"too_big"');
+    expect(text('arg-period#27')).toBe(
+      'dailyAt " 09:00 " は前後に空白がある（HH:MM だけを渡すこと）。',
+    );
+    expect(text('arg-period#29')).toContain('cron " 0 10 * * 1" は前後に空白がある');
+    expect(text('arg-period#31')).toBe(
+      'dailyAt / everyMinutes / cron のうち、どれか1つだけ渡すこと。',
+    );
+    expect(text('arg-spec-schema#1')).toBe(
+      'dailyAt " 09:00" は前後に空白がある（HH:MM だけを渡すこと）。',
+    );
+    expect(text('arg-spec-schema#4')).toContain(
+      'は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと',
+    );
+    expect(text('arg-spec-schema#4')).not.toContain('"too_big"');
     for (const key of ALL_KEYS.filter((name) => name.startsWith('arg-'))) {
       expect(step(key)?.storeCalls, `${key}: 検査で断る場面が書き込み口を呼んだ`).toEqual([]);
       expect(step(key)?.journal, `${key}: 検査で断る場面が日誌を書いた`).toEqual([]);
@@ -1207,7 +1234,7 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     }
     // 新規
     expect(text('new-daily#1')).toBe(
-      'weekly-review を 毎日 09:00（ローカル時刻） で仕込んだ。時刻が来たら依頼の本文とともに届く。',
+      'weekly-review を 毎日 09:00（ローカル時刻）で仕込んだ。時刻が来たら依頼の本文とともに届く。',
     );
     expect(text('new-daily#2')).toContain('k-short を 毎日 09:00（ローカル時刻）');
     expect(calls('new-daily#1')).toEqual(['editRequest ifMatch=null null', 'put ifMatch=null put']);
@@ -1215,15 +1242,15 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(startsWith('new-daily#1', CREATED)).toBe(1);
     expect(step('new-daily#1')?.forgotten).toEqual(['weekly-review']);
     expect(text('new-every#3')).toContain('525600 分ごと');
-    expect(text('new-cron#3')).toContain('cron:  0 10 * * 1 （ローカル時刻）');
+    expect(text('new-cron#3')).toContain('cron " 0 10 * * 1 " は前後に空白がある');
     expect(rowOf('new-forms#4', 'nul-body')?.request).toBe('本文です');
     expect(decisions('new-forms#4')[0]).toBe(`${SETTING}: nul-body: 本文です`);
     // 置き換え
     expect(text('new-then-replace#2')).toContain(
-      'は既に在ったので置き換えた（15 分ごと で仕込み直した）',
+      'は既に在ったので置き換えた（15 分ごとで仕込み直した）',
     );
     expect(text('new-then-replace#2')).toContain(
-      '置き換え前は 毎日 09:00（ローカル時刻）、依頼本文は「最初の本文」だった',
+      '置き換え前は 毎日 09:00（ローカル時刻）、依頼本文は「最初の本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら',
     );
     expect(calls('new-then-replace#2')).toEqual([
       'editRequest ifMatch="2026-10-29T00:01:00.000Z" edited',
@@ -1242,7 +1269,7 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(text('replace-excerpt#2')).toContain('（置き換え前の本文は日誌にも残してある）');
     expect(text('replace-excerpt#2')).not.toContain('文字省略');
     expect(text('replace-excerpt#3')).toContain('…（1 文字省略。全 201 文字）');
-    expect(text('replace-excerpt#3')).toContain('journal_read id=id-5');
+    expect(text('replace-excerpt#3')).toContain('journal_read id=id-5）。時刻が来たら');
     expect(text('replace-excerpt#4')).toContain('…（300 文字省略。全 500 文字）');
     // 読めない行
     expect(text('unreadable-row#1')).toContain(UNREADABLE_TEXT);
@@ -1250,6 +1277,9 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
       'editRequest ifMatch=null threw UnreadableScheduleError',
     ]);
     expect(decisions('unreadable-row#1')[0]).toContain(SETTING);
+    expect(decisions('unreadable-row#1')[0]).toContain(
+      '（同じ kind の行が読めない形で入っているので、置き換え前の本文は残せない）',
+    );
     expect(decisions('unreadable-row#1')[1]).toContain(`${FAILED}（読めない形で入っている）`);
     expect(step('unreadable-row#1')?.schedules.unreadable).toEqual([
       { kind: K, reason: '行が読めない形' },
@@ -1284,8 +1314,10 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(startsWith('conflict-replace-twice', EDITED)).toBe(1);
     expect(calls('conflict-replace-limit')).toHaveLength(3);
     expect(text('conflict-replace-limit')).toContain(CONFLICT_TEXT);
-    expect(startsWith('conflict-replace-limit', RETRACT)).toBe(2);
-    expect(startsWith('conflict-replace-limit', FAILED)).toBe(1);
+    // 上限に達した回も打ち消す（「別の書き手に変えられ続け、3 回試して諦めた」と言い分ける）。ストアの障害の行は出ない
+    expect(startsWith('conflict-replace-limit', RETRACT)).toBe(3);
+    expect(decisions('conflict-replace-limit').at(-1)).toContain('3 回試して諦めた');
+    expect(startsWith('conflict-replace-limit', FAILED)).toBe(0);
     expect(step('conflict-replace-limit')?.forgotten).toEqual([]);
     expect(calls('conflict-new-put-race')).toEqual([
       'editRequest ifMatch=null null',
@@ -1299,14 +1331,15 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(calls('conflict-new-limit-put').at(-1)).toBe(
       'put ifMatch=null threw ScheduleConflictError',
     );
-    expect(startsWith('conflict-new-limit-put', RETRACT)).toBe(2);
-    expect(startsWith('conflict-new-limit-put', FAILED)).toBe(1);
+    expect(startsWith('conflict-new-limit-put', RETRACT)).toBe(3);
+    expect(decisions('conflict-new-limit-put').at(-1)).toContain('3 回試して諦めた');
+    expect(startsWith('conflict-new-limit-put', FAILED)).toBe(0);
     expect(calls('conflict-deleted')).toEqual([
       'editRequest ifMatch="2026-10-01T00:00:00.000Z" threw ScheduleConflictError',
       'editRequest ifMatch=null null',
       'put ifMatch=null put',
     ]);
-    expect(text('conflict-deleted')).toContain('を 30 分ごと で仕込んだ。');
+    expect(text('conflict-deleted')).toContain('を 30 分ごとで仕込んだ。');
     expect(startsWith('conflict-deleted', CREATED)).toBe(1);
     expect(text('conflict-long-excerpt')).toContain('journal_read id=id-3');
     expect(text('conflict-long-excerpt')).toContain('…（213 文字省略。全 413 文字）');
@@ -1348,8 +1381,18 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     // forgetStandingRow
     expect(step('forget-absent#1')?.forgotten).toEqual([]);
     expect(text('forget-absent#2')).toContain('は既に在ったので置き換えた');
-    expect(text('forget-throws')).toBe('控えを捨てる口が落ちた');
-    expect(step('forget-throws')?.journal).toHaveLength(1);
+    const FORGET_NOTE =
+      '（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、';
+    expect(text('forget-throws')).toContain(
+      `で仕込んだ。時刻が来たら依頼の本文とともに届く。${FORGET_NOTE}`,
+    );
+    expect(text('forget-throws')).toMatch(/置き換え前の版と同じとして畳まれることがある）$/);
+    expect(step('forget-throws')?.output.isError).toBe(false);
+    expect(step('forget-throws')?.journal).toHaveLength(2);
+    expect(startsWith('forget-throws', CREATED)).toBe(1);
     expect(rowOf('forget-throws', K)?.request).toBe('週次の見直しをする');
+    expect(text('forget-throws-replace')).toContain(FORGET_NOTE);
+    expect(startsWith('forget-throws-replace', EDITED)).toBe(1);
+    expect(rowOf('forget-throws-replace', K)?.request).toBe('新しい本文');
   });
 });

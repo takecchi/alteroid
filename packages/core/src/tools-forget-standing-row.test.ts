@@ -171,6 +171,46 @@ describe('道具で継続中の依頼の版を見た・変えたら、定期の 
   });
 });
 
+// 控えを捨てる口が投げても、行を外した事実（日誌にも残っている）は応答に残す。例外で返すと、クローンが「外せなかった」と受け取る（#6358）
+describe('schedule_remove: 控えを捨てる口が投げても、外した事実を成功の応答で返す', () => {
+  it('⭐ 行は外れ、日誌に「外す」が残り、応答は「外した」と注を言う（例外にならない）', async () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => 'conv-1',
+      workConversationId: () => 'conv-1',
+      forgetStandingRow: () => {
+        throw new Error('控えを捨てる口が落ちた');
+      },
+    });
+    await stores.schedules.put({
+      kind: KIND,
+      spec: { type: 'daily', at: '09:00' },
+      request: REQUEST_A,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    });
+    const found = tools.find((entry) => entry.name === 'schedule_remove');
+    if (!found) throw new Error('schedule_remove が無い');
+    const result = await found.handler({ kind: KIND } as never, { _meta: {} });
+    const reply = (result.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+
+    expect(reply).toBe(
+      `${KIND} を外した。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。` +
+        '次の tick で、外す前の版と同じとして畳まれることがある）',
+    );
+    expect(await stores.schedules.get(KIND)).toBeNull();
+    const journal = await stores.journal.list();
+    expect(
+      journal.map((entry) => ('decision' in entry ? entry.decision : '')).join('\n'),
+    ).toContain(`定期の依頼を外す: ${KIND}`);
+  });
+});
+
 describe('DigestSessionDelta: 自発の tick（renderDigest）で畳んだ行も、控えを会話の上の版に揃える', () => {
   const row = (request: string) =>
     `- ${KIND}（毎日 09:00）${request}\n  前回動いた時刻: （まだ一度も動いていない）`;
