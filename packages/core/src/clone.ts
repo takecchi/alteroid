@@ -3632,11 +3632,6 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 差分の記録を捨てる口（観測つき）。畳んだ記録が実際に残っていて捨てた回（`reset()` が真）だけ、理由を日誌へ1行残す（本番で畳めた割合を数えるため）。
-   * 同じターンで理由が重なっても、2回目以降は捨てる記録が無いので書かない（最初に当たった理由だけ）。起動直後の最初の全文は、捨てる記録が無いので書かない。
-   * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
-   */
-  /**
    * 畳みの控えを全文へ戻す経路の、唯一の入口。どの控えを何のために捨てるかを呼び出し元ごとに引数で名乗る（以前は `clear()`・`#resetDigestDelta`・`forgetFixed()` などが5〜6か所に対で書かれていた）。
    * 順序は固定: situation 側の控え → 周期の数え → セッション id → digest 側（`reset` か `forgetFixed`）。呼び出し元ごとの組み合わせは変えていない:
    * - 失敗したターン・会話の切り替え・要約: situation と digest の両方（`reset`）
@@ -3658,6 +3653,12 @@ class Clone implements CloneHost {
     else this.#resetDigestDelta(target.digest.reason, target.digest.label);
   }
 
+  /**
+   * 差分の記録を捨てる口（観測つき）。畳んだ記録が実際に残っていて捨てた回（`reset()` が真）だけ、理由を日誌へ1行残す（本番で畳めた割合を数えるため）。
+   * 同じターンで理由が重なっても、2回目以降は捨てる記録が無いので書かない（最初に当たった理由だけ）。起動直後の最初の全文は、捨てる記録が無いので書かない。
+   * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
+   * 呼ぶのは `#returnToFullText` だけ。
+   */
   #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
     // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
     this.#forgetFoldState();
