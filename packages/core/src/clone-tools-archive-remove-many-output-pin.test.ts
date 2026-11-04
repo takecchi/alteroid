@@ -656,6 +656,20 @@ const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: 'journal-fails-after-partial-race',
+    covers:
+      '1塊目の一部だけが競合（1件は消え、1件は他の経路が先に消していた）のあと、2塊目の先の日誌が書けない（日誌の3回目）: 止めの文は実際に消えた件数と競合の件数から作る',
+    seed: longChain(5),
+    journalFailsAt: [3],
+    steps: [
+      {
+        args: call({ sessionIds: [LONG_SESSION] }),
+        writes: 'some',
+        hooks: { raceFirst: ['L1'] },
+      },
+    ],
+  },
+  {
     name: 'journal-fails-retraction',
     covers:
       '打ち消しの行の日誌が書けない（先の行は書けて、競合で消せなかった id が在り、打ち消しの書き込み＝2回目が落ちる）: 打ち消しは黙って諦める（best effort）。出力は競合の注意を付けて普段どおり',
