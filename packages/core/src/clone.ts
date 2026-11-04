@@ -2290,12 +2290,10 @@ class Clone implements CloneHost {
             counts === ''
               ? ''
               : `${counts}（件数・回数は、この枠の区間でこのプロセスが数えた分だけ。器の入れ替えを跨いだ分と、ターンの成功で枠が降りた回の分は数えずに0へ戻るので、実際より少ない＝下限。）`;
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text: `${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
-          });
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
+          );
           continue;
         }
       }
@@ -5340,28 +5338,22 @@ class Clone implements CloneHost {
         // 「一度も活動していない」は `hasUndistilledActivity` でなく `stores.sessions` の `cloneSessionId`（プロセスを跨いで残る）で見る: `hasUndistilledActivity` の初期値は `true` で、確認された活動と仮定を区別できないため。読めなかったら「活動が在った」側へ倒す: 読めないことを理由に記録を失わないため
         if (!this.#sdkSession.query) {
           if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
                 '（終わっていた）ので蒸留できない。未蒸留の活動の印は残したので、次にセッションが戻った' +
                 'とき（別の入口が新しいセッションを起こしたとき）に蒸留される。',
-            });
+            );
           }
           return;
         }
         // 前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない: 会話終了の直後の `stop()` は同じ文面になり、間にターンが無ければ文字どおりの重複のため。印が立っていれば必ず投げる
         if (!this.#distillMemory.hasUndistilledActivity) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
               '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。',
-          });
+          );
           return;
         }
         // 的の一覧は定期の棚卸しの刻みにだけ添える: 会話終了・shutdown の蒸留は会話を記憶へ移すのが本題のため。測れなかったら添えてもターンは止めない: 記憶が読めない回に棚卸しを落とすと、いちばん畳みたい状態で仕事が消えるため
@@ -5536,12 +5528,10 @@ class Clone implements CloneHost {
 
         // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
         if (claimed.status !== 'ok' && claimed.status !== 'missing') {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
-          });
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
+          );
           // 人間が消した（`withdrawn`）ものと、完了まで済んだ回（`completed`）は再試行しない
           if (
             event.cause !== 'manual' &&
@@ -5638,15 +5628,12 @@ class Clone implements CloneHost {
                 ? '手で起こした回なので再試行せず、次の起動か次の定刻で配り直される'
                 : `${String(retryDelayMs / 60_000)} 分後に配り直す。成功するまで最長 ` +
                   `${String(FAILED_TURN_RETRY_DELAYS_MS.at(-1)! / 60_000)} 分ごとに配り直し続ける`;
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
                 `ので「終わった」とは記録しない（引き受けた印は残る。${retryClause}）: ` +
                 outcome.reason,
-            });
+            );
             if (retryDelayMs !== undefined) {
               this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
               this.#onScheduledRunNotStarted?.(event.kind, retryDelayMs);
@@ -7994,25 +7981,20 @@ class Clone implements CloneHost {
           const described = describePluginLoadForJournal(event.runtime.pluginLoad);
           if (described.digest !== this.#lastPluginLoadDigest) {
             this.#lastPluginLoadDigest = described.digest;
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text: `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`,
-            });
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`,
+            );
           }
         }
         // 人間の操作で開き直した後の最初の init なら、古い id → 新しい id を日誌に残す。
         const reopened = this.#distillMemory.takeReopenInit();
         if (reopened !== null) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
               ` → ${event.sessionId}（${describeReopenArchive(reopened.archive)}）`,
-          });
+          );
         }
         return;
       }
@@ -8054,15 +8036,12 @@ class Clone implements CloneHost {
         } else {
           const crossFold = this.#rateLimitCrossFold.get(memoryKey);
           if (crossFold !== undefined && crossFold.folded.size > 0) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
                 `${crossFold.folded.size} 本の異なる会話が当たっている` +
                 '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
-            });
+            );
           }
           this.#rateLimitCrossFold.set(memoryKey, {
             lastConversationId: conversationId,
