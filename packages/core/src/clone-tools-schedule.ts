@@ -2,7 +2,8 @@
 // `tools.ts` から呼ぶ（`createCloneTools` が並びのまま連結する）。このファイルから `tools.ts` を import しない（一方向）。
 
 import { z } from 'zod';
-import { isCronExpression } from './cron.js';
+import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
+import { collapseErrorCause } from './error-cause.js';
 import { encodeScheduleCursor, resolveScheduleCursor } from './schedule-cursor.js';
 import { renderStandingRow } from './digest.js';
 import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
@@ -102,6 +103,12 @@ function describeScheduleCreateViolation(input: ScheduleCreateInput): string | n
   if (given.length !== 1) {
     return 'dailyAt / everyMinutes / cron のうち、どれか1つだけ渡すこと。';
   }
+  if (dailyAt !== undefined && dailyAt !== dailyAt.trim()) {
+    return `dailyAt "${dailyAt}" は前後に空白がある（HH:MM だけを渡すこと）。`;
+  }
+  if (cron !== undefined && cron !== cron.trim()) {
+    return `cron "${cron}" は前後に空白がある（分 時 日 月 曜の5欄だけを渡すこと。例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`;
+  }
   if (dailyAt !== undefined && parseTimeOfDay(dailyAt) === null) {
     return `dailyAt "${dailyAt}" は HH:MM として読めない。`;
   }
@@ -133,12 +140,15 @@ function buildScheduleCreateAttemptJournalEntry(args: {
   request: string;
   spec: ScheduleSpec;
   previous: ScheduledRequest | null;
+  unreadable: boolean;
 }): JournalEntryInput {
-  const { kind, request, spec, previous } = args;
+  const { kind, request, spec, previous, unreadable } = args;
   return previous === null
     ? {
         type: 'decision',
-        decision: `定期の依頼を設定しようとしている: ${kind}: ${request}`,
+        decision: unreadable
+          ? `定期の依頼を設定しようとしている（同じ kind の行が読めない形で入っているので、置き換え前の本文は残せない）: ${kind}: ${request}`
+          : `定期の依頼を設定しようとしている: ${kind}: ${request}`,
         grounds: '継続する依頼を時間起点として持つ判断',
       }
     : scheduleReplaceEntry({
@@ -159,9 +169,19 @@ function buildScheduleCreateConflictJournalEntry(kind: string): JournalEntryInpu
 function buildScheduleCreateFailedJournalEntry(args: {
   kind: string;
   request: string;
-  unreadable: boolean;
+  cause: 'unreadable' | 'conflict-limit' | 'other';
 }): JournalEntryInput {
-  const { kind, request, unreadable } = args;
+  const { kind, request, cause } = args;
+  if (cause === 'conflict-limit') {
+    // 最後の回の先の行を打ち消す（上限の手前の回と同じ形で、上限に達したことも言う）
+    return {
+      type: 'decision',
+      decision: `直前の定期の依頼の設定の行は効いていない（${kind} は書き換えていない）。理由: 読んだ後に同じ kind が別の書き手に変えられ続け、${SCHEDULE_CREATE_ATTEMPTS} 回試して諦めた`,
+      grounds:
+        '日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す',
+    };
+  }
+  const unreadable = cause === 'unreadable';
   return {
     type: 'decision',
     decision: unreadable
@@ -199,12 +219,12 @@ function renderScheduleCreateConflictRefusal(kind: string): string {
 async function readScheduleCreatePrevious(
   stores: ScheduleCreateStores,
   kind: string,
-): Promise<ScheduledRequest | null> {
+): Promise<{ previous: ScheduledRequest | null; unreadable: boolean }> {
   try {
-    return await stores.schedules.get(kind);
+    return { previous: await stores.schedules.get(kind), unreadable: false };
   } catch (error) {
     if (!(error instanceof UnreadableScheduleError)) throw error;
-    return null;
+    return { previous: null, unreadable: true };
   }
 }
 
@@ -260,13 +280,20 @@ async function createScheduleRowJournaling(args: {
   let previous: ScheduledRequest | null = null;
   let replaceEntryId: string | undefined;
   for (let attempt = 1; plan === undefined; attempt += 1) {
-    previous = await readScheduleCreatePrevious(stores, kind);
+    const read = await readScheduleCreatePrevious(stores, kind);
+    previous = read.previous;
 
     // 日誌を先に書く: 書けなければ仕込まずに道具のエラーで返すため
     const attemptEntry = await appendJournalOrThrow(
       'schedule_create',
       stores.journal,
-      buildScheduleCreateAttemptJournalEntry({ kind, request, spec, previous }),
+      buildScheduleCreateAttemptJournalEntry({
+        kind,
+        request,
+        spec,
+        previous,
+        unreadable: read.unreadable,
+      }),
       'act-not-performed',
     );
     replaceEntryId = previous === null ? undefined : attemptEntry.id;
@@ -296,7 +323,11 @@ async function createScheduleRowJournaling(args: {
       await appendJournalOrDrop(
         'schedule_create',
         stores.journal,
-        buildScheduleCreateFailedJournalEntry({ kind, request, unreadable }),
+        buildScheduleCreateFailedJournalEntry({
+          kind,
+          request,
+          cause: unreadable ? 'unreadable' : conflict ? 'conflict-limit' : 'other',
+        }),
       );
       if (unreadable) return { kind: 'refused', message: describeUnreadableScheduleEdit(error) };
       if (conflict) return { kind: 'refused', message: renderScheduleCreateConflictRefusal(kind) };
@@ -308,7 +339,7 @@ async function createScheduleRowJournaling(args: {
 
 // 新規作成の応答は変えない
 function renderScheduleCreateCreated(plan: ScheduledRequest): string {
-  return `${plan.kind} を ${describeScheduleSpec(plan.spec)} で仕込んだ。時刻が来たら依頼の本文とともに届く。`;
+  return `${plan.kind} を ${describeScheduleSpec(plan.spec)}で仕込んだ。時刻が来たら依頼の本文とともに届く。`;
 }
 
 function renderScheduleCreateReplaced(args: {
@@ -320,12 +351,12 @@ function renderScheduleCreateReplaced(args: {
   const oldRequest = excerpt(previous.request, SCHEDULE_REQUEST_EXCERPT);
   const truncated = oldRequest !== previous.request;
   return (
-    `${plan.kind} は既に在ったので置き換えた（${describeScheduleSpec(plan.spec)} で仕込み直した）。` +
-    `置き換え前は ${describeScheduleSpec(previous.spec)}、依頼本文は「${oldRequest}」だった。` +
+    `${plan.kind} は既に在ったので置き換えた（${describeScheduleSpec(plan.spec)}で仕込み直した）。` +
+    `置き換え前は ${describeScheduleSpec(previous.spec)}、依頼本文は「${oldRequest}」だった` +
     (truncated
       ? `（本文は抜粋。置き換え前の全文は日誌に逐語で残してある: journal_read id=${replaceEntryId ?? ''}）`
       : '（置き換え前の本文は日誌にも残してある）') +
-    '時刻が来たら新しい依頼の本文とともに届く。'
+    '。時刻が来たら新しい依頼の本文とともに届く。'
   );
 }
 
@@ -498,7 +529,12 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
         const parsedKind = scheduleKindSchema.parse(kind);
 
         const parsedSpec = scheduleSpecSchema.safeParse(buildScheduleCreateSpec(input));
-        if (!parsedSpec.success) return text(`周期を読めなかった: ${parsedSpec.error.message}`);
+        if (!parsedSpec.success) {
+          return text(
+            `周期を読めなかった（dailyAt は HH:MM、everyMinutes は ${formatIntRangeJa({ min: 1, max: SCHEDULE_EVERY_MINUTES_MAX })} の整数、` +
+              `cron は分 時 日 月 曜の5欄で ${CRON_EXPRESSION_MAX} 字まで）。`,
+          );
+        }
 
         const now = new Date().toISOString();
 
@@ -512,14 +548,22 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
         if (run.kind === 'refused') return text(run.message);
         const { plan, previous, replaceEntryId } = run;
         // 書き換えた版は応答（置き換えなら旧版も）で会話に載る: 定期の tick の控えが古い版のまま「最後に全文で出した版と同じ」と畳まないよう、その kind の控えを捨てる
-        context.forgetStandingRow?.(parsedKind);
+        // 投げても書けた事実は残す: 最後の日誌は普段どおり書き、応答の末尾に注を足す
+        let forgetNote = '';
+        try {
+          context.forgetStandingRow?.(parsedKind);
+        } catch (error) {
+          forgetNote =
+            `（定期の tick の控えを捨てられなかった: ${collapseErrorCause(error)}。` +
+            '次の tick で、以前の版と同じとして畳まれることがある）';
+        }
         await appendJournalOrDrop(
           'schedule_create',
           stores.journal,
           buildScheduleCreateDoneJournalEntry({ replaced: previous !== null, plan, request }),
         );
-        if (previous === null) return text(renderScheduleCreateCreated(plan));
-        return text(renderScheduleCreateReplaced({ plan, previous, replaceEntryId }));
+        if (previous === null) return text(renderScheduleCreateCreated(plan) + forgetNote);
+        return text(renderScheduleCreateReplaced({ plan, previous, replaceEntryId }) + forgetNote);
       },
     ),
 
@@ -561,7 +605,15 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
           );
         }
         // 外した行の控えも捨てる: 同じ kind が後で別の本文で作り直されても、古い版を「前回と同じ」と畳まないため
-        context.forgetStandingRow?.(kind);
+        try {
+          context.forgetStandingRow?.(kind);
+        } catch (error) {
+          // 行は外れて日誌にも残っている: 例外で返すとクローンが「外せなかった」と受け取るので、事実と注を返す
+          return text(
+            `${kind} を外した。（定期の tick の控えを捨てられなかった: ${collapseErrorCause(error)}。` +
+              '次の tick で、外す前の版と同じとして畳まれることがある）',
+          );
+        }
         return text(`${kind} を外した。`);
       },
     ),
