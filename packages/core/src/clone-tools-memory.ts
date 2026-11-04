@@ -35,6 +35,7 @@ import {
   type MemorySection,
   type MemorySectionLookup,
 } from './memory.js';
+import { collapseErrorCause } from './error-cause.js';
 import { stripNul } from './nul-guard.js';
 import { memorySlugSchema, type MemoryDocKind, type MemoryProtectionStatus } from './schema.js';
 import type { CloneRuntimeFacts } from './self.js';
@@ -229,7 +230,7 @@ function denialMessage(
   })();
 
   return [
-    `記憶 ${slug} への${action}を、統合の走行（distill）から断った。`,
+    `記憶 ${slug} への${/^[A-Za-z]/.test(action) ? ' ' : ''}${action}を、統合の走行（distill）から断った。`,
     `理由: ${reason}。`,
     'いま何も変わっていない（記憶は断る前のまま残っている）。',
     alternative,
@@ -850,7 +851,7 @@ function checkMemoryFrontmatterBaseVersion(
   slug: string,
   baseVersion: string | undefined,
 ): { kind: 'ok'; baseVersion: string } | MemoryMoveRefusal {
-  if (baseVersion === undefined) {
+  if (baseVersion === undefined || baseVersion.trim() === '') {
     return {
       kind: 'refused',
       body:
@@ -998,10 +999,10 @@ function renderMemoryFrontmatterSetResult(args: {
   slug: string;
   diff: string;
   kindChangeNote: string;
-  aftermath: { floor: string; reinjection: string; growth: string };
+  aftermath: string;
 }): string {
   const { slug, diff, kindChangeNote, aftermath } = args;
-  return `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${aftermath.floor}\n\n${aftermath.reinjection}\n\n${aftermath.growth}`;
+  return `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${aftermath}`;
 }
 
 export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
@@ -1411,7 +1412,15 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         );
         if (argsViolation !== null) return text(argsViolation);
 
-        const existing = await stores.persona.read(slug);
+        let existing;
+        try {
+          existing = await stores.persona.read(slug);
+        } catch (error) {
+          return text(
+            `記憶 ${slug} を読めなかった（${collapseErrorCause(error)}）。` +
+              'frontmatter は直していない（何も変わっていない）。',
+          );
+        }
         if (existing === null) return text(describeMemoryFrontmatterNotFound(slug));
 
         const cause = memoryCause();
@@ -1430,6 +1439,13 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           type,
           parent,
         });
+        // 同じ値なら書かない: 書くと版が進み、ほかの書き手の base_version が古くなるため
+        if (nextContent === existing.content) {
+          return text(
+            `記憶 ${slug} の frontmatter は渡した値といまの値が同じなので、何も書いていない` +
+              `（版は変わらない: base_version=${memoryVersion(existing.content)}）。`,
+          );
+        }
         const memoryBefore = await stores.persona.documents();
         const writeResult = await writeMemoryFrontmatter({
           stores,
@@ -1439,9 +1455,9 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         });
         if (writeResult.kind === 'refused') return text(writeResult.body);
         const { written } = writeResult;
-        const memoryAfter = await stores.persona.documents();
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
+        // 日誌を書いた後の一覧の読みより先に残す: 一覧は応答の文にしか使わず、読みが落ちても記憶は書き換わっているため
         await journalMemoryFrontmatterSet({
           stores,
           slug,
@@ -1453,14 +1469,28 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
 
         const diff = describeMemoryWriteDiff(existing.content, written.content);
         const kindChangeNote = describeMemoryFrontmatterKindChange(priorKind, nextKind);
-        const aftermath = describeMemoryFrontmatterAftermath({
-          context,
-          slug,
-          memoryBefore,
-          memoryAfter,
-          existing,
-          written,
-        });
+        let memoryAfter: Awaited<ReturnType<Stores['persona']['documents']>> | null;
+        let afterError: unknown;
+        try {
+          memoryAfter = await stores.persona.documents();
+        } catch (error) {
+          memoryAfter = null;
+          afterError = error;
+        }
+        let aftermath: string;
+        if (memoryAfter === null) {
+          aftermath = `（書いた後の記憶の一覧が読めなかったので、載り方の変化は確かめていない: ${collapseErrorCause(afterError)}）`;
+        } else {
+          const parts = describeMemoryFrontmatterAftermath({
+            context,
+            slug,
+            memoryBefore,
+            memoryAfter,
+            existing,
+            written,
+          });
+          aftermath = `${parts.floor}\n\n${parts.reinjection}\n\n${parts.growth}`;
+        }
 
         return text(renderMemoryFrontmatterSetResult({ slug, diff, kindChangeNote, aftermath }));
       },

@@ -28,21 +28,22 @@
     "doc-missing#1": 69,
     "doc-missing#2": 69,
     "doc-missing#3": 69,
-    "read-fails#1": 10,
+    "read-fails#1": 68,
     "read-fails#2": 347,
-    "guard-distill#1": 372,
-    "guard-distill#2": 372,
-    "guard-distill#3": 441,
+    "guard-distill#1": 373,
+    "guard-distill#2": 373,
+    "guard-distill#3": 442,
     "guard-distill#4": 469,
     "guard-distill#5": 469,
     "guard-env#1": 425,
     "guard-env#2": 57,
-    "guard-env#3": 372,
+    "guard-env#3": 373,
     "version#1": 173,
-    "version#2": 303,
+    "version#2": 173,
     "version#3": 303,
     "version#4": 173,
     "version#5": 432,
+    "version#6": 173,
     "version-race#1": 303,
     "version-race#2": 228,
     "malformed#1": 125,
@@ -75,12 +76,13 @@
     "kind-changes#2": 515,
     "kind-changes#3": 564,
     "kind-changes#4": 575,
-    "kind-changes#5": 366,
+    "kind-changes#5": 138,
     "kind-from-none#1": 430,
     "kind-from-none#2": 496,
-    "unchanged#1": 414,
-    "unchanged#2": 414,
+    "unchanged#1": 138,
+    "unchanged#2": 138,
     "unchanged#3": 356,
+    "unchanged#4": 138,
     "floor-big#1": 459,
     "floor-big#2": 719,
     "floor-big#3": 739,
@@ -90,7 +92,7 @@
     "write-fails#1": 7,
     "write-fails#2": 414,
     "documents-fails#1": 9,
-    "documents-fails#2": 9,
+    "documents-fails#2": 116,
     "journal-fails#1": 216,
     "journal-fails#2": 414,
     "journal-row#1": 435,
@@ -1088,10 +1090,10 @@
     },
     "read-fails#1": {
       "output": {
-        "length": 10,
-        "text": "ストアの読みが落ちた",
-        "isError": true,
-        "thrown": true
+        "length": 68,
+        "text": "記憶 values を読めなかった（Error: ストアの読みが落ちた）。frontmatter は直していない（何も変わっていない）。",
+        "isError": false,
+        "thrown": false
       },
       "wrote": false,
       "memory": {
@@ -1221,8 +1223,8 @@
     },
     "guard-distill#1": {
       "output": {
-        "length": 372,
-        "text": "記憶 human-doc へのfrontmatter の更新を、統合の走行（distill）から断った。 理由: この文書には人間の書き込みの履歴が在る（保護状態: human）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 human-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
+        "length": 373,
+        "text": "記憶 human-doc への frontmatter の更新を、統合の走行（distill）から断った。 理由: この文書には人間の書き込みの履歴が在る（保護状態: human）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 human-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
         "isError": false,
         "thrown": false
       },
@@ -1297,8 +1299,8 @@
     },
     "guard-distill#2": {
       "output": {
-        "length": 372,
-        "text": "記憶 human-doc へのfrontmatter の更新を、統合の走行（distill）から断った。 理由: この文書には人間の書き込みの履歴が在る（保護状態: human）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 human-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
+        "length": 373,
+        "text": "記憶 human-doc への frontmatter の更新を、統合の走行（distill）から断った。 理由: この文書には人間の書き込みの履歴が在る（保護状態: human）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 human-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
         "isError": false,
         "thrown": false
       },
@@ -1373,8 +1375,8 @@
     },
     "guard-distill#3": {
       "output": {
-        "length": 441,
-        "text": "記憶 unknown-doc へのfrontmatter の更新を、統合の走行（distill）から断った。 理由: この文書の書き込みの履歴が確認できない（保護状態: unknown。索引が無い・外から書き換えられた可能性がある、などのときにここへ倒す——不明を「人間は書いていない」とは読まず、守る側へ倒す）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 unknown-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
+        "length": 442,
+        "text": "記憶 unknown-doc への frontmatter の更新を、統合の走行（distill）から断った。 理由: この文書の書き込みの履歴が確認できない（保護状態: unknown。索引が無い・外から書き換えられた可能性がある、などのときにここへ倒す——不明を「人間は書いていない」とは読まず、守る側へ倒す）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 unknown-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
         "isError": false,
         "thrown": false
       },
@@ -1726,8 +1728,8 @@
     },
     "guard-env#3": {
       "output": {
-        "length": 372,
-        "text": "記憶 human-doc へのfrontmatter の更新を、統合の走行（distill）から断った。 理由: この文書には人間の書き込みの履歴が在る（保護状態: human）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 human-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
+        "length": 373,
+        "text": "記憶 human-doc への frontmatter の更新を、統合の走行（distill）から断った。 理由: この文書には人間の書き込みの履歴が在る（保護状態: human）。 いま何も変わっていない（記憶は断る前のまま残っている）。 memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、frontmatter のキー（description / type / parent）は直せない。 本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 human-doc の frontmatter を更新したい。理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる（この場・このターンではやり直せない）。",
         "isError": false,
         "thrown": false
       },
@@ -1814,8 +1816,8 @@
     },
     "version#2": {
       "output": {
-        "length": 303,
-        "text": "記憶 values は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、frontmatter の更新を**書かなかった**。いまの版は base_version=2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3（111 文字）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。memory_read slug=values で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "length": 173,
+        "text": "記憶 values の frontmatter を直すには、先に memory_read slug=values で読み、応答に出る base_version をこの呼び出しの base_version に渡すこと（読んだ後に人間が要旨などを直していても、渡したキーで上書きしないため。焼き込みの索引だけでは書けない）。**何も書いていない。**",
         "isError": false,
         "thrown": false
       },
@@ -1864,14 +1866,7 @@
         }
       },
       "journal": [],
-      "storeCalls": [
-        {
-          "slug": "values",
-          "content": "---\ndescription: 要旨\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
-          "ifMatch": "",
-          "outcome": "conflict"
-        }
-      ]
+      "storeCalls": []
     },
     "version#3": {
       "output": {
@@ -2060,6 +2055,60 @@
           "outcome": "ok"
         }
       ]
+    },
+    "version#6": {
+      "output": {
+        "length": 173,
+        "text": "記憶 values の frontmatter を直すには、先に memory_read slug=values で読み、応答に出る base_version をこの呼び出しの base_version に渡すこと（読んだ後に人間が要旨などを直していても、渡したキーで上書きしないため。焼き込みの索引だけでは書けない）。**何も書いていない。**",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "memory": {
+        "broken": {
+          "slug": "broken",
+          "title": "broken",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "createdAt": {
+            "kind": "known",
+            "at": "2026-10-29T00:00:00.000Z"
+          },
+          "bytes": 29,
+          "content": "---\nno colon here\n---\n本文\n",
+          "frontmatter": {
+            "kind": "malformed"
+          },
+          "kind": "premise",
+          "descriptionFreshness": {
+            "kind": "absent"
+          },
+          "version": "dbf14c08c7da6047e9753bf8c2c973893d726945bbd2f9ec224378d48840d186"
+        },
+        "values": {
+          "slug": "values",
+          "title": "価値観",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "createdAt": {
+            "kind": "known",
+            "at": "2026-10-29T00:00:00.000Z"
+          },
+          "bytes": 200,
+          "content": "---\ndescription: 正しい版で通る\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
+          "frontmatter": {
+            "kind": "parsed",
+            "description": "正しい版で通る",
+            "type": "premise"
+          },
+          "kind": "premise",
+          "description": "正しい版で通る",
+          "descriptionFreshness": {
+            "kind": "fresh"
+          },
+          "version": "81302b805b22a432b8ff6f7296ff2592fa1367d2baaa422b48247b8cba457b1e"
+        }
+      },
+      "journal": [],
+      "storeCalls": []
     },
     "version-race#1": {
       "output": {
@@ -5535,12 +5584,12 @@
     },
     "kind-changes#5": {
       "output": {
-        "length": 366,
-        "text": "記憶 values の frontmatter を更新した。\n\n111 → 111 文字（+0）\n消えた見出し: なし。\n\n更新: values（区分: indexed）。\n毎ターンの床（焼き込み全体。いま読み直した値）: 438 文字から 438 文字へ（+0）。\n\nこの書き込みが次のターンの会話へ載る見込み: 129 文字（values（premise・カード（要旨＋節の目次）））。\n⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。\n\nいまの記憶の総量（現在値）: 438 文字。 ⚠️ セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、これはセッション構築時点との差ではなく現在値である。",
+        "length": 138,
+        "text": "記憶 values の frontmatter は渡した値といまの値が同じなので、何も書いていない（版は変わらない: base_version=3bc58baf801dabf2cb34e156b85026a9fbd614cc9d2bbcd01a72c9ec090dd03a）。",
         "isError": false,
         "thrown": false
       },
-      "wrote": true,
+      "wrote": false,
       "memory": {
         "other-fact": {
           "slug": "other-fact",
@@ -5589,7 +5638,7 @@
         "values": {
           "slug": "values",
           "title": "価値観",
-          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
           "createdAt": {
             "kind": "known",
             "at": "2026-10-29T00:00:00.000Z"
@@ -5605,7 +5654,7 @@
           "description": "元の要旨",
           "descriptionFreshness": {
             "kind": "stale",
-            "staleForMs": 300000,
+            "staleForMs": 240000,
             "drift": {
               "kind": "measured",
               "describedBytes": 191,
@@ -5616,27 +5665,8 @@
           "version": "3bc58baf801dabf2cb34e156b85026a9fbd614cc9d2bbcd01a72c9ec090dd03a"
         }
       },
-      "journal": [
-        {
-          "type": "memory_update",
-          "id": "id-5",
-          "at": "2026-10-29T00:05:00.000Z",
-          "slug": "values",
-          "cause": "clone",
-          "action": "describe",
-          "bytesBefore": 191,
-          "bytesAfter": 191,
-          "summary": "直した"
-        }
-      ],
-      "storeCalls": [
-        {
-          "slug": "values",
-          "content": "---\ndescription: 元の要旨\ntype: indexed\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
-          "ifMatch": "3bc58baf801dabf2cb34e156b85026a9fbd614cc9d2bbcd01a72c9ec090dd03a",
-          "outcome": "ok"
-        }
-      ]
+      "journal": [],
+      "storeCalls": []
     },
     "kind-from-none#1": {
       "output": {
@@ -5794,12 +5824,12 @@
     },
     "unchanged#1": {
       "output": {
-        "length": 414,
-        "text": "記憶 values の frontmatter を更新した。\n\n111 → 111 文字（+0）\n消えた見出し: なし。\n\n更新: values（区分: premise）。\n毎ターンの床（焼き込み全体。いま読み直した値）: 380 文字から 380 文字へ（+0）。\n\nこの書き込みが次のターンの会話へ載る見込み: 255 文字（values（premise・カード（要旨＋節の目次）））。\n⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。\n\nいまの記憶の総量（現在値）: 380 文字。 ⚠️ セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、これはセッション構築時点との差ではなく現在値である。\n\npremise の大きさの順位（大きい順、全 1 件）:\n1. values: 255 文字",
+        "length": 138,
+        "text": "記憶 values の frontmatter は渡した値といまの値が同じなので、何も書いていない（版は変わらない: base_version=2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3）。",
         "isError": false,
         "thrown": false
       },
-      "wrote": true,
+      "wrote": false,
       "memory": {
         "reorder": {
           "slug": "reorder",
@@ -5828,7 +5858,7 @@
         "values": {
           "slug": "values",
           "title": "価値観",
-          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
           "createdAt": {
             "kind": "known",
             "at": "2026-10-29T00:00:00.000Z"
@@ -5843,48 +5873,22 @@
           "kind": "premise",
           "description": "元の要旨",
           "descriptionFreshness": {
-            "kind": "stale",
-            "staleForMs": 60000,
-            "drift": {
-              "kind": "measured",
-              "describedBytes": 191,
-              "currentBytes": 191,
-              "deltaBytes": 0
-            }
+            "kind": "fresh"
           },
           "version": "2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3"
         }
       },
-      "journal": [
-        {
-          "type": "memory_update",
-          "id": "id-1",
-          "at": "2026-10-29T00:01:00.000Z",
-          "slug": "values",
-          "cause": "clone",
-          "action": "describe",
-          "bytesBefore": 191,
-          "bytesAfter": 191,
-          "summary": "直した"
-        }
-      ],
-      "storeCalls": [
-        {
-          "slug": "values",
-          "content": "---\ndescription: 元の要旨\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
-          "ifMatch": "2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3",
-          "outcome": "ok"
-        }
-      ]
+      "journal": [],
+      "storeCalls": []
     },
     "unchanged#2": {
       "output": {
-        "length": 414,
-        "text": "記憶 values の frontmatter を更新した。\n\n111 → 111 文字（+0）\n消えた見出し: なし。\n\n更新: values（区分: premise）。\n毎ターンの床（焼き込み全体。いま読み直した値）: 380 文字から 380 文字へ（+0）。\n\nこの書き込みが次のターンの会話へ載る見込み: 255 文字（values（premise・カード（要旨＋節の目次）））。\n⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。\n\nいまの記憶の総量（現在値）: 380 文字。 ⚠️ セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、これはセッション構築時点との差ではなく現在値である。\n\npremise の大きさの順位（大きい順、全 1 件）:\n1. values: 255 文字",
+        "length": 138,
+        "text": "記憶 values の frontmatter は渡した値といまの値が同じなので、何も書いていない（版は変わらない: base_version=2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3）。",
         "isError": false,
         "thrown": false
       },
-      "wrote": true,
+      "wrote": false,
       "memory": {
         "reorder": {
           "slug": "reorder",
@@ -5913,7 +5917,7 @@
         "values": {
           "slug": "values",
           "title": "価値観",
-          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
           "createdAt": {
             "kind": "known",
             "at": "2026-10-29T00:00:00.000Z"
@@ -5928,39 +5932,13 @@
           "kind": "premise",
           "description": "元の要旨",
           "descriptionFreshness": {
-            "kind": "stale",
-            "staleForMs": 120000,
-            "drift": {
-              "kind": "measured",
-              "describedBytes": 191,
-              "currentBytes": 191,
-              "deltaBytes": 0
-            }
+            "kind": "fresh"
           },
           "version": "2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3"
         }
       },
-      "journal": [
-        {
-          "type": "memory_update",
-          "id": "id-2",
-          "at": "2026-10-29T00:02:00.000Z",
-          "slug": "values",
-          "cause": "clone",
-          "action": "describe",
-          "bytesBefore": 191,
-          "bytesAfter": 191,
-          "summary": "直した"
-        }
-      ],
-      "storeCalls": [
-        {
-          "slug": "values",
-          "content": "---\ndescription: 元の要旨\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
-          "ifMatch": "2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3",
-          "outcome": "ok"
-        }
-      ]
+      "journal": [],
+      "storeCalls": []
     },
     "unchanged#3": {
       "output": {
@@ -6005,7 +5983,7 @@
         "values": {
           "slug": "values",
           "title": "価値観",
-          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
           "createdAt": {
             "kind": "known",
             "at": "2026-10-29T00:00:00.000Z"
@@ -6020,14 +5998,7 @@
           "kind": "premise",
           "description": "元の要旨",
           "descriptionFreshness": {
-            "kind": "stale",
-            "staleForMs": 120000,
-            "drift": {
-              "kind": "measured",
-              "describedBytes": 191,
-              "currentBytes": 191,
-              "deltaBytes": 0
-            }
+            "kind": "fresh"
           },
           "version": "2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3"
         }
@@ -6035,7 +6006,7 @@
       "journal": [
         {
           "type": "memory_update",
-          "id": "id-3",
+          "id": "id-1",
           "at": "2026-10-29T00:03:00.000Z",
           "slug": "reorder",
           "cause": "clone",
@@ -6053,6 +6024,72 @@
           "outcome": "ok"
         }
       ]
+    },
+    "unchanged#4": {
+      "output": {
+        "length": 138,
+        "text": "記憶 values の frontmatter は渡した値といまの値が同じなので、何も書いていない（版は変わらない: base_version=2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "memory": {
+        "reorder": {
+          "slug": "reorder",
+          "title": "価値観",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "createdAt": {
+            "kind": "known",
+            "at": "2026-10-29T00:00:00.000Z"
+          },
+          "bytes": 201,
+          "content": "---\ndescription: 元の要旨\ntype: fact\nparent: root\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
+          "frontmatter": {
+            "kind": "parsed",
+            "description": "元の要旨",
+            "type": "fact",
+            "parent": "root"
+          },
+          "kind": "fact",
+          "description": "元の要旨",
+          "parent": "root",
+          "descriptionFreshness": {
+            "kind": "stale",
+            "staleForMs": 180000,
+            "drift": {
+              "kind": "measured",
+              "describedBytes": 206,
+              "currentBytes": 201,
+              "deltaBytes": -5
+            }
+          },
+          "version": "4810ce16c858abc13653c8ffeb83ff3358c318245dd4b967c4c7eaf4261ddd3c"
+        },
+        "values": {
+          "slug": "values",
+          "title": "価値観",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "createdAt": {
+            "kind": "known",
+            "at": "2026-10-29T00:00:00.000Z"
+          },
+          "bytes": 191,
+          "content": "---\ndescription: 元の要旨\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
+          "frontmatter": {
+            "kind": "parsed",
+            "description": "元の要旨",
+            "type": "premise"
+          },
+          "kind": "premise",
+          "description": "元の要旨",
+          "descriptionFreshness": {
+            "kind": "fresh"
+          },
+          "version": "2f44656c2c9bbff68acfd8896c5c43ae1f0de2c4b591a8c4b17aaf3a7d3454d3"
+        }
+      },
+      "journal": [],
+      "storeCalls": []
     },
     "floor-big#1": {
       "output": {
@@ -6591,10 +6628,10 @@
     },
     "documents-fails#2": {
       "output": {
-        "length": 9,
-        "text": "記憶の一覧が落ちた",
-        "isError": true,
-        "thrown": true
+        "length": 116,
+        "text": "記憶 values の frontmatter を更新した。\n\n111 → 110 文字（-1）\n消えた見出し: なし。\n\n（書いた後の記憶の一覧が読めなかったので、載り方の変化は確かめていない: Error: 記憶の一覧が落ちた）",
+        "isError": false,
+        "thrown": false
       },
       "wrote": true,
       "memory": {
@@ -6621,7 +6658,19 @@
           "version": "a31fd1422297ac1cb7d12f55c2662aef79de1a792bded26e7746205cdf4102fb"
         }
       },
-      "journal": [],
+      "journal": [
+        {
+          "type": "memory_update",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "slug": "values",
+          "cause": "clone",
+          "action": "describe",
+          "bytesBefore": 191,
+          "bytesAfter": 186,
+          "summary": "直した"
+        }
+      ],
       "storeCalls": [
         {
           "slug": "values",
@@ -6676,7 +6725,7 @@
     "journal-fails#2": {
       "output": {
         "length": 414,
-        "text": "記憶 values の frontmatter を更新した。\n\n109 → 109 文字（+0）\n消えた見出し: なし。\n\n更新: values（区分: premise）。\n毎ターンの床（焼き込み全体。いま読み直した値）: 253 文字から 253 文字へ（+0）。\n\nこの書き込みが次のターンの会話へ載る見込み: 253 文字（values（premise・カード（要旨＋節の目次）））。\n⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。\n\nいまの記憶の総量（現在値）: 253 文字。 ⚠️ セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、これはセッション構築時点との差ではなく現在値である。\n\npremise の大きさの順位（大きい順、全 1 件）:\n1. values: 253 文字",
+        "text": "記憶 values の frontmatter を更新した。\n\n109 → 115 文字（+6）\n消えた見出し: なし。\n\n更新: values（区分: premise）。\n毎ターンの床（焼き込み全体。いま読み直した値）: 253 文字から 259 文字へ（+6）。\n\nこの書き込みが次のターンの会話へ載る見込み: 202 文字（values（premise・カードの変わった範囲だけ））。\n⚠️ 予測であって実測ではない（他に何も変わらなければ。単純に合算しないこと）。\n\nいまの記憶の総量（現在値）: 259 文字。 ⚠️ セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、これはセッション構築時点との差ではなく現在値である。\n\npremise の大きさの順位（大きい順、全 1 件）:\n1. values: 259 文字",
         "isError": false,
         "thrown": false
       },
@@ -6690,26 +6739,19 @@
             "kind": "known",
             "at": "2026-10-29T00:00:00.000Z"
           },
-          "bytes": 185,
-          "content": "---\ndescription: 要旨\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
+          "bytes": 203,
+          "content": "---\ndescription: 要旨（やり直し）\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
           "frontmatter": {
             "kind": "parsed",
-            "description": "要旨",
+            "description": "要旨（やり直し）",
             "type": "premise"
           },
           "kind": "premise",
-          "description": "要旨",
+          "description": "要旨（やり直し）",
           "descriptionFreshness": {
-            "kind": "stale",
-            "staleForMs": 60000,
-            "drift": {
-              "kind": "measured",
-              "describedBytes": 185,
-              "currentBytes": 185,
-              "deltaBytes": 0
-            }
+            "kind": "fresh"
           },
-          "version": "734e260f7946c2e542178ebbedb43c24951f6815b301f642b694c6a48696f7ea"
+          "version": "77d1af13265ddb77d1413a04af60bbf561e73733c78b059b4f4377e4f3903d52"
         }
       },
       "journal": [
@@ -6721,14 +6763,14 @@
           "cause": "clone",
           "action": "describe",
           "bytesBefore": 185,
-          "bytesAfter": 185,
+          "bytesAfter": 203,
           "summary": "直した"
         }
       ],
       "storeCalls": [
         {
           "slug": "values",
-          "content": "---\ndescription: 要旨\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
+          "content": "---\ndescription: 要旨（やり直し）\ntype: premise\n---\n# 価値観\n\n## 判断の基準\n\n本文1行目。\n本文2行目。\n\n## 好み\n\n- 箇条書き1\n- 箇条書き2\n\n### 細目\n\n最後の段落。\n",
           "ifMatch": "734e260f7946c2e542178ebbedb43c24951f6815b301f642b694c6a48696f7ea",
           "outcome": "ok"
         }
