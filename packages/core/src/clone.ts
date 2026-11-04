@@ -5211,10 +5211,35 @@ class Clone implements CloneHost {
       });
       return;
     }
-    const transcript = result.body;
+    await this.#distillGrave({
+      kind: 'transcript',
+      graveId: grave.archiveId,
+      transcript: result.body,
+      recoveryText: `前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
+      failureText: (reason) => `前の器が記憶へ移せなかった区間の蒸留に失敗した: ${reason}`,
+      clear: () => this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId),
+    });
+  }
+
+  /**
+   * 墓標の拾い直しの後半（読めた本文を蒸留し、成功したら印を下ろす）。2種類の墓標で同じ手順を踏む。
+   * 前半（本文の読み方と、読めなかったときの印の下ろし方）と日誌の文言は、呼び出し側が持つ: 読み取り結果の形が墓標ごとに違い、文言を寄せるとどちらの材料が無かったのかが日誌から消えるため
+   */
+  async #distillGrave(options: {
+    readonly kind: 'transcript' | 'lost_session';
+    readonly graveId: string;
+    readonly transcript: string;
+    /** 拾い直しの行の本文（接頭辞を除く） */
+    readonly recoveryText: string;
+    /** 蒸留の失敗の行の前半（接頭辞と「（印は残す…）」を除く）。`reason` は `reasonOf(error)` */
+    readonly failureText: (reason: string) => string;
+    /** 成功したときに印を下ろす。引き直してから下ろす形（`…GraveIf`）を渡す */
+    readonly clear: () => Promise<unknown>;
+  }): Promise<void> {
+    const { kind, graveId } = options;
 
     // 上限を超えて失敗し続けている印は日誌へ書かない（#4752）。蒸留は試みる
-    const quiet = await this.#graveDistillQuiet('transcript', grave.archiveId);
+    const quiet = await this.#graveDistillQuiet(kind, graveId);
 
     // 拾い直したことを日誌へ1行残す: `pre_compact_distill` の入力だけだと compaction の蒸留と区別が付かず、後から何回拾い直したかを数えられないため
     if (!quiet) {
@@ -5222,12 +5247,12 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
+        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${options.recoveryText}`,
       });
     }
 
     try {
-      await this.#distillFromTranscript(tailOf(transcript), {
+      await this.#distillFromTranscript(tailOf(options.transcript), {
         journalInput: !quiet,
         onQuotaFailure: (tokenKey) => {
           this.#graveFailedTokenKey = tokenKey;
@@ -5236,22 +5261,22 @@ class Clone implements CloneHost {
       this.#graveFailedTokenKey = undefined;
     } catch (error) {
       // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動か鍵の契機で拾い直せるため。鍵は枠で落ちた時点で、観測の前に控え済み（#4898）
-      const note = await this.#graveDistillFailureNote('transcript', grave.archiveId);
+      const note = await this.#graveDistillFailureNote(kind, graveId);
       if (note !== null) {
         await this.#journal({
           type: 'exchange',
           with: 'self',
           role: 'outbound',
           text:
-            `${EXCHANGE_KIND_FAILURE_PREFIX}前の器が記憶へ移せなかった区間の蒸留に失敗した: ${reasonOf(error)}` +
-            `（印は残す。次の起動で拾い直す: ${grave.archiveId}）${note}`,
+            `${EXCHANGE_KIND_FAILURE_PREFIX}${options.failureText(reasonOf(error))}` +
+            `（印は残す。次の起動で拾い直す: ${graveId}）${note}`,
         });
       }
       return;
     }
 
     // 印を下ろすのは蒸留が成功したときだけ、引き直してから下ろす: 拾っている間に新しい印が立つ窓があり、素で `null` を書くとその新しい方を消すため
-    await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
+    await options.clear();
   }
 
   // 読めなければ 0（書く側に倒す）: 数えられないだけで拾い直しを止める理由が無く、黙る側に倒すと失敗が見えなくなるため
@@ -5335,42 +5360,14 @@ class Clone implements CloneHost {
       return;
     }
 
-    // 理由は `#pickUpTranscriptGrave` と同じ（#4752）
-    const quiet = await this.#graveDistillQuiet('lost_session', grave.sessionId);
-    if (!quiet) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
-      });
-    }
-
-    try {
-      await this.#distillFromTranscript(tailOf(transcript), {
-        journalInput: !quiet,
-        onQuotaFailure: (tokenKey) => {
-          this.#graveFailedTokenKey = tokenKey;
-        },
-      });
-      this.#graveFailedTokenKey = undefined;
-    } catch (error) {
-      // 印は残す（#4705）: 拾い直しの墓標（`#pickUpTranscriptGrave`）と同じ理由
-      const note = await this.#graveDistillFailureNote('lost_session', grave.sessionId);
-      if (note !== null) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_FAILURE_PREFIX}捨てたセッションの区間の蒸留に失敗した: ${reasonOf(error)}` +
-            `（印は残す。次の起動で拾い直す: ${grave.sessionId}）${note}`,
-        });
-      }
-      return;
-    }
-
-    await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
+    await this.#distillGrave({
+      kind: 'lost_session',
+      graveId: grave.sessionId,
+      transcript,
+      recoveryText: `捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
+      failureText: (reason) => `捨てたセッションの区間の蒸留に失敗した: ${reason}`,
+      clear: () => this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId),
+    });
   }
 
   // `reached` を呼び出し側が直後に `error`（終端）で閉じるなら、`usage_limited` の `await` を先に済ませる
