@@ -7,6 +7,7 @@ import { UnreadableJournalEntryError } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, dropLastRowPerPage } from './testing.js';
 import { createCloneTools } from './tools.js';
+import type { UsageTotals } from './usage.js';
 
 // `journal_read` の出力（全文と字数）を、場面ごとにコミットした固定値（clone-tools-journal-read-output-pin.json）と丸ごと比べる。
 // `clone-tools-journal.ts` の `tool('journal_read', …)`（約 340 行の式）を出力の部分ごとの小さな関数へ分けるとき、
@@ -106,7 +107,7 @@ function totals(
   output: number,
   cacheRead = 0,
   cacheWrite = 0,
-): Record<string, unknown> {
+): UsageTotals {
   return {
     inputTokens: input,
     outputTokens: output,
