@@ -2340,9 +2340,9 @@ class Clone implements CloneHost {
 
       // まとめ読みより前に1件ずつ見る: 束にしてから見ると、戻っていない担当の知らせ1件のために、戻った担当の知らせまで一緒に届くため（#4499）
       // 枠の短絡より後ろに置く: クローン自身が枠で止まっている間は保持し、解除されて配る時点の状態で判定するため
-      const quotaFold = await this.#quotaFoldNoticeFor(event);
+      const quotaFold = await this.#recoveredFoldNoticeFor(event, 'quota');
       if (quotaFold !== null) {
-        await this.#foldRecoveredQuotaNotice(event, quotaFold);
+        await this.#foldRecoveredNotice(event, quotaFold, 'quota');
         await this.#settleInboxEvent(event, false);
         this.#inFlight = null;
         continue;
@@ -2350,9 +2350,9 @@ class Clone implements CloneHost {
 
       // 枠の知らせ以外で、担当が戻っていれば畳んでよい印の付いた知らせ（#5048。作業者の落ち・起こし直し・セッションの落ち）。
       // 枠の知らせと同じく、1件ずつ・枠の短絡より後ろで、配る時点の状態で判定する
-      const recoveredFold = await this.#recoveredNoticeFoldFor(event);
+      const recoveredFold = await this.#recoveredFoldNoticeFor(event, 'recovered');
       if (recoveredFold !== null) {
-        await this.#foldRecoveredNotice(event, recoveredFold);
+        await this.#foldRecoveredNotice(event, recoveredFold, 'recovered');
         await this.#settleInboxEvent(event, false);
         this.#inFlight = null;
         continue;
@@ -2923,27 +2923,19 @@ class Clone implements CloneHost {
 
   // 消えてよいのはクローンを起こすことだけで、記録は消さない: 型ごとの本文追記と「畳んだ」の1行を書く（配り直した行と対で残り、「畳んだ」と「そもそも配られなかった」を区別できる）。断り書きは全文で写す: どこにも保存されず、写さないと畳んだ根拠が永久に取れないため
   // 本文は畳む前に日誌へ書く: 知らせとしての記録は残し、消すのはクローンのターンだけにするため
-  async #foldRecoveredQuotaNotice(event: InboxEvent, notice: string): Promise<void> {
+  // 枠以外の知らせ（`recovered`。#5048）も同じく、本文と根拠を日誌へ残して、消すのはクローンのターンだけにする。文言の違いは「枠の知らせ」か「知らせ」かだけ
+  async #foldRecoveredNotice(
+    event: InboxEvent,
+    notice: string,
+    kind: 'quota' | 'recovered',
+  ): Promise<void> {
     await this.#journalIncomingBody(event);
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'outbound',
       text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた枠の知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
-        `いない）: ${inboxEventShape(event)}\n\n${notice}`,
-    });
-  }
-
-  // `#foldRecoveredQuotaNotice` と同じく、本文と根拠を日誌へ残して、消すのはクローンのターンだけにする（#5048）
-  async #foldRecoveredNotice(event: InboxEvent, notice: string): Promise<void> {
-    await this.#journalIncomingBody(event);
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた${kind === 'quota' ? '枠の' : ''}知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
         `いない）: ${inboxEventShape(event)}\n\n${notice}`,
     });
   }
@@ -4028,29 +4020,31 @@ class Clone implements CloneHost {
     return describeQuotaRecovery(targets, managers, Date.now());
   }
 
-  // 一覧を引けなければ畳まない（`null`）: 確かめられないまま消すより、届けて `#quotaRecoveryNoticeFor` の「確かめられなかった」を読ませる側へ倒すため
-  async #quotaFoldNoticeFor(event: InboxEvent): Promise<string | null> {
-    const targets = foldableQuotaStopTargetsOf(event);
-    if (targets === undefined) return null;
+  // 戻っていた担当の知らせを畳んでよいか（畳むなら日誌へ写す断り書き。畳まないなら `null`）。枠の知らせ（`quota`）とそれ以外（`recovered`）の2組を1本にした。違いは入口の印と判定の関数だけ:
+  //   - quota: 印は `quotaSessionWindow` 等（`foldableQuotaStopTargetsOf`）、判定は `quotaFoldNoticeOf`。
+  //   - recovered: 印は `foldWhenBack`（#5048）、判定は `recoveredNoticeFoldOf`（`movedFromGeneration`・`attached` はこちらだけが見る）。
+  // 印の無い知らせでは一覧を引かない。一覧を引けなければ畳まない（`null`）: 確かめられないまま消すより、届けて `#quotaRecoveryNoticeFor` の「確かめられなかった」を読ませる側へ倒すため
+  async #recoveredFoldNoticeFor(
+    event: InboxEvent,
+    kind: 'quota' | 'recovered',
+  ): Promise<string | null> {
+    let decide: ((managers: readonly QuotaRecoverySummary[]) => string | null) | null = null;
+    if (kind === 'quota') {
+      const targets = foldableQuotaStopTargetsOf(event);
+      if (targets !== undefined) {
+        decide = (managers) => quotaFoldNoticeOf(targets, managers, Date.now());
+      }
+    } else if (event.type === 'manager_message' && event.foldWhenBack !== undefined) {
+      decide = (managers) => recoveredNoticeFoldOf(event, managers, Date.now());
+    }
+    if (decide === null) return null;
     let managers: readonly QuotaRecoverySummary[];
     try {
       managers = await this.#managers.list();
     } catch {
       return null;
     }
-    return quotaFoldNoticeOf(targets, managers, Date.now());
-  }
-
-  // 印（`foldWhenBack`）の無い知らせでは一覧を引かない。一覧を引けなければ畳まない（`null`）: 確かめられないまま消さない（#5048）
-  async #recoveredNoticeFoldFor(event: InboxEvent): Promise<string | null> {
-    if (event.type !== 'manager_message' || event.foldWhenBack === undefined) return null;
-    let managers: readonly QuotaRecoverySummary[];
-    try {
-      managers = await this.#managers.list();
-    } catch {
-      return null;
-    }
-    return recoveredNoticeFoldOf(event, managers, Date.now());
+    return decide(managers);
   }
 
   // 書き込みの完了を待ってから消す: 待たないと短いターンでは消し込みが書き込みを追い越し、消したはずの合図が後から書かれて起動のたびに永久に配り直されるため
