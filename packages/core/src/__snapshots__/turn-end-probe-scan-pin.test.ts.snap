@@ -1,0 +1,128 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > assistant が無い 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > sidechain の assistant 行は飛ばす 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": {
+    "stopReason": "end_turn",
+    "tail": "本流",
+    "timestamp": "2026-11-05T00:00:00.000Z",
+  },
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > stop_reason が無い（文字列でない）行で決まる 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 後ろの user 行と空行と JSON でない行を飛ばして、本流の最後の assistant 行で決める 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": {
+    "stopReason": "end_turn",
+    "tail": "本文",
+    "timestamp": "2026-11-05T00:00:00.000Z",
+  },
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 最後が end_turn の本文 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": {
+    "stopReason": "end_turn",
+    "tail": "終わり",
+    "timestamp": "2026-11-05T00:00:00.000Z",
+  },
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 最後が tool_use で、id の無い tool_use だけ 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 最後が tool_use で、すべてに答えている 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 最後が tool_use で、後ろの tool_result が一部に答えている 1`] = `
+{
+  "toolUseStall": {
+    "pending": [
+      {
+        "id": "x",
+        "name": "T-x",
+      },
+      {
+        "id": "z",
+        "name": "T-z",
+      },
+    ],
+    "timestamp": "2026-11-05T00:00:00.000Z",
+  },
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 本流の tool_use の後ろに sidechain の行があっても、本流の行で決める 1`] = `
+{
+  "toolUseStall": {
+    "pending": [
+      {
+        "id": "q",
+        "name": "T-q",
+      },
+    ],
+    "timestamp": "2026-11-05T00:00:00.000Z",
+  },
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 空の生ログ 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 窓にちょうど収まる生ログでは、先頭の行も見る 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": {
+    "stopReason": "end_turn",
+    "tail": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+    "timestamp": "2026-11-05T00:00:00.000Z",
+  },
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 窓の先頭で切れた行は、残りが読める JSON でも捨てる 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
+
+exports[`turn-end-probe: 本流の最後の assistant 行の探し方を、2つの探りの結果で固定する > 窓より長い生ログで、窓の先頭で切れた行は捨てる 1`] = `
+{
+  "toolUseStall": undefined,
+  "turnEnd": undefined,
+}
+`;
