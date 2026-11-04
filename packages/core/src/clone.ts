@@ -702,6 +702,10 @@ const SCHEDULE_STORE_RETRY_MS = 200;
 const FORGET_RETRY_ATTEMPTS = 3;
 const FORGET_RETRY_MS = 200;
 
+// 戻っていた担当の知らせを畳む2組（`#recoveredFoldNoticeFor`・`#foldRecoveredNotice`）。`#pump` はこの順に見る: 枠の知らせ（#4499）が先、枠以外の知らせ（#5048）が後
+const RECOVERED_FOLD_KINDS = ['quota', 'recovered'] as const;
+type RecoveredFoldKind = (typeof RECOVERED_FOLD_KINDS)[number];
+
 // 65,535 を上げない: `IN (...)` のバインドパラメータ上限で、`removeMany` の DELETE に条件を足すなら下げること
 const RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65_535;
 
@@ -2253,7 +2257,8 @@ class Clone implements CloneHost {
     // 2本（`#pickUpTranscriptGrave` / `#pickUpLostSession`）に分けたまま `#sweepGraves` が直列に回す: 畳むとどちらの材料が無かったのかが日誌から消え、同時に走らせると同じ蒸留の枠を取り合うため
     void this.#sweepGraves();
 
-    for await (const event of this.#delivery.inbox) {
+    // 名前を付ける: 戻っていた担当の知らせの畳み（下の `for … of RECOVERED_FOLD_KINDS`）が、畳んだら次の合図へ進む（`continue pump`）ため
+    pump: for await (const event of this.#delivery.inbox) {
       this.#inFlight = { events: [event], started: false };
       // 印は必ず消費する（判定の結果にかかわらず）: 残すと、後で配り直された同じ合図が暇なときの新着に見えるため
       const arrivedWhileIdle = this.#delivery.inbox.consumeBypass(event);
@@ -2322,24 +2327,18 @@ class Clone implements CloneHost {
         continue;
       }
 
+      // 戻っていた担当の知らせは、担当が戻っていればターンを起こさずに畳む。枠の知らせ（`quota`。#4499）を先に、枠以外の知らせ（`recovered`。#5048。作業者の落ち・起こし直し・セッションの落ち）を後に見る:
+      // 両方の印を持つ知らせは枠の側の判定と文言で畳み、枠の側で畳めなかったときだけ枠以外の側を見るため
       // まとめ読みより前に1件ずつ見る: 束にしてから見ると、戻っていない担当の知らせ1件のために、戻った担当の知らせまで一緒に届くため（#4499）
       // 枠の短絡より後ろに置く: クローン自身が枠で止まっている間は保持し、解除されて配る時点の状態で判定するため
-      const quotaFold = await this.#recoveredFoldNoticeFor(event, 'quota');
-      if (quotaFold !== null) {
-        await this.#foldRecoveredNotice(event, quotaFold, 'quota');
-        await this.#settleInboxEvent(event, false);
-        this.#inFlight = null;
-        continue;
-      }
-
-      // 枠の知らせ以外で、担当が戻っていれば畳んでよい印の付いた知らせ（#5048。作業者の落ち・起こし直し・セッションの落ち）。
-      // 枠の知らせと同じく、1件ずつ・枠の短絡より後ろで、配る時点の状態で判定する
-      const recoveredFold = await this.#recoveredFoldNoticeFor(event, 'recovered');
-      if (recoveredFold !== null) {
-        await this.#foldRecoveredNotice(event, recoveredFold, 'recovered');
-        await this.#settleInboxEvent(event, false);
-        this.#inFlight = null;
-        continue;
+      for (const kind of RECOVERED_FOLD_KINDS) {
+        const folded = await this.#recoveredFoldNoticeFor(event, kind);
+        if (folded !== null) {
+          await this.#foldRecoveredNotice(event, folded, kind);
+          await this.#settleInboxEvent(event, false);
+          this.#inFlight = null;
+          continue pump;
+        }
       }
 
       // 暇なときに最初に届いた報告・外部の合図だけ、短く待ってから束ねる: 待ち行列を素通りして単独で即ターンになると、直後に続く合図が「1件目だけ単独 + 残りの束」で余計に1ターン走るため
@@ -2922,7 +2921,7 @@ class Clone implements CloneHost {
   async #foldRecoveredNotice(
     event: InboxEvent,
     notice: string,
-    kind: 'quota' | 'recovered',
+    kind: RecoveredFoldKind,
   ): Promise<void> {
     await this.#journalIncomingBody(event);
     await this.#journalSelf(
@@ -4003,7 +4002,7 @@ class Clone implements CloneHost {
   // 印の無い知らせでは一覧を引かない。一覧を引けなければ畳まない（`null`）: 確かめられないまま消すより、届けて `#quotaRecoveryNoticeFor` の「確かめられなかった」を読ませる側へ倒すため
   async #recoveredFoldNoticeFor(
     event: InboxEvent,
-    kind: 'quota' | 'recovered',
+    kind: RecoveredFoldKind,
   ): Promise<string | null> {
     let decide: ((managers: readonly QuotaRecoverySummary[]) => string | null) | null = null;
     if (kind === 'quota') {
