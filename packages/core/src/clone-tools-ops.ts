@@ -36,6 +36,7 @@ import type { JournalEntryInput } from './schema.js';
 import {
   guardArchiveRemoval,
   type ManagerPool,
+  type ManagerTranscript,
   type RunnerFleetOverview,
   type RunnerManagerEntry,
   type RunnerOverview,
@@ -940,6 +941,188 @@ function renderArchiveRemoveManyDone(args: {
     ...renderArchiveRemoveManyRacedNote(targeted, state.raced),
     ...renderArchiveRemoveManyInUseNote(args.skippedInUse),
   ].join('\n');
+}
+
+interface ManagerTranscriptInput {
+  managerId: string;
+  offset: number;
+  since: string | undefined;
+  until: string | undefined;
+  type: string | undefined;
+  contains: string | undefined;
+}
+
+type ManagerTranscriptBody = Extract<ManagerTranscript, { kind: 'body' }>;
+type ManagerTranscriptRemoved = Extract<ManagerTranscript, { kind: 'removed' }>;
+type ManagerTranscriptFilterCounts = Awaited<
+  ReturnType<typeof filterTranscriptLinesYielding>
+>['counts'];
+
+// 引数の検査。断る文を返す（通れば null）。since/until が読めるかは生ログを読みに行く前に見る（順序は元のまま）
+function describeManagerTranscriptViolation(input: ManagerTranscriptInput): string | null {
+  const { offset, since, until } = input;
+  const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+  if (offsetError !== null) return offsetError;
+  if (since !== undefined && !isReadableJournalTimeBoundary(since)) {
+    return describeUnreadableJournalTimeBoundary('since', since) + '生ログは絞れない。';
+  }
+  if (until !== undefined && !isReadableJournalTimeBoundary(until)) {
+    return describeUnreadableJournalTimeBoundary('until', until) + '生ログは絞れない。';
+  }
+  return null;
+}
+
+function hasManagerTranscriptFilter(input: ManagerTranscriptInput): boolean {
+  const { since, until, type, contains } = input;
+  return (
+    since !== undefined || until !== undefined || type !== undefined || contains !== undefined
+  );
+}
+
+// 読めない行を「生ログは無い」と言わない
+function renderManagerTranscriptUnreadable(detail: string): string {
+  return `${detail}生ログには降りていない。`;
+}
+
+// `missing` が2つの意味を畳んでいることを隠さずそう書く: `ManagerPool.transcript()` が区別する値を返さないため（leg は道具の式が await して渡す）
+function renderManagerTranscriptMissing(managerId: string, missingLeg: string): string {
+  return (
+    `マネージャー ${managerId} の生ログは無い。走行中の runner のディスク・` +
+    '退避済みアーカイブ・預かったセッションの生ログ、3段のどこにも見当たらなかった。' +
+    `（${managerId} という id 自体が台帳に無い場合と、id はあるが生ログが` +
+    '一度も残らなかった場合のどちらも、この応答だけでは区別できない。' +
+    'manager_list に出ているかで id の実在は別途確かめられる。）\n\n' +
+    missingLeg
+  );
+}
+
+// `missing` と同じ文面へ畳まない: 退避そのものは在ったが本文が落とされており、「どこにも無かった」ではなく「消された」ため
+function renderManagerTranscriptRemoved(
+  managerId: string,
+  result: ManagerTranscriptRemoved,
+): string {
+  return (
+    `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
+    `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
+    `archive id: ${result.archiveId}）。` +
+    '走行中の runner のディスク・預かったセッションの生ログにも見当たらなかった。'
+  );
+}
+
+function selectManagerTranscriptTypes(type: string | undefined): string[] | undefined {
+  return type === undefined
+    ? undefined
+    : type
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+}
+
+// 「全X行のうちY行が当たった」は0件でも出す: 黙って空の本文を返すと「絞りが効いていない」のか「本当に0件だった」のか区別できないため
+function renderManagerTranscriptFilterNote(
+  counts: ManagerTranscriptFilterCounts,
+  since: string | undefined,
+  until: string | undefined,
+): string {
+  const { totalLines, matchedLines, noTimestampLines, unparsableLines } = counts;
+  const noteLines = [`絞り込み: 全 ${totalLines} 行のうち ${matchedLines} 行が当たった。`];
+  if (since !== undefined || until !== undefined) {
+    // 窓を渡したときは除いた行数を0件でも出す: 黙って捨てると「窓の判定ができない行があった」という事実そのものが出力から消えるため
+    noteLines.push(
+      `（時刻の無い行 ${noTimestampLines} 行・読めない行 ${unparsableLines} 行は` +
+        '窓の判定ができないので除いた）',
+    );
+  } else if (unparsableLines > 0) {
+    noteLines.push(
+      `（JSON として読めない行 ${unparsableLines} 行は type の判定ができないので除いた）`,
+    );
+  }
+  return noteLines.join('\n') + '\n\n';
+}
+
+// 1枚目の本文を絞って頁の控えにする（絞りの await → `new Date()` の順は元のまま。各1回）
+async function buildManagerTranscriptSnapshot(
+  result: ManagerTranscriptBody,
+  input: ManagerTranscriptInput,
+  hasFilter: boolean,
+): Promise<TranscriptPageSnapshot> {
+  const { body: rawBody, archiveId } = result;
+  const { since, until, type, contains } = input;
+  let body = rawBody;
+  let filterNote = '';
+  if (hasFilter) {
+    const types = selectManagerTranscriptTypes(type);
+    const filtered = await filterTranscriptLinesYielding(rawBody, {
+      since,
+      until,
+      types,
+      contains,
+    });
+    body = filtered.body;
+    filterNote = renderManagerTranscriptFilterNote(filtered.counts, since, until);
+  }
+  return {
+    body,
+    filterNote,
+    ...(archiveId === undefined ? {} : { archiveId }),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+function renderManagerTranscriptArchiveNote(archiveId: string | undefined): string {
+  return archiveId === undefined
+    ? ''
+    : `（archive id: ${archiveId}。archive_remove archiveId=${archiveId} で消せる）`;
+}
+
+// 続きの取り方に今回渡した絞りの引数をそのまま付ける: 付けないと、続きを読んだ瞬間に絞りが外れて窓の外の行まで読めてしまうため
+function describeManagerTranscriptResumeFilterArgs(
+  input: ManagerTranscriptInput,
+  hasFilter: boolean,
+): string {
+  const { since, until, type, contains } = input;
+  return hasFilter
+    ? [
+        since !== undefined ? ` since=${since}` : '',
+        until !== undefined ? ` until=${until}` : '',
+        type !== undefined ? ` type=${type}` : '',
+        contains !== undefined ? ` contains=${contains}` : '',
+      ].join('')
+    : '';
+}
+
+function renderManagerTranscriptTail(
+  managerId: string,
+  part1: ReturnType<typeof page>,
+  resumeFilterArgs: string,
+): string {
+  return part1.more
+    ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}${resumeFilterArgs}）`
+    : '';
+}
+
+// 使い回した頁にはいつの生ログかを添える: 1枚目より後に書かれた行は載らないため
+function renderManagerTranscriptReuseNote(reusedPage: boolean, fetchedAt: string): string {
+  return reusedPage
+    ? `\n（この頁は1枚目を読んだ時点（${fetchedAt}）の生ログを使い回している。それより後の行は offset を付けずに読み直すと載る）`
+    : '';
+}
+
+function renderManagerTranscriptPage(args: {
+  input: ManagerTranscriptInput;
+  hasFilter: boolean;
+  snapshot: TranscriptPageSnapshot;
+  part1: ReturnType<typeof page>;
+  reusedPage: boolean;
+}): string {
+  const { input, hasFilter, snapshot, part1, reusedPage } = args;
+  const { managerId } = input;
+  const archiveNote = renderManagerTranscriptArchiveNote(snapshot.archiveId);
+  const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）${archiveNote}`;
+  const resumeFilterArgs = describeManagerTranscriptResumeFilterArgs(input, hasFilter);
+  const tail = renderManagerTranscriptTail(managerId, part1, resumeFilterArgs);
+  const reuseNote = renderManagerTranscriptReuseNote(reusedPage, snapshot.fetchedAt);
+  return `${snapshot.filterNote}${head}${reuseNote}\n\n${part1.body}${tail}`;
 }
 
 export function opsTools(context: ToolContext, shared: CloneToolsShared) {
