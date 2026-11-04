@@ -8090,19 +8090,7 @@ class Clone implements CloneHost {
       }
 
       case 'compaction': {
-        this.#sdkSession.turn?.timer?.compactionEnded();
-        // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
-        this.#returnToFullText({
-          situation: true,
-          digest: { reason: 'compaction', label: 'compact_boundary' },
-        });
-        // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
-        this.#sdkSession.turn?.compactions.push({
-          trigger: event.trigger,
-          preTokens: event.preTokens,
-          ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
-        });
-        return;
+        return this.#applyCompaction(event);
       }
 
       case 'transcript_mirror_failed': {
@@ -8113,22 +8101,7 @@ class Clone implements CloneHost {
       }
 
       case 'refusal': {
-        const turn = this.#sdkSession.turn;
-        if (turn !== null) {
-          turn.refusal = { category: event.category ?? turn.refusal?.category ?? null };
-        }
-        if (event.fellBack) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: ${event.category ?? '不明'}、` +
-              `元のモデル: ${event.originalModel ?? '不明'}）。`,
-            ...(turn?.conversationId == null ? {} : { conversationId: turn.conversationId }),
-          });
-        }
-        return;
+        return this.#applyRefusal(event);
       }
 
       case 'turn_ended': {
@@ -8139,24 +8112,7 @@ class Clone implements CloneHost {
       // この層は見ないと決めてある。クローンのターンは人間が読む面で、報告を握り潰す判断が別に要る。
       // 例外は `delegation_notified` の失敗通知だけ: 作業者が上限で落ちた事実だけを覚え、次の道具の結果へ添える（#4911）。
       case 'delegation_notified': {
-        // 失敗の通知で、文言が「上限に当たった」と読めるものに限る。completed の報告の引用では立てない（#4903 と同じ）
-        if (
-          event.status === 'failed' &&
-          event.summary !== undefined &&
-          classifyUsageNotice(event.summary)?.kind === 'reached'
-        ) {
-          // 身元は作業者を呼んだ tool_use の id にそろえる（#4996。担当の層 `runner.ts` と同じ）
-          await this.#recordWorkerLimit(
-            event.toolUseId !== undefined
-              ? `tool_use:${event.toolUseId}`
-              : event.taskId === undefined
-                ? 'background-worker'
-                : `task:${event.taskId}`,
-            workerLimitLabel(event.toolUseId, event.taskId),
-            event.summary,
-          );
-        }
-        return;
+        return this.#applyDelegationNotified(event);
       }
 
       case 'delegation_started':
@@ -8170,6 +8126,67 @@ class Clone implements CloneHost {
         return;
       }
     }
+  }
+
+  /** SDK `compaction` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyCompaction(event: Extract<AgentEvent, { type: 'compaction' }>): Promise<void> {
+    this.#sdkSession.turn?.timer?.compactionEnded();
+    // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
+    this.#returnToFullText({
+      situation: true,
+      digest: { reason: 'compaction', label: 'compact_boundary' },
+    });
+    // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
+    this.#sdkSession.turn?.compactions.push({
+      trigger: event.trigger,
+      preTokens: event.preTokens,
+      ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
+    });
+    return;
+  }
+
+  /** SDK `refusal` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyRefusal(event: Extract<AgentEvent, { type: 'refusal' }>): Promise<void> {
+    const turn = this.#sdkSession.turn;
+    if (turn !== null) {
+      turn.refusal = { category: event.category ?? turn.refusal?.category ?? null };
+    }
+    if (event.fellBack) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: ${event.category ?? '不明'}、` +
+          `元のモデル: ${event.originalModel ?? '不明'}）。`,
+        ...(turn?.conversationId == null ? {} : { conversationId: turn.conversationId }),
+      });
+    }
+    return;
+  }
+
+  /** SDK `delegation_notified` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyDelegationNotified(
+    event: Extract<AgentEvent, { type: 'delegation_notified' }>,
+  ): Promise<void> {
+    // 失敗の通知で、文言が「上限に当たった」と読めるものに限る。completed の報告の引用では立てない（#4903 と同じ）
+    if (
+      event.status === 'failed' &&
+      event.summary !== undefined &&
+      classifyUsageNotice(event.summary)?.kind === 'reached'
+    ) {
+      // 身元は作業者を呼んだ tool_use の id にそろえる（#4996。担当の層 `runner.ts` と同じ）
+      await this.#recordWorkerLimit(
+        event.toolUseId !== undefined
+          ? `tool_use:${event.toolUseId}`
+          : event.taskId === undefined
+            ? 'background-worker'
+            : `task:${event.taskId}`,
+        workerLimitLabel(event.toolUseId, event.taskId),
+        event.summary,
+      );
+    }
+    return;
   }
 
   /** SDK `session_started` の1件を処理する（`#apply` が振り分ける）。 */

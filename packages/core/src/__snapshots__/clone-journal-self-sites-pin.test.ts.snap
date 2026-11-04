@@ -74,7 +74,7 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#recordUsage 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（\${fold.reset.fromCostUsd.toFixed(4)} → \` + \`\${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が \` + '0 から始まったため。記録済みの分は保持している。'",
   "#recordUsage 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}[site=\${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: \${reasonOf(error)}\`",
   "#read 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: \` + \`\${previousSessionId ?? '不明'}）: \${describeReopenArchive(archived)}\`",
-  "#apply 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: \${event.category ?? '不明'}、\` + \`元のモデル: \${event.originalModel ?? '不明'}）。\` [+...(turn?.conversationId == null ? {} : {conversationId: turn.conversationId})]",
+  "#applyRefusal 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: \${event.category ?? '不明'}、\` + \`元のモデル: \${event.originalModel ?? '不明'}）。\` [+...(turn?.conversationId == null ? {} : {conversationId: turn.conversationId})]",
   "#applySessionStarted 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${described.text}\`",
   "#applySessionStarted 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直した: \${reopened.previousSessionId ?? '（古い id は不明）'}\` + \` → \${event.sessionId}（\${describeReopenArchive(reopened.archive)}）\`",
   "#applyRateLimit 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、\` + \`\${crossFold.folded.size} 本の異なる会話が当たっている\` + '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。'",
