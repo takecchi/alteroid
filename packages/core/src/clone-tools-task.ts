@@ -922,6 +922,182 @@ function renderInboxRemoveManyDone(args: {
   ].join('\n');
 }
 
+type TaskCursorOutcome = ReturnType<typeof resolveTaskCursor>;
+type TaskCursorRefusal = Exclude<TaskCursorOutcome, { kind: 'ok' }>;
+type TaskListStores = CloneToolsShared['stores'];
+type TaskListUnreadable = Awaited<ReturnType<TaskListStores['tasks']['list']>>['unreadable'];
+type TaskReadOutcome = { kind: 'unreadable' } | { kind: 'missing' } | { kind: 'found'; task: Task };
+
+// 引数の検査。断る文を返す（通れば null）
+function describeTaskListViolation(offset: number): string | null {
+  return describeIntRangeViolation('offset', offset, { min: 0 });
+}
+
+// `UnreadableTaskError` だけを3値目として返す: 器の障害まで飲み込むと「壊れている」に化けて見えなくなるため
+async function readTaskForFullText(
+  tasks: TaskListStores['tasks'],
+  id: string,
+): Promise<TaskReadOutcome> {
+  let task: Task | null;
+  try {
+    task = await tasks.get(id);
+  } catch (error) {
+    if (error instanceof UnreadableTaskError) return { kind: 'unreadable' };
+    throw error;
+  }
+  if (task === null) return { kind: 'missing' };
+  return { kind: 'found', task };
+}
+
+function renderTaskListUnreadableOne(id: string): string {
+  return `task ${id} は読めない形で入っている（無いのとは違う）。本文はここでは取れない。`;
+}
+
+function renderTaskListMissing(id: string): string {
+  return `task ${id} は無い（task_list で実在する id を確かめること）。`;
+}
+
+function renderTaskFullHead(id: string, task: Task): string {
+  return [
+    `${id} ${task.title}`,
+    `${taskOriginBadge({ origin: task.origin, source: task.source })}`,
+    `作成: ${task.createdAt} / 更新: ${task.updatedAt}`,
+    taskStatusLine(task),
+    ...(task.originConversationId === undefined
+      ? []
+      : [`起点の会話: ${task.originConversationId}`]),
+  ].join('\n');
+}
+
+// 閉じた理由を本文より先に置く: 本文が長いと2ページ目へ落ちるため
+function renderTaskFullBody(task: Task): string {
+  return [
+    ...(task.closedAt === undefined ? [] : [`閉じた理由: ${describeTaskClosedRecord(task)}`]),
+    `本文（全文）: ${task.body}`,
+  ].join('\n\n');
+}
+
+function renderTaskFullTail(task: Task, part: ReturnType<typeof page>): string {
+  return part.more
+    ? `\n\n…（ここで切れている。続きは task_list id=${task.id} offset=${part.to}）`
+    : '';
+}
+
+function renderTaskFull(id: string, task: Task, offset: number): string {
+  const head = renderTaskFullHead(id, task);
+  const body = renderTaskFullBody(task);
+  const part = page(body, offset, TASK_PAGE);
+  const tail = renderTaskFullTail(task, part);
+  return `${head}（${describePage(part)}）\n\n${part.body}${tail}`;
+}
+
+function renderTaskListEmpty(): string {
+  return '（task は無い）';
+}
+
+function renderTaskListCursorRefusal(
+  outcome: TaskCursorRefusal,
+  cursor: string | undefined,
+): string {
+  if (outcome.kind === 'malformed') {
+    return (
+      'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+      '一覧を先頭から読み直すには cursor を付けずに task_list を呼ぶこと。'
+    );
+  }
+  if (outcome.kind === 'includeClosed-mismatch') {
+    return (
+      `cursor は includeClosed=${outcome.cursorIncludeClosed} の一覧から出た続きの位置。` +
+      `task_list includeClosed=${outcome.cursorIncludeClosed} cursor=${cursor} のように揃えて呼び直すか、` +
+      'cursor を付けずに先頭から呼び直すこと。'
+    );
+  }
+  return (
+    'cursor が指していた task は、いまの一覧に居ない（閉じた・消えた）。続きの位置が決められないので、' +
+    '黙って別の続きにはしない。cursor を付けずに task_list を先頭から呼び直すこと。'
+  );
+}
+
+function renderTaskListItems(view: readonly Task[], firstPosition: number): string[] {
+  return view.map((task, index) =>
+    renderListingEntry({
+      id: task.id,
+      title: task.title,
+      summary: excerptLine(task.body, TASK_BODY_LIMIT),
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      extra: [
+        `  ${firstPosition + index + 1}番目 / ${taskStatusLine(task)}`,
+        ...(task.originConversationId === undefined
+          ? []
+          : [`  起点の会話: ${task.originConversationId}`]),
+      ],
+    }),
+  );
+}
+
+// 母数は cursor を当てる前の全件: 頁が進んでも動かさないため
+function renderTaskListOmitted(args: {
+  rest: number;
+  shown: number;
+  view: readonly Task[];
+  total: number;
+  firstPosition: number;
+  includeClosed: boolean;
+}): string {
+  const { rest, shown, view, total, firstPosition, includeClosed } = args;
+  const lastShown = view[shown - 1];
+  const nextCursor = encodeTaskCursor({ id: lastShown!.id, includeClosed });
+  return (
+    `…ほか ${rest} 件は省略（task は ${total} 件あり、並びの ${firstPosition + 1} 番目から ${shown} 件だけ出した。` +
+    `省いたのは、これより後ろの件である。続きは task_list cursor=${nextCursor} で取れる。` +
+    `includeClosed=${includeClosed} のまま呼ぶこと）。`
+  );
+}
+
+function renderTaskListBody(args: {
+  entriesCount: number;
+  view: readonly Task[];
+  items: readonly string[];
+  firstPosition: number;
+  includeClosed: boolean;
+}): string[] {
+  const { entriesCount, view, items, firstPosition, includeClosed } = args;
+  if (entriesCount === 0) return ['（読める task は無い）'];
+  if (view.length === 0) return ['（cursor より後ろの task は無い。これが最後の頁）'];
+  return [
+    includeClosed
+      ? '（上から並び順。開いている件の後ろに、閉じた件が新しい順で続く）'
+      : '（以下はすべて開いている件。上が先）',
+    renderListing(items, {
+      budget: TASK_LIST_BUDGET,
+      omitted: ({ rest, shown }) =>
+        renderTaskListOmitted({
+          rest,
+          shown,
+          view,
+          total: entriesCount,
+          firstPosition,
+          includeClosed,
+        }),
+    }),
+    `（本文は${TASK_BODY_LIMIT}字の抜粋。1件の全文は task_list id=<id> で取れる）`,
+  ];
+}
+
+function renderTaskListUnreadableNote(unreadable: TaskListUnreadable): string {
+  const idsAll = unreadable
+    .map((entry) => entry.id)
+    .filter((value): value is string => value !== undefined);
+  const ids = idsAll.slice(0, UNREADABLE_TASK_IDS_SHOWN);
+  const idsRest = idsAll.length - ids.length;
+  return `**読めない行が ${unreadable.length} 件ある${
+    ids.length > 0
+      ? `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`
+      : ''
+  }。終わったのではない。**`;
+}
+
 export function taskTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getWorkConversationId } = shared;
   return [
@@ -961,132 +1137,36 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ id, offset = 0, includeClosed, cursor }) => {
-        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        const offsetError = describeTaskListViolation(offset);
         if (offsetError !== null) return text(offsetError);
         if (id !== undefined) {
-          // `UnreadableTaskError` だけを3値目として返す: 器の障害まで飲み込むと「壊れている」に化けて見えなくなるため
-          let task: Task | null;
-          try {
-            task = await stores.tasks.get(id);
-          } catch (error) {
-            if (error instanceof UnreadableTaskError) {
-              return text(
-                `task ${id} は読めない形で入っている（無いのとは違う）。本文はここでは取れない。`,
-              );
-            }
-            throw error;
-          }
-          if (task === null)
-            return text(`task ${id} は無い（task_list で実在する id を確かめること）。`);
-          const head = [
-            `${id} ${task.title}`,
-            `${taskOriginBadge({ origin: task.origin, source: task.source })}`,
-            `作成: ${task.createdAt} / 更新: ${task.updatedAt}`,
-            taskStatusLine(task),
-            ...(task.originConversationId === undefined
-              ? []
-              : [`起点の会話: ${task.originConversationId}`]),
-          ].join('\n');
-          // 閉じた理由を本文より先に置く: 本文が長いと2ページ目へ落ちるため
-          const body = [
-            ...(task.closedAt === undefined
-              ? []
-              : [`閉じた理由: ${describeTaskClosedRecord(task)}`]),
-            `本文（全文）: ${task.body}`,
-          ].join('\n\n');
-          const part = page(body, offset, TASK_PAGE);
-          const tail = part.more
-            ? `\n\n…（ここで切れている。続きは task_list id=${task.id} offset=${part.to}）`
-            : '';
-          return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
+          const read = await readTaskForFullText(stores.tasks, id);
+          if (read.kind === 'unreadable') return text(renderTaskListUnreadableOne(id));
+          if (read.kind === 'missing') return text(renderTaskListMissing(id));
+          return text(renderTaskFull(id, read.task, offset));
         }
 
         const { entries, unreadable } = await stores.tasks.list(
           includeClosed === true ? { includeClosed: true } : undefined,
         );
         if (entries.length === 0 && unreadable.length === 0) {
-          return text('（task は無い）');
+          return text(renderTaskListEmpty());
         }
         const cursorOutcome = resolveTaskCursor(entries, includeClosed === true, cursor);
-        if (cursorOutcome.kind === 'malformed') {
-          return text(
-            'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
-              '一覧を先頭から読み直すには cursor を付けずに task_list を呼ぶこと。',
-          );
-        }
-        if (cursorOutcome.kind === 'includeClosed-mismatch') {
-          return text(
-            `cursor は includeClosed=${cursorOutcome.cursorIncludeClosed} の一覧から出た続きの位置。` +
-              `task_list includeClosed=${cursorOutcome.cursorIncludeClosed} cursor=${cursor} のように揃えて呼び直すか、` +
-              'cursor を付けずに先頭から呼び直すこと。',
-          );
-        }
-        if (cursorOutcome.kind === 'anchor-gone') {
-          return text(
-            'cursor が指していた task は、いまの一覧に居ない（閉じた・消えた）。続きの位置が決められないので、' +
-              '黙って別の続きにはしない。cursor を付けずに task_list を先頭から呼び直すこと。',
-          );
+        if (cursorOutcome.kind !== 'ok') {
+          return text(renderTaskListCursorRefusal(cursorOutcome, cursor));
         }
         const view = cursorOutcome.view;
         const firstPosition = entries.length - view.length;
-        const items = view.map((task, index) =>
-          renderListingEntry({
-            id: task.id,
-            title: task.title,
-            summary: excerptLine(task.body, TASK_BODY_LIMIT),
-            createdAt: task.createdAt,
-            updatedAt: task.updatedAt,
-            extra: [
-              `  ${firstPosition + index + 1}番目 / ${taskStatusLine(task)}`,
-              ...(task.originConversationId === undefined
-                ? []
-                : [`  起点の会話: ${task.originConversationId}`]),
-            ],
-          }),
-        );
-        const lines: string[] = [];
-        if (entries.length === 0) {
-          lines.push('（読める task は無い）');
-        } else if (view.length === 0) {
-          lines.push('（cursor より後ろの task は無い。これが最後の頁）');
-        } else {
-          lines.push(
-            includeClosed === true
-              ? '（上から並び順。開いている件の後ろに、閉じた件が新しい順で続く）'
-              : '（以下はすべて開いている件。上が先）',
-            renderListing(items, {
-              budget: TASK_LIST_BUDGET,
-              // 母数は cursor を当てる前の全件: 頁が進んでも動かさないため
-              omitted: ({ rest, shown }) => {
-                const lastShown = view[shown - 1];
-                const nextCursor = encodeTaskCursor({
-                  id: lastShown!.id,
-                  includeClosed: includeClosed === true,
-                });
-                return (
-                  `…ほか ${rest} 件は省略（task は ${entries.length} 件あり、並びの ${firstPosition + 1} 番目から ${shown} 件だけ出した。` +
-                  `省いたのは、これより後ろの件である。続きは task_list cursor=${nextCursor} で取れる。` +
-                  `includeClosed=${includeClosed === true} のまま呼ぶこと）。`
-                );
-              },
-            }),
-            `（本文は${TASK_BODY_LIMIT}字の抜粋。1件の全文は task_list id=<id> で取れる）`,
-          );
-        }
-        if (unreadable.length > 0) {
-          const idsAll = unreadable
-            .map((entry) => entry.id)
-            .filter((value): value is string => value !== undefined);
-          const ids = idsAll.slice(0, UNREADABLE_TASK_IDS_SHOWN);
-          const idsRest = idsAll.length - ids.length;
-          lines.push(
-            `**読めない行が ${unreadable.length} 件ある${
-              ids.length > 0
-                ? `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`
-                : ''
-            }。終わったのではない。**`,
-          );
-        }
+        const items = renderTaskListItems(view, firstPosition);
+        const lines = renderTaskListBody({
+          entriesCount: entries.length,
+          view,
+          items,
+          firstPosition,
+          includeClosed: includeClosed === true,
+        });
+        if (unreadable.length > 0) lines.push(renderTaskListUnreadableNote(unreadable));
         return text(lines.join('\n'));
       },
     ),
