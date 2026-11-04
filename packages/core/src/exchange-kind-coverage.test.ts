@@ -47,22 +47,40 @@ function readCoreSource(file: string): string {
 }
 
 /**
- * `type: 'exchange'` を実際に書く私有 helper の定義（ファイル → メソッド名）。
+ * `type: 'exchange'` を実際に書く helper（ファイル → 本体を書くメソッド名・呼び出しの字面・helper が固定で書く `with`）。
  * helper の本体は text を変数で受けるので接頭辞の検査の対象にならない。代わりに、helper の呼び出し
- * （`this.#journalExchange('inbound' | 'outbound', text)`）の側を書き込み箇所として数える。
+ * （`this.#journalExchange('inbound' | 'outbound', text)` / `this.#journalSelf(…)`）の側を書き込み箇所として数える。
+ * 表に無いファイルも既定の `journalExchange`（`#` の有無を問わない）の呼び出しを数える: 窓（`*-windows.ts`）などが `this.journalExchange(…)` で書くため。
  */
-const EXCHANGE_HELPER_DEFINITIONS: Record<string, string> = {
-  'manager.ts': '#journalExchange',
+interface ExchangeHelper {
+  /** 本体を書くメソッド名（その中の `journal({…})` は書き込み箇所に数えない）。無ければ本体はこのファイルに無い */
+  readonly definition?: string;
+  /** 呼び出しの字面（`this.` の後ろ）にかける正規表現の断片 */
+  readonly callPattern: string;
+  readonly with: string;
+}
+const DEFAULT_EXCHANGE_HELPER: ExchangeHelper = {
+  callPattern: '#?journalExchange',
+  with: 'manager',
+};
+const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
+  'clone.ts': { definition: '#journalSelf', callPattern: '#journalSelf', with: 'self' },
+  'manager.ts': {
+    definition: '#journalExchange',
+    callPattern: '#?journalExchange',
+    with: 'manager',
+  },
 };
 
 /**
  * 書き込み箇所の走査。2つの形を数える:
  *  - `journal(` / `journal.append(` に渡すオブジェクトリテラルが `type: 'exchange'` を持つもの（従来どおり）
- *  - helper `this.#journalExchange(role, text, …)` の呼び出し（`with: 'manager'` を固定で書く helper。text は第2引数）
+ *  - helper（`EXCHANGE_HELPER_DEFINITIONS`）の呼び出し `this.#helper(role, text)`（`with` を固定で書く helper。text は第2引数）
  */
 function findJournalCallObjects(file: string): ExchangeWriteSite[] {
   const text = readCoreSource(file);
   const sites: ExchangeWriteSite[] = [];
+  const helper = EXCHANGE_HELPER_DEFINITIONS[file] ?? DEFAULT_EXCHANGE_HELPER;
   const callRe = /\bjournal(?:\.append)?\(\{/g;
   let m: RegExpExecArray | null;
   while ((m = callRe.exec(text)) !== null) {
@@ -76,31 +94,31 @@ function findJournalCallObjects(file: string): ExchangeWriteSite[] {
     const objectText = text.slice(openBraceIndex, end + 1);
     if (!/type:\s*'exchange'/.test(objectText)) continue;
     const enclosing = enclosingDeclaration(text, m.index);
-    if (enclosing === EXCHANGE_HELPER_DEFINITIONS[file]) continue;
+    if (enclosing === helper.definition) continue;
     const line = text.slice(0, m.index).split('\n').length;
     sites.push({ file, line, objectText, enclosing, start: openBraceIndex, end });
   }
-  const helperRe = /\bthis\.#?journalExchange\(/g;
+  const helperRe = new RegExp(`\\bthis\\.${helper.callPattern}\\(`, 'g');
   while ((m = helperRe.exec(text)) !== null) {
     const openParenIndex = m.index + m[0].length - 1;
     const end = findMatchingBrace(text, openParenIndex, '(', ')');
     if (end === -1) {
       throw new Error(
-        `${file}: ${m.index} にある journalExchange( 呼び出しの閉じ括弧が見つからない（括弧の対応が崩れている）`,
+        `${file}: ${m.index} にある ${m[0]} 呼び出しの閉じ括弧が見つからない（括弧の対応が崩れている）`,
       );
     }
     const args = text.slice(openParenIndex + 1, end);
     const head = /^\s*'(?:inbound|outbound)',\s*/.exec(args);
     if (!head) {
       throw new Error(
-        `${file}: ${m.index} にある journalExchange( の第1引数が 'inbound' / 'outbound' の字面ではない（走査が読めない）`,
+        `${file}: ${m.index} にある ${m[0]} の第1引数が 'inbound' / 'outbound' の字面ではない（走査が読めない）`,
       );
     }
     sites.push({
       file,
       line: text.slice(0, m.index).split('\n').length,
-      // 既存の欄の取り出しをそのまま使うため、`text` 欄を持つオブジェクトの形に直す（with は helper が 'manager' で固定）。
-      objectText: `{ with: 'manager', text: ${args.slice(head[0].length)} }`,
+      // 既存の欄の取り出しをそのまま使うため、`text` 欄を持つオブジェクトの形に直す（with は helper が固定で書く値）。
+      objectText: `{ with: '${helper.with}', text: ${args.slice(head[0].length)} }`,
       enclosing: enclosingDeclaration(text, m.index),
       start: openParenIndex,
       end,
@@ -429,7 +447,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
  * 走査が見落とす書き方を黙って通さないための表で、載るのは helper の本体だけ（呼び出し側は走査が別に数える）。
  */
 const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, string>> = {
-  'clone.ts': {},
+  'clone.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',

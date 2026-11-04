@@ -5146,14 +5146,11 @@ class Clone implements CloneHost {
 
   async #reportDroppedGraves(what: string, dropped: readonly string[]): Promise<void> {
     if (dropped.length === 0) return;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_FAILURE_PREFIX}${what}が上限（${String(MAX_PENDING_GRAVES)} 件）を超えたので、` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}${what}が上限（${String(MAX_PENDING_GRAVES)} 件）を超えたので、` +
         `古いものから落とした: ${dropped.join(', ')}（⚠️ この区間は記憶へ移せていない）`,
-    });
+    );
   }
 
   #retryGravesFor(trigger: string, options: { onlyIfKeyChanged?: boolean } = {}): void {
@@ -5209,16 +5206,14 @@ class Clone implements CloneHost {
       // 判定と書き込みを1操作へ畳む: 引き直して比べる形では、引き直しの後・下ろす書き込みが効く前に新しい印が landing しうるため（`clone-grave-pickup-race.test.ts` が再現する）
       const lowered = await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
       // 下ろしていないなら「下ろした」と書かない: 跡が嘘をつくため
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${
           lowered
             ? text
             : `記憶へ移せていない区間の退避を拾えなかったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.archiveId}`
         }`,
-      });
+      );
       return;
     }
     await this.#distillGrave({
@@ -5253,12 +5248,10 @@ class Clone implements CloneHost {
 
     // 拾い直したことを日誌へ1行残す: `pre_compact_distill` の入力だけだと compaction の蒸留と区別が付かず、後から何回拾い直したかを数えられないため
     if (!quiet) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${options.recoveryText}`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}${options.recoveryText}`,
+      );
     }
 
     try {
@@ -5273,14 +5266,11 @@ class Clone implements CloneHost {
       // 印は残す（#4705）: 蒸留が落ちる主な理由は枠で、次の起動か鍵の契機で拾い直せるため。鍵は枠で落ちた時点で、観測の前に控え済み（#4898）
       const note = await this.#graveDistillFailureNote(kind, graveId);
       if (note !== null) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_FAILURE_PREFIX}${options.failureText(reasonOf(error))}` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_FAILURE_PREFIX}${options.failureText(reasonOf(error))}` +
             `（印は残す。次の起動で拾い直す: ${graveId}）${note}`,
-        });
+        );
       }
       return;
     }
@@ -5356,17 +5346,15 @@ class Clone implements CloneHost {
     if (transcript === null) {
       // 印だけを残さない: 残すと、拾えないものを起動のたびに引きに行くため
       const lowered = await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${
           lowered
             ? `捨てたセッションの生ログが1件も無いので、印を下ろした: ${grave.sessionId}` +
               '（⚠️ この区間は記憶へ移せていない）'
             : `捨てたセッションの生ログが1件も無かったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.sessionId}`
         }`,
-      });
+      );
       return;
     }
 
@@ -8717,6 +8705,14 @@ class Clone implements CloneHost {
     const turn = this.#sdkSession.turn;
     if (turn === null || turn.conversationId === null) return;
     await this.#journalReply(turn, false);
+  }
+
+  // `with: 'self'` の exchange（クローン自身の跡の1行）を書く。`manager.ts` の `#journalExchange` と同じ形。
+  // async にせず `#journal` の Promise をそのまま返す: `await` / `void` の呼び出し側のタイミングを変えない。
+  // 接頭辞（EXCHANGE_KIND_*_PREFIX）は呼び出し箇所の text に字面で置く（exchange-kind-coverage.test.ts が第2引数を走査する）。
+  // 欄が4つ（type・with・role・text）を超える行は、ここへ寄せずに `#journal` を直接呼ぶ
+  #journalSelf(role: 'inbound' | 'outbound', text: string): Promise<void> {
+    return this.#journal({ type: 'exchange', with: 'self', role, text });
   }
 
   /** 日誌の書き込み失敗でクローンのセッションを殺さない。 */
