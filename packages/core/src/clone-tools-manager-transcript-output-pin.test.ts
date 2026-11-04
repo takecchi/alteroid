@@ -159,15 +159,19 @@ const BIG_BODY = `${Array.from({ length: 42 }, (_, i) =>
     type: i < 40 ? 'assistant' : 'user',
     timestamp: ts(i),
     tag: i % 2 === 0 ? 'a' : 'b',
-    pad: 'x'.repeat(i < 40 ? 200 : 10),
+    pad: i < 40 ? 'xxxxxxxxx '.repeat(20) : 'xxxxxxxxx ',
   }),
 ).join('\n')}\n`;
 
-const TEN = '0123456789';
+// 固定値の json に長い `[A-Za-z0-9_./@-]` の連続を作らない: `scripts/agents-md-references.test.ts` の
+// `path:行番号` 走査の正規表現（`[A-Za-z0-9_@.][A-Za-z0-9_./@-]*:(\d+)`）は、コロンの無い長い連続に当たると
+// 開始位置ごとに末尾まで読み直して二乗の時間がかかる（8,000 字の連続1本で走査が約 1 秒延びる）。空白で 10 字ごとに切る。
+const TEN = '012345678 ';
 const BODY_8000 = TEN.repeat(800);
 const BODY_8001 = `${BODY_8000}Z`;
-const BODY_16001 = `${'abcdefghij'.repeat(1600)}!`;
-const BODY_ASTRAL = `${'a'.repeat(7_999)}😀tail`;
+const BODY_16001 = `${'abcdefghi '.repeat(1600)}!`;
+// 7,999 字（'aaaaaaaaa ' を 799 回＝7,990 字 + 'aaaaaaaaa' の 9 字）のあとに補助面の文字
+const BODY_ASTRAL = `${'aaaaaaaaa '.repeat(799)}aaaaaaaaa😀tail`;
 const SMALL = 'abcdefghij';
 
 /** 絞りを全部付けた引数（BIG_BODY の assistant は 0〜39 分。until=ts(40) は含まない） */
