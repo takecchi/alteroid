@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
 // そこで、書き込み箇所すべてについて「囲むメソッド・role・text の式」を取り出し、その一覧を固定する。
 // 寄せる前（`this.#journal({ type: 'exchange', with: 'self', role, text })`）と寄せた後（`this.#journalSelf(role, text)`）は、同じ1行として取り出される。
 //
-// 式の空白は1つに畳んでから比べる: 寄せると prettier が式の折り返しと字下げを変えるため。
-// そのぶん、文字列の中の連続した空白・改行の違いは、この試験では見えない（文言そのものは実行時の試験が持つ）。
+// 式のコードの部分の空白は1つに畳み、コメントは落としてから比べる: 寄せると prettier が式の折り返しと字下げを変え、コメントの置き場所も動きうるため。
+// 文字列（'…' / "…"）とテンプレートの地の文は畳まずに1文字ずつ比べる: 寄せる途中で文言の中の空白・改行を誤って変えたら、ここで見えるようにするため。
 
 const CLONE_TS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'clone.ts');
 
@@ -99,13 +99,85 @@ function splitGroup(text: string, open: number): string[] {
 }
 
 // 空白を1つに畳み、行コメント（`// …` の行末まで）を落とす: 寄せると prettier が折り返しを変え、コメントの置き場所も式の外へ動きうるため
-const squash = (expression: string): string =>
-  expression
-    .split('\n')
-    .map((line) => line.replace(/^\s*\/\/.*$/, ''))
-    .join('\n')
-    .replace(/\s+/g, ' ')
-    .trim();
+/**
+ * 式の外側（コードの部分）の空白を1つに畳み、コメントを落とす。文字列（'…' / "…"）とテンプレートの地の文は、1文字も変えずに残す。
+ * テンプレートの `${…}` の中はコードとして畳む。
+ */
+function squash(expression: string): string {
+  let out = '';
+  // `` ` `` はテンプレートの地の文の中、`${` はその中の式の中を表す
+  const stack: string[] = [];
+  let pendingSpace = false;
+  const emit = (chunk: string): void => {
+    // `${` の直後の空白も落とす（閉じの前と同じ理由）
+    if (pendingSpace && out !== '' && !out.endsWith('${')) out += ' ';
+    pendingSpace = false;
+    out += chunk;
+  };
+  let i = 0;
+  while (i < expression.length) {
+    const ch = expression[i]!;
+    if (stack.at(-1) === '`') {
+      if (ch === '\\') {
+        out += expression.slice(i, i + 2);
+        i += 2;
+      } else if (ch === '`') {
+        out += ch;
+        stack.pop();
+        i += 1;
+      } else if (ch === '$' && expression[i + 1] === '{') {
+        out += '${';
+        stack.push('${');
+        i += 2;
+      } else {
+        out += ch;
+        i += 1;
+      }
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      pendingSpace = true;
+      i += 1;
+      continue;
+    }
+    if (ch === '/' && expression[i + 1] === '/') {
+      const newline = expression.indexOf('\n', i);
+      i = newline === -1 ? expression.length : newline;
+      pendingSpace = true;
+      continue;
+    }
+    if (ch === '/' && expression[i + 1] === '*') {
+      const end = expression.indexOf('*/', i + 2);
+      i = end === -1 ? expression.length : end + 2;
+      pendingSpace = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < expression.length && expression[j] !== ch) j += expression[j] === '\\' ? 2 : 1;
+      emit(expression.slice(i, j + 1));
+      i = j + 1;
+      continue;
+    }
+    if (ch === '`') {
+      emit(ch);
+      stack.push('`');
+      i += 1;
+      continue;
+    }
+    if (ch === '}' && stack.at(-1) === '${') {
+      // `${…}` の閉じの前の空白は落とす（prettier が `${ x }` の形に折ることがあるため）
+      pendingSpace = false;
+      out += ch;
+      stack.pop();
+      i += 1;
+      continue;
+    }
+    emit(ch);
+    i += 1;
+  }
+  return out.trim();
+}
 
 interface SelfSite {
   readonly start: number;
