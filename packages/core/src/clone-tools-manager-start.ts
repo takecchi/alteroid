@@ -9,11 +9,11 @@ import {
   ManagerAttachmentsRefusedError,
 } from './manager-attachments.js';
 import { taskStatusForJob } from './task.js';
-import { describePidsSaturation } from './runner-protocol.js';
+import { describePidsSaturation, type PidsSaturation } from './runner-protocol.js';
 import { reasonOf } from './dropped-record.js';
-import { type ManagerSummary } from './manager.js';
+import { type ManagerStartInput, type ManagerSummary } from './manager.js';
 import { stripNul } from './nul-guard.js';
-import { type Task } from './schema.js';
+import { type JournalEntryInput, type Task } from './schema.js';
 import { UnreadableTaskError } from './store.js';
 import { describeStringLengthViolation, formatStringLengthJa } from './tool-arg-checks.js';
 import {
@@ -37,6 +37,169 @@ function describeStartedCwd(
     return `頼んだ cwd（${manager.requestedCwd}）はこの器に無かったので、${manager.cwd} で開いた`;
   }
   return `cwd: ${manager.cwd}`;
+}
+
+type ManagerStartStores = CloneToolsShared['stores'];
+
+// 空の依頼を断る: 日誌に「起こそうとしている」と書き、runner へ何もしない依頼を渡して1本ぶんの器を使うことになるため
+// 検めるのは NUL を除いた値だが、`start` と日誌へ渡すのは素の `request` のまま（食い違いは #6411 で別に扱う）
+function describeManagerStartRequestViolation(request: string): string | null {
+  const requestError = describeStringLengthViolation('request', stripNul(request), {
+    min: 1,
+  });
+  if (requestError !== null) return `${requestError}起こしていない。`;
+  if (stripNul(request).trim().length === 0) {
+    return 'request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。';
+  }
+  return null;
+}
+
+// `tasks.get` だけを包み、読めない形の task だけを断りにする（ほかの例外は投げ直す）
+type ManagerStartTaskLookup = { kind: 'unreadable' } | { kind: 'read'; task: Task | null };
+
+async function readManagerStartTaskLookup(
+  stores: ManagerStartStores,
+  taskId: string,
+): Promise<ManagerStartTaskLookup> {
+  try {
+    return { kind: 'read', task: await stores.tasks.get(taskId) };
+  } catch (error) {
+    if (error instanceof UnreadableTaskError) {
+      return { kind: 'unreadable' };
+    }
+    throw error;
+  }
+}
+
+// task は日誌にも委譲にも触れる前に確かめる: 結び付かない委譲を黙って走らせると、終わっても task が動かず、渡したつもりのクローンが気づけないため
+async function describeManagerStartTaskViolation(
+  stores: ManagerStartStores,
+  taskId: string,
+): Promise<string | null> {
+  const lookup = await readManagerStartTaskLookup(stores, taskId);
+  if (lookup.kind === 'unreadable') {
+    return `task ${taskId} は読めない形で入っている。マネージャーは起こしていない。`;
+  }
+  const linked = lookup.task;
+  if (linked === null) {
+    return `task ${taskId} は無い（task_list で実在する id を確かめること）。マネージャーは起こしていない。`;
+  }
+  if (linked.status === 'done' || linked.status === 'cancelled') {
+    return `task ${taskId} は閉じている（${linked.status}）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。`;
+  }
+  // 1つの task に同時に走る委譲は1本まで: 2本目が先に終わると、1本目が走っているのに task が判断待ちへ倒れる
+  const running = (await stores.jobs.listJobs()).filter(
+    (job) => job.taskId === taskId && taskStatusForJob(job.status) === 'waiting',
+  );
+  if (running.length > 0) {
+    return (
+      `task ${taskId} には走っている委譲がある（${running.map((job) => `${job.id}: ${job.status}`).join('、')}）。` +
+      '1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。' +
+      'その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。' +
+      '止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。'
+    );
+  }
+  return null;
+}
+
+function describeManagerStartHandedNote(handedRefs: { id: string; name: string }[]): string {
+  return handedRefs.length === 0
+    ? ''
+    : `（添付 ${handedRefs.length} 件を渡す: ${handedRefs.map((ref) => `${ref.id} ${ref.name}`).join(', ')}）`;
+}
+
+function describeManagerStartNominated(runnerId: string | undefined): string {
+  return runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`;
+}
+
+// `start` に渡す request は素の値のまま。検める所（`describeManagerStartRequestViolation`）と日誌の3つの builder と合わせて、request の扱いはここに集める
+function buildManagerStartInput(args: {
+  request: string;
+  cwd: string | undefined;
+  runnerId: string | undefined;
+  supersedes: string | undefined;
+  conversationId: string | undefined;
+  taskId: string | undefined;
+  attachments: NonNullable<ManagerStartInput['attachments']>;
+}): ManagerStartInput {
+  const { request, cwd, runnerId, supersedes, conversationId, taskId, attachments } = args;
+  return {
+    request,
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(runnerId === undefined ? {} : { runnerId }),
+    ...(supersedes === undefined ? {} : { supersedes }),
+    ...(conversationId === undefined ? {} : { conversationId }),
+    ...(taskId === undefined ? {} : { taskId }),
+    ...(attachments.length === 0 ? {} : { attachments }),
+  };
+}
+
+function buildManagerStartAttemptJournalEntry(args: {
+  request: string;
+  runnerId: string | undefined;
+  handedNote: string;
+}): JournalEntryInput {
+  const { request, runnerId, handedNote } = args;
+  return {
+    type: 'decision',
+    decision: `マネージャーを起こそうとしている${describeManagerStartNominated(runnerId)}${handedNote}: ${request}`,
+    grounds: '委譲の判断',
+  };
+}
+
+function buildManagerStartFailedJournalEntry(args: {
+  request: string;
+  runnerId: string | undefined;
+  handedNote: string;
+  error: unknown;
+}): JournalEntryInput {
+  const { request, runnerId, handedNote, error } = args;
+  return {
+    type: 'decision',
+    decision: `マネージャーを起こせなかった${describeManagerStartNominated(runnerId)}${handedNote}: ${request}`,
+    grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
+  };
+}
+
+function buildManagerStartStartedJournalEntry(args: {
+  request: string;
+  runnerId: string | undefined;
+  handedNote: string;
+  started: ManagerSummary;
+}): JournalEntryInput {
+  const { request, runnerId, handedNote, started } = args;
+  return {
+    type: 'decision',
+    decision:
+      `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
+      `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）${handedNote}: ${request}`,
+    grounds: '委譲の判断',
+  };
+}
+
+function renderManagerStartRefusedByAttachments(error: ManagerAttachmentsRefusedError): string {
+  return `${reasonOf(error)}。マネージャーは起こしていない。`;
+}
+
+// pids 飽和の置き先でも断らない: 起こしたうえで、材料つきで知らせる
+function renderManagerStartPidsSaturationNote(saturation: PidsSaturation): string {
+  return (
+    `\n⚠ 置き先の runner は pids 飽和と判定されている: ${describePidsSaturation(saturation)}。` +
+    'この委譲は新しいプロセスを起こせず落ちるかもしれない——' +
+    'runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。'
+  );
+}
+
+function renderManagerStarted(
+  started: ManagerSummary,
+  saturation: PidsSaturation | undefined,
+): string {
+  return (
+    `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
+    `runner: ${started.runnerId ?? '未記録'}）。` +
+    '報告・質問は後から受信箱に届く。' +
+    (saturation === undefined ? '' : renderManagerStartPidsSaturationNote(saturation))
+  );
 }
 
 export function managerStartTool(context: ToolContext, shared: CloneToolsShared) {
@@ -102,47 +265,11 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
         taskId?: string | undefined;
       };
       if (!context.managers) return NO_POOL;
-      // 空の依頼を断る: 日誌に「起こそうとしている」と書き、runner へ何もしない依頼を渡して1本ぶんの器を使うことになるため
-      const requestError = describeStringLengthViolation('request', stripNul(request), {
-        min: 1,
-      });
-      if (requestError !== null) return text(`${requestError}起こしていない。`);
-      if (stripNul(request).trim().length === 0) {
-        return text('request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。');
-      }
-      // task は日誌にも委譲にも触れる前に確かめる: 結び付かない委譲を黙って走らせると、終わっても task が動かず、渡したつもりのクローンが気づけないため
+      const requestViolation = describeManagerStartRequestViolation(request);
+      if (requestViolation !== null) return text(requestViolation);
       if (taskId !== undefined) {
-        let linked: Task | null;
-        try {
-          linked = await stores.tasks.get(taskId);
-        } catch (error) {
-          if (error instanceof UnreadableTaskError) {
-            return text(`task ${taskId} は読めない形で入っている。マネージャーは起こしていない。`);
-          }
-          throw error;
-        }
-        if (linked === null) {
-          return text(
-            `task ${taskId} は無い（task_list で実在する id を確かめること）。マネージャーは起こしていない。`,
-          );
-        }
-        if (linked.status === 'done' || linked.status === 'cancelled') {
-          return text(
-            `task ${taskId} は閉じている（${linked.status}）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。`,
-          );
-        }
-        // 1つの task に同時に走る委譲は1本まで: 2本目が先に終わると、1本目が走っているのに task が判断待ちへ倒れる
-        const running = (await stores.jobs.listJobs()).filter(
-          (job) => job.taskId === taskId && taskStatusForJob(job.status) === 'waiting',
-        );
-        if (running.length > 0) {
-          return text(
-            `task ${taskId} には走っている委譲がある（${running.map((job) => `${job.id}: ${job.status}`).join('、')}）。` +
-              '1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。' +
-              'その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。' +
-              '止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。',
-          );
-        }
+        const taskViolation = await describeManagerStartTaskViolation(stores, taskId);
+        if (taskViolation !== null) return text(taskViolation);
       }
       // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
       // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため
@@ -156,74 +283,53 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
       );
       if (!handover.ok) return text(handover.message);
       const handedRefs = attachmentRefsOf(handover.attachments);
-      const handedNote =
-        handedRefs.length === 0
-          ? ''
-          : `（添付 ${handedRefs.length} 件を渡す: ${handedRefs.map((ref) => `${ref.id} ${ref.name}`).join(', ')}）`;
+      const handedNote = describeManagerStartHandedNote(handedRefs);
 
       // 日誌を先に書く: 書けなければ起こさずに道具のエラーで返すため
       await appendJournalOrThrow(
         'manager_start',
         stores.journal,
-        {
-          type: 'decision',
-          decision: `マネージャーを起こそうとしている${
-            runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-          }${handedNote}: ${request}`,
-          grounds: '委譲の判断',
-        },
+        buildManagerStartAttemptJournalEntry({ request, runnerId, handedNote }),
         'act-not-performed',
       );
 
       let started: ManagerSummary;
       try {
-        started = await context.managers.start({
-          request,
-          ...(cwd === undefined ? {} : { cwd }),
-          ...(runnerId === undefined ? {} : { runnerId }),
-          ...(supersedes === undefined ? {} : { supersedes }),
-          ...(conversationId === undefined ? {} : { conversationId }),
-          ...(taskId === undefined ? {} : { taskId }),
-          ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
-        });
+        started = await context.managers.start(
+          buildManagerStartInput({
+            request,
+            cwd,
+            runnerId,
+            supersedes,
+            conversationId,
+            taskId,
+            attachments: handover.attachments,
+          }),
+        );
       } catch (error) {
-        await appendJournalOrDrop('manager_start', stores.journal, {
-          type: 'decision',
-          decision: `マネージャーを起こせなかった${
-            runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-          }${handedNote}: ${request}`,
-          grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
-        });
+        await appendJournalOrDrop(
+          'manager_start',
+          stores.journal,
+          buildManagerStartFailedJournalEntry({ request, runnerId, handedNote, error }),
+        );
         if (error instanceof ManagerAttachmentsRefusedError) {
-          return text(`${reasonOf(error)}。マネージャーは起こしていない。`);
+          return text(renderManagerStartRefusedByAttachments(error));
         }
         throw error;
       }
 
       // 日誌より先に控える: 日誌の追記が落ちても、起こした事実は変わらない（自動 done がこの委譲を見落とさない）
       context.noteDelegationStarted?.(taskId);
-      await appendJournalOrDrop('manager_start', stores.journal, {
-        type: 'decision',
-        decision:
-          `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
-          `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）${handedNote}: ${request}`,
-        grounds: '委譲の判断',
-      });
-      // pids 飽和の置き先でも断らない: 起こしたうえで、材料つきで知らせる
+      await appendJournalOrDrop(
+        'manager_start',
+        stores.journal,
+        buildManagerStartStartedJournalEntry({ request, runnerId, handedNote, started }),
+      );
       const saturation =
         started.runnerId === undefined
           ? undefined
           : context.managers.runnerPidsSaturation?.(started.runnerId);
-      return text(
-        `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
-          `runner: ${started.runnerId ?? '未記録'}）。` +
-          '報告・質問は後から受信箱に届く。' +
-          (saturation === undefined
-            ? ''
-            : `\n⚠ 置き先の runner は pids 飽和と判定されている: ${describePidsSaturation(saturation)}。` +
-              'この委譲は新しいプロセスを起こせず落ちるかもしれない——' +
-              'runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。'),
-      );
+      return text(renderManagerStarted(started, saturation));
     },
   );
 }
