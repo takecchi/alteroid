@@ -29,8 +29,10 @@ import {
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   selectArchiveRemovalTargets,
+  type ArchiveRemovalSelection,
   type ArchiveRemoveManyFilter,
 } from './archive-prune.js';
+import type { JournalEntryInput } from './schema.js';
 import {
   guardArchiveRemoval,
   type ManagerPool,
@@ -601,6 +603,331 @@ function renderRunnerListPage(
   });
 }
 
+type ArchiveRemoveManyStores = CloneToolsShared['stores'];
+
+interface ArchiveRemoveManyInput {
+  sessionIds: string[] | undefined;
+  before: string | undefined;
+  minStoredBytes: number | undefined;
+  summary: string;
+}
+
+// 引数の検査。断る文を返す（通れば null）。順序は元のまま
+function describeArchiveRemoveManyViolation(input: ArchiveRemoveManyInput): string | null {
+  const { sessionIds, before, minStoredBytes, summary } = input;
+  const sessionIdsLengthError = describeArrayLengthViolation('sessionIds', sessionIds, {
+    min: 1,
+  });
+  if (sessionIdsLengthError !== null) return sessionIdsLengthError;
+  const sessionIdsElementError = describeStringArrayElementLengthViolation(
+    'sessionIds',
+    sessionIds,
+  );
+  if (sessionIdsElementError !== null) return sessionIdsElementError;
+  const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
+  if (beforeLengthError !== null) return beforeLengthError;
+  const summaryError =
+    describeStringLengthViolation('summary', summary, { min: 1 }) ??
+    describeBlankViolation('summary', summary);
+  if (summaryError !== null) return summaryError;
+  if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
+    return (
+      'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
+      '——それは絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。' +
+      '**1件も消していない。**'
+    );
+  }
+  // 3段で検める: 存在しない日付や日付でない文字列を別の時刻として読んで消すため。元に戻せない一括削除なので時差も必須にする
+  if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
+    return (
+      describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+      '**1件も消していない。**'
+    );
+  }
+  const minStoredBytesError = describeIntRangeViolation('minStoredBytes', minStoredBytes, {
+    min: 0,
+  });
+  if (minStoredBytesError !== null) return minStoredBytesError;
+  return null;
+}
+
+function describeArchiveRemoveManyFilterText(input: ArchiveRemoveManyInput): string {
+  const { sessionIds, before, minStoredBytes } = input;
+  return [
+    ...(sessionIds === undefined ? [] : [`sessionIds=[${sessionIds.join(', ')}]`]),
+    ...(before === undefined ? [] : [`before=${before}`]),
+    ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
+  ].join(' / ');
+}
+
+// 墓標の一覧 → アーカイブの一覧 → 絞りと選定（読む順は元のまま。各1回）
+async function selectArchiveRemoveManyTargets(
+  stores: ArchiveRemoveManyStores,
+  input: ArchiveRemoveManyInput,
+): Promise<{ selection: ArchiveRemovalSelection; filterText: string }> {
+  const { sessionIds, before, minStoredBytes } = input;
+  // 墓標を守る
+  // 順番待ちの墓標も守る（#4884）
+  const protectedIds: string[] = (await stores.sessions.listTranscriptGraves()).map(
+    (g) => g.archiveId,
+  );
+
+  const filter: ArchiveRemoveManyFilter = {
+    ...(sessionIds === undefined ? {} : { sessionIds }),
+    ...(before === undefined ? {} : { before }),
+    ...(minStoredBytes === undefined ? {} : { minStoredBytes }),
+  };
+  const filterText = describeArchiveRemoveManyFilterText(input);
+
+  // 絞りと選定は `selectArchiveRemovalTargets` に閉じる: ロジックを書き写すと片方だけ変えたとき黙って食い違うため
+  const allRows = await stores.archive.list();
+  const selection = selectArchiveRemovalTargets(allRows, filter, { protectedIds });
+  return { selection, filterText };
+}
+
+function renderArchiveRemoveManyFunnel(selection: ArchiveRemovalSelection): string {
+  return `アーカイブ全 ${selection.totalRows} 行 → 絞り込みで ${selection.matched} 件`;
+}
+
+function describeArchiveRemoveManyZeroReason(totalRows: number): string {
+  return totalRows === 0
+    ? 'アーカイブそのものに行が無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。'
+    : '絞り込みに当たる行が0件——**絞り込みが外れている。**';
+}
+
+function renderArchiveRemoveManyZeroResult(funnel: string, totalRows: number): string {
+  const why = describeArchiveRemoveManyZeroReason(totalRows);
+  return ['絞り込みに当たる行は0件だった。**1件も消していない。**', funnel, why].join('\n');
+}
+
+// 走行中のマネージャーが使っている行を外す。`context.managers` は対象1件ごとに読む（元のまま）
+function partitionArchiveRemoveManyByGuard(
+  context: ToolContext,
+  targets: readonly ArchiveEntry[],
+): { removableTargets: ArchiveEntry[]; skippedInUse: number } {
+  const removableTargets: ArchiveEntry[] = [];
+  let skippedInUse = 0;
+  for (const target of targets) {
+    const guard = guardArchiveRemoval(context.managers, target.id, undefined, true);
+    if (guard.kind === 'denied' || guard.kind === 'unknown') {
+      skippedInUse += 1;
+      continue;
+    }
+    removableTargets.push(target);
+  }
+  return { removableTargets, skippedInUse };
+}
+
+function renderArchiveRemoveManySkippedLine(
+  skipped: ArchiveRemovalSelection['skipped'],
+  skippedInUse: number,
+): string {
+  return (
+    `skipped: protected(墓標) ${skipped.protected} / ` +
+    `alreadyRemoved ${skipped.alreadyRemoved} / newest ${skipped.newest} / ` +
+    `notContained ${skipped.notContained} / inUse(走行中) ${skippedInUse}`
+  );
+}
+
+function renderArchiveRemoveManyRemainingLine(remaining: number): string {
+  return `remaining（limit に溢れて対象にすらならなかった件数）: ${remaining}`;
+}
+
+function renderArchiveRemoveManyInUseNote(skippedInUse: number): string[] {
+  return skippedInUse === 0
+    ? []
+    : [
+        '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
+          '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
+      ];
+}
+
+function renderArchiveRemoveManyDryRunIds(removableTargets: readonly ArchiveEntry[]): string {
+  const shown = removableTargets.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN).map((row) => row.id);
+  const hidden = removableTargets.length - shown.length;
+  return `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
+    hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
+  }`;
+}
+
+function renderArchiveRemoveManyDryRun(args: {
+  funnel: string;
+  filterText: string;
+  targeted: number;
+  matchedCount: number;
+  skippedLine: string;
+  remainingLine: string;
+  removableTargets: readonly ArchiveEntry[];
+  skippedInUse: number;
+}): string {
+  const { funnel, filterText, targeted, matchedCount, skippedLine, remainingLine } = args;
+  return [
+    '**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。',
+    funnel,
+    `絞り込み: ${filterText}`,
+    `この呼びで消すのは ${targeted} 件（当たったのは ${matchedCount} 件。` +
+      `1回の上限 ${ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT} 件）。`,
+    skippedLine,
+    remainingLine,
+    renderArchiveRemoveManyDryRunIds(args.removableTargets),
+    ...renderArchiveRemoveManyInUseNote(args.skippedInUse),
+  ].join('\n');
+}
+
+// 塊ごとの先の日誌の行
+function buildArchiveRemoveManyJournalEntry(args: {
+  index: number;
+  chunkCount: number;
+  chunkTargetIds: readonly string[];
+  summary: string;
+  filterText: string;
+}): JournalEntryInput {
+  const { index, chunkCount, chunkTargetIds, summary, filterText } = args;
+  return {
+    type: 'decision',
+    decision:
+      `退避済み生ログの本文を絞り込みで一括して tombstone する` +
+      `（${index + 1}/${chunkCount} 塊目、この塊は ${chunkTargetIds.length} 件）: ${summary}\n` +
+      `絞り込み: ${filterText}\n` +
+      `消す id: ${chunkTargetIds.join(' ')}`,
+    grounds: summary,
+  };
+}
+
+function describeArchiveRemoveManyStopped(args: {
+  index: number;
+  chunkCount: number;
+  chunkSize: number;
+  error: unknown;
+}): string {
+  const { index, chunkCount, chunkSize, error } = args;
+  return (
+    `⚠⚠ ${index + 1}/${chunkCount} 塊目の先の日誌が書けなかったので、この塊（${chunkSize} 件）と` +
+    `それ以降は消さずに止めた（${collapseErrorCause(error)}）。` +
+    `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`
+  );
+}
+
+// 「日誌に N 件」は実際に書いた件数で数える: 塊の先の行が書けて止めた回に、書いていない行を名乗らないため
+interface ArchiveRemoveManyRunState {
+  removedIds: string[];
+  removedBytes: number;
+  raced: number;
+  journaledChunks: number;
+  stoppedNote: string | undefined;
+}
+
+// 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeArchiveChunkJournalFirst`）: 本文は戻らないので、消してから書くと日誌が落ちた回に何を消したかが残らないため
+async function removeArchiveTargetsJournaling(args: {
+  stores: ArchiveRemoveManyStores;
+  removableTargets: readonly ArchiveEntry[];
+  summary: string;
+  filterText: string;
+}): Promise<ArchiveRemoveManyRunState> {
+  const { stores, removableTargets, summary, filterText } = args;
+  const chunks = chunkIdsByChars(
+    removableTargets.map((row) => row.id),
+    ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+  );
+  const state: ArchiveRemoveManyRunState = {
+    removedIds: [],
+    removedBytes: 0,
+    raced: 0,
+    journaledChunks: 0,
+    stoppedNote: undefined,
+  };
+  for (const [index, chunk] of chunks.entries()) {
+    const chunkIds = new Set(chunk);
+    const chunkTargetIds = removableTargets
+      .filter((row) => chunkIds.has(row.id))
+      .map((row) => row.id);
+    const outcome = await removeArchiveChunkJournalFirst(stores, chunkTargetIds, () =>
+      buildArchiveRemoveManyJournalEntry({
+        index,
+        chunkCount: chunks.length,
+        chunkTargetIds,
+        summary,
+        filterText,
+      }),
+    );
+    if (outcome.kind === 'journal-failed') {
+      // 先の行が書けなかった塊は消していない。1つも消していなければ行為は起きていない（`act-not-performed`）。
+      noteDroppedRecord('日誌', journalEntryShape(outcome.entry), outcome.error);
+      if (state.removedIds.length === 0 && state.raced === 0 && state.journaledChunks === 0) {
+        throw new JournalNotRecordedError(
+          'archive_remove_many',
+          outcome.entry,
+          'act-not-performed',
+          outcome.error,
+        );
+      }
+      // 前の塊は消えていて日誌にも在るので投げず、どこまで消したかを返す（投げると「やり直してよい」が前の塊について嘘になる）
+      state.stoppedNote = describeArchiveRemoveManyStopped({
+        index,
+        chunkCount: chunks.length,
+        chunkSize: chunkTargetIds.length,
+        error: outcome.error,
+      });
+      break;
+    }
+    state.journaledChunks += 1;
+    // 他経路が先に消していた回は `raced` へ数える（`already` も同じ競合）: この呼びが消したことにしない（打ち消しの行は helper が足してある）
+    state.removedIds.push(...outcome.removedIds);
+    state.removedBytes += outcome.removedBytes;
+    state.raced += outcome.racedIds.length;
+  }
+  return state;
+}
+
+function renderArchiveRemoveManyRemovedIds(
+  removedIds: readonly string[],
+  journaledChunks: number,
+): string {
+  const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
+  const hiddenRemoved = removedIds.length - shownRemoved.length;
+  return `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
+    hiddenRemoved > 0
+      ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
+      : ''
+  }`;
+}
+
+function renderArchiveRemoveManyRacedNote(targeted: number, raced: number): string[] {
+  return raced === 0
+    ? []
+    : [
+        `⚠ 対象 ${targeted} 件のうち ${raced} 件は消せなかった` +
+          '（この呼びの最中に他の経路が先に消した）。',
+      ];
+}
+
+function renderArchiveRemoveManyDone(args: {
+  summary: string;
+  funnel: string;
+  filterText: string;
+  skippedLine: string;
+  remainingLine: string;
+  targeted: number;
+  skippedInUse: number;
+  state: ArchiveRemoveManyRunState;
+}): string {
+  const { summary, funnel, filterText, skippedLine, remainingLine, targeted, state } = args;
+  return [
+    ...(state.stoppedNote === undefined ? [] : [state.stoppedNote]),
+    `**${state.removedIds.length} 件の本文を tombstone した**（理由: ${summary}）。` +
+      '行そのものは残っている（list には引き続き出る）。',
+    funnel,
+    `絞り込み: ${filterText}`,
+    skippedLine,
+    remainingLine,
+    `消した本文の合計: ${state.removedBytes.toLocaleString('ja-JP')} バイト` +
+      describeArchiveRemovedBytesUnit(),
+    renderArchiveRemoveManyRemovedIds(state.removedIds, state.journaledChunks),
+    ...renderArchiveRemoveManyRacedNote(targeted, state.raced),
+    ...renderArchiveRemoveManyInUseNote(args.skippedInUse),
+  ].join('\n');
+}
+
 export function opsTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
 
@@ -934,202 +1261,63 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ sessionIds, before, minStoredBytes, summary, dryRun }) => {
-        const sessionIdsLengthError = describeArrayLengthViolation('sessionIds', sessionIds, {
-          min: 1,
-        });
-        if (sessionIdsLengthError !== null) return text(sessionIdsLengthError);
-        const sessionIdsElementError = describeStringArrayElementLengthViolation(
-          'sessionIds',
-          sessionIds,
-        );
-        if (sessionIdsElementError !== null) return text(sessionIdsElementError);
-        const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
-        if (beforeLengthError !== null) return text(beforeLengthError);
-        const summaryError =
-          describeStringLengthViolation('summary', summary, { min: 1 }) ??
-          describeBlankViolation('summary', summary);
-        if (summaryError !== null) return text(summaryError);
-        if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
-          return text(
-            'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
-              '——それは絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。' +
-              '**1件も消していない。**',
-          );
-        }
-        // 3段で検める: 存在しない日付や日付でない文字列を別の時刻として読んで消すため。元に戻せない一括削除なので時差も必須にする
-        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
-          return text(
-            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
-              '**1件も消していない。**',
-          );
-        }
-        const minStoredBytesError = describeIntRangeViolation('minStoredBytes', minStoredBytes, {
-          min: 0,
-        });
-        if (minStoredBytesError !== null) return text(minStoredBytesError);
+        const input: ArchiveRemoveManyInput = { sessionIds, before, minStoredBytes, summary };
+        const violation = describeArchiveRemoveManyViolation(input);
+        if (violation !== null) return text(violation);
 
-        // 墓標を守る
-        // 順番待ちの墓標も守る（#4884）
-        const protectedIds: string[] = (await stores.sessions.listTranscriptGraves()).map(
-          (g) => g.archiveId,
-        );
-
-        const filter: ArchiveRemoveManyFilter = {
-          ...(sessionIds === undefined ? {} : { sessionIds }),
-          ...(before === undefined ? {} : { before }),
-          ...(minStoredBytes === undefined ? {} : { minStoredBytes }),
-        };
-        const filterText = [
-          ...(sessionIds === undefined ? [] : [`sessionIds=[${sessionIds.join(', ')}]`]),
-          ...(before === undefined ? [] : [`before=${before}`]),
-          ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
-        ].join(' / ');
-
-        // 絞りと選定は `selectArchiveRemovalTargets` に閉じる: ロジックを書き写すと片方だけ変えたとき黙って食い違うため
-        const allRows = await stores.archive.list();
-        const selection = selectArchiveRemovalTargets(allRows, filter, { protectedIds });
-        const funnel = `アーカイブ全 ${selection.totalRows} 行 → 絞り込みで ${selection.matched} 件`;
+        const { selection, filterText } = await selectArchiveRemoveManyTargets(stores, input);
+        const funnel = renderArchiveRemoveManyFunnel(selection);
 
         if (selection.matched === 0) {
-          const why =
-            selection.totalRows === 0
-              ? 'アーカイブそのものに行が無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。'
-              : '絞り込みに当たる行が0件——**絞り込みが外れている。**';
-          return text(
-            ['絞り込みに当たる行は0件だった。**1件も消していない。**', funnel, why].join('\n'),
-          );
+          return text(renderArchiveRemoveManyZeroResult(funnel, selection.totalRows));
         }
 
         // `requireContainment` には常に `true` を渡す: 走行中の委譲の保護を `archiveIds` の末尾1本へ狭めないと、過去に積んだ写しが1本残らず保護され一括処理が1件も消せないため
         // この guard は `dryRun` の分岐より前で回す: 下見が返す `targeted` / `skipped.inUse` が実行時と食い違うため
-        const removableTargets: ArchiveEntry[] = [];
-        let skippedInUse = 0;
-        for (const target of selection.targets) {
-          const guard = guardArchiveRemoval(context.managers, target.id, undefined, true);
-          if (guard.kind === 'denied' || guard.kind === 'unknown') {
-            skippedInUse += 1;
-            continue;
-          }
-          removableTargets.push(target);
-        }
+        const { removableTargets, skippedInUse } = partitionArchiveRemoveManyByGuard(
+          context,
+          selection.targets,
+        );
         // `targeted` は guard を通った後の件数にする: 飛ばした行を `skipped.inUse` と2回数えないため
         const targeted = removableTargets.length;
 
-        const skippedLine =
-          `skipped: protected(墓標) ${selection.skipped.protected} / ` +
-          `alreadyRemoved ${selection.skipped.alreadyRemoved} / newest ${selection.skipped.newest} / ` +
-          `notContained ${selection.skipped.notContained} / inUse(走行中) ${skippedInUse}`;
-        const remainingLine = `remaining（limit に溢れて対象にすらならなかった件数）: ${selection.remaining}`;
+        const skippedLine = renderArchiveRemoveManySkippedLine(selection.skipped, skippedInUse);
+        const remainingLine = renderArchiveRemoveManyRemainingLine(selection.remaining);
 
         if (dryRun !== false) {
           // 省略された `dryRun` は試算にする: 消した本文を戻す道具が無いため
-          const shown = removableTargets
-            .slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN)
-            .map((row) => row.id);
-          const hidden = removableTargets.length - shown.length;
           return text(
-            [
-              '**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。',
+            renderArchiveRemoveManyDryRun({
               funnel,
-              `絞り込み: ${filterText}`,
-              `この呼びで消すのは ${targeted} 件（当たったのは ${selection.matched} 件。` +
-                `1回の上限 ${ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT} 件）。`,
+              filterText,
+              targeted,
+              matchedCount: selection.matched,
               skippedLine,
               remainingLine,
-              `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
-                hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
-              }`,
-              ...(skippedInUse === 0
-                ? []
-                : [
-                    '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
-                      '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
-                  ]),
-            ].join('\n'),
+              removableTargets,
+              skippedInUse,
+            }),
           );
         }
 
-        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeArchiveChunkJournalFirst`）: 本文は戻らないので、消してから書くと日誌が落ちた回に何を消したかが残らないため
-        const chunks = chunkIdsByChars(
-          removableTargets.map((row) => row.id),
-          ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
-        );
-        const removedIds: string[] = [];
-        let removedBytes = 0;
-        let raced = 0;
-        // 「日誌に N 件」は実際に書いた件数で数える: 塊の先の行が書けて止めた回に、書いていない行を名乗らないため
-        let journaledChunks = 0;
-        let stoppedNote: string | undefined;
-        for (const [index, chunk] of chunks.entries()) {
-          const chunkIds = new Set(chunk);
-          const chunkTargetIds = removableTargets
-            .filter((row) => chunkIds.has(row.id))
-            .map((row) => row.id);
-          const outcome = await removeArchiveChunkJournalFirst(stores, chunkTargetIds, () => ({
-            type: 'decision',
-            decision:
-              `退避済み生ログの本文を絞り込みで一括して tombstone する` +
-              `（${index + 1}/${chunks.length} 塊目、この塊は ${chunkTargetIds.length} 件）: ${summary}\n` +
-              `絞り込み: ${filterText}\n` +
-              `消す id: ${chunkTargetIds.join(' ')}`,
-            grounds: summary,
-          }));
-          if (outcome.kind === 'journal-failed') {
-            // 先の行が書けなかった塊は消していない。1つも消していなければ行為は起きていない（`act-not-performed`）。
-            noteDroppedRecord('日誌', journalEntryShape(outcome.entry), outcome.error);
-            if (removedIds.length === 0 && raced === 0 && journaledChunks === 0) {
-              throw new JournalNotRecordedError(
-                'archive_remove_many',
-                outcome.entry,
-                'act-not-performed',
-                outcome.error,
-              );
-            }
-            // 前の塊は消えていて日誌にも在るので投げず、どこまで消したかを返す（投げると「やり直してよい」が前の塊について嘘になる）
-            stoppedNote =
-              `⚠⚠ ${index + 1}/${chunks.length} 塊目の先の日誌が書けなかったので、この塊（${chunkTargetIds.length} 件）と` +
-              `それ以降は消さずに止めた（${collapseErrorCause(outcome.error)}）。` +
-              `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`;
-            break;
-          }
-          journaledChunks += 1;
-          // 他経路が先に消していた回は `raced` へ数える（`already` も同じ競合）: この呼びが消したことにしない（打ち消しの行は helper が足してある）
-          removedIds.push(...outcome.removedIds);
-          removedBytes += outcome.removedBytes;
-          raced += outcome.racedIds.length;
-        }
+        const state = await removeArchiveTargetsJournaling({
+          stores,
+          removableTargets,
+          summary,
+          filterText,
+        });
 
-        const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
-        const hiddenRemoved = removedIds.length - shownRemoved.length;
         return text(
-          [
-            ...(stoppedNote === undefined ? [] : [stoppedNote]),
-            `**${removedIds.length} 件の本文を tombstone した**（理由: ${summary}）。` +
-              '行そのものは残っている（list には引き続き出る）。',
+          renderArchiveRemoveManyDone({
+            summary,
             funnel,
-            `絞り込み: ${filterText}`,
+            filterText,
             skippedLine,
             remainingLine,
-            `消した本文の合計: ${removedBytes.toLocaleString('ja-JP')} バイト` +
-              describeArchiveRemovedBytesUnit(),
-            `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
-              hiddenRemoved > 0
-                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
-                : ''
-            }`,
-            ...(raced === 0
-              ? []
-              : [
-                  `⚠ 対象 ${targeted} 件のうち ${raced} 件は消せなかった` +
-                    '（この呼びの最中に他の経路が先に消した）。',
-                ]),
-            ...(skippedInUse === 0
-              ? []
-              : [
-                  '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
-                    '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
-                ]),
-          ].join('\n'),
+            targeted,
+            skippedInUse,
+            state,
+          }),
         );
       },
     ),
