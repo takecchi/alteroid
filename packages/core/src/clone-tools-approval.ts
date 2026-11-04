@@ -154,6 +154,199 @@ async function jobConversationOf(
   }
 }
 
+type ApprovalReadOutcome =
+  { kind: 'unreadable' } | { kind: 'missing' } | { kind: 'found'; approval: PendingApproval };
+
+type ApprovalListFold = ReturnType<typeof foldFixedFor>;
+
+// 引数の検査。断る文を返す（通れば null）
+function describeApprovalsListViolation(offset: number): string | null {
+  return describeIntRangeViolation('offset', offset, { min: 0 });
+}
+
+// `UnreadableApprovalError` だけを断りの値にする: 器の障害まで飲み込むと「壊れている」に化けて見えなくなるため
+async function readApprovalForFullText(
+  jobs: Stores['jobs'],
+  id: string,
+): Promise<ApprovalReadOutcome> {
+  let approval: PendingApproval | null;
+  try {
+    approval = await jobs.getApproval(id);
+  } catch (error) {
+    if (error instanceof UnreadableApprovalError) return { kind: 'unreadable' };
+    throw error;
+  }
+  if (!approval) return { kind: 'missing' };
+  return { kind: 'found', approval };
+}
+
+function renderApprovalsListMissing(id: string): string {
+  return `承認待ち ${id} は無い（id が違う）。`;
+}
+
+// 答えが付いた件も取り下げた件も読める: 「その質問が何だったか」は終端が付いた後にこそ要るため
+function describeApprovalFullStatus(approval: PendingApproval): string {
+  return approval.withdrawnAt !== undefined
+    ? `${approval.withdrawnAt} に取り下げ`
+    : approval.answeredAt === undefined
+      ? '回答待ち'
+      : `${approval.answeredAt} に回答済み`;
+}
+
+function renderApprovalFullHead(approval: PendingApproval): string {
+  const status = describeApprovalFullStatus(approval);
+  return (
+    `${approval.id}（${approval.createdAt}）` +
+    status +
+    (approval.jobId === undefined
+      ? ''
+      : ` / 宛先 managerId: "${approval.jobId}"` +
+        (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`))
+  );
+}
+
+function renderApprovalFullBody(approval: PendingApproval): string {
+  return [
+    `質問: ${approval.question}`,
+    ...(approval.context === undefined ? [] : [`背景: ${approval.context}`]),
+    ...(approval.questions === undefined
+      ? []
+      : [`設問:\n${describeQuestionLines(approval.questions).join('\n')}`]),
+    ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
+    ...(approval.withdrawnReason === undefined
+      ? []
+      : [`取り下げた理由: ${approval.withdrawnReason}`]),
+  ].join('\n\n');
+}
+
+function renderApprovalFullTail(approval: PendingApproval, part: ReturnType<typeof page>): string {
+  return part.more
+    ? `\n\n…（ここで切れている。続きは approvals_list id=${approval.id} offset=${part.to}）`
+    : '';
+}
+
+function renderApprovalFull(approval: PendingApproval, offset: number): string {
+  const head = renderApprovalFullHead(approval);
+  const body = renderApprovalFullBody(approval);
+  const part = page(body, offset, APPROVAL_PAGE);
+  const tail = renderApprovalFullTail(approval, part);
+  return `${head}（${describePage(part)}）\n\n${part.body}${tail}`;
+}
+
+// ここで全順序にする（`createdAt` 昇順、同着は `id` 昇順）: この一覧は予算で切るので、並びがストア実装依存だと切り落とされる側が構成によって変わるため
+// ストア側の `orderBy` は消さない: 消すと pg が大きな表を未整列のまま全件返してからここで並べることになるため
+function sortPendingApprovals(entries: readonly PendingApproval[]): PendingApproval[] {
+  return [...entries].sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
+}
+
+function renderApprovalsListEmpty(unreadableNote: string | null): string {
+  return unreadableNote === null
+    ? '（人間の回答待ちは無い）'
+    : `（読めた回答待ちは無い）\n${unreadableNote}`;
+}
+
+function renderApprovalListItems(pending: readonly PendingApproval[]): string[] {
+  return pending.map((approval) =>
+    renderListingEntry({
+      id: approval.id,
+      title: approvalTitle(approval.question),
+      // 更新は出さない: 回答待ちだけの一覧では `approvalUpdatedAt` が常に `createdAt` と同じで、同じ時刻の2回目は情報にならないため（読み方は説明文が持つ）
+      createdAt: approval.createdAt,
+      summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
+      extra: [
+        approval.questions === undefined || approval.questions.length === 0
+          ? null
+          : `  ${summarizeQuestions(approval.questions)}（詳細は approvals_list id=<id>）`,
+        approval.jobId === undefined
+          ? null
+          : `  宛先: managerId: "${approval.jobId}"` +
+            (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`),
+      ],
+    }),
+  );
+}
+
+// 末尾の固定の注記は、同じ会話の2回目から札にする（質問が抜粋であること・並びの向きは札にも残す）。
+// 件ごとの行（`（詳細は approvals_list id=<id>）`）は畳まない: 予算で出ない件が先に「全文を出した」と控えられるため
+function renderApprovalListNotes(fold: ApprovalListFold, unreadableNote: string | null): string[] {
+  return [
+    fold(
+      'approvals-list:note-excerpt',
+      '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
+      '（質問は抜粋。全文は id=<id> で取れる）',
+    ),
+    ...(unreadableNote === null ? [] : [unreadableNote]),
+  ];
+}
+
+// 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
+function renderApprovalListAll(
+  items: readonly string[],
+  notes: readonly string[],
+  fold: ApprovalListFold,
+): string {
+  return [
+    renderListing(items, { budget: APPROVAL_LIST_BUDGET, omitted: () => '' }),
+    ...notes,
+    fold(
+      'approvals-list:order-note',
+      '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
+      '（並び: 作成時刻の昇順、同着は id の昇順）',
+    ),
+  ].join('\n');
+}
+
+// 索引の行は `- ` で始めない: `- ` は1件の詳細（id・件名／作成・更新／概要）の頭として読まれるため
+// 予算に入りきらなければ古い側を件数で省く: 重複を確かめたいのは新しく積んだ側のため
+function renderApprovalListIndexLines(pending: readonly PendingApproval[]): string {
+  return renderListingFromEnd(
+    pending.map(
+      (approval) =>
+        `・${approval.id}（${approval.createdAt}）${excerpt(approvalTitle(approval.question), APPROVAL_INDEX_TITLE_EXCERPT)}`,
+    ),
+    {
+      budget: APPROVAL_INDEX_BUDGET,
+      omitted: ({ rest }) => `…索引も古い側の ${rest} 件を省いた（id で開ける）。`,
+    },
+  );
+}
+
+function renderApprovalListDetailOmitted(args: { rest: number; shown: number }): string {
+  const { rest, shown } = args;
+  return `…ほか ${rest} 件は詳細を省略（新しい順に先頭から ${shown} 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。`;
+}
+
+// 入りきらないときは、全件の短い索引を頭に出し、詳細は新しい順に入るだけ出す（#4997）:
+// 重複を確かめる口なのに、古い順に先頭から切ると、いちばん要る新しく積んだ問いが必ず落ちるため
+function renderApprovalListIndexed(args: {
+  pending: readonly PendingApproval[];
+  items: readonly string[];
+  notes: readonly string[];
+  fold: ApprovalListFold;
+}): string {
+  const { pending, items, notes, fold } = args;
+  const indexLines = renderApprovalListIndexLines(pending);
+  const newestFirst = [...items].reverse();
+  return [
+    `回答待ちは ${pending.length} 件ある。まず索引（id・作成時刻・件名。作成の古い順）:`,
+    indexLines,
+    '',
+    '詳細（新しい順）:',
+    renderListing(newestFirst, {
+      budget: Math.max(APPROVAL_DETAIL_MIN_BUDGET, APPROVAL_LIST_BUDGET - indexLines.length),
+      omitted: renderApprovalListDetailOmitted,
+    }),
+    ...notes,
+    fold(
+      'approvals-list:order-note-indexed',
+      '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
+      '（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）',
+    ),
+  ].join('\n');
+}
+
 export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId, getWorkConversationId } = shared;
   return [
@@ -349,145 +542,27 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
           .describe(`id で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
       },
       async ({ id, offset = 0 }, extra: unknown) => {
-        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        const offsetError = describeApprovalsListViolation(offset);
         if (offsetError !== null) return text(offsetError);
         if (id !== undefined) {
-          let approval: PendingApproval | null;
-          try {
-            approval = await stores.jobs.getApproval(id);
-          } catch (error) {
-            if (error instanceof UnreadableApprovalError)
-              return text(describeUnreadableApproval(id));
-            throw error;
-          }
-          if (!approval) return text(`承認待ち ${id} は無い（id が違う）。`);
-          // 答えが付いた件も取り下げた件も読める: 「その質問が何だったか」は終端が付いた後にこそ要るため
-          const status =
-            approval.withdrawnAt !== undefined
-              ? `${approval.withdrawnAt} に取り下げ`
-              : approval.answeredAt === undefined
-                ? '回答待ち'
-                : `${approval.answeredAt} に回答済み`;
-          const head =
-            `${approval.id}（${approval.createdAt}）` +
-            status +
-            (approval.jobId === undefined
-              ? ''
-              : ` / 宛先 managerId: "${approval.jobId}"` +
-                (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`));
-          const body = [
-            `質問: ${approval.question}`,
-            ...(approval.context === undefined ? [] : [`背景: ${approval.context}`]),
-            ...(approval.questions === undefined
-              ? []
-              : [`設問:\n${describeQuestionLines(approval.questions).join('\n')}`]),
-            ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
-            ...(approval.withdrawnReason === undefined
-              ? []
-              : [`取り下げた理由: ${approval.withdrawnReason}`]),
-          ].join('\n\n');
-          const part = page(body, offset, APPROVAL_PAGE);
-          const tail = part.more
-            ? `\n\n…（ここで切れている。続きは approvals_list id=${approval.id} offset=${part.to}）`
-            : '';
-          return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
+          const read = await readApprovalForFullText(stores.jobs, id);
+          if (read.kind === 'unreadable') return text(describeUnreadableApproval(id));
+          if (read.kind === 'missing') return text(renderApprovalsListMissing(id));
+          return text(renderApprovalFull(read.approval, offset));
         }
 
-        // ここで全順序にする（`createdAt` 昇順、同着は `id` 昇順）: この一覧は予算で切るので、並びがストア実装依存だと切り落とされる側が構成によって変わるため
-        // ストア側の `orderBy` は消さない: 消すと pg が大きな表を未整列のまま全件返してからここで並べることになるため
         const approvalList = await stores.jobs.listApprovals({ pendingOnly: true });
-        const pending = [...approvalList.entries].sort(
-          (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        );
+        const pending = sortPendingApprovals(approvalList.entries);
         // 読めない行は一覧から消さず、件数と id で言う
         const unreadableNote = describeUnreadableApprovals(approvalList.unreadable);
-        if (pending.length === 0) {
-          return text(
-            unreadableNote === null
-              ? '（人間の回答待ちは無い）'
-              : `（読めた回答待ちは無い）\n${unreadableNote}`,
-          );
-        }
-        const items = pending.map((approval) =>
-          renderListingEntry({
-            id: approval.id,
-            title: approvalTitle(approval.question),
-            // 更新は出さない: 回答待ちだけの一覧では `approvalUpdatedAt` が常に `createdAt` と同じで、同じ時刻の2回目は情報にならないため（読み方は説明文が持つ）
-            createdAt: approval.createdAt,
-            summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
-            extra: [
-              approval.questions === undefined || approval.questions.length === 0
-                ? null
-                : `  ${summarizeQuestions(approval.questions)}（詳細は approvals_list id=<id>）`,
-              approval.jobId === undefined
-                ? null
-                : `  宛先: managerId: "${approval.jobId}"` +
-                  (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`),
-            ],
-          }),
-        );
-        // 末尾の固定の注記は、同じ会話の2回目から札にする（質問が抜粋であること・並びの向きは札にも残す）。
-        // 件ごとの行（`（詳細は approvals_list id=<id>）`）は畳まない: 予算で出ない件が先に「全文を出した」と控えられるため
+        if (pending.length === 0) return text(renderApprovalsListEmpty(unreadableNote));
+        const items = renderApprovalListItems(pending);
         const fold = foldFixedFor(context, extra);
-        const notes = [
-          fold(
-            'approvals-list:note-excerpt',
-            '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
-            '（質問は抜粋。全文は id=<id> で取れる）',
-          ),
-          ...(unreadableNote === null ? [] : [unreadableNote]),
-        ];
-        // 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
+        const notes = renderApprovalListNotes(fold, unreadableNote);
         if (fillListingBudget(items, APPROVAL_LIST_BUDGET, false).rest === 0) {
-          return text(
-            [
-              renderListing(items, { budget: APPROVAL_LIST_BUDGET, omitted: () => '' }),
-              ...notes,
-              fold(
-                'approvals-list:order-note',
-                '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
-                '（並び: 作成時刻の昇順、同着は id の昇順）',
-              ),
-            ].join('\n'),
-          );
+          return text(renderApprovalListAll(items, notes, fold));
         }
-        // 入りきらないときは、全件の短い索引を頭に出し、詳細は新しい順に入るだけ出す（#4997）:
-        // 重複を確かめる口なのに、古い順に先頭から切ると、いちばん要る新しく積んだ問いが必ず落ちるため
-        // 索引の行は `- ` で始めない: `- ` は1件の詳細（id・件名／作成・更新／概要）の頭として読まれるため
-        // 予算に入りきらなければ古い側を件数で省く: 重複を確かめたいのは新しく積んだ側のため
-        const indexLines = renderListingFromEnd(
-          pending.map(
-            (approval) =>
-              `・${approval.id}（${approval.createdAt}）${excerpt(approvalTitle(approval.question), APPROVAL_INDEX_TITLE_EXCERPT)}`,
-          ),
-          {
-            budget: APPROVAL_INDEX_BUDGET,
-            omitted: ({ rest }) => `…索引も古い側の ${rest} 件を省いた（id で開ける）。`,
-          },
-        );
-        const newestFirst = [...items].reverse();
-        return text(
-          [
-            `回答待ちは ${pending.length} 件ある。まず索引（id・作成時刻・件名。作成の古い順）:`,
-            indexLines,
-            '',
-            '詳細（新しい順）:',
-            renderListing(newestFirst, {
-              budget: Math.max(
-                APPROVAL_DETAIL_MIN_BUDGET,
-                APPROVAL_LIST_BUDGET - indexLines.length,
-              ),
-              omitted: ({ rest, shown }) =>
-                `…ほか ${rest} 件は詳細を省略（新しい順に先頭から ${shown} 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。`,
-            }),
-            ...notes,
-            fold(
-              'approvals-list:order-note-indexed',
-              '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
-              '（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）',
-            ),
-          ].join('\n'),
-        );
+        return text(renderApprovalListIndexed({ pending, items, notes, fold }));
       },
     ),
 
