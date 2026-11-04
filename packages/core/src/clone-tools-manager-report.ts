@@ -200,6 +200,292 @@ function unpushedWorkReportNote(
   return note === null ? null : note.trimStart();
 }
 
+type ManagerReportPart = 'report' | 'request';
+
+type ManagerReportFoldedTurn = NonNullable<ManagerSummary['lastFoldedTurn']>;
+
+interface ManagerReportBodySelection {
+  foldedTurn: ManagerReportFoldedTurn | undefined;
+  body: string | undefined;
+  // 報告が在る枝の拒否の基準: foldedTurn の回は `foldedTurn.at`、それ以外は `lastReportAt`
+  deniedSinceWhenPresent: string | undefined;
+  // 報告が無い枝の拒否の基準: 本文が空の回は foldedTurn が在っても `lastReportAt` のまま
+  deniedSinceWhenMissing: string | undefined;
+}
+
+interface ManagerReportNotes {
+  usageStopped: string | null;
+  runnerVanished: string | null;
+  systemError: string | null;
+  cgroupEvents: string | null;
+  denied: string | null;
+  unobserved: string | null;
+  unpushedWork: string | null;
+  withheldReports: string | null;
+}
+
+const NO_MANAGER_REPORT_NOTES: ManagerReportNotes = {
+  usageStopped: null,
+  runnerVanished: null,
+  systemError: null,
+  cgroupEvents: null,
+  denied: null,
+  unobserved: null,
+  unpushedWork: null,
+  withheldReports: null,
+};
+
+// 読めない委譲の行は「居ない」と分けて言う: 見つからなかったときだけ台帳を読み直す（単票の取得のたびに一覧を読まない）
+async function describeManagerReportNotFound(
+  context: ToolContext,
+  managerId: string,
+): Promise<string> {
+  const unreadableRow = (await context.stores.jobs.listUnreadableJobs()).find(
+    (row) => row.id === managerId,
+  );
+  if (unreadableRow !== undefined) {
+    return describeUnreadableManagerRow(managerId, unreadableRow.reason);
+  }
+  return (
+    `マネージャー ${managerId} は居ない（もう畳まれたか、id が違う）。` +
+    'manager_list で今あるものが見える。'
+  );
+}
+
+function renderManagerReportModelLine(context: ToolContext, found: ManagerSummary): string {
+  return `モデル: ${describeManagerModels(managerModelsOf(context.managers, found))}`;
+}
+
+// 在れば `lastReport` より優先して見せる: `lastFoldedTurn` は `lastReport` より後に届いた内容で、陰に隠れたままだと `manager_report` から一生読めなくなるため
+function selectManagerReportBody(
+  found: ManagerSummary,
+  part: ManagerReportPart,
+): ManagerReportBodySelection {
+  const foldedTurn = part === 'request' ? undefined : found.lastFoldedTurn;
+  const body = part === 'request' ? found.request : (foldedTurn?.text ?? found.lastReport);
+  return {
+    foldedTurn,
+    body,
+    // foldedTurn の回は `lastReportAt` の代わりに `foldedTurn.at` を渡す: `lastReportAt` は畳まれる前の古い値のままで、「拒否の後の報告はまだ届いていない」と誤判定するため
+    deniedSinceWhenPresent: foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
+    deniedSinceWhenMissing: found.lastReportAt,
+  };
+}
+
+// 失敗した回は「報告」と呼ばない: 見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
+// `foldedTurn` が在る回は注記を出さない: `lastFailure` は畳まれる前の無関係な古いターンを指し、注記が予告する本文の種類と実際の本文が食い違うため
+function describeManagerReportFailure(
+  found: ManagerSummary,
+  part: ManagerReportPart,
+  foldedTurn: ManagerReportFoldedTurn | undefined,
+): string | null {
+  return part === 'request' || foldedTurn !== undefined
+    ? null
+    : describeManagerFailure(
+        found.lastFailure,
+        found.lastReport,
+        found.status,
+        tokenGenerationMismatched(found),
+      );
+}
+
+// 依頼文（`part === 'request'`）では注記を出さない: 依頼文は報告・失敗・拒否の話ではないため
+// 報告の有無とは別の軸なので、報告が空の回でも出す。拒否は黙ると「まだ書いていない」と「番人に止められて書けない」を区別できないため、報告が在る回でも出す（報告を書いた後で別の道具を止められていると、本文だけ読むと「報告どおり進んでいる」と読めるため）
+function readManagerReportNotes(
+  pool: ManagerPool,
+  found: ManagerSummary,
+  args: {
+    part: ManagerReportPart;
+    rescueAll: boolean;
+    deniedSince: string | undefined;
+  },
+): ManagerReportNotes {
+  const { part, rescueAll, deniedSince } = args;
+  if (part === 'request') return NO_MANAGER_REPORT_NOTES;
+  const usageStopped = describeUsageStopped(found);
+  const runnerVanished = describeRunnerVanished(found);
+  const systemError = describeManagerSystemError(found);
+  const cgroupEvents = describeManagerCgroupEvents(found);
+  const denied = describeDenials(pool.denials(found.managerId), deniedSince);
+  // 報告が無い枝でも出す: `manager_list` で「何も届いていない」と読んだクローンが掘りに来る先で、黙ると順位を付けた意味が掘った先で消えるため
+  const unobserved = describeUnobservedOutcome(found);
+  const unpushedWork = unpushedWorkReportNote(found, rescueAll);
+  const withheldReports = describeWithheldReports(found);
+  return {
+    usageStopped,
+    runnerVanished,
+    systemError,
+    cgroupEvents,
+    denied,
+    unobserved,
+    unpushedWork,
+    withheldReports,
+  };
+}
+
+// 注記の並び: 使用量・runner 消失・システムエラー・cgroup・拒否・観測できていない・未 push・配られていない報告
+function listManagerReportNotes(notes: ManagerReportNotes): string[] {
+  return [
+    notes.usageStopped,
+    notes.runnerVanished,
+    notes.systemError,
+    notes.cgroupEvents,
+    notes.denied,
+    notes.unobserved,
+    notes.unpushedWork,
+    notes.withheldReports,
+  ].filter((s) => s !== null);
+}
+
+// 依頼文では見に行かない: 往復を無条件に増やさないため、report のときだけ生ログを見る（呼び元が `part === 'report'` で呼ぶ）
+async function renderManagerReportMissing(
+  pool: ManagerPool,
+  found: ManagerSummary,
+  modelLine: string,
+  args: { rescueAll: boolean; deniedSince: string | undefined },
+): Promise<string> {
+  const missing = await describeMissingReport(pool, found.managerId, found.status);
+  const notes = readManagerReportNotes(pool, found, {
+    part: 'report',
+    rescueAll: args.rescueAll,
+    deniedSince: args.deniedSince,
+  });
+  return [modelLine, missing, ...listManagerReportNotes(notes)].join('\n\n');
+}
+
+function describeManagerReportLabel(
+  found: ManagerSummary,
+  part: ManagerReportPart,
+  foldedTurn: ManagerReportFoldedTurn | undefined,
+): string {
+  return part === 'request'
+    ? '依頼文'
+    : // 停止後に届いた本文は別の見出しで言い分ける: `isFoldedTurnReport` とは別の畳まれ方のため
+      foldedTurn !== undefined
+      ? `停止後に届いた、畳まれたターンの中身（${foldedTurn.at} 受信）`
+      : isFoldedTurnReport(found)
+        ? '直近のターンの中身'
+        : '直近の報告';
+}
+
+// 齢といまの status を見出しに添える: 読み手が直近に完了したターンの中身をいまの状態として読まないため
+function describeManagerReportAgeStatus(
+  found: ManagerSummary,
+  part: ManagerReportPart,
+  foldedTurn: ManagerReportFoldedTurn | undefined,
+): string {
+  return part === 'request'
+    ? ''
+    : foldedTurn !== undefined
+      ? // foldedTurn の回は `lastReportAt` の欄ごと出さない: 畳まれる前の別のターンの受信時刻で、いま読んでいる本文の齢に見えるため
+        ` — いまの status: \`${found.status}\``
+      : // 文言に「直近の報告」を含めない: 見出しを「直近のターンの中身」へ切り替えた回で混ざると、切り替えた意味が薄れるため
+        ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
+}
+
+function renderManagerReportHead(
+  found: ManagerSummary,
+  part: ManagerReportPart,
+  foldedTurn: ManagerReportFoldedTurn | undefined,
+  part1: ReturnType<typeof page>,
+): string {
+  const label = describeManagerReportLabel(found, part, foldedTurn);
+  const reportAgeStatus = describeManagerReportAgeStatus(found, part, foldedTurn);
+  return `マネージャー ${found.managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
+}
+
+// foldedTurn の回はその材料で組む: `lastReportAt` / `lastReportStatus` は畳まれる前の別のターンの値で、そのまま渡すと無関係な drift を語るため
+function renderManagerReportDriftNote(
+  found: ManagerSummary,
+  part: ManagerReportPart,
+  foldedTurn: ManagerReportFoldedTurn | undefined,
+): string {
+  const drift =
+    part === 'request'
+      ? ''
+      : describeReportDrift({
+          managerId: found.managerId,
+          lastReportAt: foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
+          lastReportStatus: foldedTurn !== undefined ? 'stopped' : found.lastReportStatus,
+          status: found.status,
+          now: new Date(),
+        });
+  return drift === '' ? '' : `${drift}\n\n`;
+}
+
+// 失敗は本文の上に置く: 下だと包まれたエラー文を先に読んでから「実は報告ではない」と分かる順になるため。以下の注記も同じ順
+function renderManagerReportNoteBlock(failure: string | null, notes: ManagerReportNotes): string {
+  return [failure, ...listManagerReportNotes(notes)]
+    .filter((s) => s !== null)
+    .map((s) => `${s}\n\n`)
+    .join('');
+}
+
+// 本文だけを畳む: 状態の注記（失敗・拒否・退避 ref など）は発言の後に変わりうるので残す。依頼文・頁送り（offset > 0）・refetch は従来どおり本文を出す
+function readManagerReportShownAt(
+  context: ToolContext,
+  extra: unknown,
+  args: {
+    managerId: string;
+    body: string;
+    part: ManagerReportPart;
+    offset: number;
+    refetch: boolean;
+  },
+): Date | null {
+  const { managerId, body, part, offset, refetch } = args;
+  return part === 'report' && offset === 0 && !refetch && !isSubagentCaller(context, extra)
+    ? (context.managerReportShownAt?.(managerId, body) ?? null)
+    : null;
+}
+
+function renderManagerReportShown(args: {
+  head: string;
+  modelLine: string;
+  preamble: string;
+  managerId: string;
+  body: string;
+  shownAt: Date;
+}): string {
+  const { head, modelLine, preamble, managerId, body, shownAt } = args;
+  return (
+    `${head}\n\n${modelLine}\n\n${preamble}` +
+    `この報告の全文（${body.length.toLocaleString('en-US')} 文字）は ${shownAt.toISOString().slice(11, 16)}Z の発言に載っている（会話の上）。` +
+    '引き直すには `refetch: true` を付ける。' +
+    `\n\n（さらに掘るなら manager_transcript managerId=${managerId} で生ログへ）`
+  );
+}
+
+function renderManagerReportPageTail(
+  managerId: string,
+  part: ManagerReportPart,
+  part1: ReturnType<typeof page>,
+): string {
+  return part1.more
+    ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
+        `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
+    : '';
+}
+
+// 切れていない場合にも次の一手を常に添える: ここに載る `lastReport` は報告の全文で、セッションの生ログではないため
+function renderManagerReportFooter(managerId: string): string {
+  return '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
+}
+
+function renderManagerReportPage(args: {
+  head: string;
+  modelLine: string;
+  preamble: string;
+  managerId: string;
+  part: ManagerReportPart;
+  part1: ReturnType<typeof page>;
+}): string {
+  const { head, modelLine, preamble, managerId, part, part1 } = args;
+  const tail = renderManagerReportPageTail(managerId, part, part1);
+  const footer = renderManagerReportFooter(managerId);
+  return `${head}\n\n${modelLine}\n\n${preamble}${part1.body}${tail}${footer}`;
+}
+
 export function managerReportTool(context: ToolContext) {
   return tool(
     'manager_report',
@@ -251,153 +537,47 @@ export function managerReportTool(context: ToolContext) {
       if (!context.managers) return NO_POOL;
       const managers = await context.managers.list();
       const found = managers.find((manager) => manager.managerId === managerId);
-      if (!found) {
-        // 読めない委譲の行は「居ない」と分けて言う: 見つからなかったときだけ台帳を読み直す（単票の取得のたびに一覧を読まない）
-        const unreadableRow = (await context.stores.jobs.listUnreadableJobs()).find(
-          (row) => row.id === managerId,
-        );
-        if (unreadableRow !== undefined) {
-          return text(describeUnreadableManagerRow(managerId, unreadableRow.reason));
-        }
-        return text(
-          `マネージャー ${managerId} は居ない（もう畳まれたか、id が違う）。` +
-            'manager_list で今あるものが見える。',
-        );
-      }
+      if (!found) return text(await describeManagerReportNotFound(context, managerId));
 
-      const modelLine = `モデル: ${describeManagerModels(managerModelsOf(context.managers, found))}`;
-      // 在れば `lastReport` より優先して見せる: `lastFoldedTurn` は `lastReport` より後に届いた内容で、陰に隠れたままだと `manager_report` から一生読めなくなるため
-      const foldedTurn = part === 'request' ? undefined : found.lastFoldedTurn;
-      const body = part === 'request' ? found.request : (foldedTurn?.text ?? found.lastReport);
+      const modelLine = renderManagerReportModelLine(context, found);
+      const { foldedTurn, body, deniedSinceWhenPresent, deniedSinceWhenMissing } =
+        selectManagerReportBody(found, part);
       if (body === undefined || body.length === 0) {
         if (part === 'request') {
           return text(`マネージャー ${managerId} の依頼文が記録に無い。`);
         }
-        // 依頼文では見に行かない: 往復を無条件に増やさないため、report のときだけ生ログを見る
-        const missing = await describeMissingReport(context.managers, managerId, found.status);
-        // 報告の有無とは別の軸なので、報告が空の回だからこちらも出さない、にはしない
-        const usageStopped = describeUsageStopped(found);
-        const runnerVanished = describeRunnerVanished(found);
-        const systemError = describeManagerSystemError(found);
-        const cgroupEvents = describeManagerCgroupEvents(found);
-        // 報告が空の回でも拒否は出す: 黙ると「まだ書いていない」と「番人に止められて書けない」を区別できないため
-        const denied = describeDenials(context.managers.denials(managerId), found.lastReportAt);
-        // この枝でも出す: `manager_list` で「何も届いていない」と読んだクローンが掘りに来る先で、黙ると順位を付けた意味が掘った先で消えるため
-        const unobserved = describeUnobservedOutcome(found);
-        const unpushedWork = unpushedWorkReportNote(found, rescueAll);
-        const withheldReportsNote = describeWithheldReports(found);
         return text(
-          [
-            modelLine,
-            missing,
-            usageStopped,
-            runnerVanished,
-            systemError,
-            cgroupEvents,
-            denied,
-            unobserved,
-            unpushedWork,
-            withheldReportsNote,
-          ]
-            .filter((s) => s !== null)
-            .join('\n\n'),
+          await renderManagerReportMissing(context.managers, found, modelLine, {
+            rescueAll,
+            deniedSince: deniedSinceWhenMissing,
+          }),
         );
       }
 
-      // 失敗した回は「報告」と呼ばない: 見出しが「直近の報告」のままだと、⚠ を見た直後に包みの内側だけを読んで報告として扱うため
-      // `foldedTurn` が在る回は注記を出さない: `lastFailure` は畳まれる前の無関係な古いターンを指し、注記が予告する本文の種類と実際の本文が食い違うため
-      const managerFailure =
-        part === 'request' || foldedTurn !== undefined
-          ? null
-          : describeManagerFailure(
-              found.lastFailure,
-              found.lastReport,
-              found.status,
-              tokenGenerationMismatched(found),
-            );
-      const usageStopped = part === 'request' ? null : describeUsageStopped(found);
-      const runnerVanished = part === 'request' ? null : describeRunnerVanished(found);
-      const systemError = part === 'request' ? null : describeManagerSystemError(found);
-      const cgroupEvents = part === 'request' ? null : describeManagerCgroupEvents(found);
-      // 報告が在る回でも拒否は出す: 報告を書いた後で別の道具を止められていると、本文だけ読むと「報告どおり進んでいる」と読めるため
-      // foldedTurn の回は `lastReportAt` の代わりに `foldedTurn.at` を渡す: `lastReportAt` は畳まれる前の古い値のままで、「拒否の後の報告はまだ届いていない」と誤判定するため
-      const denied =
-        part === 'request'
-          ? null
-          : describeDenials(
-              context.managers.denials(managerId),
-              foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
-            );
-      // 依頼文（`part === 'request'`）では注記を出さない: 依頼文は報告・失敗・拒否の話ではないため
-      const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
-      const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found, rescueAll);
-      const withheldReportsNote = part === 'request' ? null : describeWithheldReports(found);
-      const label =
-        part === 'request'
-          ? '依頼文'
-          : // 停止後に届いた本文は別の見出しで言い分ける: `isFoldedTurnReport` とは別の畳まれ方のため
-            foldedTurn !== undefined
-            ? `停止後に届いた、畳まれたターンの中身（${foldedTurn.at} 受信）`
-            : isFoldedTurnReport(found)
-              ? '直近のターンの中身'
-              : '直近の報告';
+      const failure = describeManagerReportFailure(found, part, foldedTurn);
+      const notes = readManagerReportNotes(context.managers, found, {
+        part,
+        rescueAll,
+        deniedSince: deniedSinceWhenPresent,
+      });
       const part1 = page(body, offset, REPORT_PAGE);
-      // 齢といまの status を見出しに添える: 読み手が直近に完了したターンの中身をいまの状態として読まないため
-      const reportAgeStatus =
-        part === 'request'
-          ? ''
-          : foldedTurn !== undefined
-            ? // foldedTurn の回は `lastReportAt` の欄ごと出さない: 畳まれる前の別のターンの受信時刻で、いま読んでいる本文の齢に見えるため
-              ` — いまの status: \`${found.status}\``
-            : // 文言に「直近の報告」を含めない: 見出しを「直近のターンの中身」へ切り替えた回で混ざると、切り替えた意味が薄れるため
-              ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
-      const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
-      // foldedTurn の回はその材料で組む: `lastReportAt` / `lastReportStatus` は畳まれる前の別のターンの値で、そのまま渡すと無関係な drift を語るため
-      const drift =
-        part === 'request'
-          ? ''
-          : describeReportDrift({
-              managerId,
-              lastReportAt: foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
-              lastReportStatus: foldedTurn !== undefined ? 'stopped' : found.lastReportStatus,
-              status: found.status,
-              now: new Date(),
-            });
-      const driftNote = drift === '' ? '' : `${drift}\n\n`;
-      // 失敗は本文の上に置く: 下だと包まれたエラー文を先に読んでから「実は報告ではない」と分かる順になるため。以下の注記も同じ順
-      const failureNote = managerFailure === null ? '' : `${managerFailure}\n\n`;
-      const usageStoppedNote = usageStopped === null ? '' : `${usageStopped}\n\n`;
-      const runnerVanishedNote = runnerVanished === null ? '' : `${runnerVanished}\n\n`;
-      const systemErrorNote = systemError === null ? '' : `${systemError}\n\n`;
-      const cgroupEventsNote = cgroupEvents === null ? '' : `${cgroupEvents}\n\n`;
-      const denialNote = denied === null ? '' : `${denied}\n\n`;
-      const unobservedNote = unobserved === null ? '' : `${unobserved}\n\n`;
-      const unpushedWorkNote = unpushedWork === null ? '' : `${unpushedWork}\n\n`;
-      const withheldReportsFooterNote =
-        withheldReportsNote === null ? '' : `${withheldReportsNote}\n\n`;
-      // 本文だけを畳む: 状態の注記（失敗・拒否・退避 ref など）は発言の後に変わりうるので残す。依頼文・頁送り（offset > 0）・refetch は従来どおり本文を出す
-      const shownAt =
-        part === 'report' && offset === 0 && !refetch && !isSubagentCaller(context, extra)
-          ? (context.managerReportShownAt?.(managerId, body) ?? null)
-          : null;
+      const head = renderManagerReportHead(found, part, foldedTurn, part1);
+      const preamble =
+        renderManagerReportDriftNote(found, part, foldedTurn) +
+        renderManagerReportNoteBlock(failure, notes);
+      const shownAt = readManagerReportShownAt(context, extra, {
+        managerId,
+        body,
+        part,
+        offset,
+        refetch,
+      });
       if (shownAt !== null) {
         return text(
-          `${head}\n\n${modelLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}` +
-            `この報告の全文（${body.length.toLocaleString('en-US')} 文字）は ${shownAt.toISOString().slice(11, 16)}Z の発言に載っている（会話の上）。` +
-            '引き直すには `refetch: true` を付ける。' +
-            `\n\n（さらに掘るなら manager_transcript managerId=${managerId} で生ログへ）`,
+          renderManagerReportShown({ head, modelLine, preamble, managerId, body, shownAt }),
         );
       }
-      const tail = part1.more
-        ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
-          `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
-        : '';
-      // 切れていない場合にも次の一手を常に添える: ここに載る `lastReport` は報告の全文で、セッションの生ログではないため
-      const footer =
-        '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
-      return text(
-        `${head}\n\n${modelLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
-      );
+      return text(renderManagerReportPage({ head, modelLine, preamble, managerId, part, part1 }));
     },
   );
 }
