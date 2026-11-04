@@ -2439,27 +2439,13 @@ class Pool implements ManagerPool {
   /** 起こした直後の要約を組む（同期。`cwdConfirmed` / `requestedCwd` を足す）。 */
   #startedSummaryOf(record: ManagerRecord, requestedCwd: string | undefined): ManagerSummary {
     const silent = this.#silentRunners();
-    const registeredRunnerIds = this.#registeredRunnerIds();
-    const summary = summaryOf(
-      record,
-      isLive(record, silent),
-      lostSinceOf(record, silent),
-      vanishedOf(record, registeredRunnerIds),
-      record.sessionMissingSince,
-      record.turnEndedAt,
-      record.turnEndReason,
-      record.turnEndTail,
-      record.toolUseStallAt,
-      record.toolUseStallPending,
-      this.#withheld.awaitingBackgroundOf(record.job.id),
-      this.#tokenIdentities.get(record.job.id)?.generation,
-      this.#tokenIdentity?.()?.generation,
-      this.#tokenIdentity !== undefined,
-      this.#resetTimeSkewMatches.get(record.job.id),
-      // `record.job.usageStoppedAt` を直接渡さない: `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
-      this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
-      runnerListedAtOf(record.job, silent, this.#runnerSessions()),
-    );
+    const summary = this.#summaryOfRecord(record, {
+      silent,
+      registeredRunnerIds: this.#registeredRunnerIds(),
+      activeTokenGeneration: this.#tokenIdentity?.()?.generation,
+      tokenGenerationPoolWired: this.#tokenIdentity !== undefined,
+      runnerListedAt: runnerListedAtOf(record.job, silent, this.#runnerSessions()),
+    });
     // `summaryOf` へは混ぜない: `cwdConfirmed` / `requestedCwd` は起こした回にしか意味が無く、
     // 引数を増やすと他の全呼び出し元が「該当なし」を渡す羽目になる。
     return {
@@ -3242,27 +3228,43 @@ class Pool implements ManagerPool {
 
   #summarize(record: ManagerRecord, context: SummaryContext): ManagerSummary {
     const { silent, runnerSessions, registeredRunnerIds } = context;
+    return this.#summaryOfRecord(record, {
+      silent,
+      registeredRunnerIds,
+      activeTokenGeneration: context.activeTokenGeneration,
+      tokenGenerationPoolWired: context.tokenGenerationPoolWired,
+      runnerListedAt: runnerListedAtOf(record.job, silent, runnerSessions),
+    });
+  }
+
+  /**
+   * 委譲の要約を組む（起こした直後・一覧と詳細・起動時の引き取りの3つの口が使う）。口ごとに違う材料（名簿の像・現役の鍵の世代・`runnerListedAt`）は
+   * `view` で受け、残りの材料（背景処理・この委譲の鍵の世代・`#usageStopped` の門など）はここで読む: 口ごとに同じ材料を並べ直す写しを作らないため。
+   */
+  #summaryOfRecord(
+    record: ManagerRecord,
+    view: {
+      readonly silent: ReadonlyMap<string, string>;
+      readonly registeredRunnerIds: ReadonlySet<string> | null;
+      readonly activeTokenGeneration: number | undefined;
+      readonly tokenGenerationPoolWired: boolean;
+      readonly runnerListedAt: string | undefined;
+    },
+  ): ManagerSummary {
     const job = record.job;
-    return summaryOf(
-      record,
-      isLive(record, silent),
-      lostSinceOf(record, silent),
-      vanishedOf(record, registeredRunnerIds),
-      record.sessionMissingSince,
-      record.turnEndedAt,
-      record.turnEndReason,
-      record.turnEndTail,
-      record.toolUseStallAt,
-      record.toolUseStallPending,
-      this.#withheld.awaitingBackgroundOf(job.id),
-      this.#tokenIdentities.get(job.id)?.generation,
-      context.activeTokenGeneration,
-      context.tokenGenerationPoolWired,
-      this.#resetTimeSkewMatches.get(job.id),
-      // `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
-      this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
-      runnerListedAtOf(job, silent, runnerSessions),
-    );
+    return summaryOf(record, {
+      live: isLive(record, view.silent),
+      runnerLostSince: lostSinceOf(record, view.silent),
+      runnerVanished: vanishedOf(record, view.registeredRunnerIds),
+      runnerListedAt: view.runnerListedAt,
+      awaitingBackground: this.#withheld.awaitingBackgroundOf(job.id),
+      tokenGeneration: this.#tokenIdentities.get(job.id)?.generation,
+      activeTokenGeneration: view.activeTokenGeneration,
+      tokenGenerationPoolWired: view.tokenGenerationPoolWired,
+      resetTimeSkewMatch: this.#resetTimeSkewMatches.get(job.id),
+      // `record.job.usageStoppedAt` を直接渡さない: `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
+      usageStoppedAt: this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
+    });
   }
 
   // 聞けていない委譲には欄を作らない（0 を捏造しない）。走行中の像（`#records`）に在る委譲だけに添える
@@ -4226,25 +4228,14 @@ class Pool implements ManagerPool {
     silent: ReadonlyMap<string, string>,
     registeredRunnerIds: ReadonlySet<string> | null,
   ): ManagerSummary {
-    return summaryOf(
-      record,
-      isLive(record, silent),
-      lostSinceOf(record, silent),
-      vanishedOf(record, registeredRunnerIds),
-      record.sessionMissingSince,
-      record.turnEndedAt,
-      record.turnEndReason,
-      record.turnEndTail,
-      record.toolUseStallAt,
-      record.toolUseStallPending,
-      this.#withheld.awaitingBackgroundOf(record.job.id),
-      this.#tokenIdentities.get(record.job.id)?.generation,
-      this.#tokenIdentity?.()?.generation,
-      this.#tokenIdentity !== undefined,
-      this.#resetTimeSkewMatches.get(record.job.id),
-      this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
-      undefined,
-    );
+    return this.#summaryOfRecord(record, {
+      silent,
+      registeredRunnerIds,
+      activeTokenGeneration: this.#tokenIdentity?.()?.generation,
+      tokenGenerationPoolWired: this.#tokenIdentity !== undefined,
+      // 引き取りの口は runner の一覧の観測を渡さない（`runnerListedAt` を立てない）
+      runnerListedAt: undefined,
+    });
   }
 
   /** 再起動後に resume できる委譲を runner へ戻す（同じ runner への resume の窓の開閉・resume・受理後の書き戻し・拒否と失敗の後始末）。戻せた回は一覧へ載せる要約を返す。 */

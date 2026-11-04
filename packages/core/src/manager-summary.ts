@@ -6,7 +6,6 @@ import type {
   TokenGenerationUnknownReason,
 } from './manager.js';
 import type { NoticeResetMatch } from './token-reset-match.js';
-import type { PendingToolUse } from './turn-end-probe.js';
 
 // 「デプロイ全体の話」を「この委譲固有の話」より先に見る: プールが配線されていなければ、living 枝を経由していてもこの委譲について言えることは無い。
 function tokenGenerationUnknownReasonOf(
@@ -31,26 +30,48 @@ export interface SummaryContext {
   tokenGenerationPoolWired: boolean;
 }
 
-export function summaryOf(
-  record: ManagerRecord,
-  live: boolean,
-  runnerLostSince: string | undefined,
-  runnerVanished: true | undefined,
-  sessionMissingSince: string | undefined,
-  turnEndedAt: string | undefined,
-  turnEndReason: string | undefined,
-  turnEndTail: string | undefined,
-  toolUseStallAt: string | undefined,
-  toolUseStallPending: PendingToolUse[] | undefined,
-  awaitingBackground: ManagerAwaitingBackground | undefined,
-  tokenGeneration: number | undefined,
-  activeTokenGeneration: number | undefined,
-  tokenGenerationPoolWired: boolean,
-  resetTimeSkewMatch: NoticeResetMatch | undefined,
-  usageStoppedAt: string | undefined,
-  runnerListedAt: string | undefined,
-): ManagerSummary {
-  const { job } = record;
+/**
+ * `summaryOf` の材料のうち、`record` から読めないもの（名簿・プロセス内の状態）。呼ぶ側が計算した値だけを渡す。
+ * 欄はすべて必須にする（値は `undefined` でよい）: 省略を許すと、足す人が考えなかった欄が黙って既定の側へ倒れるため（上の `live` の理由と同じ）。
+ * 名前で渡す: 位置で並べると、型の同じ欄（`tokenGeneration` と `activeTokenGeneration` など）を取り違えても型では落ちないため。
+ */
+export interface SummaryFacts {
+  live: boolean;
+  runnerLostSince: string | undefined;
+  runnerVanished: true | undefined;
+  runnerListedAt: string | undefined;
+  // `live` と同じく必須にする: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
+  awaitingBackground: ManagerAwaitingBackground | undefined;
+  tokenGeneration: number | undefined;
+  activeTokenGeneration: number | undefined;
+  tokenGenerationPoolWired: boolean;
+  resetTimeSkewMatch: NoticeResetMatch | undefined;
+  usageStoppedAt: string | undefined;
+}
+
+export function summaryOf(record: ManagerRecord, facts: SummaryFacts): ManagerSummary {
+  const {
+    live,
+    runnerLostSince,
+    runnerVanished,
+    runnerListedAt,
+    awaitingBackground,
+    tokenGeneration,
+    activeTokenGeneration,
+    tokenGenerationPoolWired,
+    resetTimeSkewMatch,
+    usageStoppedAt,
+  } = facts;
+  // `record` から読める欄は、呼ぶ側に写させずここで読む: 呼ぶ側が同じ欄を位置で並べ直す写しを作らないため
+  const {
+    job,
+    sessionMissingSince,
+    turnEndedAt,
+    turnEndReason,
+    turnEndTail,
+    toolUseStallAt,
+    toolUseStallPending,
+  } = record;
   const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
     tokenGeneration,
     tokenGenerationPoolWired,
@@ -125,7 +146,6 @@ export function summaryOf(
             oldestHeldAt: job.heldMessages[0].heldAt,
           },
         }),
-    // `live` と同じく引数で運ぶ（省略可能にしない）: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
     ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
     // `tokenGeneration` が無ければ `activeTokenGeneration` も出さない: 比べる相手が無い判定を作らない。
     ...(tokenGeneration === undefined
