@@ -916,20 +916,7 @@ export async function buildActivityDigest(
 
   sections.push(...managersSection());
 
-  if (decisionsCount > 0 || routineDecisionsCount > 0) {
-    sections.push('', '## 聞かずに決めたこと');
-    const shownDecisions = decisions.slice(0, MAX_ITEMS);
-    for (const entry of shownDecisions) {
-      sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
-    }
-    sections.push(...omitted(decisionsCount, shownDecisions.length, journalWhere('decision')));
-    if (routineDecisionsCount > 0) {
-      sections.push(
-        `（器の機構が定型で書いた記録 ${routineDecisionsCount} 件は一覧に入れていない。` +
-          '`journal_read` の types=["decision"] で見える）',
-      );
-    }
-  }
+  appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount);
 
   if (escalationGroups.length > 0) {
     sections.push('', '## エスカレーション');
@@ -945,6 +932,46 @@ export async function buildActivityDigest(
     );
   }
 
+  appendPendingSection(sections, pending, unreadableApprovalNote);
+
+  appendMemoryUpdatesSection(sections, memoryUpdates, memoryUpdatesCount);
+
+  appendExternalsSection(sections, externals, externalsCount, externalSourceTally, options);
+
+  sections.push('', ...(await usageSection(stores, window.since, until)));
+
+  return sections.join('\n');
+}
+
+/** 要約の全体の形の「聞かずに決めたこと」の節を足す（`buildActivityDigest` から出した）。 */
+function appendDecisionsSection(
+  sections: string[],
+  decisions: readonly Extract<JournalEntry, { type: 'decision' }>[],
+  decisionsCount: number,
+  routineDecisionsCount: number,
+): void {
+  if (decisionsCount > 0 || routineDecisionsCount > 0) {
+    sections.push('', '## 聞かずに決めたこと');
+    const shownDecisions = decisions.slice(0, MAX_ITEMS);
+    for (const entry of shownDecisions) {
+      sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
+    }
+    sections.push(...omitted(decisionsCount, shownDecisions.length, journalWhere('decision')));
+    if (routineDecisionsCount > 0) {
+      sections.push(
+        `（器の機構が定型で書いた記録 ${routineDecisionsCount} 件は一覧に入れていない。` +
+          '`journal_read` の types=["decision"] で見える）',
+      );
+    }
+  }
+}
+
+/** 要約の全体の形の「人間の回答待ち」の節を足す（`buildActivityDigest` から出した）。 */
+function appendPendingSection(
+  sections: string[],
+  pending: readonly PendingApproval[],
+  unreadableApprovalNote: string | null,
+): void {
   if (pending.length > 0 || unreadableApprovalNote !== null) {
     sections.push('', '## 人間の回答待ち（保留中。他の仕事は進めてよい）');
     const shownPending = pending.slice(0, MAX_ITEMS);
@@ -962,7 +989,14 @@ export async function buildActivityDigest(
     }
     if (unreadableApprovalNote !== null) sections.push(`- ${unreadableApprovalNote}`);
   }
+}
 
+/** 要約の全体の形の「記憶の更新」の節を足す（`buildActivityDigest` から出した）。 */
+function appendMemoryUpdatesSection(
+  sections: string[],
+  memoryUpdates: readonly Extract<JournalEntry, { type: 'memory_update' }>[],
+  memoryUpdatesCount: number,
+): void {
   if (memoryUpdatesCount > 0) {
     sections.push('', '## 記憶の更新');
     const shownMemoryUpdates = memoryUpdates.slice(0, MAX_ITEMS);
@@ -981,7 +1015,16 @@ export async function buildActivityDigest(
       ...omitted(memoryUpdatesCount, shownMemoryUpdates.length, journalWhere('memory_update')),
     );
   }
+}
 
+/** 要約の全体の形の「届いた外部イベント」の節（件数・発行元ごとの数・本文の形）を足す（`buildActivityDigest` から出した）。 */
+function appendExternalsSection(
+  sections: string[],
+  externals: readonly Extract<JournalEntry, { type: 'external_event' }>[],
+  externalsCount: number,
+  externalSourceTally: ReturnType<typeof createSourceTally>,
+  options: ActivityDigestOptions,
+): void {
   if (externalsCount > 0) {
     sections.push('', '## 届いた外部イベント');
     sections.push(EXTERNAL_EVENT_NOTE);
@@ -1038,10 +1081,6 @@ export async function buildActivityDigest(
       ),
     );
   }
-
-  sections.push('', ...(await usageSection(stores, window.since, until)));
-
-  return sections.join('\n');
 }
 
 function isLocalMidnight(at: Date): boolean {

@@ -4497,16 +4497,7 @@ class RunnerSession {
     // の文脈占有が測れなくなる。
     const contextUsage = await this.#observeContextUsage();
 
-    // 成否分岐の外で無条件に emit する: `usage` に相乗りさせるだけだと失敗したターンの文脈占有がどこにも残らないため
-    if (contextUsage !== undefined) {
-      this.#emit({
-        type: 'context_usage',
-        managerId: this.#id,
-        sessionId: this.#resumeState.sessionId,
-        turnSucceeded: event.succeeded,
-        contextUsage,
-      });
-    }
+    this.#emitContextUsage(event, contextUsage);
 
     // ターンの区切りで必ず畳む: 持ち越すと前のターンの本文が次の報告に混ざり、言っていないことを言ったことになるため
     const {
@@ -4540,24 +4531,7 @@ class RunnerSession {
     // `succeeded` で兼ねない: あちらは台帳の問いで `subtype === 'success'` だけを見るので `is_error: true` の result を成功として通すため
     const failure = event.failure ?? rejected ?? undefined;
 
-    // `init` を「戻れた」と見ない: 手が動く前の結果なし終了は、この resume が効かなかったということのため
-    if (event.succeeded) {
-      this.#markProgressed();
-      // 成功した result だけを通す: SDK は
-      // 「Crash/startup-error results may carry zeroed values」と言っている。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
-      // ゼロを通すと受け取った側の基準が下がり、次の本物の累積が丸ごと増分になって記録済みの分がもう一度積まれるため
-      if (event.usage !== undefined) {
-        this.#emit({
-          type: 'usage',
-          managerId: this.#id,
-          sessionId: this.#resumeState.sessionId,
-          models: event.usage.models,
-          // 応答として返ったかを別の欄で運ぶ: `succeeded` は台帳の問いで、枠で落ちた `is_error: true` のターンもここへ来て、成功と読まれると回し手が `recovered` と枠を往復し続けるため
-          answered: failure === undefined,
-          ...(contextUsage === undefined ? {} : { contextUsage }),
-        });
-      }
-    }
+    this.#emitAnsweredUsage(event, failure, contextUsage);
 
     // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
     // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
@@ -4682,6 +4656,49 @@ class RunnerSession {
     // 確認待ちの間に溜めた peer の知らせも、同じ理由でここで届ける
     this.#deliverPeerNotices();
     return;
+  }
+
+  /** `#applyTurnEnded` の、文脈占有を送る段（`#applyTurnEnded` から出した。`await` を含まないので同期）。 */
+  #emitContextUsage(
+    event: Extract<AgentEvent, { type: 'turn_ended' }>,
+    contextUsage: ContextUsageObservation | undefined,
+  ): void {
+    // 成否分岐の外で無条件に emit する: `usage` に相乗りさせるだけだと失敗したターンの文脈占有がどこにも残らないため
+    if (contextUsage !== undefined) {
+      this.#emit({
+        type: 'context_usage',
+        managerId: this.#id,
+        sessionId: this.#resumeState.sessionId,
+        turnSucceeded: event.succeeded,
+        contextUsage,
+      });
+    }
+  }
+
+  /** `#applyTurnEnded` の、成功したターンの使用量を送る段（`#applyTurnEnded` から出した。`await` を含まないので同期）。 */
+  #emitAnsweredUsage(
+    event: Extract<AgentEvent, { type: 'turn_ended' }>,
+    failure: SdkFailure | undefined,
+    contextUsage: ContextUsageObservation | undefined,
+  ): void {
+    // `init` を「戻れた」と見ない: 手が動く前の結果なし終了は、この resume が効かなかったということのため
+    if (event.succeeded) {
+      this.#markProgressed();
+      // 成功した result だけを通す: SDK は
+      // 「Crash/startup-error results may carry zeroed values」と言っている。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
+      // ゼロを通すと受け取った側の基準が下がり、次の本物の累積が丸ごと増分になって記録済みの分がもう一度積まれるため
+      if (event.usage !== undefined) {
+        this.#emit({
+          type: 'usage',
+          managerId: this.#id,
+          sessionId: this.#resumeState.sessionId,
+          models: event.usage.models,
+          // 応答として返ったかを別の欄で運ぶ: `succeeded` は台帳の問いで、枠で落ちた `is_error: true` のターンもここへ来て、成功と読まれると回し手が `recovered` と枠を往復し続けるため
+          answered: failure === undefined,
+          ...(contextUsage === undefined ? {} : { contextUsage }),
+        });
+      }
+    }
   }
 
   // 作業者（`local_agent`）のタスクだけを数える: SDK は作業者以外のタスクでも `task_started` を出し、一律に数えると委譲していないターンでも `openedWorkers` が増え `worker_wait` の区間まで開くため
