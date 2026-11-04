@@ -4356,23 +4356,7 @@ class RunnerSession {
   async #apply(event: AgentEvent): Promise<void> {
     switch (event.type) {
       case 'session_started': {
-        // `init` そのものをリセットの契機にしない: ターンの頭ごとに来るだけで、無条件にリセットすると在り高が0へ落ち、`awaitingBackground` が付かず報告が畳まれずクローンを起こすため
-        // [sdk-verbatim SDKSystemMessage]
-        // > Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn: session_id, model, working directory, tools, MCP servers, slash commands, permission mode, and the capabilities list for feature detection.
-        // [sdk-verbatim SDKBackgroundTasksChangedMessage]
-        // > The level is per-process: nothing is emitted at startup, so consumers must reset to the empty set whenever the session's CLI process (re)starts and let the next membership change repopulate it.
-        if (this.#resumeState.observeSessionStarted(event.sessionId)) {
-          this.#sdkSession.resetLiveBackgroundTasks();
-        }
-        // `pluginLoad` が null（init に `plugins` が無い）なら欄ごと省く: 「読み込み結果を観測していない」を空の結果として運ばないため
-        this.#emit({
-          type: 'session',
-          managerId: this.#id,
-          sessionId: event.sessionId,
-          ...(event.runtime.pluginLoad === null ? {} : { pluginLoad: event.runtime.pluginLoad }),
-          // `mcp_servers` が読めなかった（null）なら欄ごと省く: 「観測していない」を「0本」として運ばないため
-          ...(event.runtime.mcpServers === null ? {} : { mcpServers: event.runtime.mcpServers }),
-        });
+        this.#applySessionStarted(event);
         return;
       }
 
@@ -4404,35 +4388,8 @@ class RunnerSession {
       }
 
       case 'assistant_message': {
-        // 作業者の本文を混ぜない: `parentToolUseId` が付いたものは Task の中の別の層の発言のため
-        if (event.parentToolUseId === null) {
-          const said = assistantText(event.blocks);
-          // 「応答ではない」と印の付いたメッセージを報告に混ぜない: 上限の英語文言がそのまま「マネージャーの報告」として台帳・日誌・受信箱へ流れるため
-          const rejected = assistantFailureOf(event.errorCode, said);
-          if (rejected !== undefined) {
-            this.#turnTally.setRejected(rejected);
-            return;
-          }
-          if (said.length > 0) {
-            this.#turnTally.recordSaid(said, event.id);
-            this.#observeReportLanguage(said);
-          }
-        } else {
-          // 作業者の発言に付いた拒否の印をターンの失敗にしない: 数えるだけ
-          const workerText = assistantText(event.blocks);
-          const rejected = assistantFailureOf(event.errorCode, '');
-          if (rejected !== undefined) {
-            this.#turnTally.pushWorkerRejection(rejected.code);
-            // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
-            if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
-              this.#recordWorkerLimit(
-                `tool_use:${event.parentToolUseId}`,
-                workerLimitLabel(event.parentToolUseId, undefined),
-                workerText.length > 0 ? workerText : rejected.code,
-              );
-            }
-          }
-        }
+        this.#applyAssistantMessage(event);
+
         return;
       }
 
@@ -4466,197 +4423,7 @@ class RunnerSession {
         return;
 
       case 'turn_ended': {
-        // `clone.ts` の `#apply` の `case 'turn_ended'` と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
-        // の文脈占有が測れなくなる。
-        const contextUsage = await this.#observeContextUsage();
-
-        // 成否分岐の外で無条件に emit する: `usage` に相乗りさせるだけだと失敗したターンの文脈占有がどこにも残らないため
-        if (contextUsage !== undefined) {
-          this.#emit({
-            type: 'context_usage',
-            managerId: this.#id,
-            sessionId: this.#resumeState.sessionId,
-            turnSucceeded: event.succeeded,
-            contextUsage,
-          });
-        }
-
-        // ターンの区切りで必ず畳む: 持ち越すと前のターンの本文が次の報告に混ざり、言っていないことを言ったことになるため
-        const {
-          said,
-          rejected,
-          inputsThisTurn,
-          notificationsThisTurn,
-          toolsThisTurn,
-          submitsThisTurn,
-          sourcesThisTurn,
-          openedWorkersThisTurn,
-          workerRejectionsThisTurn,
-          failedWorkerNotificationsThisTurn,
-          failedWorkerNotificationsNamingLimitThisTurn,
-        } = this.#turnTally.takeAtResult();
-
-        const closedWindow = this.#workerWaitWindow.foldTurn({
-          inputsThisTurn,
-          notificationsThisTurn,
-          toolsThisTurn,
-          submitsThisTurn,
-          sourcesThisTurn,
-        });
-        if (closedWindow !== null) {
-          this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
-        }
-
-        // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載り、ゼロ埋めで害が出る値でもないため
-        for (const denial of event.denials) this.#noteDenial(denial, 'result');
-
-        // `succeeded` で兼ねない: あちらは台帳の問いで `subtype === 'success'` だけを見るので `is_error: true` の result を成功として通すため
-        const failure = event.failure ?? rejected ?? undefined;
-
-        // `init` を「戻れた」と見ない: 手が動く前の結果なし終了は、この resume が効かなかったということのため
-        if (event.succeeded) {
-          this.#markProgressed();
-          // 成功した result だけを通す: SDK は
-          // 「Crash/startup-error results may carry zeroed values」と言っている。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
-          // ゼロを通すと受け取った側の基準が下がり、次の本物の累積が丸ごと増分になって記録済みの分がもう一度積まれるため
-          if (event.usage !== undefined) {
-            this.#emit({
-              type: 'usage',
-              managerId: this.#id,
-              sessionId: this.#resumeState.sessionId,
-              models: event.usage.models,
-              // 応答として返ったかを別の欄で運ぶ: `succeeded` は台帳の問いで、枠で落ちた `is_error: true` のターンもここへ来て、成功と読まれると回し手が `recovered` と枠を往復し続けるため
-              answered: failure === undefined,
-              ...(contextUsage === undefined ? {} : { contextUsage }),
-            });
-          }
-        }
-
-        // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
-        // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
-        // マネージャーの本文 `said` を分類に通さない: `classifyUsageNotice` は部分一致で、報告に「上限に当たった」と書いただけで誤判定するため
-        // 鍵の器が無い器で `Not logged in` が来たときの案内。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
-        let noCredentialDirHint = false;
-        if (failure !== undefined) {
-          let classified = false;
-          // 応答の本文 `resultTextOf(event)` は候補に入れない（#4934）: 作業者の上限の原文（#4903 で道具の結果へ添える）を担当が引用して別の理由で失敗すると、自分の枠と取り違える。
-          // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で本文と同じ文字列、Codex は `errorLines` に同じ文言が入り、「結果なしで終了: …」は固定の包みで上限の文言を含まない。
-          for (const candidate of [failure.text, ...event.errorLines]) {
-            const notice = classifyUsageNotice(candidate);
-            if (notice !== undefined) {
-              this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
-              classified = true;
-              break;
-            }
-          }
-          // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
-          if (!classified) {
-            noCredentialDirHint =
-              this.#credentials === undefined &&
-              [failure.text, resultTextOf(event).text, ...event.errorLines].some((text) =>
-                NOT_LOGGED_IN_PATTERN.test(text),
-              );
-            noteUnclassifiedFailure(
-              this.#sdkSession.unclassifiedFailures,
-              this.#id,
-              failure.via,
-              failure.code,
-            );
-          }
-        }
-
-        // 止めた後の失敗の結果は立て直さない（#5205。`#read` の他の2か所と揃える）: 畳み（stop）で終わったターンの失敗を「resume が戻れなかった」と読み、
-        // 止めたはずのセッションの中に CLI を作り直していた。作り直した CLI は名簿から外れたまま古い世代で出来事を出し続け、stop も答えも届かない
-        if (!event.succeeded && !this.#sdkSession.stopped) {
-          const outcome = this.#recoverFromFailedResume(
-            `結果なしで終了: ${resultTextOf(event).text}`,
-          );
-          if (outcome === 'recovered') return;
-          // 戻れなかった resume を「1ターン終わった」として報告しない: `done` が書かれ、腐った session_id しか無いのにクローンが「まだ続けられるもの」を見せられ、話しかけるたびに失敗するため
-          if (outcome === 'unresumable') {
-            // `await` へ揃えない: 揃えると直列化点が増え、`stop()` との競合を含めて影響を測っていないため
-            // `#stopped` ならここで `#finish` を呼ばない: `stop()` が `host.list()` から消した後に `closed(status=lost)` が遅れて出るため
-            if (!this.#sdkSession.stopped) {
-              void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
-                (error: unknown) => {
-                  noteBackgroundFailure(
-                    'セッションの片付け',
-                    `managerId=${this.#id} outcome=lost`,
-                    error,
-                  );
-                  throw error;
-                },
-              );
-            }
-            return;
-          }
-        }
-
-        // 失敗した回の報告に失敗であることを載せる: 上限の英語文言が「マネージャーの報告」として流れ、「報告が来た」と「エラーで死んだ」が区別できなくなるため
-        // 本文（`text`）の側でも包む: 構造化した `failure` を見ていない読み手にはエラー文が報告として見えるため
-        // 失敗で終わった回は `contentless` に含めない: 上限に当たった事実をクローンが知る必要があるため
-        const outcome =
-          failure === undefined
-            ? reportText(said, resultTextOf(event))
-            : {
-                text:
-                  failedReportText(
-                    said,
-                    failure,
-                    resultTextOf(event).text,
-                    openedWorkersThisTurn,
-                    workerRejectionsThisTurn,
-                    failedWorkerNotificationsThisTurn,
-                    failedWorkerNotificationsNamingLimitThisTurn,
-                  ) + (noCredentialDirHint ? `\n\n${NO_CREDENTIAL_DIR_HINT}` : ''),
-                contentless: false,
-              };
-        // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
-        // 背景処理の完了待ちで畳む報告でも取り込む: デーモンはファイルの付いた報告を背景待ちでも畳まずに配る。残すと、背景処理が絶えない担当では成果物が出し箱に置き去りになる
-        // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
-        const liveBackground = this.#liveBackgroundTasks();
-        // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
-        const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
-        this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
-        if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
-        // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
-        const awaitingBackground =
-          failure === undefined && this.#sdkSession.status === 'done' && liveBackground.length > 0
-            ? {
-                count: liveBackground.length,
-                breakdown: summarizeBackgroundTasks(liveBackground),
-              }
-            : undefined;
-        const outwardActions = this.#outwardActions.splice(0);
-        this.#emit({
-          type: 'report',
-          managerId: this.#id,
-          reportId: event.id,
-          text: outcome.text,
-          ...('fullText' in outcome && outcome.fullText !== undefined
-            ? { fullText: outcome.fullText }
-            : {}),
-          status: this.#sdkSession.status,
-          ...(failure === undefined
-            ? {}
-            : {
-                failure: {
-                  code: failure.code,
-                  via: failure.via,
-                  ...(failure.status === undefined ? {} : { status: failure.status }),
-                },
-              }),
-          ...(outcome.contentless ? { contentless: true } : {}),
-          ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
-          ...(outwardActions.length === 0 ? {} : { outwardActions }),
-          ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
-          ...outbox,
-        });
-        // `report` を出した後に呼ぶ: `push()` が状態を `running` へ戻すので、先に呼ぶと `report.status` / `awaitingBackground` が嘘になるため
-        this.#wakeForFinishedBackgroundTaskOutputs();
-        // 確認待ちの間に溜めた peer の知らせも、同じ理由でここで届ける
-        this.#deliverPeerNotices();
-        return;
+        return this.#applyTurnEnded(event);
       }
 
       // 既定で無視へ倒さない（枝が増えたら型で落とす）: provider が名乗り始めた事実が黙って網の外へ出るため
@@ -4666,6 +4433,255 @@ class RunnerSession {
         return;
       }
     }
+  }
+
+  /** SDK `session_started` の1件を処理する（`#apply` が振り分ける。`await` を含まないので同期）。 */
+  #applySessionStarted(event: Extract<AgentEvent, { type: 'session_started' }>): void {
+    // `init` そのものをリセットの契機にしない: ターンの頭ごとに来るだけで、無条件にリセットすると在り高が0へ落ち、`awaitingBackground` が付かず報告が畳まれずクローンを起こすため
+    // [sdk-verbatim SDKSystemMessage]
+    // > Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn: session_id, model, working directory, tools, MCP servers, slash commands, permission mode, and the capabilities list for feature detection.
+    // [sdk-verbatim SDKBackgroundTasksChangedMessage]
+    // > The level is per-process: nothing is emitted at startup, so consumers must reset to the empty set whenever the session's CLI process (re)starts and let the next membership change repopulate it.
+    if (this.#resumeState.observeSessionStarted(event.sessionId)) {
+      this.#sdkSession.resetLiveBackgroundTasks();
+    }
+    // `pluginLoad` が null（init に `plugins` が無い）なら欄ごと省く: 「読み込み結果を観測していない」を空の結果として運ばないため
+    this.#emit({
+      type: 'session',
+      managerId: this.#id,
+      sessionId: event.sessionId,
+      ...(event.runtime.pluginLoad === null ? {} : { pluginLoad: event.runtime.pluginLoad }),
+      // `mcp_servers` が読めなかった（null）なら欄ごと省く: 「観測していない」を「0本」として運ばないため
+      ...(event.runtime.mcpServers === null ? {} : { mcpServers: event.runtime.mcpServers }),
+    });
+    return;
+  }
+
+  /** SDK `assistant_message` の1件を処理する（`#apply` が振り分ける。`await` を含まないので同期）。 */
+  #applyAssistantMessage(event: Extract<AgentEvent, { type: 'assistant_message' }>): void {
+    // 作業者の本文を混ぜない: `parentToolUseId` が付いたものは Task の中の別の層の発言のため
+    if (event.parentToolUseId === null) {
+      const said = assistantText(event.blocks);
+      // 「応答ではない」と印の付いたメッセージを報告に混ぜない: 上限の英語文言がそのまま「マネージャーの報告」として台帳・日誌・受信箱へ流れるため
+      const rejected = assistantFailureOf(event.errorCode, said);
+      if (rejected !== undefined) {
+        this.#turnTally.setRejected(rejected);
+        return;
+      }
+      if (said.length > 0) {
+        this.#turnTally.recordSaid(said, event.id);
+        this.#observeReportLanguage(said);
+      }
+    } else {
+      // 作業者の発言に付いた拒否の印をターンの失敗にしない: 数えるだけ
+      const workerText = assistantText(event.blocks);
+      const rejected = assistantFailureOf(event.errorCode, '');
+      if (rejected !== undefined) {
+        this.#turnTally.pushWorkerRejection(rejected.code);
+        // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
+        if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
+          this.#recordWorkerLimit(
+            `tool_use:${event.parentToolUseId}`,
+            workerLimitLabel(event.parentToolUseId, undefined),
+            workerText.length > 0 ? workerText : rejected.code,
+          );
+        }
+      }
+    }
+    return;
+  }
+
+  /** SDK `turn_ended` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyTurnEnded(event: Extract<AgentEvent, { type: 'turn_ended' }>): Promise<void> {
+    // `clone.ts` の `#apply` の `case 'turn_ended'` と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
+    // の文脈占有が測れなくなる。
+    const contextUsage = await this.#observeContextUsage();
+
+    // 成否分岐の外で無条件に emit する: `usage` に相乗りさせるだけだと失敗したターンの文脈占有がどこにも残らないため
+    if (contextUsage !== undefined) {
+      this.#emit({
+        type: 'context_usage',
+        managerId: this.#id,
+        sessionId: this.#resumeState.sessionId,
+        turnSucceeded: event.succeeded,
+        contextUsage,
+      });
+    }
+
+    // ターンの区切りで必ず畳む: 持ち越すと前のターンの本文が次の報告に混ざり、言っていないことを言ったことになるため
+    const {
+      said,
+      rejected,
+      inputsThisTurn,
+      notificationsThisTurn,
+      toolsThisTurn,
+      submitsThisTurn,
+      sourcesThisTurn,
+      openedWorkersThisTurn,
+      workerRejectionsThisTurn,
+      failedWorkerNotificationsThisTurn,
+      failedWorkerNotificationsNamingLimitThisTurn,
+    } = this.#turnTally.takeAtResult();
+
+    const closedWindow = this.#workerWaitWindow.foldTurn({
+      inputsThisTurn,
+      notificationsThisTurn,
+      toolsThisTurn,
+      submitsThisTurn,
+      sourcesThisTurn,
+    });
+    if (closedWindow !== null) {
+      this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
+    }
+
+    // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載り、ゼロ埋めで害が出る値でもないため
+    for (const denial of event.denials) this.#noteDenial(denial, 'result');
+
+    // `succeeded` で兼ねない: あちらは台帳の問いで `subtype === 'success'` だけを見るので `is_error: true` の result を成功として通すため
+    const failure = event.failure ?? rejected ?? undefined;
+
+    // `init` を「戻れた」と見ない: 手が動く前の結果なし終了は、この resume が効かなかったということのため
+    if (event.succeeded) {
+      this.#markProgressed();
+      // 成功した result だけを通す: SDK は
+      // 「Crash/startup-error results may carry zeroed values」と言っている。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
+      // ゼロを通すと受け取った側の基準が下がり、次の本物の累積が丸ごと増分になって記録済みの分がもう一度積まれるため
+      if (event.usage !== undefined) {
+        this.#emit({
+          type: 'usage',
+          managerId: this.#id,
+          sessionId: this.#resumeState.sessionId,
+          models: event.usage.models,
+          // 応答として返ったかを別の欄で運ぶ: `succeeded` は台帳の問いで、枠で落ちた `is_error: true` のターンもここへ来て、成功と読まれると回し手が `recovered` と枠を往復し続けるため
+          answered: failure === undefined,
+          ...(contextUsage === undefined ? {} : { contextUsage }),
+        });
+      }
+    }
+
+    // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
+    // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
+    // マネージャーの本文 `said` を分類に通さない: `classifyUsageNotice` は部分一致で、報告に「上限に当たった」と書いただけで誤判定するため
+    // 鍵の器が無い器で `Not logged in` が来たときの案内。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
+    let noCredentialDirHint = false;
+    if (failure !== undefined) {
+      let classified = false;
+      // 応答の本文 `resultTextOf(event)` は候補に入れない（#4934）: 作業者の上限の原文（#4903 で道具の結果へ添える）を担当が引用して別の理由で失敗すると、自分の枠と取り違える。
+      // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で本文と同じ文字列、Codex は `errorLines` に同じ文言が入り、「結果なしで終了: …」は固定の包みで上限の文言を含まない。
+      for (const candidate of [failure.text, ...event.errorLines]) {
+        const notice = classifyUsageNotice(candidate);
+        if (notice !== undefined) {
+          this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
+          classified = true;
+          break;
+        }
+      }
+      // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
+      if (!classified) {
+        noCredentialDirHint =
+          this.#credentials === undefined &&
+          [failure.text, resultTextOf(event).text, ...event.errorLines].some((text) =>
+            NOT_LOGGED_IN_PATTERN.test(text),
+          );
+        noteUnclassifiedFailure(
+          this.#sdkSession.unclassifiedFailures,
+          this.#id,
+          failure.via,
+          failure.code,
+        );
+      }
+    }
+
+    // 止めた後の失敗の結果は立て直さない（#5205。`#read` の他の2か所と揃える）: 畳み（stop）で終わったターンの失敗を「resume が戻れなかった」と読み、
+    // 止めたはずのセッションの中に CLI を作り直していた。作り直した CLI は名簿から外れたまま古い世代で出来事を出し続け、stop も答えも届かない
+    if (!event.succeeded && !this.#sdkSession.stopped) {
+      const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultTextOf(event).text}`);
+      if (outcome === 'recovered') return;
+      // 戻れなかった resume を「1ターン終わった」として報告しない: `done` が書かれ、腐った session_id しか無いのにクローンが「まだ続けられるもの」を見せられ、話しかけるたびに失敗するため
+      if (outcome === 'unresumable') {
+        // `await` へ揃えない: 揃えると直列化点が増え、`stop()` との競合を含めて影響を測っていないため
+        // `#stopped` ならここで `#finish` を呼ばない: `stop()` が `host.list()` から消した後に `closed(status=lost)` が遅れて出るため
+        if (!this.#sdkSession.stopped) {
+          void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
+            (error: unknown) => {
+              noteBackgroundFailure(
+                'セッションの片付け',
+                `managerId=${this.#id} outcome=lost`,
+                error,
+              );
+              throw error;
+            },
+          );
+        }
+        return;
+      }
+    }
+
+    // 失敗した回の報告に失敗であることを載せる: 上限の英語文言が「マネージャーの報告」として流れ、「報告が来た」と「エラーで死んだ」が区別できなくなるため
+    // 本文（`text`）の側でも包む: 構造化した `failure` を見ていない読み手にはエラー文が報告として見えるため
+    // 失敗で終わった回は `contentless` に含めない: 上限に当たった事実をクローンが知る必要があるため
+    const outcome =
+      failure === undefined
+        ? reportText(said, resultTextOf(event))
+        : {
+            text:
+              failedReportText(
+                said,
+                failure,
+                resultTextOf(event).text,
+                openedWorkersThisTurn,
+                workerRejectionsThisTurn,
+                failedWorkerNotificationsThisTurn,
+                failedWorkerNotificationsNamingLimitThisTurn,
+              ) + (noCredentialDirHint ? `\n\n${NO_CREDENTIAL_DIR_HINT}` : ''),
+            contentless: false,
+          };
+    // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
+    // 背景処理の完了待ちで畳む報告でも取り込む: デーモンはファイルの付いた報告を背景待ちでも畳まずに配る。残すと、背景処理が絶えない担当では成果物が出し箱に置き去りになる
+    // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
+    const liveBackground = this.#liveBackgroundTasks();
+    // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
+    const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
+    this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
+    if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
+    // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
+    const awaitingBackground =
+      failure === undefined && this.#sdkSession.status === 'done' && liveBackground.length > 0
+        ? {
+            count: liveBackground.length,
+            breakdown: summarizeBackgroundTasks(liveBackground),
+          }
+        : undefined;
+    const outwardActions = this.#outwardActions.splice(0);
+    this.#emit({
+      type: 'report',
+      managerId: this.#id,
+      reportId: event.id,
+      text: outcome.text,
+      ...('fullText' in outcome && outcome.fullText !== undefined
+        ? { fullText: outcome.fullText }
+        : {}),
+      status: this.#sdkSession.status,
+      ...(failure === undefined
+        ? {}
+        : {
+            failure: {
+              code: failure.code,
+              via: failure.via,
+              ...(failure.status === undefined ? {} : { status: failure.status }),
+            },
+          }),
+      ...(outcome.contentless ? { contentless: true } : {}),
+      ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
+      ...(outwardActions.length === 0 ? {} : { outwardActions }),
+      ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
+      ...outbox,
+    });
+    // `report` を出した後に呼ぶ: `push()` が状態を `running` へ戻すので、先に呼ぶと `report.status` / `awaitingBackground` が嘘になるため
+    this.#wakeForFinishedBackgroundTaskOutputs();
+    // 確認待ちの間に溜めた peer の知らせも、同じ理由でここで届ける
+    this.#deliverPeerNotices();
+    return;
   }
 
   // 作業者（`local_agent`）のタスクだけを数える: SDK は作業者以外のタスクでも `task_started` を出し、一律に数えると委譲していないターンでも `openedWorkers` が増え `worker_wait` の区間まで開くため
