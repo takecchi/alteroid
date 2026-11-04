@@ -1,0 +1,108 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`委譲の要約を組む3つの道の出力を固定する > 道1と道2: start() の戻り値と、その後の list() / get() の要約 > list() の要素 1`] = `
+{
+  "activeTokenGeneration": 2,
+  "cwd": "/work/opened",
+  "lease": {
+    "fence": 1,
+    "grantedAt": "2026-10-01T00:00:00.000Z",
+    "runnerId": "runner-primary",
+    "seenAt": "2026-10-01T00:00:00.000Z",
+    "ttlMs": 600000,
+  },
+  "live": true,
+  "managerId": "mgr-started",
+  "request": "調べておいて",
+  "runnerId": "runner-primary",
+  "runnerListedAt": "2026-10-01T00:00:10.000Z",
+  "startedAt": "2026-10-01T00:00:00.000Z",
+  "status": "running",
+  "tokenGeneration": 1,
+  "updatedAt": "2026-10-01T00:00:00.000Z",
+  "waiting": [],
+  "workspace": {
+    "kind": "unknown",
+    "path": "/work/opened",
+    "reason": "器の workspace がボリュームかどうかを runner が名乗らないので、入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。",
+    "runnerId": "runner-primary",
+  },
+}
+`;
+
+exports[`委譲の要約を組む3つの道の出力を固定する > 道1と道2: start() の戻り値と、その後の list() / get() の要約 > start() の戻り値 1`] = `
+{
+  "activeTokenGeneration": 2,
+  "cwd": "/work/opened",
+  "cwdConfirmed": true,
+  "lease": {
+    "fence": 1,
+    "grantedAt": "2026-10-01T00:00:00.000Z",
+    "runnerId": "runner-primary",
+    "seenAt": "2026-10-01T00:00:00.000Z",
+    "ttlMs": 600000,
+  },
+  "live": true,
+  "managerId": "mgr-started",
+  "request": "調べておいて",
+  "requestedCwd": "/work/project",
+  "runnerId": "runner-primary",
+  "runnerListedAt": "2026-10-01T00:00:10.000Z",
+  "startedAt": "2026-10-01T00:00:00.000Z",
+  "status": "running",
+  "tokenGeneration": 1,
+  "updatedAt": "2026-10-01T00:00:00.000Z",
+  "waiting": [],
+  "workspace": {
+    "kind": "unknown",
+    "path": "/work/opened",
+    "reason": "器の workspace がボリュームかどうかを runner が名乗らないので、入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。",
+    "runnerId": "runner-primary",
+  },
+}
+`;
+
+exports[`委譲の要約を組む3つの道の出力を固定する > 道3: restore() の戻り値（生きていたセッションの引き取りと resume の受理） > restore() の戻り値 1`] = `
+[
+  {
+    "cwd": "/work/project",
+    "live": true,
+    "managerId": "mgr-living",
+    "request": "生きている依頼",
+    "runnerId": "runner-primary",
+    "sessionId": "sess-living",
+    "startedAt": "2026-09-30T00:00:00.000Z",
+    "status": "running",
+    "tokenGenerationUnknownReason": "reattached-across-restart",
+    "updatedAt": "2026-10-01T00:00:00.000Z",
+    "waiting": [],
+    "workspace": {
+      "kind": "unknown",
+      "path": "/work/project",
+      "reason": "器の workspace がボリュームかどうかを runner が名乗らないので、入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。",
+      "runnerId": "runner-primary",
+    },
+  },
+  {
+    "activeTokenGeneration": 3,
+    "cwd": "/work/project",
+    "lease": {
+      "fence": 1,
+      "grantedAt": "2026-10-01T00:00:00.000Z",
+      "runnerId": "runner-primary",
+      "seenAt": "2026-10-01T00:00:00.000Z",
+      "ttlMs": 600000,
+    },
+    "live": true,
+    "managerId": "mgr-resumable",
+    "request": "戻す依頼",
+    "runnerId": "runner-primary",
+    "sessionId": "sess-resumable",
+    "startedAt": "2026-09-30T00:00:00.000Z",
+    "status": "running",
+    "tokenGeneration": 2,
+    "updatedAt": "2026-10-01T00:00:00.000Z",
+    "waiting": [],
+  },
+]
+`;
