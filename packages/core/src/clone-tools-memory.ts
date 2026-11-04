@@ -1113,7 +1113,7 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         if (toAppend.length > 0) {
           const appendText = toAppend
             .map((section) => existing.content.slice(section.start, section.end))
-            .join('');
+            .join('\n');
           appendedChars = appendText.length;
           toWritten = await stores.persona.append(toSlug, appendText);
           await appendJournalOrThrow(
