@@ -185,12 +185,20 @@ function renderApprovalsListMissing(id: string): string {
 }
 
 // 答えが付いた件も取り下げた件も読める: 「その質問が何だったか」は終端が付いた後にこそ要るため
+// 状態の語は、時刻だけでなく回答・取り下げの中身（本文に出すもの）も見て決める: 状態の語と本文を同じ事実から言うため
+function describeApprovalEvent(at: string | undefined, word: string): string {
+  return at === undefined ? `${word}（時刻の記録が無い）` : `${at} に${word}`;
+}
+
 function describeApprovalFullStatus(approval: PendingApproval): string {
-  return approval.withdrawnAt !== undefined
-    ? `${approval.withdrawnAt} に取り下げ`
-    : approval.answeredAt === undefined
-      ? '回答待ち'
-      : `${approval.answeredAt} に回答済み`;
+  const answered = approval.answeredAt !== undefined || approval.answer !== undefined;
+  const withdrawn = approval.withdrawnAt !== undefined || approval.withdrawnReason !== undefined;
+  const answeredText = describeApprovalEvent(approval.answeredAt, '回答済み');
+  const withdrawnText = describeApprovalEvent(approval.withdrawnAt, '取り下げ');
+  if (answered && withdrawn) return `${answeredText}（${withdrawnText}も記録されている）`;
+  if (answered) return answeredText;
+  if (withdrawn) return withdrawnText;
+  return '回答待ち';
 }
 
 function renderApprovalFullHead(approval: PendingApproval): string {
@@ -236,8 +244,9 @@ function renderApprovalFull(approval: PendingApproval, offset: number): string {
 // ここで全順序にする（`createdAt` 昇順、同着は `id` 昇順）: この一覧は予算で切るので、並びがストア実装依存だと切り落とされる側が構成によって変わるため
 // ストア側の `orderBy` は消さない: 消すと pg が大きな表を未整列のまま全件返してからここで並べることになるため
 function sortPendingApprovals(entries: readonly PendingApproval[]): PendingApproval[] {
+  // `createdAt` はスキーマで日時として検められているので `Date.parse` は NaN にならない（表記が混ざっても実時刻で比べる）
   return [...entries].sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id),
   );
 }
 

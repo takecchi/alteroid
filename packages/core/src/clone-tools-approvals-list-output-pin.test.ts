@@ -366,7 +366,7 @@ const SCENARIOS: Scenario[] = [
     name: 'id-status-priority',
     group: 'id の全文読み',
     covers:
-      '状態の優先: 取り下げ済みかつ回答済み（両方立つ行）は「取り下げ」と言い、回答の行も理由の行も出る。取り下げの理由だけ・回答だけの行',
+      '状態の語は回答・取り下げの中身も見て決める: 両方立つ行は「回答済み（取り下げも記録されている）」と両方言い、回答の行も理由の行も出る。時刻が無く取り下げの理由だけ・回答だけの行は「取り下げ（時刻の記録が無い）」「回答済み（時刻の記録が無い）」',
     seed: [
       ap('s-both', 1, {
         answeredAt: minuteIso(10),
@@ -378,6 +378,18 @@ const SCENARIOS: Scenario[] = [
       ap('s-answer-only', 3, { answer: '日時が無いのに回答だけ' }),
     ],
     steps: ['s-both', 's-reason-only', 's-answer-only'].map((id) => ({ args: { id } })),
+  },
+  {
+    name: 'id-status-times-only',
+    group: 'id の全文読み',
+    covers:
+      '時刻だけあって中身が無い行: 回答の時刻だけ（answer なし）は「… に回答済み」、取り下げの時刻だけ（理由なし）は「… に取り下げ」。どちらも本文に回答・理由の行は出ない。両方の時刻だけが立つ行は両方言う',
+    seed: [
+      ap('t-answered', 1, { answeredAt: minuteIso(10) }),
+      ap('t-withdrawn', 2, { withdrawnAt: minuteIso(11) }),
+      ap('t-both', 3, { answeredAt: minuteIso(10), withdrawnAt: minuteIso(11) }),
+    ],
+    steps: ['t-answered', 't-withdrawn', 't-both'].map((id) => ({ args: { id } })),
   },
   {
     name: 'id-question-kinds',
@@ -661,12 +673,12 @@ const SCENARIOS: Scenario[] = [
     name: 'list-order-offset',
     group: '一覧（並び）',
     covers:
-      '作成時刻の書き方が違う行（Z と +09:00）の並び: 並びは文字列の比較なので実時刻の順と一致しない（現状のまま固定）',
+      '作成時刻の書き方が違う行（Z と +09:00）の並び: 実時刻の順（+09:00 の 09:00 が最初）。同じ実時刻で表記だけが違う行は id の昇順',
     seed: [
       {
         id: 'tz-z',
         createdAt: '2026-10-01T00:30:00.000Z',
-        question: 'Z の 00:30（実時刻は 2 番目）',
+        question: 'Z の 00:30（実時刻は 2 番目、tz-ms と同時刻）',
       },
       {
         id: 'tz-jst',
@@ -674,6 +686,17 @@ const SCENARIOS: Scenario[] = [
         question: '+09:00 の 09:00（実時刻は 1 番目）',
       },
       { id: 'tz-ms', createdAt: '2026-10-01T00:30:00Z', question: '秒の小数なしの Z' },
+    ],
+    steps: [{ args: {} }],
+  },
+  {
+    name: 'list-order-same-instant',
+    group: '一覧（並び）',
+    covers: '同じ実時刻で表記だけが違う行（Z・小数つき Z・+09:00）は id の昇順。積んだ順に依らない',
+    seed: [
+      { id: 'si-c', createdAt: '2026-10-01T09:00:00+09:00', question: '+09:00 表記（si-c）' },
+      { id: 'si-a', createdAt: '2026-10-01T00:00:00Z', question: 'Z 表記（si-a）' },
+      { id: 'si-b', createdAt: '2026-10-01T00:00:00.000Z', question: '小数つき Z 表記（si-b）' },
     ],
     steps: [{ args: {} }],
   },
@@ -1231,10 +1254,20 @@ describe('approvals_list の出力の固定（場面ごとの全文と字数・�
     expect(text('id-dest-variants#1')).not.toContain('requestId');
     expect(text('id-dest-variants#3')).not.toContain('宛先');
     expect(text('id-dest-variants#4')).toContain('宛先 managerId: ""');
-    expect(text('id-status-priority#1')).toContain('に取り下げ（');
+    expect(text('id-status-priority#1')).toContain('に回答済み（');
+    expect(text('id-status-priority#1')).toContain('に取り下げも記録されている）');
     expect(text('id-status-priority#1')).toContain('回答: 遅れて届いた回答');
-    expect(text('id-status-priority#2')).toContain('）回答待ち（');
+    expect(text('id-status-priority#1')).toContain('取り下げた理由: 先に取り下げた');
+    expect(text('id-status-priority#2')).toContain('）取り下げ（時刻の記録が無い）（');
     expect(text('id-status-priority#2')).toContain('取り下げた理由: ');
+    expect(text('id-status-priority#3')).toContain('）回答済み（時刻の記録が無い）（');
+    expect(text('id-status-priority#3')).toContain('回答: ');
+    expect(text('id-status-times-only#1')).toContain('に回答済み（');
+    expect(text('id-status-times-only#1')).not.toContain('回答:');
+    expect(text('id-status-times-only#2')).toContain('に取り下げ（');
+    expect(text('id-status-times-only#2')).not.toContain('取り下げた理由');
+    expect(text('id-status-times-only#3')).toContain('に回答済み（');
+    expect(text('id-status-times-only#3')).toContain('に取り下げも記録されている）');
     expect(text('id-question-kinds#1')).toMatch(/設問:\n$/);
     expect(text('id-question-kinds#3')).toContain('(27) [id=o27] 案27');
     expect(text('id-question-kinds#4')).not.toContain('permissionRequest');
@@ -1330,8 +1363,10 @@ describe('approvals_list の出力の固定（場面ごとの全文と字数・�
     ] as const) {
       expect(before('list-order', a, b)).toBe(true);
     }
-    expect(before('list-order-offset', '- tz-z ', '- tz-ms ')).toBe(true);
-    expect(before('list-order-offset', '- tz-ms ', '- tz-jst ')).toBe(true);
+    expect(before('list-order-offset', '- tz-jst ', '- tz-ms ')).toBe(true);
+    expect(before('list-order-offset', '- tz-ms ', '- tz-z ')).toBe(true);
+    expect(before('list-order-same-instant', '- si-a ', '- si-b ')).toBe(true);
+    expect(before('list-order-same-instant', '- si-b ', '- si-c ')).toBe(true);
     // 件名・抜粋
     expect(text('list-title-shape')).toContain('- h-multi 一行目の題\n');
     expect(text('list-title-shape')).toContain('- h-lead-blank 本文だけ の問い\n');

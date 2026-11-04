@@ -33,9 +33,12 @@
     "id-dest-variants#3": 58,
     "id-dest-variants#4": 81,
     "id-dest-variants#5": 106,
-    "id-status-priority#1": 118,
-    "id-status-priority#2": 96,
-    "id-status-priority#3": 91,
+    "id-status-priority#1": 158,
+    "id-status-priority#2": 106,
+    "id-status-priority#3": 101,
+    "id-status-times-only#1": 94,
+    "id-status-times-only#2": 96,
+    "id-status-times-only#3": 126,
     "id-question-kinds#1": 64,
     "id-question-kinds#2": 246,
     "id-question-kinds#3": 592,
@@ -94,7 +97,8 @@
     "list-questions-summary": 681,
     "list-dest-variants": 583,
     "list-order": 477,
-    "list-order-offset": 367,
+    "list-order-offset": 389,
+    "list-order-same-instant": 336,
     "list-title-shape": 411,
     "list-title-limit": 822,
     "list-summary-limit": 2291,
@@ -492,8 +496,8 @@
     },
     "id-status-priority#1": {
       "output": {
-        "length": 118,
-        "text": "s-both（2026-10-01T00:01:00.000Z）2026-10-01T00:11:00.000Z に取り下げ（全 45 文字）\n\n質問: 質問 s-both\n\n回答: 遅れて届いた回答\n\n取り下げた理由: 先に取り下げた",
+        "length": 158,
+        "text": "s-both（2026-10-01T00:01:00.000Z）2026-10-01T00:10:00.000Z に回答済み（2026-10-01T00:11:00.000Z に取り下げも記録されている）（全 45 文字）\n\n質問: 質問 s-both\n\n回答: 遅れて届いた回答\n\n取り下げた理由: 先に取り下げた",
         "isError": false,
         "thrown": false
       },
@@ -503,8 +507,8 @@
     },
     "id-status-priority#2": {
       "output": {
-        "length": 96,
-        "text": "s-reason-only（2026-10-01T00:02:00.000Z）回答待ち（全 42 文字）\n\n質問: 質問 s-reason-only\n\n取り下げた理由: 日時が無いのに理由だけ",
+        "length": 106,
+        "text": "s-reason-only（2026-10-01T00:02:00.000Z）取り下げ（時刻の記録が無い）（全 42 文字）\n\n質問: 質問 s-reason-only\n\n取り下げた理由: 日時が無いのに理由だけ",
         "isError": false,
         "thrown": false
       },
@@ -514,14 +518,47 @@
     },
     "id-status-priority#3": {
       "output": {
-        "length": 91,
-        "text": "s-answer-only（2026-10-01T00:03:00.000Z）回答待ち（全 37 文字）\n\n質問: 質問 s-answer-only\n\n回答: 日時が無いのに回答だけ",
+        "length": 101,
+        "text": "s-answer-only（2026-10-01T00:03:00.000Z）回答済み（時刻の記録が無い）（全 37 文字）\n\n質問: 質問 s-answer-only\n\n回答: 日時が無いのに回答だけ",
         "isError": false,
         "thrown": false
       },
       "wrote": false,
       "writeCalls": [],
       "readCalls": ["getApproval s-answer-only"]
+    },
+    "id-status-times-only#1": {
+      "output": {
+        "length": 94,
+        "text": "t-answered（2026-10-01T00:01:00.000Z）2026-10-01T00:10:00.000Z に回答済み（全 17 文字）\n\n質問: 質問 t-answered",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "writeCalls": [],
+      "readCalls": ["getApproval t-answered"]
+    },
+    "id-status-times-only#2": {
+      "output": {
+        "length": 96,
+        "text": "t-withdrawn（2026-10-01T00:02:00.000Z）2026-10-01T00:11:00.000Z に取り下げ（全 18 文字）\n\n質問: 質問 t-withdrawn",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "writeCalls": [],
+      "readCalls": ["getApproval t-withdrawn"]
+    },
+    "id-status-times-only#3": {
+      "output": {
+        "length": 126,
+        "text": "t-both（2026-10-01T00:03:00.000Z）2026-10-01T00:10:00.000Z に回答済み（2026-10-01T00:11:00.000Z に取り下げも記録されている）（全 13 文字）\n\n質問: 質問 t-both",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "writeCalls": [],
+      "readCalls": ["getApproval t-both"]
     },
     "id-question-kinds#1": {
       "output": {
@@ -1163,8 +1200,19 @@
     },
     "list-order-offset": {
       "output": {
-        "length": 367,
-        "text": "- tz-z Z の 00:30（実時刻は 2 番目）\n  作成: 2026-10-01T00:30:00.000Z\n  Z の 00:30（実時刻は 2 番目）\n- tz-ms 秒の小数なしの Z\n  作成: 2026-10-01T00:30:00Z\n  秒の小数なしの Z\n- tz-jst +09:00 の 09:00（実時刻は 1 番目）\n  作成: 2026-10-01T09:00:00+09:00\n  +09:00 の 09:00（実時刻は 1 番目）\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）",
+        "length": 389,
+        "text": "- tz-jst +09:00 の 09:00（実時刻は 1 番目）\n  作成: 2026-10-01T09:00:00+09:00\n  +09:00 の 09:00（実時刻は 1 番目）\n- tz-ms 秒の小数なしの Z\n  作成: 2026-10-01T00:30:00Z\n  秒の小数なしの Z\n- tz-z Z の 00:30（実時刻は 2 番目、tz-ms と同時刻）\n  作成: 2026-10-01T00:30:00.000Z\n  Z の 00:30（実時刻は 2 番目、tz-ms と同時刻）\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "writeCalls": [],
+      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+    },
+    "list-order-same-instant": {
+      "output": {
+        "length": 336,
+        "text": "- si-a Z 表記（si-a）\n  作成: 2026-10-01T00:00:00Z\n  Z 表記（si-a）\n- si-b 小数つき Z 表記（si-b）\n  作成: 2026-10-01T00:00:00.000Z\n  小数つき Z 表記（si-b）\n- si-c +09:00 表記（si-c）\n  作成: 2026-10-01T09:00:00+09:00\n  +09:00 表記（si-c）\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）",
         "isError": false,
         "thrown": false
       },
