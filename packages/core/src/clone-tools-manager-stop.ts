@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { describeManagerState } from './digest.js';
 import { reasonOf } from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
-import { type ManagerSummary } from './manager.js';
+import type { ManagerPool, ManagerSummary } from './manager.js';
 import type { ManagerUnpushedWork } from './unpushed-work-observation.js';
 import { isEmptyCompleteUnpushedWorkObservation } from './unpushed-work-observation-format.js';
 import { text, tool, NO_POOL } from './clone-tools-common.js';
@@ -101,6 +101,205 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
   );
 }
 
+// 3状態にする: `pool.list()` の失敗を `[]` に倒すと「居ない」と「読めなかった」が区別できないため
+type ManagerStopLookup =
+  | { kind: 'found'; manager: ManagerSummary }
+  | { kind: 'absent' }
+  | { kind: 'unreadable'; reason: string };
+
+async function readManagerStopLookup(
+  pool: ManagerPool,
+  managerId: string,
+): Promise<ManagerStopLookup> {
+  let list: ManagerSummary[];
+  try {
+    list = await pool.list();
+  } catch (error: unknown) {
+    return { kind: 'unreadable', reason: reasonOf(error) };
+  }
+  const manager = list.find((entry) => entry.managerId === managerId);
+  return manager === undefined ? { kind: 'absent' } : { kind: 'found', manager };
+}
+
+function renderManagerStopUnreadableRefusal(managerId: string, reason: string): string {
+  return (
+    `[${managerId}] 止めていない。**いまの状態を一覧から読めなかった**ので、` +
+    '走行中（running）かどうか判定できない — 走行中なら、畳むと、そのターンの' +
+    '進行中の作業（起こした作業者など）が失われる。\n' +
+    `読めなかった原因: ${reason}\n` +
+    'manager_list で状態を確かめること。読めても判断が同じなら、🔴 force: true で' +
+    '呼び直すと止まる。'
+  );
+}
+
+// この調べものが失敗しても断りは必ず返す: 止める道が塞がっていないことを守るため、例外を投げない設計でも念のため捕まえる
+async function readManagerStopUnpushedWork(
+  pool: ManagerPool,
+  managerId: string,
+): Promise<ManagerUnpushedWork> {
+  return await pool
+    .unpushedWork(managerId, {
+      signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
+      source: 'stop-refusal',
+    })
+    .catch((error: unknown): ManagerUnpushedWork => ({
+      kind: 'unavailable',
+      reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
+    }));
+}
+
+// 要点を先頭・短くする: 「⚠ の1行を足す」形の断りは読まれても流されるため、核心（force で止まる）を長い説明の奥に埋めない
+function describeManagerStopLastReport(before: ManagerSummary): string {
+  return before.lastReportAt === undefined
+    ? '直近の報告は一度も届いていない。'
+    : `直近の報告は ${before.lastReportAt}` +
+        '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
+}
+
+// 具体（未 push・CI）は作業ツリーが見つかったか探索に失敗したときだけ足す: git を使わない仕事に git/CI 前提の文面を毎回出さないため
+function isManagerStopGitConcrete(unpushedWork: ManagerUnpushedWork): boolean {
+  return (
+    unpushedWork.kind === 'unavailable' ||
+    !isEmptyCompleteUnpushedWorkObservation({
+      kind: 'observed',
+      worktrees: unpushedWork.result.worktrees,
+      truncatedAtCount: unpushedWork.result.truncatedAtCount,
+      stoppedEarly: unpushedWork.result.stoppedEarly,
+      scratchRootsUnknown: unpushedWork.result.scratchRootsUnknown,
+      unreadableDirCount: unpushedWork.result.unreadableDirCount,
+    })
+  );
+}
+
+function renderManagerStopRunningRefusal(
+  managerId: string,
+  before: ManagerSummary,
+  unpushedWork: ManagerUnpushedWork,
+): string {
+  const lastReportLine = describeManagerStopLastReport(before);
+  const gitConcrete = isManagerStopGitConcrete(unpushedWork);
+  return (
+    `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる` +
+    (gitConcrete
+      ? '（未 push の実装・起こした作業者・監視中の CI など）'
+      : '（起こした作業者など）') +
+    '。🔴 force: true で止まる。\n' +
+    `${lastReportLine} ターンの中身は manager_report で先に読めること。` +
+    (gitConcrete ? `\n${describeUnpushedWork(unpushedWork)}` : '')
+  );
+}
+
+// 読めない行を「居ない」と言わない
+function renderManagerStopAbortUnreadable(managerId: string, detail: string): string {
+  return `${managerId} は止められなかった: ${detail}`;
+}
+
+function renderManagerStopAbortAbsent(
+  managerId: string,
+  detail: string,
+  beforeLookup: ManagerStopLookup,
+  before: ManagerSummary | undefined,
+): string {
+  if (beforeLookup.kind === 'unreadable') {
+    // 読めなかったことを「居ない」と言い切らない
+    return (
+      `${managerId} は止められなかった: ${detail}\n` +
+      `止める前の状態を一覧から読めなかった（${beforeLookup.reason}）ので、` +
+      '台帳にあるかどうかは分からない。manager_list で今あるものを確かめること。'
+    );
+  }
+  if (!before) {
+    return (
+      `${managerId} は居ない（id が違うか、台帳からも消えている）。` +
+      'manager_list で今あるものが見える。'
+    );
+  }
+  return (
+    `${managerId} は止められなかった: ${detail}\n` +
+    `台帳では ${before.status} で、このデーモンからは話しかけられない（live: false）。` +
+    '走らせていた器がもう無いので、止める手そのものが残っていない。'
+  );
+}
+
+// 読めなかったときは「消えている」と言わない
+function describeManagerStopAfterUnreadable(afterLookup: ManagerStopLookup): string | undefined {
+  return afterLookup.kind === 'unreadable'
+    ? `止めた後の状態を一覧から読めなかった（${afterLookup.reason}）`
+    : undefined;
+}
+
+function renderManagerStopNotStopped(
+  managerId: string,
+  detail: string,
+  after: ManagerSummary | undefined,
+  afterUnreadable: string | undefined,
+): string {
+  return (
+    `[${managerId}] ${detail}\n` +
+    `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
+    `いまの状態: ${afterUnreadable ?? (after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, after.awaitingBackground))}。` +
+    ' manager_list で確かめ、必要ならもう一度止めること。'
+  );
+}
+
+// 「止めた」とも「止まっていない」とも言い切らない
+function renderManagerStopUnknown(managerId: string, detail: string): string {
+  return (
+    `[${managerId}] ${detail}\n` +
+    '止まったかは**未確認**である（runner に確認が取れなかった）。' +
+    'manager_list で状態を確かめること。'
+  );
+}
+
+// 「走っている手は無い」と断定しない: `done` はマネージャー自身のターンが終わっただけで、作業者の生存はデーモンから見えないため
+function describeManagerStopWasDone(): string {
+  return (
+    'もともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、' +
+    '畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは' +
+    '意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。'
+  );
+}
+
+function describeManagerStopAfterState(
+  after: ManagerSummary | undefined,
+  afterUnreadable: string | undefined,
+): string {
+  return afterUnreadable !== undefined
+    ? `${afterUnreadable}。manager_list で状態を確かめること。`
+    : after === undefined
+      ? '一覧からも消えている。'
+      : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`;
+}
+
+// 届いていない本文を待ってこの応答を止めない: report イベントは HTTP 越しの runner では後から届くため、届いていれば抜粋を、届いていなければ `manager_report` への案内を出す
+function describeManagerStopFoldedTurn(
+  managerId: string,
+  after: ManagerSummary | undefined,
+): string {
+  return after?.lastFoldedTurn === undefined
+    ? '畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。' +
+        `届けば台帳へ残るので、manager_report ${managerId} で後から読めること。`
+    : `畳んだターンの本文（${after.lastFoldedTurn.at} 受信）: ` +
+        `${excerptLine(after.lastFoldedTurn.text, MANAGER_STOP_FOLDED_TURN_EXCERPT)} ` +
+        `全文は manager_report ${managerId} で読めること。`;
+}
+
+function renderManagerStopStopped(
+  managerId: string,
+  detail: string,
+  before: ManagerSummary | undefined,
+  after: ManagerSummary | undefined,
+  afterUnreadable: string | undefined,
+): string {
+  const lines = [`[${managerId}] ${detail}`];
+  if (before?.status === 'done') {
+    lines.push(describeManagerStopWasDone());
+  }
+  lines.push(describeManagerStopAfterState(after, afterUnreadable));
+  lines.push(describeManagerStopFoldedTurn(managerId, after));
+  return lines.join('\n');
+}
+
 export function managerStopTool(context: ToolContext) {
   // クローン用の停止を別に作らない: 挙動が2種類あると、人間とクローンで見えている状態が食い違うため
   // マネージャーには渡さない: 自分や隣の仕事を止められると M4 の制御面分離が意味を失うため
@@ -135,161 +334,45 @@ export function managerStopTool(context: ToolContext) {
     async ({ managerId, reason, force }) => {
       if (!context.managers) return NO_POOL;
       const pool = context.managers;
-      // 3状態にする: `pool.list()` の失敗を `[]` に倒すと「居ない」と「読めなかった」が区別できないため
-      type ManagerLookup =
-        | { kind: 'found'; manager: ManagerSummary }
-        | { kind: 'absent' }
-        | { kind: 'unreadable'; reason: string };
-      const find = async (): Promise<ManagerLookup> => {
-        let list: ManagerSummary[];
-        try {
-          list = await pool.list();
-        } catch (error: unknown) {
-          return { kind: 'unreadable', reason: reasonOf(error) };
-        }
-        const manager = list.find((entry) => entry.managerId === managerId);
-        return manager === undefined ? { kind: 'absent' } : { kind: 'found', manager };
-      };
-
-      const beforeLookup = await find();
+      const beforeLookup = await readManagerStopLookup(pool, managerId);
       const before = beforeLookup.kind === 'found' ? beforeLookup.manager : undefined;
 
       if (beforeLookup.kind === 'unreadable' && force !== true) {
-        return text(
-          `[${managerId}] 止めていない。**いまの状態を一覧から読めなかった**ので、` +
-            '走行中（running）かどうか判定できない — 走行中なら、畳むと、そのターンの' +
-            '進行中の作業（起こした作業者など）が失われる。\n' +
-            `読めなかった原因: ${beforeLookup.reason}\n` +
-            'manager_list で状態を確かめること。読めても判断が同じなら、🔴 force: true で' +
-            '呼び直すと止まる。',
-        );
+        return text(renderManagerStopUnreadableRefusal(managerId, beforeLookup.reason));
       }
 
       // running は既定で abort を呼ばずに断る: クローンには人間の画面のようにターンが走っている様子が見えないため
       // `force` を必ず残す: 暴走している委譲を止める道を塞ぐほうが、誤って畳むより危険なため
       // `waiting_human` は含めない: クローン自身が立てた問いで、待っていること自体は既に知っているため
       if (before?.status === 'running' && force !== true) {
-        // 要点を先頭・短くする: 「⚠ の1行を足す」形の断りは読まれても流されるため、核心（force で止まる）を長い説明の奥に埋めない
-        const lastReportLine =
-          before.lastReportAt === undefined
-            ? '直近の報告は一度も届いていない。'
-            : `直近の報告は ${before.lastReportAt}` +
-              '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
-
-        // この調べものが失敗しても断りは必ず返す: 止める道が塞がっていないことを守るため、例外を投げない設計でも念のため捕まえる
-        const unpushedWork = await pool
-          .unpushedWork(managerId, {
-            signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
-            source: 'stop-refusal',
-          })
-          .catch((error: unknown): ManagerUnpushedWork => ({
-            kind: 'unavailable',
-            reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
-          }));
-
-        // 具体（未 push・CI）は作業ツリーが見つかったか探索に失敗したときだけ足す: git を使わない仕事に git/CI 前提の文面を毎回出さないため
-        const gitConcrete =
-          unpushedWork.kind === 'unavailable' ||
-          !isEmptyCompleteUnpushedWorkObservation({
-            kind: 'observed',
-            worktrees: unpushedWork.result.worktrees,
-            truncatedAtCount: unpushedWork.result.truncatedAtCount,
-            stoppedEarly: unpushedWork.result.stoppedEarly,
-            scratchRootsUnknown: unpushedWork.result.scratchRootsUnknown,
-            unreadableDirCount: unpushedWork.result.unreadableDirCount,
-          });
-        return text(
-          `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる` +
-            (gitConcrete
-              ? '（未 push の実装・起こした作業者・監視中の CI など）'
-              : '（起こした作業者など）') +
-            '。🔴 force: true で止まる。\n' +
-            `${lastReportLine} ターンの中身は manager_report で先に読めること。` +
-            (gitConcrete ? `\n${describeUnpushedWork(unpushedWork)}` : ''),
-        );
+        const unpushedWork = await readManagerStopUnpushedWork(pool, managerId);
+        return text(renderManagerStopRunningRefusal(managerId, before, unpushedWork));
       }
 
       const result = await pool.abort(managerId, reason, 'clone');
 
       if (result.outcome === 'unreadable') {
-        // 読めない行を「居ない」と言わない
-        return text(`${managerId} は止められなかった: ${result.detail}`);
+        return text(renderManagerStopAbortUnreadable(managerId, result.detail));
       }
       if (result.outcome === 'absent') {
-        if (beforeLookup.kind === 'unreadable') {
-          // 読めなかったことを「居ない」と言い切らない
-          return text(
-            `${managerId} は止められなかった: ${result.detail}\n` +
-              `止める前の状態を一覧から読めなかった（${beforeLookup.reason}）ので、` +
-              '台帳にあるかどうかは分からない。manager_list で今あるものを確かめること。',
-          );
-        }
-        if (!before) {
-          return text(
-            `${managerId} は居ない（id が違うか、台帳からも消えている）。` +
-              'manager_list で今あるものが見える。',
-          );
-        }
-        return text(
-          `${managerId} は止められなかった: ${result.detail}\n` +
-            `台帳では ${before.status} で、このデーモンからは話しかけられない（live: false）。` +
-            '走らせていた器がもう無いので、止める手そのものが残っていない。',
-        );
+        return text(renderManagerStopAbortAbsent(managerId, result.detail, beforeLookup, before));
       }
 
-      const afterLookup = await find();
+      const afterLookup = await readManagerStopLookup(pool, managerId);
       const after = afterLookup.kind === 'found' ? afterLookup.manager : undefined;
-      // 読めなかったときは「消えている」と言わない
-      const afterUnreadable =
-        afterLookup.kind === 'unreadable'
-          ? `止めた後の状態を一覧から読めなかった（${afterLookup.reason}）`
-          : undefined;
+      const afterUnreadable = describeManagerStopAfterUnreadable(afterLookup);
 
       if (result.outcome === 'not_stopped') {
-        return text(
-          `[${managerId}] ${result.detail}\n` +
-            `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
-            `いまの状態: ${afterUnreadable ?? (after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, after.awaitingBackground))}。` +
-            ' manager_list で確かめ、必要ならもう一度止めること。',
-        );
+        return text(renderManagerStopNotStopped(managerId, result.detail, after, afterUnreadable));
       }
 
       if (result.outcome === 'unknown') {
-        // 「止めた」とも「止まっていない」とも言い切らない
-        return text(
-          `[${managerId}] ${result.detail}\n` +
-            '止まったかは**未確認**である（runner に確認が取れなかった）。' +
-            'manager_list で状態を確かめること。',
-        );
+        return text(renderManagerStopUnknown(managerId, result.detail));
       }
 
-      const lines = [`[${managerId}] ${result.detail}`];
-
-      if (before?.status === 'done') {
-        // 「走っている手は無い」と断定しない: `done` はマネージャー自身のターンが終わっただけで、作業者の生存はデーモンから見えないため
-        lines.push(
-          'もともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、' +
-            '畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは' +
-            '意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。',
-        );
-      }
-      lines.push(
-        afterUnreadable !== undefined
-          ? `${afterUnreadable}。manager_list で状態を確かめること。`
-          : after === undefined
-            ? '一覧からも消えている。'
-            : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
+      return text(
+        renderManagerStopStopped(managerId, result.detail, before, after, afterUnreadable),
       );
-      // 届いていない本文を待ってこの応答を止めない: report イベントは HTTP 越しの runner では後から届くため、届いていれば抜粋を、届いていなければ `manager_report` への案内を出す
-      lines.push(
-        after?.lastFoldedTurn === undefined
-          ? '畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。' +
-              `届けば台帳へ残るので、manager_report ${managerId} で後から読めること。`
-          : `畳んだターンの本文（${after.lastFoldedTurn.at} 受信）: ` +
-              `${excerptLine(after.lastFoldedTurn.text, MANAGER_STOP_FOLDED_TURN_EXCERPT)} ` +
-              `全文は manager_report ${managerId} で読めること。`,
-      );
-      return text(lines.join('\n'));
     },
   );
 }
