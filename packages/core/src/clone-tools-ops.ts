@@ -799,12 +799,24 @@ function describeArchiveRemoveManyStopped(args: {
   chunkCount: number;
   chunkSize: number;
   error: unknown;
+  removed: number;
+  raced: number;
 }): string {
-  const { index, chunkCount, chunkSize, error } = args;
+  const { index, chunkCount, chunkSize, error, removed, raced } = args;
+  let before = `止める前の ${index} 塊は消えていて日誌にも残っている。`;
+  if (raced > 0 && removed > 0) {
+    before =
+      `止める前の ${index} 塊で消えたのは ${removed} 件で、日誌にも残っている` +
+      `（ほか ${raced} 件は他の経路が先に消していたので、日誌に打ち消しの行を足してある）。`;
+  } else if (raced > 0) {
+    before =
+      `止める前の ${index} 塊は他の経路が先に消していたので、この呼びでは1件も消えていない` +
+      `（日誌には先に書いた行と打ち消しの行が残っている）。`;
+  }
   return (
     `⚠⚠ ${index + 1}/${chunkCount} 塊目の先の日誌が書けなかったので、この塊（${chunkSize} 件）と` +
     `それ以降は消さずに止めた（${collapseErrorCause(error)}）。` +
-    `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`
+    `${before}残りは同じ絞り込みでもう一度呼べば続きから消せる。`
   );
 }
 
@@ -867,6 +879,8 @@ async function removeArchiveTargetsJournaling(args: {
         chunkCount: chunks.length,
         chunkSize: chunkTargetIds.length,
         error: outcome.error,
+        removed: state.removedIds.length,
+        raced: state.raced,
       });
       break;
     }
