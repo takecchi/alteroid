@@ -31,7 +31,13 @@ import {
   selectArchiveRemovalTargets,
   type ArchiveRemoveManyFilter,
 } from './archive-prune.js';
-import { guardArchiveRemoval, type ManagerPool, type RunnerManagerEntry } from './manager.js';
+import {
+  guardArchiveRemoval,
+  type ManagerPool,
+  type RunnerFleetOverview,
+  type RunnerManagerEntry,
+  type RunnerOverview,
+} from './manager.js';
 import type { RunnerPushOutcome } from './push-ledger.js';
 import { describeRevisionStatus } from './revision.js';
 import { describeManagerPeers } from './manager-peers-format.js';
@@ -59,6 +65,7 @@ import {
   RUNNER_MANAGER_PEERS_EXCERPT,
   isSubagentCaller,
   NO_FIXED_FOLD,
+  type FixedFold,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
@@ -142,6 +149,456 @@ function runnerManagerTokenTag(manager: RunnerManagerEntry): string {
   }
   if (manager.tokenGeneration === manager.activeTokenGeneration) return '';
   return ` ⚠世代${manager.tokenGeneration}≠現役${manager.activeTokenGeneration}`;
+}
+
+// ここから runner_list の出力を部分ごとに作る関数。どれも文字列（または行の配列）を返すだけで、pool の呼び・控え（fold）への書き込み・時刻の読みは持たない（それは道具の式の側に残す）
+
+type RunnerListShow = { fingerprints: boolean; resources: boolean };
+type RunnerResources = NonNullable<RunnerOverview['resources']>;
+type RunnerTasks = NonNullable<RunnerResources['tasks']>;
+type RunnerReclaim = NonNullable<RunnerTasks['reclaim']>;
+type RunnerNotFired = NonNullable<RunnerReclaim['notFired']>;
+
+// 自動畳みが走っていればどの return 経路でも必ず言う: 早い return でだけ黙ると、畳んだ・見送ったことがクローンに一度も届かない窓ができるため
+function describeRunnerAutoFoldedNote(autoFolded: RunnerFleetOverview['autoFolded']): string {
+  return autoFolded === undefined
+    ? ''
+    : autoFolded.length === 0
+      ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった）'
+      : `\n⚠ この呼び出しで自動畳みが働いた:\n${autoFolded
+          .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
+          .join('\n')}`;
+}
+
+type RunnerListPageCheck =
+  | { kind: 'refused'; body: string }
+  | { kind: 'listing'; view: RunnerOverview[]; restarted: boolean; daemonLine: string };
+
+// 壊れた cursor・0台・最後の頁は、一覧を組まずにここで断りの本文を返す（どれも自動畳みの注記を末尾に付ける）
+function checkRunnerListPage(
+  overview: RunnerFleetOverview,
+  cursor: string | undefined,
+  autoFoldedNote: string,
+): RunnerListPageCheck {
+  const resolved = resolveRunnerCursor(overview.runners, cursor);
+  if (resolved.kind === 'malformed') {
+    // 黙って先頭からへ倒さない
+    return {
+      kind: 'refused',
+      body:
+        'この cursor は読めない（壊れているか、この道具のものではない）。' +
+        'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
+        '先頭から読み直すなら cursor を省いて呼ぶこと。' +
+        autoFoldedNote,
+    };
+  }
+
+  // デーモン自身の版は runner が0台でも出す: 0台のときに落とすと、配線がまだ無い状態（まさに版を確かめたい状態）でだけ答えが消えるため
+  const daemonLine = `デーモン（あなた自身が居るプロセス）の版: ${describeRevisionStatus(
+    overview.daemonRevision,
+  )}`;
+
+  if (overview.runners.length === 0) {
+    return {
+      kind: 'refused',
+      body:
+        '登録されている runner は0台である（設定に ALTEROID_RUNNER_URLS 等が無いか、' +
+        `まだ配線されていない）。\n${daemonLine}${autoFoldedNote}`,
+    };
+  }
+
+  // cursor を渡されたときだけ「最後の頁」と言う: 名簿が0台のときの言い方を奪わないため
+  if (cursor !== undefined && resolved.view.length === 0) {
+    return {
+      kind: 'refused',
+      body: `（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}${autoFoldedNote}`,
+    };
+  }
+
+  return { kind: 'listing', view: resolved.view, restarted: resolved.restarted, daemonLine };
+}
+
+function describeRunnerListHead(
+  runnerCount: number,
+  daemonLine: string,
+  restarted: boolean,
+): string[] {
+  const head: string[] = [
+    // 1台のときにそう言う: 言わないと「分散していない」ことが読み取れず、複数台に散っていると誤読されうるため
+    runnerCount === 1
+      ? 'runner は1台のみ登録されている（分散していない）。'
+      : `runner は${runnerCount}台登録されている。`,
+    // デーモンと runner の版を同じ出力に並べる: 別々の口に出すと突き合わせ忘れがそのまま見逃しになり、2つの Service は別々にデプロイされてずれる窓が在るため
+    daemonLine,
+  ];
+  // 先頭から出し直したことを黙って重複させない: 言わないと「進んでいない」のか「出し直した」のかが区別できないため
+  if (restarted) {
+    head.push(
+      '⚠ 渡された cursor が指していた器は、いま名簿に居ない（登録から外れた）。' +
+        'この並びは登録順で、そこから位置を割り出す手が無いので、**先頭から出し直した**' +
+        '——既に見た器がもう一度出る。**1台も落としていない**（欠落より重複の側へ倒してある）。',
+    );
+  }
+  return head;
+}
+
+// 器の行とどの器か分からない行で共有する: 字面は `describeManagerState` から取る（`m.status` をそのまま書くと「走行中」と「走行中だがセッション切断」がここでだけ潰れるため）
+function describeRunnerManagerEntries(managers: RunnerManagerEntry[]): string {
+  const shown = managers.slice(0, RUNNER_MANAGER_LIST_LIMIT);
+  const rest = managers.length - shown.length;
+  return (
+    shown
+      .map(
+        (m) =>
+          `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
+          runnerManagerTokenTag(m),
+      )
+      .join(', ') + (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`)
+  );
+}
+
+// 器の見出し・版・peer・失敗・飽和
+function runnerHeaderLines(runner: RunnerOverview): string[] {
+  const lines: string[] = [];
+  lines.push(
+    `- ${runner.label} [${runner.state}]` +
+      (runner.runnerId === undefined
+        ? '（runnerId は未確定。まだ名乗っていない）'
+        : ` runnerId=${runner.runnerId}`),
+  );
+  lines.push(`  この状態になった: ${runner.since}`);
+  if (runner.workspacePath !== undefined) lines.push(`  workspace: ${runner.workspacePath}`);
+  // 名乗らないことを黙らせない: 出さないと「入れ替わっていない」と「判定できない」が同じに見えるため
+  lines.push(
+    runner.instanceId === undefined
+      ? '  応えているプロセス: 名乗っていない（この器では入れ替わりを判定できない）'
+      : `  応えているプロセス: ${runner.instanceId}` +
+          (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
+  );
+  // 版は「どのプロセスか」の隣に置く: 別の問いに答える2つを並べないと片方でもう片方を推測することになり、state から遠いと `lost` の器の古い値が現役の版として読まれるため
+  lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
+  const peersLine = describeManagerPeers(runner.managerPeers);
+  if (peersLine !== undefined) {
+    lines.push(`  peer: ${excerptLine(peersLine, RUNNER_MANAGER_PEERS_EXCERPT)}`);
+  }
+  if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
+  // 材料が無い器には行を出さない: 「飽和ではない」と言わないため
+  if (runner.pidsSaturation !== undefined) {
+    lines.push(
+      `  pids 飽和: 新しい委譲を置けない（${describePidsSaturation(runner.pidsSaturation)}）`,
+    );
+  }
+  return lines;
+}
+
+// 器のマネージャーの内訳
+function runnerManagersLine(runner: RunnerOverview): string {
+  if (runner.managers.length === 0) return '  マネージャー: 無し';
+  return (
+    `  マネージャー(${runner.managers.length}): ` + describeRunnerManagerEntries(runner.managers)
+  );
+}
+
+// 鍵・プロファイル・MCP の登録の指紋（`fingerprints === true` のときだけ呼ぶ）。3状態（聞いていない／失敗／0件・無し）を同じ文言に潰さない
+function runnerFingerprintLines(runner: RunnerOverview): string[] {
+  const lines: string[] = [];
+  if (runner.credentialsProbe?.status === 'unheard') {
+    lines.push('  鍵: 確かめていない（繋がっていないので聞いていない）');
+  } else if (runner.credentialsProbe?.status === 'failed') {
+    lines.push(`  鍵を確かめられなかった: ${runner.credentialsProbe.error}`);
+  } else if (runner.credentials !== undefined) {
+    lines.push(
+      runner.credentials.length === 0
+        ? '  鍵: 無し'
+        : `  鍵の指紋: ${excerptLine(
+            runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', '),
+            RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT,
+          )}`,
+    );
+  }
+  if (runner.profileProbe?.status === 'unheard') {
+    lines.push('  プロファイル: 確かめていない（繋がっていないので聞いていない）');
+  } else if (runner.profileProbe?.status === 'failed') {
+    lines.push(`  プロファイルを確かめられなかった: ${runner.profileProbe.error}`);
+  } else if (runner.profile !== undefined) {
+    lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
+  }
+  // `unsupported` は `failed` とは別の文言で言う: 鍵を配り直せば直る故障と、runner を上げないと直らない故障を混ぜないため
+  if (runner.mcpServersProbe?.status === 'unheard') {
+    lines.push('  MCP の登録: 確かめていない（繋がっていないので聞いていない）');
+  } else if (runner.mcpServersProbe?.status === 'unsupported') {
+    lines.push('  MCP の登録: 確かめられない（この runner は口を持たない。古い版）');
+  } else if (runner.mcpServersProbe?.status === 'failed') {
+    lines.push(`  MCP の登録を確かめられなかった: ${runner.mcpServersProbe.error}`);
+  } else if (runner.mcpServers !== undefined) {
+    lines.push(
+      `  MCP の登録: ${excerptLine(runner.mcpServers.names.join(', '), RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT)}（指紋 ${runner.mcpServers.sha256}）`,
+    );
+  }
+  return lines;
+}
+
+// 直近の押し込み。`undefined` を「成功した」の既定値として埋めない: 3種類とも「まだ一度も試みていない」ことがあり、その種類だけ行を出さない
+function runnerPushHealthLines(runner: RunnerOverview): string[] {
+  const lines: string[] = [];
+  if (runner.pushHealth !== undefined) {
+    const outcomeText = (label: string, outcome: RunnerPushOutcome | undefined) =>
+      outcome === undefined
+        ? undefined
+        : outcome.status === 'ok'
+          ? `${label} ok（${outcome.at}）`
+          : `${label} 失敗（${outcome.at}）: ${outcome.error ?? '理由不明'}`;
+    const pushLines = [
+      outcomeText('プロファイル', runner.pushHealth.profile),
+      outcomeText('環境変数', runner.pushHealth.credentials),
+      outcomeText('認証トークン', runner.pushHealth.agentToken),
+      outcomeText('MCP の登録', runner.pushHealth.mcpServers),
+      outcomeText('plugin', runner.pushHealth.plugins),
+    ].filter((line): line is string => line !== undefined);
+    if (pushLines.length > 0) {
+      lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
+    }
+  }
+  return lines;
+}
+
+// 孤児ルート外・hold・素性の分からない孤児
+function runnerNotFiredLines(notFired: RunnerNotFired): string[] {
+  const lines: string[] = [];
+  const { outsideRoots, held, observeOnly } = notFired;
+  const bySid =
+    outsideRoots.bySid === undefined
+      ? ''
+      : `。仮に孤児ルートに入っていたら: 撃つ ${outsideRoots.bySid.wouldFire} / ` +
+        `sid 不明 ${outsideRoots.bySid.sidUnknown} / ` +
+        `sid が live ${outsideRoots.bySid.sidLive} / ` +
+        `sid の長が残存 ${outsideRoots.bySid.sidLeaderPresent} / ` +
+        describeUnrecognised(outsideRoots.bySid.sidUnrecognised, outsideRoots.bySid.unrecognisedBy);
+  lines.push(
+    `    孤児ルート外: ${outsideRoots.total}（うち親が生存 ` +
+      `${outsideRoots.parentInScan}。孤児ルートの部分木に入らず、撃つ判定に掛からない）` +
+      bySid,
+  );
+  if (held !== undefined) {
+    lines.push(
+      `    hold（候補のうち撃たなかった理由）: sid 不明 ${held.sidUnknown} / ` +
+        `sid が live ${held.sidLive} / sid の長が残存 ${held.sidLeaderPresent} / ` +
+        describeUnrecognised(held.sidUnrecognised, held.unrecognisedBy),
+    );
+  } else {
+    lines.push(
+      '    hold の内訳: この走査には判定材料（live / 終端済みの sid）が渡っていないので出せない',
+    );
+  }
+  if (observeOnly !== undefined) {
+    lines.push(
+      `    素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: ${observeOnly}`,
+    );
+  }
+  return lines;
+}
+
+// 孤児の回収（reclaim）の行
+function runnerReclaimLines(reclaim: RunnerReclaim): string[] {
+  const lines: string[] = [];
+  const age =
+    reclaim.oldestAgeSec === undefined
+      ? ''
+      : `（いちばん古い ${describeZombieAge(reclaim.oldestAgeSec)}）`;
+  const atScan =
+    reclaim.pidsAtScan === undefined
+      ? ''
+      : `、走査時 pids ${reclaim.pidsAtScan.current}/${reclaim.pidsAtScan.max}`;
+  const mode =
+    reclaim.mode === 'observe'
+      ? 'observe: 終端した委譲の木だけ畳む'
+      : '回収（既定）: 素性の分からない孤児も撃つ';
+  lines.push(
+    `    孤児（${mode}）: 候補 ${reclaim.candidates} 本 / ` +
+      `${reclaim.candidateThreads} threads${age}${atScan}` +
+      `、送出 ${reclaim.signalled} / 畳み ${reclaim.killed} / ` +
+      `返却 ${reclaim.freedThreads} threads`,
+  );
+  // 欄が無い（古い runner）ときは行を出さない: 「引き取り手が無い」と読ませないため
+  if (reclaim.subreaper !== undefined) {
+    lines.push(
+      reclaim.subreaper.command === null
+        ? '    委譲の引き取り手: 無し（tini が PATH に無い。setsid で抜けて親が先に終わった子孫は、誰のものか分からず撃たれない）'
+        : `    委譲の引き取り手: ${reclaim.subreaper.command} -s（setsid で抜けた子孫も委譲の木に留まる）`,
+    );
+  }
+  if (
+    reclaim.roots !== undefined &&
+    reclaim.largestTreeCandidates !== undefined &&
+    reclaim.singletonTrees !== undefined
+  ) {
+    lines.push(
+      `    孤児の木: ルート ${reclaim.roots} 本 / ` +
+        `いちばん大きい木 ${reclaim.largestTreeCandidates} 本 / ` +
+        `単独 ${reclaim.singletonTrees} 本`,
+    );
+  }
+  if (reclaim.medianAgeSec !== undefined && reclaim.ageBuckets !== undefined) {
+    const buckets = reclaim.ageBuckets
+      .map((bucket) => `${describeAgeBucketLabel(bucket.upToSec)} ${bucket.count}`)
+      .join(' / ');
+    lines.push(
+      `    孤児の齢（⚠ 起動から。孤児になってからではない）: ` +
+        `中央値 ${describeZombieAge(reclaim.medianAgeSec)} / ${buckets}`,
+    );
+  }
+  // 欄ごと無い回は 0 に潰さず行を出さない: 在る欄の0は「数えて0本だった」で、取れなかったのとは別のため
+  const { notFired } = reclaim;
+  if (notFired !== undefined) {
+    lines.push(...runnerNotFiredLines(notFired));
+  }
+  return lines;
+}
+
+// pids の内訳（ゾンビ・comm・孤児）。`tasks` が無い runner ではこの行そのものを省く: 「0」でも「unknown」でもなく、3状態を新しく混ぜないため
+function runnerTaskLines(tasks: RunnerTasks): string[] {
+  const lines: string[] = [];
+  const aliveThreads = tasks.threads - tasks.zombies;
+  const aliveProcesses = tasks.processes - tasks.zombies;
+  lines.push(
+    `    内訳: ゾンビ ${tasks.zombies} / 生存 ${aliveThreads}` + `（${aliveProcesses}プロセス）`,
+  );
+  if (tasks.zombieCommands !== undefined && tasks.zombieCommands.length > 0) {
+    lines.push(
+      `    ゾンビの comm: ${tasks.zombieCommands
+        .map((entry) => `${entry.command} ${entry.count}`)
+        .join(', ')}`,
+    );
+  }
+  if (tasks.oldestZombieSeconds !== undefined) {
+    lines.push(`    いちばん古いゾンビ: ${describeZombieAge(tasks.oldestZombieSeconds)}`);
+  }
+  // 欄が無い・走査が読めなかった回では行そのものを出さない: 「0本だった」と「数えられなかった」を混ぜないため。`pids` を同じ行に並べる: 返るはずの量と返る先の空きは組で読むため
+  const { reclaim } = tasks;
+  if (reclaim !== undefined) {
+    lines.push(...runnerReclaimLines(reclaim));
+  }
+  return lines;
+}
+
+// pids の3つの状態（読めた／訊けなかった／訊けたが読めない）を混ぜない: 疑う先が違うので同じ文言に倒さない
+function runnerPidsLines(runner: RunnerOverview): string[] {
+  const lines: string[] = [];
+  if (runner.resources === undefined) {
+    const probe = runner.resourcesProbe;
+    if (probe?.status === 'unheard') {
+      lines.push('  pids: 確かめていない（繋がっていないので聞いていない）');
+    } else if (probe?.status === 'failed') {
+      lines.push(`  pids: 訊いたが失敗した: ${probe.error}`);
+    } else if (probe?.status === 'unsupported') {
+      lines.push('  pids: 確かめられない（この runner は口を持たない。古い版）');
+    } else if (probe?.status === 'asked') {
+      lines.push('  pids: 訊けたが、応答に資源が無かった');
+    } else {
+      lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
+    }
+  } else if (runner.resources.pids === undefined) {
+    lines.push('  pids: 訊けたが読めない器だった（cgroup を持たない。ローカル開発など）');
+  } else {
+    const { current, max } = runner.resources.pids;
+    lines.push(`  pids: ${current} / ${max}`);
+    const { tasks } = runner.resources;
+    if (tasks !== undefined) {
+      lines.push(...runnerTaskLines(tasks));
+    }
+  }
+  return lines;
+}
+
+// 資源（`resources === true` のときだけ呼ぶ）: pids・内訳・孤児・持ち主の記録。「言えないこと」は器ごとに繰り返さず一覧の末尾に1度だけ出す: 台数ぶん並べると断りが本体を上回って読み飛ばされるため
+function runnerResourceLines(runner: RunnerOverview): string[] {
+  const lines = runnerPidsLines(runner);
+  // `pids` の読めた・読めないとは独立した材料: 欄が無い（古い runner）ときは行を出さない
+  const ownerRecords = runner.resources?.pidOwnerRecords;
+  if (ownerRecords !== undefined) {
+    lines.push(
+      `  持ち主の記録 ${ownerRecords.remembered.toLocaleString('en-US')}/` +
+        `${ownerRecords.cap.toLocaleString('en-US')}・` +
+        `上限で忘れた累計 ${ownerRecords.forgottenTotal.toLocaleString('en-US')}`,
+    );
+  }
+  return lines;
+}
+
+// 器1台ぶんを1つのブロックにしてから予算で積む: 行ごとに積むと、予算に当たった器が途中の1行で切れて「版が無い器」に見えるため
+function describeRunnerBlock(runner: RunnerOverview, show: RunnerListShow): string {
+  const lines: string[] = [
+    ...runnerHeaderLines(runner),
+    runnerManagersLine(runner),
+    // 表示そのものを引数で二重に締める: どちらか片方が緩んでも既定で漏れないよう `fingerprints === true` のときしか出さない
+    ...(show.fingerprints ? runnerFingerprintLines(runner) : []),
+    ...runnerPushHealthLines(runner),
+    ...(show.resources ? runnerResourceLines(runner) : []),
+  ];
+  return lines.join('\n');
+}
+
+// 末尾の注記。固定の2文は、同じ会話の2回目から札にする（fold は道具の式が作って渡す。呼ぶ順は since-note → pids-note のまま）
+function describeRunnerListTail(
+  autoFoldedNote: string,
+  fold: FixedFold,
+  resources: boolean,
+  unassigned: RunnerManagerEntry[],
+): string[] {
+  const tail: string[] = [];
+  if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
+  // 「この状態になった」の注記は器ごとに繰り返さず末尾に1度だけ添える: 名簿はインメモリで再起動すると `since` が巻き戻り、「ずっと保持されている記録」と誤読されないため
+  tail.push(
+    fold(
+      'runner-list:since-note',
+      '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
+        'デーモンを再起動すると作り直される。',
+      '「この状態になった」は名簿の値で、デーモンの再起動で作り直される。',
+    ),
+  );
+  // pids を出したなら、その数字が言えないことを必ず添える: 言えないことを書いていない計器は、読む側が言えると思い込むため
+  if (resources) {
+    tail.push(
+      fold(
+        'runner-list:pids-note',
+        'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
+          'この2つの数字だけからは、何がその数を持っているかは分からない。' +
+          '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
+          'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
+          '対応していない runner——古い版——では内訳の行自体が出ない）。' +
+          '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
+          'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
+        'pids について: **現在値/上限は器の合計であって内訳ではない。空きは「次に何本置けるか」を意味しない**（内訳は対応する runner のブロックに出る）。',
+      ),
+    );
+  }
+  if (unassigned.length > 0) {
+    tail.push(
+      `どの器か分からない: ${unassigned.length}件（` +
+        describeRunnerManagerEntries(unassigned) +
+        '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',
+    );
+  }
+  return tail;
+}
+
+// 予算で切る頁。省略の断りと続きの案内（cursor）もここで作る
+function renderRunnerListPage(
+  blocks: string[],
+  view: RunnerOverview[],
+  registeredCount: number,
+): string {
+  return renderListing(blocks, {
+    budget: RUNNER_LIST_BUDGET,
+    omitted: ({ rest, shown }) => {
+      // 母数は cursor を当てる前の全件: 頁が進んでも動かさないため
+      const lastShown = view[shown - 1]!;
+      return (
+        `…ほか ${rest} 台は省略（登録は ${registeredCount} 台あり、${shown} 台だけ出した）。` +
+        `続きは runner_list cursor=${encodeRunnerCursor({ label: lastShown.label })} で取れる。`
+      );
+    },
+  });
 }
 
 export function opsTools(context: ToolContext, shared: CloneToolsShared) {
@@ -799,376 +1256,34 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
           ...(fingerprints === undefined ? {} : { fingerprints }),
           ...(resources === undefined ? {} : { resources }),
         });
-        // 自動畳みが走っていればどの return 経路でも必ず言う: 早い return でだけ黙ると、畳んだ・見送ったことがクローンに一度も届かない窓ができるため
-        const autoFoldedNote =
-          overview.autoFolded === undefined
-            ? ''
-            : overview.autoFolded.length === 0
-              ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった）'
-              : `\n⚠ この呼び出しで自動畳みが働いた:\n${overview.autoFolded
-                  .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
-                  .join('\n')}`;
+        const autoFoldedNote = describeRunnerAutoFoldedNote(overview.autoFolded);
 
-        const resolved = resolveRunnerCursor(overview.runners, cursor);
-        if (resolved.kind === 'malformed') {
-          // 黙って先頭からへ倒さない
-          return text(
-            'この cursor は読めない（壊れているか、この道具のものではない）。' +
-              'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
-              '先頭から読み直すなら cursor を省いて呼ぶこと。' +
-              autoFoldedNote,
-          );
-        }
+        const pageCheck = checkRunnerListPage(overview, cursor, autoFoldedNote);
+        if (pageCheck.kind === 'refused') return text(pageCheck.body);
 
-        // デーモン自身の版は runner が0台でも出す: 0台のときに落とすと、配線がまだ無い状態（まさに版を確かめたい状態）でだけ答えが消えるため
-        const daemonLine = `デーモン（あなた自身が居るプロセス）の版: ${describeRevisionStatus(
-          overview.daemonRevision,
-        )}`;
+        const head = describeRunnerListHead(
+          overview.runners.length,
+          pageCheck.daemonLine,
+          pageCheck.restarted,
+        );
+        const show = { fingerprints: fingerprints === true, resources: resources === true };
+        const blocks = pageCheck.view.map((runner) => describeRunnerBlock(runner, show));
 
-        if (overview.runners.length === 0) {
-          return text(
-            '登録されている runner は0台である（設定に ALTEROID_RUNNER_URLS 等が無いか、' +
-              `まだ配線されていない）。\n${daemonLine}${autoFoldedNote}`,
-          );
-        }
-
-        // cursor を渡されたときだけ「最後の頁」と言う: 名簿が0台のときの言い方を奪わないため
-        if (cursor !== undefined && resolved.view.length === 0) {
-          return text(
-            `（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}${autoFoldedNote}`,
-          );
-        }
-
-        const head: string[] = [
-          // 1台のときにそう言う: 言わないと「分散していない」ことが読み取れず、複数台に散っていると誤読されうるため
-          overview.runners.length === 1
-            ? 'runner は1台のみ登録されている（分散していない）。'
-            : `runner は${overview.runners.length}台登録されている。`,
-          // デーモンと runner の版を同じ出力に並べる: 別々の口に出すと突き合わせ忘れがそのまま見逃しになり、2つの Service は別々にデプロイされてずれる窓が在るため
-          daemonLine,
-        ];
-        // 先頭から出し直したことを黙って重複させない: 言わないと「進んでいない」のか「出し直した」のかが区別できないため
-        if (resolved.restarted) {
-          head.push(
-            '⚠ 渡された cursor が指していた器は、いま名簿に居ない（登録から外れた）。' +
-              'この並びは登録順で、そこから位置を割り出す手が無いので、**先頭から出し直した**' +
-              '——既に見た器がもう一度出る。**1台も落としていない**（欠落より重複の側へ倒してある）。',
-          );
-        }
-
-        // 器1台ぶんを1つのブロックにしてから予算で積む: 行ごとに積むと、予算に当たった器が途中の1行で切れて「版が無い器」に見えるため
-        const blocks: string[] = [];
-        for (const runner of resolved.view) {
-          const lines: string[] = [];
-          lines.push(
-            `- ${runner.label} [${runner.state}]` +
-              (runner.runnerId === undefined
-                ? '（runnerId は未確定。まだ名乗っていない）'
-                : ` runnerId=${runner.runnerId}`),
-          );
-          lines.push(`  この状態になった: ${runner.since}`);
-          if (runner.workspacePath !== undefined)
-            lines.push(`  workspace: ${runner.workspacePath}`);
-          // 名乗らないことを黙らせない: 出さないと「入れ替わっていない」と「判定できない」が同じに見えるため
-          lines.push(
-            runner.instanceId === undefined
-              ? '  応えているプロセス: 名乗っていない（この器では入れ替わりを判定できない）'
-              : `  応えているプロセス: ${runner.instanceId}` +
-                  (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
-          );
-          // 版は「どのプロセスか」の隣に置く: 別の問いに答える2つを並べないと片方でもう片方を推測することになり、state から遠いと `lost` の器の古い値が現役の版として読まれるため
-          lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
-          const peersLine = describeManagerPeers(runner.managerPeers);
-          if (peersLine !== undefined) {
-            lines.push(`  peer: ${excerptLine(peersLine, RUNNER_MANAGER_PEERS_EXCERPT)}`);
-          }
-          if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
-          // 材料が無い器には行を出さない: 「飽和ではない」と言わないため
-          if (runner.pidsSaturation !== undefined) {
-            lines.push(
-              `  pids 飽和: 新しい委譲を置けない（${describePidsSaturation(runner.pidsSaturation)}）`,
-            );
-          }
-          if (runner.managers.length === 0) {
-            lines.push('  マネージャー: 無し');
-          } else {
-            const shown = runner.managers.slice(0, RUNNER_MANAGER_LIST_LIMIT);
-            const rest = runner.managers.length - shown.length;
-            lines.push(
-              `  マネージャー(${runner.managers.length}): ` +
-                // 字面は `describeManagerState` から取る: `m.status` をそのまま書くと「走行中」と「走行中だがセッション切断」がここでだけ潰れるため
-                shown
-                  .map(
-                    (m) =>
-                      `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
-                      runnerManagerTokenTag(m),
-                  )
-                  .join(', ') +
-                (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
-            );
-          }
-          // 表示そのものを引数で二重に締める: どちらか片方が緩んでも既定で漏れないよう `fingerprints === true` のときしか出さない
-          // 3状態（聞いていない／失敗／0件・無し）を同じ文言に潰さない
-          if (fingerprints === true) {
-            if (runner.credentialsProbe?.status === 'unheard') {
-              lines.push('  鍵: 確かめていない（繋がっていないので聞いていない）');
-            } else if (runner.credentialsProbe?.status === 'failed') {
-              lines.push(`  鍵を確かめられなかった: ${runner.credentialsProbe.error}`);
-            } else if (runner.credentials !== undefined) {
-              lines.push(
-                runner.credentials.length === 0
-                  ? '  鍵: 無し'
-                  : `  鍵の指紋: ${excerptLine(
-                      runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', '),
-                      RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT,
-                    )}`,
-              );
-            }
-            if (runner.profileProbe?.status === 'unheard') {
-              lines.push('  プロファイル: 確かめていない（繋がっていないので聞いていない）');
-            } else if (runner.profileProbe?.status === 'failed') {
-              lines.push(`  プロファイルを確かめられなかった: ${runner.profileProbe.error}`);
-            } else if (runner.profile !== undefined) {
-              lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
-            }
-            // `unsupported` は `failed` とは別の文言で言う: 鍵を配り直せば直る故障と、runner を上げないと直らない故障を混ぜないため
-            if (runner.mcpServersProbe?.status === 'unheard') {
-              lines.push('  MCP の登録: 確かめていない（繋がっていないので聞いていない）');
-            } else if (runner.mcpServersProbe?.status === 'unsupported') {
-              lines.push('  MCP の登録: 確かめられない（この runner は口を持たない。古い版）');
-            } else if (runner.mcpServersProbe?.status === 'failed') {
-              lines.push(`  MCP の登録を確かめられなかった: ${runner.mcpServersProbe.error}`);
-            } else if (runner.mcpServers !== undefined) {
-              lines.push(
-                `  MCP の登録: ${excerptLine(runner.mcpServers.names.join(', '), RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT)}（指紋 ${runner.mcpServers.sha256}）`,
-              );
-            }
-          }
-          // `undefined` を「成功した」の既定値として埋めない: 3種類とも「まだ一度も試みていない」ことがあり、その種類だけ行を出さない
-          if (runner.pushHealth !== undefined) {
-            const outcomeText = (label: string, outcome: RunnerPushOutcome | undefined) =>
-              outcome === undefined
-                ? undefined
-                : outcome.status === 'ok'
-                  ? `${label} ok（${outcome.at}）`
-                  : `${label} 失敗（${outcome.at}）: ${outcome.error ?? '理由不明'}`;
-            const pushLines = [
-              outcomeText('プロファイル', runner.pushHealth.profile),
-              outcomeText('環境変数', runner.pushHealth.credentials),
-              outcomeText('認証トークン', runner.pushHealth.agentToken),
-              outcomeText('MCP の登録', runner.pushHealth.mcpServers),
-              outcomeText('plugin', runner.pushHealth.plugins),
-            ].filter((line): line is string => line !== undefined);
-            if (pushLines.length > 0) {
-              lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
-            }
-          }
-          // pids の3つの状態（読めた／訊けなかった／訊けたが読めない）を混ぜない: 疑う先が違うので同じ文言に倒さない
-          // 「言えないこと」は器ごとに繰り返さず一覧の末尾に1度だけ出す: 台数ぶん並べると断りが本体を上回って読み飛ばされるため
-          if (resources === true) {
-            if (runner.resources === undefined) {
-              const probe = runner.resourcesProbe;
-              if (probe?.status === 'unheard') {
-                lines.push('  pids: 確かめていない（繋がっていないので聞いていない）');
-              } else if (probe?.status === 'failed') {
-                lines.push(`  pids: 訊いたが失敗した: ${probe.error}`);
-              } else if (probe?.status === 'unsupported') {
-                lines.push('  pids: 確かめられない（この runner は口を持たない。古い版）');
-              } else if (probe?.status === 'asked') {
-                lines.push('  pids: 訊けたが、応答に資源が無かった');
-              } else {
-                lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
-              }
-            } else if (runner.resources.pids === undefined) {
-              lines.push('  pids: 訊けたが読めない器だった（cgroup を持たない。ローカル開発など）');
-            } else {
-              const { current, max } = runner.resources.pids;
-              lines.push(`  pids: ${current} / ${max}`);
-              // `tasks` が無い runner ではこの行そのものを省く: 「0」でも「unknown」でもなく、3状態を新しく混ぜないため
-              const { tasks } = runner.resources;
-              if (tasks !== undefined) {
-                const aliveThreads = tasks.threads - tasks.zombies;
-                const aliveProcesses = tasks.processes - tasks.zombies;
-                lines.push(
-                  `    内訳: ゾンビ ${tasks.zombies} / 生存 ${aliveThreads}` +
-                    `（${aliveProcesses}プロセス）`,
-                );
-                if (tasks.zombieCommands !== undefined && tasks.zombieCommands.length > 0) {
-                  lines.push(
-                    `    ゾンビの comm: ${tasks.zombieCommands
-                      .map((entry) => `${entry.command} ${entry.count}`)
-                      .join(', ')}`,
-                  );
-                }
-                if (tasks.oldestZombieSeconds !== undefined) {
-                  lines.push(
-                    `    いちばん古いゾンビ: ${describeZombieAge(tasks.oldestZombieSeconds)}`,
-                  );
-                }
-                // 欄が無い・走査が読めなかった回では行そのものを出さない: 「0本だった」と「数えられなかった」を混ぜないため。`pids` を同じ行に並べる: 返るはずの量と返る先の空きは組で読むため
-                const { reclaim } = tasks;
-                if (reclaim !== undefined) {
-                  const age =
-                    reclaim.oldestAgeSec === undefined
-                      ? ''
-                      : `（いちばん古い ${describeZombieAge(reclaim.oldestAgeSec)}）`;
-                  const atScan =
-                    reclaim.pidsAtScan === undefined
-                      ? ''
-                      : `、走査時 pids ${reclaim.pidsAtScan.current}/${reclaim.pidsAtScan.max}`;
-                  const mode =
-                    reclaim.mode === 'observe'
-                      ? 'observe: 終端した委譲の木だけ畳む'
-                      : '回収（既定）: 素性の分からない孤児も撃つ';
-                  lines.push(
-                    `    孤児（${mode}）: 候補 ${reclaim.candidates} 本 / ` +
-                      `${reclaim.candidateThreads} threads${age}${atScan}` +
-                      `、送出 ${reclaim.signalled} / 畳み ${reclaim.killed} / ` +
-                      `返却 ${reclaim.freedThreads} threads`,
-                  );
-                  // 欄が無い（古い runner）ときは行を出さない: 「引き取り手が無い」と読ませないため
-                  if (reclaim.subreaper !== undefined) {
-                    lines.push(
-                      reclaim.subreaper.command === null
-                        ? '    委譲の引き取り手: 無し（tini が PATH に無い。setsid で抜けて親が先に終わった子孫は、誰のものか分からず撃たれない）'
-                        : `    委譲の引き取り手: ${reclaim.subreaper.command} -s（setsid で抜けた子孫も委譲の木に留まる）`,
-                    );
-                  }
-                  if (
-                    reclaim.roots !== undefined &&
-                    reclaim.largestTreeCandidates !== undefined &&
-                    reclaim.singletonTrees !== undefined
-                  ) {
-                    lines.push(
-                      `    孤児の木: ルート ${reclaim.roots} 本 / ` +
-                        `いちばん大きい木 ${reclaim.largestTreeCandidates} 本 / ` +
-                        `単独 ${reclaim.singletonTrees} 本`,
-                    );
-                  }
-                  if (reclaim.medianAgeSec !== undefined && reclaim.ageBuckets !== undefined) {
-                    const buckets = reclaim.ageBuckets
-                      .map((bucket) => `${describeAgeBucketLabel(bucket.upToSec)} ${bucket.count}`)
-                      .join(' / ');
-                    lines.push(
-                      `    孤児の齢（⚠ 起動から。孤児になってからではない）: ` +
-                        `中央値 ${describeZombieAge(reclaim.medianAgeSec)} / ${buckets}`,
-                    );
-                  }
-                  // 欄ごと無い回は 0 に潰さず行を出さない: 在る欄の0は「数えて0本だった」で、取れなかったのとは別のため
-                  const { notFired } = reclaim;
-                  if (notFired !== undefined) {
-                    const { outsideRoots, held, observeOnly } = notFired;
-                    const bySid =
-                      outsideRoots.bySid === undefined
-                        ? ''
-                        : `。仮に孤児ルートに入っていたら: 撃つ ${outsideRoots.bySid.wouldFire} / ` +
-                          `sid 不明 ${outsideRoots.bySid.sidUnknown} / ` +
-                          `sid が live ${outsideRoots.bySid.sidLive} / ` +
-                          `sid の長が残存 ${outsideRoots.bySid.sidLeaderPresent} / ` +
-                          describeUnrecognised(
-                            outsideRoots.bySid.sidUnrecognised,
-                            outsideRoots.bySid.unrecognisedBy,
-                          );
-                    lines.push(
-                      `    孤児ルート外: ${outsideRoots.total}（うち親が生存 ` +
-                        `${outsideRoots.parentInScan}。孤児ルートの部分木に入らず、撃つ判定に掛からない）` +
-                        bySid,
-                    );
-                    if (held !== undefined) {
-                      lines.push(
-                        `    hold（候補のうち撃たなかった理由）: sid 不明 ${held.sidUnknown} / ` +
-                          `sid が live ${held.sidLive} / sid の長が残存 ${held.sidLeaderPresent} / ` +
-                          describeUnrecognised(held.sidUnrecognised, held.unrecognisedBy),
-                      );
-                    } else {
-                      lines.push(
-                        '    hold の内訳: この走査には判定材料（live / 終端済みの sid）が渡っていないので出せない',
-                      );
-                    }
-                    if (observeOnly !== undefined) {
-                      lines.push(
-                        `    素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: ${observeOnly}`,
-                      );
-                    }
-                  }
-                }
-              }
-            }
-            // `pids` の読めた・読めないとは独立した材料: 欄が無い（古い runner）ときは行を出さない
-            const ownerRecords = runner.resources?.pidOwnerRecords;
-            if (ownerRecords !== undefined) {
-              lines.push(
-                `  持ち主の記録 ${ownerRecords.remembered.toLocaleString('en-US')}/` +
-                  `${ownerRecords.cap.toLocaleString('en-US')}・` +
-                  `上限で忘れた累計 ${ownerRecords.forgottenTotal.toLocaleString('en-US')}`,
-              );
-            }
-          }
-          blocks.push(lines.join('\n'));
-        }
-
-        const tail: string[] = [];
-        if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
-        // 「この状態になった」の注記は器ごとに繰り返さず末尾に1度だけ添える: 名簿はインメモリで再起動すると `since` が巻き戻り、「ずっと保持されている記録」と誤読されないため
         // 末尾の固定の2文は、同じ会話の2回目から札にする（`manager_list` と同じ口。札にも結論を残す）。返す直前のここで1度だけ呼ぶ
         const foldRunnerTail = isSubagentCaller(context, extra)
           ? NO_FIXED_FOLD
           : (context.foldFixed ?? NO_FIXED_FOLD);
-        tail.push(
-          foldRunnerTail(
-            'runner-list:since-note',
-            '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
-              'デーモンを再起動すると作り直される。',
-            '「この状態になった」は名簿の値で、デーモンの再起動で作り直される。',
-          ),
+        const tail = describeRunnerListTail(
+          autoFoldedNote,
+          foldRunnerTail,
+          resources === true,
+          overview.unassigned,
         );
-        // pids を出したなら、その数字が言えないことを必ず添える: 言えないことを書いていない計器は、読む側が言えると思い込むため
-        if (resources === true) {
-          tail.push(
-            foldRunnerTail(
-              'runner-list:pids-note',
-              'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
-                'この2つの数字だけからは、何がその数を持っているかは分からない。' +
-                '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
-                'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
-                '対応していない runner——古い版——では内訳の行自体が出ない）。' +
-                '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
-                'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
-              'pids について: **現在値/上限は器の合計であって内訳ではない。空きは「次に何本置けるか」を意味しない**（内訳は対応する runner のブロックに出る）。',
-            ),
-          );
-        }
-        if (overview.unassigned.length > 0) {
-          const shown = overview.unassigned.slice(0, RUNNER_MANAGER_LIST_LIMIT);
-          const rest = overview.unassigned.length - shown.length;
-          tail.push(
-            `どの器か分からない: ${overview.unassigned.length}件（` +
-              shown
-                .map(
-                  (m) =>
-                    `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
-                    runnerManagerTokenTag(m),
-                )
-                .join(', ') +
-              (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`) +
-              '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',
-          );
-        }
 
         return text(
           [
             ...head,
-            renderListing(blocks, {
-              budget: RUNNER_LIST_BUDGET,
-              omitted: ({ rest, shown }) => {
-                // 母数は cursor を当てる前の全件: 頁が進んでも動かさないため
-                const lastShown = resolved.view[shown - 1]!;
-                return (
-                  `…ほか ${rest} 台は省略（登録は ${overview.runners.length} 台あり、${shown} 台だけ出した）。` +
-                  `続きは runner_list cursor=${encodeRunnerCursor({ label: lastShown.label })} で取れる。`
-                );
-              },
-            }),
+            renderRunnerListPage(blocks, pageCheck.view, overview.runners.length),
             ...tail,
           ].join('\n'),
         );
