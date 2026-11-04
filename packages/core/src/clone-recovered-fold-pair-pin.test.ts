@@ -228,4 +228,32 @@ describe('戻っていた担当の知らせの畳み — 枠の知らせ（#4499
     const list = () => Promise.resolve([summary()]);
     expect(await outcome(list, {}, 'PLAIN-BODY')).toBeNull();
   });
+
+  // 違い④の順（枠の側を先に見て、畳めなければ枠以外の側を見る）を、どちらの側でも畳める場面と、枠の側だけ畳めない場面の両方で縛る。
+  // 一覧（`list()`）を引く回数も見る: 枠の側で畳めば枠以外の側は見ない（1回）、枠の側で畳めなければ枠以外の側がもう一度引く（2回）
+  it('⭐ 違い④: 両方の印があり、どちらの側でも畳めるなら、枠の側が先に畳み、一覧は1回だけ引く', async () => {
+    let calls = 0;
+    const list = () => {
+      calls += 1;
+      return Promise.resolve([summary()]);
+    };
+    const both = await outcome(list, { quota: true, fold: {} }, 'BOTH-FOLDABLE-BODY');
+    expect(both).toContain(QUOTA_FOLD_LINE);
+    expect(both).not.toContain(RECOVERED_FOLD_LINE);
+    expect(calls).toBe(1);
+  });
+
+  it('⭐ 違い④: 両方の印があり、枠の側だけ畳めない（世代を記録しない回）なら、枠以外の側が畳み、一覧は2回引く', async () => {
+    let calls = 0;
+    const list = () => {
+      calls += 1;
+      return Promise.resolve([
+        summary({ tokenGeneration: undefined, activeTokenGeneration: undefined }),
+      ]);
+    };
+    const both = await outcome(list, { quota: true, fold: { attached: true } }, 'BOTH-SECOND-BODY');
+    expect(both).toContain(RECOVERED_FOLD_LINE);
+    expect(both).not.toContain(QUOTA_FOLD_LINE);
+    expect(calls).toBe(2);
+  });
 });
