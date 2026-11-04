@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// clone.ts（と、振り分けの固定では manager.ts・runner.ts）のソースを走査して「書き換えの前後で変わらないこと」を固定する試験の共通の道具。
+// clone.ts（と、振り分けの固定・長いメソッドの固定では manager.ts・runner.ts・digest.ts）のソースを走査して「書き換えの前後で変わらないこと」を固定する試験の共通の道具。
 // 日誌の1行の固定（`clone-journal-self-sites-pin.test.ts`）と、振り分けの case の中身の固定（`clone-dispatch-cases-pin.test.ts`）と、長いメソッドの中身の固定（`clone-method-body-pin.test.ts`）が使う。
 // 1つの試験に写さず、ここに置く: 文字列・テンプレート・コメントの読み飛ばし方が2つの試験でずれると、片方だけが見逃すため。
 
@@ -15,7 +15,7 @@ export function readCloneSource(): string {
 }
 
 /** 振り分けの固定・長いメソッドの固定の対象にしてよいソース（`packages/core/src` の下）。 */
-export type ScannedSource = 'clone.ts' | 'manager.ts' | 'runner.ts';
+export type ScannedSource = 'clone.ts' | 'manager.ts' | 'runner.ts' | 'digest.ts';
 
 export function readSource(file: ScannedSource): string {
   return readFileSync(path.join(SRC_DIR, file), 'utf8');
@@ -95,9 +95,17 @@ export function readGroup(text: string, from: number): { close: number; commas: 
   return { close: -1, commas };
 }
 
-/** `name` のメソッドの本体（`{` の中）を返す。宣言は2字下げで `async #name(` か `#name(` から始まるものだけを見る。 */
+/**
+ * `name` のメソッド・関数の本体（`{` の中）を返す。見る宣言は2つの形だけ:
+ * クラスの中の2字下げの `async #name(` / `#name(`、行頭の `export async function name(` / `function name(`（`export`・`async` は省けてよい）。
+ * 2字下げの形は `#` で始まる名前にだけ当てる: 行頭の関数の本体の中の2字下げの呼び出し（`  name(…);`）を宣言と読み違えないため。
+ */
 export function methodBody(text: string, name: string): string {
-  const declaration = new RegExp(`\\n {2}(?:async )?${name}\\(`).exec(text);
+  const declaration = new RegExp(
+    name.startsWith('#')
+      ? `\\n {2}(?:async )?${name}\\(`
+      : `\\n(?:export )?(?:async )?function ${name}\\(`,
+  ).exec(text);
   if (declaration === null) throw new Error(`${name} の宣言が見つからない`);
   const paramsOpen = declaration.index + declaration[0].length - 1;
   const paramsClose = readGroup(text, paramsOpen).close;
@@ -184,7 +192,47 @@ export const INLINED_BY_FILE: Readonly<
 > = {
   'clone.ts': INLINED_BY_METHOD,
   'manager.ts': {},
-  'runner.ts': {},
+  'runner.ts': {
+    // SDK の `turn_ended` の1件（`RunnerSession#apply` から出した先）: 文脈占有を送る段と、成功したターンの使用量を送る段。
+    // どちらも `await` を含まないので同期のメソッドへ出し、呼び出しにも `await` を付けない
+    '#applyTurnEnded': [
+      {
+        name: '#emitContextUsage',
+        call: 'this.#emitContextUsage(event, contextUsage);',
+        trailing: '',
+      },
+      {
+        name: '#emitAnsweredUsage',
+        call: 'this.#emitAnsweredUsage(event, failure, contextUsage);',
+        trailing: '',
+      },
+    ],
+  },
+  'digest.ts': {
+    // 要約の全体の形: 末尾で `sections` へ節を足す `if` のうち、`await` を含まない4つ（エスカレーションの節は `await` を含むので出さない）
+    buildActivityDigest: [
+      {
+        name: 'appendDecisionsSection',
+        call: 'appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount);',
+        trailing: '',
+      },
+      {
+        name: 'appendPendingSection',
+        call: 'appendPendingSection(sections, pending, unreadableApprovalNote);',
+        trailing: '',
+      },
+      {
+        name: 'appendMemoryUpdatesSection',
+        call: 'appendMemoryUpdatesSection(sections, memoryUpdates, memoryUpdatesCount);',
+        trailing: '',
+      },
+      {
+        name: 'appendExternalsSection',
+        call: 'appendExternalsSection(sections, externals, externalsCount, externalSourceTally, options);',
+        trailing: '',
+      },
+    ],
+  },
 };
 
 /** メソッドの本体を `squash` で畳み、`INLINED_BY_FILE` に載った段は、出した先の本体を呼び出しの位置へ差し戻したもの。 */
