@@ -44,40 +44,70 @@ function turnEndBodyOf(content: unknown): string {
  * `stop_reason` が文字列でなければ `undefined`（分からないものを症状に化けさせない）。
  */
 export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
+  const found = lastMainAssistantLine(probeWindowLines(transcript));
+  if (found === undefined) return undefined;
+  const { record } = found;
+
+  // **本文の有無でここを飛ばさない。**
+  const stopReason = record.message?.stop_reason;
+  if (typeof stopReason !== 'string') return undefined;
+  if (stopReason === 'tool_use') return undefined;
+
+  const body = turnEndBodyOf(record.message?.content);
+  return {
+    timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
+    stopReason,
+    tail: body.length > TURN_END_TAIL_EXCERPT ? body.slice(-TURN_END_TAIL_EXCERPT) : body,
+  };
+}
+
+/** 2つの探り（`probeTurnEnd`・`probeToolUseStall`）が見る生ログの1行の形。値を確かめずに読むので、欄はすべて `unknown`。 */
+interface ProbedTranscriptLine {
+  type?: unknown;
+  isSidechain?: unknown;
+  timestamp?: unknown;
+  message?: { content?: unknown; stop_reason?: unknown };
+}
+
+/**
+ * 生ログの末尾の窓（`TURN_END_PROBE_CHARS`）の行。窓で切ったときは先頭の行を捨てる: 途中で切れた行の残りを、
+ * たまたま読める JSON として拾わないため。2つの探りはこの窓だけを見る（同じ行を見て、重ならない範囲を担当するため）。
+ */
+function probeWindowLines(transcript: string): string[] {
   const truncated = transcript.length > TURN_END_PROBE_CHARS;
   const window = truncated ? transcript.slice(-TURN_END_PROBE_CHARS) : transcript;
   const rawLines = window.split('\n');
-  const lines = truncated ? rawLines.slice(1) : rawLines;
+  return truncated ? rawLines.slice(1) : rawLines;
+}
 
+/**
+ * 1行を JSON として読む。空行・JSON でない行は `undefined`。読めた値は `{ entry }` に包んで返す:
+ * 読めた値が `null` のとき「飛ばす」と区別するため（呼び手は値を確かめずに欄を読む）。
+ */
+function parseProbeLine(line: string): { entry: unknown } | undefined {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return undefined;
+  try {
+    return { entry: JSON.parse(trimmed) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 本流の最後の assistant 行を、後ろから探す。assistant 以外の行と sidechain（作業者）の行は飛ばし、最初に当たった行で決める。
+ * 2つの探りの答えは、どちらもこの1行だけから決まる: `probeTurnEnd` は `stop_reason` が `tool_use` 以外の回、`probeToolUseStall` は `tool_use` の回を担当する。
+ */
+function lastMainAssistantLine(
+  lines: readonly string[],
+): { record: ProbedTranscriptLine; index: number } | undefined {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]!.trim();
-    if (line.length === 0) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const record = entry as {
-      type?: unknown;
-      isSidechain?: unknown;
-      timestamp?: unknown;
-      message?: { content?: unknown; stop_reason?: unknown };
-    };
+    const parsed = parseProbeLine(lines[index]!);
+    if (parsed === undefined) continue;
+    const record = parsed.entry as ProbedTranscriptLine;
     if (record.type !== 'assistant') continue;
     if (record.isSidechain === true) continue;
-
-    // **本文の有無でここを飛ばさない。**
-    const stopReason = record.message?.stop_reason;
-    if (typeof stopReason !== 'string') return undefined;
-    if (stopReason === 'tool_use') return undefined;
-
-    const body = turnEndBodyOf(record.message?.content);
-    return {
-      timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
-      stopReason,
-      tail: body.length > TURN_END_TAIL_EXCERPT ? body.slice(-TURN_END_TAIL_EXCERPT) : body,
-    };
+    return { record, index };
   }
   return undefined;
 }
@@ -149,55 +179,29 @@ function collectToolResultIds(content: unknown, sink: Set<string>): void {
  * 「前の行」の `tool_result` は別の（済んだ）呼び出しへの応答なので、採用した行より後ろだけを見る。
  */
 export function probeToolUseStall(transcript: string): ToolUseStallProbe | undefined {
-  const truncated = transcript.length > TURN_END_PROBE_CHARS;
-  const window = truncated ? transcript.slice(-TURN_END_PROBE_CHARS) : transcript;
-  const rawLines = window.split('\n');
-  const lines = truncated ? rawLines.slice(1) : rawLines;
+  const lines = probeWindowLines(transcript);
+  const found = lastMainAssistantLine(lines);
+  if (found === undefined) return undefined;
+  const { record, index } = found;
 
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]!.trim();
-    if (line.length === 0) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const record = entry as {
-      type?: unknown;
-      isSidechain?: unknown;
-      timestamp?: unknown;
-      message?: { content?: unknown; stop_reason?: unknown };
-    };
-    if (record.type !== 'assistant') continue;
-    if (record.isSidechain === true) continue;
+  if (record.message?.stop_reason !== 'tool_use') return undefined;
 
-    if (record.message?.stop_reason !== 'tool_use') return undefined;
+  const pending = toolUsesOf(record.message?.content);
+  if (pending.length === 0) return undefined;
 
-    const pending = toolUsesOf(record.message?.content);
-    if (pending.length === 0) return undefined;
-
-    const answered = new Set<string>();
-    for (let after = index + 1; after < lines.length; after += 1) {
-      const laterLine = lines[after]!.trim();
-      if (laterLine.length === 0) continue;
-      let laterEntry: unknown;
-      try {
-        laterEntry = JSON.parse(laterLine);
-      } catch {
-        continue;
-      }
-      const later = laterEntry as { message?: { content?: unknown } };
-      collectToolResultIds(later.message?.content, answered);
-    }
-
-    const unanswered = pending.filter((item) => !answered.has(item.id));
-    if (unanswered.length === 0) return undefined;
-
-    return {
-      timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
-      pending: unanswered,
-    };
+  const answered = new Set<string>();
+  for (let after = index + 1; after < lines.length; after += 1) {
+    const parsed = parseProbeLine(lines[after]!);
+    if (parsed === undefined) continue;
+    const later = parsed.entry as { message?: { content?: unknown } };
+    collectToolResultIds(later.message?.content, answered);
   }
-  return undefined;
+
+  const unanswered = pending.filter((item) => !answered.has(item.id));
+  if (unanswered.length === 0) return undefined;
+
+  return {
+    timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
+    pending: unanswered,
+  };
 }
