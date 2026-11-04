@@ -1125,16 +1125,13 @@ class Clone implements CloneHost {
   readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限` +
+      void this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限` +
           `（${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から` +
           '再び届くと、同じ拒否がもう一度日誌に載る。',
-      });
+      );
     },
   });
   readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
@@ -1147,16 +1144,13 @@ class Clone implements CloneHost {
   readonly #subagentToolUses = createRecentMap<string>({
     limit: SUBAGENT_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}サブエージェントの呼びの印が上限` +
+      void this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}サブエージェントの呼びの印が上限` +
           `（${SUBAGENT_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の呼びが後から道具に届くと、` +
           '本体の呼びとして扱われ、固定の文言の畳みの控えを更新しうる。',
-      });
+      );
     },
   });
   // tool_use_id が取れなかった事実を stderr へ出したか。デーモン1回につき1回だけ（セッションが替わっても戻さない: 取れない器は会話が替わっても取れないままで、同じ事実を会話ごとに繰り返さないため。本体扱いに倒すので、黙ると畳みの前提が崩れていても気づけない）
@@ -1167,16 +1161,13 @@ class Clone implements CloneHost {
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
     onForget: (ids) => {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限` +
+      void this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限` +
           `（${ALLOWED_BY_GRANT_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id への拒否が後から届いても、もう「hook の allow を` +
           '追い越した」とは検出できない。',
-      });
+      );
     },
   });
   // 日誌の書き込みは毎回行い、間引くのは注意書きの文言だけにする。上限や永続化は持たせない: 忘れても実害は注意書きがもう一度載るだけのため
@@ -1779,15 +1770,12 @@ class Clone implements CloneHost {
     if (dropped === 0) return 0;
 
     // id をここに並べない: 呼び手が既に自分の記録へ書いており、並べると 3,000 件規模の消し込みでこの1行が日誌を埋めるため
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
         `（待ち行列 ${fromQueue.length} 件、枠で保持していた分 ${fromHeld.length} 件）。` +
         '既に取り出して処理中のものは取り消していない。',
-    });
+    );
     return dropped;
   }
 
@@ -2302,12 +2290,10 @@ class Clone implements CloneHost {
             counts === ''
               ? ''
               : `${counts}（件数・回数は、この枠の区間でこのプロセスが数えた分だけ。器の入れ替えを跨いだ分と、ターンの成功で枠が降りた回の分は数えずに0へ戻るので、実際より少ない＝下限。）`;
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text: `${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
-          });
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
+          );
           continue;
         }
       }
@@ -3379,14 +3365,11 @@ class Clone implements CloneHost {
         (error: unknown) => {
           noteDroppedRecord('Task の自動起票', inboxEventShape(event), error);
           this.#humanTaskFailures.add(event.id);
-          return this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: ${event.id}）。` +
+          return this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: ${event.id}）。` +
               `必要なら \`task_add\` で載せ直すこと（理由: ${reasonOf(error)}）。`,
-          });
+          );
         },
       )
       .finally(() => {
@@ -4130,12 +4113,10 @@ class Clone implements CloneHost {
       this.#droppedSignals.splice(0, over);
       this.#droppedSignalsOverflowed += over;
     }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
-    });
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
+    );
   }
 
   // 蒸留のターンには載せない: 内部のターンで、拾い直すかを判断する場ではないため
@@ -4168,15 +4149,12 @@ class Clone implements CloneHost {
       return;
     }
     if (!reopened) return;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 ${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 ${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、` +
         '配達の印を未配達（pending）へ戻した。次の起動（器の入れ替え）の拾い直しでもう一度配る。' +
         '同じ承認でこの行が何度も出るなら、その回答の処理は決定的に失敗している。',
-    });
+    );
   }
 
   // `#restoreUnreadPass` の前に置かない: 前で `await` すると `claimPending()` の時機が1往復遅れ、直後に `post()` された合図を「前の器の未読」として拾って同じ合図を2回配達へ乗せるため
@@ -4762,12 +4740,9 @@ class Clone implements CloneHost {
   async #noteHeldEscalation(conversationId: string | null): Promise<void> {
     this.#heldEscalationStreak += 1;
     const streak = this.#heldEscalationStreak;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}会話を引き継がずに開いたこのセッションは、1度も答えを返せないまま、` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}会話を引き継がずに開いたこのセッションは、1度も答えを返せないまま、` +
         '1回目の長さの失敗では開き直さずに持ちこたえた（held）が、別の入力でもう一度同じ長さで落ちた。' +
         '⟹ 拒まれた入力がセッションに残って送り直されている可能性があるので、ここで畳んで新しい' +
         `セッションで開き直す（issue #955。答えを返せないままの畳み直しは連続 ${String(streak)} 回目）。` +
@@ -4776,7 +4751,7 @@ class Clone implements CloneHost {
             'システムプロンプトや記憶の焼き込みそのものが文脈窓に収まっていない可能性がある' +
             '（held と畳み直しの交互）。'
           : ''),
-    });
+    );
     if (conversationId !== null) return;
     try {
       // 会話の窓は `readConversationWindow` でだけ組む: `scripts/conversation-window-single-source.test.ts` が見るため
@@ -4845,16 +4820,13 @@ class Clone implements CloneHost {
         !this.#sessionAnswered;
       if (inAutoReopenedSession && !this.#autoReopenHalted) {
         this.#autoReopenHalted = true;
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた` +
             `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ 自動の開き直しはもうしない` +
             '（記憶の焼き込みや届き続ける合図そのものが弾かれている可能性。ターンは回り続ける。' +
             '解けるのは、このセッションが1度答えたとき、または人間が手動で開き直したとき）。',
-        });
+        );
         await this.#noteRefusalToHuman(
           conversationId,
           describeRefusalHalted(this.#refusalCategory),
@@ -4867,12 +4839,9 @@ class Clone implements CloneHost {
       if (this.#sdkSession.wantsReopen) return;
 
       const setting = resolveRefusalAutoReopen(this.#env);
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_DECISION_PREFIX}別の入力で ${String(streak)} 回続けて安全分類器に弾かれた` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}別の入力で ${String(streak)} 回続けて安全分類器に弾かれた` +
           `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ セッションごと弾かれていると見る。` +
           (setting.enabled
             ? '自動の開き直しが有効なので、開き直す。'
@@ -4880,7 +4849,7 @@ class Clone implements CloneHost {
           (setting.unrecognized === undefined
             ? ''
             : ` ⚠ ${REFUSAL_AUTO_REOPEN_ENV} の値「${setting.unrecognized}」は読めないので有効として扱った。`),
-      });
+      );
       if (!setting.enabled) {
         await this.#noteRefusalToHuman(
           conversationId,
@@ -4950,17 +4919,14 @@ class Clone implements CloneHost {
     } catch (error) {
       noteDroppedRecord('resume 素材の破棄', 'clone', error);
     }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が ` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が ` +
         `${String(this.#usageBlockedAccumulatedChars)} 文字（閾値 ` +
         `${String(UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD)}）に達した。同じ` +
         'セッションへ積み続けると枠が開いた頃には文脈が伸びきっているので、' +
         'ここでセッションを畳んで作り直す（Issue #1240）。',
-    });
+    );
     return 'folding';
   }
 
@@ -5372,28 +5338,22 @@ class Clone implements CloneHost {
         // 「一度も活動していない」は `hasUndistilledActivity` でなく `stores.sessions` の `cloneSessionId`（プロセスを跨いで残る）で見る: `hasUndistilledActivity` の初期値は `true` で、確認された活動と仮定を区別できないため。読めなかったら「活動が在った」側へ倒す: 読めないことを理由に記録を失わないため
         if (!this.#sdkSession.query) {
           if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
                 '（終わっていた）ので蒸留できない。未蒸留の活動の印は残したので、次にセッションが戻った' +
                 'とき（別の入口が新しいセッションを起こしたとき）に蒸留される。',
-            });
+            );
           }
           return;
         }
         // 前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない: 会話終了の直後の `stop()` は同じ文面になり、間にターンが無ければ文字どおりの重複のため。印が立っていれば必ず投げる
         if (!this.#distillMemory.hasUndistilledActivity) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
               '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。',
-          });
+          );
           return;
         }
         // 的の一覧は定期の棚卸しの刻みにだけ添える: 会話終了・shutdown の蒸留は会話を記憶へ移すのが本題のため。測れなかったら添えてもターンは止めない: 記憶が読めない回に棚卸しを落とすと、いちばん畳みたい状態で仕事が消えるため
@@ -5568,12 +5528,10 @@ class Clone implements CloneHost {
 
         // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
         if (claimed.status !== 'ok' && claimed.status !== 'missing') {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
-          });
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
+          );
           // 人間が消した（`withdrawn`）ものと、完了まで済んだ回（`completed`）は再試行しない
           if (
             event.cause !== 'manual' &&
@@ -5670,15 +5628,12 @@ class Clone implements CloneHost {
                 ? '手で起こした回なので再試行せず、次の起動か次の定刻で配り直される'
                 : `${String(retryDelayMs / 60_000)} 分後に配り直す。成功するまで最長 ` +
                   `${String(FAILED_TURN_RETRY_DELAYS_MS.at(-1)! / 60_000)} 分ごとに配り直し続ける`;
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
                 `ので「終わった」とは記録しない（引き受けた印は残る。${retryClause}）: ` +
                 outcome.reason,
-            });
+            );
             if (retryDelayMs !== undefined) {
               this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
               this.#onScheduledRunNotStarted?.(event.kind, retryDelayMs);
@@ -5942,14 +5897,11 @@ class Clone implements CloneHost {
         last = reasonOf(error);
       }
     }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${kind} の「終わった」を記録できなかった` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${kind} の「終わった」を記録できなかった` +
         `（引き受けた印が残るので、次の起動で配り直される）: ${last}`,
-    });
+    );
   }
 
   // 読みと記録を別操作にしない: 隙間に人間が消した・直した依頼が古い本文で走るため（確定はストア側の `claimRun` に閉じる）。版が入れ替わっていたら読み直す: 古い方で走らないことが最優先のため
@@ -6172,12 +6124,10 @@ class Clone implements CloneHost {
     // `manual` は除く: 人間が作り直しを頼んだ回は、既にあっても走らせる
     if (cause !== 'manual' && (await this.#dailyReportWritten(date))) {
       this.#dailyReportRetries.delete(date);
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_DECISION_PREFIX}${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: ${cause}）`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: ${cause}）`,
+      );
       return;
     }
     const range = localDayRange(date);
@@ -6209,18 +6159,15 @@ class Clone implements CloneHost {
       });
       existing = written.filter(isDailyReport).filter((entry) => entry.date === date);
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（${date}）で日誌を読めなかった` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（${date}）で日誌を読めなかった` +
           `（理由: ${reasonOf(error)}）。` +
           (outcome.status === 'failed'
             ? 'この日の日報が既にあるか確かめられなかったので、「作れなかった」の印は書かなかった。'
             : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
               'ならこの回の重複（消さずに日誌から辿ること）。'),
-      });
+      );
       if (outcome.status === 'failed') {
         // 印を書けなかっただけで、失敗した日報であることは変わらない: 再起動まで待たずに作り直す。
         this.#scheduleDailyReportRetry(date);
@@ -6646,14 +6593,11 @@ class Clone implements CloneHost {
     if (bytes === null) return sessionId;
     if (bytes <= RESUME_SIZE_BUDGET_BYTES) return sessionId;
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
         `（${bytes} バイト ＞ 予算 ${RESUME_SIZE_BUDGET_BYTES} バイト）`,
-    });
+    );
     return null;
   }
 
@@ -6719,15 +6663,12 @@ class Clone implements CloneHost {
     try {
       return (await this.#stores.mcpServers.read())?.mcpServers ?? {};
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで` +
           `このセッションを起こした（理由: ${reasonOf(error)}）。` +
           '登録を直すには人間に PUT /mcp-servers で置き直してもらう。',
-      });
+      );
       return {};
     }
   }
@@ -6744,15 +6685,12 @@ class Clone implements CloneHost {
       scopes: PLUGIN_SCOPES_FOR_CLONE,
     });
     for (const failure of result.failures) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、` +
           `${failure.name === null ? 'plugin の一覧が読めず、plugin' : `plugin「${failure.name}」`}なしで` +
           `このセッションを起こした（段: ${failure.stage}）。`,
-      });
+      );
     }
     // 展開先の中身が入れたときと違っていたので展開し直した（Issue #4798）。書き換えられた形跡として残す。
     for (const rebuilt of result.rebuilt) {
@@ -6765,12 +6703,10 @@ class Clone implements CloneHost {
               .join(
                 ', ',
               )}${rebuilt.files.length > 5 ? ` ほか${rebuilt.files.length - 5}件` : ''}）。`;
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_DECISION_PREFIX}plugin ${rebuilt.name} の${detail} #4798`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}plugin ${rebuilt.name} の${detail} #4798`,
+      );
     }
     const loaded = result.plugins.map((plugin) => basename(plugin.path)).sort();
     const removedSummary = summarizeRemovedForJournal(result.removed);
@@ -6779,15 +6715,12 @@ class Clone implements CloneHost {
       const hadAny = this.#lastPluginsDigest !== '';
       this.#lastPluginsDigest = loaded.length === 0 && removedSummary === null ? '' : digest;
       if (loaded.length > 0 || removedSummary !== null || hadAny) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
             `${loaded.length === 0 ? 'なし' : loaded.join(', ')}` +
             `${removedSummary === null ? '' : `。展開しなかったもの: ${removedSummary}`}`,
-        });
+        );
       }
     }
     return result.plugins.map((plugin) => ({
@@ -6829,12 +6762,7 @@ class Clone implements CloneHost {
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       onNote: (text) => {
-        void this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${EXCHANGE_KIND_DECISION_PREFIX}${text}`,
-        });
+        void this.#journalSelf('outbound', `${EXCHANGE_KIND_DECISION_PREFIX}${text}`);
       },
       resume,
       ...(this.#sessionStore === undefined ? {} : { sessionLog: this.#sessionStore }),
@@ -7129,14 +7057,11 @@ class Clone implements CloneHost {
   async #recordWorkerLimit(identity: string, label: string, raw: string): Promise<void> {
     const shown = redactErrorText(raw, this.#env);
     if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}作業者（${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}作業者（${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。` +
         `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）`,
-    });
+    );
   }
 
   /** 作業者が上限で落ちていれば知らせの段落を返す。相手（クローン本人・作業者ごと）に10分に1回まで。クローン本人に添えた回は日誌にも1行残す。投げたときは何も添えない。 */
@@ -7148,14 +7073,11 @@ class Clone implements CloneHost {
         Date.now(),
       );
       if (notice !== null && agentId === undefined) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
             'この道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。',
-        });
+        );
       }
       return notice?.text ?? null;
     } catch {
@@ -7355,14 +7277,11 @@ class Clone implements CloneHost {
       this.#recentDenials.fillHeadWord(toolUseId, denial.input);
       const later = denialInputShape(denial.input);
       if (later !== undefined) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
+        await this.#journalSelf(
+          'inbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
             `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${later}`,
-        });
+        );
       }
       return;
     }
@@ -7389,17 +7308,14 @@ class Clone implements CloneHost {
           ? 'クローン本体'
           : `作業者（${agentType ?? UNKNOWN_AGENT_TYPE}）`;
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}${tool} の実行が、確認へ上がらずに止められた${why}。` +
+    await this.#journalSelf(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}${tool} の実行が、確認へ上がらずに止められた${why}。` +
         `止められたのは ${actorLabel} の手（合図の出所: ${via}）。` +
         // 入力は形だけ残し値は残さない: 道具の入力には鍵が入りうる（`denial-shape.ts`）
         `入力の形: ${denialInputShape(denial.input) ?? denialInputAbsence(via)}。` +
         `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない。`,
-    });
+    );
   }
 
   /**
@@ -7426,15 +7342,12 @@ class Clone implements CloneHost {
         'この許可は、いまは効いていない可能性がある。'
       : '';
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
+    await this.#journalSelf(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
         `PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: ${via}）が拒否された${why}。` +
         guidance,
-    });
+    );
   }
 
   /**
@@ -7463,16 +7376,13 @@ class Clone implements CloneHost {
           'この許可は、いまは効いていない可能性がある。'
         : '';
 
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
+      await this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
           `PreToolUse が allow を返した作業者（agentId: ${agentId}）の呼び出し` +
           `（tool_use_id: ${toolUseId}）が、実行の決着も拒否の記録も無いまま、` +
           `その作業者の SubagentStop を迎えた。決着しなかった。${guidance}`,
-      });
+      );
     }
   }
 
@@ -8028,14 +7938,11 @@ class Clone implements CloneHost {
           });
           this.#distillMemory.recordReopenArchive(archived);
           // ここでも日誌へ残す: 退避中に次のセッションが init すると、init の行は「まだ終わっていない」としか書けず archive id が残らない。
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
               `${previousSessionId ?? '不明'}）: ${describeReopenArchive(archived)}`,
-          });
+          );
         }
         if (foldedForContextWindow && reopenRequest !== null) {
           // 文脈窓の畳みが先に退避した。開き直しの断りには退避先を載せられないので「無い」と言う。
@@ -8074,25 +7981,20 @@ class Clone implements CloneHost {
           const described = describePluginLoadForJournal(event.runtime.pluginLoad);
           if (described.digest !== this.#lastPluginLoadDigest) {
             this.#lastPluginLoadDigest = described.digest;
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text: `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`,
-            });
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`,
+            );
           }
         }
         // 人間の操作で開き直した後の最初の init なら、古い id → 新しい id を日誌に残す。
         const reopened = this.#distillMemory.takeReopenInit();
         if (reopened !== null) {
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
               ` → ${event.sessionId}（${describeReopenArchive(reopened.archive)}）`,
-          });
+          );
         }
         return;
       }
@@ -8134,15 +8036,12 @@ class Clone implements CloneHost {
         } else {
           const crossFold = this.#rateLimitCrossFold.get(memoryKey);
           if (crossFold !== undefined && crossFold.folded.size > 0) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
+            await this.#journalSelf(
+              'outbound',
+              `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
                 `${crossFold.folded.size} 本の異なる会話が当たっている` +
                 '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
-            });
+            );
           }
           this.#rateLimitCrossFold.set(memoryKey, {
             lastConversationId: conversationId,
