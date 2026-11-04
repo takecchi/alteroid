@@ -149,13 +149,7 @@ export const daemonState = pgTable('daemon_state', {
   value: text('value'),
 });
 
-// 消さない: 巻き戻した旧デーモンがここを読むので、消すと環境が黙って痩せる。新版は書かない（`clear()` だけは空にする）。
-export const envProfile = pgTable('env_profile', {
-  id: text('id').primaryKey(),
-  script: text('script').notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
-});
-
+// 旧表 `env_profile`（1本の本文だけを持つ旧形）は廃止した。移行（`migrate.ts`）が在れば落とす。
 // 行を持たせる: 本文の中のシェル分岐では効かせ分けられない（app と runner の違いが本文から見えず、同じ本文が両方へ降りる）。
 // `scope` は確認・許可の話ではなくプロセストポロジーの表現（`packages/core/src/store.ts` の `EnvProfileEntry`）。
 // runner から読ませない: runner へはデーモンが制御面で降ろす。

@@ -105,14 +105,6 @@ export const STATEMENTS = [
      value text
    )`,
 
-  // 消さない: 巻き戻した旧デーモンがここを読むので、消すと環境が黙って痩せる。新版は書かない（`clear()` だけは
-  // 空にする: 人間が外したものが巻き戻した旧版で蘇らないように）。
-  `create table if not exists env_profile (
-     id text primary key,
-     script text not null,
-     updated_at timestamptz not null default now()
-   )`,
-
   `create table if not exists session_entries (
      seq bigserial primary key,
      project_key text not null,
@@ -371,15 +363,10 @@ export const STATEMENTS = [
      updated_at timestamptz not null default now()
    )`,
 
-  // 「1度だけ」の印を `daemon_state` に置く: `on conflict do nothing` だけだと、人間が `default` を外したあとの起動で
-  // 旧表の本文（外したはずの鍵を含みうる）が毎回蘇る。旧表が空でも印は立てる（のちに旧版が書いたものを拾い直さない）。
-  `insert into env_profile_entries (name, script, scope, updated_at)
-   select 'default', script, 'all', updated_at from env_profile
-    where id = 'default' and btrim(script) <> ''
-      and not exists (select 1 from daemon_state where key = 'env_profile_entries_migrated')
-   on conflict (name) do nothing`,
-  `insert into daemon_state (key, value) values ('env_profile_entries_migrated', '1')
-   on conflict (key) do nothing`,
+  // 旧表 `env_profile`（実行環境のプロファイルの旧形。1本の本文だけを持っていた）は廃止した: 在れば落とす。
+  // 中身は `env_profile_entries` へ写し済みで、その前の版のデーモンへ巻き戻すことはしない（身内だけで使っている）。
+  // 写したときの印（`daemon_state` の `env_profile_entries_migrated`）は、既存の DB に残っていても読む所が無いので消さない。
+  `drop table if exists env_profile`,
 
   // 専用の列にする: jsonb の `->>'withdrawnAt'` より `answered_at` と揃った形で `isNull` で絞れる（`jobs.ts` の `where` 節）。
   `alter table approvals add column if not exists withdrawn_at timestamptz`,

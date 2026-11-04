@@ -479,7 +479,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | ScheduleStore | 継続する依頼（名前・周期・依頼の本文・前回動いた時刻） | JSON | PostgreSQL |
 | TaskStore | 引き受けた仕事の待ち行列（起点・起点の会話・状態・並び・題と依頼の本文・閉じた記録・「続く」の印） | JSON | PostgreSQL |
 | PracticeStore | 仕事のやり方（slug・種類・題・本文。#1055 段3） | `practices.json`（1枚） | PostgreSQL（列に切って保存） |
-| ProfileStore | 実行環境プロファイル（`.zprofile` 相当。名前付きのシェルスクリプトの行ごとに撒く先を持つ） | `profile.d/<name>.sh`（0600）＋`<name>.scope` | PostgreSQL（1名前1行。旧 `env_profile` は消さず `default` 行へ1度だけ写す） |
+| ProfileStore | 実行環境プロファイル（`.zprofile` 相当。名前付きのシェルスクリプトの行ごとに撒く先を持つ） | `profile.d/<name>.sh`（0600）＋`<name>.scope` | PostgreSQL（1名前1行の `env_profile_entries`。旧表 `env_profile` は写し終えたので廃止し、移行で落とす） |
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ）と、外したが runner から外し終えていない名前 | `credentials.json`（0600。外した名前は同じファイルの `pendingRemovals`） | PostgreSQL（1名前1行。外した名前は `manager_credential_removals`） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |

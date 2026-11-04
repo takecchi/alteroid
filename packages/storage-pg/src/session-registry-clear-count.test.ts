@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
@@ -51,17 +51,6 @@ describe('PgSessionRegistry.clear() — 4つの欄だけを数え、数えた欄
       .from(daemonState)
       .where(inArray(daemonState.key, ['clone_transcript_grave', 'clone_lost_session']));
     expect(left).toHaveLength(2);
-  });
-
-  it('migrate が置いた「旧プロファイルを写し終えた」印は消さない', async () => {
-    await stores.sessions.setProjectKey('pk');
-    await stores.sessions.clear();
-
-    const marker = await db
-      .select()
-      .from(daemonState)
-      .where(eq(daemonState.key, 'env_profile_entries_migrated'));
-    expect(marker).toHaveLength(1);
   });
 });
 

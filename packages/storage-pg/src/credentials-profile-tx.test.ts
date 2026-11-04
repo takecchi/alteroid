@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
-import { envProfile, managerCredentials } from './schema.js';
+import { managerCredentials } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 // 複数文の書き込みを1つのトランザクションで行う（#4727）。2文目で失敗を仕込み、1文目が確定していないことを見る
@@ -46,32 +46,5 @@ describe('CredentialVaultStore.put() — 削除と書き込みを1つのトラ�
 
     const rows = await db.select().from(managerCredentials);
     expect(rows.map((row) => row.name).sort()).toEqual(['OLD_KEY']);
-  });
-});
-
-describe('ProfileStore.clear() — 旧表と新表を1つのトランザクションで空にする（#4727）', () => {
-  it('⭐ 新表の DELETE が落ちたら、旧表の DELETE もロールバックされる', async () => {
-    await db.insert(envProfile).values({ id: 'default', script: 'export A=1' });
-    await stores.profile.set('A', 'export A=1', 'all');
-    await client.exec(`
-      CREATE OR REPLACE FUNCTION forbid_profile_entries_delete() RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'forbid_profile_entries_delete: 仕込んだ失敗（issue #4727 の歯）';
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
-    await client.exec(`
-      CREATE TRIGGER env_profile_entries_forbid_delete
-        BEFORE DELETE ON env_profile_entries
-        FOR EACH ROW
-        EXECUTE FUNCTION forbid_profile_entries_delete();
-    `);
-
-    await expect(stores.profile.clear()).rejects.toThrow(
-      /Failed query: delete from "env_profile_entries"/,
-    );
-
-    const legacy = await db.select().from(envProfile);
-    expect(legacy.map((row) => row.id)).toEqual(['default']);
   });
 });

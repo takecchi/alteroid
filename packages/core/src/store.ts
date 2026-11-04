@@ -1471,7 +1471,7 @@ export interface CredentialVaultStore {
 
 /**
  * 認証トークンのプール。回さない: 検知も切替もここには無く、ここが持つのは置き場と、置いたものを読み書きする口だけ。
- * `env_profile` と同じ形（正本はデーモンが持ち、器違いは挙動を変えない）。`Stores` の一員にするのは、環境を作り直しても残るため。
+ * 実行環境のプロファイル（`ProfileStore`）と同じ形（正本はデーモンが持ち、器違いは挙動を変えない）。`Stores` の一員にするのは、環境を作り直しても残るため。
  */
 export interface TokenPoolStore {
   /**
