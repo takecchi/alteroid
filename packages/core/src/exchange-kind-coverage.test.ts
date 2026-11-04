@@ -320,8 +320,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#foldRecoveredNotice': 'thinning',
     // `#handle` の case を種類ごとのメソッドへ出した。書き込みは出した先の `#handleDistill`（蒸留の見送り）と `#handleTimer`（定期の依頼）に移った
     '#handleDistill': 'thinning',
-    '#handleTimer': 'decision,failure',
+    '#handleTimer': 'decision',
     '#journalIncomingBody': 'reply',
+    // `#restoreUnreadPass` の live の見出しの1行を出した先
+    '#journalRedeliveredLive': 'recovery',
     '#journalReply': 'reply',
     '#journalRestoreUnreadPassEnd': 'gauge',
     '#journalRestoreUnreadPassStart': 'gauge',
@@ -355,9 +357,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#reportFailure': 'failure,human,thinning',
     '#resetDigestDelta': 'decision',
     '#restoreFoldStateOnce': 'gauge',
-    '#restoreUnreadPass': 'recovery,thinning',
+    '#restoreUnreadPass': 'thinning',
     '#resumeCandidateWithinBudget': 'decision',
     '#salvageTranscript': 'failure,recovery',
+    // `#handleTimer` のターンの後の完了の記録を出した先（失敗の再試行の1行）
+    '#settleTimerRun': 'failure',
     '#stopRunningTurn': 'decision,failure',
     '#withFreshMemory': 'gauge',
     '#withdrawQueued': 'decision',
