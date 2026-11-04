@@ -760,6 +760,250 @@ function describeMemoryMoveResult(args: {
   ].join('\n');
 }
 
+type MemoryFrontmatterSetWritten = Awaited<ReturnType<Stores['persona']['write']>>;
+
+// `memory_frontmatter_set` の slug と「渡したキーが1つも無い」の断り（無ければ null）
+function describeMemoryFrontmatterSetBasicViolation(
+  slug: string,
+  description: string | undefined,
+  type: string | undefined,
+  parent: string | undefined,
+): string | null {
+  if (!memorySlugSchema.safeParse(slug).success) {
+    return `記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`;
+  }
+  if (description === undefined && type === undefined && parent === undefined) {
+    return (
+      `記憶 ${slug} の frontmatter を直すには description・type・parent のうち少なくとも1つを渡すこと` +
+      '（何も変わっていない）。'
+    );
+  }
+  return null;
+}
+
+// 改行を含む値は入口（ストアを読む前）で断る: 値の続きが別のキー・閉じの `---`・本文の1行目として紛れ込むため
+// 断りには文字数・改行の位置・抜粋を名乗らせる: 呼び手が改行を探し続けて直し方を誤らないため
+function describeMemoryFrontmatterLineBreakViolation(
+  slug: string,
+  description: string | undefined,
+  type: string | undefined,
+  parent: string | undefined,
+): string | null {
+  const lineBreakInputs: readonly ['description' | 'type' | 'parent', string | undefined][] = [
+    ['description', description],
+    ['type', type],
+    ['parent', parent],
+  ];
+  for (const [lineBreakKey, value] of lineBreakInputs) {
+    if (value === undefined) continue;
+    const lineBreak = findMemoryFrontmatterLineBreak(value);
+    if (lineBreak === null) continue;
+    const charLabel = lineBreak.char === '\r' ? '\\r' : '\\n';
+    return (
+      `記憶 ${slug} の frontmatter を更新できない——${lineBreakKey} に改行（\\n / \\r）を含む値は渡せない` +
+      '（frontmatter は1キー1行で書く約束なので、改行が入ると値の続きが本文や他のキーと混ざる）。' +
+      `渡された ${lineBreakKey} は全 ${value.length} 文字、${lineBreak.position} 文字目に ${charLabel} が在る` +
+      `（前後の抜粋: "${lineBreak.excerpt}"）。何も変わっていない。`
+    );
+  }
+  return null;
+}
+
+// `type` は自由文字列で受けない: 綴り違いが書かれると区分は変わらないのに `kindChangeNote` が空になり、書き手に「変えた」つもりだけが残るため
+function describeMemoryFrontmatterTypeViolation(
+  slug: string,
+  type: string | undefined,
+): string | null {
+  if (type !== undefined && !isKnownMemoryDocKind(type)) {
+    return (
+      `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact か indexed のいずれかだけである` +
+      `（渡された値: ${JSON.stringify(type)}）。何も変わっていない。`
+    );
+  }
+  return null;
+}
+
+// 引数の検査: slug・渡したキーが無い → 改行 → type の綴り、の順（ストアは読まない）
+function describeMemoryFrontmatterSetArgsViolation(
+  slug: string,
+  description: string | undefined,
+  type: string | undefined,
+  parent: string | undefined,
+): string | null {
+  const basic = describeMemoryFrontmatterSetBasicViolation(slug, description, type, parent);
+  if (basic !== null) return basic;
+  const lineBreak = describeMemoryFrontmatterLineBreakViolation(slug, description, type, parent);
+  if (lineBreak !== null) return lineBreak;
+  return describeMemoryFrontmatterTypeViolation(slug, type);
+}
+
+// 文書が無いときの断り文
+function describeMemoryFrontmatterNotFound(slug: string): string {
+  return (
+    `記憶 ${slug} は存在しない（frontmatter を直せない。新規作成は memory_write を使うこと。` +
+    '何も変わっていない）。'
+  );
+}
+
+// base_version の検査（渡されていなければ断る）
+function checkMemoryFrontmatterBaseVersion(
+  slug: string,
+  baseVersion: string | undefined,
+): { kind: 'ok'; baseVersion: string } | MemoryMoveRefusal {
+  if (baseVersion === undefined) {
+    return {
+      kind: 'refused',
+      body:
+        `記憶 ${slug} の frontmatter を直すには、先に memory_read slug=${slug} で読み、` +
+        '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+        '（読んだ後に人間が要旨などを直していても、渡したキーで上書きしないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
+    };
+  }
+  return { kind: 'ok', baseVersion };
+}
+
+// 直す前の frontmatter の検査（malformed なら断る）
+function checkMemoryFrontmatterPrior(
+  slug: string,
+  content: string,
+): { kind: 'ok'; priorFrontmatter: MemoryMoveFrontmatter } | MemoryMoveRefusal {
+  const priorFrontmatter = parseMemoryFrontmatter(content);
+  if (priorFrontmatter.kind === 'malformed') {
+    return {
+      kind: 'refused',
+      body:
+        `記憶 ${slug} の frontmatter が壊れている（malformed）。ここでは直さない——` +
+        '機械が推測して組み直すと本文を食う経路ができるため。memory_write で全文を書き直すか、' +
+        '人間に確認を通すこと（何も変わっていない）。',
+    };
+  }
+  return { kind: 'ok', priorFrontmatter };
+}
+
+// 版つきで書く。競合（MemoryConflictError）だけを断りにして返し、ほかの失敗はそのまま投げる
+async function writeMemoryFrontmatter(args: {
+  stores: Stores;
+  slug: string;
+  nextContent: string;
+  baseVersion: string;
+}): Promise<{ kind: 'written'; written: MemoryFrontmatterSetWritten } | MemoryMoveRefusal> {
+  const { stores, slug, nextContent, baseVersion } = args;
+  let written;
+  try {
+    written = await stores.persona.write(slug, nextContent, { ifMatch: baseVersion });
+  } catch (error) {
+    if (error instanceof MemoryConflictError) {
+      return {
+        kind: 'refused',
+        body: describeMemoryConflict(slug, 'frontmatter の更新', error.current),
+      };
+    }
+    throw error;
+  }
+  return { kind: 'written', written };
+}
+
+// 書いた後の日誌（frontmatter の更新）
+async function journalMemoryFrontmatterSet(args: {
+  stores: Stores;
+  slug: string;
+  cause: 'distill' | 'clone';
+  existingContent: string;
+  writtenContent: string;
+  summary: string;
+}): Promise<void> {
+  const { stores, slug, cause, existingContent, writtenContent, summary } = args;
+  await appendJournalOrThrow(
+    'memory_frontmatter_set',
+    stores.journal,
+    {
+      type: 'memory_update',
+      slug,
+      cause,
+      action: 'describe',
+      bytesBefore: Buffer.byteLength(existingContent, 'utf8'),
+      bytesAfter: Buffer.byteLength(writtenContent, 'utf8'),
+      summary,
+    },
+    'act-completed',
+  );
+}
+
+// 区分の名前（応答の「区分が変わった」に出す）
+function describeMemoryDocKindLabel(kind: MemoryDocKind): string {
+  switch (kind) {
+    case 'premise':
+      return 'premise（要旨＋節の目次が載る）';
+    case 'indexed':
+      return 'indexed（要旨だけが載る。節の目次は載らない）';
+    case 'fact':
+      return 'fact（目次の1行だけ載る）';
+    default:
+      return assertNeverMemoryDocKind(kind);
+  }
+}
+
+// 区分ごとの、次のターンからの載り方
+function describeMemoryNextKindLoad(kind: MemoryDocKind): string {
+  switch (kind) {
+    case 'fact':
+      return '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。';
+    case 'indexed':
+      return (
+        '次のターンから、この文書は要旨だけがプロンプトへ載る（節の目次は載らない。' +
+        '節を確かめるには memory_outline を呼び、memory_section_read で開くこと）。'
+      );
+    case 'premise':
+      return '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。';
+    default:
+      return assertNeverMemoryDocKind(kind);
+  }
+}
+
+// 区分が変わったときの注記（変わらなければ空文字列）
+function describeMemoryFrontmatterKindChange(
+  priorKind: MemoryDocKind,
+  nextKind: MemoryDocKind,
+): string {
+  return priorKind === nextKind
+    ? ''
+    : `\n\n区分が変わった: ${describeMemoryDocKindLabel(priorKind)} → ${describeMemoryDocKindLabel(nextKind)}。` +
+        describeMemoryNextKindLoad(nextKind);
+}
+
+// 書いた後の記憶（読み直し済み）から、床・再注入の見込み・成長の注記を作る
+function describeMemoryFrontmatterAftermath(args: {
+  context: ToolContext;
+  slug: string;
+  memoryBefore: readonly MemoryPart[];
+  memoryAfter: readonly MemoryPart[];
+  existing: MemoryMoveDocument;
+  written: MemoryFrontmatterSetWritten;
+}): { floor: string; reinjection: string; growth: string } {
+  const { context, slug, memoryBefore, memoryAfter, existing, written } = args;
+  const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
+  const reinjection = describeMemoryReinjectionEstimate(
+    [written],
+    memoryAfter,
+    seenBefore(slug, existing),
+  );
+  const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+    written.content,
+  ]);
+  return { floor, reinjection, growth };
+}
+
+// 更新できたときの応答の全体
+function renderMemoryFrontmatterSetResult(args: {
+  slug: string;
+  diff: string;
+  kindChangeNote: string;
+  aftermath: { floor: string; reinjection: string; growth: string };
+}): string {
+  const { slug, diff, kindChangeNote, aftermath } = args;
+  return `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${aftermath.floor}\n\n${aftermath.reinjection}\n\n${aftermath.growth}`;
+}
+
 export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, memoryCause } = shared;
   return [
@@ -1159,154 +1403,66 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ slug, description, type, parent, summary, base_version: baseVersion }) => {
-        if (!memorySlugSchema.safeParse(slug).success) {
-          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
-        }
-        if (description === undefined && type === undefined && parent === undefined) {
-          return text(
-            `記憶 ${slug} の frontmatter を直すには description・type・parent のうち少なくとも1つを渡すこと` +
-              '（何も変わっていない）。',
-          );
-        }
-
-        // 改行を含む値は入口（ストアを読む前）で断る: 値の続きが別のキー・閉じの `---`・本文の1行目として紛れ込むため
-        // 断りには文字数・改行の位置・抜粋を名乗らせる: 呼び手が改行を探し続けて直し方を誤らないため
-        const lineBreakInputs: readonly ['description' | 'type' | 'parent', string | undefined][] =
-          [
-            ['description', description],
-            ['type', type],
-            ['parent', parent],
-          ];
-        for (const [lineBreakKey, value] of lineBreakInputs) {
-          if (value === undefined) continue;
-          const lineBreak = findMemoryFrontmatterLineBreak(value);
-          if (lineBreak === null) continue;
-          const charLabel = lineBreak.char === '\r' ? '\\r' : '\\n';
-          return text(
-            `記憶 ${slug} の frontmatter を更新できない——${lineBreakKey} に改行（\\n / \\r）を含む値は渡せない` +
-              '（frontmatter は1キー1行で書く約束なので、改行が入ると値の続きが本文や他のキーと混ざる）。' +
-              `渡された ${lineBreakKey} は全 ${value.length} 文字、${lineBreak.position} 文字目に ${charLabel} が在る` +
-              `（前後の抜粋: "${lineBreak.excerpt}"）。何も変わっていない。`,
-          );
-        }
-
-        // `type` は自由文字列で受けない: 綴り違いが書かれると区分は変わらないのに `kindChangeNote` が空になり、書き手に「変えた」つもりだけが残るため
-        if (type !== undefined && !isKnownMemoryDocKind(type)) {
-          return text(
-            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact か indexed のいずれかだけである` +
-              `（渡された値: ${JSON.stringify(type)}）。何も変わっていない。`,
-          );
-        }
+        const argsViolation = describeMemoryFrontmatterSetArgsViolation(
+          slug,
+          description,
+          type,
+          parent,
+        );
+        if (argsViolation !== null) return text(argsViolation);
 
         const existing = await stores.persona.read(slug);
-        if (existing === null) {
-          return text(
-            `記憶 ${slug} は存在しない（frontmatter を直せない。新規作成は memory_write を使うこと。` +
-              '何も変わっていない）。',
-          );
-        }
+        if (existing === null) return text(describeMemoryFrontmatterNotFound(slug));
 
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, 'frontmatter の更新');
         if (denial !== null) return text(denial);
 
-        if (baseVersion === undefined) {
-          return text(
-            `記憶 ${slug} の frontmatter を直すには、先に memory_read slug=${slug} で読み、` +
-              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
-              '（読んだ後に人間が要旨などを直していても、渡したキーで上書きしないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
-          );
-        }
+        const versionCheck = checkMemoryFrontmatterBaseVersion(slug, baseVersion);
+        if (versionCheck.kind === 'refused') return text(versionCheck.body);
 
-        const priorFrontmatter = parseMemoryFrontmatter(existing.content);
-        if (priorFrontmatter.kind === 'malformed') {
-          return text(
-            `記憶 ${slug} の frontmatter が壊れている（malformed）。ここでは直さない——` +
-              '機械が推測して組み直すと本文を食う経路ができるため。memory_write で全文を書き直すか、' +
-              '人間に確認を通すこと（何も変わっていない）。',
-          );
-        }
+        const priorCheck = checkMemoryFrontmatterPrior(slug, existing.content);
+        if (priorCheck.kind === 'refused') return text(priorCheck.body);
 
-        const priorKind = resolveMemoryDocKind(priorFrontmatter);
+        const priorKind = resolveMemoryDocKind(priorCheck.priorFrontmatter);
         const nextContent = applyMemoryFrontmatterPatch(existing.content, {
           description,
           type,
           parent,
         });
         const memoryBefore = await stores.persona.documents();
-        let written;
-        try {
-          written = await stores.persona.write(slug, nextContent, { ifMatch: baseVersion });
-        } catch (error) {
-          if (error instanceof MemoryConflictError) {
-            return text(describeMemoryConflict(slug, 'frontmatter の更新', error.current));
-          }
-          throw error;
-        }
+        const writeResult = await writeMemoryFrontmatter({
+          stores,
+          slug,
+          nextContent,
+          baseVersion: versionCheck.baseVersion,
+        });
+        if (writeResult.kind === 'refused') return text(writeResult.body);
+        const { written } = writeResult;
         const memoryAfter = await stores.persona.documents();
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
-        await appendJournalOrThrow(
-          'memory_frontmatter_set',
-          stores.journal,
-          {
-            type: 'memory_update',
-            slug,
-            cause,
-            action: 'describe',
-            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(written.content, 'utf8'),
-            summary,
-          },
-          'act-completed',
-        );
+        await journalMemoryFrontmatterSet({
+          stores,
+          slug,
+          cause,
+          existingContent: existing.content,
+          writtenContent: written.content,
+          summary,
+        });
 
         const diff = describeMemoryWriteDiff(existing.content, written.content);
-        const kindLabel = (kind: MemoryDocKind): string => {
-          switch (kind) {
-            case 'premise':
-              return 'premise（要旨＋節の目次が載る）';
-            case 'indexed':
-              return 'indexed（要旨だけが載る。節の目次は載らない）';
-            case 'fact':
-              return 'fact（目次の1行だけ載る）';
-            default:
-              return assertNeverMemoryDocKind(kind);
-          }
-        };
-        const describeNextKindLoad = (kind: MemoryDocKind): string => {
-          switch (kind) {
-            case 'fact':
-              return '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。';
-            case 'indexed':
-              return (
-                '次のターンから、この文書は要旨だけがプロンプトへ載る（節の目次は載らない。' +
-                '節を確かめるには memory_outline を呼び、memory_section_read で開くこと）。'
-              );
-            case 'premise':
-              return '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。';
-            default:
-              return assertNeverMemoryDocKind(kind);
-          }
-        };
-        const kindChangeNote =
-          priorKind === nextKind
-            ? ''
-            : `\n\n区分が変わった: ${kindLabel(priorKind)} → ${kindLabel(nextKind)}。` +
-              describeNextKindLoad(nextKind);
-        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
-        const reinjection = describeMemoryReinjectionEstimate(
-          [written],
+        const kindChangeNote = describeMemoryFrontmatterKindChange(priorKind, nextKind);
+        const aftermath = describeMemoryFrontmatterAftermath({
+          context,
+          slug,
+          memoryBefore,
           memoryAfter,
-          seenBefore(slug, existing),
-        );
-        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
-          written.content,
-        ]);
+          existing,
+          written,
+        });
 
-        return text(
-          `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
-        );
+        return text(renderMemoryFrontmatterSetResult({ slug, diff, kindChangeNote, aftermath }));
       },
     ),
 
