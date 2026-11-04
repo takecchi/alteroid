@@ -128,8 +128,8 @@
     "journal-fails-final#2": 113,
     "forget-absent#1": 38,
     "forget-absent#2": 113,
-    "forget-throws": 122,
-    "forget-throws-replace": 189
+    "forget-throws": 119,
+    "forget-throws-replace": 186
   },
   "scenarios": {
     "arg-kind#1": {
@@ -7388,8 +7388,8 @@
     },
     "forget-throws": {
       "output": {
-        "length": 122,
-        "text": "weekly-review を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、置き換え前の版と同じとして畳まれることがある）",
+        "length": 119,
+        "text": "weekly-review を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、以前の版と同じとして畳まれることがある）",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -7462,8 +7462,8 @@
     },
     "forget-throws-replace": {
       "output": {
-        "length": 189,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、置き換え前の版と同じとして畳まれることがある）",
+        "length": 186,
+        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、以前の版と同じとして畳まれることがある）",
         "isError": false,
         "thrown": false,
         "errorName": null

@@ -555,7 +555,7 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
         } catch (error) {
           forgetNote =
             `（定期の tick の控えを捨てられなかった: ${collapseErrorCause(error)}。` +
-            '次の tick で、置き換え前の版と同じとして畳まれることがある）';
+            '次の tick で、以前の版と同じとして畳まれることがある）';
         }
         await appendJournalOrDrop(
           'schedule_create',

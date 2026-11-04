@@ -1386,7 +1386,7 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(text('forget-throws')).toContain(
       `で仕込んだ。時刻が来たら依頼の本文とともに届く。${FORGET_NOTE}`,
     );
-    expect(text('forget-throws')).toMatch(/置き換え前の版と同じとして畳まれることがある）$/);
+    expect(text('forget-throws')).toMatch(/以前の版と同じとして畳まれることがある）$/);
     expect(step('forget-throws')?.output.isError).toBe(false);
     expect(step('forget-throws')?.journal).toHaveLength(2);
     expect(startsWith('forget-throws', CREATED)).toBe(1);
