@@ -151,7 +151,16 @@ interface GitCall {
   readonly command?: string;
 }
 
-async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promise<GitResult> {
+/**
+ * `git()`・`streamGit()` の期限と中断。呼び手の中断（呼ぶ前から中断済みを含む）と期限切れのどちらでも `controller` を止め、`timedOut()` を立てる。
+ * 呼び手は子の `signal` に `controller.signal` を渡し、終わったら（`finally` で）必ず `dispose()` を呼ぶ: 期限のタイマーと、呼び手の `abort` の受け手を残さないため。
+ * 出力の溢れで止めるときも `controller.abort()` を使うが、`timedOut()` は立てない（溢れと期限切れを呼び手が区別するため）。
+ */
+function gitDeadline(call: GitCall): {
+  readonly controller: AbortController;
+  readonly timedOut: () => boolean;
+  readonly dispose: () => void;
+} {
   const controller = new AbortController();
   let timedOut = false;
   const onCallerAbort = (): void => {
@@ -165,6 +174,18 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
     controller.abort();
   }, call.timeoutMs ?? GIT_TIMEOUT_MS);
   timer.unref?.();
+  return {
+    controller,
+    timedOut: () => timedOut,
+    dispose: () => {
+      clearTimeout(timer);
+      call.signal?.removeEventListener('abort', onCallerAbort);
+    },
+  };
+}
+
+async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promise<GitResult> {
+  const { controller, timedOut, dispose } = gitDeadline(call);
   const maxBytes = call.maxBytes ?? LIST_MAX_BYTES;
   let overflow = false;
   try {
@@ -197,12 +218,11 @@ async function git(spawn: ProcessSpawnFn, args: string[], call: GitCall): Promis
       child.on('error', reject);
       child.on('close', (code) => resolve(code));
     });
-    return { stdout, stderr, exitCode, timedOut, overflow };
+    return { stdout, stderr, exitCode, timedOut: timedOut(), overflow };
   } catch {
-    return { stdout: '', stderr: '', exitCode: null, timedOut, overflow };
+    return { stdout: '', stderr: '', exitCode: null, timedOut: timedOut(), overflow };
   } finally {
-    clearTimeout(timer);
-    call.signal?.removeEventListener('abort', onCallerAbort);
+    dispose();
   }
 }
 
@@ -225,19 +245,7 @@ async function streamGit(
   call: GitCall & { readonly maxBytes: number },
   onChunk: (text: string) => void,
 ): Promise<GitStreamResult> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const onCallerAbort = (): void => {
-    timedOut = true;
-    controller.abort();
-  };
-  if (call.signal?.aborted === true) onCallerAbort();
-  call.signal?.addEventListener('abort', onCallerAbort, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, call.timeoutMs ?? GIT_TIMEOUT_MS);
-  timer.unref?.();
+  const { controller, timedOut, dispose } = gitDeadline(call);
   let overflow = false;
   let bytes = 0;
   try {
@@ -262,12 +270,11 @@ async function streamGit(
       child.on('error', reject);
       child.on('close', (code) => resolve(code));
     });
-    return { exitCode, timedOut, overflow, bytes };
+    return { exitCode, timedOut: timedOut(), overflow, bytes };
   } catch {
-    return { exitCode: null, timedOut, overflow, bytes };
+    return { exitCode: null, timedOut: timedOut(), overflow, bytes };
   } finally {
-    clearTimeout(timer);
-    call.signal?.removeEventListener('abort', onCallerAbort);
+    dispose();
   }
 }
 
