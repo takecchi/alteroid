@@ -461,6 +461,457 @@ function safeJson(value: unknown): string {
   }
 }
 
+type JournalStores = CloneToolsShared['stores'];
+
+type JournalListQuery = NonNullable<Parameters<JournalStore['listPage']>[0]>;
+
+type JournalPageResult = Awaited<ReturnType<JournalStore['listPage']>>;
+
+// `journal_read` の一覧（id を渡さない読み方）の引数。`limit` と `offset` の検査は呼び元で済んでいる
+type JournalListArgs = {
+  limit: number | undefined;
+  since: string | undefined;
+  until: string | undefined;
+  types: JournalListQuery['types'];
+  q: string | undefined;
+  withFilter: JournalListQuery['with'];
+  afterId: string | undefined;
+  afterAt: string | undefined;
+  order: 'asc' | 'desc' | undefined;
+};
+
+// 一覧の出力を組むのに要る、読んだあとの値（取れた頁・探した範囲・地平の注記）
+type JournalListOutcome = {
+  entries: JournalEntry[];
+  moreBeyond: { id: string; at: string } | null;
+  coverage: JournalSearchCoverage;
+  budgetSeconds: number;
+  horizonNoteLines: string[];
+};
+
+// 引数の検査（id の有無にかかわらず先に行う）: limit → offset → q と order=asc の組、の順
+function checkJournalReadArgs(args: {
+  limit: number | undefined;
+  offset: number;
+  id: string | undefined;
+  q: string | undefined;
+  order: 'asc' | 'desc' | undefined;
+}): { kind: 'ok' } | { kind: 'refused'; body: string } {
+  const { limit, offset, id, q, order } = args;
+  const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
+  if (limitError !== null) return { kind: 'refused', body: limitError };
+  const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+  if (offsetError !== null) return { kind: 'refused', body: offsetError };
+  // 語の検索は新しい側から1日ずつ遡る前提（続きの案内・coverage の until もその向き）なので、asc とは組まない。`q=`（空）は絞らないので断らない。id の全文読みは他の条件を無視するので対象外
+  if (id === undefined && order === 'asc' && q !== undefined && q !== '') {
+    return {
+      kind: 'refused',
+      body:
+        'q は新しい側から遡る検索で、order=asc とは合わない。古い側から読むなら since / until で窓を閉じること。' +
+        '**日誌は読んでいない。**',
+    };
+  }
+  return { kind: 'ok' };
+}
+
+// ---- 読み方1: id で1件を全文で読む ----
+
+async function readJournalEntryById(
+  stores: JournalStores,
+  id: string,
+  offset: number,
+): Promise<string> {
+  let entry: JournalEntry | null;
+  try {
+    entry = await stores.journal.get(id);
+  } catch (error) {
+    // 在るが読めない行を「無い」と言わない
+    if (error instanceof UnreadableJournalEntryError)
+      return describeUnreadableJournalEntry('日誌', id);
+    throw error;
+  }
+  if (!entry) return `日誌 ${id} は無い（id が違うか、まだ書かれていない）。`;
+  return describeJournalEntryFull(entry, offset);
+}
+
+// 1件の全文: 見出し + 頁の注記 + 本文の1頁（JOURNAL_PAGE 字まで）+ 切れたときの続きの案内
+function describeJournalEntryFull(entry: JournalEntry, offset: number): string {
+  const { head, body } = renderJournalEntry(entry);
+  if (body === '') return `${entry.at} ${head}`;
+  const part = page(body, offset, JOURNAL_PAGE);
+  return `${entry.at} ${head}（${describePage(part)}）\n\n${part.body}${describeJournalEntryPageTail(entry, part)}`;
+}
+
+function describeJournalEntryPageTail(entry: JournalEntry, part: ReturnType<typeof page>): string {
+  return part.more
+    ? `\n\n…（ここで切れている。続きは journal_read id=${entry.id} offset=${part.to}）`
+    : '';
+}
+
+// ---- 読み方2: 一覧（q があれば窓をまたいで探す） ----
+
+async function readJournalListing(
+  context: ToolContext,
+  stores: JournalStores,
+  args: JournalListArgs,
+): Promise<string> {
+  const { limit, q, types, afterId, order } = args;
+  const checked = checkJournalListArgs(args);
+  if (checked.kind === 'refused') return checked.body;
+  const { normalizedSince, normalizedUntil } = checked;
+
+  const requested = limit ?? 20;
+  const fetched = await fetchJournalPage(context, stores, args, requested, checked);
+  if (fetched.kind === 'refused') return fetched.body;
+  const { entries, moreBeyond, coverage } = fetched;
+  // 0件かどうかで注記を決めない: 窓がまるごと地平より後ろなら、0件でも「本当に無かった」と言い切れるため
+  const oldestAt =
+    normalizedSince !== undefined || normalizedUntil !== undefined
+      ? await stores.journal.oldestAt()
+      : null;
+  const horizonNote = describeJournalHorizonNote(oldestAt, normalizedSince, entries.length === 0);
+  const horizonNoteLines = horizonNote === undefined ? [] : [horizonNote];
+
+  if (entries.length === 0 && moreBeyond !== null) {
+    return describeUnreadablePageOnly(requested, order, moreBeyond, horizonNoteLines);
+  }
+
+  const budgetSeconds = Math.round(
+    (context.journalSearch?.budgetMs ?? JOURNAL_SEARCH_BUDGET_MS) / 1000,
+  );
+  const outcome: JournalListOutcome = {
+    entries,
+    moreBeyond,
+    coverage,
+    budgetSeconds,
+    horizonNoteLines,
+  };
+
+  if (entries.length === 0) {
+    return describeEmptyJournalListing(args, normalizedSince, outcome);
+  }
+  return describeJournalListing({ q, types, afterId, order }, outcome);
+}
+
+// 日時・続きの位置の検査（since → until → afterId と afterAt の対 → afterAt の日時）。通れば since/until を正規化して返す
+// since/until を `toISOString()` へ正規化してからストアへ渡す: pg は時刻で比べるが fs・インメモリは文字列比較で、秒の省略やオフセットで3実装の答えが割れるため
+function checkJournalListArgs(
+  args: Pick<JournalListArgs, 'since' | 'until' | 'afterId' | 'afterAt'>,
+):
+  | { kind: 'ok'; normalizedSince: string | undefined; normalizedUntil: string | undefined }
+  | { kind: 'refused'; body: string } {
+  const { since, until, afterId, afterAt } = args;
+  if (since !== undefined && normalizeJournalTimeBoundary(since) === null) {
+    return {
+      kind: 'refused',
+      body: describeUnreadableJournalTimeBoundary('since', since) + '**日誌は読んでいない。**',
+    };
+  }
+  if (until !== undefined && normalizeJournalTimeBoundary(until) === null) {
+    return {
+      kind: 'refused',
+      body: describeUnreadableJournalTimeBoundary('until', until) + '**日誌は読んでいない。**',
+    };
+  }
+  // `afterAt` は正規化しない: 錨の `at` と文字列で一致させる値のため、応答の値をそのまま渡させる
+  if ((afterId === undefined) !== (afterAt === undefined)) {
+    return {
+      kind: 'refused',
+      body:
+        'afterId と afterAt は両方一緒に渡す（片方だけでは続きの位置が決まらない。' +
+        '応答の「続きは …」の2つをそのまま渡すこと）。**日誌は読んでいない。**',
+    };
+  }
+  if (afterAt !== undefined && Number.isNaN(Date.parse(afterAt))) {
+    return {
+      kind: 'refused',
+      body:
+        `afterAt に渡された「${afterAt}」は日時として読めない（ISO 8601 で、` +
+        '応答の「続きは …」の値をそのまま渡すこと）。**日誌は読んでいない。**',
+    };
+  }
+  return {
+    kind: 'ok',
+    normalizedSince:
+      since === undefined ? undefined : (normalizeJournalTimeBoundary(since) ?? undefined),
+    normalizedUntil:
+      until === undefined ? undefined : (normalizeJournalTimeBoundary(until) ?? undefined),
+  };
+}
+
+// ストアへ渡す問い合わせ。`[]`（空配列）もそのまま転送する: `{}` へ落とすと「0件」の契約が「絞らない」に化け、契約の歯からも見えないため
+function buildJournalQuery(
+  args: JournalListArgs,
+  requested: number,
+  normalized: { normalizedSince: string | undefined; normalizedUntil: string | undefined },
+): JournalListQuery & { readonly limit: number } {
+  const { types, q, withFilter, order, afterId, afterAt } = args;
+  return {
+    limit: requested,
+    ...(normalized.normalizedSince === undefined ? {} : { since: normalized.normalizedSince }),
+    ...(normalized.normalizedUntil === undefined ? {} : { until: normalized.normalizedUntil }),
+    ...(types === undefined ? {} : { types }),
+    ...(q === undefined ? {} : { q }),
+    ...(withFilter === undefined ? {} : { with: withFilter }),
+    ...(order === undefined ? {} : { order }),
+    ...(afterId === undefined || afterAt === undefined
+      ? {}
+      : { after: { id: afterId, at: afterAt } }),
+  };
+}
+
+// 頁を読む（語があれば窓で区切って遡る）。錨が見つからないときは断りの本文を返す
+async function fetchJournalPage(
+  context: ToolContext,
+  stores: JournalStores,
+  args: JournalListArgs,
+  requested: number,
+  normalized: { normalizedSince: string | undefined; normalizedUntil: string | undefined },
+): Promise<
+  | {
+      kind: 'ok';
+      entries: JournalEntry[];
+      moreBeyond: JournalPageResult['next'];
+      coverage: JournalSearchCoverage;
+    }
+  | { kind: 'refused'; body: string }
+> {
+  const { q, afterId, afterAt } = args;
+  let journalPage: JournalPageResult;
+  // 語の検索の探した範囲（#5126）。語が無い・空の呼びは今どおり1本で読むので `complete`
+  let coverage: JournalSearchCoverage = { kind: 'complete' };
+  try {
+    const query = buildJournalQuery(args, requested, normalized);
+    // 語で探すときは窓で区切って遡る（#5126）: 当たりの少ない語が本番の大きさで1本数十秒かかり、その間なにも返らないため
+    if (q !== undefined && q !== '') {
+      const searched = await searchJournalBackwardInSlices(
+        stores.journal,
+        { ...query, q },
+        context.journalSearch,
+      );
+      journalPage = { entries: searched.entries, next: searched.next };
+      coverage = searched.coverage;
+    } else {
+      journalPage = await stores.journal.listPage(query);
+    }
+  } catch (error) {
+    // 錨が見つからないのは「判定できない」で「先頭から」ではない: 黙って先頭から読み直すと、続きを読んでいるつもりのクローンが同じ行を読み返すため
+    if (error instanceof JournalAnchorNotFoundError) {
+      return { kind: 'refused', body: describeAnchorNotFound(afterId, afterAt) };
+    }
+    throw error;
+  }
+  return { kind: 'ok', entries: journalPage.entries, moreBeyond: journalPage.next, coverage };
+}
+
+function describeAnchorNotFound(afterId: string | undefined, afterAt: string | undefined): string {
+  return (
+    `afterId=${afterId ?? ''} afterAt=${afterAt ?? ''} が指す日誌の行が見つからない` +
+    '（id と at の両方が一致する行が無い）。続きの位置は判定できない。' +
+    '応答に出た「続きは …」の値を書き写し間違えていないか確かめること。' +
+    '**日誌は読んでいない（先頭から読み直してもいない）。**'
+  );
+}
+
+// 空を「無かった」と言わない: ストアは形の合わない行を `limit` の後で捨てるため、読めない行の向こうの行を無かったことにする
+function describeUnreadablePageOnly(
+  requested: number,
+  order: 'asc' | 'desc' | undefined,
+  moreBeyond: { id: string; at: string },
+  horizonNoteLines: string[],
+): string {
+  return [
+    `この頁の ${requested} 行は読めない形の行だけだった（日誌が無いのではない）。` +
+      `さらに${order === 'asc' ? '新しい' : '古い'}側に行が在る。下の続きの位置を afterId / afterAt に渡せば、` +
+      '読めない行の向こうへ進める（窓をずらして読み直す必要は無い）。',
+    describeJournalContinuation(moreBeyond, order),
+    ...horizonNoteLines,
+  ].join('\n');
+}
+
+// ---- 0件のときの本文 ----
+
+function describeEmptyJournalListing(
+  args: JournalListArgs,
+  normalizedSince: string | undefined,
+  outcome: JournalListOutcome,
+): string {
+  const { q } = args;
+  // 予算で打ち切った0件は「無い」と言わず、未探索の範囲を最初の行に出す
+  if (q !== undefined && outcome.coverage.kind === 'budget') {
+    return describeEmptyBudgetSearch(q, outcome.coverage, outcome);
+  }
+  if (q !== undefined) return describeEmptySearch(q, normalizedSince, outcome.horizonNoteLines);
+  return describeEmptyListNote(args, outcome.horizonNoteLines);
+}
+
+// #5126。`conversation_read` の「この窓には無い（判定できない）」と同じ形
+function describeEmptyBudgetSearch(
+  q: string,
+  coverage: Extract<JournalSearchCoverage, { kind: 'budget' }>,
+  outcome: Pick<JournalListOutcome, 'budgetSeconds' | 'horizonNoteLines'>,
+): string {
+  return [
+    `"${q}" は、この窓（${coverage.from} 〜 ${coverage.to}）には無い（判定できない）。` +
+      `日誌を ${coverage.from} まで遡ったところで時間の予算（${outcome.budgetSeconds} 秒）を使い切り、それより古い側は見ていない。` +
+      `古い側を探すには journal_read q="${q}" until=${journalSearchContinuationUntil(coverage.from)} を渡す（ほかの絞りは同じものを渡す）。`,
+    `探す対象に入っていない欄（${JOURNAL_SEARCH_UNCOVERED_LIST}）にだけ書かれている語は、ここでは当たらない。`,
+    ...outcome.horizonNoteLines,
+  ].join('\n');
+}
+
+// `q` で0件でも、探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが tool_use の input に書かれているかもしれないため
+function describeEmptySearch(
+  q: string,
+  normalizedSince: string | undefined,
+  horizonNoteLines: string[],
+): string {
+  return [
+    `"${q}" に当たる日誌は無い（この条件の中では）。` +
+      `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象外で、` +
+      'そこにだけ書かれた語は当たらない。',
+    ...(q === ''
+      ? []
+      : [
+          normalizedSince === undefined
+            ? '（日誌の先頭まで探した）'
+            : `（since=${normalizedSince} まで探した。それより古い側は見ていない）`,
+        ]),
+    ...horizonNoteLines,
+  ].join('\n');
+}
+
+// afterId があるときは「まだ空」と言わない: 続きの位置は実在の行を指しており、日誌は空ではないため
+function describeEmptyListNote(args: JournalListArgs, horizonNoteLines: string[]): string {
+  const { since, until, types, withFilter, afterId, order } = args;
+  const emptyNote =
+    afterId !== undefined &&
+    since === undefined &&
+    until === undefined &&
+    types === undefined &&
+    withFilter === undefined
+      ? `（この位置より先（${order === 'asc' ? '新しい' : '古い'}側）に日誌の行は無い。日誌が空なのではない）`
+      : since === undefined &&
+          until === undefined &&
+          types === undefined &&
+          withFilter === undefined
+        ? '（日誌はまだ空）'
+        : '（その条件に当たる日誌は無い）';
+  return [emptyNote, ...horizonNoteLines].join('\n');
+}
+
+// ---- 1件以上のときの本文 ----
+
+function describeJournalListing(
+  args: Pick<JournalListArgs, 'q' | 'types' | 'afterId' | 'order'>,
+  outcome: JournalListOutcome,
+): string {
+  const { q, types, order } = args;
+  const { entries, moreBeyond, coverage, budgetSeconds, horizonNoteLines } = outcome;
+  // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
+  // 同じ会話の行が2つ以上あるときだけ、長い id を凡例に1回書いて行では短い札（conv#1, conv#2…）にする: 会話 id（UUID）が exchange の行ごとに出て、一覧の約17%を占めるため。1回しか出ない id は札にしない（凡例の方が長くなる）
+  const conversationLegend = journalConversationLegend(entries);
+  const items = describeJournalListingItems(entries, conversationLegend.labels);
+  const toolUseNotice = describeToolUseNotice(entries, types);
+  const { listing, shownCount } = renderBudgetedListing(items, order);
+  const cursor = describeListingCursorPosition(entries, shownCount, moreBeyond);
+  // 当たりがあっても、予算で打ち切ったなら未探索の範囲を最初の行に出す: 一覧の末尾に置くと、出た分が全部だと読まれるため（#5126）
+  const coverageHead = describeCoverageHead(q, coverage, budgetSeconds);
+  return [
+    ...coverageHead,
+    ...conversationLegend.lines,
+    listing,
+    ...(cursor === null ? [] : [describeJournalContinuation(cursor, order)]),
+    '（本文は抜粋。全文は journal_read id=<id> で取れる）',
+    ...toolUseNotice,
+    ...horizonNoteLines,
+  ].join('\n');
+}
+
+// 1件ごとの行: `<at> <head> id=<id>` と、本文があれば抜粋の行
+function describeJournalListingItems(
+  entries: readonly JournalEntry[],
+  conversationLabels: ReadonlyMap<string, string>,
+): string[] {
+  return entries.map((entry) => {
+    const { head, body } = renderJournalEntry(
+      entry,
+      JOURNAL_LISTING_ATTACHMENTS,
+      conversationLabels,
+    );
+    return (
+      `${entry.at} ${head} id=${entry.id}` +
+      (body === '' ? '' : `\n  ${journalListingBody(entry, body)}`)
+    );
+  });
+}
+
+// `tool_use` の混み具合は習慣（types で絞るのを忘れない）に預けず、この呼びで数えた件数だけを言う: `tool_use` が decision / exchange を押し出す速さが上がったため
+function describeToolUseNotice(
+  entries: readonly JournalEntry[],
+  types: JournalListArgs['types'],
+): string[] {
+  const toolUseCount = entries.filter((entry) => entry.type === 'tool_use').length;
+  // 出す条件は取れた分が全部 tool_use だったか（`M === N`）ではなく呼びが渡した `types` で判定する: `types` を省略した呼びでは外せば判断の記録が出てくるため
+  // 「だけを名指しした」は every で見る: `length === 1` だと重複指定が名指しでないことになり、外す先が無い呼びで断り書きが出るため
+  const typesIsToolUseOnly =
+    types !== undefined && types.length > 0 && types.every((type) => type === 'tool_use');
+  return toolUseCount > 0 && !typesIsToolUseOnly
+    ? [
+        `（tool_use が今回の ${entries.length} 件中 ${toolUseCount} 件。` +
+          '判断の記録だけを見るなら types で外せる）',
+      ]
+    : [];
+}
+
+// 予算（JOURNAL_BUDGET 字）で省略する。省略したときの断り書きと、表示した件数を返す
+function renderBudgetedListing(
+  items: string[],
+  order: 'asc' | 'desc' | undefined,
+): { listing: string; shownCount: number } {
+  let shownCount = items.length;
+  const listing = renderListing(items, {
+    budget: JOURNAL_BUDGET,
+    omitted: ({ rest, shown, total }) => {
+      shownCount = shown;
+      return (
+        `…ほか ${rest} 件は省略（この条件で ${total} 件あり、${order === 'asc' ? '古い' : '新しい'}順に ${shown} 件だけ出した）。` +
+        '省略した行から読み継ぐには、下の続きの位置を afterId / afterAt に渡すこと' +
+        // asc では q を勧めない: q と order=asc の組は断られるため（勧めのとおりに呼ぶと失敗する）
+        (order === 'asc'
+          ? '（狭めるなら since / until / types / with を指定する）。'
+          : '（狭めるなら since / types / with / q を指定する）。')
+      );
+    },
+  });
+  return { listing, shownCount };
+}
+
+// 予算で省略したときは `next` を案内しない: `next` は省略した行を飛び越えるため、表示した最後の行を続きの位置にする
+function describeListingCursorPosition(
+  entries: readonly JournalEntry[],
+  shownCount: number,
+  moreBeyond: { id: string; at: string } | null,
+): { id: string; at: string } | null {
+  const lastShown = entries[shownCount - 1];
+  return shownCount < entries.length && lastShown !== undefined
+    ? { id: lastShown.id, at: lastShown.at }
+    : moreBeyond;
+}
+
+function describeCoverageHead(
+  q: string | undefined,
+  coverage: JournalSearchCoverage,
+  budgetSeconds: number,
+): string[] {
+  return q !== undefined && coverage.kind === 'budget'
+    ? [
+        `（"${q}" は、日誌を ${coverage.from} まで遡ったところで時間の予算（${budgetSeconds} 秒）を使い切った。` +
+          `${coverage.from} より古い側は見ていない。古い側を探すには journal_read until=${journalSearchContinuationUntil(coverage.from)} を渡す（ほかの絞りは同じものを渡す））`,
+      ]
+    : [];
+}
+
 export function journalTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -609,254 +1060,21 @@ export function journalTools(context: ToolContext, shared: CloneToolsShared) {
         afterAt,
         order,
       }) => {
-        const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
-        if (limitError !== null) return text(limitError);
-        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
-        if (offsetError !== null) return text(offsetError);
-        // 語の検索は新しい側から1日ずつ遡る前提（続きの案内・coverage の until もその向き）なので、asc とは組まない。`q=`（空）は絞らないので断らない。id の全文読みは他の条件を無視するので対象外
-        if (id === undefined && order === 'asc' && q !== undefined && q !== '') {
-          return text(
-            'q は新しい側から遡る検索で、order=asc とは合わない。古い側から読むなら since / until で窓を閉じること。' +
-              '**日誌は読んでいない。**',
-          );
-        }
-        if (id !== undefined) {
-          let entry: JournalEntry | null;
-          try {
-            entry = await stores.journal.get(id);
-          } catch (error) {
-            // 在るが読めない行を「無い」と言わない
-            if (error instanceof UnreadableJournalEntryError)
-              return text(describeUnreadableJournalEntry('日誌', id));
-            throw error;
-          }
-          if (!entry) return text(`日誌 ${id} は無い（id が違うか、まだ書かれていない）。`);
-          const { head, body } = renderJournalEntry(entry);
-          if (body === '') return text(`${entry.at} ${head}`);
-          const part = page(body, offset, JOURNAL_PAGE);
-          const tail = part.more
-            ? `\n\n…（ここで切れている。続きは journal_read id=${entry.id} offset=${part.to}）`
-            : '';
-          return text(`${entry.at} ${head}（${describePage(part)}）\n\n${part.body}${tail}`);
-        }
-
-        // since/until を `toISOString()` へ正規化してからストアへ渡す: pg は時刻で比べるが fs・インメモリは文字列比較で、秒の省略やオフセットで3実装の答えが割れるため
-        if (since !== undefined && normalizeJournalTimeBoundary(since) === null) {
-          return text(
-            describeUnreadableJournalTimeBoundary('since', since) + '**日誌は読んでいない。**',
-          );
-        }
-        if (until !== undefined && normalizeJournalTimeBoundary(until) === null) {
-          return text(
-            describeUnreadableJournalTimeBoundary('until', until) + '**日誌は読んでいない。**',
-          );
-        }
-        // `afterAt` は正規化しない: 錨の `at` と文字列で一致させる値のため、応答の値をそのまま渡させる
-        if ((afterId === undefined) !== (afterAt === undefined)) {
-          return text(
-            'afterId と afterAt は両方一緒に渡す（片方だけでは続きの位置が決まらない。' +
-              '応答の「続きは …」の2つをそのまま渡すこと）。**日誌は読んでいない。**',
-          );
-        }
-        if (afterAt !== undefined && Number.isNaN(Date.parse(afterAt))) {
-          return text(
-            `afterAt に渡された「${afterAt}」は日時として読めない（ISO 8601 で、` +
-              '応答の「続きは …」の値をそのまま渡すこと）。**日誌は読んでいない。**',
-          );
-        }
-        const normalizedSince =
-          since === undefined ? undefined : (normalizeJournalTimeBoundary(since) ?? undefined);
-        const normalizedUntil =
-          until === undefined ? undefined : (normalizeJournalTimeBoundary(until) ?? undefined);
-
-        const requested = limit ?? 20;
-        let journalPage: Awaited<ReturnType<JournalStore['listPage']>>;
-        // 語の検索の探した範囲（#5126）。語が無い・空の呼びは今どおり1本で読むので `complete`
-        let coverage: JournalSearchCoverage = { kind: 'complete' };
-        try {
-          const query = {
-            limit: requested,
-            ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
-            ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
-            // `[]`（空配列）もそのまま転送する: `{}` へ落とすと「0件」の契約が「絞らない」に化け、契約の歯からも見えないため
-            ...(types === undefined ? {} : { types }),
-            ...(q === undefined ? {} : { q }),
-            ...(withFilter === undefined ? {} : { with: withFilter }),
-            ...(order === undefined ? {} : { order }),
-            ...(afterId === undefined || afterAt === undefined
-              ? {}
-              : { after: { id: afterId, at: afterAt } }),
-          };
-          // 語で探すときは窓で区切って遡る（#5126）: 当たりの少ない語が本番の大きさで1本数十秒かかり、その間なにも返らないため
-          if (q !== undefined && q !== '') {
-            const searched = await searchJournalBackwardInSlices(
-              stores.journal,
-              { ...query, q },
-              context.journalSearch,
-            );
-            journalPage = { entries: searched.entries, next: searched.next };
-            coverage = searched.coverage;
-          } else {
-            journalPage = await stores.journal.listPage(query);
-          }
-        } catch (error) {
-          // 錨が見つからないのは「判定できない」で「先頭から」ではない: 黙って先頭から読み直すと、続きを読んでいるつもりのクローンが同じ行を読み返すため
-          if (error instanceof JournalAnchorNotFoundError) {
-            return text(
-              `afterId=${afterId ?? ''} afterAt=${afterAt ?? ''} が指す日誌の行が見つからない` +
-                '（id と at の両方が一致する行が無い）。続きの位置は判定できない。' +
-                '応答に出た「続きは …」の値を書き写し間違えていないか確かめること。' +
-                '**日誌は読んでいない（先頭から読み直してもいない）。**',
-            );
-          }
-          throw error;
-        }
-        const { entries, next: moreBeyond } = journalPage;
-        // 0件かどうかで注記を決めない: 窓がまるごと地平より後ろなら、0件でも「本当に無かった」と言い切れるため
-        const oldestAt =
-          normalizedSince !== undefined || normalizedUntil !== undefined
-            ? await stores.journal.oldestAt()
-            : null;
-        const horizonNote = describeJournalHorizonNote(
-          oldestAt,
-          normalizedSince,
-          entries.length === 0,
-        );
-        const horizonNoteLines = horizonNote === undefined ? [] : [horizonNote];
-
-        if (entries.length === 0 && moreBeyond !== null) {
-          // 空を「無かった」と言わない: ストアは形の合わない行を `limit` の後で捨てるため、読めない行の向こうの行を無かったことにする
-          return text(
-            [
-              `この頁の ${requested} 行は読めない形の行だけだった（日誌が無いのではない）。` +
-                `さらに${order === 'asc' ? '新しい' : '古い'}側に行が在る。下の続きの位置を afterId / afterAt に渡せば、` +
-                '読めない行の向こうへ進める（窓をずらして読み直す必要は無い）。',
-              describeJournalContinuation(moreBeyond, order),
-              ...horizonNoteLines,
-            ].join('\n'),
-          );
-        }
-
-        const budgetSeconds = Math.round(
-          (context.journalSearch?.budgetMs ?? JOURNAL_SEARCH_BUDGET_MS) / 1000,
-        );
-
-        if (entries.length === 0) {
-          // 予算で打ち切った0件は「無い」と言わず、未探索の範囲を最初の行に出す（#5126。`conversation_read` の「この窓には無い（判定できない）」と同じ形）
-          if (q !== undefined && coverage.kind === 'budget') {
-            return text(
-              [
-                `"${q}" は、この窓（${coverage.from} 〜 ${coverage.to}）には無い（判定できない）。` +
-                  `日誌を ${coverage.from} まで遡ったところで時間の予算（${budgetSeconds} 秒）を使い切り、それより古い側は見ていない。` +
-                  `古い側を探すには journal_read q="${q}" until=${journalSearchContinuationUntil(coverage.from)} を渡す（ほかの絞りは同じものを渡す）。`,
-                `探す対象に入っていない欄（${JOURNAL_SEARCH_UNCOVERED_LIST}）にだけ書かれている語は、ここでは当たらない。`,
-                ...horizonNoteLines,
-              ].join('\n'),
-            );
-          }
-          // `q` で0件でも、探す対象に入っていない欄が在ることまで言う: 黙ると「日誌にその語は無い」と読めるが tool_use の input に書かれているかもしれないため
-          if (q !== undefined) {
-            return text(
-              [
-                `"${q}" に当たる日誌は無い（この条件の中では）。` +
-                  `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象外で、` +
-                  'そこにだけ書かれた語は当たらない。',
-                ...(q === ''
-                  ? []
-                  : [
-                      normalizedSince === undefined
-                        ? '（日誌の先頭まで探した）'
-                        : `（since=${normalizedSince} まで探した。それより古い側は見ていない）`,
-                    ]),
-                ...horizonNoteLines,
-              ].join('\n'),
-            );
-          }
-          // afterId があるときは「まだ空」と言わない: 続きの位置は実在の行を指しており、日誌は空ではないため
-          const emptyNote =
-            afterId !== undefined &&
-            since === undefined &&
-            until === undefined &&
-            types === undefined &&
-            withFilter === undefined
-              ? `（この位置より先（${order === 'asc' ? '新しい' : '古い'}側）に日誌の行は無い。日誌が空なのではない）`
-              : since === undefined &&
-                  until === undefined &&
-                  types === undefined &&
-                  withFilter === undefined
-                ? '（日誌はまだ空）'
-                : '（その条件に当たる日誌は無い）';
-          return text([emptyNote, ...horizonNoteLines].join('\n'));
-        }
-
-        // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
-        // 同じ会話の行が2つ以上あるときだけ、長い id を凡例に1回書いて行では短い札（conv#1, conv#2…）にする: 会話 id（UUID）が exchange の行ごとに出て、一覧の約17%を占めるため。1回しか出ない id は札にしない（凡例の方が長くなる）
-        const conversationLegend = journalConversationLegend(entries);
-        const items = entries.map((entry) => {
-          const { head, body } = renderJournalEntry(
-            entry,
-            JOURNAL_LISTING_ATTACHMENTS,
-            conversationLegend.labels,
-          );
-          return (
-            `${entry.at} ${head} id=${entry.id}` +
-            (body === '' ? '' : `\n  ${journalListingBody(entry, body)}`)
-          );
-        });
-
-        // `tool_use` の混み具合は習慣（types で絞るのを忘れない）に預けず、この呼びで数えた件数だけを言う: `tool_use` が decision / exchange を押し出す速さが上がったため
-        const toolUseCount = entries.filter((entry) => entry.type === 'tool_use').length;
-        // 出す条件は取れた分が全部 tool_use だったか（`M === N`）ではなく呼びが渡した `types` で判定する: `types` を省略した呼びでは外せば判断の記録が出てくるため
-        // 「だけを名指しした」は every で見る: `length === 1` だと重複指定が名指しでないことになり、外す先が無い呼びで断り書きが出るため
-        const typesIsToolUseOnly =
-          types !== undefined && types.length > 0 && types.every((type) => type === 'tool_use');
-        const toolUseNotice =
-          toolUseCount > 0 && !typesIsToolUseOnly
-            ? [
-                `（tool_use が今回の ${entries.length} 件中 ${toolUseCount} 件。` +
-                  '判断の記録だけを見るなら types で外せる）',
-              ]
-            : [];
-
-        // 予算で省略したときは `next` を案内しない: `next` は省略した行を飛び越えるため、表示した最後の行を続きの位置にする
-        let shownCount = items.length;
-        const listing = renderListing(items, {
-          budget: JOURNAL_BUDGET,
-          omitted: ({ rest, shown, total }) => {
-            shownCount = shown;
-            return (
-              `…ほか ${rest} 件は省略（この条件で ${total} 件あり、${order === 'asc' ? '古い' : '新しい'}順に ${shown} 件だけ出した）。` +
-              '省略した行から読み継ぐには、下の続きの位置を afterId / afterAt に渡すこと' +
-              // asc では q を勧めない: q と order=asc の組は断られるため（勧めのとおりに呼ぶと失敗する）
-              (order === 'asc'
-                ? '（狭めるなら since / until / types / with を指定する）。'
-                : '（狭めるなら since / types / with / q を指定する）。')
-            );
-          },
-        });
-        const lastShown = entries[shownCount - 1];
-        const cursor =
-          shownCount < entries.length && lastShown !== undefined
-            ? { id: lastShown.id, at: lastShown.at }
-            : moreBeyond;
-        // 当たりがあっても、予算で打ち切ったなら未探索の範囲を最初の行に出す: 一覧の末尾に置くと、出た分が全部だと読まれるため（#5126）
-        const coverageHead =
-          q !== undefined && coverage.kind === 'budget'
-            ? [
-                `（"${q}" は、日誌を ${coverage.from} まで遡ったところで時間の予算（${budgetSeconds} 秒）を使い切った。` +
-                  `${coverage.from} より古い側は見ていない。古い側を探すには journal_read until=${journalSearchContinuationUntil(coverage.from)} を渡す（ほかの絞りは同じものを渡す））`,
-              ]
-            : [];
+        const checked = checkJournalReadArgs({ limit, offset, id, q, order });
+        if (checked.kind === 'refused') return text(checked.body);
+        if (id !== undefined) return text(await readJournalEntryById(stores, id, offset));
         return text(
-          [
-            ...coverageHead,
-            ...conversationLegend.lines,
-            listing,
-            ...(cursor === null ? [] : [describeJournalContinuation(cursor, order)]),
-            '（本文は抜粋。全文は journal_read id=<id> で取れる）',
-            ...toolUseNotice,
-            ...horizonNoteLines,
-          ].join('\n'),
+          await readJournalListing(context, stores, {
+            limit,
+            since,
+            until,
+            types,
+            q,
+            withFilter,
+            afterId,
+            afterAt,
+            order,
+          }),
         );
       },
     ),
