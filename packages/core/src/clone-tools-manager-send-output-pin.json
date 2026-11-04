@@ -1,0 +1,2151 @@
+{
+  "lengths": {
+    "closes-too-many": 27,
+    "closes-reason-empty": 40,
+    "closes-reason-nul-only": 40,
+    "closes-reason-blank": 52,
+    "closes-second-reason-blank": 52,
+    "closes-bad-with-no-pool": 40,
+    "closes-bad-with-empty-message": 40,
+    "no-pool": 67,
+    "no-pool-with-closes": 103,
+    "no-pool-empty-message": 67,
+    "message-empty": 23,
+    "message-nul-only": 23,
+    "message-empty-with-closes": 59,
+    "message-empty-with-attachments": 23,
+    "message-whitespace-passes": 104,
+    "message-nul-inside": 104,
+    "attach-empty-array": 104,
+    "attach-one-small": 104,
+    "attach-dup-ids": 104,
+    "attach-large-staged": 104,
+    "attach-default-limits": 104,
+    "attach-answer-refused-by-pool": 27,
+    "attach-missing": 91,
+    "attach-missing-with-closes": 115,
+    "attach-getmeta-throws": 38,
+    "attach-get-throws": 38,
+    "attach-vanishes-while-reading": 38,
+    "attach-too-many": 77,
+    "attach-total-too-large": 88,
+    "deliver-plain": 104,
+    "deliver-fold-ref": 68,
+    "deliver-fold-subagent": 104,
+    "deliver-decision-unused": 241,
+    "deliver-deny-unused": 240,
+    "deliver-requestid-only": 104,
+    "deliver-decision-with-requestid": 104,
+    "deliver-session-resumed": 146,
+    "held-plain": 73,
+    "held-decision-unused": 210,
+    "held-decision-with-requestid": 73,
+    "held-with-closes": 109,
+    "stale-token-declined": 68,
+    "stale-token-declined-with-closes": 104,
+    "stale-token-declined-decision-no-note": 68,
+    "stale-token-held-with-attachments": 73,
+    "target-unknown": 24,
+    "target-unknown-with-decision": 24,
+    "target-unknown-with-closes": 60,
+    "target-unreadable": 36,
+    "target-runner-not-open": 51,
+    "target-session-missing": 234,
+    "target-session-missing-with-closes": 270,
+    "answer-allow": 18,
+    "answer-deny": 18,
+    "answer-decision-only-no-requestid": 18,
+    "answer-requestid-only-no-decision": 18,
+    "answer-toolu-requestid": 35,
+    "answer-long-summary-and-message": 212,
+    "answer-unreadable-decision-text": 97,
+    "answer-with-closes": 46,
+    "answer-with-note-task": 18,
+    "answer-requestid-mismatch": 53,
+    "answer-ambiguous-without-requestid": 85,
+    "answer-already-resolved-retracts": 37,
+    "answer-already-resolved-retract-fails": 25,
+    "answer-retract-long-detail": 266,
+    "answer-then-session-missing-retracts": 218,
+    "answer-then-held-retracts": 73,
+    "answer-then-delivered-retracts": 132,
+    "answer-journal-fails": 232,
+    "answer-journal-fails-with-closes": 232,
+    "send-throws-no-pending": 11,
+    "send-throws-string": 7,
+    "send-throws-with-closes": 11,
+    "send-throws-after-answer-journal": 18,
+    "send-throws-after-answer-journal-string": 3,
+    "send-throws-after-answer-journal-retract-fails": 18,
+    "note-job-with-task": 104,
+    "note-job-without-task": 104,
+    "note-job-missing": 104,
+    "note-list-jobs-throws": 104,
+    "note-missing": 104,
+    "closes-empty-array": 104,
+    "closes-one-ok": 132,
+    "closes-two-and-note": 160,
+    "closes-duplicate-id": 196,
+    "closes-task-missing": 166,
+    "closes-already-closed": 164,
+    "closes-already-done-status": 130,
+    "closes-get-unreadable": 163,
+    "closes-get-throws-plain": 177,
+    "closes-setstatus-unreadable": 163,
+    "closes-setstatus-throws-plain": 252,
+    "closes-journal-fails": 213,
+    "closes-after-answer-journal-fails": 127,
+    "closes-with-fold-ref": 96
+  },
+  "scenarios": {
+    "closes-too-many": {
+      "length": 27,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes は使えない（5件以下）。何もしていない。"
+    },
+    "closes-reason-empty": {
+      "length": 40,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes[0].reason は使えない（1文字以上のみ）。何もしていない。"
+    },
+    "closes-reason-nul-only": {
+      "length": 40,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes[0].reason は使えない（1文字以上のみ）。何もしていない。"
+    },
+    "closes-reason-blank": {
+      "length": 52,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes[0].reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。何もしていない。"
+    },
+    "closes-second-reason-blank": {
+      "length": 52,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes[1].reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。何もしていない。"
+    },
+    "closes-bad-with-no-pool": {
+      "length": 40,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes[0].reason は使えない（1文字以上のみ）。何もしていない。"
+    },
+    "closes-bad-with-empty-message": {
+      "length": 40,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "closes[0].reason は使えない（1文字以上のみ）。何もしていない。"
+    },
+    "no-pool": {
+      "length": 67,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。"
+    },
+    "no-pool-with-closes": {
+      "length": 103,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "no-pool-empty-message": {
+      "length": 67,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。"
+    },
+    "message-empty": {
+      "length": 23,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "message は使えない（1文字以上のみ）。"
+    },
+    "message-nul-only": {
+      "length": 23,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "message は使えない（1文字以上のみ）。"
+    },
+    "message-empty-with-closes": {
+      "length": 59,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "message は使えない（1文字以上のみ）。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "message-empty-with-attachments": {
+      "length": 23,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "message は使えない（1文字以上のみ）。"
+    },
+    "message-whitespace-passes": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"  \\n\\t \",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "message-nul-inside": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"前\\u0000後\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "attach-empty-array": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "attach-one-small": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"build.log\",\"sha256\":\"sha-att-1\",\"size\":5}],\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "attach-dup-ids": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"build.log\",\"sha256\":\"sha-att-1\",\"size\":5}],\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "attach-large-staged": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "stores.attachments.getMeta(\"att-big\")",
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"attachments\":[{\"id\":\"att-big\",\"mediaType\":\"text/plain\",\"name\":\"big.bin\",\"sha256\":\"sha-att-big\",\"size\":200,\"staged\":true}],\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "attach-default-limits": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"att-1.txt\",\"sha256\":\"sha-att-1\",\"size\":5}],\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "attach-answer-refused-by-pool": {
+      "length": 27,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"att-1.txt\",\"sha256\":\"sha-att-1\",\"size\":5}],\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "確認への回答には添付を載せられない（何も送っていない）"
+    },
+    "attach-missing": {
+      "length": 91,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.getMeta(\"att-gone\")",
+        "stores.attachments.getMeta(\"att-gone-2\")"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り）: att-gone, att-gone-2。担い手には何も送っていない。人間に再送を頼むか、id を確かめること。"
+    },
+    "attach-missing-with-closes": {
+      "length": 115,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": ["stores.attachments.getMeta(\"att-gone\")"],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り）: att-gone。担い手には何も送っていない。人間に再送を頼むか、id を確かめること。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "attach-getmeta-throws": {
+      "length": 38,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": ["stores.attachments.getMeta(\"att-1\")"],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付 att-1 の控えを読めなかった: Error: 控えのストアが落ちた"
+    },
+    "attach-get-throws": {
+      "length": 38,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付 att-1 の中身を読めなかった: Error: 中身のストアが落ちた"
+    },
+    "attach-vanishes-while-reading": {
+      "length": 38,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付 att-1 は読む間に消えた（保持期限）。担い手には何も送っていない。"
+    },
+    "attach-too-many": {
+      "length": 77,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": [
+        "stores.attachments.getMeta(\"a1\")",
+        "stores.attachments.getMeta(\"a2\")",
+        "stores.attachments.getMeta(\"a3\")",
+        "stores.attachments.getMeta(\"a4\")"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "AttachmentRejectedError: 1 発言に添えられるのは 3 個まで（4 個） code=too_many。担い手には何も送っていない。"
+    },
+    "attach-total-too-large": {
+      "length": 88,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": null,
+      "calls": ["stores.attachments.getMeta(\"a1\")", "stores.attachments.getMeta(\"a2\")"],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "AttachmentRejectedError: 1 発言の合計は 100 B まで（110 B ある） code=total_too_large。担い手には何も送っていない。"
+    },
+    "deliver-plain": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-fold-ref": {
+      "length": 68,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "context.isSubagentCall()",
+        "context.foldFixed(manager-send:delivered-note)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-fold-subagent": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "context.isSubagentCall()"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-decision-unused": {
+      "length": 241,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n⚠ decision（allow）を付けたが、いま答えを待っている確認が無かったので、回答としては使っていない（許可・拒否としてはどこにも当たっていない）。本文は追加指示として届けた。確認に答えるつもりだったなら、受信箱に届いた requestId を付けて送り直すこと。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-deny-unused": {
+      "length": 240,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"deny\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n⚠ decision（deny）を付けたが、いま答えを待っている確認が無かったので、回答としては使っていない（許可・拒否としてはどこにも当たっていない）。本文は追加指示として届けた。確認に答えるつもりだったなら、受信箱に届いた requestId を付けて送り直すこと。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-requestid-only": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"requestId\":\"req-1\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-decision-with-requestid": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-9\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "deliver-session-resumed": {
+      "length": 146,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "held-plain": {
+      "length": 73,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "held",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。"
+    },
+    "held-decision-unused": {
+      "length": 210,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "held",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"deny\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。\n⚠ decision（deny）を付けたが、いま答えを待っている確認が無かったので、回答としては使っていない（許可・拒否としてはどこにも当たっていない）。本文は追加指示として預かった。確認に答えるつもりだったなら、受信箱に届いた requestId を付けて送り直すこと。"
+    },
+    "held-decision-with-requestid": {
+      "length": 73,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "held",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。"
+    },
+    "held-with-closes": {
+      "length": 109,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "held",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "stale-token-declined": {
+      "length": 68,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "declined",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、確認待ちが残っているので畳めない。旧セッションへも送っていない（添付付きは預からない）。"
+    },
+    "stale-token-declined-with-closes": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "declined",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、確認待ちが残っているので畳めない。旧セッションへも送っていない（添付付きは預からない）。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "stale-token-declined-decision-no-note": {
+      "length": 68,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "declined",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、確認待ちが残っているので畳めない。旧セッションへも送っていない（添付付きは預からない）。"
+    },
+    "stale-token-held-with-attachments": {
+      "length": 73,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "held",
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"att-1.txt\",\"sha256\":\"sha-att-1\",\"size\":5}],\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。"
+    },
+    "target-unknown": {
+      "length": 24,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-ghost\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-ghost というマネージャーは居ない。"
+    },
+    "target-unknown-with-decision": {
+      "length": 24,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-ghost\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-ghost というマネージャーは居ない。"
+    },
+    "target-unknown-with-closes": {
+      "length": 60,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-ghost\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-ghost というマネージャーは居ない。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "target-unreadable": {
+      "length": 36,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unreadable",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "委譲 mgr-001 の行は在るが読めない形で入っている。送っていない。"
+    },
+    "target-runner-not-open": {
+      "length": 51,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 の runner（runner-1）は名簿に開いていない。届けられたか確かめられない。"
+    },
+    "target-session-missing": {
+      "length": 234,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "session_missing",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] runner にセッションが無く、resume でも入り直せなかった。\n**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。runner に生きたセッションが無く、resume でも入り直せなかっただけである。manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）なら少し置いてから送り直すこと。**確かめる前に manager_start で起こし直さないこと** — 同じ仕事が2本になる。"
+    },
+    "target-session-missing-with-closes": {
+      "length": 270,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "session_missing",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] runner にセッションが無く、resume でも入り直せなかった。\n**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。runner に生きたセッションが無く、resume でも入り直せなかっただけである。manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）なら少し置いてから送り直すこと。**確かめる前に manager_start で起こし直さないこと** — 同じ仕事が2本になる。\n本来の作業が通っていないので、closes の行は1行も閉じていない。"
+    },
+    "answer-allow": {
+      "length": 18,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"いいよ。進めて\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: いいよ。進めて）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。"
+    },
+    "answer-deny": {
+      "length": 18,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"駄目。理由は本番だから\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"deny\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=deny。抜粋: 駄目。理由は本番だから）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。"
+    },
+    "answer-decision-only-no-requestid": {
+      "length": 18,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"いいよ\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: いいよ）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。"
+    },
+    "answer-requestid-only-no-decision": {
+      "length": 18,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"進めて\",\"options\":{\"beforeAnswer\":\"function\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=指定なし（runner が本文から読む）。抜粋: 進めて）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。"
+    },
+    "answer-toolu-requestid": {
+      "length": 35,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"許可する\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"toolu_01ABC\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"toolu_01ABC\",\"summary\":\"Bash(rm -rf build) を分類器が拒否した\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（toolu_01ABC: Bash(rm -rf build) を分類器が拒否した）に自分で答える（decision=allow。抜粋: 許可する）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash(rm -rf build) を分類器が拒否した に回答した。"
+    },
+    "answer-long-summary-and-message": {
+      "length": 212,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"長い本文。\\nああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"長い要約 いいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいい\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: 長い要約 いいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいい…（85 文字省略。全 205 文字））に自分で答える（decision=allow。抜粋: 長い本文。 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（66 文字省略。全 266 文字））",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "長い要約 いいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいい に回答した。"
+    },
+    "answer-unreadable-decision-text": {
+      "length": 97,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"うーん\",\"options\":{\"beforeAnswer\":\"function\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=指定なし（runner が本文から読む）。抜粋: うーん）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか への回答が読み取れず、安全側で拒否した（decision が無く、承認とも拒否とも読めなかった）。許可するなら decision: 'allow' を付けて答え直すこと。"
+    },
+    "answer-with-closes": {
+      "length": 46,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(t-1)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-1"
+          }
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。\ncloses t-1: t-1 を done にした。"
+    },
+    "answer-with-note-task": {
+      "length": 18,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(t-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。"
+    },
+    "answer-requestid-mismatch": {
+      "length": 53,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-ghost\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "req-ghost という確認は mgr-001 で待っていない（既に解けたか、別のマネージャーのもの）。"
+    },
+    "answer-ambiguous-without-requestid": {
+      "length": 85,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は複数の確認を同時に待っている。requestId を指定して答えること: req-1（Bash を許可するか） / req-2（Edit を許可するか）"
+    },
+    "answer-already-resolved-retracts": {
+      "length": 37,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: req-1 は runner 側で既に解けている。台帳の待ちからも外した。",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "req-1 は runner 側で既に解けている。台帳の待ちからも外した。"
+    },
+    "answer-already-resolved-retract-fails": {
+      "length": 25,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "req-1 は runner 側で既に解けている。"
+    },
+    "answer-retract-long-detail": {
+      "length": 266,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "unknown",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: 解けている。うううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううう…（66 文字省略。全 266 文字）",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "解けている。うううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううううう"
+    },
+    "answer-then-session-missing-retracts": {
+      "length": 218,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "session_missing",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: runner にセッションが無かった。",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] runner にセッションが無かった。\n**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。runner に生きたセッションが無く、resume でも入り直せなかっただけである。manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）なら少し置いてから送り直すこと。**確かめる前に manager_start で起こし直さないこと** — 同じ仕事が2本になる。"
+    },
+    "answer-then-held-retracts": {
+      "length": 73,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "held",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "mgr-001 は世代が食い違う done で、背景処理が 2 本残っているので畳めない。伝言は預かった（届けられるようになったら自動で届ける）。"
+    },
+    "answer-then-delivered-retracts": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: mgr-001 へ追加指示として届けた。",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        },
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-1"
+          }
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 を done にした。"
+    },
+    "answer-journal-fails": {
+      "length": 232,
+      "isError": true,
+      "thrown": true,
+      "errorName": "JournalNotRecordedError",
+      "sendOutcome": null,
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nmanager_send は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=83 grounds.chars=57\n理由: Error: 日誌のストアが落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。"
+    },
+    "answer-journal-fails-with-closes": {
+      "length": 232,
+      "isError": true,
+      "thrown": true,
+      "errorName": "JournalNotRecordedError",
+      "sendOutcome": null,
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nmanager_send は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=83 grounds.chars=57\n理由: Error: 日誌のストアが落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。"
+    },
+    "send-throws-no-pending": {
+      "length": 11,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "sendOutcome": "throws",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "runner が落ちた"
+    },
+    "send-throws-string": {
+      "length": 7,
+      "isError": true,
+      "thrown": true,
+      "errorName": "string",
+      "sendOutcome": "throws",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "文字列で投げた"
+    },
+    "send-throws-with-closes": {
+      "length": 11,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "sendOutcome": "throws",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "runner が落ちた"
+    },
+    "send-throws-after-answer-journal": {
+      "length": 18,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "sendOutcome": "throws",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: 送信が例外で終わった: Error: runner.answer が落ちた",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "runner.answer が落ちた"
+    },
+    "send-throws-after-answer-journal-string": {
+      "length": 3,
+      "isError": true,
+      "thrown": true,
+      "errorName": "string",
+      "sendOutcome": "throws",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1）へ答えるとした直前の回答の行は効いていない（答えは届いていない）。理由: 送信が例外で終わった: 切れた",
+          "grounds": "先に書いた回答の行の後で、答えが届かなかったため打ち消す"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "切れた"
+    },
+    "send-throws-after-answer-journal-retract-fails": {
+      "length": 18,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "sendOutcome": "throws",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "runner.answer が落ちた"
+    },
+    "note-job-with-task": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(t-1)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "note-job-without-task": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "note-job-missing": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "note-list-jobs-throws": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "note-missing": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "closes-empty-array": {
+      "length": 104,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
+    },
+    "closes-one-ok": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-1"
+          }
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 を done にした。"
+    },
+    "closes-two-and-note": {
+      "length": 160,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(t-1)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()",
+        "stores.tasks.get(\"t-2\")",
+        "stores.tasks.setStatus(\"t-2\")",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-2）: waiting → done（t-2 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-2"
+          }
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        },
+        {
+          "id": "t-2",
+          "status": "done",
+          "closedReason": "t-2 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 を done にした。\ncloses t-2: t-2 を done にした。"
+    },
+    "closes-duplicate-id": {
+      "length": 196,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()",
+        "stores.tasks.get(\"t-1\")"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-1"
+          }
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 を done にした。\ncloses t-1: t-1 は既に 2026-10-27T02:00:00.000Z に閉じてある（t-1 は片付いた）。"
+    },
+    "closes-task-missing": {
+      "length": 166,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-ghost\")"
+      ],
+      "journal": [],
+      "tasksAfter": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-ghost: task t-ghost は無い（task_list で実在する id を確かめること）。"
+    },
+    "closes-already-closed": {
+      "length": 164,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 は既に 2026-10-27T00:00:00.000Z に閉じてある（先に閉じた）。"
+    },
+    "closes-already-done-status": {
+      "length": 130,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 は既に done。"
+    },
+    "closes-get-unreadable": {
+      "length": 163,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: task t-1 は読めない形で入っている。読めない形のまま書き直さないので、閉じていない。"
+    },
+    "closes-get-throws-plain": {
+      "length": 177,
+      "isError": true,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: 閉じる処理が失敗した（Error: task のストアが落ちた）。閉じたかどうかは task_list で確かめること。"
+    },
+    "closes-setstatus-unreadable": {
+      "length": 163,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: task t-1 は読めない形で入っている。読めない形のまま書き直さないので、閉じていない。"
+    },
+    "closes-setstatus-throws-plain": {
+      "length": 252,
+      "isError": true,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.tasks.get(\"t-2\")",
+        "stores.tasks.setStatus(\"t-2\")"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "queued",
+          "closedReason": null
+        },
+        {
+          "id": "t-2",
+          "status": "queued",
+          "closedReason": null
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: 閉じる処理が失敗した（Error: task の書き込みが落ちた）。閉じたかどうかは task_list で確かめること。\ncloses t-2: 閉じる処理が失敗した（Error: task の書き込みが落ちた）。閉じたかどうかは task_list で確かめること。"
+    },
+    "closes-journal-fails": {
+      "length": 213,
+      "isError": true,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）\ncloses t-1: **task は done にしている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。人間が後から読めるよう、journal_write で閉じたことを書き残すこと。"
+    },
+    "closes-after-answer-journal-fails": {
+      "length": 127,
+      "isError": true,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "answered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\",\"decision\":\"allow\",\"requestId\":\"req-1\"}})",
+        "pool.send.beforeAnswer({\"requestId\":\"req-1\",\"summary\":\"Bash を許可するか\"})",
+        "stores.journal.append()",
+        "pool.send.beforeAnswer:returned",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "クローンが担当 mgr-001 の確認（req-1: Bash を許可するか）に自分で答える（decision=allow。抜粋: 続きを調べて。結果は報告に書く。）",
+          "grounds": "クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）"
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "Bash を許可するか に回答した。\ncloses t-1: **task は done にしている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。人間が後から読めるよう、journal_write で閉じたことを書き残すこと。"
+    },
+    "closes-with-fold-ref": {
+      "length": 96,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "sendOutcome": "delivered",
+      "calls": [
+        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
+        "stores.jobs.listJobs()",
+        "context.noteDelegationStarted(undefined)",
+        "context.isSubagentCall()",
+        "context.foldFixed(manager-send:delivered-note)",
+        "stores.tasks.get(\"t-1\")",
+        "stores.tasks.setStatus(\"t-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
+          "grounds": "自分で manager_send の closes した",
+          "target": {
+            "kind": "task",
+            "id": "t-1"
+          }
+        }
+      ],
+      "tasksAfter": [
+        {
+          "id": "t-1",
+          "status": "done",
+          "closedReason": "t-1 は片付いた"
+        }
+      ],
+      "tasksUnchanged": false,
+      "jobsUnchanged": true,
+      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 を done にした。"
+    }
+  }
+}
