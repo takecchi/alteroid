@@ -1,0 +1,381 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`文脈占有の観測の写し（clone と runner の #observeContextUsage） > clone: empty 1`] = `
+{
+  "isAutoCompactEnabled": false,
+  "percentage": 0.5,
+  "rawMaxTokens": 200000,
+  "totalTokens": 1000,
+}
+`;
+
+exports[`文脈占有の観測の写し（clone と runner の #observeContextUsage） > clone: full 1`] = `
+{
+  "autoCompactThreshold": 180000,
+  "categories": [
+    {
+      "kind": "used",
+      "name": "cat-0",
+      "tokens": 100,
+    },
+    {
+      "kind": "free",
+      "name": "cat-1",
+      "tokens": 101,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-2",
+      "tokens": 102,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-3",
+      "tokens": 103,
+    },
+    {
+      "kind": "used",
+      "name": "cat-4",
+      "tokens": 104,
+    },
+    {
+      "kind": "free",
+      "name": "cat-5",
+      "tokens": 105,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-6",
+      "tokens": 106,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-7",
+      "tokens": 107,
+    },
+    {
+      "kind": "used",
+      "name": "cat-8",
+      "tokens": 108,
+    },
+    {
+      "kind": "free",
+      "name": "cat-9",
+      "tokens": 109,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-10",
+      "tokens": 110,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-11",
+      "tokens": 111,
+    },
+    {
+      "kind": "used",
+      "name": "cat-12",
+      "tokens": 112,
+    },
+    {
+      "kind": "free",
+      "name": "cat-13",
+      "tokens": 113,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-14",
+      "tokens": 114,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-15",
+      "tokens": 115,
+    },
+    {
+      "kind": "used",
+      "name": "cat-16",
+      "tokens": 116,
+    },
+    {
+      "kind": "free",
+      "name": "cat-17",
+      "tokens": 117,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-18",
+      "tokens": 118,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-19",
+      "tokens": 119,
+    },
+    {
+      "kind": "used",
+      "name": "cat-20",
+      "tokens": 120,
+    },
+    {
+      "kind": "free",
+      "name": "cat-21",
+      "tokens": 121,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-22",
+      "tokens": 122,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-23",
+      "tokens": 123,
+    },
+  ],
+  "categoriesOmitted": 3,
+  "isAutoCompactEnabled": true,
+  "mcpToolCount": 4,
+  "mcpToolTokens": 85,
+  "mcpToolsByServer": [
+    {
+      "count": 1,
+      "name": "beta",
+      "tokens": 50,
+    },
+    {
+      "count": 2,
+      "name": "alpha",
+      "tokens": 30,
+    },
+    {
+      "count": 1,
+      "name": "unknown",
+      "tokens": 5,
+    },
+  ],
+  "memoryFileCount": 2,
+  "memoryFileTokens": 15,
+  "messageBreakdown": {
+    "assistantMessageTokens": 70,
+    "attachmentTokens": 4,
+    "toolCallTokens": 30,
+    "toolResultTokens": 500,
+    "toolsByName": [
+      {
+        "callTokens": 20,
+        "name": "Bash",
+        "resultTokens": 400,
+      },
+      {
+        "callTokens": 10,
+        "name": "Read",
+        "resultTokens": 100,
+      },
+    ],
+    "userMessageTokens": 20,
+  },
+  "percentage": 6,
+  "rawMaxTokens": 200000,
+  "systemPromptSectionCount": 3,
+  "systemPromptTokens": 600,
+  "totalTokens": 12000,
+}
+`;
+
+exports[`文脈占有の観測の写し（clone と runner の #observeContextUsage） > clone: throws 1`] = `
+{
+  "error": "Error: 観測に失敗（固定用）",
+}
+`;
+
+exports[`文脈占有の観測の写し（clone と runner の #observeContextUsage） > runner: empty 1`] = `
+{
+  "isAutoCompactEnabled": false,
+  "percentage": 0.5,
+  "rawMaxTokens": 200000,
+  "totalTokens": 1000,
+}
+`;
+
+exports[`文脈占有の観測の写し（clone と runner の #observeContextUsage） > runner: full 1`] = `
+{
+  "autoCompactThreshold": 180000,
+  "categories": [
+    {
+      "kind": "used",
+      "name": "cat-0",
+      "tokens": 100,
+    },
+    {
+      "kind": "free",
+      "name": "cat-1",
+      "tokens": 101,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-2",
+      "tokens": 102,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-3",
+      "tokens": 103,
+    },
+    {
+      "kind": "used",
+      "name": "cat-4",
+      "tokens": 104,
+    },
+    {
+      "kind": "free",
+      "name": "cat-5",
+      "tokens": 105,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-6",
+      "tokens": 106,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-7",
+      "tokens": 107,
+    },
+    {
+      "kind": "used",
+      "name": "cat-8",
+      "tokens": 108,
+    },
+    {
+      "kind": "free",
+      "name": "cat-9",
+      "tokens": 109,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-10",
+      "tokens": 110,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-11",
+      "tokens": 111,
+    },
+    {
+      "kind": "used",
+      "name": "cat-12",
+      "tokens": 112,
+    },
+    {
+      "kind": "free",
+      "name": "cat-13",
+      "tokens": 113,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-14",
+      "tokens": 114,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-15",
+      "tokens": 115,
+    },
+    {
+      "kind": "used",
+      "name": "cat-16",
+      "tokens": 116,
+    },
+    {
+      "kind": "free",
+      "name": "cat-17",
+      "tokens": 117,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-18",
+      "tokens": 118,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-19",
+      "tokens": 119,
+    },
+    {
+      "kind": "used",
+      "name": "cat-20",
+      "tokens": 120,
+    },
+    {
+      "kind": "free",
+      "name": "cat-21",
+      "tokens": 121,
+    },
+    {
+      "kind": "buffer",
+      "name": "cat-22",
+      "tokens": 122,
+    },
+    {
+      "kind": "deferred",
+      "name": "cat-23",
+      "tokens": 123,
+    },
+  ],
+  "categoriesOmitted": 3,
+  "isAutoCompactEnabled": true,
+  "mcpToolCount": 4,
+  "mcpToolTokens": 85,
+  "mcpToolsByServer": [
+    {
+      "count": 1,
+      "name": "beta",
+      "tokens": 50,
+    },
+    {
+      "count": 2,
+      "name": "alpha",
+      "tokens": 30,
+    },
+    {
+      "count": 1,
+      "name": "unknown",
+      "tokens": 5,
+    },
+  ],
+  "memoryFileCount": 2,
+  "memoryFileTokens": 15,
+  "messageBreakdown": {
+    "assistantMessageTokens": 70,
+    "attachmentTokens": 4,
+    "toolCallTokens": 30,
+    "toolResultTokens": 500,
+    "toolsByName": [
+      {
+        "callTokens": 20,
+        "name": "Bash",
+        "resultTokens": 400,
+      },
+      {
+        "callTokens": 10,
+        "name": "Read",
+        "resultTokens": 100,
+      },
+    ],
+    "userMessageTokens": 20,
+  },
+  "percentage": 6,
+  "rawMaxTokens": 200000,
+  "systemPromptSectionCount": 3,
+  "systemPromptTokens": 600,
+  "totalTokens": 12000,
+}
+`;
+
+exports[`文脈占有の観測の写し（clone と runner の #observeContextUsage） > runner: throws 1`] = `
+{
+  "error": "Error: 観測に失敗（固定用）",
+}
+`;
