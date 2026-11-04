@@ -4324,29 +4324,7 @@ class Clone implements CloneHost {
     // どんな早期 return を通っても、終わりには必ず対の1行（`#journalRestoreUnreadPassEnd`）を書く: 始まりと終わりの対応を崩さないため
     await this.#journalRestoreUnreadPassStart(pending.length);
 
-    // 索引を拾い直した未読から作り直す: `#pendingCollapse` はメモリ上にしか無く、再起動を跨ぐと空になり、これから届く同文がまた新しい代表として積まれるため
-    // 先に見つかった行を代表にし、既存のバックログは遡って畳まない: `#forget` を伴う別の後始末になり、下の1件ごとの配るか消すかの判定を横取りするため
-    for (const record of pending) {
-      const key = inboxCollapseKey(record.event);
-      if (key === undefined) continue;
-      if (this.#delivery.hasCollapseKey(key)) continue;
-      this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);
-    }
-
-    // token-pool の代表は最後に見つかったものにする: 複数残っていた場合、いちばん後ろに並んでいたものを「いま分かっている中でいちばん新しい」とみなす近似（ここでも遡って畳まない）
-    for (const record of pending) {
-      if (record.event.type !== 'external') continue;
-      if (record.event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) continue;
-      // 鍵が作れない record は代表にしない: `event.id` を鍵の代わりにすると、次に鍵の作れる通知が届いたとき「中身が違う」と誤判定して代表を無条件で外しに行くため
-      const key = this.#externalMergeKey(record.event);
-      if (key === null) continue;
-      this.#delivery.setPendingTokenPoolNotice({
-        id: record.event.id,
-        at: record.event.at,
-        key,
-        folded: 0,
-      });
-    }
+    this.#registerRestoredRepresentatives(pending);
 
     // 日誌の側も同じ材料で名乗り分ける: モデルへ渡す側だけ直すと、渡す側で塞いだ嘘が `journal_read` で読み返す側から入ってくるため。`#restoredCohort` は以降動かないのでループの外で1度だけ判定する
     const alone = this.#restoredCohort <= 1;
@@ -4365,17 +4343,7 @@ class Clone implements CloneHost {
       return { record, verdict: completed ? ('stale' as const) : base };
     });
 
-    // live と判定した record は先にまとめて1回だけ「配り直した」を書く: 1件ずつだと N 件の未読を拾い直した起動でこの見出しだけで N 行が1秒未満に並ぶため
-    const liveRecordsThisPass = decided
-      .filter((entry) => entry.verdict !== 'stale')
-      .map((entry) => entry.record);
-    if (liveRecordsThisPass.length > 0) {
-      // この行に本文は載せない: 載せると、本文を持つ側（`#record` / `#handle`）と二重になるため。本文より必ず前に書く
-      await this.#journalSelf(
-        'outbound',
-        `${EXCHANGE_KIND_RECOVERY_PREFIX}${this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)}`,
-      );
-    }
+    await this.#journalRedeliveredLive(decided, alone);
 
     // 溜めるのはストアへの書き込みだけ: journal・`#record` / `#commit`・メモリ上の索引は record ごとに即座に済ませる
     // `#stopped` / `#inbox.closed` による早期 return の手前では必ず先に空にする（`flushStaleRemovalBuffer`）: 「消した」と日誌へ書いた record が器から消えないまま抜け、日誌の言明とストアの実体が食い違う窓を作らないため
@@ -4464,6 +4432,54 @@ class Clone implements CloneHost {
     await flushStaleRemovalBuffer();
     await this.#journalRestoreUnreadPassEnd(decided, decided.length, { interrupted: false });
     return claimedIds;
+  }
+
+  /** `#restoreUnreadPass` の、拾い直した未読から畳み込みの代表を作り直す段（`#restoreUnreadPass` から出した）。 */
+  #registerRestoredRepresentatives(pending: readonly PendingInboxEvent[]): void {
+    // 索引を拾い直した未読から作り直す: `#pendingCollapse` はメモリ上にしか無く、再起動を跨ぐと空になり、これから届く同文がまた新しい代表として積まれるため
+    // 先に見つかった行を代表にし、既存のバックログは遡って畳まない: `#forget` を伴う別の後始末になり、下の1件ごとの配るか消すかの判定を横取りするため
+    for (const record of pending) {
+      const key = inboxCollapseKey(record.event);
+      if (key === undefined) continue;
+      if (this.#delivery.hasCollapseKey(key)) continue;
+      this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);
+    }
+
+    // token-pool の代表は最後に見つかったものにする: 複数残っていた場合、いちばん後ろに並んでいたものを「いま分かっている中でいちばん新しい」とみなす近似（ここでも遡って畳まない）
+    for (const record of pending) {
+      if (record.event.type !== 'external') continue;
+      if (record.event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) continue;
+      // 鍵が作れない record は代表にしない: `event.id` を鍵の代わりにすると、次に鍵の作れる通知が届いたとき「中身が違う」と誤判定して代表を無条件で外しに行くため
+      const key = this.#externalMergeKey(record.event);
+      if (key === null) continue;
+      this.#delivery.setPendingTokenPoolNotice({
+        id: record.event.id,
+        at: record.event.at,
+        key,
+        folded: 0,
+      });
+    }
+  }
+
+  /** `#restoreUnreadPass` の、live と判定した合図の見出しを1行だけ書く段（`#restoreUnreadPass` から出した）。 */
+  async #journalRedeliveredLive(
+    decided: ReadonlyArray<{
+      readonly record: PendingInboxEvent;
+      readonly verdict: RestoredInboxEventVerdict;
+    }>,
+    alone: boolean,
+  ): Promise<void> {
+    // live と判定した record は先にまとめて1回だけ「配り直した」を書く: 1件ずつだと N 件の未読を拾い直した起動でこの見出しだけで N 行が1秒未満に並ぶため
+    const liveRecordsThisPass = decided
+      .filter((entry) => entry.verdict !== 'stale')
+      .map((entry) => entry.record);
+    if (liveRecordsThisPass.length > 0) {
+      // この行に本文は載せない: 載せると、本文を持つ側（`#record` / `#handle`）と二重になるため。本文より必ず前に書く
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}${this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)}`,
+      );
+    }
   }
 
   // 件数が0のときは書かない: 未読が0件の起動が大半で、0件のたびに書くと、起動回数ぶん積み重なる中身の無い雑音になるため
@@ -5662,6 +5678,20 @@ class Clone implements CloneHost {
     if (!timerPrompt.endsWith(foldedDigest)) this.#digestDelta.discardStaged();
     const outcome = await this.#runInternal(timerPrompt);
 
+    await this.#settleTimerRun(event, plan, outcome, cause);
+    return;
+  }
+
+  /**
+   * `#handleTimer` の、ターンの後の完了の記録（失敗の再試行・枠保持の印・完了）の段（`#handleTimer` から出した）。
+   * 中の `return` は、元の `#handleTimer` でもこの段の直後が `return` だったので、出しても同じ所で終わる
+   */
+  async #settleTimerRun(
+    event: Extract<InboxEvent, { type: 'timer' }>,
+    plan: ScheduledRequest | null,
+    outcome: TurnOutcome,
+    cause: 'manual' | 'schedule',
+  ): Promise<void> {
     // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
     // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば、成功するまで最後の間隔で元の発火として配り直され、再起動でも `#firstDue` が配り直す）
     // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
@@ -5706,7 +5736,6 @@ class Clone implements CloneHost {
         await this.#completeScheduledRun(event.kind, event.at, cause);
       }
     }
-    return;
   }
 
   /** 受信箱の `external` の1件を処理する（`#handle` が振り分ける）。 */
