@@ -7992,45 +7992,7 @@ class Clone implements CloneHost {
     notePhase(`clone:${event.type}`);
     switch (event.type) {
       case 'session_started': {
-        this.#sdkSession.markSawInit();
-        // 会話が変わったら「いまの全体」の説明文の控えを捨てる: 前の会話で出した全文は、この会話には無いため
-        // 初めての init（控えが無い → 有る）では捨てない: このターンの全文は、いま開いたこの会話に載せたもののため
-        if (
-          this.#situationExplainedSessionId !== undefined &&
-          this.#situationExplainedSessionId !== event.sessionId
-        ) {
-          this.#returnToFullText({
-            situation: true,
-            digest: { reason: 'full', label: 'session_changed' },
-          });
-        }
-        this.#situationExplainedSessionId = event.sessionId;
-        // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
-        await this.#stores.sessions.setCloneSessionId(event.sessionId).catch((error: unknown) => {
-          noteCloneSessionIdNotRecorded(error);
-        });
-        this.#captureInitFacts(event.runtime);
-        // 届いたかの確認（#3815）: init の plugins / plugin_errors を、前回と変わったときだけ日誌へ残す（`#plugins` と同じ形）。init に欄が無いときは書かない（観測していない）
-        if (event.runtime.pluginLoad !== null) {
-          const described = describePluginLoadForJournal(event.runtime.pluginLoad);
-          if (described.digest !== this.#lastPluginLoadDigest) {
-            this.#lastPluginLoadDigest = described.digest;
-            await this.#journalSelf(
-              'outbound',
-              `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`,
-            );
-          }
-        }
-        // 人間の操作で開き直した後の最初の init なら、古い id → 新しい id を日誌に残す。
-        const reopened = this.#distillMemory.takeReopenInit();
-        if (reopened !== null) {
-          await this.#journalSelf(
-            'outbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
-              ` → ${event.sessionId}（${describeReopenArchive(reopened.archive)}）`,
-          );
-        }
-        return;
+        return this.#applySessionStarted(event);
       }
 
       case 'permission_denied': {
@@ -8050,56 +8012,7 @@ class Clone implements CloneHost {
       }
 
       case 'rate_limit': {
-        const facts = event.facts;
-        // 覚えるのは重ねた形（`mergeRateLimitFacts`）: 届いた1件で置き換えると、`status` を運ばない観測が「もう知らせた」記憶を消す。
-        // 欄は「トークンの身元 × 枠の種類」で分け、身元は `#sessionTokenIdentity` を使う（`#tokenIdentity?.()` を読み直さない）: 回った直後に届いた前の鍵の観測が新しい鍵の欄へ入るため。
-        const kind = facts.kind ?? '';
-        const memoryKey = rateLimitMemoryKey(this.#sdkSession.sessionTokenIdentity?.tokenId, kind);
-        const previous = this.#rateLimits.get(memoryKey);
-        const transition = usageTransitionOf(previous, facts);
-        const merged = mergeRateLimitFacts(previous, facts);
-        this.#rateLimits.set(memoryKey, merged);
-
-        // 畳むたびには書かず、次に `transition` が定まった回にまとめて日誌へ吐く（`#rateLimitCrossFold`）: 日誌を肥大させないため。
-        const conversationId = this.#sdkSession.turn?.conversationId ?? null;
-        if (transition === undefined) {
-          const crossFold = this.#rateLimitCrossFold.get(memoryKey);
-          if (crossFold !== undefined && crossFold.lastConversationId !== conversationId) {
-            crossFold.folded.add(conversationId);
-          }
-        } else {
-          const crossFold = this.#rateLimitCrossFold.get(memoryKey);
-          if (crossFold !== undefined && crossFold.folded.size > 0) {
-            await this.#journalSelf(
-              'outbound',
-              `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
-                `${crossFold.folded.size} 本の異なる会話が当たっている` +
-                '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
-            );
-          }
-          this.#rateLimitCrossFold.set(memoryKey, {
-            lastConversationId: conversationId,
-            folded: new Set(),
-          });
-        }
-
-        // 遷移が取れなかった回も渡す: 同じ鍵で `rejected` が続くあいだは遷移が立たず、門の後ろでは回し手の契機を拾えない。
-        // `statusNow` は重ねる前の生の1件から取る（`merged` ではなく）: 重ねた `status` はアカウントを跨いで残り、回した直後の健全な鍵でもう一度回る。
-        if (transition !== undefined || facts.status === 'rejected') {
-          await this.#observeForTokenRotation({
-            facts: merged,
-            ...(transition === undefined ? {} : { transition }),
-            ...(facts.status === undefined ? {} : { statusNow: facts.status }),
-          });
-        }
-        if (facts.status === 'rejected') {
-          await this.#noteUsageNotice(
-            rejectedRateLimitNotice(facts),
-            this.#sdkSession.turn?.conversationId ?? null,
-            'rate_limit',
-          );
-        }
-        return;
+        return this.#applyRateLimit(event);
       }
 
       case 'text_delta': {
@@ -8114,70 +8027,7 @@ class Clone implements CloneHost {
       }
 
       case 'assistant_message': {
-        const turn = this.#sdkSession.turn;
-        const said = assistantTextOf(event.blocks);
-
-        // 作業者（`parentToolUseId` 付き = Task の中の別の層）の発言の拒否は、クローン自身のターンの失敗にしない・返答も切り捨てない（#4911）。
-        // クローン本体は動けるのに、作業者だけが上限に当たった回でターンが失敗に化けるため。構造化された印（errorCode）だけで判定し、本文の引用では立てない。
-        if (event.parentToolUseId !== null) {
-          const workerRejected = assistantFailureOf(event.errorCode, '');
-          if (
-            workerRejected !== undefined &&
-            turnFailureKindOf(assistantFailureOf(event.errorCode, said)) === 'quota'
-          ) {
-            await this.#recordWorkerLimit(
-              `tool_use:${event.parentToolUseId}`,
-              workerLimitLabel(event.parentToolUseId, undefined),
-              said.length > 0 ? said : workerRejected.code,
-            );
-          }
-          if (workerRejected !== undefined) return;
-        }
-
-        // 人間へ `text` として流さない: 「返答が来た」と見えるため。終端は `result` の分岐に任せる。
-        const rejected = assistantFailureOf(event.errorCode, said);
-        if (rejected !== undefined) {
-          if (turn) {
-            turn.rejected = rejected;
-            // このメッセージの分として流れた片は返答にしない（日誌へ書かない）。書き済みの分は戻せない。
-            turn.reply = turn.reply.slice(0, Math.max(turn.replyMessageStart, turn.replyWritten));
-            turn.replyMessageStart = turn.reply.length;
-          }
-          return;
-        }
-
-        const unstreamedInStreamedTurn =
-          turn !== null && turn.streamed && turn.reply.length === turn.replyMessageStart;
-        // 時計（#5086）はクローン本体の発言だけで動かす: 作業者（Task の中の別の層）の発言・道具は、Task という1本の道具の時間に入っている
-        const timer = event.parentToolUseId === null ? (turn?.timer ?? null) : null;
-        for (const block of event.blocks) {
-          if (block.type === 'text') {
-            if (block.text !== '') timer?.responded('text');
-            if (turn) turn.text += block.text;
-            if (!turn?.streamed) {
-              if (turn) appendReply(turn, block.text);
-              this.#emit(turn?.conversationId ?? null, { type: 'text', text: block.text });
-            } else if (turn !== null && unstreamedInStreamedTurn) {
-              appendReply(turn, block.text);
-            }
-          } else if (block.type === 'tool_use') {
-            if (block.id === undefined) timer?.responded('tool');
-            else timer?.toolStarted(block.id, block.name);
-            // 区切りの印は Web が返信の行を分ける点（`tool`）にそろえる: 分けない所に入れると、行の連結が日誌の本文と合わず写しが居座る
-            if (turn) turn.replySeparatorPending = true;
-            this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
-            if (block.unparsedInputLen !== undefined) {
-              await this.#journalUnparsedToolInput(
-                block.name,
-                block.id,
-                block.unparsedInputLen,
-                event.parentToolUseId,
-              );
-            }
-          }
-        }
-        if (turn) turn.replyMessageStart = turn.reply.length;
-        return;
+        return this.#applyAssistantMessage(event);
       }
 
       // `tool_result` を含むときだけ `thinking` にする: 人間の発言のエコーや replay を「考え始めた」と読み違えないため。
@@ -8236,142 +8086,7 @@ class Clone implements CloneHost {
       }
 
       case 'turn_ended': {
-        // ここでモデルの段を閉じ、後始末（finalize）を数え始める（#5086）
-        const timer = this.#sdkSession.turn?.timer ?? null;
-        const mainLoop = event.usage?.mainLoopUsage;
-        timer?.turnEnded({
-          succeeded: event.succeeded,
-          ...(mainLoop === undefined
-            ? {}
-            : {
-                tokens: {
-                  input: mainLoop.inputTokens,
-                  cacheRead: mainLoop.cacheReadInputTokens,
-                  cacheCreation: mainLoop.cacheCreationInputTokens,
-                  output: mainLoop.outputTokens,
-                },
-              }),
-          ...(event.timing === undefined && event.usage?.numTurns === undefined
-            ? {}
-            : {
-                sdk: {
-                  ...event.timing,
-                  ...(event.usage?.numTurns === undefined
-                    ? {}
-                    : { numTurns: event.usage.numTurns }),
-                },
-              }),
-        });
-        const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
-          timer === null ? fn() : timer.time(`finalize.${name}`, fn);
-        const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
-        if (contextUsage?.totalTokens !== undefined)
-          timer?.contextObserved(contextUsage.totalTokens);
-        // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
-        // 伸びは前の観測があって両方測れた回だけ取る: 開き直しの直後や測れなかった回の差は伸びではないため
-        const previousTotal = this.#lastContextUsage?.totalTokens;
-        this.#lastContextGrowthTokens =
-          previousTotal !== undefined && contextUsage?.totalTokens !== undefined
-            ? Math.max(0, contextUsage.totalTokens - previousTotal)
-            : 0;
-        this.#lastContextUsage = contextUsage ?? null;
-
-        // `turn_usage` に相乗りさせない: `#recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
-        if (contextUsage !== undefined) {
-          await this.#journal({
-            type: 'context_usage',
-            layer: 'clone',
-            site: 'session',
-            managerId: CLONE_ACTOR_ID,
-            ...(this.#sdkSession.sdkSessionId === null
-              ? {}
-              : { sessionId: this.#sdkSession.sdkSessionId }),
-            turnSucceeded: event.succeeded,
-            contextUsage,
-          });
-        }
-
-        // 成否を見ずに毎回呼ぶ: 条件を付けると `journal_read` の推移に穴が空く。
-        await finalizeStep('inboxFlow', () => this.#writeInboxFlow());
-
-        const compactions = this.#sdkSession.turn?.compactions ?? [];
-
-        await finalizeStep('usage', () =>
-          this.#recordUsage(event.usage, 'session', 'cumulative', {
-            contextUsage,
-            compactions,
-          }),
-        );
-
-        await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);
-
-        // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
-        for (const denial of event.denials) {
-          await this.#noteDenial(denial, 'result');
-        }
-
-        const turn = this.#sdkSession.turn;
-        const failure = event.failure ?? turn?.rejected ?? undefined;
-
-        // 内部ターン（蒸留・自律）も必ず残す: 見えない層を作らない。
-        if (turn)
-          await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));
-
-        // 判定は `isAnsweredResult`（`isSuccessResult` ではない）: `subtype: 'success'` かつ `is_error: true` を成功として通してしまうため。
-        // `turn.rejected` も見る: `assistant.error` が付いたターンは、`result` が成功でも応答として扱わない。
-        if (failure !== undefined) {
-          // 分類にかけるのは SDK が失敗として出した文言だけ（`turn.text` を通さない）: 部分一致なので、
-          // 「上限に当たった」と日報に書いた瞬間に上限と誤判定する自家中毒になる。
-          // この `await` は `#reportFailure` より先に終える: `usage_limited` は終端ではなく、終端の `error` より先に届く必要がある。
-          // grep -Fn -- 'for (const candidate of [failure.text, ...event.errorLines])' packages/core/src/runner.ts
-          // 応答の本文 `event.body` は候補に入れない（#4931）: 作業者の上限の原文（#4911 で道具の結果へ添える）をクローンが引用して別の理由で失敗すると、自分の枠と取り違える。
-          // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で、`body` と同じ文字列。
-          for (const candidate of [failure.text, ...event.errorLines]) {
-            const notice = classifyUsageNotice(candidate);
-            if (notice !== undefined) {
-              await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
-              break;
-            }
-          }
-          // 失敗した result では `done` を出さない: `#reportFailure` の `error` を終端にする。
-          await this.#reportFailure(
-            turn?.conversationId ?? null,
-            failureReason(failure, event),
-            // 種別は言い切れるほうの印を採る: `assistant.error` だけが `rate_limit` と言う回を `other` に落とさないため。
-            [event.failure, turn?.rejected].find(
-              (candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other',
-            ) ?? failure,
-          );
-          // 失敗側でも必ず畳む: 呼ばないと `#runTurn` が返らず、`#pump` が次の合図へ進めず受信箱ごと止まる。
-          this.#finishTurn();
-          return;
-        }
-
-        // 成功した result は「枠が開いている」証拠なので保持を降ろす: 降ろさないと `#pump` の `finally` が
-        // 答えの返った合図を `defer` し、次の合図で同じ発言が二重実行される。
-        // `rate_limit_event` の `rejected` でも課金枠（overage）に落ちてターンは成功しうる（通常の遷移）。
-        // `#notices` は降ろさない: 同じ文言を二度書かないための別の関心。
-        // 控えの預け入れは成功したターンの後だけ: 失敗したターンの入力が履歴に残るかは SDK の挙動に頼らない（`turn_failed` の reset と同じ）
-        this.#persistFoldStateAfterTurn();
-        this.#usageBlocked = null;
-        // 抑止した再武装・畳んだ内部の失敗の件数も0へ戻す: この解除は `#pump` 先頭の解除ブロックを経由せず、古い件数が次の枠当たりへ残るため。
-        this.#usageBlockSuppressedRearms = 0;
-        this.#usageBlockFoldedInternalFailures = 0;
-        // `observedBy` は付けない: `#observeForTokenRotation` が `#sessionTokenIdentity` から付ける。
-        await this.#observeForTokenRotation({ succeeded: true });
-        // `#usageBlocked` では代用できない: 初期値も `null` で「まだ成功していない」と区別できない。
-        this.#sessionAnswered = true;
-        this.#heldEscalationStreak = 0;
-        // 降格して再試行し通ったターン（`turn.refusal` 付き）も、答えが返った以上は数えない。
-        this.#resetRefusalStreak();
-        this.#autoReopenHalted = false;
-        // 降ろさないと、次の `reached` で前回までの積算から数え直して早く畳む。
-        this.#usageBlockedAccumulatedChars = 0;
-        // `done` を出す前に済ませる: 人間が返答を読み終えた時点で、閉じた task が `task_list` に出ているため
-        if (turn) await this.#autoCloseRepliedTasks(turn);
-        this.#emit(turn?.conversationId ?? null, { type: 'done' });
-        this.#finishTurn();
-        return;
+        return this.#applyTurnEnded(event);
       }
 
       // 反応を足さない: 区間（`worker_wait`）や背景処理（`background_tasks`）を数えるのはマネージャー層（`runner.ts`）で、
@@ -8409,6 +8124,308 @@ class Clone implements CloneHost {
         return;
       }
     }
+  }
+
+  /** SDK `session_started` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applySessionStarted(
+    event: Extract<AgentEvent, { type: 'session_started' }>,
+  ): Promise<void> {
+    this.#sdkSession.markSawInit();
+    // 会話が変わったら「いまの全体」の説明文の控えを捨てる: 前の会話で出した全文は、この会話には無いため
+    // 初めての init（控えが無い → 有る）では捨てない: このターンの全文は、いま開いたこの会話に載せたもののため
+    if (
+      this.#situationExplainedSessionId !== undefined &&
+      this.#situationExplainedSessionId !== event.sessionId
+    ) {
+      this.#returnToFullText({
+        situation: true,
+        digest: { reason: 'full', label: 'session_changed' },
+      });
+    }
+    this.#situationExplainedSessionId = event.sessionId;
+    // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
+    await this.#stores.sessions.setCloneSessionId(event.sessionId).catch((error: unknown) => {
+      noteCloneSessionIdNotRecorded(error);
+    });
+    this.#captureInitFacts(event.runtime);
+    // 届いたかの確認（#3815）: init の plugins / plugin_errors を、前回と変わったときだけ日誌へ残す（`#plugins` と同じ形）。init に欄が無いときは書かない（観測していない）
+    if (event.runtime.pluginLoad !== null) {
+      const described = describePluginLoadForJournal(event.runtime.pluginLoad);
+      if (described.digest !== this.#lastPluginLoadDigest) {
+        this.#lastPluginLoadDigest = described.digest;
+        await this.#journalSelf('outbound', `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`);
+      }
+    }
+    // 人間の操作で開き直した後の最初の init なら、古い id → 新しい id を日誌に残す。
+    const reopened = this.#distillMemory.takeReopenInit();
+    if (reopened !== null) {
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
+          ` → ${event.sessionId}（${describeReopenArchive(reopened.archive)}）`,
+      );
+    }
+    return;
+  }
+
+  /** SDK `rate_limit` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyRateLimit(event: Extract<AgentEvent, { type: 'rate_limit' }>): Promise<void> {
+    const facts = event.facts;
+    // 覚えるのは重ねた形（`mergeRateLimitFacts`）: 届いた1件で置き換えると、`status` を運ばない観測が「もう知らせた」記憶を消す。
+    // 欄は「トークンの身元 × 枠の種類」で分け、身元は `#sessionTokenIdentity` を使う（`#tokenIdentity?.()` を読み直さない）: 回った直後に届いた前の鍵の観測が新しい鍵の欄へ入るため。
+    const kind = facts.kind ?? '';
+    const memoryKey = rateLimitMemoryKey(this.#sdkSession.sessionTokenIdentity?.tokenId, kind);
+    const previous = this.#rateLimits.get(memoryKey);
+    const transition = usageTransitionOf(previous, facts);
+    const merged = mergeRateLimitFacts(previous, facts);
+    this.#rateLimits.set(memoryKey, merged);
+
+    // 畳むたびには書かず、次に `transition` が定まった回にまとめて日誌へ吐く（`#rateLimitCrossFold`）: 日誌を肥大させないため。
+    const conversationId = this.#sdkSession.turn?.conversationId ?? null;
+    if (transition === undefined) {
+      const crossFold = this.#rateLimitCrossFold.get(memoryKey);
+      if (crossFold !== undefined && crossFold.lastConversationId !== conversationId) {
+        crossFold.folded.add(conversationId);
+      }
+    } else {
+      const crossFold = this.#rateLimitCrossFold.get(memoryKey);
+      if (crossFold !== undefined && crossFold.folded.size > 0) {
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
+            `${crossFold.folded.size} 本の異なる会話が当たっている` +
+            '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
+        );
+      }
+      this.#rateLimitCrossFold.set(memoryKey, {
+        lastConversationId: conversationId,
+        folded: new Set(),
+      });
+    }
+
+    // 遷移が取れなかった回も渡す: 同じ鍵で `rejected` が続くあいだは遷移が立たず、門の後ろでは回し手の契機を拾えない。
+    // `statusNow` は重ねる前の生の1件から取る（`merged` ではなく）: 重ねた `status` はアカウントを跨いで残り、回した直後の健全な鍵でもう一度回る。
+    if (transition !== undefined || facts.status === 'rejected') {
+      await this.#observeForTokenRotation({
+        facts: merged,
+        ...(transition === undefined ? {} : { transition }),
+        ...(facts.status === undefined ? {} : { statusNow: facts.status }),
+      });
+    }
+    if (facts.status === 'rejected') {
+      await this.#noteUsageNotice(
+        rejectedRateLimitNotice(facts),
+        this.#sdkSession.turn?.conversationId ?? null,
+        'rate_limit',
+      );
+    }
+    return;
+  }
+
+  /** SDK `assistant_message` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyAssistantMessage(
+    event: Extract<AgentEvent, { type: 'assistant_message' }>,
+  ): Promise<void> {
+    const turn = this.#sdkSession.turn;
+    const said = assistantTextOf(event.blocks);
+
+    // 作業者（`parentToolUseId` 付き = Task の中の別の層）の発言の拒否は、クローン自身のターンの失敗にしない・返答も切り捨てない（#4911）。
+    // クローン本体は動けるのに、作業者だけが上限に当たった回でターンが失敗に化けるため。構造化された印（errorCode）だけで判定し、本文の引用では立てない。
+    if (event.parentToolUseId !== null) {
+      const workerRejected = assistantFailureOf(event.errorCode, '');
+      if (
+        workerRejected !== undefined &&
+        turnFailureKindOf(assistantFailureOf(event.errorCode, said)) === 'quota'
+      ) {
+        await this.#recordWorkerLimit(
+          `tool_use:${event.parentToolUseId}`,
+          workerLimitLabel(event.parentToolUseId, undefined),
+          said.length > 0 ? said : workerRejected.code,
+        );
+      }
+      if (workerRejected !== undefined) return;
+    }
+
+    // 人間へ `text` として流さない: 「返答が来た」と見えるため。終端は `result` の分岐に任せる。
+    const rejected = assistantFailureOf(event.errorCode, said);
+    if (rejected !== undefined) {
+      if (turn) {
+        turn.rejected = rejected;
+        // このメッセージの分として流れた片は返答にしない（日誌へ書かない）。書き済みの分は戻せない。
+        turn.reply = turn.reply.slice(0, Math.max(turn.replyMessageStart, turn.replyWritten));
+        turn.replyMessageStart = turn.reply.length;
+      }
+      return;
+    }
+
+    const unstreamedInStreamedTurn =
+      turn !== null && turn.streamed && turn.reply.length === turn.replyMessageStart;
+    // 時計（#5086）はクローン本体の発言だけで動かす: 作業者（Task の中の別の層）の発言・道具は、Task という1本の道具の時間に入っている
+    const timer = event.parentToolUseId === null ? (turn?.timer ?? null) : null;
+    for (const block of event.blocks) {
+      if (block.type === 'text') {
+        if (block.text !== '') timer?.responded('text');
+        if (turn) turn.text += block.text;
+        if (!turn?.streamed) {
+          if (turn) appendReply(turn, block.text);
+          this.#emit(turn?.conversationId ?? null, { type: 'text', text: block.text });
+        } else if (turn !== null && unstreamedInStreamedTurn) {
+          appendReply(turn, block.text);
+        }
+      } else if (block.type === 'tool_use') {
+        if (block.id === undefined) timer?.responded('tool');
+        else timer?.toolStarted(block.id, block.name);
+        // 区切りの印は Web が返信の行を分ける点（`tool`）にそろえる: 分けない所に入れると、行の連結が日誌の本文と合わず写しが居座る
+        if (turn) turn.replySeparatorPending = true;
+        this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
+        if (block.unparsedInputLen !== undefined) {
+          await this.#journalUnparsedToolInput(
+            block.name,
+            block.id,
+            block.unparsedInputLen,
+            event.parentToolUseId,
+          );
+        }
+      }
+    }
+    if (turn) turn.replyMessageStart = turn.reply.length;
+    return;
+  }
+
+  /** SDK `turn_ended` の1件を処理する（`#apply` が振り分ける）。 */
+  async #applyTurnEnded(event: Extract<AgentEvent, { type: 'turn_ended' }>): Promise<void> {
+    // ここでモデルの段を閉じ、後始末（finalize）を数え始める（#5086）
+    const timer = this.#sdkSession.turn?.timer ?? null;
+    const mainLoop = event.usage?.mainLoopUsage;
+    timer?.turnEnded({
+      succeeded: event.succeeded,
+      ...(mainLoop === undefined
+        ? {}
+        : {
+            tokens: {
+              input: mainLoop.inputTokens,
+              cacheRead: mainLoop.cacheReadInputTokens,
+              cacheCreation: mainLoop.cacheCreationInputTokens,
+              output: mainLoop.outputTokens,
+            },
+          }),
+      ...(event.timing === undefined && event.usage?.numTurns === undefined
+        ? {}
+        : {
+            sdk: {
+              ...event.timing,
+              ...(event.usage?.numTurns === undefined ? {} : { numTurns: event.usage.numTurns }),
+            },
+          }),
+    });
+    const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
+      timer === null ? fn() : timer.time(`finalize.${name}`, fn);
+    const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
+    if (contextUsage?.totalTokens !== undefined) timer?.contextObserved(contextUsage.totalTokens);
+    // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
+    // 伸びは前の観測があって両方測れた回だけ取る: 開き直しの直後や測れなかった回の差は伸びではないため
+    const previousTotal = this.#lastContextUsage?.totalTokens;
+    this.#lastContextGrowthTokens =
+      previousTotal !== undefined && contextUsage?.totalTokens !== undefined
+        ? Math.max(0, contextUsage.totalTokens - previousTotal)
+        : 0;
+    this.#lastContextUsage = contextUsage ?? null;
+
+    // `turn_usage` に相乗りさせない: `#recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
+    if (contextUsage !== undefined) {
+      await this.#journal({
+        type: 'context_usage',
+        layer: 'clone',
+        site: 'session',
+        managerId: CLONE_ACTOR_ID,
+        ...(this.#sdkSession.sdkSessionId === null
+          ? {}
+          : { sessionId: this.#sdkSession.sdkSessionId }),
+        turnSucceeded: event.succeeded,
+        contextUsage,
+      });
+    }
+
+    // 成否を見ずに毎回呼ぶ: 条件を付けると `journal_read` の推移に穴が空く。
+    await finalizeStep('inboxFlow', () => this.#writeInboxFlow());
+
+    const compactions = this.#sdkSession.turn?.compactions ?? [];
+
+    await finalizeStep('usage', () =>
+      this.#recordUsage(event.usage, 'session', 'cumulative', {
+        contextUsage,
+        compactions,
+      }),
+    );
+
+    await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);
+
+    // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
+    for (const denial of event.denials) {
+      await this.#noteDenial(denial, 'result');
+    }
+
+    const turn = this.#sdkSession.turn;
+    const failure = event.failure ?? turn?.rejected ?? undefined;
+
+    // 内部ターン（蒸留・自律）も必ず残す: 見えない層を作らない。
+    if (turn) await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));
+
+    // 判定は `isAnsweredResult`（`isSuccessResult` ではない）: `subtype: 'success'` かつ `is_error: true` を成功として通してしまうため。
+    // `turn.rejected` も見る: `assistant.error` が付いたターンは、`result` が成功でも応答として扱わない。
+    if (failure !== undefined) {
+      // 分類にかけるのは SDK が失敗として出した文言だけ（`turn.text` を通さない）: 部分一致なので、
+      // 「上限に当たった」と日報に書いた瞬間に上限と誤判定する自家中毒になる。
+      // この `await` は `#reportFailure` より先に終える: `usage_limited` は終端ではなく、終端の `error` より先に届く必要がある。
+      // grep -Fn -- 'for (const candidate of [failure.text, ...event.errorLines])' packages/core/src/runner.ts
+      // 応答の本文 `event.body` は候補に入れない（#4931）: 作業者の上限の原文（#4911 で道具の結果へ添える）をクローンが引用して別の理由で失敗すると、自分の枠と取り違える。
+      // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で、`body` と同じ文字列。
+      for (const candidate of [failure.text, ...event.errorLines]) {
+        const notice = classifyUsageNotice(candidate);
+        if (notice !== undefined) {
+          await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
+          break;
+        }
+      }
+      // 失敗した result では `done` を出さない: `#reportFailure` の `error` を終端にする。
+      await this.#reportFailure(
+        turn?.conversationId ?? null,
+        failureReason(failure, event),
+        // 種別は言い切れるほうの印を採る: `assistant.error` だけが `rate_limit` と言う回を `other` に落とさないため。
+        [event.failure, turn?.rejected].find(
+          (candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other',
+        ) ?? failure,
+      );
+      // 失敗側でも必ず畳む: 呼ばないと `#runTurn` が返らず、`#pump` が次の合図へ進めず受信箱ごと止まる。
+      this.#finishTurn();
+      return;
+    }
+
+    // 成功した result は「枠が開いている」証拠なので保持を降ろす: 降ろさないと `#pump` の `finally` が
+    // 答えの返った合図を `defer` し、次の合図で同じ発言が二重実行される。
+    // `rate_limit_event` の `rejected` でも課金枠（overage）に落ちてターンは成功しうる（通常の遷移）。
+    // `#notices` は降ろさない: 同じ文言を二度書かないための別の関心。
+    // 控えの預け入れは成功したターンの後だけ: 失敗したターンの入力が履歴に残るかは SDK の挙動に頼らない（`turn_failed` の reset と同じ）
+    this.#persistFoldStateAfterTurn();
+    this.#usageBlocked = null;
+    // 抑止した再武装・畳んだ内部の失敗の件数も0へ戻す: この解除は `#pump` 先頭の解除ブロックを経由せず、古い件数が次の枠当たりへ残るため。
+    this.#usageBlockSuppressedRearms = 0;
+    this.#usageBlockFoldedInternalFailures = 0;
+    // `observedBy` は付けない: `#observeForTokenRotation` が `#sessionTokenIdentity` から付ける。
+    await this.#observeForTokenRotation({ succeeded: true });
+    // `#usageBlocked` では代用できない: 初期値も `null` で「まだ成功していない」と区別できない。
+    this.#sessionAnswered = true;
+    this.#heldEscalationStreak = 0;
+    // 降格して再試行し通ったターン（`turn.refusal` 付き）も、答えが返った以上は数えない。
+    this.#resetRefusalStreak();
+    this.#autoReopenHalted = false;
+    // 降ろさないと、次の `reached` で前回までの積算から数え直して早く畳む。
+    this.#usageBlockedAccumulatedChars = 0;
+    // `done` を出す前に済ませる: 人間が返答を読み終えた時点で、閉じた task が `task_list` に出ているため
+    if (turn) await this.#autoCloseRepliedTasks(turn);
+    this.#emit(turn?.conversationId ?? null, { type: 'done' });
+    this.#finishTurn();
+    return;
   }
 
   /**

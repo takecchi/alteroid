@@ -108,9 +108,15 @@ export function squash(expression: string): string {
   const stack: string[] = [];
   let pendingSpace = false;
   const emit = (chunk: string): void => {
-    // `${` の直後の空白も落とす（閉じの前と同じ理由）
-    if (pendingSpace && out !== '' && !out.endsWith('${')) out += ' ';
+    // 開き括弧（`(` `[` `{` `${`）の直後の空白は落とす: prettier は字下げが変わると、同じ呼び出しを1行にも複数行にも折るため
+    if (pendingSpace && out !== '' && !/(?:\$\{|[([{])$/.test(out)) out += ' ';
     pendingSpace = false;
+    out += chunk;
+  };
+  // 閉じ括弧の直前の空白と末尾の `,` は落とす（開き括弧の直後と同じ理由。複数行に折ると末尾に `,` が付く）
+  const close = (chunk: string): void => {
+    pendingSpace = false;
+    out = out.replace(/,\s*$/, '').trimEnd();
     out += chunk;
   };
   let i = 0;
@@ -166,9 +172,13 @@ export function squash(expression: string): string {
     }
     if (ch === '}' && stack.at(-1) === '${') {
       // `${…}` の閉じの前の空白は落とす（prettier が `${ x }` の形に折ることがあるため）
-      pendingSpace = false;
-      out += ch;
+      close(ch);
       stack.pop();
+      i += 1;
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      close(ch);
       i += 1;
       continue;
     }

@@ -304,7 +304,10 @@ function textFieldReferencesAnyPrefix(objectText: string): boolean {
  */
 const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'clone.ts': {
-    '#apply': 'decision,gauge',
+    // `#apply` に残るのは降格の行（`refusal`。欄を足しているので `#journalSelf` へ寄せていない）だけ。ほかは出した先の `#applySessionStarted`・`#applyRateLimit` へ移った
+    '#apply': 'decision',
+    '#applyRateLimit': 'gauge',
+    '#applySessionStarted': 'decision',
     '#buildSessionSpec': 'decision',
     '#completeScheduledRun': 'failure',
     '#dailyReport': 'decision,failure',
