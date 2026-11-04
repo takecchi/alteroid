@@ -330,12 +330,12 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
-**層（クローン・マネージャー・作業者）は常に Claude で動く**（2026-10-07 の決定）。層の provider を選ぶ変数（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER`）とクローンの `ALTEROID_CLONE_PEERS` はもう読まない。残っていても起動は止まらず、`app` / `runner` の起動ログ（stderr）に「もう読みません」の行が名前つきで1行ずつ出るので、見えたら Variables から外す。
+**層（クローン・マネージャー・作業者）は常に Claude で動く**（2026-10-07 の決定）。層の provider を選ぶ変数（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER`）とクローンの `ALTEROID_CLONE_PEERS` はもう読まない。残っていても起動は止まらず、何も知らせない（起動ログの「もう読みません」の行は 2026-10-30 に外した。#5805）。Variables に残っていれば外してよい。
 
 **Codex に作業を頼めるようにするとき**
 
 - **Codex の設定を済ませるだけでよい。環境変数は要らない**（2026-10-08 の決定。#4118）。ChatGPT ログイン（`alteroid codex login`、Web の「設定 — Codex」、`POST /codex/login`）か、`alteroid credential set CODEX_API_KEY --scope runner` のどちらか。資格が runner に届いた時点で、その器のマネージャーに MCP `peer` が開く。**runner の再起動は要らない**（走行中のマネージャーにも、ターンの区切りで道具が出る）。ログアウトするか鍵を外せば閉じる。
-- 以前の `ALTEROID_MANAGER_PEERS` は退役した。Service Variables に残っていても読まず、`runner` の起動ログ（stderr）に「もう読みません」の行が出るので、見えたら外す。
+- 以前の `ALTEROID_MANAGER_PEERS` は退役した。Service Variables に残っていても読まず、何も知らせない（起動ログの「もう読みません」の行は 2026-10-30 に外した。#5805）。残っていれば外してよい。
 - 開くと、マネージャーに MCP `peer`（`peer_run` / `peer_reply` / `peer_approve`）が出て、Codex に**作業を頼める**（ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャーの判断**である。クローンからは `runner_list` の `peer:` の行（Web の設定画面・「設定 — Codex」・`alteroid runners` も同じ）で、どの器が Codex に頼めるか、閉じている器はその理由が見える。
 - Codex の構えは呼び出し元のマネージャーと同じ（`ALTEROID_MANAGER_PERMISSION_MODE`。`bypassPermissions` なら確認なし、それ以外は on-request）。それでも出た確認は `peer_run` の応答としてまずマネージャーへ返り、マネージャーが `peer_approve` で許可・拒否するか、判断できないときだけ `escalate` で（出所の印つきで）**クローンへ上がる**。答えていない確認は、そのセッションのターンが終わる・セッションが閉じる・マネージャーが止まると拒否として閉じる（ほかの peer を起こしても閉じない。#4124）。
 - **背景実行**: `run_in_background` を付けると、作業者と同じく背後へ回り、止まりどころ（ターンの終わり・確認待ち）で alteroid がマネージャーへ知らせて起こす（#4123）。待つ間のマネージャーの報告は、作業者の背景待ちと同じく畳まれる。

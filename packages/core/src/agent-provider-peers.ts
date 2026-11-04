@@ -8,9 +8,7 @@ import type { AgentProviderId } from './agent-ports.js';
  * ChatGPT ログイン（デーモンの正本から降りる）か、袋の `CODEX_API_KEY` が届いていれば開き、
  * どちらも無ければ閉じる。判定は資格が届く・外れるたびにやり直す（runner の再起動は要らない）。
  *
- * 以前は runner の `ALTEROID_MANAGER_PEERS` で開けていた。ログインしても変数を置かなければ開かず、
- * オーナーはログインだけで使えると受け取った（2026-10-08 の実例）。変数は退役させ、置かれていても読まない
- * （起動時の「もう読まない」の知らせも、退役から3週間たって外した。#5805）。
+ * 以前の環境変数 `ALTEROID_MANAGER_PEERS` は退役した（経緯は docs/architecture.md の「provider」）。
  */
 
 /** peer になれる provider（層の provider = Claude は「もう一方」ではないので入らない）。 */

@@ -186,18 +186,6 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
     await host.shutdown();
   });
 
-  it('旧い ALTEROID_MANAGER_PEERS=codex は読まない（資格が無ければ閉じたまま）', async () => {
-    const socket = fakePeerHost();
-    const { host, sdk } = hostWith({
-      peer: peerOptions(socket),
-      env: { ALTEROID_MANAGER_PEERS: 'codex' },
-    });
-    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
-    expect(sdk.options().mcpServers).toBeUndefined();
-    expect(host.managerPeers()?.managerPeers).toEqual([]);
-    await host.shutdown();
-  });
-
   it('CODEX_API_KEY が後から届けば、再起動なしで開いて名乗り直し、使い捨て token つきの stdio MCP を足す', async () => {
     const socket = fakePeerHost();
     const peer = peerOptions(socket, { models: { codex: ['gpt-5.5'] } });

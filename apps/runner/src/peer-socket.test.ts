@@ -42,11 +42,6 @@ describe('planPeerSocket（マネージャーの peer 専用ソケット。開�
     expect(existsSync(socketDir.current)).toBe(false);
   });
 
-  it('旧い ALTEROID_MANAGER_PEERS は読まない（置かれていてもソケットを作らない）', () => {
-    planPeerSocket({ ALTEROID_MANAGER_PEERS: 'codex' }, undefined);
-    expect(existsSync(socketDir.current)).toBe(false);
-  });
-
   it('開く口を呼ぶと、0711 のディレクトリに 0600 のソケットを作る', async () => {
     opened = await planPeerSocket({}, undefined).openSocket();
     const path = join(socketDir.current, PEER_SOCKET_FILENAME);
