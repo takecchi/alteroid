@@ -5334,382 +5334,27 @@ class Clone implements CloneHost {
       }
 
       case 'distill': {
-        // セッションが無くても活動が在れば見送ったことを日誌へ残し、印は倒さない: 倒すと「移した」ことになり、何も移っていない記憶が落ちるため。活動が一度も無いなら黙って return する: 起動直後の停止などで毎回日誌を増やさないため
-        // 「一度も活動していない」は `hasUndistilledActivity` でなく `stores.sessions` の `cloneSessionId`（プロセスを跨いで残る）で見る: `hasUndistilledActivity` の初期値は `true` で、確認された活動と仮定を区別できないため。読めなかったら「活動が在った」側へ倒す: 読めないことを理由に記録を失わないため
-        if (!this.#sdkSession.query) {
-          if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
-            await this.#journalSelf(
-              'outbound',
-              `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
-                '（終わっていた）ので蒸留できない。未蒸留の活動の印は残したので、次にセッションが戻った' +
-                'とき（別の入口が新しいセッションを起こしたとき）に蒸留される。',
-            );
-          }
-          return;
-        }
-        // 前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない: 会話終了の直後の `stop()` は同じ文面になり、間にターンが無ければ文字どおりの重複のため。印が立っていれば必ず投げる
-        if (!this.#distillMemory.hasUndistilledActivity) {
-          await this.#journalSelf(
-            'outbound',
-            `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
-              '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。',
-          );
-          return;
-        }
-        // 的の一覧は定期の棚卸しの刻みにだけ添える: 会話終了・shutdown の蒸留は会話を記憶へ移すのが本題のため。測れなかったら添えてもターンは止めない: 記憶が読めない回に棚卸しを落とすと、いちばん畳みたい状態で仕事が消えるため
-        let tidyTargets: string | undefined;
-        if (event.reason === 'scheduled') {
-          try {
-            tidyTargets = describeMemoryTidyTargets(await this.#stores.persona.documents());
-          } catch (error) {
-            tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
-          }
-        }
-        // 固定の本体は同じ会話の2回目以降は短い参照にする（#4937 と同じ仕組み）。枕と棚卸しの的は毎回出す。組む直前に判定し直す（上の `await` の間に作り直しの窓が開きうる）
-        this.#resetDigestDeltaIfNewConversation();
-        const distillReason = event.reason === 'shutdown' ? 'conversation_end' : event.reason;
-        const tidyOption = tidyTargets === undefined ? {} : { tidyTargets };
-        const distillPrompt = buildDistillPrompt(distillReason, {
-          ...tidyOption,
-          fold: (id, full, ref) => this.#digestDelta.fixed(id, full, ref),
-        });
-        // 日誌には畳む前の全文の長さを残す（差分にする前のまま）
-        await this.#journal(
-          turnInputEntry({
-            type: 'distill',
-            reason: event.reason,
-            prompt: buildDistillPrompt(distillReason, tidyOption),
-          }),
-        );
-        const outcome = await this.#runInternal(distillPrompt, 'distill');
-        // 成功で終わった蒸留だけが印を下ろす: 失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を「移した」ことにして落とすため
-        if (outcome.status === 'answered') {
-          this.#distillMemory.markDistilled();
-          // 「成功で終わった」を日誌へ残す: 印は器の中にしか無く、プロセスが消えると「前回どこまで移せたか」が引けないため。`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く: 条件を別の行へ写すと、片方だけ直して古い基準が残るため
-          await this.#journal(distillSucceededEntry(event.reason));
-        }
-        return;
+        return this.#handleDistill(event);
       }
 
       case 'human_answer': {
-        if (this.#handledHumanAnswerIds.has(event.id)) {
-          noteDuplicateHumanAnswer(event);
-          return;
-        }
-        this.#handledHumanAnswerIds.add(event.id);
-
-        // 行が読めなくなっていても回答は失わない: 回答の本文は `event` が持ち、取れないのは質問だけなので、そう言って続きへ進む
-        let approval: PendingApproval | null = null;
-        let approvalUnreadable = false;
-        try {
-          approval = await this.#stores.jobs.getApproval(event.approvalId);
-        } catch (error) {
-          if (!(error instanceof UnreadableApprovalError)) throw error;
-          approvalUnreadable = true;
-          noteDroppedRecord('回答済みの承認待ちの読み出し', inboxEventShape(event), error);
-        }
-        await this.#markAnswerDeliveredOnHandle(approval, event);
-        const question =
-          approval?.question ??
-          (approvalUnreadable
-            ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
-            : '(不明な質問)');
-        // 宛先は managerId と requestId の対で戻す: requestId を落とすと、複数を待っているマネージャーの宛先が決まらず、人間が答えたのに仕事が再開しないため
-        // 決着済みの確認へ requestId 付きで返すと `gone` で弾かれ、答えの中身が担当へ届かない: `manager_message` の枝と同じく、待たれていないと分かるときだけ案内を変える（分からないときは変えない）
-        const answerLiveness: ConfirmationLiveness =
-          approval?.jobId !== undefined && approval.requestId !== undefined
-            ? await confirmationLiveness(this.#managers, approval.jobId, approval.requestId)
-            : 'unknown';
-        const waiting =
-          approval?.jobId === undefined
-            ? ''
-            : answerLiveness === 'settled'
-              ? `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
-                `この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。` +
-                `回答の中身を担当へ届けるなら、確認への返答ではなく普通の伝言として \`manager_send\` で送ること（requestId は付けない）。` +
-                `\n宛先: managerId: "${approval.jobId}"`
-              : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
-                `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
-                `\n宛先: managerId: "${approval.jobId}"` +
-                (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
-        // 回答経路を添える: `operator` 経由の回答が人間本人とは限らないことを、クローンが判断材料にできるようにするため
-        const viaLine =
-          event.answeredVia === undefined
-            ? ''
-            : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
-        // 構造も JSON で添える: 回答の文は人間向けに畳んだもので、設問 id と選択肢 id の対が文から読み取れないため
-        const selectionsLine =
-          event.selections === undefined
-            ? ''
-            : `\n選択（構造。設問 id → 選んだ選択肢 id ＋ その他）: ${JSON.stringify(event.selections)}`;
-        const answerPrompt =
-          `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
-          `${selectionsLine}${viaLine}${waiting}\n\n` +
-          'この回答に沿って続きを進めよ。\n\n' +
-          this.#fixedTextFold()(
-            'human-answer-criteria',
-            HUMAN_ANSWER_CRITERIA_GUIDE,
-            HUMAN_ANSWER_CRITERIA_GUIDE_REF,
-          );
-        // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
-        const turnStart = turnInputEntry({
-          type: 'human_answer',
-          approvalId: event.approvalId,
-          text: answerPrompt,
-        });
-        await this.#journal(
-          turnStart.type === 'exchange'
-            ? { ...turnStart, answeredApprovalId: event.approvalId }
-            : turnStart,
-        );
-        // `#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ: 会話 id を持つ承認への回答だけ人間の会話へ載せるため
-        // `event.approvalId` も運ぶ: 返答が「どの承認への返答か」を、会話 id や時刻の近さでなく id で持てるようにするため
-        // 答えた承認の `taskIds` も運ぶ: 回答の返答が閉じてよい task を、その問いを出したターンが答えていた task に絞るため（読めない行・古い行は空で、何も閉じない）
-        await this.#runTurn(
-          this.#conversationOf(event),
-          answerPrompt,
-          'normal',
-          event.approvalId,
-          [],
-          null,
-          [],
-          approval?.taskIds ?? [],
-        );
-        return;
+        return this.#handleHumanAnswer(event);
       }
 
       case 'manager_message': {
-        await this.#journalIncomingBody(event);
-
-        const liveness = await this.#confirmationLivenessOf(event);
-        // `now` は `managerPrompt` の中で取らない: 純関数でないと、経過を測る試験が時刻に依存して揺れるため
-        const origin = await this.#managerOrigin(event.managerId);
-        // 添付は報告にしか付かない。付いていない回は解決しない（`null`）: 添付の行は既定の `[]`、画像も無しになる
-        const attached =
-          event.kind === 'report' && hasReportFiles(event)
-            ? await this.#resolveManagerReportAttachments([event])
-            : null;
-        // #4943: 実行許可の確認の、alteroid が組んだ固定の長い段落は、同じ会話の2回目から短い参照にする（日誌の本文は上で全文を書き済み）。質問（担当の言葉）と報告の本文は畳まない
-        const sent =
-          event.kind === 'permission'
-            ? { ...event, text: this.#foldConfirmationText(event.text) }
-            : event;
-        const prompt = managerPrompt(
-          sent,
-          origin,
-          liveness,
-          new Date(),
-          attached?.linesOf.get(event.id),
-          this.#fixedTextFold(),
-          false,
-          this.#reportBodyLimit(),
-        );
-        this.#stageReportsShown([event], prompt, new Date());
-        await this.#runInternal(prompt, 'normal', attached?.images ?? [], origin.conversationId);
-        return;
+        return this.#handleManagerMessage(event);
       }
 
       case 'timer': {
-        if (event.kind === DAILY_REPORT_KIND) {
-          // 省略時は `schedule`: この分岐は下の journalCause の計算より前で return するので、同じ既定をここで別に持つ
-          await this.#dailyReport(
-            event.target ?? localDate(new Date(event.at)),
-            event.cause ?? 'schedule',
-          );
-          return;
-        }
-        // 依頼の本文はいま読む: イベントに載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走るため
-        const claimed = await this.#claimScheduledRun(
-          event.kind,
-          event.at,
-          event.cause === 'manual' ? 'manual' : 'schedule',
-          event,
-        );
-
-        // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
-        if (claimed.status !== 'ok' && claimed.status !== 'missing') {
-          await this.#journalSelf(
-            'outbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
-          );
-          // 人間が消した（`withdrawn`）ものと、完了まで済んだ回（`completed`）は再試行しない
-          if (
-            event.cause !== 'manual' &&
-            claimed.status !== 'withdrawn' &&
-            claimed.status !== 'completed'
-          ) {
-            this.#onScheduledRunNotStarted?.(event.kind);
-          }
-          return;
-        }
-
-        // 日誌の側は2値に畳まず `event.cause` の3値をそのまま書く: 「なぜこの時刻に起きたか」（定刻どおりか、取りこぼしを拾ったか）を追えるようにするため
-        const cause = event.cause === 'manual' ? 'manual' : 'schedule';
-        const journalCause = event.cause ?? 'schedule';
-        const plan = claimed.status === 'ok' ? claimed.plan : null;
-        // #4938 の案2: 要約の全体ではなく、担当の節・継続中の依頼の節と、他の節の件数の行だけを付ける。
-        // `renderDigest` に通さない: 短いので差分にしなくてよく、通すと節の控えがこの形で上書きされ、自発の tick の差分の基準が崩れるため
-        const timerDigest = await this.#recentDigestCounts();
-        // 依頼の本文と固定の指示は、同じ会話の2回目以降は短い参照にする（#4937）
-        const firedAt = new Date();
-        // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
-        this.#resetDigestDeltaIfNewConversation();
-        // 件数の形の固定の説明文も、同じ会話の2回目以降は短い参照にする（#5392）。`fixed()` だけを呼ぶ: `renderDigest` と違い節の控えには触れず、自発の tick の差分の基準は動かない。件数・行は毎回出す
-        // 継続中の依頼の行も、前回の入力と1字も違わない行は1行の参照にする。変わった行（前回動いた時刻が進んだ行など）・⚠ の行・前回に全文で出していない行は全文のまま
-        let foldedDigest = this.#digestDelta.foldStandingRows(timerDigest);
-        for (const phrase of DIGEST_COUNTS_FIXED_PHRASES) {
-          if (!foldedDigest.includes(phrase.text)) continue;
-          foldedDigest = foldedDigest
-            .split(phrase.text)
-            .join(this.#digestDelta.fixed(phrase.id, phrase.text, phrase.ref));
-        }
-        const instructionRef = '（固定の指示は会話の上と同じ）';
-        const timerInstruction =
-          plan === null
-            ? this.#digestDelta.fixed(
-                'timer-plain-instruction',
-                TIMER_PLAIN_INSTRUCTION,
-                instructionRef,
-              )
-            : this.#digestDelta.fixed(
-                'timer-request-instructions',
-                TIMER_REQUEST_INSTRUCTIONS,
-                instructionRef,
-              );
-        const seenRequestAt =
-          plan === null ? null : this.#digestDelta.requestSeenAt(event.kind, plan.request, firedAt);
-        // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
-        await this.#journal(
-          turnInputEntry({
-            type: 'timer',
-            kind: event.kind,
-            cause: journalCause,
-            ...(event.target === undefined ? {} : { target: event.target }),
-            request: plan !== null,
-            digest: timerDigest,
-          }),
-        );
-        const timerPrompt = buildTimerPrompt({
-          kind: event.kind,
-          ...(event.target === undefined ? {} : { target: event.target }),
-          ...(plan === null ? {} : { request: plan.request }),
-          ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
-          // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
-          ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
-          digest: foldedDigest,
-          fixedInstruction: timerInstruction,
-          ...(seenRequestAt === null
-            ? {}
-            : {
-                requestRef: `依頼の本文は前回（${clockLabel(seenRequestAt)}）の発火と同じ。会話の上にある`,
-              }),
-        });
-        // 長さの上限で末尾が切られたら、控えを進めない: 会話に載っていない文を「上にある」と言わないため
-        if (!timerPrompt.endsWith(foldedDigest)) this.#digestDelta.discardStaged();
-        const outcome = await this.#runInternal(timerPrompt);
-
-        // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
-        // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば、成功するまで最後の間隔で元の発火として配り直され、再起動でも `#firstDue` が配り直す）
-        // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
-        if (plan !== null) {
-          if (outcome.status === 'failed' && !outcome.heldForUsage) {
-            // 手で起こした1回は再試行しない
-            const prior = this.#timerTurnRetries.get(event.kind);
-            const attempts = prior?.at === event.at ? prior.attempts : 0;
-            const retryDelayMs =
-              cause === 'manual'
-                ? undefined
-                : FAILED_TURN_RETRY_DELAYS_MS[
-                    Math.min(attempts, FAILED_TURN_RETRY_DELAYS_MS.length - 1)
-                  ];
-            // 次にいつ配り直すかを書く（#6139）: 再試行は回数で打ち切らないので、読み手が「止まった」のか「待っている」のかを取り違えないため
-            const retryClause =
-              retryDelayMs === undefined
-                ? '手で起こした回なので再試行せず、次の起動か次の定刻で配り直される'
-                : `${String(retryDelayMs / 60_000)} 分後に配り直す。成功するまで最長 ` +
-                  `${String(FAILED_TURN_RETRY_DELAYS_MS.at(-1)! / 60_000)} 分ごとに配り直し続ける`;
-            await this.#journalSelf(
-              'outbound',
-              `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
-                `ので「終わった」とは記録しない（引き受けた印は残る。${retryClause}）: ` +
-                outcome.reason,
-            );
-            if (retryDelayMs !== undefined) {
-              this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
-              this.#onScheduledRunNotStarted?.(event.kind, retryDelayMs);
-            }
-          } else {
-            this.#timerTurnRetries.delete(event.kind);
-            // 枠保持で終わった回は完了を記録する前に受信箱の行へ印を付ける: 完了を記録すると「完了して消し込みだけ失敗した回」と同じ見た目になり、再起動の配り直しが畳むため（`#heldForUsage` はメモリで再起動を越えない）。印を書けなかったら `completeRun` を呼ばない: 二重の側へ倒れ、回は失われないため
-            if (outcome.status === 'failed' && outcome.heldForUsage) {
-              try {
-                await this.#stores.inbox.put({ ...event, heldForUsage: true }, event.at);
-              } catch (error) {
-                noteDroppedRecord('枠保持の印の書き込み', inboxEventShape(event), error);
-                return;
-              }
-            }
-            await this.#completeScheduledRun(event.kind, event.at, cause);
-          }
-        }
-        return;
+        return this.#handleTimer(event);
       }
 
       case 'external': {
-        const body = renderPayload(event.payload, event.at, event.attachments);
-        const attached = await this.#resolveExternalAttachments([event]);
-        await this.#journalIncomingBody(event);
-        await this.#runInternal(
-          buildExternalEventPrompt({
-            source: event.source,
-            body,
-            ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
-            ...(attached.noticeLines.length === 0
-              ? {}
-              : { attachmentNoticeLines: attached.noticeLines }),
-            fold: this.#fixedTextFold(),
-          }),
-          'normal',
-          attached.images,
-        );
-        return;
+        return this.#handleExternal(event);
       }
 
       case 'self_initiative': {
-        // 動ける仕事が無い回は、モデルへ1文字も渡さず畳む（#5469 P6a）。ここで return しても合図は呼び出し元が処理済みにする（配り直されない）
-        const gate = await decideInitiativeTick(this.#stores, {
-          cause: event.cause ?? 'schedule',
-          now: new Date(),
-        });
-        if (!gate.run) {
-          await this.#noteSkippedInitiativeTick(gate);
-          return;
-        }
-        const digest = await this.#recentDigest();
-        // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文のまま
-        this.#resetDigestDeltaIfNewConversation(); // #4941: 組む直前の判定し直し
-        const sentDigest = this.#digestDelta.renderDigest(digest, new Date());
-        const fixedInstruction = this.#digestDelta.fixed(
-          'self-initiative-instructions',
-          SELF_INITIATIVE_INSTRUCTIONS,
-          '（固定の指示は会話の上と同じ）',
-        );
-        await this.#journal(
-          turnInputEntry({
-            type: 'self_initiative',
-            reason: event.reason,
-            cause: event.cause ?? 'schedule',
-            digest,
-          }),
-        );
-        const initiativePrompt = buildSelfInitiativePrompt({
-          reason: event.reason,
-          digest: sentDigest.text,
-          fixedInstruction,
-        });
-        if (!initiativePrompt.endsWith(sentDigest.text)) this.#digestDelta.discardStaged();
-        await this.#runInternal(initiativePrompt);
-        return;
+        return this.#handleSelfInitiative(event);
       }
 
       default: {
@@ -5717,6 +5362,395 @@ class Clone implements CloneHost {
         throw new Error(`未知の受信箱イベント: ${JSON.stringify(exhaustive)}`);
       }
     }
+  }
+
+  /** 受信箱の `distill` の1件を処理する（`#handle` が振り分ける）。 */
+  async #handleDistill(event: Extract<InboxEvent, { type: 'distill' }>): Promise<void> {
+    // セッションが無くても活動が在れば見送ったことを日誌へ残し、印は倒さない: 倒すと「移した」ことになり、何も移っていない記憶が落ちるため。活動が一度も無いなら黙って return する: 起動直後の停止などで毎回日誌を増やさないため
+    // 「一度も活動していない」は `hasUndistilledActivity` でなく `stores.sessions` の `cloneSessionId`（プロセスを跨いで残る）で見る: `hasUndistilledActivity` の初期値は `true` で、確認された活動と仮定を区別できないため。読めなかったら「活動が在った」側へ倒す: 読めないことを理由に記録を失わないため
+    if (!this.#sdkSession.query) {
+      if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
+            '（終わっていた）ので蒸留できない。未蒸留の活動の印は残したので、次にセッションが戻った' +
+            'とき（別の入口が新しいセッションを起こしたとき）に蒸留される。',
+        );
+      }
+      return;
+    }
+    // 前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない: 会話終了の直後の `stop()` は同じ文面になり、間にターンが無ければ文字どおりの重複のため。印が立っていれば必ず投げる
+    if (!this.#distillMemory.hasUndistilledActivity) {
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
+          '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。',
+      );
+      return;
+    }
+    // 的の一覧は定期の棚卸しの刻みにだけ添える: 会話終了・shutdown の蒸留は会話を記憶へ移すのが本題のため。測れなかったら添えてもターンは止めない: 記憶が読めない回に棚卸しを落とすと、いちばん畳みたい状態で仕事が消えるため
+    let tidyTargets: string | undefined;
+    if (event.reason === 'scheduled') {
+      try {
+        tidyTargets = describeMemoryTidyTargets(await this.#stores.persona.documents());
+      } catch (error) {
+        tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
+      }
+    }
+    // 固定の本体は同じ会話の2回目以降は短い参照にする（#4937 と同じ仕組み）。枕と棚卸しの的は毎回出す。組む直前に判定し直す（上の `await` の間に作り直しの窓が開きうる）
+    this.#resetDigestDeltaIfNewConversation();
+    const distillReason = event.reason === 'shutdown' ? 'conversation_end' : event.reason;
+    const tidyOption = tidyTargets === undefined ? {} : { tidyTargets };
+    const distillPrompt = buildDistillPrompt(distillReason, {
+      ...tidyOption,
+      fold: (id, full, ref) => this.#digestDelta.fixed(id, full, ref),
+    });
+    // 日誌には畳む前の全文の長さを残す（差分にする前のまま）
+    await this.#journal(
+      turnInputEntry({
+        type: 'distill',
+        reason: event.reason,
+        prompt: buildDistillPrompt(distillReason, tidyOption),
+      }),
+    );
+    const outcome = await this.#runInternal(distillPrompt, 'distill');
+    // 成功で終わった蒸留だけが印を下ろす: 失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を「移した」ことにして落とすため
+    if (outcome.status === 'answered') {
+      this.#distillMemory.markDistilled();
+      // 「成功で終わった」を日誌へ残す: 印は器の中にしか無く、プロセスが消えると「前回どこまで移せたか」が引けないため。`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く: 条件を別の行へ写すと、片方だけ直して古い基準が残るため
+      await this.#journal(distillSucceededEntry(event.reason));
+    }
+    return;
+  }
+
+  /** 受信箱の `human_answer` の1件を処理する（`#handle` が振り分ける）。 */
+  async #handleHumanAnswer(event: Extract<InboxEvent, { type: 'human_answer' }>): Promise<void> {
+    if (this.#handledHumanAnswerIds.has(event.id)) {
+      noteDuplicateHumanAnswer(event);
+      return;
+    }
+    this.#handledHumanAnswerIds.add(event.id);
+
+    // 行が読めなくなっていても回答は失わない: 回答の本文は `event` が持ち、取れないのは質問だけなので、そう言って続きへ進む
+    let approval: PendingApproval | null = null;
+    let approvalUnreadable = false;
+    try {
+      approval = await this.#stores.jobs.getApproval(event.approvalId);
+    } catch (error) {
+      if (!(error instanceof UnreadableApprovalError)) throw error;
+      approvalUnreadable = true;
+      noteDroppedRecord('回答済みの承認待ちの読み出し', inboxEventShape(event), error);
+    }
+    await this.#markAnswerDeliveredOnHandle(approval, event);
+    const question =
+      approval?.question ??
+      (approvalUnreadable
+        ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
+        : '(不明な質問)');
+    // 宛先は managerId と requestId の対で戻す: requestId を落とすと、複数を待っているマネージャーの宛先が決まらず、人間が答えたのに仕事が再開しないため
+    // 決着済みの確認へ requestId 付きで返すと `gone` で弾かれ、答えの中身が担当へ届かない: `manager_message` の枝と同じく、待たれていないと分かるときだけ案内を変える（分からないときは変えない）
+    const answerLiveness: ConfirmationLiveness =
+      approval?.jobId !== undefined && approval.requestId !== undefined
+        ? await confirmationLiveness(this.#managers, approval.jobId, approval.requestId)
+        : 'unknown';
+    const waiting =
+      approval?.jobId === undefined
+        ? ''
+        : answerLiveness === 'settled'
+          ? `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
+            `この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。` +
+            `回答の中身を担当へ届けるなら、確認への返答ではなく普通の伝言として \`manager_send\` で送ること（requestId は付けない）。` +
+            `\n宛先: managerId: "${approval.jobId}"`
+          : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
+            `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
+            `\n宛先: managerId: "${approval.jobId}"` +
+            (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
+    // 回答経路を添える: `operator` 経由の回答が人間本人とは限らないことを、クローンが判断材料にできるようにするため
+    const viaLine =
+      event.answeredVia === undefined
+        ? ''
+        : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
+    // 構造も JSON で添える: 回答の文は人間向けに畳んだもので、設問 id と選択肢 id の対が文から読み取れないため
+    const selectionsLine =
+      event.selections === undefined
+        ? ''
+        : `\n選択（構造。設問 id → 選んだ選択肢 id ＋ その他）: ${JSON.stringify(event.selections)}`;
+    const answerPrompt =
+      `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
+      `${selectionsLine}${viaLine}${waiting}\n\n` +
+      'この回答に沿って続きを進めよ。\n\n' +
+      this.#fixedTextFold()(
+        'human-answer-criteria',
+        HUMAN_ANSWER_CRITERIA_GUIDE,
+        HUMAN_ANSWER_CRITERIA_GUIDE_REF,
+      );
+    // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
+    const turnStart = turnInputEntry({
+      type: 'human_answer',
+      approvalId: event.approvalId,
+      text: answerPrompt,
+    });
+    await this.#journal(
+      turnStart.type === 'exchange'
+        ? { ...turnStart, answeredApprovalId: event.approvalId }
+        : turnStart,
+    );
+    // `#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ: 会話 id を持つ承認への回答だけ人間の会話へ載せるため
+    // `event.approvalId` も運ぶ: 返答が「どの承認への返答か」を、会話 id や時刻の近さでなく id で持てるようにするため
+    // 答えた承認の `taskIds` も運ぶ: 回答の返答が閉じてよい task を、その問いを出したターンが答えていた task に絞るため（読めない行・古い行は空で、何も閉じない）
+    await this.#runTurn(
+      this.#conversationOf(event),
+      answerPrompt,
+      'normal',
+      event.approvalId,
+      [],
+      null,
+      [],
+      approval?.taskIds ?? [],
+    );
+    return;
+  }
+
+  /** 受信箱の `manager_message` の1件を処理する（`#handle` が振り分ける）。 */
+  async #handleManagerMessage(
+    event: Extract<InboxEvent, { type: 'manager_message' }>,
+  ): Promise<void> {
+    await this.#journalIncomingBody(event);
+
+    const liveness = await this.#confirmationLivenessOf(event);
+    // `now` は `managerPrompt` の中で取らない: 純関数でないと、経過を測る試験が時刻に依存して揺れるため
+    const origin = await this.#managerOrigin(event.managerId);
+    // 添付は報告にしか付かない。付いていない回は解決しない（`null`）: 添付の行は既定の `[]`、画像も無しになる
+    const attached =
+      event.kind === 'report' && hasReportFiles(event)
+        ? await this.#resolveManagerReportAttachments([event])
+        : null;
+    // #4943: 実行許可の確認の、alteroid が組んだ固定の長い段落は、同じ会話の2回目から短い参照にする（日誌の本文は上で全文を書き済み）。質問（担当の言葉）と報告の本文は畳まない
+    const sent =
+      event.kind === 'permission'
+        ? { ...event, text: this.#foldConfirmationText(event.text) }
+        : event;
+    const prompt = managerPrompt(
+      sent,
+      origin,
+      liveness,
+      new Date(),
+      attached?.linesOf.get(event.id),
+      this.#fixedTextFold(),
+      false,
+      this.#reportBodyLimit(),
+    );
+    this.#stageReportsShown([event], prompt, new Date());
+    await this.#runInternal(prompt, 'normal', attached?.images ?? [], origin.conversationId);
+    return;
+  }
+
+  /** 受信箱の `timer` の1件を処理する（`#handle` が振り分ける）。 */
+  async #handleTimer(event: Extract<InboxEvent, { type: 'timer' }>): Promise<void> {
+    if (event.kind === DAILY_REPORT_KIND) {
+      // 省略時は `schedule`: この分岐は下の journalCause の計算より前で return するので、同じ既定をここで別に持つ
+      await this.#dailyReport(
+        event.target ?? localDate(new Date(event.at)),
+        event.cause ?? 'schedule',
+      );
+      return;
+    }
+    // 依頼の本文はいま読む: イベントに載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走るため
+    const claimed = await this.#claimScheduledRun(
+      event.kind,
+      event.at,
+      event.cause === 'manual' ? 'manual' : 'schedule',
+      event,
+    );
+
+    // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
+    if (claimed.status !== 'ok' && claimed.status !== 'missing') {
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
+      );
+      // 人間が消した（`withdrawn`）ものと、完了まで済んだ回（`completed`）は再試行しない
+      if (
+        event.cause !== 'manual' &&
+        claimed.status !== 'withdrawn' &&
+        claimed.status !== 'completed'
+      ) {
+        this.#onScheduledRunNotStarted?.(event.kind);
+      }
+      return;
+    }
+
+    // 日誌の側は2値に畳まず `event.cause` の3値をそのまま書く: 「なぜこの時刻に起きたか」（定刻どおりか、取りこぼしを拾ったか）を追えるようにするため
+    const cause = event.cause === 'manual' ? 'manual' : 'schedule';
+    const journalCause = event.cause ?? 'schedule';
+    const plan = claimed.status === 'ok' ? claimed.plan : null;
+    // #4938 の案2: 要約の全体ではなく、担当の節・継続中の依頼の節と、他の節の件数の行だけを付ける。
+    // `renderDigest` に通さない: 短いので差分にしなくてよく、通すと節の控えがこの形で上書きされ、自発の tick の差分の基準が崩れるため
+    const timerDigest = await this.#recentDigestCounts();
+    // 依頼の本文と固定の指示は、同じ会話の2回目以降は短い参照にする（#4937）
+    const firedAt = new Date();
+    // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
+    this.#resetDigestDeltaIfNewConversation();
+    // 件数の形の固定の説明文も、同じ会話の2回目以降は短い参照にする（#5392）。`fixed()` だけを呼ぶ: `renderDigest` と違い節の控えには触れず、自発の tick の差分の基準は動かない。件数・行は毎回出す
+    // 継続中の依頼の行も、前回の入力と1字も違わない行は1行の参照にする。変わった行（前回動いた時刻が進んだ行など）・⚠ の行・前回に全文で出していない行は全文のまま
+    let foldedDigest = this.#digestDelta.foldStandingRows(timerDigest);
+    for (const phrase of DIGEST_COUNTS_FIXED_PHRASES) {
+      if (!foldedDigest.includes(phrase.text)) continue;
+      foldedDigest = foldedDigest
+        .split(phrase.text)
+        .join(this.#digestDelta.fixed(phrase.id, phrase.text, phrase.ref));
+    }
+    const instructionRef = '（固定の指示は会話の上と同じ）';
+    const timerInstruction =
+      plan === null
+        ? this.#digestDelta.fixed(
+            'timer-plain-instruction',
+            TIMER_PLAIN_INSTRUCTION,
+            instructionRef,
+          )
+        : this.#digestDelta.fixed(
+            'timer-request-instructions',
+            TIMER_REQUEST_INSTRUCTIONS,
+            instructionRef,
+          );
+    const seenRequestAt =
+      plan === null ? null : this.#digestDelta.requestSeenAt(event.kind, plan.request, firedAt);
+    // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
+    await this.#journal(
+      turnInputEntry({
+        type: 'timer',
+        kind: event.kind,
+        cause: journalCause,
+        ...(event.target === undefined ? {} : { target: event.target }),
+        request: plan !== null,
+        digest: timerDigest,
+      }),
+    );
+    const timerPrompt = buildTimerPrompt({
+      kind: event.kind,
+      ...(event.target === undefined ? {} : { target: event.target }),
+      ...(plan === null ? {} : { request: plan.request }),
+      ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+      // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
+      ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
+      digest: foldedDigest,
+      fixedInstruction: timerInstruction,
+      ...(seenRequestAt === null
+        ? {}
+        : {
+            requestRef: `依頼の本文は前回（${clockLabel(seenRequestAt)}）の発火と同じ。会話の上にある`,
+          }),
+    });
+    // 長さの上限で末尾が切られたら、控えを進めない: 会話に載っていない文を「上にある」と言わないため
+    if (!timerPrompt.endsWith(foldedDigest)) this.#digestDelta.discardStaged();
+    const outcome = await this.#runInternal(timerPrompt);
+
+    // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
+    // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば、成功するまで最後の間隔で元の発火として配り直され、再起動でも `#firstDue` が配り直す）
+    // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
+    if (plan !== null) {
+      if (outcome.status === 'failed' && !outcome.heldForUsage) {
+        // 手で起こした1回は再試行しない
+        const prior = this.#timerTurnRetries.get(event.kind);
+        const attempts = prior?.at === event.at ? prior.attempts : 0;
+        const retryDelayMs =
+          cause === 'manual'
+            ? undefined
+            : FAILED_TURN_RETRY_DELAYS_MS[
+                Math.min(attempts, FAILED_TURN_RETRY_DELAYS_MS.length - 1)
+              ];
+        // 次にいつ配り直すかを書く（#6139）: 再試行は回数で打ち切らないので、読み手が「止まった」のか「待っている」のかを取り違えないため
+        const retryClause =
+          retryDelayMs === undefined
+            ? '手で起こした回なので再試行せず、次の起動か次の定刻で配り直される'
+            : `${String(retryDelayMs / 60_000)} 分後に配り直す。成功するまで最長 ` +
+              `${String(FAILED_TURN_RETRY_DELAYS_MS.at(-1)! / 60_000)} 分ごとに配り直し続ける`;
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
+            `ので「終わった」とは記録しない（引き受けた印は残る。${retryClause}）: ` +
+            outcome.reason,
+        );
+        if (retryDelayMs !== undefined) {
+          this.#timerTurnRetries.set(event.kind, { at: event.at, attempts: attempts + 1 });
+          this.#onScheduledRunNotStarted?.(event.kind, retryDelayMs);
+        }
+      } else {
+        this.#timerTurnRetries.delete(event.kind);
+        // 枠保持で終わった回は完了を記録する前に受信箱の行へ印を付ける: 完了を記録すると「完了して消し込みだけ失敗した回」と同じ見た目になり、再起動の配り直しが畳むため（`#heldForUsage` はメモリで再起動を越えない）。印を書けなかったら `completeRun` を呼ばない: 二重の側へ倒れ、回は失われないため
+        if (outcome.status === 'failed' && outcome.heldForUsage) {
+          try {
+            await this.#stores.inbox.put({ ...event, heldForUsage: true }, event.at);
+          } catch (error) {
+            noteDroppedRecord('枠保持の印の書き込み', inboxEventShape(event), error);
+            return;
+          }
+        }
+        await this.#completeScheduledRun(event.kind, event.at, cause);
+      }
+    }
+    return;
+  }
+
+  /** 受信箱の `external` の1件を処理する（`#handle` が振り分ける）。 */
+  async #handleExternal(event: Extract<InboxEvent, { type: 'external' }>): Promise<void> {
+    const body = renderPayload(event.payload, event.at, event.attachments);
+    const attached = await this.#resolveExternalAttachments([event]);
+    await this.#journalIncomingBody(event);
+    await this.#runInternal(
+      buildExternalEventPrompt({
+        source: event.source,
+        body,
+        ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
+        ...(attached.noticeLines.length === 0
+          ? {}
+          : { attachmentNoticeLines: attached.noticeLines }),
+        fold: this.#fixedTextFold(),
+      }),
+      'normal',
+      attached.images,
+    );
+    return;
+  }
+
+  /** 受信箱の `self_initiative` の1件を処理する（`#handle` が振り分ける）。 */
+  async #handleSelfInitiative(
+    event: Extract<InboxEvent, { type: 'self_initiative' }>,
+  ): Promise<void> {
+    // 動ける仕事が無い回は、モデルへ1文字も渡さず畳む（#5469 P6a）。ここで return しても合図は呼び出し元が処理済みにする（配り直されない）
+    const gate = await decideInitiativeTick(this.#stores, {
+      cause: event.cause ?? 'schedule',
+      now: new Date(),
+    });
+    if (!gate.run) {
+      await this.#noteSkippedInitiativeTick(gate);
+      return;
+    }
+    const digest = await this.#recentDigest();
+    // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文のまま
+    this.#resetDigestDeltaIfNewConversation(); // #4941: 組む直前の判定し直し
+    const sentDigest = this.#digestDelta.renderDigest(digest, new Date());
+    const fixedInstruction = this.#digestDelta.fixed(
+      'self-initiative-instructions',
+      SELF_INITIATIVE_INSTRUCTIONS,
+      '（固定の指示は会話の上と同じ）',
+    );
+    await this.#journal(
+      turnInputEntry({
+        type: 'self_initiative',
+        reason: event.reason,
+        cause: event.cause ?? 'schedule',
+        digest,
+      }),
+    );
+    const initiativePrompt = buildSelfInitiativePrompt({
+      reason: event.reason,
+      digest: sentDigest.text,
+      fixedInstruction,
+    });
+    if (!initiativePrompt.endsWith(sentDigest.text)) this.#digestDelta.discardStaged();
+    await this.#runInternal(initiativePrompt);
+    return;
   }
 
   // 本文だけを返さない: 失敗しても `turn.text` を返すと、呼び出し側が「クローンが答えた」と「SDK がエラーを返した」を区別できないため

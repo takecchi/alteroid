@@ -315,7 +315,9 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#externalMcpServers': 'failure',
     '#foldIntoPendingCollapse': 'thinning',
     '#foldRecoveredNotice': 'thinning',
-    '#handle': 'decision,failure,thinning',
+    // `#handle` の case を種類ごとのメソッドへ出した。書き込みは出した先の `#handleDistill`（蒸留の見送り）と `#handleTimer`（定期の依頼）に移った
+    '#handleDistill': 'thinning',
+    '#handleTimer': 'decision,failure',
     '#journalIncomingBody': 'reply',
     '#journalReply': 'reply',
     '#journalRestoreUnreadPassEnd': 'gauge',
