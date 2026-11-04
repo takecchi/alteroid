@@ -1,0 +1,524 @@
+{
+  "lengths": {
+    "no-pool": 67,
+    "no-pool-force": 67,
+    "list-unreadable-refuse": 199,
+    "list-unreadable-refuse-force-false": 196,
+    "list-unreadable-force-stopped": 132,
+    "list-unreadable-force-stopped-after-unreadable": 167,
+    "list-unreadable-force-absent": 122,
+    "list-unreadable-force-unreadable": 37,
+    "list-unreadable-force-not-stopped": 119,
+    "absent-id-abort-absent": 57,
+    "absent-id-abort-stopped": 117,
+    "absent-ledger-done": 103,
+    "absent-ledger-failed-force": 105,
+    "refuse-running-empty-observed": 191,
+    "refuse-running-no-report-empty-observed": 143,
+    "refuse-running-force-false": 191,
+    "refuse-observed-worktrees": 564,
+    "refuse-observed-all-notes": 700,
+    "refuse-observed-empty-scratch-unknown": 339,
+    "refuse-observed-empty-unreadable-dirs": 376,
+    "refuse-observed-empty-both-unknown": 433,
+    "refuse-observed-empty-truncated": 273,
+    "refuse-observed-empty-stopped-early": 273,
+    "refuse-unavailable": 270,
+    "refuse-unpushed-throws-error": 287,
+    "refuse-unpushed-timeout": 319,
+    "refuse-unpushed-throws-string": 272,
+    "force-running-stopped": 132,
+    "force-running-stopped-reasonless-folded": 374,
+    "force-running-absent": 103,
+    "force-running-not-stopped-still-running": 153,
+    "force-running-unknown": 87,
+    "force-running-unreadable": 36,
+    "force-running-abort-throws": 11,
+    "waiting-human-no-force": 132,
+    "done-no-force-stopped": 259,
+    "done-force-stopped-after-unreadable": 294,
+    "done-stopped-after-vanished": 247,
+    "failed-no-force-stopped": 132,
+    "lost-no-force-stopped": 131,
+    "stopped-no-force-stopped": 127,
+    "abort-unreadable-done": 37,
+    "abort-unknown-done": 86,
+    "abort-not-stopped-after-found-live": 112,
+    "abort-not-stopped-after-found-disconnected": 123,
+    "abort-not-stopped-after-vanished": 117,
+    "abort-not-stopped-after-unreadable": 144,
+    "stopped-after-folded-turn-short": 283,
+    "stopped-after-unreadable-running-before": 167,
+    "stopped-after-vanished-running-before": 120,
+    "reason-empty-string": 132,
+    "reason-multiline": 132
+  },
+  "scenarios": {
+    "no-pool": {
+      "length": 67,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。"
+    },
+    "no-pool-force": {
+      "length": 67,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。"
+    },
+    "list-unreadable-refuse": {
+      "length": 199,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list"],
+      "text": "[mgr-001] 止めていない。**いまの状態を一覧から読めなかった**ので、走行中（running）かどうか判定できない — 走行中なら、畳むと、そのターンの進行中の作業（起こした作業者など）が失われる。\n読めなかった原因: Error: 台帳が読めない: ENOENT\nmanager_list で状態を確かめること。読めても判断が同じなら、🔴 force: true で呼び直すと止まる。"
+    },
+    "list-unreadable-refuse-force-false": {
+      "length": 196,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list"],
+      "text": "[mgr-001] 止めていない。**いまの状態を一覧から読めなかった**ので、走行中（running）かどうか判定できない — 走行中なら、畳むと、そのターンの進行中の作業（起こした作業者など）が失われる。\n読めなかった原因: Error: 台帳が読めない: EIO\nmanager_list で状態を確かめること。読めても判断が同じなら、🔴 force: true で呼び直すと止まる。"
+    },
+    "list-unreadable-force-stopped": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"暴走\",by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "list-unreadable-force-stopped-after-unreadable": {
+      "length": 167,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\n止めた後の状態を一覧から読めなかった（Error: 後も読めない）。manager_list で状態を確かめること。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "list-unreadable-force-absent": {
+      "length": 122,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は止められなかった: mgr-001 というマネージャーは居ない。\n止める前の状態を一覧から読めなかった（Error: 台帳が読めない）ので、台帳にあるかどうかは分からない。manager_list で今あるものを確かめること。"
+    },
+    "list-unreadable-force-unreadable": {
+      "length": 37,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は止められなかった: 台帳の行が壊れている。送っていない。"
+    },
+    "list-unreadable-force-not-stopped": {
+      "length": 119,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] stop の応答が無かった。\n**止まっていない。** runner には mgr-001 のセッションがまだ残っている。いまの状態: running。 manager_list で確かめ、必要ならもう一度止めること。"
+    },
+    "absent-id-abort-absent": {
+      "length": 57,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は居ない（id が違うか、台帳からも消えている）。manager_list で今あるものが見える。"
+    },
+    "absent-id-abort-stopped": {
+      "length": 117,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"掃除\",by=clone)", "pool.list"],
+      "text": "[mgr-001] 止めた（台帳の行だけ）。\n一覧からも消えている。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "absent-ledger-done": {
+      "length": 103,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は止められなかった: 器が見つからない。\n台帳では done で、このデーモンからは話しかけられない（live: false）。走らせていた器がもう無いので、止める手そのものが残っていない。"
+    },
+    "absent-ledger-failed-force": {
+      "length": 105,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は止められなかった: 器が見つからない。\n台帳では failed で、このデーモンからは話しかけられない（live: false）。走らせていた器がもう無いので、止める手そのものが残っていない。"
+    },
+    "refuse-running-empty-observed": {
+      "length": 191,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（起こした作業者など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T00:30:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。"
+    },
+    "refuse-running-no-report-empty-observed": {
+      "length": 143,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（起こした作業者など）。🔴 force: true で止まる。\n直近の報告は一度も届いていない。 ターンの中身は manager_report で先に読めること。"
+    },
+    "refuse-running-force-false": {
+      "length": 191,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（起こした作業者など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。"
+    },
+    "refuse-observed-worktrees": {
+      "length": 564,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更（/workspace/repo の下、3本の作業ツリー）:\n  - .（枝: feat/example）: 未 push 3本 / 未コミット 2件\n  - sub（枝: (枝を指していない、または確かめられなかった)）: 未 push: 確かめられなかった（git が起こせなかった） / 未コミット: 確かめられなかった（）\n  - /tmp/scratch-1（枝: wip）: 未 push: 確かめられなかった（理由不明） / 未コミット: 確かめられなかった（理由不明）\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、実際には push 済みでも多めに出ることがある（安全側の誤り）。"
+    },
+    "refuse-observed-all-notes": {
+      "length": 700,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更（/workspace/repo の下、1本の作業ツリー）:\n  - .（枝: feat/example）: 未 push 3本 / 未コミット 2件\n  ⚠️ 作業ツリーの探索は50件で打ち切った——さらに在る可能性がある。\n  ⚠️ 呼び出し元の期限切れで、一部の作業ツリーは調べる前に打ち切った（各行の理由を見よ）。\n  ⚠️ 他マネージャー/作業者の /tmp スクラッチディレクトリの有無を確かめられなかった（EACCES: /tmp）——そこに未 push の実装が残っている可能性があり、上の一覧には含まれていない。\n  ⚠️ /workspace/repo の下で子ディレクトリの読み取りに4件失敗した（/tmp スクラッチの起点そのものの読み失敗を含む）——そこに未 push の実装が残っている可能性があり、上の一覧には含まれていない。\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、実際には push 済みでも多めに出ることがある（安全側の誤り）。"
+    },
+    "refuse-observed-empty-scratch-unknown": {
+      "length": 339,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: /workspace/repo の下には作業ツリーが見つからなかったが、他マネージャー/作業者の /tmp スクラッチディレクトリの有無は確かめられなかった（EACCES: /tmp）。**確認できていない。**"
+    },
+    "refuse-observed-empty-unreadable-dirs": {
+      "length": 376,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: /workspace/repo の下には作業ツリーが見つからなかったが、/workspace/repo の下の子ディレクトリの読み取りに2回失敗した（/tmp スクラッチの起点そのものの読み失敗を含む）——その下に未 push の実装が残っていた可能性がある。**確認できていない。**"
+    },
+    "refuse-observed-empty-both-unknown": {
+      "length": 433,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: /workspace/repo の下には作業ツリーが見つからなかったが、他マネージャー/作業者の /tmp スクラッチディレクトリの有無は確かめられなかった（EACCES: /tmp）、/workspace/repo の下の子ディレクトリの読み取りに2回失敗した（/tmp スクラッチの起点そのものの読み失敗を含む）——その下に未 push の実装が残っていた可能性がある。**確認できていない。**"
+    },
+    "refuse-observed-empty-truncated": {
+      "length": 273,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（/workspace/repo の下を探索した）。"
+    },
+    "refuse-observed-empty-stopped-early": {
+      "length": 273,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（/workspace/repo の下を探索した）。"
+    },
+    "refuse-unavailable": {
+      "length": 270,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: **確かめられなかった**（宛先の runner がいま開いていない。）。"
+    },
+    "refuse-unpushed-throws-error": {
+      "length": 287,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: **確かめられなかった**（確かめようとして例外が飛んだ: Error: runner との往復が切れた）。"
+    },
+    "refuse-unpushed-timeout": {
+      "length": 319,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: **確かめられなかった**（確かめようとして例外が飛んだ: TimeoutError: The operation was aborted due to timeout）。"
+    },
+    "refuse-unpushed-throws-string": {
+      "length": 272,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
+      ],
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: **確かめられなかった**（確かめようとして例外が飛んだ: 文字列で投げた）。"
+    },
+    "force-running-stopped": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.abort(mgr-001,reason=\"依頼が要らなくなった\",by=clone)",
+        "pool.list"
+      ],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "force-running-stopped-reasonless-folded": {
+      "length": 374,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 止めた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文（2026-10-27T01:10:00.000Z 受信）: 畳んだ 本文。 長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長い文章です。長…（188 文字省略。全 428 文字） 全文は manager_report mgr-001 で読めること。"
+    },
+    "force-running-absent": {
+      "length": 103,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は止められなかった: 器が消えた。\n台帳では running で、このデーモンからは話しかけられない（live: false）。走らせていた器がもう無いので、止める手そのものが残っていない。"
+    },
+    "force-running-not-stopped-still-running": {
+      "length": 153,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] セッションが残った。\n**止まっていない。** runner には mgr-001 のセッションがまだ残っている。いまの状態: running/背景処理待ち×2（2026-10-27T00:20:00.000Z から）。 manager_list で確かめ、必要ならもう一度止めること。"
+    },
+    "force-running-unknown": {
+      "length": 87,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] runner の応答が無かった。\n止まったかは**未確認**である（runner に確認が取れなかった）。manager_list で状態を確かめること。"
+    },
+    "force-running-unreadable": {
+      "length": 36,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"x\",by=clone)"],
+      "text": "mgr-001 は止められなかった: 台帳の行が読めない。送っていない。"
+    },
+    "force-running-abort-throws": {
+      "length": 11,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "runner が落ちた"
+    },
+    "waiting-human-no-force": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"問いが要らない\",by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "done-no-force-stopped": {
+      "length": 259,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nもともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "done-force-stopped-after-unreadable": {
+      "length": 294,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nもともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。\n止めた後の状態を一覧から読めなかった（Error: 後で読めない）。manager_list で状態を確かめること。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "done-stopped-after-vanished": {
+      "length": 247,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nもともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。\n一覧からも消えている。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "failed-no-force-stopped": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "lost-no-force-stopped": {
+      "length": 131,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"行方不明\",by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文（2026-10-27T01:01:00.000Z 受信）: 最後の発言。 全文は manager_report mgr-001 で読めること。"
+    },
+    "stopped-no-force-stopped": {
+      "length": 127,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] すでに止まっていた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "abort-unreadable-done": {
+      "length": 37,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)"],
+      "text": "mgr-001 は止められなかった: 台帳の行が壊れている。送っていない。"
+    },
+    "abort-unknown-done": {
+      "length": 86,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] runner が開いていない。\n止まったかは**未確認**である（runner に確認が取れなかった）。manager_list で状態を確かめること。"
+    },
+    "abort-not-stopped-after-found-live": {
+      "length": 112,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] セッションが残った。\n**止まっていない。** runner には mgr-001 のセッションがまだ残っている。いまの状態: done。 manager_list で確かめ、必要ならもう一度止めること。"
+    },
+    "abort-not-stopped-after-found-disconnected": {
+      "length": 123,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] セッションが残った。\n**止まっていない。** runner には mgr-001 のセッションがまだ残っている。いまの状態: stopped/セッション切断。 manager_list で確かめ、必要ならもう一度止めること。"
+    },
+    "abort-not-stopped-after-vanished": {
+      "length": 117,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] セッションが残った。\n**止まっていない。** runner には mgr-001 のセッションがまだ残っている。いまの状態: 一覧から消えている。 manager_list で確かめ、必要ならもう一度止めること。"
+    },
+    "abort-not-stopped-after-unreadable": {
+      "length": 144,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] セッションが残った。\n**止まっていない。** runner には mgr-001 のセッションがまだ残っている。いまの状態: 止めた後の状態を一覧から読めなかった（Error: 止めた後に読めない）。 manager_list で確かめ、必要ならもう一度止めること。"
+    },
+    "stopped-after-folded-turn-short": {
+      "length": 283,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"終わり\",by=clone)", "pool.list"],
+      "text": "[mgr-001] 止めた。日誌に残した。\nもともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。\nいまの状態: stopped/背景処理待ち×1（2026-10-27T00:20:00.000Z から）。\n畳んだターンの本文（2026-10-27T01:15:00.000Z 受信）: 短い本文。 全文は manager_report mgr-001 で読めること。"
+    },
+    "stopped-after-unreadable-running-before": {
+      "length": 167,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\n止めた後の状態を一覧から読めなかった（Error: 後で読めない）。manager_list で状態を確かめること。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "stopped-after-vanished-running-before": {
+      "length": 120,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=undefined,by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\n一覧からも消えている。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "reason-empty-string": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["pool.list", "pool.abort(mgr-001,reason=\"\",by=clone)", "pool.list"],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    },
+    "reason-multiline": {
+      "length": 132,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "pool.list",
+        "pool.abort(mgr-001,reason=\"一行目\\n二行目 ああああああああああああああああああああああああああああああ\",by=clone)",
+        "pool.list"
+      ],
+      "text": "[mgr-001] 停止した。セッションは閉じた。\nいまの状態: stopped/セッション切断。\n畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。届けば台帳へ残るので、manager_report mgr-001 で後から読めること。"
+    }
+  }
+}
