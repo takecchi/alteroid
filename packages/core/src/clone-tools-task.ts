@@ -1575,7 +1575,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
         return text(
           [
             ...(stoppedNote === undefined ? [] : [stoppedNote]),
-            `**${removedIds.length} 件を畳んだ（消した）**（理由: ${reason}）。`,
+            `**${removedIds.length} 件を畳んで（消した）**（理由: ${reason}）。`,
             funnel,
             `絞り込み: ${filterText}`,
             `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
