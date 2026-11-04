@@ -30,9 +30,10 @@ export function errorDetail(error) {
 }
 
 // `gh` を1回呼ぶ薄い包み（main-ci-alarm と record-release-prod-ci が逐語で同じ本体を持っていたもの）。投げず、`{ stdout, error }` のどちらか一方だけが null でない。
-export function gh(argv, { input } = {}) {
+// `exec` は試験が起動を差し替える口: 試験から本物の `gh` を起動すると、起動の重さとネットワークが実行機次第で、CI の混み具合では期限を越えて落ちるため（#6279）。
+export function gh(argv, { input, exec = execFileSync } = {}) {
   try {
-    const stdout = execFileSync('gh', argv, {
+    const stdout = exec('gh', argv, {
       encoding: 'utf8',
       input,
       stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
