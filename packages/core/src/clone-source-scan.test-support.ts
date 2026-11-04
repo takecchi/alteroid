@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 // clone.ts のソースを走査して「書き換えの前後で変わらないこと」を固定する試験の共通の道具。
-// 日誌の1行の固定（`clone-journal-self-sites-pin.test.ts`）と、振り分けの case の中身の固定（`clone-dispatch-cases-pin.test.ts`）が使う。
+// 日誌の1行の固定（`clone-journal-self-sites-pin.test.ts`）と、振り分けの case の中身の固定（`clone-dispatch-cases-pin.test.ts`）と、受信箱のループの中身の固定（`clone-pump-pin.test.ts`）が使う。
 // 1つの試験に写さず、ここに置く: 文字列・テンプレート・コメントの読み飛ばし方が2つの試験でずれると、片方だけが見逃すため。
 
 export const CLONE_TS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'clone.ts');
@@ -84,6 +84,20 @@ export function readGroup(text: string, from: number): { close: number; commas: 
     i += 1;
   }
   return { close: -1, commas };
+}
+
+/** `name` のメソッドの本体（`{` の中）を返す。宣言は2字下げで `async #name(` か `#name(` から始まるものだけを見る。 */
+export function methodBody(text: string, name: string): string {
+  const declaration = new RegExp(`\\n {2}(?:async )?${name}\\(`).exec(text);
+  if (declaration === null) throw new Error(`${name} の宣言が見つからない`);
+  const paramsOpen = declaration.index + declaration[0].length - 1;
+  const paramsClose = readGroup(text, paramsOpen).close;
+  const bodyOpen = text.indexOf('{', paramsClose);
+  const bodyClose = readGroup(text, bodyOpen).close;
+  if (paramsClose === -1 || bodyOpen === -1 || bodyClose === -1) {
+    throw new Error(`${name} の本体の括弧が読めない`);
+  }
+  return text.slice(bodyOpen + 1, bodyClose);
 }
 
 /** 括弧の中身を、深さ 1 の `,` で分ける。 */

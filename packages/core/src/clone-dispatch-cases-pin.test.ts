@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { readCloneSource, readGroup, squash } from './clone-source-scan.test-support.js';
+import {
+  methodBody,
+  readCloneSource,
+  readGroup,
+  squash,
+} from './clone-source-scan.test-support.js';
 
 // clone.ts の振り分けのメソッド（受信箱の1件を処理する `#handle`、SDK の出来事を受ける `#apply`）は、出来事の種類ごとの `case` が並ぶ形で、
 // 長い `case` を種類ごとのメソッド（`#handleTimer` など）へ出していく。出す変更が壊しうるのは「中身をそのまま移したか」だけである
@@ -9,20 +14,6 @@ import { readCloneSource, readGroup, squash } from './clone-source-scan.test-sup
 // 出す前と出した後は同じ文字列になる。式の畳み方（コードの空白は畳み、コメントは落とし、文字列は1文字ずつ比べる）は `squash`。
 
 const DISPATCHERS = ['#handle', '#apply'] as const;
-
-/** `name` のメソッドの本体（`{` の中）を返す。宣言は2字下げで `async #name(` か `#name(` から始まるものだけを見る。 */
-function methodBody(text: string, name: string): string {
-  const declaration = new RegExp(`\\n {2}(?:async )?${name}\\(`).exec(text);
-  if (declaration === null) throw new Error(`${name} の宣言が見つからない`);
-  const paramsOpen = declaration.index + declaration[0].length - 1;
-  const paramsClose = readGroup(text, paramsOpen).close;
-  const bodyOpen = text.indexOf('{', paramsClose);
-  const bodyClose = readGroup(text, bodyOpen).close;
-  if (paramsClose === -1 || bodyOpen === -1 || bodyClose === -1) {
-    throw new Error(`${name} の本体の括弧が読めない`);
-  }
-  return text.slice(bodyOpen + 1, bodyClose);
-}
 
 /** 振り分けのメソッドの、最初の `switch (event.type) {` の中を返す。 */
 function switchBody(text: string, dispatcher: string): string {
