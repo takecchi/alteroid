@@ -116,9 +116,7 @@ describe('schedule_create が既存の kind を置き換えるとき（#5348）'
     const reply = await create(stores, { kind: KIND, request: '本文', everyMinutes: 30 });
 
     expect(reply.isError).toBe(false);
-    expect(reply.text).toBe(
-      `${KIND} を 30 分ごと で仕込んだ。時刻が来たら依頼の本文とともに届く。`,
-    );
+    expect(reply.text).toBe(`${KIND} を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。`);
     expect(await decisionsOf(stores)).toEqual([
       `定期の依頼を設定しようとしている: ${KIND}: 本文`,
       `定期の依頼を仕込んだ: ${KIND}（30 分ごと）: 本文`,
