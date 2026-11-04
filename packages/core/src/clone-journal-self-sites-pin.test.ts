@@ -1,183 +1,17 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-
 import { describe, expect, it } from 'vitest';
+
+import {
+  enclosingDeclaration,
+  readCloneSource,
+  splitGroup,
+  squash,
+} from './clone-source-scan.test-support.js';
 
 // clone.ts で日誌へ `with: 'self'` の1行を書く箇所を、塊ごとに `#journalSelf(role, text)` へ寄せていく（#6333 で最初の塊）。
 // 寄せる変更が壊しうるのは、各箇所の `role` と `text` の式だけである（helper の中身は `#journal({ type: 'exchange', with: 'self', role, text })` の1行）。
 // そこで、書き込み箇所すべてについて「囲むメソッド・role・text の式」を取り出し、その一覧を固定する。
 // 寄せる前（`this.#journal({ type: 'exchange', with: 'self', role, text })`）と寄せた後（`this.#journalSelf(role, text)`）は、同じ1行として取り出される。
-//
-// 式のコードの部分の空白は1つに畳み、コメントは落としてから比べる: 寄せると prettier が式の折り返しと字下げを変え、コメントの置き場所も動きうるため。
-// 文字列（'…' / "…"）とテンプレートの地の文は畳まずに1文字ずつ比べる: 寄せる途中で文言の中の空白・改行を誤って変えたら、ここで見えるようにするため。
-
-const CLONE_TS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'clone.ts');
-
-const DECLARATION_RE =
-  /^ {0,2}(?:(?:export|default|public|private|protected|static|async|readonly)\s+)*(?:function\s+)?(?:get\s+|set\s+)?(#?[A-Za-z_$][\w$]*)\s*[(<]/;
-const NOT_A_DECLARATION = new Set([
-  'if',
-  'for',
-  'while',
-  'switch',
-  'catch',
-  'return',
-  'function',
-  'await',
-  'throw',
-]);
-
-function enclosingDeclaration(text: string, index: number): string {
-  const lines = text.slice(0, index).split('\n');
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]!;
-    const m = DECLARATION_RE.exec(line);
-    if (m && !NOT_A_DECLARATION.has(m[1]!) && !line.trimEnd().endsWith(';')) return m[1]!;
-  }
-  return '<top>';
-}
-
-/**
- * `from` の開き括弧（`{` / `(`）から対応する閉じまでを読み、閉じの位置と、深さ 1 の `,` の位置を返す。
- * 文字列（'…' / "…"）・テンプレートの地の文・コメント（`//` と `/* *\/`）は数えない。テンプレートの `${…}` の中は式として数える。
- */
-function readGroup(text: string, from: number): { close: number; commas: number[] } {
-  const stack: string[] = [];
-  const commas: number[] = [];
-  let i = from;
-  while (i < text.length) {
-    const ch = text[i]!;
-    const top = stack.at(-1);
-    if (top === '`') {
-      if (ch === '\\') i += 2;
-      else if (ch === '`') {
-        stack.pop();
-        i += 1;
-      } else if (ch === '$' && text[i + 1] === '{') {
-        stack.push('${');
-        i += 2;
-      } else i += 1;
-      continue;
-    }
-    if (ch === '/' && text[i + 1] === '/') {
-      const newline = text.indexOf('\n', i);
-      i = newline === -1 ? text.length : newline;
-      continue;
-    }
-    if (ch === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      i = end === -1 ? text.length : end + 2;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      i += 1;
-      while (i < text.length && text[i] !== ch) i += text[i] === '\\' ? 2 : 1;
-      i += 1;
-      continue;
-    }
-    if (ch === '`') stack.push('`');
-    else if (ch === '{' || ch === '(' || ch === '[') stack.push(ch);
-    else if (ch === '}' || ch === ')' || ch === ']') {
-      stack.pop();
-      if (stack.length === 0) return { close: i, commas };
-    } else if (ch === ',' && stack.length === 1) commas.push(i);
-    i += 1;
-  }
-  return { close: -1, commas };
-}
-
-/** 括弧の中身を、深さ 1 の `,` で分ける。 */
-function splitGroup(text: string, open: number): string[] {
-  const { close, commas } = readGroup(text, open);
-  const bounds = [open, ...commas, close];
-  const parts: string[] = [];
-  for (let k = 0; k + 1 < bounds.length; k += 1) {
-    parts.push(text.slice(bounds[k]! + 1, bounds[k + 1]!));
-  }
-  return parts.map((part) => part.trim()).filter((part) => part !== '');
-}
-
-// 空白を1つに畳み、行コメント（`// …` の行末まで）を落とす: 寄せると prettier が折り返しを変え、コメントの置き場所も式の外へ動きうるため
-/**
- * 式の外側（コードの部分）の空白を1つに畳み、コメントを落とす。文字列（'…' / "…"）とテンプレートの地の文は、1文字も変えずに残す。
- * テンプレートの `${…}` の中はコードとして畳む。
- */
-function squash(expression: string): string {
-  let out = '';
-  // `` ` `` はテンプレートの地の文の中、`${` はその中の式の中を表す
-  const stack: string[] = [];
-  let pendingSpace = false;
-  const emit = (chunk: string): void => {
-    // `${` の直後の空白も落とす（閉じの前と同じ理由）
-    if (pendingSpace && out !== '' && !out.endsWith('${')) out += ' ';
-    pendingSpace = false;
-    out += chunk;
-  };
-  let i = 0;
-  while (i < expression.length) {
-    const ch = expression[i]!;
-    if (stack.at(-1) === '`') {
-      if (ch === '\\') {
-        out += expression.slice(i, i + 2);
-        i += 2;
-      } else if (ch === '`') {
-        out += ch;
-        stack.pop();
-        i += 1;
-      } else if (ch === '$' && expression[i + 1] === '{') {
-        out += '${';
-        stack.push('${');
-        i += 2;
-      } else {
-        out += ch;
-        i += 1;
-      }
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      pendingSpace = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '/' && expression[i + 1] === '/') {
-      const newline = expression.indexOf('\n', i);
-      i = newline === -1 ? expression.length : newline;
-      pendingSpace = true;
-      continue;
-    }
-    if (ch === '/' && expression[i + 1] === '*') {
-      const end = expression.indexOf('*/', i + 2);
-      i = end === -1 ? expression.length : end + 2;
-      pendingSpace = true;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      let j = i + 1;
-      while (j < expression.length && expression[j] !== ch) j += expression[j] === '\\' ? 2 : 1;
-      emit(expression.slice(i, j + 1));
-      i = j + 1;
-      continue;
-    }
-    if (ch === '`') {
-      emit(ch);
-      stack.push('`');
-      i += 1;
-      continue;
-    }
-    if (ch === '}' && stack.at(-1) === '${') {
-      // `${…}` の閉じの前の空白は落とす（prettier が `${ x }` の形に折ることがあるため）
-      pendingSpace = false;
-      out += ch;
-      stack.pop();
-      i += 1;
-      continue;
-    }
-    emit(ch);
-    i += 1;
-  }
-  return out.trim();
-}
+// 式の畳み方（コードの空白は畳み、文字列は1文字ずつ比べる）は `clone-source-scan.test-support.ts` の `squash`。
 
 interface SelfSite {
   readonly start: number;
@@ -223,11 +57,11 @@ function selfSites(text: string): string[] {
 
 describe('clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯）', () => {
   it('書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない', () => {
-    expect(selfSites(readFileSync(CLONE_TS, 'utf8'))).toMatchSnapshot();
+    expect(selfSites(readCloneSource())).toMatchSnapshot();
   });
 
   it('走査が箇所を見つけられない状態（走査の故障）を通さない', () => {
     // 寄せ終わっても `#journalSelf(` の呼び出しとして数えられるので、0 にはならない
-    expect(selfSites(readFileSync(CLONE_TS, 'utf8')).length).toBeGreaterThan(50);
+    expect(selfSites(readCloneSource()).length).toBeGreaterThan(50);
   });
 });
