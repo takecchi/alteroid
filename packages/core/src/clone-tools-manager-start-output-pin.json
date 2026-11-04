@@ -1,0 +1,1521 @@
+{
+  "lengths": {
+    "no-pool": 67,
+    "no-pool-empty-request": 67,
+    "request-empty": 31,
+    "request-nul-only": 31,
+    "request-whitespace": 39,
+    "request-fullwidth-space": 39,
+    "request-whitespace-nul": 39,
+    "request-empty-with-task": 31,
+    "request-with-nul-inside": 66,
+    "task-missing": 60,
+    "task-empty-string": 53,
+    "task-unreadable": 37,
+    "task-get-throws-plain": 13,
+    "task-done": 78,
+    "task-cancelled": 83,
+    "task-done-with-running-job": 78,
+    "task-running-one": 203,
+    "task-running-one-waiting-human": 209,
+    "task-running-many": 226,
+    "task-only-settled-jobs": 66,
+    "task-queued-ok": 66,
+    "task-waiting-no-jobs-ok": 66,
+    "jobs-list-throws": 10,
+    "attach-empty-array": 66,
+    "attach-one-small": 66,
+    "attach-dup-ids": 66,
+    "attach-two-small": 66,
+    "attach-large-staged": 66,
+    "attach-mixed-staged-and-small": 66,
+    "attach-missing": 91,
+    "attach-missing-with-task": 79,
+    "attach-getmeta-throws": 38,
+    "attach-get-throws": 38,
+    "attach-vanishes-while-reading": 38,
+    "attach-too-many": 77,
+    "attach-total-too-large": 88,
+    "attach-large-not-counted-in-total": 66,
+    "journal-fails-first": 232,
+    "journal-fails-first-with-task-and-attach": 232,
+    "journal-fails-started": 66,
+    "journal-fails-started-with-saturation": 189,
+    "journal-fails-both-appends": 232,
+    "journal-fails-failure-entry-refused": 65,
+    "journal-fails-failure-entry-throws": 11,
+    "start-refused": 75,
+    "start-throws-plain": 15,
+    "start-throws-string": 7,
+    "args-minimal": 66,
+    "arg-cwd-confirmed": 70,
+    "arg-cwd-unconfirmed": 85,
+    "arg-cwd-unconfirmed-with-requested": 81,
+    "arg-cwd-replaced": 98,
+    "arg-runner-id": 66,
+    "arg-supersedes": 66,
+    "arg-conversation-id": 66,
+    "arg-work-conversation-id": 66,
+    "args-all": 262,
+    "note-missing": 66,
+    "note-without-task": 66,
+    "saturation-at-limit": 189,
+    "saturation-signs": 231,
+    "saturation-none": 66,
+    "saturation-no-method": 66,
+    "saturation-runner-unrecorded": 61
+  },
+  "scenarios": {
+    "no-pool": {
+      "length": 67,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。"
+    },
+    "no-pool-empty-request": {
+      "length": 67,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "いまは委譲できない場面である（記憶へ移すための内部ターン）。実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。"
+    },
+    "request-empty": {
+      "length": 31,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "request は使えない（1文字以上のみ）。起こしていない。"
+    },
+    "request-nul-only": {
+      "length": 31,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "request は使えない（1文字以上のみ）。起こしていない。"
+    },
+    "request-whitespace": {
+      "length": 39,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。"
+    },
+    "request-fullwidth-space": {
+      "length": 39,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。"
+    },
+    "request-whitespace-nul": {
+      "length": 39,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "request が空白だけなので起こしていない。任せたい仕事を書いて渡すこと。"
+    },
+    "request-empty-with-task": {
+      "length": 31,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "request は使えない（1文字以上のみ）。起こしていない。"
+    },
+    "request-with-nul-inside": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"前\\u0000後\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 前後",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 前後",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "task-missing": {
+      "length": 60,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-ghost\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-ghost は無い（task_list で実在する id を確かめること）。マネージャーは起こしていない。"
+    },
+    "task-empty-string": {
+      "length": 53,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task  は無い（task_list で実在する id を確かめること）。マネージャーは起こしていない。"
+    },
+    "task-unreadable": {
+      "length": 37,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 は読めない形で入っている。マネージャーは起こしていない。"
+    },
+    "task-get-throws-plain": {
+      "length": 13,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "calls": ["stores.tasks.get(\"t-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task のストアが落ちた"
+    },
+    "task-done": {
+      "length": 78,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 は閉じている（done）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。"
+    },
+    "task-cancelled": {
+      "length": 83,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 は閉じている（cancelled）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。"
+    },
+    "task-done-with-running-job": {
+      "length": 78,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 は閉じている（done）。続きを頼むなら先に task_set_status で queued へ戻すこと。マネージャーは起こしていない。"
+    },
+    "task-running-one": {
+      "length": 203,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")", "stores.jobs.listJobs()"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 には走っている委譲がある（mgr-run: running）。1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。"
+    },
+    "task-running-one-waiting-human": {
+      "length": 209,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")", "stores.jobs.listJobs()"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 には走っている委譲がある（mgr-ask: waiting_human）。1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。"
+    },
+    "task-running-many": {
+      "length": 226,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.tasks.get(\"t-1\")", "stores.jobs.listJobs()"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "task t-1 には走っている委譲がある（mgr-run: running、mgr-ask: waiting_human）。1つの task に同時に走らせる委譲は1本までなので、マネージャーは起こしていない。その委譲が終わるのを待つか、manager_stop で止めてから頼むこと。止められない（器が消えて running のまま残っている等）ときは、taskId を付けずに起こすか、task_set_status で task を動かすこと。"
+    },
+    "task-only-settled-jobs": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"taskId\":\"t-1\"})",
+        "context.noteDelegationStarted(t-1)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "task-queued-ok": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"taskId\":\"t-1\"})",
+        "context.noteDelegationStarted(t-1)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "task-waiting-no-jobs-ok": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"taskId\":\"t-1\"})",
+        "context.noteDelegationStarted(t-1)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "jobs-list-throws": {
+      "length": 10,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "calls": ["stores.tasks.get(\"t-1\")", "stores.jobs.listJobs()"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "委譲の台帳が読めない"
+    },
+    "attach-empty-array": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "attach-one-small": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"build.log\",\"sha256\":\"sha-att-1\",\"size\":5}],\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（添付 1 件を渡す: att-1 build.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）（添付 1 件を渡す: att-1 build.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "attach-dup-ids": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"build.log\",\"sha256\":\"sha-att-1\",\"size\":5}],\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（添付 1 件を渡す: att-1 build.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）（添付 1 件を渡す: att-1 build.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "attach-two-small": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.getMeta(\"att-2\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.attachments.get(\"att-2\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"a.log\",\"sha256\":\"sha-att-1\",\"size\":5},{\"data\":\"YWFhYWFhYQ==\",\"id\":\"att-2\",\"mediaType\":\"text/plain\",\"name\":\"b.log\",\"sha256\":\"sha-att-2\",\"size\":7}],\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（添付 2 件を渡す: att-1 a.log, att-2 b.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）（添付 2 件を渡す: att-1 a.log, att-2 b.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "attach-large-staged": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-big\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"id\":\"att-big\",\"mediaType\":\"text/plain\",\"name\":\"big.bin\",\"sha256\":\"sha-att-big\",\"size\":200,\"staged\":true}],\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（添付 1 件を渡す: att-big big.bin）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）（添付 1 件を渡す: att-big big.bin）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "attach-mixed-staged-and-small": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-big\")",
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"id\":\"att-big\",\"mediaType\":\"text/plain\",\"name\":\"big.bin\",\"sha256\":\"sha-att-big\",\"size\":200,\"staged\":true},{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"a.log\",\"sha256\":\"sha-att-1\",\"size\":5}],\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（添付 2 件を渡す: att-big big.bin, att-1 a.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）（添付 2 件を渡す: att-big big.bin, att-1 a.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "attach-missing": {
+      "length": 91,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.getMeta(\"att-gone\")",
+        "stores.attachments.getMeta(\"att-gone-2\")"
+      ],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り）: att-gone, att-gone-2。担い手には何も送っていない。人間に再送を頼むか、id を確かめること。"
+    },
+    "attach-missing-with-task": {
+      "length": 79,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.attachments.getMeta(\"att-gone\")"
+      ],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り）: att-gone。担い手には何も送っていない。人間に再送を頼むか、id を確かめること。"
+    },
+    "attach-getmeta-throws": {
+      "length": 38,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.attachments.getMeta(\"att-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付 att-1 の控えを読めなかった: Error: 控えのストアが落ちた"
+    },
+    "attach-get-throws": {
+      "length": 38,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付 att-1 の中身を読めなかった: Error: 中身のストアが落ちた"
+    },
+    "attach-vanishes-while-reading": {
+      "length": 38,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "添付 att-1 は読む間に消えた（保持期限）。担い手には何も送っていない。"
+    },
+    "attach-too-many": {
+      "length": 77,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"a1\")",
+        "stores.attachments.getMeta(\"a2\")",
+        "stores.attachments.getMeta(\"a3\")",
+        "stores.attachments.getMeta(\"a4\")"
+      ],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "AttachmentRejectedError: 1 発言に添えられるのは 3 個まで（4 個） code=too_many。担い手には何も送っていない。"
+    },
+    "attach-total-too-large": {
+      "length": 88,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": ["stores.attachments.getMeta(\"a1\")", "stores.attachments.getMeta(\"a2\")"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "AttachmentRejectedError: 1 発言の合計は 100 B まで（110 B ある） code=total_too_large。担い手には何も送っていない。"
+    },
+    "attach-large-not-counted-in-total": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"a1\")",
+        "stores.attachments.getMeta(\"att-big\")",
+        "stores.attachments.get(\"a1\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"data\":\"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh\",\"id\":\"a1\",\"mediaType\":\"text/plain\",\"name\":\"a1.txt\",\"sha256\":\"sha-a1\",\"size\":60},{\"id\":\"att-big\",\"mediaType\":\"text/plain\",\"name\":\"att-big.txt\",\"sha256\":\"sha-att-big\",\"size\":200,\"staged\":true}],\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（添付 2 件を渡す: a1 a1.txt, att-big att-big.txt）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）（添付 2 件を渡す: a1 a1.txt, att-big att-big.txt）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "journal-fails-first": {
+      "length": 232,
+      "isError": true,
+      "thrown": true,
+      "errorName": "JournalNotRecordedError",
+      "calls": ["stores.journal.append()"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nmanager_start は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=30 grounds.chars=5\n理由: Error: 日誌のストアが落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。"
+    },
+    "journal-fails-first-with-task-and-attach": {
+      "length": 232,
+      "isError": true,
+      "thrown": true,
+      "errorName": "JournalNotRecordedError",
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.journal.append()"
+      ],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nmanager_start は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=81 grounds.chars=5\n理由: Error: 日誌のストアが落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。"
+    },
+    "journal-fails-started": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"taskId\":\"t-1\"})",
+        "context.noteDelegationStarted(t-1)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "journal-fails-started-with-saturation": {
+      "length": 189,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。\n⚠ 置き先の runner は pids 飽和と判定されている: pids 100/100 で上限に達している。この委譲は新しいプロセスを起こせず落ちるかもしれない——runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。"
+    },
+    "journal-fails-both-appends": {
+      "length": 232,
+      "isError": true,
+      "thrown": true,
+      "errorName": "JournalNotRecordedError",
+      "calls": ["stores.journal.append()"],
+      "journal": [],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nmanager_start は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=30 grounds.chars=5\n理由: Error: 日誌のストアが落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。"
+    },
+    "journal-fails-failure-entry-refused": {
+      "length": 65,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "ManagerAttachmentsRefusedError: runner が添付を受け取れない。マネージャーは起こしていない。"
+    },
+    "journal-fails-failure-entry-throws": {
+      "length": 11,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "runner が落ちた"
+    },
+    "start-refused": {
+      "length": 75,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"a.log\",\"sha256\":\"sha-att-1\",\"size\":5}],\"request\":\"調べて。背景は別に書く。\",\"runnerId\":\"runner-old\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（指名: runnerId=runner-old）（添付 1 件を渡す: att-1 a.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こせなかった（指名: runnerId=runner-old）（添付 1 件を渡す: att-1 a.log）: 調べて。背景は別に書く。",
+          "grounds": "委譲しようとしたが、状態の変更が失敗した: ManagerAttachmentsRefusedError: runner-old は添付の受け渡しを名乗っていない"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "ManagerAttachmentsRefusedError: runner-old は添付の受け渡しを名乗っていない。マネージャーは起こしていない。"
+    },
+    "start-throws-plain": {
+      "length": 15,
+      "isError": true,
+      "thrown": true,
+      "errorName": "Error",
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"runnerId\":\"runner-x\",\"taskId\":\"t-1\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（指名: runnerId=runner-x）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こせなかった（指名: runnerId=runner-x）: 調べて。背景は別に書く。",
+          "grounds": "委譲しようとしたが、状態の変更が失敗した: Error: runner-x は名簿に無い"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "runner-x は名簿に無い"
+    },
+    "start-throws-string": {
+      "length": 7,
+      "isError": true,
+      "thrown": true,
+      "errorName": "string",
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こせなかった: 調べて。背景は別に書く。",
+          "grounds": "委譲しようとしたが、状態の変更が失敗した: 文字列で投げた"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "文字列で投げた"
+    },
+    "args-minimal": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-cwd-confirmed": {
+      "length": 70,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"cwd\":\"/work/sub\",\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work/sub）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work/sub、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-cwd-unconfirmed": {
+      "length": 85,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"cwd\":\"/work/sub\",\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（実際の cwd は未確認（頼んだ値: /work/sub））: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（実際の cwd は未確認（頼んだ値: /work/sub）、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-cwd-unconfirmed-with-requested": {
+      "length": 81,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（実際の cwd は未確認（頼んだ値: /work））: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（実際の cwd は未確認（頼んだ値: /work）、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-cwd-replaced": {
+      "length": 98,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"cwd\":\"/work/ghost\",\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（頼んだ cwd（/work/ghost）はこの器に無かったので、/work で開いた）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（頼んだ cwd（/work/ghost）はこの器に無かったので、/work で開いた、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-runner-id": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"runnerId\":\"runner-2\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-2)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（指名: runnerId=runner-2）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work, 指名: runnerId=runner-2）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-2）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-supersedes": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"supersedes\":\"mgr-old\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-conversation-id": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"conversationId\":\"conv-reply\",\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "arg-work-conversation-id": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"conversationId\":\"conv-work\",\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "args-all": {
+      "length": 262,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.getMeta(\"att-big\")",
+        "stores.attachments.get(\"att-1\")",
+        "stores.journal.append()",
+        "pool.start({\"attachments\":[{\"data\":\"YWFhYWE=\",\"id\":\"att-1\",\"mediaType\":\"text/plain\",\"name\":\"a.log\",\"sha256\":\"sha-att-1\",\"size\":5},{\"id\":\"att-big\",\"mediaType\":\"text/plain\",\"name\":\"big.bin\",\"sha256\":\"sha-att-big\",\"size\":200,\"staged\":true}],\"conversationId\":\"conv-1\",\"cwd\":\"/work/sub\",\"request\":\"調べて。背景は別に書く。\",\"runnerId\":\"runner-2\",\"supersedes\":\"mgr-old\",\"taskId\":\"t-1\"})",
+        "context.noteDelegationStarted(t-1)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-2)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている（指名: runnerId=runner-2）（添付 2 件を渡す: att-1 a.log, att-big big.bin）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work/sub, 指名: runnerId=runner-2）（添付 2 件を渡す: att-1 a.log, att-big big.bin）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work/sub、runner: runner-2）。報告・質問は後から受信箱に届く。\n⚠ 置き先の runner は pids 飽和と判定されている: pids 4096/4096 で上限に達している / 直近10分に spawn が EAGAIN で失敗 3 回 / 直近10分に fork が pids 上限で拒まれた委譲 2 本。この委譲は新しいプロセスを起こせず落ちるかもしれない——runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。"
+    },
+    "note-missing": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.tasks.get(\"t-1\")",
+        "stores.jobs.listJobs()",
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\",\"taskId\":\"t-1\"})",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "note-without-task": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "saturation-at-limit": {
+      "length": 189,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。\n⚠ 置き先の runner は pids 飽和と判定されている: pids 100/100 で上限に達している。この委譲は新しいプロセスを起こせず落ちるかもしれない——runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。"
+    },
+    "saturation-signs": {
+      "length": 231,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。\n⚠ 置き先の runner は pids 飽和と判定されている: 直近15分に spawn が EAGAIN で失敗 2 回 / 直近15分に fork が pids 上限で拒まれた委譲 1 本。この委譲は新しいプロセスを起こせず落ちるかもしれない——runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。"
+    },
+    "saturation-none": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()",
+        "pool.runnerPidsSaturation(runner-1)"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "saturation-no-method": {
+      "length": 66,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: runner-1）。報告・質問は後から受信箱に届く。"
+    },
+    "saturation-runner-unrecorded": {
+      "length": 61,
+      "isError": false,
+      "thrown": false,
+      "errorName": null,
+      "calls": [
+        "stores.journal.append()",
+        "pool.start({\"request\":\"調べて。背景は別に書く。\"})",
+        "context.noteDelegationStarted(undefined)",
+        "stores.journal.append()"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャーを起こそうとしている: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-27T02:00:00.000Z",
+          "decision": "マネージャー mgr-001 を起こした（cwd: /work）: 調べて。背景は別に書く。",
+          "grounds": "委譲の判断"
+        }
+      ],
+      "tasksUnchanged": true,
+      "jobsUnchanged": true,
+      "text": "マネージャー mgr-001 を起こした（cwd: /work、runner: 未記録）。報告・質問は後から受信箱に届く。"
+    }
+  }
+}
