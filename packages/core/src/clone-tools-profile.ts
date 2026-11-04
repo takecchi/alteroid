@@ -444,10 +444,17 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         const settingsLine = await readTokenSettingsLine(stores.tokens);
         const { active, line: activeLine } = await readTokenActiveLine(stores.tokens);
         const resolved = resolveTokenCursor(allTokens, cursor);
-        if (resolved.kind === 'malformed') return text(renderTokenListMalformedCursor());
+        const REC = (o: Record<string, unknown>) => console.log('TKREC ' + JSON.stringify(o));
+        if (resolved.kind === 'malformed') {
+          const s = renderTokenListMalformedCursor();
+          REC({ kind: 'malformed', total: s.length, refusal: s.length });
+          return text(s);
+        }
         // cursor を渡されたときだけ「最後の頁」と言う: プールが空のときの言い方を奪わないため
         if (cursor !== undefined && resolved.view.length === 0) {
-          return text(renderTokenListLastPage());
+          const s = renderTokenListLastPage();
+          REC({ kind: 'lastpage', total: s.length, refusal: s.length });
+          return text(s);
         }
         const tokens = resolved.view;
         // `toAgentTokenView` を通す: 自分で組むと値を含む `AgentToken` から拾う形になり、いつか `value` が混ざるため
@@ -455,10 +462,46 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         const now = Date.now();
         const head = renderTokenListHead(settingsLine, activeLine, unreadableTokensNote);
         if (views.length === 0) {
-          return text(renderTokenListEmpty(head, unreadableTokensNote !== null, fold));
+          const s = renderTokenListEmpty(head, unreadableTokensNote !== null, fold);
+          REC({
+            kind: 'empty',
+            total: s.length,
+            settings: settingsLine.length,
+            active: activeLine.length,
+            unreadable: unreadableTokensNote?.length ?? 0,
+            head: head.join('\n').length,
+            emptyBody: s.length,
+          });
+          return text(s);
         }
         const items = renderTokenListItems(views, now, active);
-        return text(renderTokenListBody({ head, items, tokens, total: allTokens.length, fold }));
+        const s = renderTokenListBody({ head, items, tokens, total: allTokens.length, fold });
+        const allItems = items.join('\n').length;
+        let noteLen = 0;
+        const listing = renderListing(items, {
+          budget: TOKEN_LIST_BUDGET,
+          omitted: ({ rest, shown }) => {
+            const n = renderTokenListOmitted({ rest, shown, tokens, total: allTokens.length });
+            noteLen = n.length;
+            return n;
+          },
+        });
+        const foot = renderTokenListFootnotes(fold);
+        REC({
+          kind: 'list',
+          total: s.length,
+          settings: settingsLine.length,
+          active: activeLine.length,
+          unreadable: unreadableTokensNote?.length ?? 0,
+          head: head.join('\n').length,
+          count: items.length,
+          before: allItems,
+          shown: listing.length,
+          omittedNote: noteLen,
+          foot: foot.map((f) => f.length),
+          extraMax: Math.max(...views.map((v) => renderTokenListEntryExtra(v).join('\n').length)),
+        });
+        return text(s);
       },
     ),
 
