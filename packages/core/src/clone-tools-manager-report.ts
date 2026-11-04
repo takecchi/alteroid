@@ -212,8 +212,15 @@ type ManagerReportFoldedTurn = NonNullable<ManagerSummary['lastFoldedTurn']>;
 interface ManagerReportBodySelection {
   foldedTurn: ManagerReportFoldedTurn | undefined;
   body: string | undefined;
+<<<<<<< HEAD
   // 拒否の基準: foldedTurn の回は `foldedTurn.at`、それ以外は `lastReportAt`（報告が在る枝・無い枝で同じ）
   deniedSince: string | undefined;
+=======
+  // 報告が在る枝の拒否の基準: foldedTurn の回は `foldedTurn.at`、それ以外は `lastReportAt`
+  deniedSinceWhenPresent: string | undefined;
+  // 報告が無い枝の拒否の基準: 本文が空の回は foldedTurn が在っても `lastReportAt` のまま
+  deniedSinceWhenMissing: string | undefined;
+>>>>>>> origin/main
 }
 
 interface ManagerReportNotes {
@@ -264,17 +271,27 @@ function selectManagerReportBody(
   found: ManagerSummary,
   part: ManagerReportPart,
 ): ManagerReportBodySelection {
+<<<<<<< HEAD
   // 本文が空の畳まれたターンは「無い」と見る: 空を本文に選ぶと、`lastReport` に読める報告が在っても「報告はまだ無い」と返し、止まっていない委譲を止まっていると見誤らせるため（#6387）
   const folded = found.lastFoldedTurn;
   const foldedTurn =
     part === 'request' || folded === undefined || folded.text.length === 0 ? undefined : folded;
+=======
+  const foldedTurn = part === 'request' ? undefined : found.lastFoldedTurn;
+>>>>>>> origin/main
   const body = part === 'request' ? found.request : (foldedTurn?.text ?? found.lastReport);
   return {
     foldedTurn,
     body,
+<<<<<<< HEAD
     // foldedTurn の回は `lastReportAt` の代わりに `foldedTurn.at` を渡す: `lastReportAt` は畳まれる前の古い値のままで、「拒否の後の報告はまだ届いていない」と誤判定するため。
     // 報告が無い枝に来るのは foldedTurn が無い回だけなので、どちらの枝も同じ基準になる
     deniedSince: foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
+=======
+    // foldedTurn の回は `lastReportAt` の代わりに `foldedTurn.at` を渡す: `lastReportAt` は畳まれる前の古い値のままで、「拒否の後の報告はまだ届いていない」と誤判定するため
+    deniedSinceWhenPresent: foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
+    deniedSinceWhenMissing: found.lastReportAt,
+>>>>>>> origin/main
   };
 }
 
@@ -546,7 +563,12 @@ export function managerReportTool(context: ToolContext) {
       if (!found) return text(await describeManagerReportNotFound(context, managerId));
 
       const modelLine = renderManagerReportModelLine(context, found);
+<<<<<<< HEAD
       const { foldedTurn, body, deniedSince } = selectManagerReportBody(found, part);
+=======
+      const { foldedTurn, body, deniedSinceWhenPresent, deniedSinceWhenMissing } =
+        selectManagerReportBody(found, part);
+>>>>>>> origin/main
       if (body === undefined || body.length === 0) {
         if (part === 'request') {
           return text(`マネージャー ${managerId} の依頼文が記録に無い。`);
@@ -554,7 +576,11 @@ export function managerReportTool(context: ToolContext) {
         return text(
           await renderManagerReportMissing(context.managers, found, modelLine, {
             rescueAll,
+<<<<<<< HEAD
             deniedSince,
+=======
+            deniedSince: deniedSinceWhenMissing,
+>>>>>>> origin/main
           }),
         );
       }
@@ -563,7 +589,11 @@ export function managerReportTool(context: ToolContext) {
       const notes = readManagerReportNotes(context.managers, found, {
         part,
         rescueAll,
+<<<<<<< HEAD
         deniedSince,
+=======
+        deniedSince: deniedSinceWhenPresent,
+>>>>>>> origin/main
       });
       const part1 = page(body, offset, REPORT_PAGE);
       const head = renderManagerReportHead(found, part, foldedTurn, part1);
