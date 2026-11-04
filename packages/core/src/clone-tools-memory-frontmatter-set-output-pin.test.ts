@@ -238,7 +238,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'read-fails',
     covers:
-      '文書を読むところで例外（ストアが落ちた）。例外のまま呼び手へ返る・何も書かない（日誌も）。別の slug の読みは落ちない',
+      '文書を読むところで例外（ストアが落ちた）。断りの文で返る（例外のままにしない）・何も書かない（日誌も）。別の slug の読みは落ちない',
     seed: [
       { slug: 'values', content: PREMISE_DOC },
       { slug: 'other', content: OTHER_FACT },
@@ -344,7 +344,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'version',
     covers:
-      '版: 版なし（断る・読み直しを求める）・空文字の版・古い版（衝突。いまの版と字数を名乗る）・正しい版。版なしの検査は壊れた frontmatter の検査より先',
+      '版: 版なし（断る・読み直しを求める）・空文字と空白だけの版（版なしと同じ断り・書き込みに進まない）・古い版（衝突。いまの版と字数を名乗る）・正しい版。版なしの検査は壊れた frontmatter の検査より先',
     seed: [
       { slug: 'values', content: PREMISE_DOC },
       { slug: 'broken', content: MAL_NOCOLON },
@@ -355,6 +355,7 @@ const SCENARIOS: Scenario[] = [
       { args: fm('values', { description: '要旨', base_version: STALE_VERSION }), writes: 'none' },
       { args: { slug: 'broken', summary: '版なし', description: '要旨' }, writes: 'none' },
       { args: fm('values', { description: '正しい版で通る' }), writes: 'some' },
+      { args: fm('values', { description: '要旨', base_version: '  ' }), writes: 'none' },
     ],
   },
   {
@@ -490,7 +491,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'kind-changes',
     covers:
-      '区分の変化の注記: premise → fact → indexed → premise → indexed（変わるたびに「区分が変わった」と次のターンからの載り方）・同じ区分へ（indexed → indexed。注記なし）。他の文書（premise・fact）が在るので順位・床が動く',
+      '区分の変化の注記: premise → fact → indexed → premise → indexed（変わるたびに「区分が変わった」と次のターンからの載り方）・同じ区分へ同じ値（indexed → indexed。書かずに「何も書いていない」と返る）。他の文書（premise・fact）が在るので順位・床が動く',
     seed: [
       { slug: 'values', content: PREMISE_DOC },
       { slug: 'other-premise', content: OTHER_PREMISE },
@@ -501,7 +502,7 @@ const SCENARIOS: Scenario[] = [
       { args: fm('values', { type: 'indexed' }), writes: 'some' },
       { args: fm('values', { type: 'premise' }), writes: 'some' },
       { args: fm('values', { type: 'indexed' }), writes: 'some' },
-      { args: fm('values', { type: 'indexed' }), writes: 'some' },
+      { args: fm('values', { type: 'indexed' }), writes: 'none' },
     ],
   },
   {
@@ -521,17 +522,21 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'unchanged',
     covers:
-      '同じ値を渡す（実質の変更なし）: それでも書き込み・日誌が起きる（更新時刻・版は同じ内容なので変わらない）・渡したキーが既存と同じ・正規化だけが起きる文書（キーの順序・空白）',
+      '同じ値を渡す（実質の変更なし）: 直した本文がいまと同じなら書き込み・日誌をせず「何も書いていない」と返す（版は変わらない）・正規化だけが起きる文書（キーの順序・空白）は本文が変わるので書く・版が古くても書かないので競合にならない',
     seed: [
       { slug: 'values', content: PREMISE_DOC },
       { slug: 'reorder', content: REORDER_DOC },
     ],
     steps: [
-      { args: fm('values', { description: '元の要旨' }), writes: 'some' },
-      { args: fm('values', { description: '元の要旨', type: 'premise' }), writes: 'some' },
+      { args: fm('values', { description: '元の要旨' }), writes: 'none' },
+      { args: fm('values', { description: '元の要旨', type: 'premise' }), writes: 'none' },
       {
         args: fm('reorder', { description: '元の要旨', type: 'fact', parent: 'root' }),
         writes: 'some',
+      },
+      {
+        args: fm('values', { description: '元の要旨', base_version: STALE_VERSION }),
+        writes: 'none',
       },
     ],
   },
@@ -598,7 +603,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'documents-fails',
     covers:
-      '書き込みの前後に取る記憶の一覧が落ちる: 書く前（何も書かない）・書いた後（記憶は書き換わったが日誌は無く、例外で返る）',
+      '書き込みの前後に取る記憶の一覧が落ちる: 書く前（何も書かない・例外で返る）・書いた後（記憶は書き換わり日誌も残る。応答は更新した旨のまま、載り方の変化の代わりに「確かめていない」の注が付く）',
     seed: [{ slug: 'values', content: PREMISE_DOC }],
     steps: [
       {
@@ -625,7 +630,8 @@ const SCENARIOS: Scenario[] = [
     journalFailsAt: [1],
     steps: [
       { args: fm('values', { description: '要旨' }), writes: 'some' },
-      { args: fm('values', { description: '要旨' }), writes: 'some' },
+      // 同じ値だと書かずに返る（#6366 の小さい方 1）ので、日誌が戻った後の書き込みを確かめるため別の値にする
+      { args: fm('values', { description: '要旨（やり直し）' }), writes: 'some' },
     ],
   },
   {
@@ -1117,10 +1123,13 @@ describe('memory_frontmatter_set の出力と呼んだあとの状態の固定�
     expect(text('type-invalid#5')).toContain('type に渡せるのは');
     expect(text('type-invalid#6')).toContain('は存在しない');
     expect(text('doc-missing#1')).toContain('は存在しない');
-    expect(text('read-fails#1')).toBe('ストアの読みが落ちた');
-    expect(actual['read-fails#1']?.output.thrown).toBe(true);
+    expect(text('read-fails#1')).toBe(
+      '記憶 values を読めなかった（Error: ストアの読みが落ちた）。frontmatter は直していない（何も変わっていない）。',
+    );
+    expect(actual['read-fails#1']?.output.thrown).toBe(false);
     expect(text('read-fails#2')).toContain('記憶 other の frontmatter を更新した');
     expect(text('guard-distill#1')).toContain('人間の書き込みの履歴が在る（保護状態: human）');
+    expect(text('guard-distill#1')).toContain('記憶 human-doc への frontmatter の更新を、');
     expect(text('guard-distill#1')).toContain('ask_human');
     expect(text('guard-distill#1')).toContain('代わりにならない');
     expect(text('guard-distill#2')).toContain('断った');
@@ -1134,9 +1143,11 @@ describe('memory_frontmatter_set の出力と呼んだあとの状態の固定�
     expect(text('version#1')).toContain('base_version をこの呼び出しの base_version に渡すこと');
     expect(text('version#1')).toContain('**何も書いていない。**');
     expect(calls('version#1')).toEqual([]);
-    expect(text('version#2')).toContain('その間に変わった');
-    expect(outcomes('version#2')).toEqual(['conflict']);
-    expect(calls('version#2')[0]?.ifMatch).toBe('');
+    expect(text('version#2')).toContain('base_version をこの呼び出しの base_version に渡すこと');
+    expect(text('version#2')).toBe(text('version#1'));
+    expect(calls('version#2')).toEqual([]);
+    expect(text('version#6')).toBe(text('version#1'));
+    expect(calls('version#6')).toEqual([]);
     expect(text('version#3')).toContain('**書かなかった**');
     expect(text('version#3')).toContain(`base_version=${memoryVersion(PREMISE_DOC)}`);
     expect(calls('version#3')[0]?.ifMatch).toBe(STALE_VERSION);
@@ -1187,9 +1198,15 @@ describe('memory_frontmatter_set の出力と呼んだあとの状態の固定�
     expect(text('kind-changes#5')).not.toContain('区分が変わった');
     expect(text('kind-from-none#1')).not.toContain('区分が変わった');
     expect(text('kind-from-none#2')).toContain('区分が変わった');
-    expect(outcomes('unchanged#1')).toEqual(['ok']);
-    expect(doc('unchanged#1', 'values')).toBe(PREMISE_DOC);
-    expect(journal('unchanged#1')).toHaveLength(1);
+    for (const key of ['unchanged#1', 'unchanged#2', 'unchanged#4']) {
+      expect(text(key), key).toContain('何も書いていない（版は変わらない: base_version=');
+      expect(text(key), key).toContain(`base_version=${memoryVersion(PREMISE_DOC)}`);
+      expect(calls(key), key).toEqual([]);
+      expect(journal(key), key).toEqual([]);
+      expect(doc(key, 'values'), key).toBe(PREMISE_DOC);
+    }
+    expect(outcomes('unchanged#3')).toEqual(['ok']);
+    expect(journal('unchanged#3')).toHaveLength(1);
     expect(doc('unchanged#3', 'reorder')).toBe(
       `---\ndescription: 元の要旨\ntype: fact\nparent: root\n---\n${BODY}`,
     );
@@ -1203,9 +1220,13 @@ describe('memory_frontmatter_set の出力と呼んだあとの状態の固定�
     expect(outcomes('write-fails#2')).toEqual(['ok']);
     expect(text('documents-fails#1')).toBe('記憶の一覧が落ちた');
     expect(calls('documents-fails#1')).toEqual([]);
-    expect(text('documents-fails#2')).toBe('記憶の一覧が落ちた');
+    expect(text('documents-fails#2')).toContain('記憶 values の frontmatter を更新した。');
+    expect(text('documents-fails#2')).toContain(
+      '（書いた後の記憶の一覧が読めなかったので、載り方の変化は確かめていない: Error: 記憶の一覧が落ちた）',
+    );
+    expect(actual['documents-fails#2']?.output.thrown).toBe(false);
     expect(outcomes('documents-fails#2')).toEqual(['ok']);
-    expect(journal('documents-fails#2')).toEqual([]);
+    expect(journal('documents-fails#2')).toHaveLength(1);
     expect(doc('documents-fails#2', 'values')).toContain('description: 要旨B');
     expect(text('journal-fails#1').split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
     expect(journal('journal-fails#1')).toEqual([]);
