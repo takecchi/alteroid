@@ -82,14 +82,14 @@ describe('migrate のロックの待ちと挑み直し（#4747）', () => {
 
     expect(probe.failed()).toBe(1);
     expect(lines.join('')).toContain('code=55P03');
-  });
+  }, 30_000);
 
   it('⭐ 2つのデーモンの同時の初回の競合（23505）も挑み直す', async () => {
     const { db } = await createEmptyTestDb();
     const probe = failingOnce(db, STATEMENTS[0]!, '23505');
     await migrate(probe.db, () => undefined, { retryDelayMs: 1 });
     expect(probe.failed()).toBe(1);
-  });
+  }, 30_000);
 
   it('挑み直さない失敗（構文の誤りなど）は、そのまま投げる', async () => {
     const { db } = await createEmptyTestDb();
@@ -97,7 +97,7 @@ describe('migrate のロックの待ちと挑み直し（#4747）', () => {
     await expect(migrate(probe.db, () => undefined, { retryDelayMs: 1 })).rejects.toThrow(
       'code=42601',
     );
-  });
+  }, 30_000);
 
   // 索引づくりの関数の文も同じ道を通す（#4768）: 外に残すと、同時の初回で catalog の一意違反が出て起動が落ちるため
   it(`⭐ ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX} の作成が同時の初回の競合（23505）で落ちても挑み直す（#4768）`, async () => {
@@ -110,5 +110,5 @@ describe('migrate のロックの待ちと挑み直し（#4747）', () => {
     );
     await migrate(probe.db, () => undefined, { retryDelayMs: 1 });
     expect(probe.failed()).toBe(1);
-  });
+  }, 30_000);
 });

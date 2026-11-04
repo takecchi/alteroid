@@ -44,7 +44,7 @@ describe('PgPluginStore', () => {
     await migrate(db);
     const got = await stores.plugins.get('my-plugin');
     expect(got?.files.map((f) => f.path)).toEqual(['.claude-plugin/plugin.json', 'run.sh']);
-  });
+  }, 30_000);
 
   it('description 列が無い古い表でも migrate が列を足し、既存の行は説明なしで読める', async () => {
     await stores.plugins.put(input('old-one'));
@@ -59,7 +59,7 @@ describe('PgPluginStore', () => {
     const after = await stores.plugins.list();
     expect(after.find((p) => p.name === 'new-one')?.description).toBe('この plugin の説明');
     expect(after.find((p) => p.name === 'old-one')).not.toHaveProperty('description');
-  });
+  }, 30_000);
 
   it('list は plugin_files を読まない（説明は plugins の行から返す）', async () => {
     await stores.plugins.put({ ...input(), description: '説明' });

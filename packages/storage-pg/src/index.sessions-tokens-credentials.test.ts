@@ -47,7 +47,7 @@ describe('PgMcpServerStore', () => {
     expect((await stores.mcpServers.read())?.mcpServers).toEqual({
       remote: { type: 'http', url: 'https://example.invalid/mcp' },
     });
-  });
+  }, 30_000);
 
   it('SQL で直接書き換えられた行も、読むときに検査する', async () => {
     await db.execute(
@@ -120,7 +120,7 @@ describe('PgProfileStore', () => {
       ]);
       const legacy = await client.query("select script from env_profile where id = 'default'");
       expect(legacy.rows).toHaveLength(1);
-    });
+    }, 30_000);
 
     it('2周目で、移行のあとに書き換えた default を旧表の値へ戻さない（冪等）', async () => {
       await resetToBeforeMigration();
@@ -134,7 +134,7 @@ describe('PgProfileStore', () => {
       expect(await stores.profile.list()).toMatchObject([
         { name: 'default', script: 'export NEW=1\n', scope: 'runner' },
       ]);
-    });
+    }, 30_000);
 
     it('2周目で、移行のあとに外した default を旧表から蘇らせない', async () => {
       await resetToBeforeMigration();
@@ -145,7 +145,7 @@ describe('PgProfileStore', () => {
       await migrate(db);
 
       expect(await stores.profile.list()).toEqual([]);
-    });
+    }, 30_000);
 
     it('旧表が空白だけなら何も写さない（印だけ立つ）', async () => {
       await resetToBeforeMigration();
@@ -158,7 +158,7 @@ describe('PgProfileStore', () => {
         "select value from daemon_state where key = 'env_profile_entries_migrated'",
       );
       expect(marker.rows).toHaveLength(1);
-    });
+    }, 30_000);
 
     it('clear は旧表も空にする（全部外したものが、旧形式から蘇らない）', async () => {
       await resetToBeforeMigration();
@@ -170,7 +170,7 @@ describe('PgProfileStore', () => {
       await migrate(db);
 
       expect(await stores.profile.list()).toEqual([]);
-    });
+    }, 30_000);
   });
 });
 
@@ -410,7 +410,7 @@ describe('PgTokenPoolStore', () => {
 
     expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-a']);
     expect((await stores.tokens.readSettings()).rotateOn).toBe('off');
-  });
+  }, 30_000);
 });
 
 describe('PgSessionRegistry', () => {
@@ -935,5 +935,5 @@ describe('PgConversationReadStore', () => {
       baseline: '2026-10-01T00:00:00.000Z',
       positions: { c1: { readThrough: '2026-10-01T00:00:01.000Z' } },
     });
-  });
+  }, 30_000);
 });

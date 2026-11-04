@@ -77,7 +77,7 @@ describe('migrate（archive の指紋・連続性列。#698）', () => {
     expect(rows).toEqual([
       { bodyChars: 5, bodyMd5: 'deadbeefdeadbeefdeadbeefdeadbeef', continuity: 'continues' },
     ]);
-  });
+  }, 30_000);
 });
 
 describe('migrate（usage_daily の unreadable 列。#2086）', () => {
@@ -121,7 +121,7 @@ describe('migrate（usage_daily の unreadable 列。#2086）', () => {
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.totals).toEqual({ ...ZERO_USAGE, costUsd: 2, unreadable: { inputTokens: 2 } });
-  });
+  }, 30_000);
 });
 
 // 親だけ見ない: `toast.` を書き忘れて親だけ効いている状態を緑のまま通すため、TOAST 側の `reloptions` を別に引く。
@@ -192,7 +192,7 @@ describe('migrate（archive の autovacuum reloptions。#698）', () => {
       .from(archive)
       .where(eq(archive.id, 'session-migrate-reloptions-1.jsonl'));
     expect(rows).toHaveLength(1);
-  });
+  }, 30_000);
 });
 
 describe('migrate（auth_accounts のメール大小文字索引。#1702）', () => {

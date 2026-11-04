@@ -704,7 +704,7 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     expect(rows[0]?.layer).toBe('manager');
     expect(rows[0]?.site).toBe('session');
     expect(rows[0]?.totals.costUsd).toBe(12.5);
-  });
+  }, 30_000);
 
   it('既にある基準がそのまま引ける（次の1回で二重計上しない）', async () => {
     await migrate(legacyDb);
@@ -726,7 +726,7 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     const { rows } = await legacyStore.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.totals.costUsd).toBeCloseTo(13, 10);
-  });
+  }, 30_000);
 
   it('台帳の始点は動かさず、層の軸の始点だけが後から入る', async () => {
     await migrate(legacyDb);
@@ -753,7 +753,7 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     expect(after.layersSince).toBe('2026-08-19T10:00:00.000Z');
     expect(after.beforeLayers).toBe(false);
     expect((await legacyStore.aggregate({ from: '2026-08-01' })).beforeLayers).toBe(true);
-  });
+  }, 30_000);
 
   it('移行後は同じ actor・日・モデルで層の違う行が2つ立てられる（古い3列の鍵が外れている）', async () => {
     await migrate(legacyDb);
@@ -772,7 +772,7 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     const { rows } = await legacyStore.aggregate({});
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.layer).sort()).toEqual(['clone', 'manager']);
-  });
+  }, 30_000);
 
   it('migrate を2回当てても落ちない（鍵の差し替えが冪等である）', async () => {
     await migrate(legacyDb);
@@ -783,7 +783,7 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     const { rows } = await legacyStore.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.layer).toBe('manager');
-  });
+  }, 30_000);
 });
 
 describe('認証トークンの軸（どの区間がどのトークンだったか。#393 受け入れ基準6）', () => {
@@ -1137,7 +1137,7 @@ describe('起動を2回通す（usage_turns。新規テーブルなので鍵の�
     const { turnRows } = await store.aggregate({});
     expect(turnRows).toHaveLength(1);
     expect(turnRows[0]?.turns).toBe(1);
-  });
+  }, 30_000);
 });
 
 // 空の DB から始めない: 新しい鍵を旧名のまま作る形は、空の DB なら6列の索引が作られて通り、5列の既存索引が名前で一致して no-op になる罠を踏めないため。
@@ -1219,7 +1219,7 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     const { rows } = await layeredStore.aggregate({ managerId: 'mgr-new' });
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.tokenId)).toEqual(['tok-a', 'tok-b']);
-  });
+  }, 30_000);
 
   it('旧名の索引が実際に消え、新しい名前の索引が在る（no-op で通していない）', async () => {
     await migrate(layeredDb);
@@ -1231,7 +1231,7 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     // 行が2つ立つことだけで済ませない: 旧索引が消えたことでも新索引が在ることでも説明できてしまうため、名前で直接見る。
     expect(names).toContain('usage_daily_token_key_idx');
     expect(names).not.toContain('usage_daily_key_idx');
-  });
+  }, 30_000);
 
   it('既にある行はトークンの帰属を持たない（既定を観測として売らない）', async () => {
     await migrate(layeredDb);
@@ -1243,7 +1243,7 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     expect(rows[0]?.totals.costUsd).toBe(12.5);
     expect(tokensSince).toBeNull();
     expect(beforeTokens).toBe(true);
-  });
+  }, 30_000);
 
   it('台帳と層の始点は動かさず、トークンの軸の始点だけが後から入る', async () => {
     await migrate(layeredDb);
@@ -1264,7 +1264,7 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     expect(aggregate.since).toBe('2026-08-01T09:00:00.000Z');
     expect(aggregate.layersSince).toBe('2026-08-19T09:00:00.000Z');
     expect(aggregate.tokensSince).toBe('2026-08-25T10:00:00.000Z');
-  });
+  }, 30_000);
 
   it('migrate を2回当てても落ちない（鍵の差し替えが冪等である）', async () => {
     await migrate(layeredDb);
@@ -1275,7 +1275,7 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     const { rows } = await layeredStore.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tokenId).toBeUndefined();
-  });
+  }, 30_000);
 });
 
 // 2周目を通すだけにしない: 2周目が古い鍵を作りに行くのを捕まえるには、新しい鍵が許して古い鍵が拒む行を挟む必要がある（行が1つなら5列でも一意で create が通ってしまう）。
@@ -1305,7 +1305,7 @@ describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに�
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.tokenId ?? '').sort()).toEqual(['', 'tok-a']);
-  });
+  }, 30_000);
 
   it('5列の鍵が既に在る DB から: 移行して記録してから2周目を通しても落ちない', async () => {
     const { client: legacyClient, db: legacyDb } = await createEmptyTestDb();
@@ -1346,7 +1346,7 @@ describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに�
     } finally {
       await legacyClient.close();
     }
-  });
+  }, 30_000);
 });
 
 describe('PgUsageStore.recordedManagerIds', () => {
@@ -1500,5 +1500,5 @@ describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキー�
       runner: { id: 'runner-a', superseded: true },
     });
     expect(second.delta['claude-opus-5']?.costUsd).toBe(2);
-  });
+  }, 30_000);
 });

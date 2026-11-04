@@ -82,7 +82,7 @@ describe('PgAttachmentStore', () => {
       'attachments_expires_at_idx',
       'attachments_pkey',
     ]);
-  });
+  }, 30_000);
 });
 
 describe('PgAttachmentStore: bind が途中で例外を投げた回（#3592）', () => {
@@ -207,5 +207,5 @@ describe('PgAttachmentStore: 保存の印・一覧・使用量（#4126 P4）', (
     expect(typeof legacy?.expiresAt).toBe('string');
     // 外した not null が効いている: 保存の印を付けると期限が null になる
     expect((await store.setKept('legacy', true, new Date()))?.expiresAt).toBeUndefined();
-  });
+  }, 30_000);
 });

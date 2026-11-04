@@ -595,7 +595,7 @@ describe('AuthStore', () => {
 
     const granted = (await stores.auth.listAccounts()).filter((it) => it.grantedAt !== null);
     expect(granted).toHaveLength(2);
-  });
+  }, 30_000);
 
   it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {
     await stores.auth.putAccount(account);

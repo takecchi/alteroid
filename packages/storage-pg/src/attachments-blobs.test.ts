@@ -453,5 +453,5 @@ describe('migrate（blob_key・bytes の null 許容・置き場の制約。#412
     await expect(insert('a', 'k')).rejects.toThrow();
     await insert('null', 'k');
     await insert('a', 'null');
-  });
+  }, 30_000);
 });

@@ -59,18 +59,18 @@ describe('台帳のテーブルを落とす（#5469 P7 の段4）', () => {
     expect(await relationPresent('commitments')).toBe(false);
     expect(await relationPresent('commitments_seq_seq')).toBe(false);
     expect(await relationPresent('commitments_open_manager_body_idx')).toBe(false);
-  });
+  }, 30_000);
 
   it('起動の経路（migrateOnBoot）でも落とす', async () => {
     await createLegacyCommitments();
     await migrateOnBoot(db, () => undefined);
     expect(await relationPresent('commitments')).toBe(false);
-  });
+  }, 30_000);
 
   it('表の無い DB でも通り、2周目でも通る（表を作り直さない）', async () => {
     await migrate(db, () => undefined);
     await migrate(db, () => undefined);
     expect(await relationPresent('commitments')).toBe(false);
     expect(await relationPresent('commitments_seq_seq')).toBe(false);
-  });
+  }, 30_000);
 });

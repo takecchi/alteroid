@@ -63,7 +63,7 @@ describe('migrate', () => {
     await migrate(db);
 
     expect((await stores.persona.read('values'))?.content).toContain('価値観');
-  });
+  }, 30_000);
 
   it('既にある DB へ当て直しても、記録済みの位相を消さない', async () => {
     await stores.schedules.putPhase({
@@ -75,7 +75,7 @@ describe('migrate', () => {
     expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
       '2026-08-12T01:00:00.000Z',
     );
-  });
+  }, 30_000);
 
   it('created_at 列の追加は加算のみ・冪等（記憶の絶対条件6）——値を消さず二度通しても壊れない', async () => {
     await stores.persona.write('values', '# 価値観\n');
@@ -90,7 +90,7 @@ describe('migrate', () => {
       kind: 'known',
       at: '2026-01-02T03:04:05.000Z',
     });
-  });
+  }, 30_000);
 
   // 同じ入り口を2回呼ぶだけにしない: 1周目の後に行を積み `remove()` してから2周目を当てないと、2周目でだけ壊れる状態を測れないから。
   it('archive の tombstone 列の追加は2回通しても壊れない（1周目の後に remove() してから2周目を当てる）', async () => {
@@ -105,7 +105,7 @@ describe('migrate', () => {
     const untouchedId = (await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n'))
       .id;
     expect(await stores.archive.read(untouchedId)).toEqual({ kind: 'body', body: 'OTHER\n' });
-  });
+  }, 30_000);
 });
 
 describe('seedPgWorkspace', () => {

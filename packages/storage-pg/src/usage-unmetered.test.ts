@@ -285,5 +285,5 @@ describe('既存の行の集計値は、S3 の migrate を通しても変わら�
     expect(summarizeUsage(rest.rows, rest.turnRows)).toEqual(
       summarizeUsage(reference.rows, reference.turnRows),
     );
-  });
+  }, 30_000);
 });

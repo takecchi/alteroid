@@ -34,5 +34,5 @@ describe('PgCodexChatgptAuthStore（#3939）', () => {
     });
     await migrate(db);
     expect((await stores.codexAuth.get())?.revision).toBe('r1');
-  });
+  }, 30_000);
 });

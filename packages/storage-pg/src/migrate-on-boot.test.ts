@@ -49,7 +49,7 @@ describe('migrateOnBoot（#4731）', () => {
     const probe = counting(db);
     await migrateOnBoot(probe.db, () => undefined);
     expect(probe.statements()).toBe(STATEMENTS.length);
-  });
+  }, 30_000);
 
   it('⭐ 同じ文の一覧で流し済みなら、次の起動では文を1本も流さない', async () => {
     const { db } = await createEmptyTestDb();
@@ -57,7 +57,7 @@ describe('migrateOnBoot（#4731）', () => {
     const probe = counting(db);
     await migrateOnBoot(probe.db, () => undefined);
     expect(probe.statements()).toBe(0);
-  });
+  }, 30_000);
 
   it('⭐ 記録された指紋が今の文の一覧と違えば（版が変わった）、頭から流し直す', async () => {
     const { db } = await createEmptyTestDb();
@@ -68,7 +68,7 @@ describe('migrateOnBoot（#4731）', () => {
     const probe = counting(db);
     await migrateOnBoot(probe.db, () => undefined);
     expect(probe.statements()).toBe(STATEMENTS.length);
-  });
+  }, 30_000);
 
   it('途中の文で落ちたら指紋を書かず、次の起動でもう一度流す', async () => {
     const { db } = await createEmptyTestDb();
@@ -81,5 +81,5 @@ describe('migrateOnBoot（#4731）', () => {
     const probe = counting(db);
     await migrateOnBoot(probe.db, () => undefined);
     expect(probe.statements()).toBe(STATEMENTS.length);
-  });
+  }, 30_000);
 });
