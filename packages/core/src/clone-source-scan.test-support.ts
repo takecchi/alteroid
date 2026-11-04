@@ -145,6 +145,25 @@ export const INLINED_BY_METHOD: Readonly<Record<string, readonly InlinedStep[]>>
       trailing: '',
     },
   ],
+  // SDK の `turn_ended` の1件: 時計のモデルの段を閉じる1文と、失敗したターン・答えが返ったターンの後始末
+  // （どちらも直後の `return;` は元のメソッドに残す）
+  '#applyTurnEnded': [
+    {
+      name: '#closeModelPhase',
+      call: 'this.#closeModelPhase(timer, event);',
+      trailing: '',
+    },
+    {
+      name: '#settleFailedTurn',
+      call: 'await this.#settleFailedTurn(event, turn, failure);',
+      trailing: '',
+    },
+    {
+      name: '#settleAnsweredTurn',
+      call: 'await this.#settleAnsweredTurn(turn);',
+      trailing: '',
+    },
+  ],
 };
 
 /** メソッドの本体を `squash` で畳み、`INLINED_BY_METHOD` に載った段は、出した先の本体を呼び出しの位置へ差し戻したもの。 */

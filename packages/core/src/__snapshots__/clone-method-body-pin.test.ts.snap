@@ -1,5 +1,44 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > #applyTurnEnded: 出した先を差し戻した中身が変わらない 1`] = `
+[
+  "const timer = this.#sdkSession.turn?.timer ?? null;",
+  "const mainLoop = event.usage?.mainLoopUsage;",
+  "timer?.turnEnded({succeeded: event.succeeded, ...(mainLoop === undefined ? {} : {tokens: {input: mainLoop.inputTokens, cacheRead: mainLoop.cacheReadInputTokens, cacheCreation: mainLoop.cacheCreationInputTokens, output: mainLoop.outputTokens}}), ...(event.timing === undefined && event.usage?.numTurns === undefined ? {} : {sdk: {...event.timing, ...(event.usage?.numTurns === undefined ? {} : {numTurns: event.usage.numTurns})}})});",
+  "const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> => timer === null ? fn() : timer.time(\`finalize.\${name}\`, fn);",
+  "const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());",
+  "if (contextUsage?.totalTokens !== undefined) timer?.contextObserved(contextUsage.totalTokens);",
+  "const previousTotal = this.#lastContextUsage?.totalTokens;",
+  "this.#lastContextGrowthTokens = previousTotal !== undefined && contextUsage?.totalTokens !== undefined ? Math.max(0, contextUsage.totalTokens - previousTotal) : 0;",
+  "this.#lastContextUsage = contextUsage ?? null;",
+  "if (contextUsage !== undefined) {await this.#journal({type: 'context_usage', layer: 'clone', site: 'session', managerId: CLONE_ACTOR_ID, ...(this.#sdkSession.sdkSessionId === null ? {} : {sessionId: this.#sdkSession.sdkSessionId}), turnSucceeded: event.succeeded, contextUsage});} await finalizeStep('inboxFlow', () => this.#writeInboxFlow());",
+  "const compactions = this.#sdkSession.turn?.compactions ?? [];",
+  "await finalizeStep('usage', () => this.#recordUsage(event.usage, 'session', 'cumulative', {contextUsage, compactions}));",
+  "await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);",
+  "for (const denial of event.denials) {await this.#noteDenial(denial, 'result');} const turn = this.#sdkSession.turn;",
+  "const failure = event.failure ?? turn?.rejected ?? undefined;",
+  "if (turn) await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));",
+  "if (failure !== undefined) {for (const candidate of [failure.text, ...event.errorLines]) {const notice = classifyUsageNotice(candidate);",
+  "if (notice !== undefined) {await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');",
+  "break;}} await this.#reportFailure(turn?.conversationId ?? null, failureReason(failure, event), [event.failure, turn?.rejected].find((candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other') ?? failure);",
+  "this.#finishTurn();",
+  "return;} this.#persistFoldStateAfterTurn();",
+  "this.#usageBlocked = null;",
+  "this.#usageBlockSuppressedRearms = 0;",
+  "this.#usageBlockFoldedInternalFailures = 0;",
+  "await this.#observeForTokenRotation({succeeded: true});",
+  "this.#sessionAnswered = true;",
+  "this.#heldEscalationStreak = 0;",
+  "this.#resetRefusalStreak();",
+  "this.#autoReopenHalted = false;",
+  "this.#usageBlockedAccumulatedChars = 0;",
+  "if (turn) await this.#autoCloseRepliedTasks(turn);",
+  "this.#emit(turn?.conversationId ?? null, {type: 'done'});",
+  "this.#finishTurn();",
+  "return;",
+]
+`;
+
 exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > #handleTimer: 出した先を差し戻した中身が変わらない 1`] = `
 [
   "if (event.kind === DAILY_REPORT_KIND) {await this.#dailyReport(event.target ?? localDate(new Date(event.at)), event.cause ?? 'schedule');",
