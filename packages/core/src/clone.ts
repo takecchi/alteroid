@@ -1125,16 +1125,13 @@ class Clone implements CloneHost {
   readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限` +
+      void this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限` +
           `（${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から` +
           '再び届くと、同じ拒否がもう一度日誌に載る。',
-      });
+      );
     },
   });
   readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
@@ -1147,16 +1144,13 @@ class Clone implements CloneHost {
   readonly #subagentToolUses = createRecentMap<string>({
     limit: SUBAGENT_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}サブエージェントの呼びの印が上限` +
+      void this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}サブエージェントの呼びの印が上限` +
           `（${SUBAGENT_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の呼びが後から道具に届くと、` +
           '本体の呼びとして扱われ、固定の文言の畳みの控えを更新しうる。',
-      });
+      );
     },
   });
   // tool_use_id が取れなかった事実を stderr へ出したか。デーモン1回につき1回だけ（セッションが替わっても戻さない: 取れない器は会話が替わっても取れないままで、同じ事実を会話ごとに繰り返さないため。本体扱いに倒すので、黙ると畳みの前提が崩れていても気づけない）
@@ -1167,16 +1161,13 @@ class Clone implements CloneHost {
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
     onForget: (ids) => {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限` +
+      void this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限` +
           `（${ALLOWED_BY_GRANT_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id への拒否が後から届いても、もう「hook の allow を` +
           '追い越した」とは検出できない。',
-      });
+      );
     },
   });
   // 日誌の書き込みは毎回行い、間引くのは注意書きの文言だけにする。上限や永続化は持たせない: 忘れても実害は注意書きがもう一度載るだけのため
@@ -1779,15 +1770,12 @@ class Clone implements CloneHost {
     if (dropped === 0) return 0;
 
     // id をここに並べない: 呼び手が既に自分の記録へ書いており、並べると 3,000 件規模の消し込みでこの1行が日誌を埋めるため
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
         `（待ち行列 ${fromQueue.length} 件、枠で保持していた分 ${fromHeld.length} 件）。` +
         '既に取り出して処理中のものは取り消していない。',
-    });
+    );
     return dropped;
   }
 
@@ -3379,14 +3367,11 @@ class Clone implements CloneHost {
         (error: unknown) => {
           noteDroppedRecord('Task の自動起票', inboxEventShape(event), error);
           this.#humanTaskFailures.add(event.id);
-          return this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: ${event.id}）。` +
+          return this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: ${event.id}）。` +
               `必要なら \`task_add\` で載せ直すこと（理由: ${reasonOf(error)}）。`,
-          });
+          );
         },
       )
       .finally(() => {
@@ -5925,14 +5910,11 @@ class Clone implements CloneHost {
         last = reasonOf(error);
       }
     }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${kind} の「終わった」を記録できなかった` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${kind} の「終わった」を記録できなかった` +
         `（引き受けた印が残るので、次の起動で配り直される）: ${last}`,
-    });
+    );
   }
 
   // 読みと記録を別操作にしない: 隙間に人間が消した・直した依頼が古い本文で走るため（確定はストア側の `claimRun` に閉じる）。版が入れ替わっていたら読み直す: 古い方で走らないことが最優先のため
@@ -6155,12 +6137,10 @@ class Clone implements CloneHost {
     // `manual` は除く: 人間が作り直しを頼んだ回は、既にあっても走らせる
     if (cause !== 'manual' && (await this.#dailyReportWritten(date))) {
       this.#dailyReportRetries.delete(date);
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_DECISION_PREFIX}${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: ${cause}）`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: ${cause}）`,
+      );
       return;
     }
     const range = localDayRange(date);
@@ -6192,18 +6172,15 @@ class Clone implements CloneHost {
       });
       existing = written.filter(isDailyReport).filter((entry) => entry.date === date);
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（${date}）で日誌を読めなかった` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（${date}）で日誌を読めなかった` +
           `（理由: ${reasonOf(error)}）。` +
           (outcome.status === 'failed'
             ? 'この日の日報が既にあるか確かめられなかったので、「作れなかった」の印は書かなかった。'
             : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
               'ならこの回の重複（消さずに日誌から辿ること）。'),
-      });
+      );
       if (outcome.status === 'failed') {
         // 印を書けなかっただけで、失敗した日報であることは変わらない: 再起動まで待たずに作り直す。
         this.#scheduleDailyReportRetry(date);
@@ -6699,15 +6676,12 @@ class Clone implements CloneHost {
     try {
       return (await this.#stores.mcpServers.read())?.mcpServers ?? {};
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで` +
           `このセッションを起こした（理由: ${reasonOf(error)}）。` +
           '登録を直すには人間に PUT /mcp-servers で置き直してもらう。',
-      });
+      );
       return {};
     }
   }
@@ -6724,15 +6698,12 @@ class Clone implements CloneHost {
       scopes: PLUGIN_SCOPES_FOR_CLONE,
     });
     for (const failure of result.failures) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、` +
           `${failure.name === null ? 'plugin の一覧が読めず、plugin' : `plugin「${failure.name}」`}なしで` +
           `このセッションを起こした（段: ${failure.stage}）。`,
-      });
+      );
     }
     // 展開先の中身が入れたときと違っていたので展開し直した（Issue #4798）。書き換えられた形跡として残す。
     for (const rebuilt of result.rebuilt) {
@@ -6745,12 +6716,10 @@ class Clone implements CloneHost {
               .join(
                 ', ',
               )}${rebuilt.files.length > 5 ? ` ほか${rebuilt.files.length - 5}件` : ''}）。`;
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_DECISION_PREFIX}plugin ${rebuilt.name} の${detail} #4798`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}plugin ${rebuilt.name} の${detail} #4798`,
+      );
     }
     const loaded = result.plugins.map((plugin) => basename(plugin.path)).sort();
     const removedSummary = summarizeRemovedForJournal(result.removed);
@@ -6759,15 +6728,12 @@ class Clone implements CloneHost {
       const hadAny = this.#lastPluginsDigest !== '';
       this.#lastPluginsDigest = loaded.length === 0 && removedSummary === null ? '' : digest;
       if (loaded.length > 0 || removedSummary !== null || hadAny) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
             `${loaded.length === 0 ? 'なし' : loaded.join(', ')}` +
             `${removedSummary === null ? '' : `。展開しなかったもの: ${removedSummary}`}`,
-        });
+        );
       }
     }
     return result.plugins.map((plugin) => ({
