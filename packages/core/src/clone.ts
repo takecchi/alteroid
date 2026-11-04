@@ -2471,8 +2471,10 @@ class Clone implements CloneHost {
         // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
         // 預けた控えは `#resetDigestDelta` が `#forgetFoldState` で捨てる（成功したターンの後だけ預ける `#persistFoldStateAfterTurn` と合わせて、片方だけ残らない）
         if (this.#pumpTurnFailed) {
-          this.#situationExplained.clear();
-          this.#resetDigestDelta('full', 'turn_failed');
+          this.#returnToFullText({
+            situation: true,
+            digest: { reason: 'full', label: 'turn_failed' },
+          });
         }
         // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
@@ -3634,6 +3636,28 @@ class Clone implements CloneHost {
    * 同じターンで理由が重なっても、2回目以降は捨てる記録が無いので書かない（最初に当たった理由だけ）。起動直後の最初の全文は、捨てる記録が無いので書かない。
    * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
    */
+  /**
+   * 畳みの控えを全文へ戻す経路の、唯一の入口。どの控えを何のために捨てるかを呼び出し元ごとに引数で名乗る（以前は `clear()`・`#resetDigestDelta`・`forgetFixed()` などが5〜6か所に対で書かれていた）。
+   * 順序は固定: situation 側の控え → 周期の数え → セッション id → digest 側（`reset` か `forgetFixed`）。呼び出し元ごとの組み合わせは変えていない:
+   * - 失敗したターン・会話の切り替え・要約: situation と digest の両方（`reset`）
+   * - 周期: situation・周期の数え・digest の固定の文言だけ（`forgetFixed`。要約の軽い全文への切り替えには触れない）
+   * - 作り直しで読み戻した控えを捨てる回: 上に加えて周期の数えとセッション id
+   * - `#resetDigestDeltaIfNewConversation`（断り書きの先頭より前）・PreCompact: digest 側だけ（situation 側は直後の `#applyFoldPeriod` / `compaction` の合図が消す）
+   * 預けた控えは `#resetDigestDelta` が捨てる（周期の `forgetFixed` は預けた控えに触れない。従来どおり）。
+   */
+  #returnToFullText(target: {
+    situation?: true;
+    turnsSinceFull?: true;
+    sessionId?: true;
+    digest: { reason: 'full' | 'compaction'; label: DigestResetLabel } | 'fixed';
+  }): void {
+    if (target.situation === true) this.#situationExplained.clear();
+    if (target.turnsSinceFull === true) this.#situationTurnsSinceFull = 0;
+    if (target.sessionId === true) this.#situationExplainedSessionId = undefined;
+    if (target.digest === 'fixed') this.#digestDelta.forgetFixed();
+    else this.#resetDigestDelta(target.digest.reason, target.digest.label);
+  }
+
   #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
     // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
     this.#forgetFoldState();
@@ -3794,7 +3818,7 @@ class Clone implements CloneHost {
   /** 全文へ戻す条件に当たれば、tick の要約の差分の記録を消す。`#pump` の先頭と、要約を組む直前（組む前の `await` の間に窓が開きうる）から呼ぶ。 */
   #resetDigestDeltaIfNewConversation(): void {
     const found = this.#fullReasonThisTurn();
-    if (found !== null) this.#resetDigestDelta(found.reason, found.label);
+    if (found !== null) this.#returnToFullText({ digest: found });
   }
 
   /**
@@ -3872,10 +3896,8 @@ class Clone implements CloneHost {
       this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS ||
       this.#conversationMayDifferFromLastFull()
     ) {
-      this.#situationExplained.clear();
-      this.#situationTurnsSinceFull = 0;
       // 固定の文言の控え（道具の応答 `manager_list` ・報告の包み・断り書きの末尾）も同じ周期で全文へ戻す: 同じ線にしないと、周期の保険が situation にしか無いため
-      this.#digestDelta.forgetFixed();
+      this.#returnToFullText({ situation: true, turnsSinceFull: true, digest: 'fixed' });
     }
   }
 
@@ -6756,10 +6778,12 @@ class Clone implements CloneHost {
     const restored = this.#restoredFold;
     this.#restoredFold = null;
     if (restored !== null && resume !== restored.sessionId) {
-      this.#situationExplained.clear();
-      this.#situationTurnsSinceFull = 0;
-      this.#situationExplainedSessionId = undefined;
-      this.#resetDigestDelta('full', 'session_changed');
+      this.#returnToFullText({
+        situation: true,
+        turnsSinceFull: true,
+        sessionId: true,
+        digest: { reason: 'full', label: 'session_changed' },
+      });
     }
     this.#sdkSession.beginSession(resume);
     this.#sessionOrdinal += 1;
@@ -7626,7 +7650,7 @@ class Clone implements CloneHost {
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
     // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）。理由は要約なので、次の要約は軽い全文でよい（案 A）
-    this.#resetDigestDelta('compaction', 'compact_boundary');
+    this.#returnToFullText({ digest: { reason: 'compaction', label: 'compact_boundary' } });
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -8139,8 +8163,10 @@ class Clone implements CloneHost {
           this.#situationExplainedSessionId !== undefined &&
           this.#situationExplainedSessionId !== event.sessionId
         ) {
-          this.#situationExplained.clear();
-          this.#resetDigestDelta('full', 'session_changed');
+          this.#returnToFullText({
+            situation: true,
+            digest: { reason: 'full', label: 'session_changed' },
+          });
         }
         this.#situationExplainedSessionId = event.sessionId;
         // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
@@ -8342,8 +8368,10 @@ class Clone implements CloneHost {
       case 'compaction': {
         this.#sdkSession.turn?.timer?.compactionEnded();
         // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
-        this.#situationExplained.clear();
-        this.#resetDigestDelta('compaction', 'compact_boundary');
+        this.#returnToFullText({
+          situation: true,
+          digest: { reason: 'compaction', label: 'compact_boundary' },
+        });
         // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
         this.#sdkSession.turn?.compactions.push({
           trigger: event.trigger,
