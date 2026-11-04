@@ -1,0 +1,84 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runner の #applyTurnEnded: 失敗したターンの上限の判定 > 1 failure.text が当たる（errorLines は無い） 1`] = `
+{
+  "usageNotices": [
+    {
+      "kind": "reached",
+      "text": "You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+    },
+  ],
+}
+`;
+
+exports[`runner の #applyTurnEnded: 失敗したターンの上限の判定 > 2 failure.text は当たらず errorLines の2つ目で当たる 1`] = `
+{
+  "usageNotices": [
+    {
+      "kind": "reached",
+      "text": "You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+    },
+  ],
+}
+`;
+
+exports[`runner の #applyTurnEnded: 失敗したターンの上限の判定 > 3 failure.text と errorLines の両方が当たる 1`] = `
+{
+  "usageNotices": [
+    {
+      "kind": "reached",
+      "text": "You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+    },
+  ],
+}
+`;
+
+exports[`runner の #applyTurnEnded: 失敗したターンの上限の判定 > 4 どれも当たらない 1`] = `
+{
+  "usageNotices": [],
+}
+`;
+
+exports[`クローンの #settleFailedTurn: 失敗したターンの上限の判定 > 1 failure.text が当たる（errorLines は無い） 1`] = `
+{
+  "gaugeLines": [
+    "[計器] 利用上限に当たった。この文言で仕事が止まっている: You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+  ],
+  "usageLimited": [
+    "利用上限に当たった。この文言で仕事が止まっている: You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+  ],
+  "usageLimitedBeforeError": true,
+}
+`;
+
+exports[`クローンの #settleFailedTurn: 失敗したターンの上限の判定 > 2 failure.text は当たらず errorLines の2つ目で当たる 1`] = `
+{
+  "gaugeLines": [
+    "[計器] 利用上限に当たった。この文言で仕事が止まっている: You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+  ],
+  "usageLimited": [
+    "利用上限に当たった。この文言で仕事が止まっている: You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+  ],
+  "usageLimitedBeforeError": true,
+}
+`;
+
+exports[`クローンの #settleFailedTurn: 失敗したターンの上限の判定 > 3 failure.text と errorLines の両方が当たる 1`] = `
+{
+  "gaugeLines": [
+    "[計器] 利用上限に当たった。この文言で仕事が止まっている: You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+  ],
+  "usageLimited": [
+    "利用上限に当たった。この文言で仕事が止まっている: You've hit your weekly limit · resets Oct 20, 3am (UTC)",
+  ],
+  "usageLimitedBeforeError": true,
+}
+`;
+
+exports[`クローンの #settleFailedTurn: 失敗したターンの上限の判定 > 4 どれも当たらない 1`] = `
+{
+  "gaugeLines": [],
+  "usageLimited": [],
+  "usageLimitedBeforeError": null,
+}
+`;
