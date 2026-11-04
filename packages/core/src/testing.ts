@@ -180,11 +180,35 @@ import {
   ZERO_USAGE,
   type UsageBaseline,
   type UsageLayer,
+  type UsageQuery,
   type UsageRow,
   type UsageSite,
   type UsageTurnRow,
   type UsageUnmeteredRow,
 } from './usage.js';
+
+/**
+ * 行が集計の絞り込み（期間・担当・層・場所・鍵）に当たるか。日ごと・ターン・測れなかった行の3つの表が同じ条件で絞る:
+ * 表ごとに条件を写すと、1つの表だけ条件が抜けて、同じ問いで表によって答えが割れるため（ファイルの保存先 `storage-fs` と同じ条件と順）。
+ */
+function matchesUsageQuery(
+  row: {
+    readonly date: string;
+    readonly managerId: string;
+    readonly layer: string;
+    readonly site: string;
+    readonly tokenId?: string | undefined;
+  },
+  query: UsageQuery,
+): boolean {
+  if (query.from !== undefined && row.date < query.from) return false;
+  if (query.to !== undefined && row.date > query.to) return false;
+  if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+  if (query.layer !== undefined && row.layer !== query.layer) return false;
+  if (query.site !== undefined && row.site !== query.site) return false;
+  if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
+  return true;
+}
 
 /** 層と場所を鍵から外さない: 同じ actor・日・モデルで意味の違う行が足し込まれ、誤帰属になる。 */
 function usageRowKey(
@@ -1660,15 +1684,7 @@ export function createMemoryStores(): Stores {
       // 書き込みが鍵列の NUL を落とすので、絞り込みも落としてから引く。
       const query = stripNulFromUsageQuery(rawQuery);
       const rows = [...usageRows.values()]
-        .filter((row) => {
-          if (query.from !== undefined && row.date < query.from) return false;
-          if (query.to !== undefined && row.date > query.to) return false;
-          if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-          if (query.layer !== undefined && row.layer !== query.layer) return false;
-          if (query.site !== undefined && row.site !== query.site) return false;
-          if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-          return true;
-        })
+        .filter((row) => matchesUsageQuery(row, query))
         .sort(
           (a, b) =>
             compareCodeUnits(a.date, b.date) ||
@@ -1686,15 +1702,7 @@ export function createMemoryStores(): Stores {
                   : compareCodeUnits(a.tokenId, b.tokenId)),
         );
       const turnRows = [...usageTurns.values()]
-        .filter((row) => {
-          if (query.from !== undefined && row.date < query.from) return false;
-          if (query.to !== undefined && row.date > query.to) return false;
-          if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-          if (query.layer !== undefined && row.layer !== query.layer) return false;
-          if (query.site !== undefined && row.site !== query.site) return false;
-          if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-          return true;
-        })
+        .filter((row) => matchesUsageQuery(row, query))
         .sort(
           (a, b) =>
             compareCodeUnits(a.date, b.date) ||
@@ -1710,15 +1718,7 @@ export function createMemoryStores(): Stores {
                   : compareCodeUnits(a.tokenId, b.tokenId)),
         );
       const unmeteredRows = [...usageUnmetered.values()]
-        .filter((row) => {
-          if (query.from !== undefined && row.date < query.from) return false;
-          if (query.to !== undefined && row.date > query.to) return false;
-          if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-          if (query.layer !== undefined && row.layer !== query.layer) return false;
-          if (query.site !== undefined && row.site !== query.site) return false;
-          if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-          return true;
-        })
+        .filter((row) => matchesUsageQuery(row, query))
         .sort(
           (a, b) =>
             compareCodeUnits(a.date, b.date) ||

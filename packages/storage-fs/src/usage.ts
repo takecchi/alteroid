@@ -129,6 +129,29 @@ interface UnreadableUsageEntries {
 
 const NO_UNREADABLE: UnreadableUsageEntries = { rows: [], turns: [] };
 
+/**
+ * 読めた行が集計の絞り込み（期間・担当・層・場所・鍵）に当たるか。日ごと・ターン・測れなかった行の3つの表が同じ条件で絞る:
+ * 表ごとに条件を写すと、1つの表だけ条件が抜けて、同じ問いで表によって答えが割れるため。
+ */
+function matchesUsageQuery(
+  row: {
+    readonly date: string;
+    readonly managerId: string;
+    readonly layer: string;
+    readonly site: string;
+    readonly tokenId?: string | undefined;
+  },
+  query: UsageQuery,
+): boolean {
+  if (query.from !== undefined && row.date < query.from) return false;
+  if (query.to !== undefined && row.date > query.to) return false;
+  if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+  if (query.layer !== undefined && row.layer !== query.layer) return false;
+  if (query.site !== undefined && row.site !== query.site) return false;
+  if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
+  return true;
+}
+
 // 欄が読めない・無いときは残す: 範囲外と言い切れないため
 function toUnreadableRows(
   table: 'usage_daily' | 'usage_turns',
@@ -412,15 +435,7 @@ export class FsUsageStore implements UsageStore {
     const query = stripNulFromUsageQuery(rawQuery);
     const { file, unreadable } = await this.#readAll();
     const rows = Object.values(file.rows)
-      .filter((row) => {
-        if (query.from !== undefined && row.date < query.from) return false;
-        if (query.to !== undefined && row.date > query.to) return false;
-        if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-        if (query.layer !== undefined && row.layer !== query.layer) return false;
-        if (query.site !== undefined && row.site !== query.site) return false;
-        if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-        return true;
-      })
+      .filter((row) => matchesUsageQuery(row, query))
       .sort(
         (a, b) =>
           compareCodeUnits(a.date, b.date) ||
@@ -432,15 +447,7 @@ export class FsUsageStore implements UsageStore {
       );
 
     const turnRows = Object.values(file.turns)
-      .filter((row) => {
-        if (query.from !== undefined && row.date < query.from) return false;
-        if (query.to !== undefined && row.date > query.to) return false;
-        if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-        if (query.layer !== undefined && row.layer !== query.layer) return false;
-        if (query.site !== undefined && row.site !== query.site) return false;
-        if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-        return true;
-      })
+      .filter((row) => matchesUsageQuery(row, query))
       .sort(
         (a, b) =>
           compareCodeUnits(a.date, b.date) ||
@@ -451,15 +458,7 @@ export class FsUsageStore implements UsageStore {
       );
 
     const unmeteredRows: UsageUnmeteredRow[] = Object.values(file.unmetered)
-      .filter((row) => {
-        if (query.from !== undefined && row.date < query.from) return false;
-        if (query.to !== undefined && row.date > query.to) return false;
-        if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-        if (query.layer !== undefined && row.layer !== query.layer) return false;
-        if (query.site !== undefined && row.site !== query.site) return false;
-        if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-        return true;
-      })
+      .filter((row) => matchesUsageQuery(row, query))
       .sort(
         (a, b) =>
           compareCodeUnits(a.date, b.date) ||
