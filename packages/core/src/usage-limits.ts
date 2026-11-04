@@ -47,6 +47,25 @@ export function classifyUsageNotice(text: string): UsageLimitNotice | undefined 
   return undefined;
 }
 
+/**
+ * 失敗したターンの上限の判定。候補（SDK が失敗として出した文言 `failureText` と `errorLines`）を順に `classifyUsageNotice` へ通し、最初に当たった1件だけを返す。
+ * クローン（`clone.ts` の `#settleFailedTurn`）と担当（`runner.ts` の `#applyTurnEnded`）の両方が使う: 2つの層で候補と順序がずれると、同じ失敗が層によって上限に見えたり見えなかったりするため。
+ *
+ * 応答の本文（クローンの `event.body`、担当の `resultTextOf(event)`）は候補に入れない（#4931・#4934）: 作業者の上限の原文（#4903・#4911 で道具の結果へ添える）を
+ * 引用して別の理由で失敗すると、自分の枠と取り違えるため。失った形は無い: 失敗した result では `failureText` が `result` そのもの（`resultFailureOf`）で本文と同じ文字列、
+ * Codex は `errorLines` に同じ文言が入り、「結果なしで終了: …」は固定の包みで上限の文言を含まない。
+ */
+export function classifyFailedTurnUsageNotice(
+  failureText: string,
+  errorLines: readonly string[],
+): UsageLimitNotice | undefined {
+  for (const candidate of [failureText, ...errorLines]) {
+    const notice = classifyUsageNotice(candidate);
+    if (notice !== undefined) return notice;
+  }
+  return undefined;
+}
+
 export function describeUsageNotice(notice: UsageLimitNotice): string {
   const head =
     notice.kind === 'reached'

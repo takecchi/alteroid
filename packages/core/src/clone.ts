@@ -310,6 +310,7 @@ import {
   type UsageSnapshot,
 } from './usage.js';
 import {
+  classifyFailedTurnUsageNotice,
   classifyUsageNotice,
   describeUsageNotice,
   isRateLimitReason,
@@ -8462,15 +8463,10 @@ class Clone implements CloneHost {
     // 分類にかけるのは SDK が失敗として出した文言だけ（`turn.text` を通さない）: 部分一致なので、
     // 「上限に当たった」と日報に書いた瞬間に上限と誤判定する自家中毒になる。
     // この `await` は `#reportFailure` より先に終える: `usage_limited` は終端ではなく、終端の `error` より先に届く必要がある。
-    // grep -Fn -- 'for (const candidate of [failure.text, ...event.errorLines])' packages/core/src/runner.ts
-    // 応答の本文 `event.body` は候補に入れない（#4931）: 作業者の上限の原文（#4911 で道具の結果へ添える）をクローンが引用して別の理由で失敗すると、自分の枠と取り違える。
-    // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で、`body` と同じ文字列。
-    for (const candidate of [failure.text, ...event.errorLines]) {
-      const notice = classifyUsageNotice(candidate);
-      if (notice !== undefined) {
-        await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
-        break;
-      }
+    // 候補と順序（応答の本文を入れない理由を含む）は `classifyFailedTurnUsageNotice` に1つだけ置く: 担当の層（`runner.ts`）と同じ判定を使うため
+    const notice = classifyFailedTurnUsageNotice(failure.text, event.errorLines);
+    if (notice !== undefined) {
+      await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
     }
     // 失敗した result では `done` を出さない: `#reportFailure` の `error` を終端にする。
     await this.#reportFailure(

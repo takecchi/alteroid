@@ -332,7 +332,7 @@ import {
   type SdkFailure,
 } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
-import { classifyUsageNotice } from './usage-limits.js';
+import { classifyFailedTurnUsageNotice, classifyUsageNotice } from './usage-limits.js';
 import { describeProbeError } from './usage-probe.js';
 
 export { SUBAGENT_BACKGROUND_WAIT_MS };
@@ -4539,19 +4539,12 @@ class RunnerSession {
     // 鍵の器が無い器で `Not logged in` が来たときの案内。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
     let noCredentialDirHint = false;
     if (failure !== undefined) {
-      let classified = false;
-      // 応答の本文 `resultTextOf(event)` は候補に入れない（#4934）: 作業者の上限の原文（#4903 で道具の結果へ添える）を担当が引用して別の理由で失敗すると、自分の枠と取り違える。
-      // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で本文と同じ文字列、Codex は `errorLines` に同じ文言が入り、「結果なしで終了: …」は固定の包みで上限の文言を含まない。
-      for (const candidate of [failure.text, ...event.errorLines]) {
-        const notice = classifyUsageNotice(candidate);
-        if (notice !== undefined) {
-          this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
-          classified = true;
-          break;
-        }
-      }
-      // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
-      if (!classified) {
+      // 候補と順序（応答の本文を入れない理由を含む）は `classifyFailedTurnUsageNotice` に1つだけ置く: クローンの層（`clone.ts`）と同じ判定を使うため
+      const notice = classifyFailedTurnUsageNotice(failure.text, event.errorLines);
+      if (notice !== undefined) {
+        this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
+      } else {
+        // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
         noCredentialDirHint =
           this.#credentials === undefined &&
           [failure.text, resultTextOf(event).text, ...event.errorLines].some((text) =>
