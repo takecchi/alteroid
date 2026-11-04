@@ -121,7 +121,6 @@ const BODY = [
 const NONE_DOC = BODY;
 const PREMISE_DOC = `---\ndescription: 元の要旨\ntype: premise\n---\n${BODY}`;
 const FACT_DOC = `---\ndescription: 元の要旨\ntype: fact\n---\n${BODY}`;
-const INDEXED_DOC = `---\ndescription: 元の要旨\ntype: indexed\n---\n${BODY}`;
 const FULL_DOC = `---\ndescription: 元の要旨\ntype: fact\nparent: root\n---\n${BODY}`;
 const DESC_ONLY_DOC = `---\ndescription: 元の要旨\n---\n${BODY}`;
 const REORDER_DOC = `---\nparent: root\ntype:  fact\ndescription:   元の要旨  \n---\n${BODY}`;
