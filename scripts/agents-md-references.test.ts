@@ -255,13 +255,61 @@ export function findLineNumberCitations(
   isRepoFile: (candidate: string) => boolean,
 ): LineNumberCitation[] {
   const out: LineNumberCitation[] = [];
-  const pattern = /([A-Za-z0-9_@.][A-Za-z0-9_./@-]*):(\d+)(?:-(\d+))?/g;
   for (const { line, text } of lines) {
-    for (const m of text.matchAll(pattern)) {
-      const target = m[1] ?? '';
+    for (const { token, target } of scanLineNumberTokens(text)) {
       if (!isRepoFile(target)) continue;
-      out.push({ line, token: m[0], target });
+      out.push({ line, token, target });
     }
+  }
+  return out;
+}
+
+const isDigitCode = (c: number): boolean => c >= 48 && c <= 57;
+// 開始の文字クラス [A-Za-z0-9_@.]
+const isCitationStartCode = (c: number): boolean =>
+  isDigitCode(c) ||
+  (c >= 65 && c <= 90) ||
+  (c >= 97 && c <= 122) ||
+  c === 95 ||
+  c === 64 ||
+  c === 46;
+// 本体の文字クラス [A-Za-z0-9_./@-]（開始の文字クラス + `/` と `-`。`:` を含まない）
+const isCitationBodyCode = (c: number): boolean => isCitationStartCode(c) || c === 47 || c === 45;
+
+// 正規表現 /([A-Za-z0-9_@.][A-Za-z0-9_./@-]*):(\d+)(?:-(\d+))?/g と同じ結果を、長さに比例する時間で返す。
+// 正規表現は開始位置ごとに本体の連続の末尾まで読み直すので、区切りの無い長い連続で二乗になる。
+// 本体の文字クラスは `:` を含まないので、1つの連続の中ではどの開始位置から試しても終わりは同じ（連続の直後の1文字）。
+// だから当たるかどうかは「連続の中で最初に開始の文字クラスに入る位置」だけで決まり、外れたら残りの開始位置も全部外れる。
+function scanLineNumberTokens(text: string): Array<{ token: string; target: string }> {
+  const out: Array<{ token: string; target: string }> = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    if (!isCitationBodyCode(text.charCodeAt(i))) {
+      i++;
+      continue;
+    }
+    // 本体の文字の連続 [i, runEnd) を1回だけ読み、最初の開始位置を覚える
+    let first = -1;
+    let runEnd = i;
+    while (runEnd < n) {
+      const c = text.charCodeAt(runEnd);
+      if (!isCitationBodyCode(c)) break;
+      if (first < 0 && isCitationStartCode(c)) first = runEnd;
+      runEnd++;
+    }
+    if (first < 0 || text.charCodeAt(runEnd) !== 58 || !isDigitCode(text.charCodeAt(runEnd + 1))) {
+      i = runEnd;
+      continue;
+    }
+    let end = runEnd + 1;
+    while (end < n && isDigitCode(text.charCodeAt(end))) end++;
+    if (text.charCodeAt(end) === 45 && isDigitCode(text.charCodeAt(end + 1))) {
+      end++;
+      while (end < n && isDigitCode(text.charCodeAt(end))) end++;
+    }
+    out.push({ token: text.slice(first, end), target: text.slice(first, runEnd) });
+    i = end;
   }
   return out;
 }
@@ -313,10 +361,35 @@ export type RowNumberCitation = { line: number; token: string };
 
 export function findRowNumberCitations(lines: readonly ProseLine[]): RowNumberCitation[] {
   const out: RowNumberCitation[] = [];
-  const pattern = /\d+\s*行目/g;
   for (const { line, text } of lines) {
-    for (const m of text.matchAll(pattern)) {
-      out.push({ line, token: m[0] });
+    for (const token of scanRowNumberTokens(text)) {
+      out.push({ line, token });
+    }
+  }
+  return out;
+}
+
+// 正規表現 /\d+\s*行目/g と同じ結果を、長さに比例する時間で返す。
+// 正規表現は桁の連続の中の開始位置ごとに後ろを読み直すので、長い桁の連続（後ろに 行 が無い）で二乗になる。
+// 連続の中のどの開始位置から試しても行き着く先は同じなので、連続の先頭だけで当たりを決め、外れたら連続の終わりまで飛ばす。
+function scanRowNumberTokens(text: string): string[] {
+  const out: string[] = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    if (!isDigitCode(text.charCodeAt(i))) {
+      i++;
+      continue;
+    }
+    let digitsEnd = i;
+    while (digitsEnd < n && isDigitCode(text.charCodeAt(digitsEnd))) digitsEnd++;
+    let k = digitsEnd;
+    while (k < n && /\s/.test(text.charAt(k))) k++;
+    if (text.startsWith('行目', k)) {
+      out.push(text.slice(i, k + 2));
+      i = k + 2;
+    } else {
+      i = digitsEnd;
     }
   }
   return out;
@@ -1835,5 +1908,213 @@ describe('findCanonPathCitations / collectMissingCanonPathCitations（合成 fix
   it('行番号は検出したトークンの行を指す（複数行）', () => {
     const entries = [{ file: 'a.ts', text: ['1行目。', '2行目。', '`docs/gone.md`'].join('\n') }];
     expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual(['a.ts:3 docs/gone.md']);
+  });
+});
+
+// 直す前の参照の実装（正規表現そのまま）。新しい手書きの走査と結果が完全に同じであること、
+// 長い連続で参照の実装が二乗になり新しい走査が長さに比例することを、下の describe で縛る。
+function findLineNumberCitationsReference(
+  lines: readonly ProseLine[],
+  isRepoFile: (candidate: string) => boolean,
+): LineNumberCitation[] {
+  const out: LineNumberCitation[] = [];
+  const pattern = /([A-Za-z0-9_@.][A-Za-z0-9_./@-]*):(\d+)(?:-(\d+))?/g;
+  for (const { line, text } of lines) {
+    for (const m of text.matchAll(pattern)) {
+      const target = m[1] ?? '';
+      if (!isRepoFile(target)) continue;
+      out.push({ line, token: m[0], target });
+    }
+  }
+  return out;
+}
+
+function findRowNumberCitationsReference(lines: readonly ProseLine[]): RowNumberCitation[] {
+  const out: RowNumberCitation[] = [];
+  const pattern = /\d+\s*行目/g;
+  for (const { line, text } of lines) {
+    for (const m of text.matchAll(pattern)) {
+      out.push({ line, token: m[0] });
+    }
+  }
+  return out;
+}
+
+// 固定の種の擬似乱数（mulberry32）。Math.random を使わない: 落ちたときに同じ入力で再現できるように。
+function makeSeededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const SCAN_FUZZ_ALPHABET = [
+  ...'abcXYZ_@.019/-',
+  ':',
+  ':',
+  '1',
+  '2',
+  ' ',
+  '-',
+  '行目',
+  '行目',
+  '行',
+  '目',
+  'あ',
+  '\t',
+  '　',
+  '`',
+  '(',
+];
+
+function seededScanInputs(count: number): string[] {
+  const rand = makeSeededRandom(20260101);
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const len = Math.floor(rand() * 40);
+    let s = '';
+    for (let j = 0; j < len; j++) {
+      s += SCAN_FUZZ_ALPHABET[Math.floor(rand() * SCAN_FUZZ_ALPHABET.length)];
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+const SCAN_HAND_INPUTS: readonly string[] = [
+  '',
+  ':',
+  ':1',
+  'a:1',
+  'a:12ab:3',
+  'a:1-2x:3',
+  'a:1-',
+  'a:1-x',
+  'a:1--2',
+  'a:',
+  'a:x',
+  'a:1:2',
+  'a: 1',
+  'a :1',
+  'src/x.ts:10-20 と lib/y.ts:5',
+  '-a:1',
+  '/a:1',
+  '--/a:1',
+  '-/.a:1',
+  '-/-/:1',
+  '---:1',
+  '.:1',
+  '@:1',
+  '_:1',
+  '-_:1',
+  '12:34:56',
+  '時刻 12:34:56 に',
+  'https://example.com:8080/path:12',
+  'http://localhost:3000',
+  '日本語a.ts:3日本語b.ts:4',
+  'a.ts:3、b.ts:4。',
+  'path\tfoo.ts:7\tbar.ts:8',
+  '行末:',
+  '行末 a.ts:',
+  'a.ts:12',
+  'a.ts:12-',
+  'a.ts:12-34',
+  'a.ts:12-34-56',
+  'a.ts:12-34x:5',
+  '(a.ts:1)',
+  '`apps/daemon/src/index.ts:1049-1050`',
+  'a@b/c-d_e.f:99',
+  '0123456789'.repeat(30),
+  '0123456789'.repeat(30) + ':1',
+  '-'.repeat(30) + 'a:1',
+  '-'.repeat(30) + ':1',
+  '-'.repeat(30) + '/'.repeat(30),
+  'a:1'.repeat(20),
+  'a:1-2'.repeat(20),
+  '3行目、 12 行目、1\t\n行目、９行目、行目',
+  '12行目34行目',
+  '12 34行目',
+  '1 2 行目',
+  '行目 1行',
+  '1'.repeat(30) + '行',
+  '1'.repeat(30) + '行目',
+  '1'.repeat(30) + '   行目',
+  '1　行目',
+];
+
+describe('path:行番号 と N行目 の走査が正規表現と同じ結果を返し、長い連続で二乗にならない', () => {
+  const toLines = (texts: readonly string[]): ProseLine[] =>
+    texts.map((text, i) => ({ line: i + 1, text }));
+  const acceptAll = (): boolean => true;
+  const inputs = [...SCAN_HAND_INPUTS, ...seededScanInputs(5000)];
+
+  it('同値: 手で作った境目の例と固定の種の擬似乱数の文字列で、path:行番号（line・token・target の並び）が参照の実装と完全に同じ', () => {
+    expect(SCAN_HAND_INPUTS.length).toBeGreaterThanOrEqual(50);
+    expect(inputs.length).toBeGreaterThanOrEqual(5000);
+    const lines = toLines(inputs);
+    const expected = findLineNumberCitationsReference(lines, acceptAll);
+    // 空振りでない確認: 参照が1件も拾わない入力では同値の試験が意味を持たない
+    expect(expected.length).toBeGreaterThan(500);
+    expect(findLineNumberCitations(lines, acceptAll)).toEqual(expected);
+    // 1行ずつでも同じ（行をまたいだ状態が混ざっていないこと）
+    for (const l of lines) {
+      expect(findLineNumberCitations([l], acceptAll)).toEqual(
+        findLineNumberCitationsReference([l], acceptAll),
+      );
+    }
+  });
+
+  it('同値: isRepoFile で絞った結果も同じ（絞りは走査の外側で、target を渡して判定する）', () => {
+    const lines = toLines(inputs);
+    const only = (c: string): boolean => c.length % 2 === 0;
+    expect(findLineNumberCitations(lines, only)).toEqual(
+      findLineNumberCitationsReference(lines, only),
+    );
+  });
+
+  it('同値: N行目 の走査が参照の実装と完全に同じ', () => {
+    const lines = toLines(inputs);
+    const expected = findRowNumberCitationsReference(lines);
+    expect(expected.length).toBeGreaterThan(50);
+    expect(findRowNumberCitations(lines)).toEqual(expected);
+  });
+
+  // 比と大きな余裕で書く: CI の揺れで落ちないように絶対時間では縛らない。
+  const timeIt = (fn: () => unknown): number => {
+    const start = performance.now();
+    fn();
+    return performance.now() - start;
+  };
+  const best = (fn: () => unknown, times: number): number => {
+    let min = Infinity;
+    for (let i = 0; i < times; i++) min = Math.min(min, timeIt(fn));
+    return min;
+  };
+
+  it('速さ: path:行番号 の走査は、区切りの無い長い連続で参照の実装よりずっと速く、10 万字でも長さに比例する', () => {
+    const run10k = toLines(['0123456789'.repeat(1000)]);
+    const run100k = toLines(['0123456789'.repeat(10000)]);
+    expect(findLineNumberCitations(run10k, acceptAll)).toEqual([]);
+    // 手元の実測（1 万字）: 参照 約 46ms・新 約 0.07ms（比 約 650）。閾値 10 は 60 倍の余裕。
+    const reference = best(() => findLineNumberCitationsReference(run10k, acceptAll), 2);
+    const fast = best(() => findLineNumberCitations(run10k, acceptAll), 5);
+    // 新しい走査が速すぎて 0 に丸まっても割れるように下限を置く
+    expect(reference / Math.max(fast, 0.01)).toBeGreaterThanOrEqual(10);
+    expect(timeIt(() => findLineNumberCitations(run100k, acceptAll))).toBeLessThan(200);
+  });
+
+  it('速さ: N行目 の走査は、桁の長い連続（後ろに 行 が無い）で参照の実装よりずっと速く、10 万字でも長さに比例する', () => {
+    const run10k = toLines(['1'.repeat(10000) + '行']);
+    const run100k = toLines(['1'.repeat(100000) + '行']);
+    expect(findRowNumberCitations(run10k)).toEqual([]);
+    // 手元の実測（1 万字）: 参照 約 107ms・新 約 0.07ms（比 約 1500）。
+    const reference = best(() => findRowNumberCitationsReference(run10k), 2);
+    const fast = best(() => findRowNumberCitations(run10k), 5);
+    expect(reference / Math.max(fast, 0.01)).toBeGreaterThanOrEqual(10);
+    expect(timeIt(() => findRowNumberCitations(run100k))).toBeLessThan(200);
   });
 });
