@@ -8342,28 +8342,7 @@ class Clone implements CloneHost {
   async #applyTurnEnded(event: Extract<AgentEvent, { type: 'turn_ended' }>): Promise<void> {
     // ここでモデルの段を閉じ、後始末（finalize）を数え始める（#5086）
     const timer = this.#sdkSession.turn?.timer ?? null;
-    const mainLoop = event.usage?.mainLoopUsage;
-    timer?.turnEnded({
-      succeeded: event.succeeded,
-      ...(mainLoop === undefined
-        ? {}
-        : {
-            tokens: {
-              input: mainLoop.inputTokens,
-              cacheRead: mainLoop.cacheReadInputTokens,
-              cacheCreation: mainLoop.cacheCreationInputTokens,
-              output: mainLoop.outputTokens,
-            },
-          }),
-      ...(event.timing === undefined && event.usage?.numTurns === undefined
-        ? {}
-        : {
-            sdk: {
-              ...event.timing,
-              ...(event.usage?.numTurns === undefined ? {} : { numTurns: event.usage.numTurns }),
-            },
-          }),
-    });
+    this.#closeModelPhase(timer, event);
     const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
       timer === null ? fn() : timer.time(`finalize.${name}`, fn);
     const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
@@ -8420,33 +8399,77 @@ class Clone implements CloneHost {
     // 判定は `isAnsweredResult`（`isSuccessResult` ではない）: `subtype: 'success'` かつ `is_error: true` を成功として通してしまうため。
     // `turn.rejected` も見る: `assistant.error` が付いたターンは、`result` が成功でも応答として扱わない。
     if (failure !== undefined) {
-      // 分類にかけるのは SDK が失敗として出した文言だけ（`turn.text` を通さない）: 部分一致なので、
-      // 「上限に当たった」と日報に書いた瞬間に上限と誤判定する自家中毒になる。
-      // この `await` は `#reportFailure` より先に終える: `usage_limited` は終端ではなく、終端の `error` より先に届く必要がある。
-      // grep -Fn -- 'for (const candidate of [failure.text, ...event.errorLines])' packages/core/src/runner.ts
-      // 応答の本文 `event.body` は候補に入れない（#4931）: 作業者の上限の原文（#4911 で道具の結果へ添える）をクローンが引用して別の理由で失敗すると、自分の枠と取り違える。
-      // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で、`body` と同じ文字列。
-      for (const candidate of [failure.text, ...event.errorLines]) {
-        const notice = classifyUsageNotice(candidate);
-        if (notice !== undefined) {
-          await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
-          break;
-        }
-      }
-      // 失敗した result では `done` を出さない: `#reportFailure` の `error` を終端にする。
-      await this.#reportFailure(
-        turn?.conversationId ?? null,
-        failureReason(failure, event),
-        // 種別は言い切れるほうの印を採る: `assistant.error` だけが `rate_limit` と言う回を `other` に落とさないため。
-        [event.failure, turn?.rejected].find(
-          (candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other',
-        ) ?? failure,
-      );
-      // 失敗側でも必ず畳む: 呼ばないと `#runTurn` が返らず、`#pump` が次の合図へ進めず受信箱ごと止まる。
-      this.#finishTurn();
+      await this.#settleFailedTurn(event, turn, failure);
       return;
     }
 
+    await this.#settleAnsweredTurn(turn);
+    return;
+  }
+
+  /** `#applyTurnEnded` の、時計のモデルの段を閉じる1文（`#applyTurnEnded` から出した）。 */
+  #closeModelPhase(
+    timer: TurnTimer | null,
+    event: Extract<AgentEvent, { type: 'turn_ended' }>,
+  ): void {
+    const mainLoop = event.usage?.mainLoopUsage;
+    timer?.turnEnded({
+      succeeded: event.succeeded,
+      ...(mainLoop === undefined
+        ? {}
+        : {
+            tokens: {
+              input: mainLoop.inputTokens,
+              cacheRead: mainLoop.cacheReadInputTokens,
+              cacheCreation: mainLoop.cacheCreationInputTokens,
+              output: mainLoop.outputTokens,
+            },
+          }),
+      ...(event.timing === undefined && event.usage?.numTurns === undefined
+        ? {}
+        : {
+            sdk: {
+              ...event.timing,
+              ...(event.usage?.numTurns === undefined ? {} : { numTurns: event.usage.numTurns }),
+            },
+          }),
+    });
+  }
+
+  /** `#applyTurnEnded` の、失敗したターンの後始末（`#applyTurnEnded` から出した）。直後の `return;` は元のメソッドに残す。 */
+  async #settleFailedTurn(
+    event: Extract<AgentEvent, { type: 'turn_ended' }>,
+    turn: Turn | null,
+    failure: SdkFailure,
+  ): Promise<void> {
+    // 分類にかけるのは SDK が失敗として出した文言だけ（`turn.text` を通さない）: 部分一致なので、
+    // 「上限に当たった」と日報に書いた瞬間に上限と誤判定する自家中毒になる。
+    // この `await` は `#reportFailure` より先に終える: `usage_limited` は終端ではなく、終端の `error` より先に届く必要がある。
+    // grep -Fn -- 'for (const candidate of [failure.text, ...event.errorLines])' packages/core/src/runner.ts
+    // 応答の本文 `event.body` は候補に入れない（#4931）: 作業者の上限の原文（#4911 で道具の結果へ添える）をクローンが引用して別の理由で失敗すると、自分の枠と取り違える。
+    // 失った形は無い: 失敗した result では `failure.text` が `result` そのもの（`resultFailureOf`）で、`body` と同じ文字列。
+    for (const candidate of [failure.text, ...event.errorLines]) {
+      const notice = classifyUsageNotice(candidate);
+      if (notice !== undefined) {
+        await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
+        break;
+      }
+    }
+    // 失敗した result では `done` を出さない: `#reportFailure` の `error` を終端にする。
+    await this.#reportFailure(
+      turn?.conversationId ?? null,
+      failureReason(failure, event),
+      // 種別は言い切れるほうの印を採る: `assistant.error` だけが `rate_limit` と言う回を `other` に落とさないため。
+      [event.failure, turn?.rejected].find(
+        (candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other',
+      ) ?? failure,
+    );
+    // 失敗側でも必ず畳む: 呼ばないと `#runTurn` が返らず、`#pump` が次の合図へ進めず受信箱ごと止まる。
+    this.#finishTurn();
+  }
+
+  /** `#applyTurnEnded` の、答えが返ったターンの後始末（`#applyTurnEnded` から出した）。直後の `return;` は元のメソッドに残す。 */
+  async #settleAnsweredTurn(turn: Turn | null): Promise<void> {
     // 成功した result は「枠が開いている」証拠なので保持を降ろす: 降ろさないと `#pump` の `finally` が
     // 答えの返った合図を `defer` し、次の合図で同じ発言が二重実行される。
     // `rate_limit_event` の `rejected` でも課金枠（overage）に落ちてターンは成功しうる（通常の遷移）。
@@ -8471,7 +8494,6 @@ class Clone implements CloneHost {
     if (turn) await this.#autoCloseRepliedTasks(turn);
     this.#emit(turn?.conversationId ?? null, { type: 'done' });
     this.#finishTurn();
-    return;
   }
 
   /**
