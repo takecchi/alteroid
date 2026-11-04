@@ -696,7 +696,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'folded-turn-empty-text',
-    covers: 'lastFoldedTurn の本文が空（lastReport へは落ちず、空の本文として報告が無い側へ）',
+    covers:
+      'lastFoldedTurn の本文が空（無いと見て lastReport へ落ち、「直近の報告」として返す。拒否の基準も lastReportAt。#6387）',
     managers: () => [
       mgr({ lastFoldedTurn: { text: '', at: iso(58) }, lastReport: '落ちない報告' }),
     ],

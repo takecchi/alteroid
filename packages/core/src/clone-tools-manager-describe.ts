@@ -201,13 +201,15 @@ function unpushedWorkObservationIncompleteSuffix(
 }
 
 // 一覧では外へ出した成果も退避 ref も件数と最後の1件だけにする: 一覧は予算で打ち切られ、1件の委譲が最大20行を取ると出る委譲の数が減るため。全件は `manager_report` が出す
+// `reader` は観測を読ませる道具の名。「〈道具〉自身では更新されない」の注に出す: 別の道具の名を出すと、どの呼びが観測を更新しないのか読み違えるため
 export function describeUnpushedWorkObservation(
   manager: ManagerSummary,
   outputs: 'brief' | 'full' | 'report' = 'brief',
   now?: Date,
+  reader: 'manager_list' | 'manager_report' = 'manager_list',
 ): string | null {
   const lines = [
-    describeUnpushedWorkObservationOnly(manager),
+    describeUnpushedWorkObservationOnly(manager, reader),
     describeRescue(manager, outputs, now),
     describeRescueStash(manager),
     // 'report' でも外へ出した成果は畳まない: 畳むのは退避 ref だけで、成果の記録は件数が上限で締まっている
@@ -528,7 +530,10 @@ export function describeRescue(
 // `cwd`（探索の起点の絶対パス）は載せない: 絶対パスそのものは出さない線を、この欄の写しにも適用するため
 // 時刻だけを出さず、観測自身の `source` から出どころを行の中に書く: 読み手が「いまの状態」と誤読するため
 // 観測が `undefined` でも器の入れ替えで応答不能な分岐では `null` を返さない: 「0件」と「沈黙」が読み手から区別できなくなるため
-function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | null {
+function describeUnpushedWorkObservationOnly(
+  manager: ManagerSummary,
+  reader: 'manager_list' | 'manager_report',
+): string | null {
   const observation = manager.lastUnpushedWorkObservation;
 
   if (manager.sessionMissingSince !== undefined) {
@@ -558,7 +563,7 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
 
   if (observation === undefined) return null;
   if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
-  const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'manager_list');
+  const provenance = describeUnpushedWorkObservationProvenance(observation.source, reader);
   if (observation.kind === 'unavailable') {
     return (
       `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason

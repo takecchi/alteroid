@@ -233,10 +233,13 @@ describe('manager_report は manager_list の3軸を継承する（Issue #1847�
       expect(reply).toContain('feat/example');
       expect(reply).toContain('manager_stop');
       expect(reply).toContain('非force');
-      expect(reply).toContain('manager_list 自身では更新されない');
       expect(reply).not.toContain('枠落ち');
       expect(reply).not.toContain('/workspace/mgr-1/repo');
     }
+    // 「〈道具〉自身では更新されない」には、いま呼んだ道具の名が出る（#6387: manager_report に manager_list の名を出さない）
+    expect(list).toContain('manager_list 自身では更新されない');
+    expect(report).toContain('manager_report 自身では更新されない');
+    expect(report).not.toContain('manager_list 自身では更新されない');
   });
 
   it('未push観測（unavailable）: manager_report にも reason が出る', async () => {
