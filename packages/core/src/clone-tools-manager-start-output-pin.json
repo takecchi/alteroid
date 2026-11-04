@@ -42,9 +42,9 @@
     "journal-fails-started": 66,
     "journal-fails-started-with-saturation": 189,
     "journal-fails-both-appends": 232,
-    "journal-fails-failure-entry-refused": 65,
+    "journal-fails-failure-entry-refused": 33,
     "journal-fails-failure-entry-throws": 11,
-    "start-refused": 75,
+    "start-refused": 43,
     "start-throws-plain": 15,
     "start-throws-string": 7,
     "args-minimal": 66,
@@ -161,7 +161,7 @@
       "errorName": null,
       "calls": [
         "stores.journal.append()",
-        "pool.start({\"request\":\"前\\u0000後\"})",
+        "pool.start({\"request\":\"前後\"})",
         "context.noteDelegationStarted(undefined)",
         "stores.journal.append()",
         "pool.runnerPidsSaturation(runner-1)"
@@ -830,7 +830,7 @@
       "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nmanager_start は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=30 grounds.chars=5\n理由: Error: 日誌のストアが落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。"
     },
     "journal-fails-failure-entry-refused": {
-      "length": 65,
+      "length": 33,
       "isError": false,
       "thrown": false,
       "errorName": null,
@@ -850,7 +850,7 @@
       ],
       "tasksUnchanged": true,
       "jobsUnchanged": true,
-      "text": "ManagerAttachmentsRefusedError: runner が添付を受け取れない。マネージャーは起こしていない。"
+      "text": "runner が添付を受け取れない。マネージャーは起こしていない。"
     },
     "journal-fails-failure-entry-throws": {
       "length": 11,
@@ -876,7 +876,7 @@
       "text": "runner が落ちた"
     },
     "start-refused": {
-      "length": 75,
+      "length": 43,
       "isError": false,
       "thrown": false,
       "errorName": null,
@@ -905,7 +905,7 @@
       ],
       "tasksUnchanged": true,
       "jobsUnchanged": true,
-      "text": "ManagerAttachmentsRefusedError: runner-old は添付の受け渡しを名乗っていない。マネージャーは起こしていない。"
+      "text": "runner-old は添付の受け渡しを名乗っていない。マネージャーは起こしていない。"
     },
     "start-throws-plain": {
       "length": 15,

@@ -42,7 +42,7 @@ function describeStartedCwd(
 type ManagerStartStores = CloneToolsShared['stores'];
 
 // 空の依頼を断る: 日誌に「起こそうとしている」と書き、runner へ何もしない依頼を渡して1本ぶんの器を使うことになるため
-// 検めるのは NUL を除いた値だが、`start` と日誌へ渡すのは素の `request` のまま（食い違いは #6411 で別に扱う）
+// 検めるのは NUL を除いた値。`start` と日誌へも同じ NUL を除いた値（`stripNul(request)`）を渡す（#6411）
 function describeManagerStartRequestViolation(request: string): string | null {
   const requestError = describeStringLengthViolation('request', stripNul(request), {
     min: 1,
@@ -112,7 +112,7 @@ function describeManagerStartNominated(runnerId: string | undefined): string {
   return runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`;
 }
 
-// `start` に渡す request は素の値のまま。検める所（`describeManagerStartRequestViolation`）と日誌の3つの builder と合わせて、request の扱いはここに集める
+// `start` に渡す request は NUL を除いた値（日誌の3行と同じ値）。検める所（`describeManagerStartRequestViolation`）と日誌の3つの builder と合わせて、request の扱いはここに集める
 function buildManagerStartInput(args: {
   request: string;
   cwd: string | undefined;
@@ -177,8 +177,9 @@ function buildManagerStartStartedJournalEntry(args: {
   };
 }
 
+// クローンへ返す文には例外の型名を出さない（中身の文だけ）: 内部の型名は読み手の判断材料にならないため（#6411）。日誌の理由は調べるための記録なので型名つきのまま
 function renderManagerStartRefusedByAttachments(error: ManagerAttachmentsRefusedError): string {
-  return `${reasonOf(error)}。マネージャーは起こしていない。`;
+  return `${error.message}。マネージャーは起こしていない。`;
 }
 
 // pids 飽和の置き先でも断らない: 起こしたうえで、材料つきで知らせる
@@ -267,6 +268,8 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
       if (!context.managers) return NO_POOL;
       const requestViolation = describeManagerStartRequestViolation(request);
       if (requestViolation !== null) return text(requestViolation);
+      // `start` と日誌の3行には、検めたのと同じ NUL を除いた値を渡す: 素の値を渡すと、ストアが NUL を落とす日誌と委譲に渡る依頼文が1字違うため（#6411）
+      const requestText = stripNul(request);
       if (taskId !== undefined) {
         const taskViolation = await describeManagerStartTaskViolation(stores, taskId);
         if (taskViolation !== null) return text(taskViolation);
@@ -289,7 +292,7 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
       await appendJournalOrThrow(
         'manager_start',
         stores.journal,
-        buildManagerStartAttemptJournalEntry({ request, runnerId, handedNote }),
+        buildManagerStartAttemptJournalEntry({ request: requestText, runnerId, handedNote }),
         'act-not-performed',
       );
 
@@ -297,7 +300,7 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
       try {
         started = await context.managers.start(
           buildManagerStartInput({
-            request,
+            request: requestText,
             cwd,
             runnerId,
             supersedes,
@@ -310,7 +313,12 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
         await appendJournalOrDrop(
           'manager_start',
           stores.journal,
-          buildManagerStartFailedJournalEntry({ request, runnerId, handedNote, error }),
+          buildManagerStartFailedJournalEntry({
+            request: requestText,
+            runnerId,
+            handedNote,
+            error,
+          }),
         );
         if (error instanceof ManagerAttachmentsRefusedError) {
           return text(renderManagerStartRefusedByAttachments(error));
@@ -323,7 +331,12 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
       await appendJournalOrDrop(
         'manager_start',
         stores.journal,
-        buildManagerStartStartedJournalEntry({ request, runnerId, handedNote, started }),
+        buildManagerStartStartedJournalEntry({
+          request: requestText,
+          runnerId,
+          handedNote,
+          started,
+        }),
       );
       const saturation =
         started.runnerId === undefined

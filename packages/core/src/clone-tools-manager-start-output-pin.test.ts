@@ -949,8 +949,9 @@ describe('manager_start の出力の固定（場面ごとの全文・字数・�
     expect(text('request-whitespace-nul')).toContain('request が空白だけ');
     expect(calls('request-empty-with-task')).toEqual([]);
     expect(started('request-with-nul-inside')).toBe(true);
-    expect(startCall('request-with-nul-inside')).toContain('前\\u0000後');
-    // 日誌の側は NUL を落として記録する（道具は素の request を渡し、ストアが落とす）
+    // `start` にも日誌にも、NUL を除いた同じ値を渡す（#6411）
+    expect(startCall('request-with-nul-inside')).toBe('pool.start({"request":"前後"})');
+    expect(startCall('request-with-nul-inside')).not.toContain('\\u0000');
     expect(decisions('request-with-nul-inside')[0]).toBe('マネージャーを起こそうとしている: 前後');
     // task
     expect(calls('task-missing')).toEqual(['stores.tasks.get("t-ghost")']);
@@ -1018,15 +1019,17 @@ describe('manager_start の出力の固定（場面ごとの全文・字数・�
     expect(
       calls('journal-fails-both-appends').filter((c) => c === 'stores.journal.append()'),
     ).toHaveLength(1);
+    // クローンへ返す断りには例外の型名を出さない（#6411）
     expect(text('journal-fails-failure-entry-refused')).toBe(
-      'ManagerAttachmentsRefusedError: runner が添付を受け取れない。マネージャーは起こしていない。',
+      'runner が添付を受け取れない。マネージャーは起こしていない。',
     );
     expect(actual['journal-fails-failure-entry-throws']?.text).toBe('runner が落ちた');
     expect(journal('journal-fails-failure-entry-throws')).toHaveLength(1);
     // start の失敗
     expect(text('start-refused')).toBe(
-      'ManagerAttachmentsRefusedError: runner-old は添付の受け渡しを名乗っていない。マネージャーは起こしていない。',
+      'runner-old は添付の受け渡しを名乗っていない。マネージャーは起こしていない。',
     );
+    expect(text('start-refused')).not.toContain('ManagerAttachmentsRefusedError');
     expect(decisions('start-refused')[1]).toContain(
       'マネージャーを起こせなかった（指名: runnerId=runner-old）',
     );
