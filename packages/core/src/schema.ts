@@ -406,6 +406,50 @@ export const contextUsageObservationSchema = z.object({
 
 export type ContextUsageObservation = z.infer<typeof contextUsageObservationSchema>;
 
+/**
+ * 作業者を待つ区間の計測（`worker_wait`）の欄。runner から daemon へ送る出来事（`runner-protocol.ts`）と、日誌の行（下の `journalEntrySchema`）が、この1つを広げて使う:
+ * 片方にだけ欄を足すと、もう片方が知らない欄として黙って落とすため。
+ *
+ * 1ターン1行ではなく委譲1区間1行にする: ターンの回数と時刻は既に日誌にあり、足りないのは契機だけなので、1ターン1行は日誌でいちばん書き込みの多い経路を二重にする。
+ * 「どの作業者だったか」は `tool_use` の日誌にある。
+ * 数えるのは「マネージャーのターン」だけで、作業者（Task サブエージェント）のターンは出てこない。作業者は同一の SDK セッションの中で走り、SDK が層をまたいで合算して降ろすので分離できない。分離しようとしないこと。
+ */
+export const workerWaitMeasureShape = {
+  openedAt: isoDateTime,
+  /** `task_started` の件数で、作業者の人数ではない（同じ `task_id` が二度来れば二度数える）。ambient task も間引かない。 */
+  tasks: z.number().int().nonnegative(),
+  turns: z.number().int().nonnegative(),
+  /** 3つの合計は必ず `turns` と一致する（排他で1件だけ数える）。 */
+  byCause: z.object({
+    input: z.number().int().nonnegative(),
+    /** 「通知の直後に回ったターン」であって、その通知が原因だったことの証明ではない。 */
+    notification: z.number().int().nonnegative(),
+    /**
+     * 消去法で出している値: 分類の漏れ（まだ知らない第4の契機）も黙ってここへ流れ込む。
+     * 「SDK/CLI 側の自己継続である」は解釈であって観測ではない——alteroid はこの部分のコードを1行も持たないので
+     * 直接確かめる手段が無い。
+     */
+    continuation: z.number().int().nonnegative(),
+  }),
+  /** マネージャー自身の `PostToolUse` が発火しなかったことだけを言う（本文だけ書いて終わったターンも入る）。作業者の道具は混ぜない。 */
+  toolless: z.number().int().nonnegative(),
+  /** 対応する `task_started` を観測していない通知も数えるので、`tasks` を超えうる。 */
+  notifications: z.number().int().nonnegative(),
+  /** `turns` と食い違うこと自体が観測だが、食い違いの原因までは言っていない。 */
+  submits: z.number().int().nonnegative(),
+  /**
+   * 取れた分だけ載せ、1件も取れなければフィールドごと省く（`{}` を置かない）。
+   * `system` は「機械に起こされたターン」の数で、通知か SDK の自己継続かの内訳ではない。
+   * 無いことは機械に起こされていないではない: SDK JSDoc は「Payloads may omit it while the field rolls out」[sdk-verbatim UserPromptSubmitHookInput.source] と言っている。
+   */
+  sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  /**
+   * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う。`false` は閉じた時点で完了通知が未着の委譲があったことだけを言い、
+   * 通知が失われたことは意味しない。`true` でも最後の `result` が来ないまま畳まれると `turns` に含まれない（`submits` との突き合わせで気づける）。
+   */
+  settled: z.boolean(),
+};
+
 export const journalEntrySchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('exchange'),
@@ -626,19 +670,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     type: z.literal('worker_wait'),
     id: z.string(),
     at: isoDateTime,
-    openedAt: isoDateTime,
-    tasks: z.number().int().nonnegative(),
-    turns: z.number().int().nonnegative(),
-    byCause: z.object({
-      input: z.number().int().nonnegative(),
-      notification: z.number().int().nonnegative(),
-      continuation: z.number().int().nonnegative(),
-    }),
-    toolless: z.number().int().nonnegative(),
-    notifications: z.number().int().nonnegative(),
-    submits: z.number().int().nonnegative(),
-    sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
-    settled: z.boolean(),
+    ...workerWaitMeasureShape,
   }),
   z.object({
     type: z.literal('turn_usage'),
