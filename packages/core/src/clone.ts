@@ -2794,10 +2794,7 @@ class Clone implements CloneHost {
         );
         continue;
       }
-      const liveness: ConfirmationLiveness =
-        (event.kind === 'question' || event.kind === 'permission') && event.requestId !== undefined
-          ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
-          : 'unknown';
+      const liveness = await this.#confirmationLivenessOf(event);
       const origin = await this.#managerOrigin(event.managerId);
       const originId = origin.conversationId;
       origins.add(originId);
@@ -3133,6 +3130,19 @@ class Clone implements CloneHost {
     if (event.type === 'human_message') return event.conversationId;
     if (event.type === 'human_answer') return event.conversationId ?? null;
     return null;
+  }
+
+  /**
+   * マネージャーの確認（質問・許可確認）が、いま待たれているか。1件ずつのターンと混合の束で同じ判定を使う。
+   * `report` と requestId の無い確認は判定の対象外で `'unknown'`: `managerPrompt` は報告ではこの値を読まない
+   */
+  async #confirmationLivenessOf(
+    event: Extract<InboxEvent, { type: 'manager_message' }>,
+  ): Promise<ConfirmationLiveness> {
+    return (event.kind === 'question' || event.kind === 'permission') &&
+      event.requestId !== undefined
+      ? confirmationLiveness(this.#managers, event.managerId, event.requestId)
+      : 'unknown';
   }
 
   /** マネージャーの委譲がどの会話で頼まれたか（台帳の `Job.conversationId`）。 */
@@ -5579,30 +5589,14 @@ class Clone implements CloneHost {
       case 'manager_message': {
         await this.#journalIncomingBody(event);
 
-        // `report` は判定の対象外で、`'unknown'` を渡しても `managerPrompt` はその分岐を読まない
-        const liveness: ConfirmationLiveness =
-          (event.kind === 'question' || event.kind === 'permission') &&
-          event.requestId !== undefined
-            ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
-            : 'unknown';
+        const liveness = await this.#confirmationLivenessOf(event);
         // `now` は `managerPrompt` の中で取らない: 純関数でないと、経過を測る試験が時刻に依存して揺れるため
         const origin = await this.#managerOrigin(event.managerId);
-        if (event.kind === 'report' && hasReportFiles(event)) {
-          const attached = await this.#resolveManagerReportAttachments([event]);
-          const prompt = managerPrompt(
-            event,
-            origin,
-            liveness,
-            new Date(),
-            attached.linesOf.get(event.id),
-            this.#fixedTextFold(),
-            false,
-            this.#reportBodyLimit(),
-          );
-          this.#stageReportsShown([event], prompt, new Date());
-          await this.#runInternal(prompt, 'normal', attached.images, origin.conversationId);
-          return;
-        }
+        // 添付は報告にしか付かない。付いていない回は解決しない（`null`）: 添付の行は既定の `[]`、画像も無しになる
+        const attached =
+          event.kind === 'report' && hasReportFiles(event)
+            ? await this.#resolveManagerReportAttachments([event])
+            : null;
         // #4943: 実行許可の確認の、alteroid が組んだ固定の長い段落は、同じ会話の2回目から短い参照にする（日誌の本文は上で全文を書き済み）。質問（担当の言葉）と報告の本文は畳まない
         const sent =
           event.kind === 'permission'
@@ -5613,13 +5607,13 @@ class Clone implements CloneHost {
           origin,
           liveness,
           new Date(),
-          [],
+          attached?.linesOf.get(event.id),
           this.#fixedTextFold(),
           false,
           this.#reportBodyLimit(),
         );
         this.#stageReportsShown([event], prompt, new Date());
-        await this.#runInternal(prompt, 'normal', [], origin.conversationId);
+        await this.#runInternal(prompt, 'normal', attached?.images ?? [], origin.conversationId);
         return;
       }
 
