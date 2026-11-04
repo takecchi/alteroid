@@ -274,14 +274,15 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'refuse-observed-empty-truncated',
     covers:
-      'running・作業ツリーが空で truncatedAtCount だけ（不完全と判定されるので git の文は出るが、describe は「見つからなかった」と言い切る）',
+      'running・作業ツリーが空で truncatedAtCount だけ（git の文を出し、「見つからなかった」と言い切らず打ち切りを理由に「確認できていない」と言う。#6398）',
     args: { managerId: MGR },
     lists: [[mgr()]],
     unpushed: ok({ truncatedAtCount: 10 }),
   },
   {
     name: 'refuse-observed-empty-stopped-early',
-    covers: 'running・作業ツリーが空で stoppedEarly だけ（同上）',
+    covers:
+      'running・作業ツリーが空で stoppedEarly だけ（期限切れを理由に「確認できていない」と言う。#6398）',
     args: { managerId: MGR },
     lists: [[mgr()]],
     unpushed: ok({ stoppedEarly: true }),
@@ -836,9 +837,16 @@ describe('manager_stop の出力の固定（場面ごとの全文・字数・呼
     expect(text('refuse-observed-empty-scratch-unknown')).toContain('**確認できていない。**');
     expect(text('refuse-observed-empty-unreadable-dirs')).toContain('**確認できていない。**');
     expect(text('refuse-observed-empty-both-unknown')).toContain('、');
-    expect(text('refuse-observed-empty-truncated')).toContain('作業ツリーが見つからなかった');
+    // 探しきっていないのに「見つからなかった（… を探索した）。」と言い切らない（#6398）
+    expect(text('refuse-observed-empty-truncated')).toContain('作業ツリーの探索は10件で打ち切った');
+    expect(text('refuse-observed-empty-truncated')).toContain('**確認できていない。**');
+    expect(text('refuse-observed-empty-truncated')).not.toContain('の下を探索した）。');
     expect(text('refuse-observed-empty-truncated')).toContain('（未 push の実装・起こした作業者');
-    expect(text('refuse-observed-empty-stopped-early')).toContain('作業ツリーが見つからなかった');
+    expect(text('refuse-observed-empty-stopped-early')).toContain('呼び出し元の期限切れ');
+    expect(text('refuse-observed-empty-stopped-early')).toContain('**確認できていない。**');
+    expect(text('refuse-observed-empty-stopped-early')).not.toContain('の下を探索した）。');
+    // 確かめられなかった理由が空文字でも「（）」にしない（#6398）
+    expect(text('refuse-observed-worktrees')).not.toContain('確かめられなかった（）');
     expect(text('refuse-unavailable')).toContain(
       '**確かめられなかった**（宛先の runner がいま開いていない。）',
     );

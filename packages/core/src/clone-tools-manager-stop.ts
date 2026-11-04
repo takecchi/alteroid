@@ -17,6 +17,11 @@ const MANAGER_STOP_FOLDED_TURN_EXCERPT = 240;
 // 短めに切る: `manager_stop` 自体の応答が長々と待たされるほうが実害で、`pool.unpushedWork()` は失敗しても構わない設計のため
 const MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
+// 空文字・空白だけの理由も「理由不明」に倒す: `??` は空文字に効かず「確かめられなかった（）」になるため（#6398）
+function unknownReasonOrDefault(reason: string | undefined): string {
+  return reason === undefined || reason.trim() === '' ? '理由不明' : reason;
+}
+
 // ファイル名・差分の中身・コミットメッセージ・author を文言に含めない
 function describeUnpushedWork(probe: ManagerUnpushedWork): string {
   if (probe.kind === 'unavailable') {
@@ -39,6 +44,15 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
           '——その下に未 push の実装が残っていた可能性がある',
       );
     }
+    // 打ち切り・期限切れも「確かめられなかった」に数える: 探しきっていないのに「見つからなかった」と言うと、断りを読んだ側が未 push は無いと読んで force で畳み、作業を失うため（#6398）
+    if (result.truncatedAtCount !== undefined) {
+      uncertain.push(
+        `作業ツリーの探索は${String(result.truncatedAtCount)}件で打ち切った——さらに在る可能性がある`,
+      );
+    }
+    if (result.stoppedEarly === true) {
+      uncertain.push('呼び出し元の期限切れで、探索を最後まで終えずに打ち切った');
+    }
     return uncertain.length === 0
       ? `未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（${result.cwd} の下を探索した）。`
       : `未 push の実装・未コミットの変更: ${result.cwd} の下には作業ツリーが見つからなかったが、` +
@@ -48,11 +62,11 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
     const branch = worktree.branch ?? '(枝を指していない、または確かめられなかった)';
     const unpushed =
       worktree.unpushedCommitCount === undefined
-        ? `未 push: 確かめられなかった（${worktree.unpushedCommitCountUnknown ?? '理由不明'}）`
+        ? `未 push: 確かめられなかった（${unknownReasonOrDefault(worktree.unpushedCommitCountUnknown)}）`
         : `未 push ${String(worktree.unpushedCommitCount)}本`;
     const uncommitted =
       worktree.uncommittedChangeCount === undefined
-        ? `未コミット: 確かめられなかった（${worktree.uncommittedChangeCountUnknown ?? '理由不明'}）`
+        ? `未コミット: 確かめられなかった（${unknownReasonOrDefault(worktree.uncommittedChangeCountUnknown)}）`
         : `未コミット ${String(worktree.uncommittedChangeCount)}件`;
     return `  - ${worktree.relativePath}（枝: ${branch}）: ${unpushed} / ${uncommitted}`;
   });

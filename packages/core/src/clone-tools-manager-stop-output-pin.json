@@ -16,13 +16,13 @@
     "refuse-running-empty-observed": 191,
     "refuse-running-no-report-empty-observed": 143,
     "refuse-running-force-false": 191,
-    "refuse-observed-worktrees": 564,
+    "refuse-observed-worktrees": 568,
     "refuse-observed-all-notes": 700,
     "refuse-observed-empty-scratch-unknown": 339,
     "refuse-observed-empty-unreadable-dirs": 376,
     "refuse-observed-empty-both-unknown": 433,
-    "refuse-observed-empty-truncated": 273,
-    "refuse-observed-empty-stopped-early": 273,
+    "refuse-observed-empty-truncated": 314,
+    "refuse-observed-empty-stopped-early": 311,
     "refuse-unavailable": 270,
     "refuse-unpushed-throws-error": 287,
     "refuse-unpushed-timeout": 319,
@@ -192,7 +192,7 @@
       "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（起こした作業者など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。"
     },
     "refuse-observed-worktrees": {
-      "length": 564,
+      "length": 568,
       "isError": false,
       "thrown": false,
       "errorName": null,
@@ -200,7 +200,7 @@
         "pool.list",
         "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
       ],
-      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更（/workspace/repo の下、3本の作業ツリー）:\n  - .（枝: feat/example）: 未 push 3本 / 未コミット 2件\n  - sub（枝: (枝を指していない、または確かめられなかった)）: 未 push: 確かめられなかった（git が起こせなかった） / 未コミット: 確かめられなかった（）\n  - /tmp/scratch-1（枝: wip）: 未 push: 確かめられなかった（理由不明） / 未コミット: 確かめられなかった（理由不明）\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、実際には push 済みでも多めに出ることがある（安全側の誤り）。"
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更（/workspace/repo の下、3本の作業ツリー）:\n  - .（枝: feat/example）: 未 push 3本 / 未コミット 2件\n  - sub（枝: (枝を指していない、または確かめられなかった)）: 未 push: 確かめられなかった（git が起こせなかった） / 未コミット: 確かめられなかった（理由不明）\n  - /tmp/scratch-1（枝: wip）: 未 push: 確かめられなかった（理由不明） / 未コミット: 確かめられなかった（理由不明）\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、実際には push 済みでも多めに出ることがある（安全側の誤り）。"
     },
     "refuse-observed-all-notes": {
       "length": 700,
@@ -247,7 +247,7 @@
       "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: /workspace/repo の下には作業ツリーが見つからなかったが、他マネージャー/作業者の /tmp スクラッチディレクトリの有無は確かめられなかった（EACCES: /tmp）、/workspace/repo の下の子ディレクトリの読み取りに2回失敗した（/tmp スクラッチの起点そのものの読み失敗を含む）——その下に未 push の実装が残っていた可能性がある。**確認できていない。**"
     },
     "refuse-observed-empty-truncated": {
-      "length": 273,
+      "length": 314,
       "isError": false,
       "thrown": false,
       "errorName": null,
@@ -255,10 +255,10 @@
         "pool.list",
         "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
       ],
-      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（/workspace/repo の下を探索した）。"
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: /workspace/repo の下には作業ツリーが見つからなかったが、作業ツリーの探索は10件で打ち切った——さらに在る可能性がある。**確認できていない。**"
     },
     "refuse-observed-empty-stopped-early": {
-      "length": 273,
+      "length": 311,
       "isError": false,
       "thrown": false,
       "errorName": null,
@@ -266,7 +266,7 @@
         "pool.list",
         "pool.unpushedWork(mgr-001,source=stop-refusal,signal=AbortSignal(aborted=false))"
       ],
-      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（/workspace/repo の下を探索した）。"
+      "text": "[mgr-001] 止めていない。**いまターンの途中**（running）— 畳むと、そのターンの進行中の作業が失われる（未 push の実装・起こした作業者・監視中の CI など）。🔴 force: true で止まる。\n直近の報告は 2026-10-27T01:00:00.000Z（最後に終えたターンのもの。いま走っているターンの中身ではない）。 ターンの中身は manager_report で先に読めること。\n未 push の実装・未コミットの変更: /workspace/repo の下には作業ツリーが見つからなかったが、呼び出し元の期限切れで、探索を最後まで終えずに打ち切った。**確認できていない。**"
     },
     "refuse-unavailable": {
       "length": 270,
