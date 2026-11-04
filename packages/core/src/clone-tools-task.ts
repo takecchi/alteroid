@@ -602,6 +602,326 @@ async function retractTaskReopenEntry(
   });
 }
 
+type InboxRemoveManyStores = CloneToolsShared['stores'];
+type InboxPendingRow = Awaited<
+  ReturnType<InboxRemoveManyStores['inbox']['peekPending']>
+>['entries'][number];
+type InboxDeliveryStop = NonNullable<ToolContext['dropQueuedInboxEvents']>;
+
+interface InboxRemoveManyInput {
+  types: InboxRemoveManyFilter['types'];
+  sources: string[] | undefined;
+  before: string | undefined;
+  reason: string;
+  limit: number | undefined;
+}
+
+// 引数の検査。断る文を返す（通れば null）。順序は元のまま
+function describeInboxRemoveManyViolation(input: InboxRemoveManyInput): string | null {
+  const { types, sources, before, reason, limit } = input;
+  const limitError = describeIntRangeViolation('limit', limit, {
+    min: 1,
+    max: REMOVE_MANY_LIMIT_MAX,
+  });
+  if (limitError !== null) return limitError;
+  if (!inboxRemoveManyTypesSchema.safeParse(types).success) {
+    return `types は使えない（${formatArrayLengthJa({ min: 1 })}）。`;
+  }
+  const sourcesLengthError = describeArrayLengthViolation('sources', sources, { min: 1 });
+  if (sourcesLengthError !== null) return sourcesLengthError;
+  const sourcesElementError = describeStringArrayElementLengthViolation('sources', sources);
+  if (sourcesElementError !== null) return sourcesElementError;
+  const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
+  if (beforeLengthError !== null) return beforeLengthError;
+  const reasonError =
+    describeStringLengthViolation('reason', reason, { min: 1 }) ??
+    describeBlankViolation('reason', reason);
+  if (reasonError !== null) return reasonError;
+  // 絞り込みの無い呼びを断る: 「全部」は選べる5種類を指し、その2種は zod の enum が型で塞いでいるため実行時に弾くのは5種類を全部選んだ場合だけ
+  if (CLONE_REMOVABLE_INBOX_EVENT_TYPES.every((known) => types.includes(known))) {
+    return (
+      `types に選べる5種類（${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(', ')}）を全部並べた` +
+      '呼びは断る——それは絞り込みが無いのと同じで、1回で（人間起点を除く）受信箱を' +
+      '空にできてしまう。消したい種類だけを名指しすること（例 types: ["manager_message"]）。' +
+      '**1件も消していない。**'
+    );
+  }
+  // 読めない `before` を「絞り込みが当たらなかった」に混ぜない・時差を必須にする: `until` と同じ理由
+  if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
+    return (
+      describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+      '**1件も消していない。**'
+    );
+  }
+  return null;
+}
+
+// 受信箱の一覧を読んで絞り込む（`peekPending` は1回だけ）
+async function selectInboxRemoveManyTargets(
+  inbox: InboxRemoveManyStores['inbox'],
+  filter: InboxRemoveManyFilter,
+): Promise<{
+  allPending: readonly InboxPendingRow[];
+  matched: readonly InboxPendingRow[];
+  // 読めない行は絞り込みの材料が取れず対象にできないので、「未読が1件も無い」とは言わない: 消していないだけで受信箱に在るため
+  unreadableNote: string | null;
+}> {
+  const peek = await inbox.peekPending();
+  const allPending = peek.entries;
+  const unreadableNote = describeUnreadableInboxEvents(peek.unreadable);
+  const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
+  return { allPending, matched, unreadableNote };
+}
+
+function describeInboxRemoveManyFilterText(filter: InboxRemoveManyFilter): string {
+  const { types, sources, before } = filter;
+  return [
+    `types=[${types.join(', ')}]`,
+    ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
+    ...(before === undefined ? [] : [`before=${before}`]),
+  ].join(' / ');
+}
+
+function renderInboxRemoveManyFunnel(allPendingCount: number, matchedCount: number): string {
+  return `未読 ${allPendingCount} 件 → 絞り込みで ${matchedCount} 件`;
+}
+
+function describeInboxRemoveManyZeroReason(
+  allPending: readonly InboxPendingRow[],
+  unreadableNote: string | null,
+): string {
+  if (allPending.length === 0 && unreadableNote !== null) {
+    return `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
+  }
+  if (allPending.length === 0) {
+    return '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
+  }
+  const breakdown = CLONE_REMOVABLE_INBOX_EVENT_TYPES.map(
+    (known) => `${known} ${allPending.filter((row) => row.event.type === known).length}`,
+  ).join(' / ');
+  const humanCount = allPending.filter(
+    (row) => row.event.type === 'human_message' || row.event.type === 'human_answer',
+  ).length;
+  return (
+    `未読 ${allPending.length} 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。**` +
+    ` いま未読に在る種類の内訳（選べる5種類のみ）: ${breakdown}` +
+    `${humanCount > 0 ? `（このほか人間起点の行が ${humanCount} 件あるが、この道具では選べない）` : ''}`
+  );
+}
+
+function renderInboxRemoveManyZeroResult(funnel: string, why: string): string {
+  return ['絞り込みに当たる未読は0件だった。**1件も消していない。**', funnel, why].join('\n');
+}
+
+function renderInboxRemoveManyRestNote(rest: number, effectiveLimit: number): string[] {
+  return rest === 0
+    ? []
+    : [
+        `1回の上限（${effectiveLimit} 件）に当たったので、残り ${rest} 件は対象にしていない。` +
+          '**同じ絞り込みでもう一度呼べば続きを消せる。**',
+      ];
+}
+
+function renderInboxRemoveManyDryRunIds(targets: readonly InboxPendingRow[]): string {
+  const shown = targets.slice(0, REMOVE_MANY_IDS_SHOWN).map((row) => row.event.id);
+  const hidden = targets.length - shown.length;
+  return `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
+    hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
+  }`;
+}
+
+function renderInboxRemoveManyDryRun(args: {
+  funnel: string;
+  filterText: string;
+  targets: readonly InboxPendingRow[];
+  matchedCount: number;
+  restNote: readonly string[];
+}): string {
+  const { funnel, filterText, targets, matchedCount } = args;
+  return [
+    `**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。`,
+    funnel,
+    `絞り込み: ${filterText}`,
+    `この呼びで消すのは ${targets.length} 件（当たったのは ${matchedCount} 件）。` +
+      `いちばん古いのは ${targets[0]?.at ?? '不明'}、いちばん新しいのは ${
+        targets[targets.length - 1]?.at ?? '不明'
+      }。`,
+    renderInboxRemoveManyDryRunIds(targets),
+    ...args.restNote,
+  ].join('\n');
+}
+
+function renderInboxRemoveManyNoDeliveryRefusal(): string {
+  return [
+    '**1件も消していない。** 配達の待ち行列から落とす口が渡されていないので、' +
+      'この道具は消し込みを拒んだ。',
+    '消しても、既にクローンのメモリ上の待ち行列へ載った合図は配られ続ける' +
+      '。「消した」と名乗って配達が続く状態を作らないために、' +
+      'ここで止めている。',
+    '⚠️ これは配線の不備である（本番の `ToolContext` は2箇所とも' +
+      '`dropQueuedInboxEvents` を渡している）。人間へ上げること。',
+  ].join('\n');
+}
+
+// 塊ごとの先の日誌の行
+function buildInboxRemoveManyJournalEntry(args: {
+  index: number;
+  chunkCount: number;
+  chunk: readonly string[];
+  reason: string;
+  filterText: string;
+}): JournalEntryInput {
+  const { index, chunkCount, chunk, reason, filterText } = args;
+  return {
+    type: 'decision',
+    decision:
+      `受信箱の未読を絞り込みで一括して畳む（消す）` +
+      `（${index + 1}/${chunkCount} 塊目、この塊は ${chunk.length} 件）: ${reason}\n` +
+      `絞り込み: ${filterText}\n` +
+      `消す id: ${chunk.join(' ')}`,
+    grounds:
+      'クローン自身が inbox_remove_many で絞り込んで消す（人間はこれを読んで後から否定する）',
+  };
+}
+
+function describeInboxRemoveManyStopped(args: {
+  index: number;
+  chunkCount: number;
+  chunkSize: number;
+  error: unknown;
+}): string {
+  const { index, chunkCount, chunkSize, error } = args;
+  return (
+    `⚠⚠ ${index + 1}/${chunkCount} 塊目の先の日誌が書けなかったので、この塊（${chunkSize} 件）と` +
+    `それ以降は消さずに止めた（${collapseErrorCause(error)}）。` +
+    `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`
+  );
+}
+
+// 「日誌に N 件」は実際に書いた件数で数える: 先の行が書けて止めた回に、書いていない行を名乗らないため
+interface InboxRemoveManyRunState {
+  removedIds: string[];
+  droppedFromDelivery: number;
+  raced: number;
+  journaledChunks: number;
+  stoppedNote: string | undefined;
+}
+
+// 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeInboxChunkJournalFirst`）: 消すと配達も止まって戻らないので、消してから書くと日誌が落ちた回に何を畳んだかが残らないため
+// `stores.inbox.removeMany` を直に呼ばない: 器から消すのと配達を止めるのを1つの呼びで行う関数を通す（helper の中）
+async function removeInboxTargetsJournaling(args: {
+  stores: InboxRemoveManyStores;
+  stopDelivery: InboxDeliveryStop;
+  targets: readonly InboxPendingRow[];
+  reason: string;
+  filterText: string;
+}): Promise<InboxRemoveManyRunState> {
+  const { stores, stopDelivery, targets, reason, filterText } = args;
+  const chunks = chunkIdsByChars(
+    targets.map((row) => row.event.id),
+    REMOVE_MANY_JOURNAL_ID_CHARS,
+  );
+  const state: InboxRemoveManyRunState = {
+    removedIds: [],
+    droppedFromDelivery: 0,
+    raced: 0,
+    journaledChunks: 0,
+    stoppedNote: undefined,
+  };
+  for (const [index, chunk] of chunks.entries()) {
+    const outcome = await removeInboxChunkJournalFirst(
+      stores,
+      { dropQueuedInboxEvents: stopDelivery },
+      chunk,
+      () =>
+        buildInboxRemoveManyJournalEntry({
+          index,
+          chunkCount: chunks.length,
+          chunk,
+          reason,
+          filterText,
+        }),
+    );
+    if (outcome.kind === 'journal-failed') {
+      // 先の行が書けなかった塊は消していない。1つも消していなければ行為は起きていない（`act-not-performed`）。
+      noteDroppedRecord('日誌', journalEntryShape(outcome.entry), outcome.error);
+      if (state.journaledChunks === 0) {
+        throw new JournalNotRecordedError(
+          'inbox_remove_many',
+          outcome.entry,
+          'act-not-performed',
+          outcome.error,
+        );
+      }
+      // 前の塊は消えていて日誌にも在るので投げず、どこまで消したかを返す（投げると「やり直してよい」が前の塊について嘘になる）
+      state.stoppedNote = describeInboxRemoveManyStopped({
+        index,
+        chunkCount: chunks.length,
+        chunkSize: chunk.length,
+        error: outcome.error,
+      });
+      break;
+    }
+    state.journaledChunks += 1;
+    state.droppedFromDelivery += outcome.droppedFromDelivery;
+    state.removedIds.push(...outcome.removedIds);
+    state.raced += outcome.racedIds.length;
+  }
+  return state;
+}
+
+function renderInboxRemoveManyRemovedIds(
+  removedIds: readonly string[],
+  journaledChunks: number,
+): string {
+  const shownRemoved = removedIds.slice(0, REMOVE_MANY_IDS_SHOWN);
+  const hiddenRemoved = removedIds.length - shownRemoved.length;
+  return `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
+    hiddenRemoved > 0
+      ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
+      : ''
+  }`;
+}
+
+// 配達の側にも届いたことを名乗る: 消えた件数だけを出すと器の行しか消さずに「消した」と名乗る形に戻るため
+function renderInboxRemoveManyDeliveryNote(droppedFromDelivery: number): string {
+  return (
+    `配達の待ち行列からも外したのは ${droppedFromDelivery} 件` +
+    `（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。` +
+    `**既に取り出して処理中のものは取り消せない。**）`
+  );
+}
+
+function renderInboxRemoveManyRacedNote(targetCount: number, raced: number): string[] {
+  return raced === 0
+    ? []
+    : [
+        `⚠ 対象 ${targetCount} 件のうち ${raced} 件は消せなかった` +
+          '（この呼びの最中に他の経路が先に消した）。',
+      ];
+}
+
+function renderInboxRemoveManyDone(args: {
+  reason: string;
+  funnel: string;
+  filterText: string;
+  targetCount: number;
+  state: InboxRemoveManyRunState;
+  restNote: readonly string[];
+}): string {
+  const { reason, funnel, filterText, targetCount, state } = args;
+  return [
+    ...(state.stoppedNote === undefined ? [] : [state.stoppedNote]),
+    `**${state.removedIds.length} 件を畳んだ（消した）**（理由: ${reason}）。`,
+    funnel,
+    `絞り込み: ${filterText}`,
+    renderInboxRemoveManyRemovedIds(state.removedIds, state.journaledChunks),
+    renderInboxRemoveManyDeliveryNote(state.droppedFromDelivery),
+    ...renderInboxRemoveManyRacedNote(targetCount, state.raced),
+    ...args.restNote,
+  ].join('\n');
+}
+
 export function taskTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getWorkConversationId } = shared;
   return [
@@ -1393,208 +1713,73 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ types, sources, before, reason, dryRun, limit }) => {
-        const limitError = describeIntRangeViolation('limit', limit, {
-          min: 1,
-          max: REMOVE_MANY_LIMIT_MAX,
+        const violation = describeInboxRemoveManyViolation({
+          types,
+          sources,
+          before,
+          reason,
+          limit,
         });
-        if (limitError !== null) return text(limitError);
-        if (!inboxRemoveManyTypesSchema.safeParse(types).success) {
-          return text(`types は使えない（${formatArrayLengthJa({ min: 1 })}）。`);
-        }
-        const sourcesLengthError = describeArrayLengthViolation('sources', sources, { min: 1 });
-        if (sourcesLengthError !== null) return text(sourcesLengthError);
-        const sourcesElementError = describeStringArrayElementLengthViolation('sources', sources);
-        if (sourcesElementError !== null) return text(sourcesElementError);
-        const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
-        if (beforeLengthError !== null) return text(beforeLengthError);
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) return text(reasonError);
-        // 絞り込みの無い呼びを断る: 「全部」は選べる5種類を指し、その2種は zod の enum が型で塞いでいるため実行時に弾くのは5種類を全部選んだ場合だけ
-        if (CLONE_REMOVABLE_INBOX_EVENT_TYPES.every((known) => types.includes(known))) {
-          return text(
-            `types に選べる5種類（${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(', ')}）を全部並べた` +
-              '呼びは断る——それは絞り込みが無いのと同じで、1回で（人間起点を除く）受信箱を' +
-              '空にできてしまう。消したい種類だけを名指しすること（例 types: ["manager_message"]）。' +
-              '**1件も消していない。**',
-          );
-        }
-        // 読めない `before` を「絞り込みが当たらなかった」に混ぜない・時差を必須にする: `until` と同じ理由
-        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
-          return text(
-            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
-              '**1件も消していない。**',
-          );
-        }
+        if (violation !== null) return text(violation);
 
         const filter: InboxRemoveManyFilter = {
           types,
           ...(sources === undefined ? {} : { sources }),
           ...(before === undefined ? {} : { before }),
         };
-        const peek = await stores.inbox.peekPending();
-        const allPending = peek.entries;
-        // 読めない行は絞り込みの材料が取れず対象にできないので、「未読が1件も無い」とは言わない: 消していないだけで受信箱に在るため
-        const unreadableNote = describeUnreadableInboxEvents(peek.unreadable);
-        const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
+        const { allPending, matched, unreadableNote } = await selectInboxRemoveManyTargets(
+          stores.inbox,
+          filter,
+        );
 
-        const filterText = [
-          `types=[${types.join(', ')}]`,
-          ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
-          ...(before === undefined ? [] : [`before=${before}`]),
-        ].join(' / ');
-        const funnel = `未読 ${allPending.length} 件 → 絞り込みで ${matched.length} 件`;
+        const filterText = describeInboxRemoveManyFilterText(filter);
+        const funnel = renderInboxRemoveManyFunnel(allPending.length, matched.length);
 
         if (matched.length === 0) {
-          let why: string;
-          if (allPending.length === 0 && unreadableNote !== null) {
-            why = `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
-          } else if (allPending.length === 0) {
-            why =
-              '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
-          } else {
-            const breakdown = CLONE_REMOVABLE_INBOX_EVENT_TYPES.map(
-              (known) => `${known} ${allPending.filter((row) => row.event.type === known).length}`,
-            ).join(' / ');
-            const humanCount = allPending.filter(
-              (row) => row.event.type === 'human_message' || row.event.type === 'human_answer',
-            ).length;
-            why =
-              `未読 ${allPending.length} 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。**` +
-              ` いま未読に在る種類の内訳（選べる5種類のみ）: ${breakdown}` +
-              `${humanCount > 0 ? `（このほか人間起点の行が ${humanCount} 件あるが、この道具では選べない）` : ''}`;
-          }
-          return text(
-            ['絞り込みに当たる未読は0件だった。**1件も消していない。**', funnel, why].join('\n'),
-          );
+          const why = describeInboxRemoveManyZeroReason(allPending, unreadableNote);
+          return text(renderInboxRemoveManyZeroResult(funnel, why));
         }
 
         const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
         const targets = matched.slice(0, effectiveLimit);
-        const rest = matched.length - targets.length;
-        const restNote =
-          rest === 0
-            ? []
-            : [
-                `1回の上限（${effectiveLimit} 件）に当たったので、残り ${rest} 件は対象にしていない。` +
-                  '**同じ絞り込みでもう一度呼べば続きを消せる。**',
-              ];
+        const restNote = renderInboxRemoveManyRestNote(
+          matched.length - targets.length,
+          effectiveLimit,
+        );
 
+        // 省略された `dryRun` は試算にする: 消した合図を戻す道具が無いため
         if (dryRun !== false) {
-          // 省略された `dryRun` は試算にする: 消した合図を戻す道具が無いため
-          const shown = targets.slice(0, REMOVE_MANY_IDS_SHOWN).map((row) => row.event.id);
-          const hidden = targets.length - shown.length;
           return text(
-            [
-              `**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。`,
+            renderInboxRemoveManyDryRun({
               funnel,
-              `絞り込み: ${filterText}`,
-              `この呼びで消すのは ${targets.length} 件（当たったのは ${matched.length} 件）。` +
-                `いちばん古いのは ${targets[0]?.at ?? '不明'}、いちばん新しいのは ${
-                  targets[targets.length - 1]?.at ?? '不明'
-                }。`,
-              `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
-                hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
-              }`,
-              ...restNote,
-            ].join('\n'),
+              filterText,
+              targets,
+              matchedCount: matched.length,
+              restNote,
+            }),
           );
         }
 
         // 配達を止める口が無ければ1件も消さない: 行を消した状態で配達だけが続くほうが、1件も消さないより悪い（掃除できたと誤解するのにターンは起き続ける）ため
         const stopDelivery = context.dropQueuedInboxEvents;
-        if (stopDelivery === undefined) {
-          return text(
-            [
-              '**1件も消していない。** 配達の待ち行列から落とす口が渡されていないので、' +
-                'この道具は消し込みを拒んだ。',
-              '消しても、既にクローンのメモリ上の待ち行列へ載った合図は配られ続ける' +
-                '。「消した」と名乗って配達が続く状態を作らないために、' +
-                'ここで止めている。',
-              '⚠️ これは配線の不備である（本番の `ToolContext` は2箇所とも' +
-                '`dropQueuedInboxEvents` を渡している）。人間へ上げること。',
-            ].join('\n'),
-          );
-        }
+        if (stopDelivery === undefined) return text(renderInboxRemoveManyNoDeliveryRefusal());
 
-        // 塊ごとに「その塊の id を日誌へ書く → 消す」を交互に回す（`removeInboxChunkJournalFirst`）: 消すと配達も止まって戻らないので、消してから書くと日誌が落ちた回に何を畳んだかが残らないため
-        // `stores.inbox.removeMany` を直に呼ばない: 器から消すのと配達を止めるのを1つの呼びで行う関数を通す（helper の中）
-        const chunks = chunkIdsByChars(
-          targets.map((row) => row.event.id),
-          REMOVE_MANY_JOURNAL_ID_CHARS,
-        );
-        const removedIds: string[] = [];
-        let droppedFromDelivery = 0;
-        let raced = 0;
-        // 「日誌に N 件」は実際に書いた件数で数える: 先の行が書けて止めた回に、書いていない行を名乗らないため
-        let journaledChunks = 0;
-        let stoppedNote: string | undefined;
-        for (const [index, chunk] of chunks.entries()) {
-          const outcome = await removeInboxChunkJournalFirst(
-            stores,
-            { dropQueuedInboxEvents: stopDelivery },
-            chunk,
-            () => ({
-              type: 'decision',
-              decision:
-                `受信箱の未読を絞り込みで一括して畳む（消す）` +
-                `（${index + 1}/${chunks.length} 塊目、この塊は ${chunk.length} 件）: ${reason}\n` +
-                `絞り込み: ${filterText}\n` +
-                `消す id: ${chunk.join(' ')}`,
-              grounds:
-                'クローン自身が inbox_remove_many で絞り込んで消す（人間はこれを読んで後から否定する）',
-            }),
-          );
-          if (outcome.kind === 'journal-failed') {
-            // 先の行が書けなかった塊は消していない。1つも消していなければ行為は起きていない（`act-not-performed`）。
-            noteDroppedRecord('日誌', journalEntryShape(outcome.entry), outcome.error);
-            if (journaledChunks === 0) {
-              throw new JournalNotRecordedError(
-                'inbox_remove_many',
-                outcome.entry,
-                'act-not-performed',
-                outcome.error,
-              );
-            }
-            // 前の塊は消えていて日誌にも在るので投げず、どこまで消したかを返す（投げると「やり直してよい」が前の塊について嘘になる）
-            stoppedNote =
-              `⚠⚠ ${index + 1}/${chunks.length} 塊目の先の日誌が書けなかったので、この塊（${chunk.length} 件）と` +
-              `それ以降は消さずに止めた（${collapseErrorCause(outcome.error)}）。` +
-              `止める前の ${index} 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。`;
-            break;
-          }
-          journaledChunks += 1;
-          droppedFromDelivery += outcome.droppedFromDelivery;
-          removedIds.push(...outcome.removedIds);
-          raced += outcome.racedIds.length;
-        }
-
-        const shownRemoved = removedIds.slice(0, REMOVE_MANY_IDS_SHOWN);
-        const hiddenRemoved = removedIds.length - shownRemoved.length;
+        const state = await removeInboxTargetsJournaling({
+          stores,
+          stopDelivery,
+          targets,
+          reason,
+          filterText,
+        });
         return text(
-          [
-            ...(stoppedNote === undefined ? [] : [stoppedNote]),
-            `**${removedIds.length} 件を畳んだ（消した）**（理由: ${reason}）。`,
+          renderInboxRemoveManyDone({
+            reason,
             funnel,
-            `絞り込み: ${filterText}`,
-            `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
-              hiddenRemoved > 0
-                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
-                : ''
-            }`,
-            // 配達の側にも届いたことを名乗る: 消えた件数だけを出すと器の行しか消さずに「消した」と名乗る形に戻るため
-            `配達の待ち行列からも外したのは ${droppedFromDelivery} 件` +
-              `（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。` +
-              `**既に取り出して処理中のものは取り消せない。**）`,
-            ...(raced === 0
-              ? []
-              : [
-                  `⚠ 対象 ${targets.length} 件のうち ${raced} 件は消せなかった` +
-                    '（この呼びの最中に他の経路が先に消した）。',
-                ]),
-            ...restNote,
-          ].join('\n'),
+            filterText,
+            targetCount: targets.length,
+            state,
+            restNote,
+          }),
         );
       },
     ),
