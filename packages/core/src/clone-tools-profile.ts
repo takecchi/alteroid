@@ -8,6 +8,8 @@ import {
   toAgentTokenView,
   tokenAvailabilityAt,
   type ActiveAgentToken,
+  type AgentToken,
+  type AgentTokenView,
   type CooldownSource,
 } from './token-pool.js';
 import { describePage, excerptLine, page, renderListing, renderListingEntry } from './excerpt.js';
@@ -37,6 +39,7 @@ import {
   isSubagentCaller,
   NO_FIXED_FOLD,
   appendJournalOrThrow,
+  type FixedFold,
 } from './clone-tools-common.js';
 
 const PROFILE_DISTRIBUTION_EXCERPT = 400;
@@ -63,6 +66,183 @@ const PROFILE_LIST_BUDGET = 6_000;
 // `message` も `reasonOf` も使わない: `profile.apply` の例外は失敗したクエリの `params:` にスクリプト全文を添えうるため、クラス名だけを返す
 function errorKindOf(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
+}
+
+type TokenListTokens = CloneToolsShared['stores']['tokens'];
+type TokenListActive = ActiveAgentToken | null | undefined;
+
+// `UnreadableTokenSettingsError` だけを文言にする: 器の障害まで飲み込むと「設定が壊れている」に化けるため
+async function readTokenSettingsLine(tokens: TokenListTokens): Promise<string> {
+  try {
+    const settings = await tokens.readSettings();
+    return `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`;
+  } catch (error) {
+    if (!(error instanceof UnreadableTokenSettingsError)) throw error;
+    return (
+      `回転の設定は読めない（${error.message}）。直すには回す契機と冷却の両方を指定して` +
+      '設定し直す（`alteroid token policy <free_exhausted|overage_exhausted|off>' +
+      ' --cooldown-ms <値>` / `PUT /tokens/policy`）。'
+    );
+  }
+}
+
+// 読めないときは `null` で偽装せず `undefined` にする: `null` は「まだ一度も指名していない」という別の意味で、潰すと「指名は無い」という嘘になるため
+async function readTokenActiveLine(
+  tokens: TokenListTokens,
+): Promise<{ active: TokenListActive; line: string }> {
+  try {
+    const active = await tokens.readActive();
+    const line =
+      active === null
+        ? // `null` を「1本目が現役」と書かない: まだ何も撒いていない状態と、1本目を撒いた後は別の状態のため（器の環境変数へは倒れない）
+          '現役の指名: **まだ一度も無い**（プールからまだ一度も回していないので、鍵は撒かれていない）'
+        : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`;
+    return { active, line };
+  } catch (error) {
+    if (!(error instanceof UnreadableActiveTokenError)) throw error;
+    return { active: undefined, line: `現役の指名は読めない（${error.message}）。` };
+  }
+}
+
+// 黙って先頭からへ倒さない
+function renderTokenListMalformedCursor(): string {
+  return (
+    'この cursor は読めない（壊れているか、この道具のものではない）。' +
+    'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
+    '先頭から読み直すなら cursor を省いて呼ぶこと。'
+  );
+}
+
+function renderTokenListLastPage(): string {
+  return '（cursor より後ろのトークンは無い。これが最後の頁）';
+}
+
+function renderTokenListHead(
+  settingsLine: string,
+  activeLine: string,
+  unreadableTokensNote: string | null,
+): string[] {
+  return [
+    settingsLine,
+    activeLine,
+    ...(unreadableTokensNote === null ? [] : [unreadableTokensNote]),
+  ];
+}
+
+// 「プールは空である」は読めない行が0件のときだけ言う: 在れば、読めた行が無いとしか言えないため
+function renderTokenListEmpty(
+  head: readonly string[],
+  hasUnreadable: boolean,
+  fold: FixedFold,
+): string {
+  return [
+    ...head,
+    '',
+    ...(hasUnreadable
+      ? [
+          '読めたトークンの行は無い。**プールが空だとは言えない**——読めない行が在り、' +
+            'それが使えるかどうかはここから分からない。',
+        ]
+      : ['プールは空である。**この状態では回らない**——枠に当たっても次の候補が無い。']),
+    fold(
+      'token-list:empty-register',
+      '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
+      '登録は人間の手で（`alteroid token add`）。',
+    ),
+  ].join('\n');
+}
+
+function renderTokenListEntryExtra(view: AgentTokenView): (string | null)[] {
+  return [
+    view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
+    view.cooldownUntil === undefined
+      ? null
+      : // 出所を添える: 時刻だけだと枠のリセット時刻なのか5時間足しただけなのかが一覧から言えない。無い回は「記録が無い」と書く: 黙ると「権威ある値」と読まれるため
+        `  冷却明け ${new Date(view.cooldownUntil).toISOString()}` +
+        `（出所: ${TOKEN_COOLDOWN_SOURCE_LABEL[view.cooldownSource ?? 'unrecorded'] ?? '記録が無い'}）`,
+    view.disabledAt === undefined ? null : `  人間が外した ${view.disabledAt}`,
+    view.lastRejectedReason === undefined
+      ? null
+      : // 文言は言い換えずそのまま出す: 回復の見込みは分類であって実測ではないので、そう断って添える
+        `  止まった理由（原文）: ${excerptLine(view.lastRejectedReason, TOKEN_REASON_EXCERPT)}` +
+        (view.recovery === undefined ? '' : ` / 回復の見込み（分類）: ${view.recovery}`),
+    view.invalidatedReason === undefined
+      ? null
+      : `  失効（原文）: ${excerptLine(view.invalidatedReason, TOKEN_REASON_EXCERPT)}`,
+  ];
+}
+
+function renderTokenListItems(
+  views: readonly AgentTokenView[],
+  now: number,
+  active: TokenListActive,
+): string[] {
+  return views.map((view) => {
+    // キャストを挟まない: 挟むと「値を持つ型として扱ってよい」が既成事実になるため
+    const state = tokenAvailabilityAt(view, now);
+    const title = `${state}${active?.tokenId === view.id ? ' ← 現役' : ''}`;
+    return renderListingEntry({
+      id: view.id,
+      title,
+      summary: `${view.label}（order ${String(view.order)}）`,
+      // `now` で埋めない: 作成・更新が無い行が実在し、「いま作られた」という嘘になるため
+      createdAt: view.createdAt ?? '（記録が無い）',
+      updatedAt: view.updatedAt ?? '（記録が無い）',
+      extra: renderTokenListEntryExtra(view),
+    });
+  });
+}
+
+// 母数は cursor を当てる前の全件: 頁が進んでも動かさないため
+function renderTokenListOmitted(args: {
+  rest: number;
+  shown: number;
+  tokens: readonly AgentToken[];
+  total: number;
+}): string {
+  const { rest, shown, tokens, total } = args;
+  const lastShown = tokens[shown - 1]!;
+  return (
+    `…ほか ${rest} 件は省略（プールは ${total} 件あり、order の昇順に ${shown} 件だけ出した）。` +
+    // 「**残りを見る手はこの道具に無い**」と名乗らない: 案内先がどちらも人間の口で、クローンからは叩けなかったため
+    `続きは token_list cursor=${encodeTokenCursor({ id: lastShown.id, order: lastShown.order })} で取れる。`
+  );
+}
+
+function renderTokenListFootnotes(fold: FixedFold): string[] {
+  return [
+    // 欄の意味を出力に書く: 「作成と更新が同じ」は値を作ったのではなく一度も変わっていないという観測のため
+    fold(
+      'token-list:footnote-times',
+      '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
+        'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
+      '（作成 = 足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。「記録が無い」の行がある）',
+    ),
+    fold(
+      'token-list:footnote-reason',
+      '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
+      '（止まった理由は抜粋。全文は journal_read types=token_rotation）',
+    ),
+  ];
+}
+
+function renderTokenListBody(args: {
+  head: readonly string[];
+  items: readonly string[];
+  tokens: readonly AgentToken[];
+  total: number;
+  fold: FixedFold;
+}): string {
+  const { head, items, tokens, total, fold } = args;
+  return [
+    ...head,
+    '',
+    renderListing(items, {
+      budget: TOKEN_LIST_BUDGET,
+      omitted: ({ rest, shown }) => renderTokenListOmitted({ rest, shown, tokens, total }),
+    }),
+    ...renderTokenListFootnotes(fold),
+  ].join('\n');
 }
 
 export function profileTools(context: ToolContext, shared: CloneToolsShared) {
@@ -261,133 +441,24 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         const allTokens = await stores.tokens.list();
         // 読めなかった行を言う: `list()` は読めない行を飛ばすので、プールが「空」に見えても壊れた行が在るかもしれないため
         const unreadableTokensNote = describeUnreadableTokens(await stores.tokens.listUnreadable());
-        let settingsLine: string;
-        try {
-          const settings = await stores.tokens.readSettings();
-          settingsLine = `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`;
-        } catch (error) {
-          if (!(error instanceof UnreadableTokenSettingsError)) throw error;
-          settingsLine =
-            `回転の設定は読めない（${error.message}）。直すには回す契機と冷却の両方を指定して` +
-            '設定し直す（`alteroid token policy <free_exhausted|overage_exhausted|off>' +
-            ' --cooldown-ms <値>` / `PUT /tokens/policy`）。';
-        }
-        // 読めないときは `null` で偽装せず `undefined` にする: `null` は「まだ一度も指名していない」という別の意味で、潰すと「指名は無い」という嘘になるため
-        let active: ActiveAgentToken | null | undefined;
-        let activeLine: string;
-        try {
-          active = await stores.tokens.readActive();
-          activeLine =
-            active === null
-              ? // `null` を「1本目が現役」と書かない: まだ何も撒いていない状態と、1本目を撒いた後は別の状態のため（器の環境変数へは倒れない）
-                '現役の指名: **まだ一度も無い**（プールからまだ一度も回していないので、鍵は撒かれていない）'
-              : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`;
-        } catch (error) {
-          if (!(error instanceof UnreadableActiveTokenError)) throw error;
-          active = undefined;
-          activeLine = `現役の指名は読めない（${error.message}）。`;
-        }
+        const settingsLine = await readTokenSettingsLine(stores.tokens);
+        const { active, line: activeLine } = await readTokenActiveLine(stores.tokens);
         const resolved = resolveTokenCursor(allTokens, cursor);
-        if (resolved.kind === 'malformed') {
-          // 黙って先頭からへ倒さない
-          return text(
-            'この cursor は読めない（壊れているか、この道具のものではない）。' +
-              'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
-              '先頭から読み直すなら cursor を省いて呼ぶこと。',
-          );
-        }
+        if (resolved.kind === 'malformed') return text(renderTokenListMalformedCursor());
         // cursor を渡されたときだけ「最後の頁」と言う: プールが空のときの言い方を奪わないため
         if (cursor !== undefined && resolved.view.length === 0) {
-          return text('（cursor より後ろのトークンは無い。これが最後の頁）');
+          return text(renderTokenListLastPage());
         }
         const tokens = resolved.view;
         // `toAgentTokenView` を通す: 自分で組むと値を含む `AgentToken` から拾う形になり、いつか `value` が混ざるため
         const views = tokens.map((token) => toAgentTokenView(token));
         const now = Date.now();
-        const head = [
-          settingsLine,
-          activeLine,
-          ...(unreadableTokensNote === null ? [] : [unreadableTokensNote]),
-        ];
+        const head = renderTokenListHead(settingsLine, activeLine, unreadableTokensNote);
         if (views.length === 0) {
-          // 「プールは空である」は読めない行が0件のときだけ言う: 在れば、読めた行が無いとしか言えないため
-          return text(
-            [
-              ...head,
-              '',
-              ...(unreadableTokensNote === null
-                ? ['プールは空である。**この状態では回らない**——枠に当たっても次の候補が無い。']
-                : [
-                    '読めたトークンの行は無い。**プールが空だとは言えない**——読めない行が在り、' +
-                      'それが使えるかどうかはここから分からない。',
-                  ]),
-              fold(
-                'token-list:empty-register',
-                '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
-                '登録は人間の手で（`alteroid token add`）。',
-              ),
-            ].join('\n'),
-          );
+          return text(renderTokenListEmpty(head, unreadableTokensNote !== null, fold));
         }
-        const items = views.map((view) => {
-          // キャストを挟まない: 挟むと「値を持つ型として扱ってよい」が既成事実になるため
-          const state = tokenAvailabilityAt(view, now);
-          const title = `${state}${active?.tokenId === view.id ? ' ← 現役' : ''}`;
-          return renderListingEntry({
-            id: view.id,
-            title,
-            summary: `${view.label}（order ${String(view.order)}）`,
-            // `now` で埋めない: 作成・更新が無い行が実在し、「いま作られた」という嘘になるため
-            createdAt: view.createdAt ?? '（記録が無い）',
-            updatedAt: view.updatedAt ?? '（記録が無い）',
-            extra: [
-              view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
-              view.cooldownUntil === undefined
-                ? null
-                : // 出所を添える: 時刻だけだと枠のリセット時刻なのか5時間足しただけなのかが一覧から言えない。無い回は「記録が無い」と書く: 黙ると「権威ある値」と読まれるため
-                  `  冷却明け ${new Date(view.cooldownUntil).toISOString()}` +
-                  `（出所: ${TOKEN_COOLDOWN_SOURCE_LABEL[view.cooldownSource ?? 'unrecorded'] ?? '記録が無い'}）`,
-              view.disabledAt === undefined ? null : `  人間が外した ${view.disabledAt}`,
-              view.lastRejectedReason === undefined
-                ? null
-                : // 文言は言い換えずそのまま出す: 回復の見込みは分類であって実測ではないので、そう断って添える
-                  `  止まった理由（原文）: ${excerptLine(view.lastRejectedReason, TOKEN_REASON_EXCERPT)}` +
-                  (view.recovery === undefined ? '' : ` / 回復の見込み（分類）: ${view.recovery}`),
-              view.invalidatedReason === undefined
-                ? null
-                : `  失効（原文）: ${excerptLine(view.invalidatedReason, TOKEN_REASON_EXCERPT)}`,
-            ],
-          });
-        });
-        return text(
-          [
-            ...head,
-            '',
-            renderListing(items, {
-              budget: TOKEN_LIST_BUDGET,
-              omitted: ({ rest, shown }) => {
-                const lastShown = tokens[shown - 1]!;
-                return (
-                  `…ほか ${rest} 件は省略（プールは ${allTokens.length} 件あり、order の昇順に ${shown} 件だけ出した）。` +
-                  // 「**残りを見る手はこの道具に無い**」と名乗らない: 案内先がどちらも人間の口で、クローンからは叩けなかったため
-                  `続きは token_list cursor=${encodeTokenCursor({ id: lastShown.id, order: lastShown.order })} で取れる。`
-                );
-              },
-            }),
-            // 欄の意味を出力に書く: 「作成と更新が同じ」は値を作ったのではなく一度も変わっていないという観測のため
-            fold(
-              'token-list:footnote-times',
-              '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
-                'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
-              '（作成 = 足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。「記録が無い」の行がある）',
-            ),
-            fold(
-              'token-list:footnote-reason',
-              '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
-              '（止まった理由は抜粋。全文は journal_read types=token_rotation）',
-            ),
-          ].join('\n'),
-        );
+        const items = renderTokenListItems(views, now, active);
+        return text(renderTokenListBody({ head, items, tokens, total: allTokens.length, fold }));
       },
     ),
 
