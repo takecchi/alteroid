@@ -1187,26 +1187,18 @@
       "wrote": false
     },
     "arg-order-with-pool#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "arg-order-with-pool#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
@@ -1231,10 +1223,7 @@
       "wrote": false
     },
     "missing-no-runner#1": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1243,24 +1232,16 @@
       "wrote": false
     },
     "missing-no-runner#2": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss"
-        ],
+        "ops": ["get:miss"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "missing-no-runner#3": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1269,11 +1250,7 @@
       "wrote": false
     },
     "missing-leg#1": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1282,11 +1259,7 @@
       "wrote": false
     },
     "missing-leg#2": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1295,11 +1268,7 @@
       "wrote": false
     },
     "missing-leg#3": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1308,11 +1277,7 @@
       "wrote": false
     },
     "missing-leg#4": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1321,11 +1286,7 @@
       "wrote": false
     },
     "missing-leg#5": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1334,11 +1295,7 @@
       "wrote": false
     },
     "missing-leg#6": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1347,11 +1304,7 @@
       "wrote": false
     },
     "missing-leg#7": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1360,11 +1313,7 @@
       "wrote": false
     },
     "missing-leg#8": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1373,11 +1322,7 @@
       "wrote": false
     },
     "missing-leg#9": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1386,11 +1331,7 @@
       "wrote": false
     },
     "missing-leg#10": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1399,9 +1340,7 @@
       "wrote": false
     },
     "unreadable#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1410,22 +1349,16 @@
       "wrote": false
     },
     "unreadable#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss"
-        ],
+        "ops": ["get:miss"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "removed#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1434,114 +1367,79 @@
       "wrote": false
     },
     "removed#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss"
-        ],
+        "ops": ["get:miss"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-empty#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-empty#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-empty#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-empty#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-archive-id#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-archive-id#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "body-archive-id#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "read-fails#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1550,23 +1448,16 @@
       "wrote": false
     },
     "read-fails#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss"
-        ],
+        "ops": ["get:miss"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "read-fails#3": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1575,11 +1466,7 @@
       "wrote": false
     },
     "read-fails#4": {
-      "pool": [
-        "transcript(mgr-1)",
-        "runnerIdOf(mgr-1)",
-        "runnerBacklog()"
-      ],
+      "pool": ["transcript(mgr-1)", "runnerIdOf(mgr-1)", "runnerBacklog()"],
       "cache": {
         "ops": [],
         "holdingBefore": false,
@@ -1588,22 +1475,16 @@
       "wrote": false
     },
     "read-fails-keeps-cache#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "read-fails-keeps-cache#2": {
-      "pool": [
-        "transcript(mgr-2)"
-      ],
+      "pool": ["transcript(mgr-2)"],
       "cache": {
         "ops": [],
         "holdingBefore": true,
@@ -1612,10 +1493,7 @@
       "wrote": false
     },
     "read-fails-keeps-cache#3": {
-      "pool": [
-        "transcript(mgr-3)",
-        "runnerIdOf(mgr-3)"
-      ],
+      "pool": ["transcript(mgr-3)", "runnerIdOf(mgr-3)"],
       "cache": {
         "ops": [],
         "holdingBefore": true,
@@ -1624,9 +1502,7 @@
       "wrote": false
     },
     "read-fails-keeps-cache#4": {
-      "pool": [
-        "transcript(mgr-4)"
-      ],
+      "pool": ["transcript(mgr-4)"],
       "cache": {
         "ops": [],
         "holdingBefore": true,
@@ -1637,133 +1513,88 @@
     "read-fails-keeps-cache#5": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "page-small#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-small#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-small#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-small#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-small#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-small#6": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-edge-8000#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-edge-8000#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-edge-8001#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -1772,66 +1603,43 @@
     "page-edge-8001#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "page-edge-8001#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-edge-8001#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-cold-offset-boundary#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "page-cold-offset-boundary#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -1840,23 +1648,16 @@
     "page-cold-offset-boundary#3": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "page-three#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -1865,10 +1666,7 @@
     "page-three#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "set"
-        ],
+        "ops": ["get:hit", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
@@ -1877,23 +1675,16 @@
     "page-three#3": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "page-astral#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -1902,23 +1693,16 @@
     "page-astral#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "page-filtered-resume#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -1927,101 +1711,70 @@
     "page-filtered-resume#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "page-resume-axes#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "page-resume-axes#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "page-resume-axes#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "page-resume-axes#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "page-resume-axes#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "page-resume-axes#6": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-hit#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -2030,23 +1783,16 @@
     "cache-hit#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-hit-stays#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -2055,10 +1801,7 @@
     "cache-hit-stays#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "set"
-        ],
+        "ops": ["get:hit", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
@@ -2067,10 +1810,7 @@
     "cache-hit-stays#3": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "set"
-        ],
+        "ops": ["get:hit", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
@@ -2079,37 +1819,25 @@
     "cache-hit-stays#4": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-hit-stays#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-ttl-sliding#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -2118,10 +1846,7 @@
     "cache-ttl-sliding#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "set"
-        ],
+        "ops": ["get:hit", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
@@ -2130,51 +1855,34 @@
     "cache-ttl-sliding#3": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "set"
-        ],
+        "ops": ["get:hit", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-ttl-sliding#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear",
-          "get:miss",
-          "set"
-        ],
+        "ops": ["clear", "get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-offset-zero-refetches#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-offset-zero-refetches#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
@@ -2183,24 +1891,16 @@
     "cache-offset-zero-refetches#3": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-cold-offset#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -2209,23 +1909,16 @@
     "cache-cold-offset#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-last-page-clears#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -2234,37 +1927,25 @@
     "cache-last-page-clears#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "clear"
-        ],
+        "ops": ["get:hit", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-last-page-clears#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "cache-ttl-edge-hit#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
@@ -2273,821 +1954,556 @@
     "cache-ttl-edge-hit#2": {
       "pool": [],
       "cache": {
-        "ops": [
-          "get:hit",
-          "set"
-        ],
+        "ops": ["get:hit", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-ttl-edge-miss#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-ttl-edge-miss#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear",
-          "get:miss",
-          "set"
-        ],
+        "ops": ["clear", "get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-ttl-long#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-ttl-long#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear",
-          "get:miss",
-          "set"
-        ],
+        "ops": ["clear", "get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-manager#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-manager#2": {
-      "pool": [
-        "transcript(mgr-2)"
-      ],
+      "pool": ["transcript(mgr-2)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-manager#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-key-since#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-since#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-since#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-key-until#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-until#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-until#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-key-type#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-type#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-type#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-key-contains#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-contains#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "set"
-        ],
+        "ops": ["get:miss", "set"],
         "holdingBefore": true,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-contains#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-key-filter-presence#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-filter-presence#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "cache-key-filter-presence#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "set"
-        ],
+        "ops": ["set"],
         "holdingBefore": false,
         "holdingAfter": true
       },
       "wrote": true
     },
     "cache-key-filter-presence#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": true,
         "holdingAfter": false
       },
       "wrote": true
     },
     "filter-time#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#6": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#7": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-time#8": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#6": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#7": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-type#8": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-contains#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-contains#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-contains#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-contains#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-contains#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-combined#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-combined#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-combined#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-combined#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-combined#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-line-count#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-line-count#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-line-count#3": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-line-count#4": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-line-count#5": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-line-count#6": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-empty-result#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-empty-result#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-no-filter-same#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-no-filter-same#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "clear"
-        ],
+        "ops": ["clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-offset-cold#1": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
       "wrote": false
     },
     "filter-offset-cold#2": {
-      "pool": [
-        "transcript(mgr-1)"
-      ],
+      "pool": ["transcript(mgr-1)"],
       "cache": {
-        "ops": [
-          "get:miss",
-          "clear"
-        ],
+        "ops": ["get:miss", "clear"],
         "holdingBefore": false,
         "holdingAfter": false
       },
