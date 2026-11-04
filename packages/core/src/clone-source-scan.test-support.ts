@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 // clone.ts のソースを走査して「書き換えの前後で変わらないこと」を固定する試験の共通の道具。
-// 日誌の1行の固定（`clone-journal-self-sites-pin.test.ts`）と、振り分けの case の中身の固定（`clone-dispatch-cases-pin.test.ts`）と、受信箱のループの中身の固定（`clone-pump-pin.test.ts`）が使う。
+// 日誌の1行の固定（`clone-journal-self-sites-pin.test.ts`）と、振り分けの case の中身の固定（`clone-dispatch-cases-pin.test.ts`）と、長いメソッドの中身の固定（`clone-method-body-pin.test.ts`）が使う。
 // 1つの試験に写さず、ここに置く: 文字列・テンプレート・コメントの読み飛ばし方が2つの試験でずれると、片方だけが見逃すため。
 
 export const CLONE_TS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'clone.ts');
@@ -98,6 +98,70 @@ export function methodBody(text: string, name: string): string {
     throw new Error(`${name} の本体の括弧が読めない`);
   }
   return text.slice(bodyOpen + 1, bodyClose);
+}
+
+/** 長いメソッドから中身そのまま出した段。差し戻して読むための表（`expandedMethodBody`）。 */
+export type InlinedStep = {
+  /** 出した先のメソッド */
+  readonly name: string;
+  /** 元のメソッドの中でそれを呼ぶ1文（`squash` で畳んだ形） */
+  readonly call: string;
+  /** 出した先の末尾に足した1文。差し戻すときに外す */
+  readonly trailing: string;
+};
+
+/**
+ * 元のメソッド → そこから出した段。段を出す PR は、出す前にここへ足す（足した時点では差し戻すものが無く、固定は変わらない）。
+ * 振り分けの固定（`clone-dispatch-cases-pin.test.ts`）が case の先のメソッドを読むときにも差し戻すので、表は1つだけにする。
+ */
+export const INLINED_BY_METHOD: Readonly<Record<string, readonly InlinedStep[]>> = {
+  // 受信箱のループ: ターンの前の組み立て（時計と断り書き）と、ターンの後始末（`finally` の中身）を出した（#6357）
+  '#pump': [
+    {
+      name: '#prepareTurn',
+      call: 'const timer = await this.#prepareTurn(event, batch);',
+      trailing: ' return timer;',
+    },
+    { name: '#settleTurn', call: 'await this.#settleTurn(batch, timer);', trailing: '' },
+  ],
+  // 起動時の未読の拾い直し: 畳み込みの代表の作り直しと、live の見出しの1行
+  '#restoreUnreadPass': [
+    {
+      name: '#registerRestoredRepresentatives',
+      call: 'this.#registerRestoredRepresentatives(pending);',
+      trailing: '',
+    },
+    {
+      name: '#journalRedeliveredLive',
+      call: 'await this.#journalRedeliveredLive(decided, alone);',
+      trailing: '',
+    },
+  ],
+  // 受信箱の `timer` の1件: ターンの後の完了の記録（失敗の再試行・枠保持の印・完了）
+  '#handleTimer': [
+    {
+      name: '#settleTimerRun',
+      call: 'await this.#settleTimerRun(event, plan, outcome, cause);',
+      trailing: '',
+    },
+  ],
+};
+
+/** メソッドの本体を `squash` で畳み、`INLINED_BY_METHOD` に載った段は、出した先の本体を呼び出しの位置へ差し戻したもの。 */
+export function expandedMethodBody(text: string, method: string): string {
+  let body = squash(methodBody(text, method));
+  for (const { name, call, trailing } of INLINED_BY_METHOD[method] ?? []) {
+    const at = body.indexOf(call);
+    if (at === -1) continue;
+    if (body.indexOf(call, at + 1) !== -1) throw new Error(`${call} が2回ある`);
+    let inner = squash(methodBody(text, name));
+    if (trailing !== '') {
+      if (!inner.endsWith(trailing)) throw new Error(`${name} の末尾が ${trailing.trim()} でない`);
+      inner = inner.slice(0, -trailing.length);
+    }
+    body = body.slice(0, at) + inner + body.slice(at + call.length);
+  }
+  return body;
 }
 
 /** 括弧の中身を、深さ 1 の `,` で分ける。 */

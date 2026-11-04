@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  expandedMethodBody,
   methodBody,
   readCloneSource,
   readGroup,
@@ -42,7 +43,8 @@ function dispatchCases(text: string, dispatcher: string): string[] {
     const close = readGroup(body, open).close;
     let inner = squash(body.slice(open + 1, close));
     const delegated = /^return this\.(#[A-Za-z]+)\(event\);$/.exec(inner);
-    if (delegated !== null) inner = squash(methodBody(text, delegated[1]!));
+    // 出した先のメソッドから、さらに段を出していれば差し戻して読む（`INLINED_BY_METHOD`）: 振り分けの固定が、その分割で動かないため
+    if (delegated !== null) inner = expandedMethodBody(text, delegated[1]!);
     out.push(`${label}: ${inner}`);
     labelRe.lastIndex = close;
   }
