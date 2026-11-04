@@ -275,6 +275,491 @@ function describeMemorySectionLookupFailure(
   }
 }
 
+type MemoryMoveRefusal = { kind: 'refused'; body: string };
+
+type MemoryMoveScan = ReturnType<typeof scanMemorySections>;
+
+type MemoryMoveFrontmatter = ReturnType<typeof parseMemoryFrontmatter>;
+
+type MemoryMoveLookupFailure = {
+  id: string;
+  lookup: Exclude<MemorySectionLookup, { kind: 'found' }>;
+};
+
+type MemoryMoveDocument = { readonly content: string };
+
+type MemoryMoveWritten = Awaited<ReturnType<Stores['persona']['append']>>;
+
+// 移し先に同じ節id が既に在るかで分けた、移す節の内訳
+type MemoryMovePlan = {
+  toAppend: MemorySection[];
+  alreadyAtDestination: MemorySection[];
+};
+
+// `memory_section_move` の引数の検査: from のスラッグ → to のスラッグ → sections の個数 → from と to が同じ、の順
+function checkMemorySectionMoveArgs(
+  fromSlug: string,
+  toSlug: string,
+  ids: readonly string[],
+): { kind: 'ok' } | MemoryMoveRefusal {
+  if (!memorySlugSchema.safeParse(fromSlug).success) {
+    return {
+      kind: 'refused',
+      body: `記憶のスラッグが不正: ${fromSlug}（英小文字・数字・. _ - のみ）。`,
+    };
+  }
+  if (!memorySlugSchema.safeParse(toSlug).success) {
+    return {
+      kind: 'refused',
+      body: `記憶のスラッグが不正: ${toSlug}（英小文字・数字・. _ - のみ）。`,
+    };
+  }
+  const sectionsError = describeArrayLengthViolation('sections', ids, { min: 1 });
+  if (sectionsError !== null) return { kind: 'refused', body: sectionsError };
+  if (fromSlug === toSlug) {
+    return {
+      kind: 'refused',
+      body:
+        `from と to が同じ文書（${fromSlug}）である。節の移動先は別の文書でなければならない` +
+        '（同じ文書の中で節を動かす口はここには無い）。何も変わっていない。',
+    };
+  }
+  return { kind: 'ok' };
+}
+
+// 出どころの frontmatter の検査（malformed なら断る）
+function checkMemoryMoveSourceFrontmatter(
+  fromSlug: string,
+  content: string,
+): { kind: 'ok'; priorFrontmatter: MemoryMoveFrontmatter } | MemoryMoveRefusal {
+  const priorFrontmatter = parseMemoryFrontmatter(content);
+  if (priorFrontmatter.kind === 'malformed') {
+    return {
+      kind: 'refused',
+      body:
+        `記憶 ${fromSlug} の frontmatter が壊れている（malformed）。ここでは節を移さない——` +
+        '本文の始まる位置が決まらないので、frontmatter を本文として運ぶ経路ができる。' +
+        'memory_write で全文を書き直すか、人間に確認を通すこと（何も変わっていない）。',
+    };
+  }
+  return { kind: 'ok', priorFrontmatter };
+}
+
+// 解決できなかった節id の断り文: 先頭1件の理由 + 残りの件数の内訳 + 「1節も移していない」
+function describeMemoryMoveLookupFailures(
+  fromSlug: string,
+  ids: readonly string[],
+  failures: readonly MemoryMoveLookupFailure[],
+): string {
+  const first = failures[0] as MemoryMoveLookupFailure;
+  const base = describeMemorySectionLookupFailure(fromSlug, first.id, first.lookup);
+  if (ids.length === 1) return base;
+
+  const rest = failures.slice(1);
+  const restCounts = { absent: 0, stale: 0, ambiguous: 0 } as Record<
+    Exclude<MemorySectionLookup, { kind: 'found' }>['kind'],
+    number
+  >;
+  for (const entry of rest) restCounts[entry.lookup.kind] += 1;
+  // id を全部並べない: 90個渡されたとき応答がその数だけ膨らむため
+  const restLine =
+    rest.length > 0
+      ? `\nほかにも解決できなかった節id が ${rest.length} 件ある` +
+        `（無い ${restCounts.absent} 件・古い ${restCounts.stale} 件・曖昧 ${restCounts.ambiguous} 件）。`
+      : '';
+  const allOrNothingLine =
+    '\nこの口は全件が見つかったときしか動かさない——1つでも解決できなければ、' +
+    `今回指定した他の ${ids.length - 1} 節も含めて1節も移していない。`;
+  return `${base}${restLine}${allOrNothingLine}`;
+}
+
+// 範囲が重なる節の断り文
+function describeMemoryMoveOverlap(overlap: {
+  first: MemorySection;
+  second: MemorySection;
+}): string {
+  return (
+    `節id ${overlap.first.id}（「${overlap.first.heading}」）と ${overlap.second.id}` +
+    `（「${overlap.second.heading}」）の範囲が重なっている。片方がもう片方の中に` +
+    '入れ子になっている節を親子まとめて指した（`end` は子込みなので、親を切ると' +
+    '渡していないつもりの子も一緒に動く）か、同じ節id を2回渡したか（範囲が完全に' +
+    '一致する）のどちらかである——**どちらの形でも断る**。memory_outline で目次を' +
+    '取り直し、重ならない組で渡し直すこと。何も変わっていない' +
+    '（出どころも移し先も、1文字も動いていない）。'
+  );
+}
+
+// 節の解決: 全件を照合してから、解決できなかったもの → 範囲の重なり、の順に断る
+function resolveMemoryMoveTargets(
+  fromSlug: string,
+  ids: readonly string[],
+  sections: readonly MemorySection[],
+): { kind: 'ok'; targets: MemorySection[] } | MemoryMoveRefusal {
+  const lookups = ids.map((id) => ({ id, lookup: lookupMemorySection(sections, id) }));
+  const failures = lookups.filter(
+    (entry): entry is MemoryMoveLookupFailure => entry.lookup.kind !== 'found',
+  );
+  if (failures.length > 0) {
+    return { kind: 'refused', body: describeMemoryMoveLookupFailures(fromSlug, ids, failures) };
+  }
+
+  const targets = lookups.flatMap((entry) =>
+    entry.lookup.kind === 'found' ? [entry.lookup.section] : [],
+  );
+
+  const overlap = findOverlappingMemorySections(targets);
+  if (overlap !== null) {
+    return { kind: 'refused', body: describeMemoryMoveOverlap(overlap) };
+  }
+  return { kind: 'ok', targets };
+}
+
+// 出どころから節を切り取った結果を作る（記憶は書かない）。frontmatter の解釈が変わるなら断る
+function cutMemoryMoveSource(args: {
+  fromSlug: string;
+  existingContent: string;
+  scan: MemoryMoveScan;
+  priorFrontmatter: MemoryMoveFrontmatter;
+  targets: readonly MemorySection[];
+}):
+  | { kind: 'ok'; nextContent: string; cut: string; ordered: readonly MemorySection[] }
+  | MemoryMoveRefusal {
+  const { fromSlug, existingContent, scan, priorFrontmatter, targets } = args;
+  // `ordered` を自分で並べ替え直さない: 並び順の規則は `cutMemorySections` が1箇所で持つため
+  const { nextContent, cut, ordered } = cutMemorySections(existingContent, targets);
+
+  const priorHeader = existingContent.slice(0, scan.bodyStart);
+  const nextHeader = nextContent.slice(0, scan.bodyStart);
+  const nextFrontmatter = parseMemoryFrontmatter(nextContent);
+  if (nextHeader !== priorHeader || nextFrontmatter.kind !== priorFrontmatter.kind) {
+    return {
+      kind: 'refused',
+      body:
+        `記憶 ${fromSlug} から指定した節を切り取ると、frontmatter の解釈が変わってしまう` +
+        `（${priorFrontmatter.kind} → ${nextFrontmatter.kind}）。断った——この道具は` +
+        'frontmatter を1バイトも動かさないと約束しているので、約束が破れる切り取りは行わない。' +
+        '何も変わっていない（出どころも移し先も、1文字も動いていない）。',
+    };
+  }
+  return { kind: 'ok', nextContent, cut, ordered };
+}
+
+// 移し先に同じ節id が既に在るものは追記から外す: 半完了からの再実行で同じ節が増えると `ambiguous` になり、その id が二度と指せなくなるため
+function planMemoryMoveDestination(
+  ordered: readonly MemorySection[],
+  toBefore: MemoryMoveDocument | null,
+): MemoryMovePlan {
+  const destIds = new Set(
+    toBefore === null ? [] : scanMemorySections(toBefore.content).sections.map((s) => s.id),
+  );
+  const toAppend = ordered.filter((section) => !destIds.has(section.id));
+  const alreadyAtDestination = ordered.filter((section) => destIds.has(section.id));
+  return { toAppend, alreadyAtDestination };
+}
+
+// 移し先へ足す（追記 → move_in の日誌）。足す節が無ければ何も書かない
+async function appendMemoryMoveDestination(args: {
+  stores: Stores;
+  cause: 'distill' | 'clone';
+  toSlug: string;
+  toBefore: Awaited<ReturnType<Stores['persona']['read']>>;
+  existingContent: string;
+  plan: MemoryMovePlan;
+  summary: string;
+}): Promise<{ toWritten: MemoryMoveWritten; appendedChars: number }> {
+  const { stores, cause, toSlug, toBefore, existingContent, plan, summary } = args;
+  const { toAppend, alreadyAtDestination } = plan;
+  let toWritten: MemoryMoveWritten;
+  let appendedChars = 0;
+  if (toAppend.length > 0) {
+    const appendText = toAppend
+      .map((section) => existingContent.slice(section.start, section.end))
+      .join('');
+    appendedChars = appendText.length;
+    toWritten = await stores.persona.append(toSlug, appendText);
+    await appendJournalOrThrow(
+      'memory_section_move',
+      stores.journal,
+      {
+        type: 'memory_update',
+        slug: toSlug,
+        cause,
+        action: 'move_in',
+        bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
+        bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
+        summary:
+          alreadyAtDestination.length > 0
+            ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった）`
+            : summary,
+      },
+      'act-partially-completed',
+    );
+  } else {
+    if (toBefore === null) {
+      throw new Error(
+        '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
+          '（やり直しても重複させない冪等化の前提が崩れている）。',
+      );
+    }
+    // 追記そのものを行わない: 空文字列を `persona.append` に渡すと fs/pg どちらも書き込みが起き、末尾に空行が増え `updatedAt` が進むため
+    toWritten = toBefore;
+  }
+  return { toWritten, appendedChars };
+}
+
+// 追記は済んだが切り取りに失敗したときの文（足した節があるとき）
+function describeMemoryMoveDuplicated(args: {
+  fromSlug: string;
+  toSlug: string;
+  reason: string;
+  plan: MemoryMovePlan;
+  appendedChars: number;
+}): string {
+  const { fromSlug, toSlug, reason, plan, appendedChars } = args;
+  const { toAppend, alreadyAtDestination } = plan;
+  // 「移した」と返さない: 呼び手が重複に気づけなくなるため
+  const dedupNote =
+    alreadyAtDestination.length > 0
+      ? ` このうち ${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため、今回は追記していない（重複は増えていない）。`
+      : '';
+  return (
+    `⚠ ${toAppend.length} 節（合計 ${appendedChars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
+    `${fromSlug} からの切り取りに失敗した（${reason}）。` +
+    `いま同じ ${toAppend.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
+    `${dedupNote}` +
+    `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
+    '同じ操作をやり直すか、重複したままにするかを決めること。'
+  );
+}
+
+// 何も足さなかったうえで切り取りに失敗したときの文（足す節が0件のとき）
+function describeMemoryMoveCutFailedWithoutAppend(args: {
+  fromSlug: string;
+  toSlug: string;
+  reason: string;
+  orderedCount: number;
+}): string {
+  const { fromSlug, toSlug, reason, orderedCount } = args;
+  return (
+    `${orderedCount} 節は ${toSlug} に既に同じ節id の節が在ったため、今回は何も追記していない。` +
+    `そのうえで ${fromSlug} からの切り取りを試みたが失敗した（${reason}）。` +
+    `${fromSlug} 側は1文字も変わっていない。重複は増えていない——前回までの重複があるなら、それがそのまま残っている状態である。` +
+    `memory_outline で ${fromSlug} と ${toSlug} を読み直してから、同じ操作をやり直すこと。`
+  );
+}
+
+// 出どころから切り取って書く（版つき）。失敗は半完了の文にして返す（ここで捕まえる）
+async function writeMemoryMoveSource(args: {
+  stores: Stores;
+  fromSlug: string;
+  toSlug: string;
+  existingContent: string;
+  nextContent: string;
+  ordered: readonly MemorySection[];
+  plan: MemoryMovePlan;
+  appendedChars: number;
+}): Promise<{ kind: 'written'; fromWritten: MemoryMoveWritten } | MemoryMoveRefusal> {
+  const { stores, fromSlug, toSlug, existingContent, nextContent, ordered, plan, appendedChars } =
+    args;
+  let fromWritten;
+  try {
+    fromWritten = await stores.persona.write(fromSlug, nextContent, {
+      ifMatch: memoryVersion(existingContent),
+    });
+  } catch (error) {
+    const reason =
+      error instanceof MemoryConflictError
+        ? `${fromSlug} が読んだ後にその間に変わった（人間または別のターンが書いた）ので、書かなかった`
+        : reasonOf(error);
+    if (plan.toAppend.length > 0) {
+      return {
+        kind: 'refused',
+        body: describeMemoryMoveDuplicated({ fromSlug, toSlug, reason, plan, appendedChars }),
+      };
+    }
+    return {
+      kind: 'refused',
+      body: describeMemoryMoveCutFailedWithoutAppend({
+        fromSlug,
+        toSlug,
+        reason,
+        orderedCount: ordered.length,
+      }),
+    };
+  }
+  return { kind: 'written', fromWritten };
+}
+
+// 出どころの move_out の日誌
+async function journalMemoryMoveOut(args: {
+  stores: Stores;
+  cause: 'distill' | 'clone';
+  fromSlug: string;
+  toSlug: string;
+  existingContent: string;
+  fromWrittenContent: string;
+  plan: MemoryMovePlan;
+  summary: string;
+}): Promise<void> {
+  const { stores, cause, fromSlug, toSlug, existingContent, fromWrittenContent, plan, summary } =
+    args;
+  const { toAppend, alreadyAtDestination } = plan;
+  await appendJournalOrThrow(
+    'memory_section_move',
+    stores.journal,
+    {
+      type: 'memory_update',
+      slug: fromSlug,
+      cause,
+      action: 'move_out',
+      bytesBefore: Buffer.byteLength(existingContent, 'utf8'),
+      bytesAfter: Buffer.byteLength(fromWrittenContent, 'utf8'),
+      summary:
+        toAppend.length === 0 && alreadyAtDestination.length > 0
+          ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった。切り取りのみ行った）`
+          : summary,
+    },
+    'act-completed',
+  );
+}
+
+// 書いたあとの記憶を読み直して、床・再注入の見込み・成長の注記を作る（documents の読み → floor → reinjection → growth の順）
+async function describeMemoryMoveAftermath(args: {
+  stores: Stores;
+  context: ToolContext;
+  memoryBefore: readonly MemoryPart[];
+  fromSlug: string;
+  toSlug: string;
+  existing: MemoryMoveDocument;
+  toBefore: MemoryMoveDocument | null;
+  toWritten: MemoryMoveWritten;
+  fromWritten: MemoryMoveWritten;
+}): Promise<{ floor: string; reinjection: string; growth: string }> {
+  const {
+    stores,
+    context,
+    memoryBefore,
+    fromSlug,
+    toSlug,
+    existing,
+    toBefore,
+    toWritten,
+    fromWritten,
+  } = args;
+  const memoryAfter = await stores.persona.documents();
+  const floor = memoryFloorNote(
+    memoryBefore,
+    memoryAfter,
+    toSlug,
+    toWritten.content,
+    toBefore === null,
+  );
+  const reinjection = describeMemoryReinjectionEstimate(
+    [toWritten, fromWritten],
+    memoryAfter,
+    new Map([...seenBefore(toSlug, toBefore), ...seenBefore(fromSlug, existing)]),
+  );
+  const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+    toWritten.content,
+    fromWritten.content,
+  ]);
+  return { floor, reinjection, growth };
+}
+
+// 移した節の一覧（見出し・節id・文字数だけ。本文は出さない）
+function renderMemoryMoveListing(ordered: readonly MemorySection[], toSlug: string): string {
+  // 古い本文を1文字も出さない: 出せば文脈に入り、この道具の存在理由が消えるため
+  return renderListing(
+    ordered.map(
+      (section) =>
+        `- 「${section.heading}」（節id ${section.id}、${section.chars.toLocaleString('en-US')} 文字）`,
+    ),
+    {
+      budget: MEMORY_SECTION_MOVE_LIST_BUDGET,
+      omitted: ({ rest, shown, total }) =>
+        `…ほか ${rest} 節は一覧から省略（移した ${total} 節のうち ${shown} 節だけ出した。` +
+        `移動は済んでいる——省いた節も含めて、移った先の見出しは memory_outline slug=${toSlug} で見える）。`,
+    },
+  );
+}
+
+// 追記しなかった分も応答の本文で名乗る行（無ければ空）
+function describeMemoryMoveIdempotentNote(toSlug: string, plan: MemoryMovePlan): string[] {
+  const { toAppend, alreadyAtDestination } = plan;
+  // 追記しなかった分も応答の本文で名乗る: 冪等にした結果が何も起きなかったように見える応答になるため
+  return alreadyAtDestination.length > 0
+    ? [
+        '',
+        `⭐ このうち ${alreadyAtDestination.length} 節は ${toSlug} に同じ節id の節が既に在ったため、追記していない` +
+          `（今回 ${toSlug} へ新しく足したのは ${toAppend.length} 節）。重複は増えていない——` +
+          '半完了から同じ呼び出しをやり直しても、移し先の節は増えない。' +
+          `どの節が既に在ったかは memory_outline slug=${toSlug} で確かめられる。`,
+      ]
+    : [];
+}
+
+// 階層飛びの警告の行（無ければ空）
+function describeMemoryMoveHierarchyJumpNote(
+  scanSections: readonly MemorySection[],
+  targets: readonly MemorySection[],
+): readonly string[] {
+  const warning = describeMemorySectionMoveHierarchyJumpWarning(scanSections, targets);
+  return warning === null ? [] : ['', warning];
+}
+
+// 移せたときの応答の全体
+function describeMemoryMoveResult(args: {
+  fromSlug: string;
+  toSlug: string;
+  ordered: readonly MemorySection[];
+  cutChars: number;
+  plan: MemoryMovePlan;
+  scanSections: readonly MemorySection[];
+  targets: readonly MemorySection[];
+  toBefore: MemoryMoveDocument | null;
+  toWritten: MemoryMoveWritten;
+  existingContent: string;
+  fromWritten: MemoryMoveWritten;
+  aftermath: { floor: string; reinjection: string; growth: string };
+}): string {
+  const {
+    fromSlug,
+    toSlug,
+    ordered,
+    cutChars,
+    plan,
+    scanSections,
+    targets,
+    toBefore,
+    toWritten,
+    existingContent,
+    fromWritten,
+    aftermath,
+  } = args;
+  const listing = renderMemoryMoveListing(ordered, toSlug);
+  const idempotentNote = describeMemoryMoveIdempotentNote(toSlug, plan);
+  const hierarchyJumpNote = describeMemoryMoveHierarchyJumpNote(scanSections, targets);
+  return [
+    `記憶 ${fromSlug} から ${ordered.length} 節（合計 ${cutChars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
+    '',
+    listing,
+    ...idempotentNote,
+    ...hierarchyJumpNote,
+    '',
+    `移した先 ${toSlug}:`,
+    describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),
+    '',
+    `出どころ ${fromSlug}:`,
+    describeMemoryWriteDiff(existingContent, fromWritten.content),
+    '',
+    aftermath.floor,
+    '',
+    aftermath.reinjection,
+    '',
+    aftermath.growth,
+  ].join('\n');
+}
+
 export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, memoryCause } = shared;
   return [
@@ -997,20 +1482,8 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         summary: z.string().describe('なぜ移したかの一行要約（日誌に残る。本文は残らない）'),
       },
       async ({ fromSlug, sections: ids, toSlug, summary }) => {
-        if (!memorySlugSchema.safeParse(fromSlug).success) {
-          return text(`記憶のスラッグが不正: ${fromSlug}（英小文字・数字・. _ - のみ）。`);
-        }
-        if (!memorySlugSchema.safeParse(toSlug).success) {
-          return text(`記憶のスラッグが不正: ${toSlug}（英小文字・数字・. _ - のみ）。`);
-        }
-        const sectionsError = describeArrayLengthViolation('sections', ids, { min: 1 });
-        if (sectionsError !== null) return text(sectionsError);
-        if (fromSlug === toSlug) {
-          return text(
-            `from と to が同じ文書（${fromSlug}）である。節の移動先は別の文書でなければならない` +
-              '（同じ文書の中で節を動かす口はここには無い）。何も変わっていない。',
-          );
-        }
+        const argsCheck = checkMemorySectionMoveArgs(fromSlug, toSlug, ids);
+        if (argsCheck.kind === 'refused') return text(argsCheck.body);
 
         const existing = await stores.persona.read(fromSlug);
         if (existing === null) {
@@ -1021,248 +1494,90 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         const denial = await guardFullReplace(stores, fromSlug, cause, '節の移動');
         if (denial !== null) return text(denial);
 
-        const priorFrontmatter = parseMemoryFrontmatter(existing.content);
-        if (priorFrontmatter.kind === 'malformed') {
-          return text(
-            `記憶 ${fromSlug} の frontmatter が壊れている（malformed）。ここでは節を移さない——` +
-              '本文の始まる位置が決まらないので、frontmatter を本文として運ぶ経路ができる。' +
-              'memory_write で全文を書き直すか、人間に確認を通すこと（何も変わっていない）。',
-          );
-        }
+        const frontmatterCheck = checkMemoryMoveSourceFrontmatter(fromSlug, existing.content);
+        if (frontmatterCheck.kind === 'refused') return text(frontmatterCheck.body);
 
         const scan = scanMemorySections(existing.content);
-        const lookups = ids.map((id) => ({ id, lookup: lookupMemorySection(scan.sections, id) }));
-        const failures = lookups.filter(
-          (
-            entry,
-          ): entry is { id: string; lookup: Exclude<MemorySectionLookup, { kind: 'found' }> } =>
-            entry.lookup.kind !== 'found',
-        );
-        if (failures.length > 0) {
-          const first = failures[0] as {
-            id: string;
-            lookup: Exclude<MemorySectionLookup, { kind: 'found' }>;
-          };
-          const base = describeMemorySectionLookupFailure(fromSlug, first.id, first.lookup);
-          if (ids.length === 1) return text(base);
+        const resolved = resolveMemoryMoveTargets(fromSlug, ids, scan.sections);
+        if (resolved.kind === 'refused') return text(resolved.body);
+        const { targets } = resolved;
 
-          const rest = failures.slice(1);
-          const restCounts = { absent: 0, stale: 0, ambiguous: 0 } as Record<
-            Exclude<MemorySectionLookup, { kind: 'found' }>['kind'],
-            number
-          >;
-          for (const entry of rest) restCounts[entry.lookup.kind] += 1;
-          // id を全部並べない: 90個渡されたとき応答がその数だけ膨らむため
-          const restLine =
-            rest.length > 0
-              ? `\nほかにも解決できなかった節id が ${rest.length} 件ある` +
-                `（無い ${restCounts.absent} 件・古い ${restCounts.stale} 件・曖昧 ${restCounts.ambiguous} 件）。`
-              : '';
-          const allOrNothingLine =
-            '\nこの口は全件が見つかったときしか動かさない——1つでも解決できなければ、' +
-            `今回指定した他の ${ids.length - 1} 節も含めて1節も移していない。`;
-          return text(`${base}${restLine}${allOrNothingLine}`);
-        }
-
-        const targets = lookups.flatMap((entry) =>
-          entry.lookup.kind === 'found' ? [entry.lookup.section] : [],
-        );
-
-        const overlap = findOverlappingMemorySections(targets);
-        if (overlap !== null) {
-          return text(
-            `節id ${overlap.first.id}（「${overlap.first.heading}」）と ${overlap.second.id}` +
-              `（「${overlap.second.heading}」）の範囲が重なっている。片方がもう片方の中に` +
-              '入れ子になっている節を親子まとめて指した（`end` は子込みなので、親を切ると' +
-              '渡していないつもりの子も一緒に動く）か、同じ節id を2回渡したか（範囲が完全に' +
-              '一致する）のどちらかである——**どちらの形でも断る**。memory_outline で目次を' +
-              '取り直し、重ならない組で渡し直すこと。何も変わっていない' +
-              '（出どころも移し先も、1文字も動いていない）。',
-          );
-        }
-
-        // `ordered` を自分で並べ替え直さない: 並び順の規則は `cutMemorySections` が1箇所で持つため
-        const { nextContent, cut, ordered } = cutMemorySections(existing.content, targets);
-
-        const priorHeader = existing.content.slice(0, scan.bodyStart);
-        const nextHeader = nextContent.slice(0, scan.bodyStart);
-        const nextFrontmatter = parseMemoryFrontmatter(nextContent);
-        if (nextHeader !== priorHeader || nextFrontmatter.kind !== priorFrontmatter.kind) {
-          return text(
-            `記憶 ${fromSlug} から指定した節を切り取ると、frontmatter の解釈が変わってしまう` +
-              `（${priorFrontmatter.kind} → ${nextFrontmatter.kind}）。断った——この道具は` +
-              'frontmatter を1バイトも動かさないと約束しているので、約束が破れる切り取りは行わない。' +
-              '何も変わっていない（出どころも移し先も、1文字も動いていない）。',
-          );
-        }
+        const cutResult = cutMemoryMoveSource({
+          fromSlug,
+          existingContent: existing.content,
+          scan,
+          priorFrontmatter: frontmatterCheck.priorFrontmatter,
+          targets,
+        });
+        if (cutResult.kind === 'refused') return text(cutResult.body);
+        const { nextContent, cut, ordered } = cutResult;
 
         const [toBefore, memoryBefore] = await Promise.all([
           stores.persona.read(toSlug),
           stores.persona.documents(),
         ]);
 
-        // 移し先に同じ節id が既に在るものは追記から外す: 半完了からの再実行で同じ節が増えると `ambiguous` になり、その id が二度と指せなくなるため
-        const destIds = new Set(
-          toBefore === null ? [] : scanMemorySections(toBefore.content).sections.map((s) => s.id),
-        );
-        const toAppend = ordered.filter((section) => !destIds.has(section.id));
-        const alreadyAtDestination = ordered.filter((section) => destIds.has(section.id));
-
-        let toWritten: Awaited<ReturnType<Stores['persona']['append']>>;
-        let appendedChars = 0;
-        if (toAppend.length > 0) {
-          const appendText = toAppend
-            .map((section) => existing.content.slice(section.start, section.end))
-            .join('');
-          appendedChars = appendText.length;
-          toWritten = await stores.persona.append(toSlug, appendText);
-          await appendJournalOrThrow(
-            'memory_section_move',
-            stores.journal,
-            {
-              type: 'memory_update',
-              slug: toSlug,
-              cause,
-              action: 'move_in',
-              bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
-              bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
-              summary:
-                alreadyAtDestination.length > 0
-                  ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった）`
-                  : summary,
-            },
-            'act-partially-completed',
-          );
-        } else {
-          if (toBefore === null) {
-            throw new Error(
-              '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
-                '（やり直しても重複させない冪等化の前提が崩れている）。',
-            );
-          }
-          // 追記そのものを行わない: 空文字列を `persona.append` に渡すと fs/pg どちらも書き込みが起き、末尾に空行が増え `updatedAt` が進むため
-          toWritten = toBefore;
-        }
-
-        let fromWritten;
-        try {
-          fromWritten = await stores.persona.write(fromSlug, nextContent, {
-            ifMatch: memoryVersion(existing.content),
-          });
-        } catch (error) {
-          const reason =
-            error instanceof MemoryConflictError
-              ? `${fromSlug} が読んだ後にその間に変わった（人間または別のターンが書いた）ので、書かなかった`
-              : reasonOf(error);
-          if (toAppend.length > 0) {
-            // 「移した」と返さない: 呼び手が重複に気づけなくなるため
-            const dedupNote =
-              alreadyAtDestination.length > 0
-                ? ` このうち ${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため、今回は追記していない（重複は増えていない）。`
-                : '';
-            return text(
-              `⚠ ${toAppend.length} 節（合計 ${appendedChars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
-                `${fromSlug} からの切り取りに失敗した（${reason}）。` +
-                `いま同じ ${toAppend.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
-                `${dedupNote}` +
-                `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
-                '同じ操作をやり直すか、重複したままにするかを決めること。',
-            );
-          }
-          return text(
-            `${ordered.length} 節は ${toSlug} に既に同じ節id の節が在ったため、今回は何も追記していない。` +
-              `そのうえで ${fromSlug} からの切り取りを試みたが失敗した（${reason}）。` +
-              `${fromSlug} 側は1文字も変わっていない。重複は増えていない——前回までの重複があるなら、それがそのまま残っている状態である。` +
-              `memory_outline で ${fromSlug} と ${toSlug} を読み直してから、同じ操作をやり直すこと。`,
-          );
-        }
-        await appendJournalOrThrow(
-          'memory_section_move',
-          stores.journal,
-          {
-            type: 'memory_update',
-            slug: fromSlug,
-            cause,
-            action: 'move_out',
-            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(fromWritten.content, 'utf8'),
-            summary:
-              toAppend.length === 0 && alreadyAtDestination.length > 0
-                ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった。切り取りのみ行った）`
-                : summary,
-          },
-          'act-completed',
-        );
-
-        const memoryAfter = await stores.persona.documents();
-        const floor = memoryFloorNote(
-          memoryBefore,
-          memoryAfter,
+        const plan = planMemoryMoveDestination(ordered, toBefore);
+        const { toWritten, appendedChars } = await appendMemoryMoveDestination({
+          stores,
+          cause,
           toSlug,
-          toWritten.content,
-          toBefore === null,
-        );
-        const reinjection = describeMemoryReinjectionEstimate(
-          [toWritten, fromWritten],
-          memoryAfter,
-          new Map([...seenBefore(toSlug, toBefore), ...seenBefore(fromSlug, existing)]),
-        );
-        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
-          toWritten.content,
-          fromWritten.content,
-        ]);
+          toBefore,
+          existingContent: existing.content,
+          plan,
+          summary,
+        });
 
-        // 古い本文を1文字も出さない: 出せば文脈に入り、この道具の存在理由が消えるため
-        const listing = renderListing(
-          ordered.map(
-            (section) =>
-              `- 「${section.heading}」（節id ${section.id}、${section.chars.toLocaleString('en-US')} 文字）`,
-          ),
-          {
-            budget: MEMORY_SECTION_MOVE_LIST_BUDGET,
-            omitted: ({ rest, shown, total }) =>
-              `…ほか ${rest} 節は一覧から省略（移した ${total} 節のうち ${shown} 節だけ出した。` +
-              `移動は済んでいる——省いた節も含めて、移った先の見出しは memory_outline slug=${toSlug} で見える）。`,
-          },
-        );
+        const fromResult = await writeMemoryMoveSource({
+          stores,
+          fromSlug,
+          toSlug,
+          existingContent: existing.content,
+          nextContent,
+          ordered,
+          plan,
+          appendedChars,
+        });
+        if (fromResult.kind === 'refused') return text(fromResult.body);
+        const { fromWritten } = fromResult;
+        await journalMemoryMoveOut({
+          stores,
+          cause,
+          fromSlug,
+          toSlug,
+          existingContent: existing.content,
+          fromWrittenContent: fromWritten.content,
+          plan,
+          summary,
+        });
 
-        // 追記しなかった分も応答の本文で名乗る: 冪等にした結果が何も起きなかったように見える応答になるため
-        const idempotentNote =
-          alreadyAtDestination.length > 0
-            ? [
-                '',
-                `⭐ このうち ${alreadyAtDestination.length} 節は ${toSlug} に同じ節id の節が既に在ったため、追記していない` +
-                  `（今回 ${toSlug} へ新しく足したのは ${toAppend.length} 節）。重複は増えていない——` +
-                  '半完了から同じ呼び出しをやり直しても、移し先の節は増えない。' +
-                  `どの節が既に在ったかは memory_outline slug=${toSlug} で確かめられる。`,
-              ]
-            : [];
-
-        const hierarchyJumpNote = ((): readonly string[] => {
-          const warning = describeMemorySectionMoveHierarchyJumpWarning(scan.sections, targets);
-          return warning === null ? [] : ['', warning];
-        })();
+        const aftermath = await describeMemoryMoveAftermath({
+          stores,
+          context,
+          memoryBefore,
+          fromSlug,
+          toSlug,
+          existing,
+          toBefore,
+          toWritten,
+          fromWritten,
+        });
 
         return text(
-          [
-            `記憶 ${fromSlug} から ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
-            '',
-            listing,
-            ...idempotentNote,
-            ...hierarchyJumpNote,
-            '',
-            `移した先 ${toSlug}:`,
-            describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),
-            '',
-            `出どころ ${fromSlug}:`,
-            describeMemoryWriteDiff(existing.content, fromWritten.content),
-            '',
-            floor,
-            '',
-            reinjection,
-            '',
-            growth,
-          ].join('\n'),
+          describeMemoryMoveResult({
+            fromSlug,
+            toSlug,
+            ordered,
+            cutChars: cut.length,
+            plan,
+            scanSections: scan.sections,
+            targets,
+            toBefore,
+            toWritten,
+            existingContent: existing.content,
+            fromWritten,
+            aftermath,
+          }),
         );
       },
     ),
