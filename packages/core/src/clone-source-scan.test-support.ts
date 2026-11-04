@@ -2,14 +2,23 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// clone.ts のソースを走査して「書き換えの前後で変わらないこと」を固定する試験の共通の道具。
+// clone.ts（と、振り分けの固定では manager.ts・runner.ts）のソースを走査して「書き換えの前後で変わらないこと」を固定する試験の共通の道具。
 // 日誌の1行の固定（`clone-journal-self-sites-pin.test.ts`）と、振り分けの case の中身の固定（`clone-dispatch-cases-pin.test.ts`）と、長いメソッドの中身の固定（`clone-method-body-pin.test.ts`）が使う。
 // 1つの試験に写さず、ここに置く: 文字列・テンプレート・コメントの読み飛ばし方が2つの試験でずれると、片方だけが見逃すため。
 
-export const CLONE_TS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'clone.ts');
+const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+export const CLONE_TS = path.join(SRC_DIR, 'clone.ts');
 
 export function readCloneSource(): string {
   return readFileSync(CLONE_TS, 'utf8');
+}
+
+/** 振り分けの固定・長いメソッドの固定の対象にしてよいソース（`packages/core/src` の下）。 */
+export type ScannedSource = 'clone.ts' | 'manager.ts' | 'runner.ts';
+
+export function readSource(file: ScannedSource): string {
+  return readFileSync(path.join(SRC_DIR, file), 'utf8');
 }
 
 const DECLARATION_RE =
@@ -111,8 +120,8 @@ export type InlinedStep = {
 };
 
 /**
- * 元のメソッド → そこから出した段。段を出す PR は、出す前にここへ足す（足した時点では差し戻すものが無く、固定は変わらない）。
- * 振り分けの固定（`clone-dispatch-cases-pin.test.ts`）が case の先のメソッドを読むときにも差し戻すので、表は1つだけにする。
+ * clone.ts の、元のメソッド → そこから出した段。段を出す PR は、出す前にここへ足す（足した時点では差し戻すものが無く、固定は変わらない）。
+ * 振り分けの固定（`clone-dispatch-cases-pin.test.ts`）が case の先のメソッドを読むときにも差し戻すので、表はファイルごとに1つだけにする（`INLINED_BY_FILE`）。
  */
 export const INLINED_BY_METHOD: Readonly<Record<string, readonly InlinedStep[]>> = {
   // 受信箱のループ: ターンの前の組み立て（時計と断り書き）と、ターンの後始末（`finally` の中身）を出した（#6357）
@@ -166,10 +175,26 @@ export const INLINED_BY_METHOD: Readonly<Record<string, readonly InlinedStep[]>>
   ],
 };
 
-/** メソッドの本体を `squash` で畳み、`INLINED_BY_METHOD` に載った段は、出した先の本体を呼び出しの位置へ差し戻したもの。 */
-export function expandedMethodBody(text: string, method: string): string {
+/**
+ * ファイル → 元のメソッド → そこから出した段。メソッドの名前はファイルの中でだけ一意なので、ファイルで分ける
+ * （clone.ts と runner.ts の両方に `#applyTurnEnded` のような同じ名前がありうる）。
+ */
+export const INLINED_BY_FILE: Readonly<
+  Record<ScannedSource, Readonly<Record<string, readonly InlinedStep[]>>>
+> = {
+  'clone.ts': INLINED_BY_METHOD,
+  'manager.ts': {},
+  'runner.ts': {},
+};
+
+/** メソッドの本体を `squash` で畳み、`INLINED_BY_FILE` に載った段は、出した先の本体を呼び出しの位置へ差し戻したもの。 */
+export function expandedMethodBody(
+  text: string,
+  method: string,
+  file: ScannedSource = 'clone.ts',
+): string {
   let body = squash(methodBody(text, method));
-  for (const { name, call, trailing } of INLINED_BY_METHOD[method] ?? []) {
+  for (const { name, call, trailing } of INLINED_BY_FILE[file][method] ?? []) {
     const at = body.indexOf(call);
     if (at === -1) continue;
     if (body.indexOf(call, at + 1) !== -1) throw new Error(`${call} が2回ある`);
