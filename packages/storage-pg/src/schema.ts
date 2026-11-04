@@ -244,8 +244,7 @@ export const authAccounts = pgTable(
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
     grantedBy: text('granted_by'),
-    // コードは読み書きしない（#2948 で宣言の仕組みを畳んだ）。既存の DB に値が残るので、列定義だけを DDL と揃えて残す。
-    ownerDeclaredAt: timestamp('owner_declared_at', { withTimezone: true, mode: 'date' }),
+    // 持ち主の宣言の列 `owner_declared_at` は廃止した（#2948 で仕組みを畳み、移行で列を落とす）。
   },
   (table) => [
     // `migrate` が無条件には作らない: 既存の重複行（大小文字だけが違う2行）が在ると作成が落ち、

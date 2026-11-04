@@ -729,7 +729,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
   - 認証を要求しない構成でも、`altk_` の bearer が付いていれば照合と制限を掛ける
   - `token-pool`・`runner-registry`（daemon 自身が受信箱へ出す知らせの名）は、`POST /events`・`POST /events/<source>` でも連携の鍵の source としても使えない（400。前後の空白・大文字小文字・全角は正規化して判定する）。
 - **緩めたのは「持ち主か否か」の線だけである。** 認証（`authenticate`）は変えていない —— ログインしていない（401）・許可されていない（403）アカウントは、これらの口にも触れない。持ち主かどうかを見分ける口は残していない（下の項）
-- **持ち主の宣言の仕組みは無い。** 2026-10-05 の決定（ログインできる人＝持ち主。#2862）で通す・通さないに効かなくなったので、宣言の口（`/access/:id/owner*`）・CLI の `alteroid access owner`・`access list` の `[owner]` 表示を #2948 で畳んだ。以前に宣言した値は、pg の `auth_accounts.owner_declared_at` 列やファイルの記憶のキーに残っていても読まない（列は消していない）
+- **持ち主の宣言の仕組みは無い。** 2026-10-05 の決定（ログインできる人＝持ち主。#2862）で通す・通さないに効かなくなったので、宣言の口（`/access/:id/owner*`）・CLI の `alteroid access owner`・`access list` の `[owner]` 表示を #2948 で畳んだ。以前に宣言した値は、ファイルの記憶のキーに残っていても読まない。pg の `auth_accounts.owner_declared_at` 列は移行で落とす
 
 - **どちらの資格も要らずに通る経路が7本ある。** ログインそのものの経路（`/auth` とその配下。ただし `/auth/me` は認証が要る）と、`/health` `/openapi.json` `/docs` である。**上の表は「資格を持つ者に何ができるか」を言っているだけで、「資格が要る経路の一覧」ではない。** 正本は `isPublicPath`（`grep -Fn -- 'function isPublicPath' apps/daemon/src/app.ts`）で、本数はそこから数え直せる
 - **無認証の `GET /health` は「動いているか」だけを返す。記憶の置き場（`storage`。PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）は返さない**（2026-10-05 のオーナー決定、#2869）。公開の構成で、内部のホスト名・DB 名・ホームのパスをログインしていない相手に読ませないため。残る項目は `ok` `pid` `operator`（CLI の本人確認）`auth`（ログインの要否と手段）。置き場は資格が要る `GET /status` が返す（`alteroid daemon status` はこれを読む）
