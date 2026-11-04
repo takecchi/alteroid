@@ -2941,14 +2941,11 @@ class Clone implements CloneHost {
   }
 
   async #noteRedeliveryPredicateHitB(managerId: string): Promise<void> {
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_GAUGE_PREFIX}${REDELIVERY_COUNT_PREFIX_B}名乗った前提が動いている報告のままターンを起こした` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_GAUGE_PREFIX}${REDELIVERY_COUNT_PREFIX_B}名乗った前提が動いている報告のままターンを起こした` +
         `（managerId=${managerId}）。`,
-    });
+    );
   }
 
   // 消し込みは呼び手が行い、ここは跡を書くだけにする: 跡が書けなかったときに消し込みまで道連れにしないため。型ごとの本文追記を飛ばさない: 消した合図の中身が日誌のどこにも残らなくなるため
@@ -4379,12 +4376,10 @@ class Clone implements CloneHost {
       .map((entry) => entry.record);
     if (liveRecordsThisPass.length > 0) {
       // この行に本文は載せない: 載せると、本文を持つ側（`#record` / `#handle`）と二重になるため。本文より必ず前に書く
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)}`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}${this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)}`,
+      );
     }
 
     // 溜めるのはストアへの書き込みだけ: journal・`#record` / `#commit`・メモリ上の索引は record ごとに即座に済ませる
@@ -4456,14 +4451,11 @@ class Clone implements CloneHost {
         this.#delivery.deleteUnread(record.event.id);
         this.#delivery.redeliveryState.drop(record.event.id);
         this.#dropPendingCollapse(record.event);
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので、配らずに畳んだ` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので、配らずに畳んだ` +
             `（配り直しの対象だったが、消し込みが先に届いた）: ${inboxEventShape(record.event)}`,
-        });
+        );
         continue;
       }
 
@@ -4482,12 +4474,10 @@ class Clone implements CloneHost {
   // 件数が0のときは書かない: 未読が0件の起動が大半で、0件のたびに書くと、起動回数ぶん積み重なる中身の無い雑音になるため
   async #journalRestoreUnreadPassStart(total: number): Promise<void> {
     if (total <= 0) return;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 ${total} 件）`,
-    });
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 ${total} 件）`,
+    );
   }
 
   // `processed` は「ストアから消えた件数」で統一する: 行が「残り N 件は次の起動で拾い直す」と名乗る以上、N はストアの実際の残りと一致させるため（stale は含め、live は含めない）
@@ -4504,17 +4494,15 @@ class Clone implements CloneHost {
       .filter((entry) => entry.verdict === 'stale').length;
     const liveCount = processed - staleCount;
     // 接頭辞の参照は `#journal` 呼び出しの `text:` に直接書く: `exchange-kind-coverage.test.ts` がソースを走査して `EXCHANGE_KIND_*_PREFIX` の定数名を文字として探すため、変数経由だとこの歯を素通りする
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: context.interrupted
+    await this.#journalSelf(
+      'outbound',
+      context.interrupted
         ? `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを中断した（#stopped または #inbox.closed。` +
-          `総数 ${total} 件のうち ${processed} 件を処理した＝内訳 stale ${staleCount} 件・` +
-          `live ${liveCount} 件。残り ${total - processed} 件は次の起動で拾い直す）`
+            `総数 ${total} 件のうち ${processed} 件を処理した＝内訳 stale ${staleCount} 件・` +
+            `live ${liveCount} 件。残り ${total - processed} 件は次の起動で拾い直す）`
         : `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しが終わった（総数 ${total} 件のうち ${processed} 件を` +
-          `処理した＝内訳 stale ${staleCount} 件・live ${liveCount} 件）`,
-    });
+            `処理した＝内訳 stale ${staleCount} 件・live ${liveCount} 件）`,
+    );
   }
 
   // record の本文より前に、ループの外で書き切る: N 件を1本へまとめるには先に N 件ぶんの中身を知る必要があり、`deliveries` は `claimPending()` がループより前に確定させた値で、ループが途中で打ち切られても「配り直された」事実は真のため（「二度届く（雑音）より消える（判断材料の喪失）方が高い」）
@@ -5338,12 +5326,10 @@ class Clone implements CloneHost {
 
     // 言い換えない: `describeUsageNotice` が人間の検索できる文言をそのまま返すため
     if (this.#notices.noteUsage(notice.kind, notice.text)) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_GAUGE_PREFIX}${describeUsageNotice(notice)}`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_GAUGE_PREFIX}${describeUsageNotice(notice)}`,
+      );
     }
 
     // 回し手へ渡すのは文言から分類した通知（`source === 'text'`）だけ: `rate_limit_event` 由来の `reached` は「その枠が尽きた」を仕立て直したもので「仕事が止まった」ではなく、渡すと `overage_exhausted` の設定でも課金枠を使わずに回ってしまうため
@@ -6359,12 +6345,9 @@ class Clone implements CloneHost {
     // 要約の後でも、記憶がシステムプロンプトに焼いた時点から変わっていなければ全文は載せない: システムプロンプトは要約で消えず、同じ索引を会話へもう一度積むと次の要約まで全要求に二重で乗るため（#5305）。
     // 比べる相手は焼いた時点だけにする（最後に載せた時点ではない）: 要約の前に載せた差分は要約に畳まれて消えており、焼いた時点との差はまだ文脈のどこにも載っていないため。
     if (refreshIndex && this.#distillMemory.matchesBakedMemory(documents)) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          EXCHANGE_KIND_GAUGE_PREFIX +
+      await this.#journalSelf(
+        'outbound',
+        EXCHANGE_KIND_GAUGE_PREFIX +
           redactErrorText(
             describeMemoryIndexRefresh({
               reinjected: false,
@@ -6374,7 +6357,7 @@ class Clone implements CloneHost {
             }),
             this.#env,
           ),
-      });
+      );
       return [
         ...(resumeNotice === null ? [] : [resumeNotice, '']),
         MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
@@ -6405,12 +6388,9 @@ class Clone implements CloneHost {
         : renderMemoryDocuments(documents);
     const removedNames = diffOnly ? [...new Set([...removed, ...bakedDiff.removed])] : removed;
     if (reinjectedIndex !== null) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          EXCHANGE_KIND_GAUGE_PREFIX +
+      await this.#journalSelf(
+        'outbound',
+        EXCHANGE_KIND_GAUGE_PREFIX +
           redactErrorText(
             describeMemoryIndexRefresh({
               reinjected: true,
@@ -6420,7 +6400,7 @@ class Clone implements CloneHost {
             }),
             this.#env,
           ),
-      });
+      );
     }
 
     const attribution = refreshIndex
@@ -7115,12 +7095,10 @@ class Clone implements CloneHost {
   #noteCallerGauge(label: string, limit: number): void {
     const body = this.#callerGauge.note(label, limit);
     if (body === undefined) return;
-    void this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_GAUGE_PREFIX}${redactErrorText(body, this.#env)}`,
-    });
+    void this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_GAUGE_PREFIX}${redactErrorText(body, this.#env)}`,
+    );
   }
 
   /**
@@ -7952,27 +7930,22 @@ class Clone implements CloneHost {
 
       // 数え直しは黙って通さない: 記録が無いと後から「なぜ集計が飛んでいるか」を誰も辿れない。
       if (fold.reset !== undefined) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（${fold.reset.fromCostUsd.toFixed(4)} → ` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（${fold.reset.fromCostUsd.toFixed(4)} → ` +
             `${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が ` +
             '0 から始まったため。記録済みの分は保持している。',
-        });
+        );
       }
     } catch (error) {
       // stderr と日誌の両方に残す: stderr は台帳の失敗を名指しする跡で、日誌に無いと「起きなかった」と読める。
       noteDroppedRecord('利用状況の台帳', `layer=clone site=${site}`, error);
 
       // 日誌にも1件残す。循環しない: `#journal` は失敗しても投げ返さず、別のストア（日誌）へ1回試すだけ。
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
+      );
     }
   }
 
