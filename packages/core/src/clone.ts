@@ -4130,12 +4130,10 @@ class Clone implements CloneHost {
       this.#droppedSignals.splice(0, over);
       this.#droppedSignalsOverflowed += over;
     }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
-    });
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
+    );
   }
 
   // 蒸留のターンには載せない: 内部のターンで、拾い直すかを判断する場ではないため
@@ -4168,15 +4166,12 @@ class Clone implements CloneHost {
       return;
     }
     if (!reopened) return;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 ${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 ${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、` +
         '配達の印を未配達（pending）へ戻した。次の起動（器の入れ替え）の拾い直しでもう一度配る。' +
         '同じ承認でこの行が何度も出るなら、その回答の処理は決定的に失敗している。',
-    });
+    );
   }
 
   // `#restoreUnreadPass` の前に置かない: 前で `await` すると `claimPending()` の時機が1往復遅れ、直後に `post()` された合図を「前の器の未読」として拾って同じ合図を2回配達へ乗せるため
@@ -4762,12 +4757,9 @@ class Clone implements CloneHost {
   async #noteHeldEscalation(conversationId: string | null): Promise<void> {
     this.#heldEscalationStreak += 1;
     const streak = this.#heldEscalationStreak;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}会話を引き継がずに開いたこのセッションは、1度も答えを返せないまま、` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}会話を引き継がずに開いたこのセッションは、1度も答えを返せないまま、` +
         '1回目の長さの失敗では開き直さずに持ちこたえた（held）が、別の入力でもう一度同じ長さで落ちた。' +
         '⟹ 拒まれた入力がセッションに残って送り直されている可能性があるので、ここで畳んで新しい' +
         `セッションで開き直す（issue #955。答えを返せないままの畳み直しは連続 ${String(streak)} 回目）。` +
@@ -4776,7 +4768,7 @@ class Clone implements CloneHost {
             'システムプロンプトや記憶の焼き込みそのものが文脈窓に収まっていない可能性がある' +
             '（held と畳み直しの交互）。'
           : ''),
-    });
+    );
     if (conversationId !== null) return;
     try {
       // 会話の窓は `readConversationWindow` でだけ組む: `scripts/conversation-window-single-source.test.ts` が見るため
@@ -4845,16 +4837,13 @@ class Clone implements CloneHost {
         !this.#sessionAnswered;
       if (inAutoReopenedSession && !this.#autoReopenHalted) {
         this.#autoReopenHalted = true;
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた` +
             `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ 自動の開き直しはもうしない` +
             '（記憶の焼き込みや届き続ける合図そのものが弾かれている可能性。ターンは回り続ける。' +
             '解けるのは、このセッションが1度答えたとき、または人間が手動で開き直したとき）。',
-        });
+        );
         await this.#noteRefusalToHuman(
           conversationId,
           describeRefusalHalted(this.#refusalCategory),
@@ -4867,12 +4856,9 @@ class Clone implements CloneHost {
       if (this.#sdkSession.wantsReopen) return;
 
       const setting = resolveRefusalAutoReopen(this.#env);
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_DECISION_PREFIX}別の入力で ${String(streak)} 回続けて安全分類器に弾かれた` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}別の入力で ${String(streak)} 回続けて安全分類器に弾かれた` +
           `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ セッションごと弾かれていると見る。` +
           (setting.enabled
             ? '自動の開き直しが有効なので、開き直す。'
@@ -4880,7 +4866,7 @@ class Clone implements CloneHost {
           (setting.unrecognized === undefined
             ? ''
             : ` ⚠ ${REFUSAL_AUTO_REOPEN_ENV} の値「${setting.unrecognized}」は読めないので有効として扱った。`),
-      });
+      );
       if (!setting.enabled) {
         await this.#noteRefusalToHuman(
           conversationId,
@@ -4950,17 +4936,14 @@ class Clone implements CloneHost {
     } catch (error) {
       noteDroppedRecord('resume 素材の破棄', 'clone', error);
     }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が ` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が ` +
         `${String(this.#usageBlockedAccumulatedChars)} 文字（閾値 ` +
         `${String(UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD)}）に達した。同じ` +
         'セッションへ積み続けると枠が開いた頃には文脈が伸びきっているので、' +
         'ここでセッションを畳んで作り直す（Issue #1240）。',
-    });
+    );
     return 'folding';
   }
 
@@ -6646,14 +6629,11 @@ class Clone implements CloneHost {
     if (bytes === null) return sessionId;
     if (bytes <= RESUME_SIZE_BUDGET_BYTES) return sessionId;
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
         `（${bytes} バイト ＞ 予算 ${RESUME_SIZE_BUDGET_BYTES} バイト）`,
-    });
+    );
     return null;
   }
 
@@ -6829,12 +6809,7 @@ class Clone implements CloneHost {
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       onNote: (text) => {
-        void this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${EXCHANGE_KIND_DECISION_PREFIX}${text}`,
-        });
+        void this.#journalSelf('outbound', `${EXCHANGE_KIND_DECISION_PREFIX}${text}`);
       },
       resume,
       ...(this.#sessionStore === undefined ? {} : { sessionLog: this.#sessionStore }),
@@ -7129,14 +7104,11 @@ class Clone implements CloneHost {
   async #recordWorkerLimit(identity: string, label: string, raw: string): Promise<void> {
     const shown = redactErrorText(raw, this.#env);
     if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}作業者（${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}作業者（${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。` +
         `次の道具の結果に知らせを添える（原文: ${shown.trim().slice(0, 300)}）`,
-    });
+    );
   }
 
   /** 作業者が上限で落ちていれば知らせの段落を返す。相手（クローン本人・作業者ごと）に10分に1回まで。クローン本人に添えた回は日誌にも1行残す。投げたときは何も添えない。 */
@@ -7148,14 +7120,11 @@ class Clone implements CloneHost {
         Date.now(),
       );
       if (notice !== null && agentId === undefined) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
+        await this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（${String(notice.count)} 体）ので、` +
             'この道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。',
-        });
+        );
       }
       return notice?.text ?? null;
     } catch {
@@ -7355,14 +7324,11 @@ class Clone implements CloneHost {
       this.#recentDenials.fillHeadWord(toolUseId, denial.input);
       const later = denialInputShape(denial.input);
       if (later !== undefined) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'inbound',
-          text:
-            `${EXCHANGE_KIND_DECISION_PREFIX}先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
+        await this.#journalSelf(
+          'inbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
             `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${later}`,
-        });
+        );
       }
       return;
     }
@@ -7389,17 +7355,14 @@ class Clone implements CloneHost {
           ? 'クローン本体'
           : `作業者（${agentType ?? UNKNOWN_AGENT_TYPE}）`;
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}${tool} の実行が、確認へ上がらずに止められた${why}。` +
+    await this.#journalSelf(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}${tool} の実行が、確認へ上がらずに止められた${why}。` +
         `止められたのは ${actorLabel} の手（合図の出所: ${via}）。` +
         // 入力は形だけ残し値は残さない: 道具の入力には鍵が入りうる（`denial-shape.ts`）
         `入力の形: ${denialInputShape(denial.input) ?? denialInputAbsence(via)}。` +
         `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない。`,
-    });
+    );
   }
 
   /**
@@ -7426,15 +7389,12 @@ class Clone implements CloneHost {
         'この許可は、いまは効いていない可能性がある。'
       : '';
 
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'inbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
+    await this.#journalSelf(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
         `PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: ${via}）が拒否された${why}。` +
         guidance,
-    });
+    );
   }
 
   /**
@@ -7463,16 +7423,13 @@ class Clone implements CloneHost {
           'この許可は、いまは効いていない可能性がある。'
         : '';
 
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'inbound',
-        text:
-          `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
+      await this.#journalSelf(
+        'inbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
           `PreToolUse が allow を返した作業者（agentId: ${agentId}）の呼び出し` +
           `（tool_use_id: ${toolUseId}）が、実行の決着も拒否の記録も無いまま、` +
           `その作業者の SubagentStop を迎えた。決着しなかった。${guidance}`,
-      });
+      );
     }
   }
 
@@ -8028,14 +7985,11 @@ class Clone implements CloneHost {
           });
           this.#distillMemory.recordReopenArchive(archived);
           // ここでも日誌へ残す: 退避中に次のセッションが init すると、init の行は「まだ終わっていない」としか書けず archive id が残らない。
-          await this.#journal({
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text:
-              `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
+          await this.#journalSelf(
+            'outbound',
+            `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
               `${previousSessionId ?? '不明'}）: ${describeReopenArchive(archived)}`,
-          });
+          );
         }
         if (foldedForContextWindow && reopenRequest !== null) {
           // 文脈窓の畳みが先に退避した。開き直しの断りには退避先を載せられないので「無い」と言う。
