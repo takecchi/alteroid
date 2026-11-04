@@ -103,9 +103,10 @@ import type {
   AgentUserInput,
 } from './agent-session.js';
 import {
-  CONTEXT_USAGE_CATEGORY_LIMIT,
   CONTEXT_USAGE_READ_TIMEOUT_MS,
+  contextUsageObservationOf,
   contextUsageWithin,
+  failedContextUsageObservation,
 } from './context-usage.js';
 import { controlRequestWithin, SESSION_ALLOW_RULES_TIMEOUT_MS } from './control-deadline.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
@@ -321,8 +322,6 @@ import {
   type ScratchSweeperOptions,
 } from './scratch-sweep.js';
 import { computeUnpushedWork, worktreeRootsOfDirs } from './unpushed-work.js';
-import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
-import { foldMessageBreakdown } from './message-breakdown.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // クローンと同じ判定を呼ぶ: 層ごとに書くと片方だけが印を見落として非対称になるため
 import {
@@ -333,7 +332,6 @@ import {
 } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyFailedTurnUsageNotice, classifyUsageNotice } from './usage-limits.js';
-import { describeProbeError } from './usage-probe.js';
 
 export { SUBAGENT_BACKGROUND_WAIT_MS };
 
@@ -4994,55 +4992,10 @@ class RunnerSession {
     const startedAt = Date.now();
     try {
       const usage = await contextUsageWithin(session.contextUsage(), this.#contextUsageTimeoutMs);
-      const categories = (usage.categories ?? []).map((category) => ({
-        name: category.name,
-        tokens: category.tokens,
-        kind: category.kind,
-      }));
-      const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
-      const omittedCategories = categories.length - shownCategories.length;
-      const sumTokens = (items: readonly { tokens: number }[]): number =>
-        items.reduce((total, item) => total + item.tokens, 0);
-      const mcpTools = usage.mcpTools ?? [];
-      const memoryFiles = usage.memoryFiles ?? [];
-      const systemPromptSections = usage.systemPromptSections ?? [];
-      const messageBreakdown = foldMessageBreakdown(usage.messageBreakdown);
-      return {
-        durationMs: Date.now() - startedAt,
-        totalTokens: usage.totalTokens,
-        rawMaxTokens: usage.rawMaxTokens,
-        percentage: usage.percentage,
-        ...(usage.autoCompactThreshold === undefined
-          ? {}
-          : { autoCompactThreshold: usage.autoCompactThreshold }),
-        isAutoCompactEnabled: usage.isAutoCompactEnabled,
-        // 空の配列のときは欄そのものを作らない: 取れない軸に 0 の行を作らないため（AGENTS.md の地雷）
-        ...(shownCategories.length === 0 ? {} : { categories: shownCategories }),
-        ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
-        ...(mcpTools.length === 0
-          ? {}
-          : {
-              mcpToolTokens: sumTokens(mcpTools),
-              mcpToolCount: mcpTools.length,
-              mcpToolsByServer: foldMcpToolsByServer(mcpTools),
-            }),
-        ...(memoryFiles.length === 0
-          ? {}
-          : { memoryFileTokens: sumTokens(memoryFiles), memoryFileCount: memoryFiles.length }),
-        ...(systemPromptSections.length === 0
-          ? {}
-          : {
-              systemPromptTokens: sumTokens(systemPromptSections),
-              systemPromptSectionCount: systemPromptSections.length,
-            }),
-        // SDK が返さなかった回は欄を作らない（0 を置くと「測ったが 0」と読める）。
-        ...(messageBreakdown === undefined ? {} : { messageBreakdown }),
-      };
+      // 写し方は `contextUsageObservationOf` に1つだけ置く: クローンの層（`clone.ts`）と同じ形で残すため
+      return contextUsageObservationOf(usage, startedAt);
     } catch (error) {
-      return {
-        durationMs: Date.now() - startedAt,
-        error: describeProbeError(error, process.env),
-      };
+      return failedContextUsageObservation(error, startedAt);
     }
   }
 

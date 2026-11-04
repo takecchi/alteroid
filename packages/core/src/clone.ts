@@ -34,9 +34,10 @@ import { ClaudeCloneDriver } from './claude-clone-driver.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import {
-  CONTEXT_USAGE_CATEGORY_LIMIT,
   CONTEXT_USAGE_READ_TIMEOUT_MS,
+  contextUsageObservationOf,
   contextUsageWithin,
+  failedContextUsageObservation,
 } from './context-usage.js';
 import {
   CLONE_INTERRUPT_TIMEOUT_MS,
@@ -82,8 +83,6 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
-import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
-import { foldMessageBreakdown } from './message-breakdown.js';
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
@@ -7764,57 +7763,10 @@ class Clone implements CloneHost {
     const startedAt = Date.now();
     try {
       const usage = await contextUsageWithin(q.contextUsage(), this.#contextUsageTimeoutMs);
-      // 分類は `kind` の値だけで行い `name` の文字列は見ない（`summarizeContextCategories` が1箇所で持つ）。
-      const categories = (usage.categories ?? []).map((category) => ({
-        name: category.name,
-        tokens: category.tokens,
-        kind: category.kind,
-      }));
-      const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
-      const omittedCategories = categories.length - shownCategories.length;
-      // 配列は合計へ畳む: 1本ずつ写すと日誌の1行が道具の本数だけ伸びる。
-      const sumTokens = (items: readonly { tokens: number }[]): number =>
-        items.reduce((total, item) => total + item.tokens, 0);
-      const mcpTools = usage.mcpTools ?? [];
-      const memoryFiles = usage.memoryFiles ?? [];
-      const systemPromptSections = usage.systemPromptSections ?? [];
-      const messageBreakdown = foldMessageBreakdown(usage.messageBreakdown);
-      return {
-        durationMs: Date.now() - startedAt,
-        totalTokens: usage.totalTokens,
-        rawMaxTokens: usage.rawMaxTokens,
-        percentage: usage.percentage,
-        ...(usage.autoCompactThreshold === undefined
-          ? {}
-          : { autoCompactThreshold: usage.autoCompactThreshold }),
-        isAutoCompactEnabled: usage.isAutoCompactEnabled,
-        // 空の配列のときは欄を作らない: 0 を置くと、SDK がその欄を返さなかった回が「測ったが 0」と読める。
-        ...(shownCategories.length === 0 ? {} : { categories: shownCategories }),
-        ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
-        ...(mcpTools.length === 0
-          ? {}
-          : {
-              mcpToolTokens: sumTokens(mcpTools),
-              mcpToolCount: mcpTools.length,
-              mcpToolsByServer: foldMcpToolsByServer(mcpTools),
-            }),
-        ...(memoryFiles.length === 0
-          ? {}
-          : { memoryFileTokens: sumTokens(memoryFiles), memoryFileCount: memoryFiles.length }),
-        ...(systemPromptSections.length === 0
-          ? {}
-          : {
-              systemPromptTokens: sumTokens(systemPromptSections),
-              systemPromptSectionCount: systemPromptSections.length,
-            }),
-        // SDK が返さなかった回は欄を作らない（0 を置くと「測ったが 0」と読める）。
-        ...(messageBreakdown === undefined ? {} : { messageBreakdown }),
-      };
+      // 写し方は `contextUsageObservationOf` に1つだけ置く: 担当の層（`runner.ts`）と同じ形で残すため
+      return contextUsageObservationOf(usage, startedAt);
     } catch (error) {
-      return {
-        durationMs: Date.now() - startedAt,
-        error: describeProbeError(error, process.env),
-      };
+      return failedContextUsageObservation(error, startedAt);
     }
   }
 
