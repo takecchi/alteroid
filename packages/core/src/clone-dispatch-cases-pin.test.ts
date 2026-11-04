@@ -15,6 +15,9 @@ import {
 // （どの `case` も `return` で終わり、`break` で switch の後ろへ落ちないので、`case 'x': return this.#handleX(event);` にすれば意味は変わらない）。
 // そこで、各 `case` の中身を種類ごとに取り出して固定する。中身が `return this.#name(event, …);` の1文だけなら、そのメソッドの本体を代わりに取り出すので、
 // 出す前と出した後は同じ文字列になる。引数は `event` で始まり、残りは名前だけ（`record`・`fromRunnerId` など、出す前の case が使っていた変数をそのまま渡す）。
+// `await` を含まない case は、同期のメソッドへ出して `this.#name(event, …); return;` の2文で呼ぶ形も読む: async のメソッドへ出して `return` すると、
+// 振り分けの Promise が解決するまでのマイクロタスクが増え、それに頼る道（runner.ts の `#read` の後ろの偽の SDK の試験など）の前後が変わるため。
+// 出した先の本体は元の case の中身そのもの（末尾の `return;` を含む）なので、呼び出しの2文を本体に置き換えれば、やはり同じ文字列になる。
 // 式の畳み方（コードの空白は畳み、コメントは落とし、文字列は1文字ずつ比べる）は `squash`。
 
 /** 固定する振り分けと、走査の故障を通さないための case の数の下限。 */
@@ -59,6 +62,13 @@ function dispatchCases(file: ScannedSource, dispatcher: string): string[] {
     const delegated = /^return this\.(#[A-Za-z]+)\(event(?:, [A-Za-z]+)*\);$/.exec(inner);
     // 出した先のメソッドから、さらに段を出していれば差し戻して読む（`INLINED_BY_FILE`）: 振り分けの固定が、その分割で動かないため
     if (delegated !== null) inner = expandedMethodBody(text, delegated[1]!, file);
+    // 同期の形は、出した先の本体が `return;` で終わるときだけ差し戻す: 元からある `this.#onTaskStarted(event); return;` のような
+    // 下請けの呼び出し（case の中身を移したものではなく、本体が `return;` で終わらない）まで読み替えないため
+    const delegatedSync = /^this\.(#[A-Za-z]+)\(event(?:, [A-Za-z]+)*\); return;$/.exec(inner);
+    if (delegatedSync !== null) {
+      const moved = expandedMethodBody(text, delegatedSync[1]!, file);
+      if (moved.endsWith('return;')) inner = moved;
+    }
     out.push(`${label}: ${inner}`);
     labelRe.lastIndex = close;
   }
