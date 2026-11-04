@@ -2374,65 +2374,7 @@ class Clone implements CloneHost {
       // 取り出してターンに渡す束の畳み込みの索引は、ここで落とす: 残すと、読まれている最中の代表に同じ本文の後続が畳まれ、二度目の発生がクローンへ届かないため。
       // まだ受信箱にある代表への畳み込み（#954）は変えない（落とすのは取り出された束だけ）。この下の `await` より前に置く: 間に届いた同文を新しい代表として積むため
       for (const taken of batch) this.#dropPendingCollapse(taken);
-      // 時計は束が決まった時点で作る（#5086）: 順番待ちは束の中でいちばん古い合図の `at` から数える。読めない `at` は取り出した時刻とみなす
-      const timer = new TurnTimer({
-        now: Date.now,
-        arrivedAt: Math.min(
-          ...batch.map((queued) => {
-            const at = Date.parse(queued.at);
-            return Number.isNaN(at) ? Date.now() : at;
-          }),
-        ),
-        triggers: batch.map((queued) => queued.type),
-        batchSize: batch.length,
-      });
-      this.#turnTimer = timer;
-      const prepareStartedAt = Date.now();
-
-      // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 待ち行列の断りより先に行う（断りの固定の1文もこの記録を使うため）
-      this.#digestDelta.discardStaged();
-      this.#digestResetLoggedThisTurn = false;
-      // 預けた控えの読み戻し（起動後の最初の束だけ）: 次の全文へ戻す判定より前に行う
-      await this.#restoreFoldStateOnce();
-      // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
-      this.#resetDigestDeltaIfNewConversation();
-      // 周期・会話の切り替えの全文戻しは、断り書き（待ち行列の先頭・末尾の固定1文）と「いまの全体」の両方より前に、1か所で行う
-      this.#applyFoldPeriod(batch);
-      this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
-      // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
-      this.#notices.set(
-        'commitment',
-        await timer
-          .time('prepare.taskQueue', () => this.#taskQueueNoticeFor(batch))
-          .catch((error: unknown) => {
-            noteDroppedRecord('待ち行列の断り書きの組み立て', inboxEventShape(event), error);
-            return '';
-          }),
-      );
-      // 読めなければ消さずに「数えられなかった」と名乗る行を出す: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
-      this.#notices.set(
-        'situation',
-        await timer
-          .time('prepare.situation', () => this.#situationNoticeFor(batch))
-          .catch((error: unknown) => {
-            noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
-            return describeSituationUnavailable(error);
-          }),
-      );
-      const validityNotice = await timer.time('prepare.validity', () =>
-        this.#validityNoticeFor(batch),
-      );
-      // 欄を増やさず `validity` に並べる: どちらも「積まれた時点の前提がいまも当てはまるか」の断りで、読む位置も同じでよいため。
-      // 述語 B の計器は `validityNotice` だけで判定する: 回復の1節で鳴らすと、状態の食い違いを数える計器が別の事実で嵩増しされるため
-      this.#notices.set(
-        'validity',
-        (await timer.time('prepare.quotaRecovery', () => this.#quotaRecoveryNoticeFor(batch))) +
-          validityNotice,
-      );
-      if (validityNotice !== '' && event.type === 'manager_message') {
-        await this.#noteRedeliveryPredicateHitB(event.managerId);
-      }
-      timer.add('prepare', Date.now() - prepareStartedAt);
+      const timer = await this.#prepareTurn(event, batch);
       this.#pumpTurnFailed = false;
       this.#droppedSignalsShown = new Set();
       try {
@@ -2445,40 +2387,115 @@ class Clone implements CloneHost {
         await this.#reportFailure(this.#conversationOf(event), { error });
         this.#finishTurn();
       } finally {
-        this.#notices.clearTurn();
-        // 入力が入らなかった回の全文は控えへ移さず捨てる
-        this.#situationExplainedStaged = null;
-        this.#taskQueueHeadStaged = null;
-        this.#digestDelta.discardStaged();
-        // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする。
-        // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
-        // 預けた控えは `#resetDigestDelta` が `#forgetFoldState` で捨てる（成功したターンの後だけ預ける `#persistFoldStateAfterTurn` と合わせて、片方だけ残らない）
-        if (this.#pumpTurnFailed) {
-          this.#returnToFullText({
-            situation: true,
-            digest: { reason: 'full', label: 'turn_failed' },
-          });
-        }
-        // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
-        const defer = this.#usageBlocked !== null;
-        const failedOutsideUsage = !defer && this.#pumpTurnFailed;
-        await this.#noteDroppedSignals(batch, { failedOutsideUsage, defer });
-        for (const held of batch) {
-          // 保持した `human_answer` は「処理済み」の印を外す: 枠で失敗した回答はまだ処理されておらず、残すと解除後の再配達が「二重配達」と畳まれて回答が黙って失われるため
-          if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
-          // 枠以外の失敗で終わった回答は、配達の印を `pending` へ戻して起動時の拾い直しに載せる（#4633）
-          if (failedOutsideUsage && held.type === 'human_answer') {
-            this.#handledHumanAnswerIds.delete(held.id);
-            await this.#reopenAnswerDeliveryAfterFailure(held);
-          }
-          await this.#settleInboxEvent(held, defer);
-        }
-        this.#turnTimer = null;
-        await this.#writeTurnTiming(timer, this.#pumpTurnFailed);
-        this.#inFlight = null;
+        await this.#settleTurn(batch, timer);
       }
     }
     this.#delivery.settleAllCompletions();
+  }
+
+  /**
+   * 束が決まった後、ターンを回す前の組み立て（`#pump` から出した）。時計を作って `#turnTimer` に置き、断り書き（待ち行列・いまの全体・前提の確かさ）を組む。
+   * 作った時計を返す: `#pump` の後始末（`#settleTurn`）が同じ時計を書くため
+   */
+  async #prepareTurn(event: InboxEvent, batch: InboxEvent[]): Promise<TurnTimer> {
+    // 時計は束が決まった時点で作る（#5086）: 順番待ちは束の中でいちばん古い合図の `at` から数える。読めない `at` は取り出した時刻とみなす
+    const timer = new TurnTimer({
+      now: Date.now,
+      arrivedAt: Math.min(
+        ...batch.map((queued) => {
+          const at = Date.parse(queued.at);
+          return Number.isNaN(at) ? Date.now() : at;
+        }),
+      ),
+      triggers: batch.map((queued) => queued.type),
+      batchSize: batch.length,
+    });
+    this.#turnTimer = timer;
+    const prepareStartedAt = Date.now();
+
+    // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 待ち行列の断りより先に行う（断りの固定の1文もこの記録を使うため）
+    this.#digestDelta.discardStaged();
+    this.#digestResetLoggedThisTurn = false;
+    // 預けた控えの読み戻し（起動後の最初の束だけ）: 次の全文へ戻す判定より前に行う
+    await this.#restoreFoldStateOnce();
+    // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
+    this.#resetDigestDeltaIfNewConversation();
+    // 周期・会話の切り替えの全文戻しは、断り書き（待ち行列の先頭・末尾の固定1文）と「いまの全体」の両方より前に、1か所で行う
+    this.#applyFoldPeriod(batch);
+    this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
+    // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
+    this.#notices.set(
+      'commitment',
+      await timer
+        .time('prepare.taskQueue', () => this.#taskQueueNoticeFor(batch))
+        .catch((error: unknown) => {
+          noteDroppedRecord('待ち行列の断り書きの組み立て', inboxEventShape(event), error);
+          return '';
+        }),
+    );
+    // 読めなければ消さずに「数えられなかった」と名乗る行を出す: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
+    this.#notices.set(
+      'situation',
+      await timer
+        .time('prepare.situation', () => this.#situationNoticeFor(batch))
+        .catch((error: unknown) => {
+          noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
+          return describeSituationUnavailable(error);
+        }),
+    );
+    const validityNotice = await timer.time('prepare.validity', () =>
+      this.#validityNoticeFor(batch),
+    );
+    // 欄を増やさず `validity` に並べる: どちらも「積まれた時点の前提がいまも当てはまるか」の断りで、読む位置も同じでよいため。
+    // 述語 B の計器は `validityNotice` だけで判定する: 回復の1節で鳴らすと、状態の食い違いを数える計器が別の事実で嵩増しされるため
+    this.#notices.set(
+      'validity',
+      (await timer.time('prepare.quotaRecovery', () => this.#quotaRecoveryNoticeFor(batch))) +
+        validityNotice,
+    );
+    if (validityNotice !== '' && event.type === 'manager_message') {
+      await this.#noteRedeliveryPredicateHitB(event.managerId);
+    }
+    timer.add('prepare', Date.now() - prepareStartedAt);
+    return timer;
+  }
+
+  /**
+   * ターンの後始末（`#pump` の `finally` の中身を出した）。ターンが投げても投げなくても、`finally` から1回だけ呼ぶ。
+   * ここで投げたものは、元の `finally` の中で投げたときと同じく `#pump` の外へ出る（`finally` の中の `await` が投げるため）
+   */
+  async #settleTurn(batch: InboxEvent[], timer: TurnTimer): Promise<void> {
+    this.#notices.clearTurn();
+    // 入力が入らなかった回の全文は控えへ移さず捨てる
+    this.#situationExplainedStaged = null;
+    this.#taskQueueHeadStaged = null;
+    this.#digestDelta.discardStaged();
+    // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする。
+    // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
+    // 預けた控えは `#resetDigestDelta` が `#forgetFoldState` で捨てる（成功したターンの後だけ預ける `#persistFoldStateAfterTurn` と合わせて、片方だけ残らない）
+    if (this.#pumpTurnFailed) {
+      this.#returnToFullText({
+        situation: true,
+        digest: { reason: 'full', label: 'turn_failed' },
+      });
+    }
+    // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
+    const defer = this.#usageBlocked !== null;
+    const failedOutsideUsage = !defer && this.#pumpTurnFailed;
+    await this.#noteDroppedSignals(batch, { failedOutsideUsage, defer });
+    for (const held of batch) {
+      // 保持した `human_answer` は「処理済み」の印を外す: 枠で失敗した回答はまだ処理されておらず、残すと解除後の再配達が「二重配達」と畳まれて回答が黙って失われるため
+      if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
+      // 枠以外の失敗で終わった回答は、配達の印を `pending` へ戻して起動時の拾い直しに載せる（#4633）
+      if (failedOutsideUsage && held.type === 'human_answer') {
+        this.#handledHumanAnswerIds.delete(held.id);
+        await this.#reopenAnswerDeliveryAfterFailure(held);
+      }
+      await this.#settleInboxEvent(held, defer);
+    }
+    this.#turnTimer = null;
+    await this.#writeTurnTiming(timer, this.#pumpTurnFailed);
+    this.#inFlight = null;
   }
 
   /**
