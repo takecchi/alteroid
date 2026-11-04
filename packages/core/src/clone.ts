@@ -1537,16 +1537,13 @@ class Clone implements CloneHost {
     }
 
     const outcome = hasSession ? 'deferred' : 'now';
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}${automatic ? 'クローンの自動判定でセッションを開き直すと決めた' : '人間の操作でセッションの開き直しを受けた'}` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}${automatic ? 'クローンの自動判定でセッションを開き直すと決めた' : '人間の操作でセッションの開き直しを受けた'}` +
         `（操作: ${options.actor}、理由: ${options.reason}、古い session id: ` +
         `${previousSessionId ?? '不明'}、蒸留: ${options.distill ? 'する' : 'しない'}、` +
         `${outcome === 'deferred' ? 'いまのターンの境界で開き直す（deferred）' : '次に開くセッションから resume しない（now）'}）`,
-    });
+    );
 
     // 印を立てた後に起こす: 入力待ちで止まっているなら（ターンの境界に居る）そこから抜けさせる。
     if (hasSession) this.#sdkSession.wakeInput();
@@ -3669,12 +3666,10 @@ class Clone implements CloneHost {
     // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
     if (this.#digestResetLoggedThisTurn) return;
     this.#digestResetLoggedThisTurn = true;
-    void this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${EXCHANGE_KIND_DECISION_PREFIX}固定文を全文へ戻す: 理由=${label}`,
-    });
+    void this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}固定文を全文へ戻す: 理由=${label}`,
+    );
   }
 
   // 待たない・握る: 同期の呼び出し元から呼び、書き込みの失敗はターンを落とさない（`#journal` と同じ扱い）。書き込みは1本の鎖に並べる: 消す・書くの順が入れ替わると、捨てたはずの控えが残るため
@@ -3790,12 +3785,10 @@ class Clone implements CloneHost {
       if (notRestoredLabel !== null) {
         this.#forgetFoldState();
         // 待たない・握る: 起動の最初の束を遅らせず、書き込みの失敗でターンを落とさない（`#journal` は投げない）。1回の起動で1行（この関数は起動後1回だけ走る）
-        void this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${EXCHANGE_KIND_GAUGE_PREFIX}畳みの控えを読み戻さなかった: 理由=${notRestoredLabel}`,
-        });
+        void this.#journalSelf(
+          'outbound',
+          `${EXCHANGE_KIND_GAUGE_PREFIX}畳みの控えを読み戻さなかった: 理由=${notRestoredLabel}`,
+        );
         return;
       }
       this.#situationExplained.clear();
@@ -5044,22 +5037,14 @@ class Clone implements CloneHost {
         bodyChars: transcript.length,
       });
       if (continuityText !== null) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`,
-        });
+        await this.#journalSelf('outbound', `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`);
       }
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}${label}の生ログの退避に失敗した: ${reasonOf(error)}` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${label}の生ログの退避に失敗した: ${reasonOf(error)}` +
           '（⚠️ この区間の生ログは器の外に残っていない）',
-      });
+      );
     }
     const archived: ReopenArchive =
       archiveId === null ? { kind: 'failed' } : { kind: 'saved', id: archiveId };
@@ -5071,17 +5056,14 @@ class Clone implements CloneHost {
     try {
       await this.#distillFromTranscript(tailOf(await readTranscriptTail(path)));
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}${label}の蒸留に失敗した: ${reasonOf(error)}` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}${label}の蒸留に失敗した: ${reasonOf(error)}` +
           // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
           (archiveId !== null
             ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）'
             : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）'),
-      });
+      );
 
       // 墓標を立てる: 蒸留が落ちる主な理由は枠で、枠は待てば開くが、印が無いと開いた後に拾う手がかりが残らないため。投げない: 失敗の報告の途中のため
       const id = archiveId;
@@ -7648,21 +7630,14 @@ class Clone implements CloneHost {
         bodyChars: transcript.length,
       });
       if (continuityText !== null) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`,
-        });
+        await this.#journalSelf('outbound', `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`);
       }
     } catch (error) {
       // これはクローンの判断ではなくシステムの失敗なので、判断として記録しない
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: ${reasonOf(error)}`,
-      });
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: ${reasonOf(error)}`,
+      );
     }
 
     // 中断の合図は蒸留にだけ掛ける: 退避は中断で飛ばさない。
@@ -7671,16 +7646,13 @@ class Clone implements CloneHost {
     try {
       await this.#distillFromTranscript(tailOf(await readTranscriptTail(transcriptPath)));
     } catch (error) {
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${reasonOf(error)}` +
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${reasonOf(error)}` +
           (archiveId !== null
             ? '（compaction の前の生ログの退避を墓標に残した。鍵が回った・枠が解けた・起動の契機で拾い直す）'
             : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）'),
-      });
+      );
       // 墓標は退避の id で指す（#4884）: 退避は compaction の前の生ログの全体の写しで、拾い直しは既存の `#pickUpTranscriptGrave` が末尾から蒸留する。
       // 区間を別に持たない: 墓標は `archiveId` 1つで1区間を指し、`archiveId` が「どの時点の生ログか」をそのまま表すため。成功した回は立てない（この `catch` の中だけ）
       const id = archiveId;
