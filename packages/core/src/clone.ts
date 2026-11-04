@@ -2904,15 +2904,12 @@ class Clone implements CloneHost {
 
   // 畳んだ跡を日誌に残す: 畳み込みは器にも待ち行列にも何も残さず、書かないと「静かに消えた」と区別が付かず、判定が間違っていても永久に見えないため
   async #noteFoldedTick(event: InboxEvent): Promise<void> {
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}枠で保持している同じ合図（${event.type}）が既にあるので、新しく届いた分を畳んだ。` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}枠で保持している同じ合図（${event.type}）が既にあるので、新しく届いた分を畳んだ。` +
         `中身は処理の瞬間に組み立て直すので、読まれる前の重複には情報が無い（保持中の同種: ` +
         `${this.#delivery.matchingDeferredCount((held) => isSameTick(held, event))} 件）。`,
-    });
+    );
   }
 
   // 消えてよいのはクローンを起こすことだけで、記録は消さない: 型ごとの本文追記と「畳んだ」の1行を書く（配り直した行と対で残り、「畳んだ」と「そもそも配られなかった」を区別できる）。断り書きは全文で写す: どこにも保存されず、写さないと畳んだ根拠が永久に取れないため
@@ -2924,29 +2921,23 @@ class Clone implements CloneHost {
     kind: 'quota' | 'recovered',
   ): Promise<void> {
     await this.#journalIncomingBody(event);
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた${kind === 'quota' ? '枠の' : ''}知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}名指す担当がもう戻っていた${kind === 'quota' ? '枠の' : ''}知らせなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
         `いない）: ${inboxEventShape(event)}\n\n${notice}`,
-    });
+    );
   }
 
   // 回さなかった回の跡: 書かないと「tick が来なかった」と「門が畳んだ」が日誌から区別できず、門の判定が間違っていても永久に見えないため
   async #noteSkippedInitiativeTick(
     gate: Extract<InitiativeGateDecision, { run: false }>,
   ): Promise<void> {
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}動ける仕事が無い発意 tick なので、ターンを起こさずに畳んだ（モデルへは1文字も渡していない）。` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}動ける仕事が無い発意 tick なので、ターンを起こさずに畳んだ（モデルへは1文字も渡していない）。` +
         `待ち行列: queued=${gate.queued} needs_decision=${gate.needsDecision} waiting=${gate.waiting}、` +
         `直近に発意 tick のターンを回した時刻: ${gate.lastTickAt ?? 'なし'}`,
-    });
+    );
   }
 
   async #noteRedeliveryPredicateHitB(managerId: string): Promise<void> {
@@ -2966,12 +2957,9 @@ class Clone implements CloneHost {
     context: { readonly alone: boolean; readonly completedRound?: boolean },
   ): Promise<void> {
     await this.#journalIncomingBody(record.event);
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}未読のまま残っていた合図を配り直したが（${record.deliveries}回目の配達` +
+    await this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}未読のまま残っていた合図を配り直したが（${record.deliveries}回目の配達` +
         (context.alone
           ? ''
           : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
@@ -2985,7 +2973,7 @@ class Clone implements CloneHost {
             `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
             `直前の行に残してある。まだ要る状況なら、この種類の合図は作り直される）: `) +
         `${inboxEventShape(record.event)}`,
-    });
+    );
   }
 
   // `inbox.removeMany` を直に呼ばず `removeInboxEventsAndStopDelivery` を通す: 将来この経路の手前へ配達される変更が入っても、消した合図がメモリ側に残る穴が空かないようにするため
@@ -3190,29 +3178,23 @@ class Clone implements CloneHost {
 
     // 待ち行列へ入れる `external` では `#journalIncomingBody` を呼ばない: 束ね読みが本文を書くので、呼ぶと同じ本文が日誌に二重に載るため（跡は「行を畳んだ」の1行だけ）
     if (options.canQueue && event.type === 'external') {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱の行は増やさずに` +
+      void this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱の行は増やさずに` +
           `畳んだ（本文と届いた時刻はこのあと束ね読み（#841）が1ターンの中で渡す）: ` +
           `${inboxEventShape(event)}`,
-      });
+      );
       return 'row-folded';
     }
 
     // 待たない: `post` を待たせないため
     void this.#journalIncomingBody(event);
-    void this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱にも待ち行列にも` +
+    void this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱にも待ち行列にも` +
         `積まずに畳んだ（モデルへは1文字も渡していない。本文は直前の行に残してある）: ` +
         `${inboxEventShape(event)}`,
-    });
+    );
     return 'folded';
   }
 
@@ -3233,15 +3215,12 @@ class Clone implements CloneHost {
     if (existing === undefined) return;
 
     if (existing.collapsed > 0) {
-      void this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読を ${existing.collapsed} 件、受信箱にも待ち行列にも` +
+      void this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読を ${existing.collapsed} 件、受信箱にも待ち行列にも` +
           `積まずに畳んだ（本文はそれぞれ畳んだ時点で直前の行に残してある。この合図が` +
           `片付いたので数え終える）: ${inboxEventShape(event)}`,
-      });
+      );
     }
   }
 
@@ -3294,19 +3273,16 @@ class Clone implements CloneHost {
     folded: number,
   ): Promise<void> {
     await this.#journalIncomingBody(old);
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
-        (next === null
-          ? `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）は、処理中に内容の違う同種の通知が届いて` +
-            `代表が差し替わった後に枠で失敗して戻ってきたので、延期の列へは積まずに畳んだ（モデルへ渡るのは新しい代表だけ。`
-          : `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
-            `内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（` +
-            `${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。`) +
+    await this.#journalSelf(
+      'outbound',
+      (next === null
+        ? `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）は、処理中に内容の違う同種の通知が届いて` +
+          `代表が差し替わった後に枠で失敗して戻ってきたので、延期の列へは積まずに畳んだ（モデルへ渡るのは新しい代表だけ。`
+        : `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
+          `内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（` +
+          `${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。`) +
         `合流はここまでで累計 ${folded} 件——時間の窓ではなく「未処理のまま残っているか」だけで判定している）。`,
-    });
+    );
   }
 
   // 失敗しても post を落とさない: 未読を書けないことでその合図の処理まで止めると、直そうとしているものより広い穴になるため
