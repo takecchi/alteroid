@@ -378,7 +378,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#deliverReportFromUnreplacedSession': 'reply',
     '#deniedOf': 'thinning',
     '#dropStaleSessionEvent': 'decision',
-    '#handleEvent': 'decision,failure,reply',
+    // `#handleEvent` の case を種類ごとのメソッドへ出したので、`#handleEvent` 自身には書き込み箇所が無い
+    '#handlePermissionDenied': 'decision',
+    '#handleReport': 'reply',
+    '#handleResumeFailed': 'failure',
+    '#handleSession': 'decision,failure',
     '#ignoreIfMovedAway': 'decision',
     '#ignoreOrDeferClosed': 'decision',
     '#journalNote': 'reply',

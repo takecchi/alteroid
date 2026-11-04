@@ -6004,42 +6004,7 @@ class Pool implements ManagerPool {
 
     switch (event.type) {
       case 'session': {
-        // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
-        if (event.pluginLoad !== undefined) {
-          this.#pluginLoad.set(fromRunnerId, {
-            at: this.#nowIso(),
-            managerId: event.managerId,
-            pluginLoad: event.pluginLoad,
-          });
-          const described = describePluginLoadForJournal(event.pluginLoad);
-          if (
-            this.#initFindingChanged(this.#pluginLoadDigests, event.managerId, described.digest)
-          ) {
-            await this.#journalExchange(
-              'inbound',
-              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
-            );
-          }
-        }
-        // 外部 MCP サーバの接続の失敗は担当の道具が欠けることなので、plugin の読み込み結果と同じ経路（日誌→クローン）で知らせる。欄が無い session は上書きしない
-        if (event.mcpServers !== undefined) {
-          const described = describeMcpStatusForJournal(event.mcpServers);
-          if (described === null) {
-            this.#mcpStatusDigests.delete(event.managerId);
-          } else if (
-            this.#initFindingChanged(this.#mcpStatusDigests, event.managerId, described.digest)
-          ) {
-            await this.#journalExchange(
-              'inbound',
-              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${described.text}`,
-            );
-          }
-        }
-        record.job.sessionId = event.sessionId;
-        record.attached = true;
-        this.#noteRunnerSessionSince(record);
-        await this.#persist(record);
-        return;
+        return this.#handleSession(event, record, fromRunnerId);
       }
 
       case 'project_key': {
@@ -6050,95 +6015,15 @@ class Pool implements ManagerPool {
       }
 
       case 'report': {
-        // 止めた後に届く `report` を無条件に処理しない: `#retire()` 後も `#onEvent` は台帳から像を作り直す（`#load()`）ので、`stopped` を上書きし `#emit()` でクローンのターンを起こしてしまう。日誌には残す（捨てると黙って失われる）。
-        if (record.job.status === 'stopped') {
-          await this.#recordStoppedReport(record, event, fromRunnerId);
-          return;
-        }
-        // `reportId` で冪等にする（`ask` の `requestId` と同型）。
-        // `reportId` を送らない旧 runner の report は拒まず毎回処理する: 無条件に捨てると本物の報告が消える。二重配達を見分けられないだけ。
-        if (event.reportId !== undefined) {
-          const reported = this.#reportedOf(record);
-          if (reported.has(event.reportId)) return;
-          reported.set(event.reportId, true);
-        }
-        const markedByFailure = this.#applyReportToJob(record, event);
-        await this.#persist(record);
-        await this.#journalExchange(
-          'inbound',
-          `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${reportFullTextOf(event)}`,
-        );
-        await this.#afterReportRecorded(event, markedByFailure);
-        await this.#deliverReport(record, event, fromRunnerId);
-        return;
+        return this.#handleReport(event, record, fromRunnerId);
       }
 
       case 'ask': {
-        // 止めたマネージャーの確認要求を待ちへ積まない: `#retire()` 後も `#load()` が像を作り直すので、積むと `waiting` / `status` を `stopped` から動かしクローンへも `#emit()` してしまう。日誌には残す。
-        if (record.job.status === 'stopped') {
-          await this.#journal({
-            type: 'escalation',
-            question: event.summary,
-            approvalId: event.requestId,
-            managerId: event.managerId,
-          });
-          return;
-        }
-        // `requestId` で冪等にする: 二度配ると、答えたはずの確認がクローンへもう一度届き、答えても runner 側は中断済みで「待っていない」と返る。
-        const asked = this.#askedOf(record);
-        if (asked.has(event.requestId)) return;
-        asked.set(event.requestId, true);
-
-        record.waiting.push({
-          requestId: event.requestId,
-          summary: event.summary,
-          kind: event.kind,
-          // デーモン側で `new Date().toISOString()` を作らない: 値の意味が経路によって変わる。
-          askedAt: event.askedAt,
-        });
-        // 終端を `waiting_human` で書き戻さない: 待つ間に `closed(failed / lost)` が書いていると、台帳が非終端へ戻り `lost` の引き取りの契機も消える。
-        if (record.job.status !== 'failed' && record.job.status !== 'lost') {
-          record.job.status = 'waiting_human';
-        }
-        await this.#persist(record);
-        await this.#journal({
-          type: 'escalation',
-          question: event.summary,
-          approvalId: event.requestId,
-          managerId: event.managerId,
-        });
-        const delivered = askDeliveryOf(event.kind, event.summary);
-        this.#emit(event.managerId, event.kind, delivered.text, event.requestId, delivered.markup);
-        return;
+        return this.#handleAsk(event, record);
       }
 
       case 'settled': {
-        // 外す前に `summary` を控える: `withdrawn` の journal に「何の確認だったか」を残すのに要る（`abort()` が既に空にしていれば拾えず、その旨も書く）。
-        const pendingSummary = record.waiting.find(
-          (item) => item.requestId === event.requestId,
-        )?.summary;
-
-        // 止めたマネージャーへの専用ガードを足さない: `abort()` が `waiting` も `[]` にするので `'waiting_human'` の条件が `'stopped'` から甦らせる余地を持たず、「外す」操作だけなので足しても観測できる差が無い。`withdrawn` の記録は止めた後でも残す。
-        record.waiting = record.waiting.filter((item) => item.requestId !== event.requestId);
-        if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
-          record.job.status = 'running';
-        }
-        await this.#persist(record);
-
-        // 新しい日誌の種別を作らず `escalation` を再利用する: `approvalId` は承認待ちキューの項目 id もマネージャーの確認の id も受ける欄で、`withdrawnAt` の形がそのまま使える。
-        if (event.withdrawn !== undefined) {
-          await this.#journal({
-            type: 'escalation',
-            question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
-            approvalId: event.requestId,
-            managerId: event.managerId,
-            withdrawnAt: this.#nowIso(),
-            withdrawnReason:
-              `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
-              `理由: ${event.withdrawn.reason}`,
-          });
-        }
-        return;
+        return this.#handleSettled(event, record);
       }
 
       case 'note': {
@@ -6161,57 +6046,11 @@ class Pool implements ManagerPool {
       }
 
       case 'tool_use': {
-        record.lastToolSettledAt = this.#nowIso();
-        await this.#journal({
-          type: 'tool_use',
-          actor: event.actor,
-          tool: event.tool,
-          input: event.input,
-        });
-        // 検出は分類器ではなく単純な正規表現で、誤検出を許容する: 害は観測が1回余分になるだけ（読み取りで多重投げも止まる）。見逃すと報告より前に落ちた委譲の枝名が残らない穴が開く。
-        // 例外で `tool_use` の処理を止めない。
-        try {
-          if (event.tool === 'Bash') {
-            const toolInput = event.input as { command?: unknown } | null | undefined;
-            const command = toolInput?.command;
-            if (
-              typeof command === 'string' &&
-              (bashCommandLooksLikeGitPush(command) || bashCommandLooksLikeGitBranchCreate(command))
-            ) {
-              this.#observeUnpushedWorkOnce(event.managerId, 'tool_use');
-            }
-          }
-        } catch {
-          // tool_use の処理を巻き添えにしないための保険。
-        }
-        return;
+        return this.#handleToolUse(event, record);
       }
 
       case 'permission_denied': {
-        const { actorLayer, count, toolTotal } = this.#countDenial(record, event);
-        const { denialSuffix, inputShape, inputText, actorLabel } = this.#denialTexts(
-          event,
-          actorLayer,
-        );
-
-        await this.#journalExchange(
-          'inbound',
-          `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
-            `（${actorLabel} / このマネージャーのこの組で ${count} 件目 / ` +
-            `${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
-            `${inputText}${denialSuffix}`,
-        );
-
-        // 止めた委譲の拒否は受信箱へ回さない: クローンの判断材料にならず、`DENIED_ESCALATE_AT = 1` で1件目から `#emit` してしまう。日誌と数え上げは済んでいる。
-        if (record.job.status === 'stopped') return;
-        if (!shouldEscalateDenial(toolTotal)) return;
-        this.#emitDenialNotice(event, actorLayer, toolTotal, {
-          denialSuffix,
-          inputShape,
-          inputText,
-          actorLabel,
-        });
-        return;
+        return this.#handlePermissionDenied(event, record);
       }
 
       case 'worker_wait': {
@@ -6237,38 +6076,7 @@ class Pool implements ManagerPool {
       }
 
       case 'parked_peers_closed': {
-        const notice: PeerCloseNotice = { reason: event.reason, peers: event.peers };
-        const status = record.job.status;
-        // 担当が起こされない（人が止めた・もう終端している）なら、クローンへの知らせだけにする。起こされるなら次の起こし直しの先頭へ添える（二重にしない）
-        if (
-          event.reason === 'stopped' ||
-          status === 'stopped' ||
-          status === 'failed' ||
-          status === 'lost'
-        ) {
-          this.#emit(
-            event.managerId,
-            'report',
-            `[${event.managerId}] ${composePeerCloseNotice(notice)}`,
-          );
-          return;
-        }
-        const reason = event.reason;
-        record.job.pendingPeerCloseNotice = {
-          reason,
-          // peer ごとに理由を持たせる: 理由の違う知らせを1つに混ぜると、理由と peer の対応がずれる（#4899）
-          peers: [
-            // 理由の欄が無い古い形の peer は、上書きされる前の知らせの理由を写してから積む
-            ...(record.job.pendingPeerCloseNotice?.peers ?? []).map((peer) => ({
-              ...peer,
-              reason: peer.reason ?? record.job.pendingPeerCloseNotice?.reason ?? reason,
-            })),
-            ...event.peers.map((peer) => ({ ...peer, reason })),
-          ],
-          at: this.#nowIso(),
-        };
-        await this.#persist(record).catch(() => undefined);
-        return;
+        return this.#handleParkedPeersClosed(event, record);
       }
 
       case 'peer_usage': {
@@ -6302,39 +6110,7 @@ class Pool implements ManagerPool {
       }
 
       case 'resume_failed': {
-        // 止めた後に遅れて届いた resume_failed で status を巻き戻さず、クローンも起こさない: 無条件に処理すると `running` / `'lost'` へ書き換えて `#post()` し、終端が甦る。日誌には残す。
-        // 明示的な `manager_send` の起こし直しは塞がない: `send()` が先に `'running'` を書くので、遅れて届く頃には `'stopped'` ではない。
-        if (record.job.status === 'stopped') {
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （停止済みのため無視）前のセッション` +
-              `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
-          );
-          return;
-        }
-        // 移った後に古い runner から遅れて届いた resume_failed で巻き戻さない。ただし「不一致」だけで「移った」と言わない: `job.runnerId` に既定値 `'runner-primary'` が焼かれたままだと、同じ runner からでも不一致になり、本当に終わった事実を捨ててしまう（`#resume` だけが書き直す）。
-        // 捨てるのは `job.runnerId` が `#registeredRunnerIds()`（名簿にいま居る id）に含まれ、かつ `fromRunnerId` と食い違うときだけ。未記録の古いジョブと名簿が `null`（判定材料なし）のときは従来どおり適用する（安全側）。
-        if (this.#movedAwayFrom(record, fromRunnerId)) {
-          await this.#journalExchange(
-            'inbound',
-            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
-              `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）前のセッション` +
-              `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
-          );
-          return;
-        }
-        // 「resume を投げた」は「戻れた」ではない: SDK が会話を見つけられなかったので、台帳と受信箱を実際に起きたことへ揃え直す。
-        await this.#journalExchange(
-          'inbound',
-          `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
-            event.reason,
-        );
-        if (event.recovered) {
-          await this.#recoverAfterResumeFailed(record, event);
-          return;
-        }
-        await this.#giveUpAfterResumeFailed(record, event);
-        return;
+        return this.#handleResumeFailed(event, record, fromRunnerId);
       }
 
       case 'closed': {
@@ -6426,6 +6202,295 @@ class Pool implements ManagerPool {
         throw new Error(`未知の runner イベント: ${JSON.stringify(exhaustive)}`);
       }
     }
+  }
+
+  /** 担当の出来事 `session` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleSession(
+    event: Extract<RunnerEvent, { type: 'session' }>,
+    record: ManagerRecord,
+    fromRunnerId: string,
+  ): Promise<void> {
+    // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
+    if (event.pluginLoad !== undefined) {
+      this.#pluginLoad.set(fromRunnerId, {
+        at: this.#nowIso(),
+        managerId: event.managerId,
+        pluginLoad: event.pluginLoad,
+      });
+      const described = describePluginLoadForJournal(event.pluginLoad);
+      if (this.#initFindingChanged(this.#pluginLoadDigests, event.managerId, described.digest)) {
+        await this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
+        );
+      }
+    }
+    // 外部 MCP サーバの接続の失敗は担当の道具が欠けることなので、plugin の読み込み結果と同じ経路（日誌→クローン）で知らせる。欄が無い session は上書きしない
+    if (event.mcpServers !== undefined) {
+      const described = describeMcpStatusForJournal(event.mcpServers);
+      if (described === null) {
+        this.#mcpStatusDigests.delete(event.managerId);
+      } else if (
+        this.#initFindingChanged(this.#mcpStatusDigests, event.managerId, described.digest)
+      ) {
+        await this.#journalExchange(
+          'inbound',
+          `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${described.text}`,
+        );
+      }
+    }
+    record.job.sessionId = event.sessionId;
+    record.attached = true;
+    this.#noteRunnerSessionSince(record);
+    await this.#persist(record);
+    return;
+  }
+
+  /** 担当の出来事 `report` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleReport(
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    record: ManagerRecord,
+    fromRunnerId: string,
+  ): Promise<void> {
+    // 止めた後に届く `report` を無条件に処理しない: `#retire()` 後も `#onEvent` は台帳から像を作り直す（`#load()`）ので、`stopped` を上書きし `#emit()` でクローンのターンを起こしてしまう。日誌には残す（捨てると黙って失われる）。
+    if (record.job.status === 'stopped') {
+      await this.#recordStoppedReport(record, event, fromRunnerId);
+      return;
+    }
+    // `reportId` で冪等にする（`ask` の `requestId` と同型）。
+    // `reportId` を送らない旧 runner の report は拒まず毎回処理する: 無条件に捨てると本物の報告が消える。二重配達を見分けられないだけ。
+    if (event.reportId !== undefined) {
+      const reported = this.#reportedOf(record);
+      if (reported.has(event.reportId)) return;
+      reported.set(event.reportId, true);
+    }
+    const markedByFailure = this.#applyReportToJob(record, event);
+    await this.#persist(record);
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${reportFullTextOf(event)}`,
+    );
+    await this.#afterReportRecorded(event, markedByFailure);
+    await this.#deliverReport(record, event, fromRunnerId);
+    return;
+  }
+
+  /** 担当の出来事 `ask` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleAsk(
+    event: Extract<RunnerEvent, { type: 'ask' }>,
+    record: ManagerRecord,
+  ): Promise<void> {
+    // 止めたマネージャーの確認要求を待ちへ積まない: `#retire()` 後も `#load()` が像を作り直すので、積むと `waiting` / `status` を `stopped` から動かしクローンへも `#emit()` してしまう。日誌には残す。
+    if (record.job.status === 'stopped') {
+      await this.#journal({
+        type: 'escalation',
+        question: event.summary,
+        approvalId: event.requestId,
+        managerId: event.managerId,
+      });
+      return;
+    }
+    // `requestId` で冪等にする: 二度配ると、答えたはずの確認がクローンへもう一度届き、答えても runner 側は中断済みで「待っていない」と返る。
+    const asked = this.#askedOf(record);
+    if (asked.has(event.requestId)) return;
+    asked.set(event.requestId, true);
+
+    record.waiting.push({
+      requestId: event.requestId,
+      summary: event.summary,
+      kind: event.kind,
+      // デーモン側で `new Date().toISOString()` を作らない: 値の意味が経路によって変わる。
+      askedAt: event.askedAt,
+    });
+    // 終端を `waiting_human` で書き戻さない: 待つ間に `closed(failed / lost)` が書いていると、台帳が非終端へ戻り `lost` の引き取りの契機も消える。
+    if (record.job.status !== 'failed' && record.job.status !== 'lost') {
+      record.job.status = 'waiting_human';
+    }
+    await this.#persist(record);
+    await this.#journal({
+      type: 'escalation',
+      question: event.summary,
+      approvalId: event.requestId,
+      managerId: event.managerId,
+    });
+    const delivered = askDeliveryOf(event.kind, event.summary);
+    this.#emit(event.managerId, event.kind, delivered.text, event.requestId, delivered.markup);
+    return;
+  }
+
+  /** 担当の出来事 `settled` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleSettled(
+    event: Extract<RunnerEvent, { type: 'settled' }>,
+    record: ManagerRecord,
+  ): Promise<void> {
+    // 外す前に `summary` を控える: `withdrawn` の journal に「何の確認だったか」を残すのに要る（`abort()` が既に空にしていれば拾えず、その旨も書く）。
+    const pendingSummary = record.waiting.find(
+      (item) => item.requestId === event.requestId,
+    )?.summary;
+
+    // 止めたマネージャーへの専用ガードを足さない: `abort()` が `waiting` も `[]` にするので `'waiting_human'` の条件が `'stopped'` から甦らせる余地を持たず、「外す」操作だけなので足しても観測できる差が無い。`withdrawn` の記録は止めた後でも残す。
+    record.waiting = record.waiting.filter((item) => item.requestId !== event.requestId);
+    if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
+      record.job.status = 'running';
+    }
+    await this.#persist(record);
+
+    // 新しい日誌の種別を作らず `escalation` を再利用する: `approvalId` は承認待ちキューの項目 id もマネージャーの確認の id も受ける欄で、`withdrawnAt` の形がそのまま使える。
+    if (event.withdrawn !== undefined) {
+      await this.#journal({
+        type: 'escalation',
+        question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
+        approvalId: event.requestId,
+        managerId: event.managerId,
+        withdrawnAt: this.#nowIso(),
+        withdrawnReason:
+          `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
+          `理由: ${event.withdrawn.reason}`,
+      });
+    }
+    return;
+  }
+
+  /** 担当の出来事 `tool_use` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleToolUse(
+    event: Extract<RunnerEvent, { type: 'tool_use' }>,
+    record: ManagerRecord,
+  ): Promise<void> {
+    record.lastToolSettledAt = this.#nowIso();
+    await this.#journal({
+      type: 'tool_use',
+      actor: event.actor,
+      tool: event.tool,
+      input: event.input,
+    });
+    // 検出は分類器ではなく単純な正規表現で、誤検出を許容する: 害は観測が1回余分になるだけ（読み取りで多重投げも止まる）。見逃すと報告より前に落ちた委譲の枝名が残らない穴が開く。
+    // 例外で `tool_use` の処理を止めない。
+    try {
+      if (event.tool === 'Bash') {
+        const toolInput = event.input as { command?: unknown } | null | undefined;
+        const command = toolInput?.command;
+        if (
+          typeof command === 'string' &&
+          (bashCommandLooksLikeGitPush(command) || bashCommandLooksLikeGitBranchCreate(command))
+        ) {
+          this.#observeUnpushedWorkOnce(event.managerId, 'tool_use');
+        }
+      }
+    } catch {
+      // tool_use の処理を巻き添えにしないための保険。
+    }
+    return;
+  }
+
+  /** 担当の出来事 `permission_denied` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handlePermissionDenied(
+    event: Extract<RunnerEvent, { type: 'permission_denied' }>,
+    record: ManagerRecord,
+  ): Promise<void> {
+    const { actorLayer, count, toolTotal } = this.#countDenial(record, event);
+    const { denialSuffix, inputShape, inputText, actorLabel } = this.#denialTexts(
+      event,
+      actorLayer,
+    );
+
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
+        `（${actorLabel} / このマネージャーのこの組で ${count} 件目 / ` +
+        `${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
+        `${inputText}${denialSuffix}`,
+    );
+
+    // 止めた委譲の拒否は受信箱へ回さない: クローンの判断材料にならず、`DENIED_ESCALATE_AT = 1` で1件目から `#emit` してしまう。日誌と数え上げは済んでいる。
+    if (record.job.status === 'stopped') return;
+    if (!shouldEscalateDenial(toolTotal)) return;
+    this.#emitDenialNotice(event, actorLayer, toolTotal, {
+      denialSuffix,
+      inputShape,
+      inputText,
+      actorLabel,
+    });
+    return;
+  }
+
+  /** 担当の出来事 `parked_peers_closed` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleParkedPeersClosed(
+    event: Extract<RunnerEvent, { type: 'parked_peers_closed' }>,
+    record: ManagerRecord,
+  ): Promise<void> {
+    const notice: PeerCloseNotice = { reason: event.reason, peers: event.peers };
+    const status = record.job.status;
+    // 担当が起こされない（人が止めた・もう終端している）なら、クローンへの知らせだけにする。起こされるなら次の起こし直しの先頭へ添える（二重にしない）
+    if (
+      event.reason === 'stopped' ||
+      status === 'stopped' ||
+      status === 'failed' ||
+      status === 'lost'
+    ) {
+      this.#emit(
+        event.managerId,
+        'report',
+        `[${event.managerId}] ${composePeerCloseNotice(notice)}`,
+      );
+      return;
+    }
+    const reason = event.reason;
+    record.job.pendingPeerCloseNotice = {
+      reason,
+      // peer ごとに理由を持たせる: 理由の違う知らせを1つに混ぜると、理由と peer の対応がずれる（#4899）
+      peers: [
+        // 理由の欄が無い古い形の peer は、上書きされる前の知らせの理由を写してから積む
+        ...(record.job.pendingPeerCloseNotice?.peers ?? []).map((peer) => ({
+          ...peer,
+          reason: peer.reason ?? record.job.pendingPeerCloseNotice?.reason ?? reason,
+        })),
+        ...event.peers.map((peer) => ({ ...peer, reason })),
+      ],
+      at: this.#nowIso(),
+    };
+    await this.#persist(record).catch(() => undefined);
+    return;
+  }
+
+  /** 担当の出来事 `resume_failed` の1件を処理する（`#handleEvent` が振り分ける）。 */
+  async #handleResumeFailed(
+    event: Extract<RunnerEvent, { type: 'resume_failed' }>,
+    record: ManagerRecord,
+    fromRunnerId: string,
+  ): Promise<void> {
+    // 止めた後に遅れて届いた resume_failed で status を巻き戻さず、クローンも起こさない: 無条件に処理すると `running` / `'lost'` へ書き換えて `#post()` し、終端が甦る。日誌には残す。
+    // 明示的な `manager_send` の起こし直しは塞がない: `send()` が先に `'running'` を書くので、遅れて届く頃には `'stopped'` ではない。
+    if (record.job.status === 'stopped') {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （停止済みのため無視）前のセッション` +
+          `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
+      );
+      return;
+    }
+    // 移った後に古い runner から遅れて届いた resume_failed で巻き戻さない。ただし「不一致」だけで「移った」と言わない: `job.runnerId` に既定値 `'runner-primary'` が焼かれたままだと、同じ runner からでも不一致になり、本当に終わった事実を捨ててしまう（`#resume` だけが書き直す）。
+    // 捨てるのは `job.runnerId` が `#registeredRunnerIds()`（名簿にいま居る id）に含まれ、かつ `fromRunnerId` と食い違うときだけ。未記録の古いジョブと名簿が `null`（判定材料なし）のときは従来どおり適用する（安全側）。
+    if (this.#movedAwayFrom(record, fromRunnerId)) {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+          `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）前のセッション` +
+          `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
+      );
+      return;
+    }
+    // 「resume を投げた」は「戻れた」ではない: SDK が会話を見つけられなかったので、台帳と受信箱を実際に起きたことへ揃え直す。
+    await this.#journalExchange(
+      'inbound',
+      `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
+        event.reason,
+    );
+    if (event.recovered) {
+      await this.#recoverAfterResumeFailed(record, event);
+      return;
+    }
+    await this.#giveUpAfterResumeFailed(record, event);
+    return;
   }
 
   /** `#handleEvent` の入口の段: hello / anthropic_route / manager_peers の runner 名乗りを受ける（同期。当たれば true）。 */
