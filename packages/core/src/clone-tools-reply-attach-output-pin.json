@@ -32,8 +32,9 @@
     "bind-race#1": 39,
     "bind-race#2": 33,
     "bind-race#3": 33,
-    "bind-race-unbind-fails": 15,
-    "bind-race-conflict-unbind-fails": 15
+    "bind-race-unbind-fails": 104,
+    "bind-race-conflict-unbind-fails": 98,
+    "bind-race-unbind-fails-journal-fails": 104
   },
   "scenarios": {
     "no-conversation": {
@@ -57,6 +58,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": []
     },
     "no-conversation-no-slot": {
@@ -80,6 +82,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": []
     },
     "no-slot": {
@@ -103,6 +106,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": []
     },
     "missing#1": {
@@ -136,6 +140,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -182,6 +187,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -242,6 +248,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -295,6 +302,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -341,6 +349,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -422,6 +431,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -524,6 +534,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -592,6 +603,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -662,6 +674,7 @@
           "sha256": "sha-att-2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -733,6 +746,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -829,6 +843,7 @@
           "sha256": "sha-att-s2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -925,6 +940,7 @@
           "sha256": "sha-att-s2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -987,6 +1003,7 @@
           "sha256": "sha-att-s2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1042,6 +1059,7 @@
           "sha256": "sha-att-s2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1097,6 +1115,7 @@
           "sha256": "sha-att-s2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1161,6 +1180,7 @@
           "sha256": "sha-att-new"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1258,6 +1278,7 @@
           "sha256": "sha-att-new"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1330,6 +1351,7 @@
           "sha256": "sha-att-new2"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1435,6 +1457,7 @@
           "sha256": "sha-att-other"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1534,6 +1557,7 @@
           "sha256": "sha-att-new"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1632,6 +1656,7 @@
           "sha256": "sha-att-1"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1746,6 +1771,7 @@
           "sha256": "sha-att-3"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1874,6 +1900,7 @@
           "sha256": "sha-att-3"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -1962,6 +1989,7 @@
           "sha256": "sha-att-3"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2000,6 +2028,7 @@
           "sha256": "sha-att-new"
         }
       ],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2062,6 +2091,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2124,6 +2154,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2204,6 +2235,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2285,6 +2317,7 @@
         }
       ],
       "slot": [],
+      "journal": [],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2310,11 +2343,11 @@
     },
     "bind-race-unbind-fails": {
       "output": {
-        "length": 15,
-        "text": "置き場が落ちた（unbind）",
+        "length": 104,
+        "text": "添付が結ぶ間に見つからなくなった（保持期限）: att-2。何も添えていないが、戻せなかったので添付の結び付けが会話 conv-now に残った: att-1（Error: 置き場が落ちた（unbind））。",
         "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "thrown": false,
+        "errorName": null
       },
       "wrote": true,
       "attachments": [
@@ -2330,6 +2363,15 @@
         }
       ],
       "slot": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の結び付けが会話 conv-now に残った（結ぶ間の競合のあと、戻せなかった）: att-1",
+          "grounds": "理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（添付が結ぶ間に見つからなくなった（保持期限）: att-2）。"
+        }
+      ],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2367,16 +2409,25 @@
             }
           },
           "outcome": "threw Error: 置き場が落ちた（unbind）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の結び付けが会話 conv-now に残った（結ぶ間の競合のあと、戻せなかった）: att-1",
+            "grounds": "理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（添付が結ぶ間に見つからなくなった（保持期限）: att-2）。"
+          },
+          "outcome": "ok id-1"
         }
       ]
     },
     "bind-race-conflict-unbind-fails": {
       "output": {
-        "length": 15,
-        "text": "置き場が落ちた（unbind）",
+        "length": 98,
+        "text": "添付が結ぶ間に別の宛先へ結ばれた: att-4。何も添えていないが、戻せなかったので添付の結び付けが会話 conv-now に残った: att-3（Error: 置き場が落ちた（unbind））。",
         "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "thrown": false,
+        "errorName": null
       },
       "wrote": true,
       "attachments": [
@@ -2402,6 +2453,15 @@
         }
       ],
       "slot": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の結び付けが会話 conv-now に残った（結ぶ間の競合のあと、戻せなかった）: att-3",
+          "grounds": "理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（添付が結ぶ間に別の宛先へ結ばれた: att-4）。"
+        }
+      ],
       "calls": [
         {
           "op": "replyAttachments.current",
@@ -2439,6 +2499,87 @@
             }
           },
           "outcome": "threw Error: 置き場が落ちた（unbind）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の結び付けが会話 conv-now に残った（結ぶ間の競合のあと、戻せなかった）: att-3",
+            "grounds": "理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（添付が結ぶ間に別の宛先へ結ばれた: att-4）。"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "bind-race-unbind-fails-journal-fails": {
+      "output": {
+        "length": 104,
+        "text": "添付が結ぶ間に見つからなくなった（保持期限）: att-2。何も添えていないが、戻せなかったので添付の結び付けが会話 conv-now に残った: att-1（Error: 置き場が落ちた（unbind））。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "journal": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-1", "att-2"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-1\"],\"newlyBound\":[\"att-1\"],\"missing\":[\"att-2\"],\"conflicts\":[]}"
+        },
+        {
+          "op": "attachments.unbind",
+          "args": {
+            "ids": ["att-1"],
+            "target": {
+              "conversationId": "conv-now"
+            }
+          },
+          "outcome": "threw Error: 置き場が落ちた（unbind）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の結び付けが会話 conv-now に残った（結ぶ間の競合のあと、戻せなかった）: att-1",
+            "grounds": "理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（添付が結ぶ間に見つからなくなった（保持期限）: att-2）。"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
         }
       ]
     }

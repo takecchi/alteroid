@@ -170,7 +170,8 @@ type TaskSayStores = CloneToolsShared['stores'];
 type TaskSayAttached = Extract<OutboundAttachmentResult, { ok: true }>;
 type TaskSayTaskRead = { kind: 'unreadable' } | { kind: 'missing' } | { kind: 'found'; task: Task };
 type TaskSayBound =
-  { kind: 'bound'; attached: TaskSayAttached } | { kind: 'refused'; result: ToolText };
+  | { kind: 'bound'; attached: TaskSayAttached }
+  | { kind: 'refused'; result: ToolText & { isError?: boolean } };
 
 // 引数の検査。断る文を返す（通れば null）
 function describeTaskSayViolation(
@@ -229,6 +230,22 @@ function renderTaskSayAttachmentRefusal(message: string): string {
   return `会話へは書かなかった。${message}`;
 }
 
+// 結ぶ間の競合のあと戻しが失敗して結び付けが残ったときだけ、日誌へ1行残す。書けなくても断りの文は変えない
+async function journalLeftBound(
+  toolName: 'task_say' | 'reply_attach',
+  stores: TaskSayStores,
+  refused: Extract<OutboundAttachmentResult, { ok: false }>,
+): Promise<void> {
+  const left = refused.leftBound;
+  if (left === undefined) return;
+  const conflict = refused.message.split('。何も添えていない')[0];
+  await appendJournalOrDrop(toolName, stores.journal, {
+    type: 'decision',
+    decision: `添付の結び付けが会話 ${left.conversationId} に残った（結ぶ間の競合のあと、戻せなかった）: ${left.ids.join(', ')}`,
+    grounds: `理由: ${left.reason}。${toolName} は何も添えずに断った（${conflict}）。`,
+  });
+}
+
 // 添付の検査と結び付け、その断り（検査に落ちたら何も結ばず、断りの戻りを返す）
 async function bindTaskSayAttachments(
   context: ToolContext,
@@ -244,7 +261,11 @@ async function bindTaskSayAttachments(
       })
     : ({ ok: true, refs: [], newlyBound: [] } satisfies OutboundAttachmentResult);
   if (!attached.ok) {
-    return { kind: 'refused', result: text(renderTaskSayAttachmentRefusal(attached.message)) };
+    await journalLeftBound('task_say', stores, attached);
+    return {
+      kind: 'refused',
+      result: { ...text(renderTaskSayAttachmentRefusal(attached.message)), isError: true },
+    };
   }
   return { kind: 'bound', attached };
 }
@@ -603,7 +624,10 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
           limits: context.attachmentLimits ?? readAttachmentLimits().limits,
           alreadyAttached: slot.current(),
         });
-        if (!attached.ok) return { ...text(attached.message), isError: true };
+        if (!attached.ok) {
+          await journalLeftBound('reply_attach', stores, attached);
+          return { ...text(attached.message), isError: true };
+        }
         if (attached.refs.length === 0) {
           return text('指された添付はすでにこの返信に添えてある。');
         }
