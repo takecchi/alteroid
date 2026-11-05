@@ -943,7 +943,7 @@ function buildProfile(service: ProfileService, hooks: Hooks, calls: PinnedCall[]
         let result: ApplyProfileResult;
         switch (hooks.override) {
           case 'throw-string':
-            // eslint-disable-next-line @typescript-eslint/only-throw-error -- 非 Error を投げる枝を作るため
+            // 非 Error を投げる枝を作る
             throw 'raw string failure';
           case 'input-error':
             throw new ProfileInputError('名前の形が不正\n二行目の理由');
