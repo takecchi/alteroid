@@ -13,6 +13,11 @@ export function isTestFile(file) {
   return /\.test\.tsx?$/.test(file);
 }
 
+// 器ごとの試験から呼ぶ共通の契約（`packages/*/src/*-contract.ts`）も数える: 試験の本体を契約へ移すと、待ちが数えられない所へ移るだけで減ったように見えるため
+export function isContractFile(file) {
+  return /^packages\/[^/]+\/src\/[^/]+-contract\.ts$/.test(file);
+}
+
 export function compareWithBaseline(actual, baseline) {
   const increased = [];
   const decreased = [];
