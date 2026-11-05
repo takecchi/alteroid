@@ -66,7 +66,6 @@ import {
   TRANSCRIPT_PAGE,
   JournalNotRecordedError,
   RUNNER_MANAGER_PEERS_EXCERPT,
-  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
@@ -1545,7 +1544,7 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
               '（自分で組み立てない）。省略すると先頭から。',
           ),
       },
-      async ({ fingerprints, resources, cursor }, extra: unknown) => {
+      async ({ fingerprints, resources, cursor }) => {
         if (!context.managers) return NO_POOL;
         const overview = await context.managers.runners({
           ...(fingerprints === undefined ? {} : { fingerprints }),
@@ -1564,7 +1563,6 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
         const show = { fingerprints: fingerprints === true, resources: resources === true };
         const blocks = pageCheck.view.map((runner) => describeRunnerBlock(runner, show));
 
-        noteSubagentCallerGauge(context, extra);
         const tail = describeRunnerListTail(
           autoFoldedNote,
           resources === true,

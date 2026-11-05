@@ -67,8 +67,8 @@ export interface ToolContext {
   replyAttachments?: ReplyAttachments;
   managers?: ManagerPool;
   /**
-   * この道具の呼びがサブエージェント（作業者）のものか。判定のたびに計器（`CallerGauge`）が1行を残す（#5428）。
-   * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
+   * この道具の呼びがサブエージェント（作業者）のものか。計器は外した（#6448）ので、クローンが渡す実装は常に `false` を返す。
+   * 道具の側で使う所は `memory_append` の呼びだけが残っていて、次の PR で口ごと外す。
    * 無い器（テスト・蒸留）は常に本体と同じ。
    */
   isSubagentCall?: (toolUseId: string | undefined, probe?: ToolUseIdProbe) => boolean;

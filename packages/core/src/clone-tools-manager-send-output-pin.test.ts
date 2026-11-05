@@ -1317,7 +1317,8 @@ describe('manager_send の出力の固定（場面ごとの全文・字数・日
     expect(text('deliver-plain')).toContain('（「届けた」は resume の口が成功を返したところまで。');
     expect(calls('deliver-plain')).not.toContain('context.isSubagentCall()');
     expect(text('deliver-fold-subagent')).toBe(text('deliver-plain'));
-    expect(calls('deliver-fold-subagent')).toContain('context.isSubagentCall()');
+    // 呼び手の計器を外したので、口が在っても道具は呼ばない（以前はここで `toContain` だった）
+    expect(calls('deliver-fold-subagent')).not.toContain('context.isSubagentCall()');
     expect(text('deliver-decision-unused')).toContain('decision（allow）を付けたが');
     expect(text('deliver-decision-unused')).toContain(UNUSED);
     expect(text('deliver-decision-unused')).toContain('本文は追加指示として届けた。');

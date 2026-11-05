@@ -67,7 +67,6 @@ import {
   appendJournalOrThrow,
   appendJournalOrDrop,
   JournalNotRecordedError,
-  noteSubagentCallerGauge,
   type ToolText,
   describeUnreadableJournalEntry,
 } from './clone-tools-common.js';
@@ -769,23 +768,19 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
               'supersededBy が付く）。false のままでも、畳まれた版が在れば件数を注記する',
           ),
       },
-      async (
-        {
-          conversationId: conversationIdInput,
-          q,
-          speaker = 'both',
-          since: sinceInput,
-          until: untilInput,
-          scan,
-          limit,
-          cursor: cursorInput,
-          id,
-          offset = 0,
-          includeSuperseded = false,
-        },
-        extra: unknown,
-      ) => {
-        noteSubagentCallerGauge(context, extra);
+      async ({
+        conversationId: conversationIdInput,
+        q,
+        speaker = 'both',
+        since: sinceInput,
+        until: untilInput,
+        scan,
+        limit,
+        cursor: cursorInput,
+        id,
+        offset = 0,
+        includeSuperseded = false,
+      }) => {
         const argViolation = describeConversationReadArgViolation(scan, limit, offset);
         if (argViolation !== null) return text(argViolation);
         // 読み方 1: id（1発言の全文）

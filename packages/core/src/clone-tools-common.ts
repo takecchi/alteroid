@@ -204,7 +204,7 @@ export function toolUseIdFromExtra(extra: unknown): string | undefined {
   return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
-/** 計器用: tool_use_id が「取れた／無かった／あったが文字列でない（空文字を含む）」のどれか。値は返さない。 */
+/** tool_use_id が「取れた／無かった／あったが文字列でない（空文字を含む）」のどれか。値は返さない。 */
 export function toolUseIdProbeFromExtra(extra: unknown): ToolUseIdProbe {
   if (typeof extra !== 'object' || extra === null) return 'missing';
   const meta = (extra as { _meta?: unknown })._meta;
@@ -222,8 +222,8 @@ export function isSubagentCaller(context: ToolContext, extra: unknown): boolean 
 }
 
 /**
- * 判定の結果を使わずに、計器（`ToolContext.isSubagentCall` が残す `CallerGauge` の行）だけを残す。
- * 以前は固定文を畳む口を選ぶために呼んでいた。畳みを外した後も道具の呼びごとに1行ずつ残る件数を変えないため、呼び自体は残す。
+ * 判定の結果を使わずに `ToolContext.isSubagentCall` を呼ぶだけの口。計器は外してあり、何も残らない。
+ * 使い手は `memory_append` だけで、その直しが入った後の PR で、この口と呼びをまとめて外す。
  */
 export function noteSubagentCallerGauge(context: ToolContext, extra: unknown): void {
   isSubagentCaller(context, extra);

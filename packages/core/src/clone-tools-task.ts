@@ -84,7 +84,6 @@ import {
   tool,
   text,
   appendJournalOrThrow,
-  noteSubagentCallerGauge,
   JournalNotRecordedError,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
@@ -1640,8 +1639,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
             `速度と見込みを数える窓の長さ（時間。有限の正数。省略時は ${String(DEFAULT_PROGRESS_WINDOW_HOURS)}）`,
           ),
       },
-      async ({ windowHours }, extra: unknown) => {
-        noteSubagentCallerGauge(context, extra);
+      async ({ windowHours }) => {
         try {
           const view = await readProgress(stores, { now: new Date(), windowHours });
           return text(describeProgress(view));

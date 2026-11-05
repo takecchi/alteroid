@@ -24,7 +24,6 @@ import {
   appendJournalOrDrop,
   type ToolText,
   JOURNAL_TEXT_EXCERPT,
-  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 import type { ToolContext } from './clone-tools-context.js';
 import { CLOSES_SCHEMA, describeClosesViolation, finishWithCloses } from './clone-tools-closes.js';
@@ -227,7 +226,7 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
         ),
       closes: CLOSES_SCHEMA,
     },
-    async ({ managerId, message, decision, requestId, attachments, closes }, extra: unknown) => {
+    async ({ managerId, message, decision, requestId, attachments, closes }) => {
       // 閉じる指定の誤りは、送る前に丸ごと断る（送ってから閉じる側だけ断ると、半分だけ済んだ呼びになるため）
       const closesError = describeClosesViolation(closes);
       if (closesError !== null) return text(closesError);
@@ -283,7 +282,6 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
         );
       }
       if (result.outcome === 'delivered') {
-        noteSubagentCallerGauge(context, extra);
         return finishWithCloses(
           stores,
           text(renderManagerSendDelivered(managerId, result.detail, unusedNote)),

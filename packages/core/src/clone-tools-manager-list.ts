@@ -52,13 +52,7 @@ import {
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import { describeWaitingKind } from './waiting-kind-format.js';
-import {
-  describeRunnerLegState,
-  text,
-  tool,
-  NO_POOL,
-  noteSubagentCallerGauge,
-} from './clone-tools-common.js';
+import { describeRunnerLegState, text, tool, NO_POOL } from './clone-tools-common.js';
 import type { ToolContext } from './clone-tools-context.js';
 import {
   describeDenials,
@@ -1170,9 +1164,8 @@ export function managerListTool(context: ToolContext) {
             'status と q はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
         ),
     },
-    async ({ status, q, cursor }, extra: unknown) => {
+    async ({ status, q, cursor }) => {
       if (!context.managers) return NO_POOL;
-      noteSubagentCallerGauge(context, extra);
       const managers = await context.managers.list();
       // この一覧ぜんぶで同じ「いま」を使う: 行ごとに `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれるため
       const now = new Date();

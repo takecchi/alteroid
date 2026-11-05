@@ -10,7 +10,7 @@ import { captureStderr, createMemoryStores } from './testing.js';
 import { createCloneMcpServer, createCloneTools, type ToolContext } from './tools.js';
 
 // かつて「サブエージェント呼びの計器」が日誌（type=exchange・接頭辞 [計器]）へ残していた行は、もう出ない。
-// 判定の結果を使う所が無かったため外した（道具が呼ぶ口 `ToolContext.isSubagentCall` だけは、次の PR まで何もしない形で残してある）。
+// 判定の結果を使う所が無かったため外した（`ToolContext.isSubagentCall` の口は、`memory_append` の呼びが残っているため、その直しの後の PR まで何もしない形で残してある。ほかの道具は呼ばない）。
 
 const GAUGE_PHRASES = ['サブエージェント呼びの確認', '呼び手の判定'];
 

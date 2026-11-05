@@ -36,7 +36,6 @@ import {
   tool,
   appendJournalOrThrow,
   text,
-  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 
 export const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site', 'token'] as const;
@@ -474,8 +473,7 @@ export function usageTools(context: ToolContext, shared: CloneToolsShared) {
               'そのまま渡す（自分で組み立てない）。省略すると先頭から',
           ),
       },
-      async ({ from, to, managerId, layer, site, tokenId, axis, cursor }, extra: unknown) => {
-        noteSubagentCallerGauge(context, extra);
+      async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
         // `from` / `to` は形を確かめてから店へ渡す: 店は日付を文字列の大小で比べるだけで、`2026-02-30` などが黙って絞り込みになるため

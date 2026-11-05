@@ -37,7 +37,7 @@ import {
   formatIntRangeJa,
   formatStringLengthJa,
 } from './tool-arg-checks.js';
-import { tool, text, appendJournalOrThrow, noteSubagentCallerGauge } from './clone-tools-common.js';
+import { tool, text, appendJournalOrThrow } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
 const APPROVAL_LIST_BUDGET = 8_000;
@@ -643,7 +643,7 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
           .optional()
           .describe(`id で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
       },
-      async ({ id, offset = 0 }, extra: unknown) => {
+      async ({ id, offset = 0 }) => {
         const offsetError = describeApprovalsListViolation(offset);
         if (offsetError !== null) return text(offsetError);
         if (id !== undefined) {
@@ -659,7 +659,6 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
         const unreadableNote = describeUnreadableApprovals(approvalList.unreadable);
         if (pending.length === 0) return text(renderApprovalsListEmpty(unreadableNote));
         const items = renderApprovalListItems(pending);
-        noteSubagentCallerGauge(context, extra);
         const notes = renderApprovalListNotes(unreadableNote);
         if (fillListingBudget(items, APPROVAL_LIST_BUDGET, false).rest === 0) {
           return text(renderApprovalListAll(items, notes));
