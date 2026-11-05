@@ -12,6 +12,9 @@ import {
   compareCodeUnits,
   extractRowField,
   summarizeInvalidFields,
+  claimScheduledRunRow,
+  completeScheduledRunRow,
+  editScheduledRequestRow,
 } from '@alteroid/core';
 import type {
   SchedulePhase,
@@ -195,12 +198,7 @@ export class FsScheduleStore implements ScheduleStore {
         throw new ScheduleConflictError(kind, found ?? null);
       }
       if (found === undefined) return { next: file, result: null };
-      const next = scheduledRequestSchema.parse({
-        ...found,
-        request: stripNul(changes.request),
-        spec: changes.spec,
-        updatedAt,
-      });
+      const next = editScheduledRequestRow(found, changes, updatedAt);
       return {
         next: {
           ...file,
@@ -252,21 +250,14 @@ export class FsScheduleStore implements ScheduleStore {
     return this.#update((file) => {
       const found = file.schedules.find((entry) => entry.kind === kind);
       if (found === undefined) throwIfUnreadable(file, kind);
-      // 古い本文で動かさないために null を返す。
-      if (found === undefined || found.updatedAt !== expectedUpdatedAt) {
-        return { next: file, result: null };
-      }
+      const claim = claimScheduledRunRow(found, expectedUpdatedAt, at, cause);
+      if (claim === null) return { next: file, result: null };
       return {
         next: {
           ...file,
-          schedules: file.schedules.map((entry) =>
-            entry.kind === kind
-              ? // 定期の基準は `completeRun` で進める
-                { ...entry, lastRunAt: at, pendingRun: { at, cause } }
-              : entry,
-          ),
+          schedules: file.schedules.map((entry) => (entry.kind === kind ? claim.next : entry)),
         },
-        result: found,
+        result: claim.before,
       };
     });
   }
@@ -275,13 +266,9 @@ export class FsScheduleStore implements ScheduleStore {
     await this.#update((file) => ({
       next: {
         ...file,
-        schedules: file.schedules.map((entry) => {
-          // 別の発火の印が付いているなら触らない: 後から来た発火のものを消さない。
-          if (entry.kind !== kind || entry.pendingRun?.at !== at) return entry;
-          const rest = { ...entry };
-          delete rest.pendingRun;
-          return cause === 'schedule' ? { ...rest, lastScheduledRunAt: at } : rest;
-        }),
+        schedules: file.schedules.map((entry) =>
+          entry.kind === kind ? completeScheduledRunRow(entry, at, cause) : entry,
+        ),
       },
       result: undefined,
     }));
