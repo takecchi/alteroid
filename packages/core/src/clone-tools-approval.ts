@@ -610,8 +610,9 @@ function buildAskHumanApproval(params: {
   };
 }
 
-// 積む → 日誌 → 器への知らせ の順（#6490 の残り: 日誌が書けないと知らせが呼ばれない。順の入れ替えはここだけで済む）。
-// 日誌が書けなかった呼びは投げるので、知らせへ来ない。
+// 積む → 器への知らせ → 日誌 の順（request_permission の enqueuePermissionApproval と同じ）。
+// 知らせを日誌より先にする: 承認の行を積んだ時点で人間には確認が届いているので、日誌が書けなくても画面へ知らせ、問いを出した控えも残すため（#6490）。
+// 日誌が書けなければ、知らせた後で「完了済み・未記録」の例外で終わる。
 // ターンの会話があれば conversationId はそれと同じ（宛先の連鎖の先頭）なので、知らせは1回だけ呼ぶ
 async function enqueueAskHumanApproval(params: {
   stores: Stores;
@@ -626,6 +627,8 @@ async function enqueueAskHumanApproval(params: {
     noteDroppedRecord('承認待ち', approvalShape(approval), error);
     throw new ApprovalNotRecordedError('ask_human', approval, error);
   }
+  context.noteQuestionAsked?.(conversationId);
+  context.emit({ type: 'ask_human', approvalId: approval.id, question: approval.question });
   await appendJournalOrThrow(
     'ask_human',
     stores.journal,
@@ -636,8 +639,6 @@ async function enqueueAskHumanApproval(params: {
     },
     'act-completed',
   );
-  context.noteQuestionAsked?.(conversationId);
-  context.emit({ type: 'ask_human', approvalId: approval.id, question: approval.question });
 }
 
 function renderAskHumanQueued(id: string): string {
