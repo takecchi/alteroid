@@ -177,70 +177,27 @@ import {
 import { assertProfileRowWritable } from './profile-input.js';
 import { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
 import {
-  addUnreadableCounts,
   foldRecordForStore,
   resetRowsOfBaselines,
   USAGE_ESTIMATE_NOTICE,
   isBeforeUsageStart,
   ZERO_USAGE,
   type UsageBaseline,
-  type UsageLayer,
-  type UsageQuery,
   type UsageRow,
-  type UsageSite,
   type UsageTurnRow,
   type UsageUnmeteredRow,
 } from './usage.js';
-
-/**
- * 行が集計の絞り込み（期間・担当・層・場所・鍵）に当たるか。日ごと・ターン・測れなかった行の3つの表が同じ条件で絞る:
- * 表ごとに条件を写すと、1つの表だけ条件が抜けて、同じ問いで表によって答えが割れるため（ファイルの保存先 `storage-fs` と同じ条件と順）。
- */
-function matchesUsageQuery(
-  row: {
-    readonly date: string;
-    readonly managerId: string;
-    readonly layer: string;
-    readonly site: string;
-    readonly tokenId?: string | undefined;
-  },
-  query: UsageQuery,
-): boolean {
-  if (query.from !== undefined && row.date < query.from) return false;
-  if (query.to !== undefined && row.date > query.to) return false;
-  if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-  if (query.layer !== undefined && row.layer !== query.layer) return false;
-  if (query.site !== undefined && row.site !== query.site) return false;
-  if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-  return true;
-}
-
-/** 層と場所を鍵から外さない: 同じ actor・日・モデルで意味の違う行が足し込まれ、誤帰属になる。 */
-function usageRowKey(
-  date: string,
-  managerId: string,
-  model: string,
-  layer: UsageLayer,
-  site: UsageSite,
-  tokenId: string | undefined,
-): string {
-  // 区切りは制御文字、トークンも鍵に入れる（ドライバと同じ）: 変えるとこの器だけ鍵の衝突が本物と違う。
-  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
-}
-
-function usageBaselineKey(layer: UsageLayer, managerId: string): string {
-  return `${layer}\u0000${managerId}`;
-}
-
-function usageTurnKey(
-  date: string,
-  managerId: string,
-  layer: UsageLayer,
-  site: UsageSite,
-  tokenId: string | undefined,
-): string {
-  return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
-}
+import {
+  addUsageTotals,
+  compareUsageRows,
+  compareUsageTurnRows,
+  compareUsageUnmeteredRows,
+  matchesUsageQuery,
+  usageBaselineKey,
+  usageRowKey,
+  usageTurnKey,
+  usageUnmeteredKey,
+} from './usage-ledger-query.js';
 
 /** `TranscriptArchive` にメソッドを足さない: 足すと3実装すべてに要る。この裏口は `seedFingerprintlessArchiveRow` 専用。 */
 const archiveInternalsRegistry = new WeakMap<
@@ -1573,8 +1530,6 @@ export function createMemoryStores(): Stores {
       for (const [model, delta] of Object.entries(fold.delta)) {
         const key = usageRowKey(date, managerId, model, layer, site, tokenId);
         const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
-        // `unreadable` も足し込む: ドライバの `addTotals` と同じ算術にしないと本物では取りこぼす。
-        const unreadable = addUnreadableCounts(before.unreadable, delta.unreadable);
         usageRows.set(key, {
           date,
           managerId,
@@ -1582,16 +1537,7 @@ export function createMemoryStores(): Stores {
           layer,
           site,
           ...(tokenId === undefined ? {} : { tokenId }),
-          totals: {
-            inputTokens: before.inputTokens + delta.inputTokens,
-            outputTokens: before.outputTokens + delta.outputTokens,
-            cacheReadInputTokens: before.cacheReadInputTokens + delta.cacheReadInputTokens,
-            cacheCreationInputTokens:
-              before.cacheCreationInputTokens + delta.cacheCreationInputTokens,
-            webSearchRequests: before.webSearchRequests + delta.webSearchRequests,
-            costUsd: before.costUsd + delta.costUsd,
-            ...(unreadable === undefined ? {} : { unreadable }),
-          },
+          totals: addUsageTotals(before, delta),
           updatedAt: at,
         });
       }
@@ -1619,51 +1565,16 @@ export function createMemoryStores(): Stores {
     async aggregate(rawQuery) {
       // 書き込みが鍵列の NUL を落とすので、絞り込みも落としてから引く。
       const query = stripNulFromUsageQuery(rawQuery);
+      // 絞り込みと並びは fs の保存先と同じ関数（`usage-ledger-query.ts`）: 器ごとに手で書くと、1つの表だけ並びがずれる。
       const rows = [...usageRows.values()]
         .filter((row) => matchesUsageQuery(row, query))
-        .sort(
-          (a, b) =>
-            compareCodeUnits(a.date, b.date) ||
-            compareCodeUnits(a.managerId, b.managerId) ||
-            compareCodeUnits(a.model, b.model) ||
-            compareCodeUnits(a.layer, b.layer) ||
-            compareCodeUnits(a.site, b.site) ||
-            // 帰属の無い行は最後（ドライバと同じ向き）。
-            (a.tokenId === b.tokenId
-              ? 0
-              : a.tokenId === undefined
-                ? 1
-                : b.tokenId === undefined
-                  ? -1
-                  : compareCodeUnits(a.tokenId, b.tokenId)),
-        );
+        .sort(compareUsageRows);
       const turnRows = [...usageTurns.values()]
         .filter((row) => matchesUsageQuery(row, query))
-        .sort(
-          (a, b) =>
-            compareCodeUnits(a.date, b.date) ||
-            compareCodeUnits(a.managerId, b.managerId) ||
-            compareCodeUnits(a.layer, b.layer) ||
-            compareCodeUnits(a.site, b.site) ||
-            (a.tokenId === b.tokenId
-              ? 0
-              : a.tokenId === undefined
-                ? 1
-                : b.tokenId === undefined
-                  ? -1
-                  : compareCodeUnits(a.tokenId, b.tokenId)),
-        );
+        .sort(compareUsageTurnRows);
       const unmeteredRows = [...usageUnmetered.values()]
         .filter((row) => matchesUsageQuery(row, query))
-        .sort(
-          (a, b) =>
-            compareCodeUnits(a.date, b.date) ||
-            compareCodeUnits(a.managerId, b.managerId) ||
-            compareCodeUnits(a.layer, b.layer) ||
-            compareCodeUnits(a.site, b.site) ||
-            compareCodeUnits(a.provider, b.provider) ||
-            compareCodeUnits(a.tokenId ?? '\uffff', b.tokenId ?? '\uffff'),
-        );
+        .sort(compareUsageUnmeteredRows);
       const resets = resetRowsOfBaselines(usageBaselines.values(), query);
       return {
         rows,
@@ -1684,7 +1595,7 @@ export function createMemoryStores(): Stores {
     async recordUnmetered(input) {
       const { layer, site, managerId, date, at, provider, tokenId } =
         stripNulFromUnmeteredRecord(input);
-      const key = [date, managerId, layer, site, provider, tokenId ?? ''].join('\u0000');
+      const key = usageUnmeteredKey(date, managerId, layer, site, provider, tokenId);
       const existing = usageUnmetered.get(key);
       usageUnmetered.set(key, {
         date,

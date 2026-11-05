@@ -219,6 +219,8 @@ railway login
 
 `-y` で尋ねなくなる（値は `.env` から取る）。`--help` に残りのオプションがある。
 
+**スクリプトが読む環境変数が3つある**（器の変数ではなく、スクリプトを走らせるシェルの変数。`railway/lib.sh`）。`ALTEROID_ENV_FILE` は `setup.sh` が読み書きする `.env` の場所（既定は repo 直下の `.env`）、`ALTEROID_APP_SERVICE` / `ALTEROID_RUNNER_SERVICE` は役の Service 名（既定は `app` / `runner`。名前を変えて建てた構成でスクリプトを使うときに置く。`verify.sh` は同じ名前を `-a` / `-r` でも渡せる）。
+
 **繋ぐ枝は `release/prod` である**（`setup.sh` / `scale-runners.sh` の既定。`-b` で変えられる）。`main` へ繋ぐと、マージした瞬間に落ちる形へ戻る（「デプロイは走行中の仕事を畳む操作である」1）。**runner Service を足すときも同じ枝に繋ぐこと** — 1台だけ `main` を見ていると、そこだけがマージのたびに畳まれる（`scale-runners.sh` の既定が `release/prod` なのはこのためである）。
 
 **台数を指定するのは `-c` である**（既定1）。`./railway/setup.sh -c 3` で `runner` / `runner-2` / `runner-3` を作り、`app` には3台ぶんの `ALTEROID_RUNNER_URLS` を置く。**既定を増やしていないのは、台数がそのまま費用だからである**（能力の上限ではない — 配置は実行環境の資源で決まり、人工の定員は置かない）。
@@ -400,6 +402,30 @@ printf '%s\n' 'export RUSTUP_HOME=/opt/rust/rustup' 'export PATH=/opt/rust/cargo
 
 `set` は**その行の**全文置換である（他の行は変えない）。`--scope` を省くと既存の行の撒く先を保つ（新しい行なら `all`）。置いた行と撒く先は `alteroid profile list`、runner へ届いたかは `alteroid profile status` で確かめる。
 
+### 調整用の環境変数（任意。置かなくても動く）
+
+どれも既定のままで動く。**`compose.yaml` へは足さない**（用途が増えるたびに器を焼き直す形に戻るため。AGENTS.md 地雷表）。置き方は、その名前を**誰のプロセスが読むか**で決まる。
+
+- **app**: デーモンが読む。Service 変数（`app`）に置くか、`alteroid credential set <名前> --scope app --no-secret`。**デーモンの起動時に1度だけ読まれる**ので、置いたあとに app を上げ直すまで効かない。
+- **runner**: runner のプロセス自身が読む。Service 変数（`runner`。Shared Variables でもよい）に置く。runner は正本から自分の環境変数を作らないので、**`alteroid credential set` では届かない**。置いたあとに runner を上げ直すと、走行中の仕事が畳まれる（上の「デプロイは走行中の仕事を畳む操作である」）。
+
+| 名前                                           | 何を変えるか                                                                                                                                       | 既定                                                                                                            | 置き方                                                                                                               |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_CLONE_PERMISSION_MODE`               | クローンの SDK セッションの permission mode（`default` / `acceptEdits` / `bypassPermissions` / `plan` / `dontAsk` / `auto`）                       | `auto`。知らない綴りは既定へ倒さず、エラーで起動しない                                                          | app                                                                                                                  |
+| `ALTEROID_MANAGER_PERMISSION_MODE`             | マネージャーの permission mode（値は上と同じ）。Codex の peer の構えも同じ値に従う                                                                 | `auto`。知らない綴りはエラーで起動しない                                                                        | runner                                                                                                               |
+| `ALTEROID_MERGED_BATCH_SIZE_LIMIT`             | クローンがまとめ読みする1束の最大件数（起動直後に拾い直した在庫が1本のプロンプトへ全部連結されないための上限）                                     | 50。正の数（小数は切り捨て）。読めない値は既定で走り、stderr に1行                                              | app                                                                                                                  |
+| `ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS`        | 機構が合成した知らせ（`turn_failed` など）を1束にまとめて待つ時間（ms）                                                                            | 3000。正の数。読めない値は既定、大きすぎる値は `setTimeout` の範囲で挟む                                        | app                                                                                                                  |
+| `ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES`     | 1ターンで画像として渡す合計のバイト数の上限。超えた分は保存するが画像としては渡さず、ファイルとして開く案内が付く（枚数は `_MAX_TURN_IMAGES`）     | 16 MiB（16777216）。正の整数。読めない値は既定で走り、stderr に1行                                              | app                                                                                                                  |
+| `ALTEROID_PEER_MAX_SESSIONS`                   | Codex の peer（マネージャーの MCP `peer`）の同時に生きているセッション数の上限。超えたら、閉じてよいもののうち最後に使われたのが古いものから閉じる | 4。1〜64 の整数。範囲外・読めない値は既定で走り、stderr に1行                                                   | runner                                                                                                               |
+| `ALTEROID_PEER_IDLE_MINUTES`                   | Codex の peer のセッションが使われないまま残ってよい時間（分）。超えると閉じる                                                                     | 30。1〜1440 の整数。範囲外・読めない値は既定で走り、stderr に1行                                                | runner                                                                                                               |
+| `ALTEROID_RUNNER_RECLAIM`                      | 孤児プロセスの回収。`reclaim` は撃つ、`observe` は委譲が0本のときの全員を撃たずに数えるだけ、`off` は走査しない                                    | `reclaim`。知らない値はエラーで起動しない。子を降ろさない構成（`ALTEROID_RUNNER_CHILD_UID` 無し）では走査しない | runner                                                                                                               |
+| `ALTEROID_RUNNER_DONE_TREE_REAP_AFTER_MINUTES` | 終わって久しい（`done`）担当の CLI の木を、回収が撃ち始めるまでの期限（分）。`off` は撃たない                                                      | 360（6時間）。正の整数か `off`。知らない値はエラーで起動しない                                                  | runner                                                                                                               |
+| `ALTEROID_PLUGINS_DIR`                         | runner が plugin を展開する置き場。起動時にこの中を片づける（信頼できない置き場は片づけない）                                                      | OS の一時ディレクトリの `alteroid-plugins`（`/workspace` には置かない）                                         | runner                                                                                                               |
+| `ALTEROID_PLUGIN_MARKETPLACE_URL`              | marketplace 名で plugin を取るときの取り元リポジトリの URL                                                                                         | `https://github.com/anthropics/claude-plugins-official`                                                         | **app の Service 変数だけ**。デーモンが起動時の生の環境変数から読み、正本の環境変数は見ない（`credential set` 不可） |
+| `ALTEROID_RUNNER_CHILD_GID` / `_CHILD_HOME`    | 子（マネージャー・作業者）を降ろす GID と HOME。UID は `ALTEROID_RUNNER_CHILD_UID`（runner 自身と同じ UID なら起動しない）                         | `Dockerfile` が `1001` と `/home/worker` を置く。無ければ GID は UID と同じ、HOME は指定なし                    | runner（変えるなら `Dockerfile` の値と揃える）                                                                       |
+
+- **compose では runner の変数は `compose.yaml` が名前を列挙したものしか渡らない**ので、表の「runner」の名前は compose では置けない（上の理由で足さない）。
+
 ### 4. デプロイ
 
 **`runner` を先に上げる。** daemon は起動時に runner の `/health` へ名乗りを聞きに行く（鍵無しで繋ぐくらいなら起動しない設計）。繋がらなければ最大2分は待ち直すので順番を外しても収束するが、順番どおりなら待たずに上がる。
@@ -485,11 +511,11 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
 
-| 要るもの       | 置き場                   | 状態                                                                                  |
-| -------------- | ------------------------ | ------------------------------------------------------------------------------------- |
-| `gh` コマンド  | イメージ（`Dockerfile`） | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
-| 書き込みの鍵   | **Shared Variables**     | `GH_TOKEN` を置く（下記）                                                             |
-| コミットの身元 | **Shared Variables**     | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
+| 要るもの       | 置き場                                | 状態                                                                                  |
+| -------------- | ------------------------------------- | ------------------------------------------------------------------------------------- |
+| `gh` コマンド  | イメージ（`Dockerfile`）              | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
+| 書き込みの鍵   | **正本**（`alteroid credential set`） | `GH_TOKEN` を置く（下記。Variables に置いてもマネージャーには届かない）               |
+| コミットの身元 | **Shared Variables か正本**           | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
 
 **これは下＝外の世界へ手を伸ばす鍵なので、渡すのが正しい**（記憶ストアの鍵と逆。伏せると人間が Claude Code でできる `gh pr create` が層を下りた瞬間にできなくなる＝デグレード。north_star 禁止1）。
 
@@ -515,12 +541,11 @@ GitHub → Settings → Developer settings → Personal access tokens → **Fine
 
 **初回はこれでよい。差し替え（ローテーション）はこの手順ではない** — 走行中のプロセスには届かないので、下の「鍵を回す」を使う。
 
-ダッシュボードの **Shared Variables** に5つ置くのがいちばん早い（他の変数と同じ場所で済む）。CLI から入れるなら Service ごとに1回ずつになる。
+**`GH_TOKEN` は正本へ置く**（下の「変数の代わりに正本へ置く」の手順）。Shared Variables や runner の Service 変数に置いても、**マネージャーには届かない** —— runner は自分の環境変数から鍵の名前（`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`）を落としてからマネージャーを起こし、鍵はクローンが正本から配った分だけを使う（`packages/core/src/runner.ts` の `childEnvLayers`）。
+
+**`GIT_*` の4つは鍵ではないので、Shared Variables（runner の Service 変数）に置けばマネージャーまで届く**（runner は鍵の名前以外の環境変数をそのままマネージャーへ渡す）。正本へ置いてもよい。CLI から入れるなら Service ごとに1回ずつになる。
 
 ```bash
-# 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
-printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
-
 railway variable set GIT_AUTHOR_NAME=takecchi --service runner --skip-deploys
 railway variable set GIT_AUTHOR_EMAIL=takeaki.kobayashi@gmail.com --service runner --skip-deploys
 railway variable set GIT_COMMITTER_NAME=takecchi --service runner --skip-deploys
@@ -531,7 +556,7 @@ railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service r
 
 ### ローカル（`docker compose`）でも同じ
 
-同じ5つを `.env` に置けば両方へ渡る（`compose.yaml` の `x-shared-env`）。確認は `docker compose exec -u 1001 runner gh auth status`。
+`GIT_*` の4つは `.env` に置けば app と runner の両方へ渡る（`compose.yaml` の `x-shared-env`）。**`GH_TOKEN` は `.env` に置いてもクローン（app）の子プロセスにしか効かない**ので、マネージャーに渡すなら `docker compose exec app alteroid credential set GH_TOKEN -f ./pat.txt` で正本へ置く。確認は `docker compose exec -u 1001 runner gh auth status`。
 
 ### 鍵を回す（走行中でも）
 
@@ -564,7 +589,7 @@ alteroid credential remove SOME_OLD_KEY --yes         # 外す（runner の器�
 
 **⚠️ `CLAUDE_CODE_OAUTH_TOKEN` はここへは置けない**（400 で断る）。正本はプールの側（`alteroid token add`）で、こちらへ置くと**名乗り直しのたびに回した鍵を巻き戻す**。
 
-**`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` も、他の普通の名前と同じ扱いである**（2026-10-06）。正本が唯一の出所で、**デーモンの環境変数（Shared Variables）は最後の土台ではない**。以前から Variables にだけ置いている器は、**起動時に1度だけ**正本へ移る（`scope: all`・シークレット。移した名前は stderr と日誌に出る。値は出ない）。以後は `alteroid credential set` / 画面で更新・削除でき、**即時に届く**（走行中の `gh` / `git` は呼ばれるたびに、マネージャーとクローンは次のターンの境界で畳んで resume する）。1度移った後で Variables を書き換えても正本は変わらない。
+**`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` も、他の普通の名前と同じ扱いである**（2026-10-06）。正本が唯一の出所で、**デーモンの環境変数（Shared Variables）は最後の土台ではない**。Variables にだけ置いた値は正本へ移らない（かつての起動時の1回きりの移行は外した）。クローンの子プロセスには今も届く（デーモンの起動時の環境変数の写しが子の env の土台になる）が、**マネージャーには届かない**（runner は自分の環境変数から鍵を拾わない）。マネージャーへ渡すには `alteroid credential set GH_TOKEN` で正本へ置く。正本に置けば、以後は `alteroid credential set` / 画面で更新・削除でき、**即時に届く**（走行中の `gh` / `git` は呼ばれるたびに、マネージャーとクローンは次のターンの境界で畳んで resume する）。
 
 **Codex（OpenAI）の API キー `CODEX_API_KEY`（Issue #486 M7）は置ける。** `GH_TOKEN` と同じ扱いで、値は空のまま Service Variables に置かない（置くなら `alteroid credential set CODEX_API_KEY -f -`）。Codex CLI の版は `Dockerfile` の `ARG CODEX_VERSION` が持つ。ChatGPT ログインの `auth.json`（`CODEX_HOME`）は別の経路である（#3939）——`alteroid codex login`（デバイスコード。表示された URL を開いてコードを入力する）でデーモンの器が取り、記憶ストアの正本に秘密として1つ置き、**runner だけ**へ降ろす（runner は `/home/worker/.codex/auth.json` へ 0600・worker の持ち主で書き出す。子の環境変数には置かない）。器を焼き直しても、runner が名乗るたびに降り直す。Codex が更新して書き換えたトークンは正本へ書き戻る（版の compare-and-swap）。状態は `alteroid codex status`、消すのは `alteroid codex logout`。`CODEX_API_KEY` が正本に在れば、そちらが先に使われる。
 
