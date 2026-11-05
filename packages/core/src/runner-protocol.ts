@@ -1636,14 +1636,17 @@ export interface RunnerClient {
   profile(): Promise<RunnerProfileFingerprint | undefined>;
   /** runner が繋ぎ直すたびに降ろし直す: 器が入れ替われば置いたものは消えるため。 */
   setProfile(script: string): Promise<RunnerProfileResult>;
-  /** 値は返らない。省略した実装には、口が無いことを「確かめられなかった」として扱い、「置いていない」という嘘を書かせない。 */
-  mcpServers?(): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * 値は返らない。置いていなければ `undefined`（`/health` に欄が無い runner も同じ）。
+   * 欄が在るのに読めなかったときは投げる（「置いていない」へ倒さない）。試験の偽の既定（`fakeRunnerClient`）は `undefined`。
+   */
+  mcpServers(): Promise<RunnerMcpServersFingerprint | undefined>;
   /**
    * 空の `{}` は登録を外す。runner が繋ぎ直すたびに降ろし直す（登録はプロセスのメモリにしか無い）。
    * 効くのはこれから開くセッションから（SDK の `mcpServers` は `query()` の起動時に1度だけ渡る）。
-   * 省略した実装へは降ろさない。
+   * 試験の偽の既定（`fakeRunnerClient`）は、何も置かず指紋も返さない（`undefined`）。
    */
-  setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
   /**
    * 委譲先の許可規則の一覧を丸ごと置き直す（#4952）。空の配列は全部外す。runner が繋ぎ直すたびに降ろし直す（一覧はプロセスのメモリにしか無い）。
    * 走行中のセッションへも置き直す（`setMcpServers` と違い、次に開くセッションを待たない）。

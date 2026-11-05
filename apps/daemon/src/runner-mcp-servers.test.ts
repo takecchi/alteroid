@@ -253,8 +253,8 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
   it('HttpRunner: 古い runner の 404 は RunnerHttpError のまま、/health の欠けは undefined になる', async () => {
     const r = await rig({ oldRunner: true, oldDaemon: true });
 
-    await expect(r.client.setMcpServers?.(REGISTRATION)).rejects.toBeInstanceOf(RunnerHttpError);
-    expect(await r.client.mcpServers?.()).toBeUndefined();
+    await expect(r.client.setMcpServers(REGISTRATION)).rejects.toBeInstanceOf(RunnerHttpError);
+    expect(await r.client.mcpServers()).toBeUndefined();
   });
 
   it('HttpRunner: /health の mcpServers の欄が在るのに読めない形なら、undefined（何も載っていない）ではなく投げる（#2487）', async () => {
@@ -262,11 +262,11 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
     const stores = createMemoryStores();
     await stores.mcpServers.write(REGISTRATION);
     const r = await rig({ stores, garbleHealth, oldDaemon: true });
-    await r.client.setMcpServers?.(REGISTRATION);
-    expect((await r.client.mcpServers?.())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+    await r.client.setMcpServers(REGISTRATION);
+    expect((await r.client.mcpServers())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
 
     garbleHealth.on = true;
-    await expect(r.client.mcpServers?.()).rejects.toThrow('mcpServers の欄を読めなかった');
+    await expect(r.client.mcpServers()).rejects.toThrow('mcpServers の欄を読めなかった');
   });
 
   it('形が不正な登録は runner が 400 で拒み、前の登録が残る（応答に値を載せない）', async () => {
@@ -281,7 +281,7 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
     } as unknown as McpServers;
     let message = '';
     try {
-      await r.client.setMcpServers?.(bad);
+      await r.client.setMcpServers(bad);
     } catch (error) {
       message = String(error);
     }

@@ -95,6 +95,12 @@ class EventfulRunner implements RunnerClient {
     return undefined;
   }
   async deleteArchive(): Promise<void> {}
+  async mcpServers(): Promise<undefined> {
+    return undefined;
+  }
+  async setMcpServers(): Promise<undefined> {
+    return undefined;
+  }
   async close(): Promise<void> {}
 }
 

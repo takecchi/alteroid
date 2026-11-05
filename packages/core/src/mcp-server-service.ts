@@ -21,7 +21,7 @@ export interface McpServerService {
   read(): Promise<StoredMcpServers | null>;
   /** 空の `{}` は「登録を外す」。形が不正・`ifMatch` の版違いなら器が投げ、保存も配布もしない。 */
   apply(servers: McpServers, options?: WriteMcpServersOptions): Promise<ApplyMcpServersResult>;
-  /** 口を持たない偽物へは `null`（押し込みを試みたことにしない）。 */
+  /** 指紋が一致していれば `null`（押し込みを試みたことにしない）。 */
   syncRunner(runner: RunnerClient): Promise<{ mcpServers?: RunnerMcpServersFingerprint } | null>;
   // 任意の口: `apply()` の即時の配布は `ManagerPool` の押し込みの帳面と挑み直しを通らないので、`ManagerPool` が購読して同じ帳面に積む。
   onPushed?(listener: (results: readonly McpServersRunnerResult[]) => void): () => void;
@@ -74,7 +74,6 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
-        if (runner.setMcpServers === undefined) return null;
         const stored = await stores.mcpServers.read();
         const servers = stored?.mcpServers ?? {};
         const want =
@@ -86,7 +85,7 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
         let unreadable = false;
         let current: RunnerMcpServersFingerprint | undefined;
         try {
-          current = await runner.mcpServers?.();
+          current = await runner.mcpServers();
         } catch {
           unreadable = true;
         }
@@ -101,9 +100,9 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
   function pushAll(servers: McpServers): Promise<McpServersRunnerResult[]> {
     return pushToRunners<McpServersRunnerResult>(
       runners,
-      (runner) => runner.setMcpServers !== undefined,
+      () => true,
       async (runner) => {
-        const placed = await runner.setMcpServers?.(servers);
+        const placed = await runner.setMcpServers(servers);
         return placed === undefined ? undefined : { mcpServers: placed };
       },
     );

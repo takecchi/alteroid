@@ -1157,7 +1157,7 @@ describe('器の入れ替えの判定材料', () => {
     const [credentials] = await Promise.all([
       client.credentials(),
       client.profile(),
-      client.mcpServers?.(),
+      client.mcpServers(),
       client.plugins?.(),
     ]);
     expect(credentials).toEqual([]);

@@ -11271,7 +11271,7 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
     });
     expect(byId.get('runner-old')).toMatchObject({ ok: false });
 
-    expect((await fresh.mcpServers?.())?.sha256).toBe(want);
+    expect((await fresh.mcpServers())?.sha256).toBe(want);
 
     const journal = await stores.journal.list({ types: ['decision'] });
     const entry = journal.find(

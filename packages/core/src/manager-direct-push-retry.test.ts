@@ -109,7 +109,7 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(calls).toBeGreaterThan(1);
-    expect((await s.runner.mcpServers?.())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+    expect((await s.runner.mcpServers())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
     expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
 
     await s.pool.stop();

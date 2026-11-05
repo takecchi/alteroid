@@ -104,7 +104,7 @@ describe('MCP の登録を置いて配る（apply）', () => {
     expect(result.names).toEqual([]);
     expect(result.sha256).toBeUndefined();
     expect(result.runners).toEqual([{ runnerId: 'runner-test', ok: true }]);
-    expect(await s.runner.mcpServers?.()).toBeUndefined();
+    expect(await s.runner.mcpServers()).toBeUndefined();
   });
 
   it('形が不正なら保存も配布もしない（前のものが残る）', async () => {
@@ -113,15 +113,14 @@ describe('MCP の登録を置いて配る（apply）', () => {
       s.service.apply({ bad: { command: 'x', nope: 1 } } as unknown as McpServers),
     ).rejects.toThrow();
     expect((await s.stores.mcpServers.read())?.mcpServers).toEqual(REGISTRATION);
-    expect((await s.runner.mcpServers?.())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+    expect((await s.runner.mcpServers())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
   });
 
-  it('口を持たない実装（setMcpServers が無い）へは配ったとも失敗したとも言わない', async () => {
-    // メソッドは prototype に在るので、delete ではなく own の undefined で覆う。
-    (s.runner as { setMcpServers?: unknown }).setMcpServers = undefined;
+  it('指紋を返さない実装（setMcpServers が undefined を返す）へは、置けたとだけ言い、指紋は載せない', async () => {
+    s.runner.setMcpServers = async () => undefined;
     const result = await s.service.apply(REGISTRATION);
-    expect(result.runners).toEqual([]);
-    expect(await s.service.syncRunner(s.runner)).toBeNull();
+    expect(result.runners).toEqual([{ runnerId: 'runner-test', ok: true }]);
+    expect(await s.service.syncRunner(s.runner)).toEqual({});
   });
 });
 
@@ -150,7 +149,7 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     broken = false;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(s.pool.pushHealthOf('runner-test')?.mcpServers?.status).toBe('ok');
-    expect((await s.runner.mcpServers?.())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+    expect((await s.runner.mcpServers())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
 
     await s.pool.stop();
   });
@@ -187,7 +186,7 @@ describe('MCP の登録の押し込みの挑み直し', () => {
 describe('syncRunner: runner の指紋を読めなかった回（#2487）', () => {
   it('登録が空（want が無い）で指紋が読めなくても、「何も載っていない」と読まず、空を降ろす', async () => {
     const s = await setup();
-    await s.runner.setMcpServers?.(REGISTRATION);
+    await s.runner.setMcpServers(REGISTRATION);
     const readReal = s.runner.mcpServers?.bind(s.runner);
     const placed: McpServers[] = [];
     const setReal = s.runner.setMcpServers?.bind(s.runner);
