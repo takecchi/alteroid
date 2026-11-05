@@ -1042,11 +1042,23 @@ async function writeMemoryDocument(args: {
     });
   } catch (error) {
     if (error instanceof MemoryConflictError) {
+      // 読んだ時点でも書く時点でも無い文書へ版を渡した: 「読んだ後に消された」ではない（一度も無かった）ので、別の文で断る
+      if (before === null && error.current === null) {
+        return { kind: 'refused', body: describeMemoryWriteVersionForMissing(slug) };
+      }
       return { kind: 'refused', body: describeMemoryConflict(slug, '全文置換', error.current) };
     }
     throw error;
   }
   return { kind: 'written', written };
+}
+
+function describeMemoryWriteVersionForMissing(slug: string): string {
+  return (
+    `記憶 ${slug} は無い（読んだ時点でも無かった）のに base_version が渡されたので、全文置換を**書かなかった**。` +
+    '**何も書いていない。**新しく作るなら base_version を付けずに呼ぶこと。' +
+    '別の文書のつもりだったなら、memory_list で slug を確かめること。'
+  );
 }
 
 // 書いた後の日誌（全文置換）
@@ -1075,7 +1087,8 @@ async function journalMemoryWrite(args: {
   );
 }
 
-// 書く → 書いた後の記憶を読み直す → 日誌、の段。競合の断りは書く段だけから出る
+// 書く → 日誌 → 書いた後の記憶を読み直す、の段。競合の断りは書く段だけから出る
+// 日誌を読み直しより先に書く: 読み直しが落ちると、記憶は書けているのに日誌が無い食い違いになるため（#6445）
 async function persistMemoryWrite(args: {
   stores: Stores;
   slug: string;
@@ -1092,8 +1105,8 @@ async function persistMemoryWrite(args: {
   const outcome = await writeMemoryDocument({ stores, slug, content, before, baseVersion });
   if (outcome.kind === 'refused') return outcome;
   const { written } = outcome;
-  const memoryAfter = await stores.persona.documents();
   await journalMemoryWrite({ stores, slug, cause, before, written, summary });
+  const memoryAfter = await stores.persona.documents();
   return { kind: 'persisted', written, memoryAfter };
 }
 
