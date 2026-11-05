@@ -549,6 +549,101 @@ function renderPermissionQueued(id: string): string {
   );
 }
 
+type AskHumanInput = {
+  question: string;
+  context?: string;
+  questions?: NonNullable<PendingApproval['questions']>;
+  managerId?: string;
+  requestId?: string;
+};
+
+// 設問（questions）→ question の順に見て、最初に当たった断りの理由を返す。通れば null
+function describeAskHumanViolation(input: AskHumanInput): string | null {
+  const { question, questions } = input;
+  if (questions !== undefined) {
+    const violation = describeQuestionsViolation(questions);
+    if (violation !== null) return violation;
+  }
+  return (
+    describeStringLengthViolation('question', question, { min: 1 }) ??
+    describeBlankViolation('question', question)
+  );
+}
+
+function renderAskHumanRefusal(violation: string): string {
+  return `承認待ちには積まなかった: ${violation}`;
+}
+
+// 宛先の会話は次の順に決める: ① 人間のターンの会話（`getConversationId()`。人間の発言・回答のターンだけが持つ）→ ② `managerId` の委譲の起点（`Job.conversationId`）→ ③ 作業会話（`getWorkConversationId()`。内部ターンでは、読んでいる報告の委譲の起点 = `Turn.originConversationId`）。
+// ②を③（報告ターンの起点）より先に見る: 別の委譲 Y の報告を読んでいるターンで、委譲 X の確認を回すこともあるため。
+// ①を②より先にする（Why not「委譲の起点を人間の会話より先に」）: 人間が会話 B で話している最中の確認を、別の会話で頼まれた委譲の会話に出すと、B の人が答えを見失うため（#4216。試験は clone-manager-origin-conversation.test.ts の「ask_human: 人間の会話のターンでは、これまでどおり…」）
+async function resolveAskHumanConversationId(params: {
+  stores: Stores;
+  managerId: string | undefined;
+  getConversationId: CloneToolsShared['getConversationId'];
+  getWorkConversationId: CloneToolsShared['getWorkConversationId'];
+}): Promise<string | undefined> {
+  const { stores, managerId, getConversationId, getWorkConversationId } = params;
+  return (
+    getConversationId() ?? (await jobConversationOf(stores, managerId)) ?? getWorkConversationId()
+  );
+}
+
+// `randomUUID()` → `new Date()` → `approvalTaskIdsEntry(context)` の順で呼ぶ
+function buildAskHumanApproval(params: {
+  input: AskHumanInput;
+  conversationId: string | undefined;
+  context: ToolContext;
+}): PendingApproval {
+  const { input, conversationId, context } = params;
+  const { question, context: background, questions, managerId, requestId } = input;
+  return {
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+    question,
+    ...(background === undefined ? {} : { context: background }),
+    ...(questions === undefined || questions.length === 0 ? {} : { questions }),
+    ...(managerId === undefined ? {} : { jobId: managerId }),
+    ...(requestId === undefined ? {} : { requestId }),
+    ...(conversationId === undefined ? {} : { conversationId }),
+    ...approvalTaskIdsEntry(context),
+  };
+}
+
+// 積む → 日誌 → 器への知らせ の順（#6490 の残り: 日誌が書けないと知らせが呼ばれない。順の入れ替えはここだけで済む）。
+// 日誌が書けなかった呼びは投げるので、知らせへ来ない。
+// ターンの会話があれば conversationId はそれと同じ（宛先の連鎖の先頭）なので、知らせは1回だけ呼ぶ
+async function enqueueAskHumanApproval(params: {
+  stores: Stores;
+  context: ToolContext;
+  approval: PendingApproval;
+  conversationId: string | undefined;
+}): Promise<void> {
+  const { stores, context, approval, conversationId } = params;
+  try {
+    await stores.jobs.putApproval(approval);
+  } catch (error) {
+    noteDroppedRecord('承認待ち', approvalShape(approval), error);
+    throw new ApprovalNotRecordedError('ask_human', approval, error);
+  }
+  await appendJournalOrThrow(
+    'ask_human',
+    stores.journal,
+    {
+      type: 'escalation',
+      question: approval.question,
+      approvalId: approval.id,
+    },
+    'act-completed',
+  );
+  context.noteQuestionAsked?.(conversationId);
+  context.emit({ type: 'ask_human', approvalId: approval.id, question: approval.question });
+}
+
+function renderAskHumanQueued(id: string): string {
+  return `承認待ちキューに積んだ（${id}）。回答は後から届く。`;
+}
+
 export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId, getWorkConversationId } = shared;
   return [
@@ -593,55 +688,20 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
               '⚠️ 通るのは受信箱に確認として届いた requestId だけである（生ログから拾った id は通らない。形の詳細は manager_send の requestId）',
           ),
       },
-      async ({ question, context: background, questions, managerId, requestId }) => {
-        if (questions !== undefined) {
-          const violation = describeQuestionsViolation(questions);
-          if (violation !== null) return text(`承認待ちには積まなかった: ${violation}`);
-        }
-        const questionError =
-          describeStringLengthViolation('question', question, { min: 1 }) ??
-          describeBlankViolation('question', question);
-        if (questionError !== null) return text(`承認待ちには積まなかった: ${questionError}`);
-        // 宛先の会話は次の順に決める: ① 人間のターンの会話（`getConversationId()`。人間の発言・回答のターンだけが持つ）→ ② `managerId` の委譲の起点（`Job.conversationId`）→ ③ 作業会話（`getWorkConversationId()`。内部ターンでは、読んでいる報告の委譲の起点 = `Turn.originConversationId`）。
-        // ②を③（報告ターンの起点）より先に見る: 別の委譲 Y の報告を読んでいるターンで、委譲 X の確認を回すこともあるため。
-        // ①を②より先にする（Why not「委譲の起点を人間の会話より先に」）: 人間が会話 B で話している最中の確認を、別の会話で頼まれた委譲の会話に出すと、B の人が答えを見失うため（#4216。試験は clone-manager-origin-conversation.test.ts の「ask_human: 人間の会話のターンでは、これまでどおり…」）
-        const conversationId =
-          getConversationId() ??
-          (await jobConversationOf(stores, managerId)) ??
-          getWorkConversationId();
+      async (args) => {
+        const violation = describeAskHumanViolation(args);
+        if (violation !== null) return text(renderAskHumanRefusal(violation));
+
+        const conversationId = await resolveAskHumanConversationId({
+          stores,
+          managerId: args.managerId,
+          getConversationId,
+          getWorkConversationId,
+        });
         await context.flushReply?.();
-        const approval: PendingApproval = {
-          id: randomUUID(),
-          createdAt: new Date().toISOString(),
-          question,
-          ...(background === undefined ? {} : { context: background }),
-          ...(questions === undefined || questions.length === 0 ? {} : { questions }),
-          ...(managerId === undefined ? {} : { jobId: managerId }),
-          ...(requestId === undefined ? {} : { requestId }),
-          ...(conversationId === undefined ? {} : { conversationId }),
-          ...approvalTaskIdsEntry(context),
-        };
-        try {
-          await stores.jobs.putApproval(approval);
-        } catch (error) {
-          noteDroppedRecord('承認待ち', approvalShape(approval), error);
-          throw new ApprovalNotRecordedError('ask_human', approval, error);
-        }
-        await appendJournalOrThrow(
-          'ask_human',
-          stores.journal,
-          {
-            type: 'escalation',
-            question,
-            approvalId: approval.id,
-          },
-          'act-completed',
-        );
-        // 問いを積んだ時点で控える（日誌が書けなかった呼びは上で投げており、ここへ来ない）。
-        // ターンの会話があれば conversationId はそれと同じ（上の連鎖の先頭）なので、1回だけ呼ぶ
-        context.noteQuestionAsked?.(conversationId);
-        context.emit({ type: 'ask_human', approvalId: approval.id, question });
-        return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
+        const approval = buildAskHumanApproval({ input: args, conversationId, context });
+        await enqueueAskHumanApproval({ stores, context, approval, conversationId });
+        return text(renderAskHumanQueued(approval.id));
       },
     ),
 
