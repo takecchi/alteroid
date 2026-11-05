@@ -35,10 +35,7 @@ import { schedulePhases, schedules } from './schema.js';
 function parsePlan(kind: string, value: unknown): ScheduledRequest {
   const parsed = scheduledRequestSchema.safeParse(value);
   if (parsed.success) return parsed.data;
-  throw new UnreadableScheduleError(
-    `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
-    { kind },
-  );
+  throw UnreadableScheduleError.forRow({ kind, reason: parsed.error.message });
 }
 
 /** kind 以外の値は載せない: `request` には人間の依頼文がそのまま入りうる。 */

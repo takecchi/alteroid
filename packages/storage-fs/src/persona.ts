@@ -17,10 +17,10 @@ import {
   resolveMemoryDescriptionFreshness,
   sha256Hex,
   stripMemoryContent,
+  toMemoryCreatedAt,
 } from '@alteroid/core';
 import type {
   JournalStore,
-  MemoryCreatedAt,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -386,10 +386,6 @@ export class FsPersonaStore implements PersonaStore {
       return docs.length;
     });
   }
-}
-
-function toMemoryCreatedAt(at: string | undefined): MemoryCreatedAt {
-  return at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 }
 
 function isNotFound(error: unknown): boolean {

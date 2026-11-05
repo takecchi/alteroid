@@ -9,6 +9,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
+// 行が無い・書いた値が読み戻る・mutate が null のときの契約は `verifyJobStoreContract`（job-store-contract.test.ts）。ここは fs の JSON ファイルにしかない期待だけを持つ。
 describe('FsJobStore.updateApproval（issue #2007）', () => {
   let root: string;
 
@@ -20,37 +21,6 @@ describe('FsJobStore.updateApproval（issue #2007）', () => {
 
   beforeEach(async () => {
     root = await makeTempDir('alteroid-test-');
-  });
-
-  it('行が無ければ null を返し、mutate を呼ばない', async () => {
-    const stores = createFsStores(root);
-    let called = false;
-    const result = await stores.jobs.updateApproval('nope', (current) => {
-      called = true;
-      return current;
-    });
-    expect(result).toBeNull();
-    expect(called).toBe(false);
-  });
-
-  it('mutate の結果を書いて返し、読み直すと書いた値が在る', async () => {
-    const stores = createFsStores(root);
-    await stores.jobs.putApproval(APPROVAL);
-    const result = await stores.jobs.updateApproval('ap-1', (current) => ({
-      ...current,
-      answeredAt: '2026-09-01T00:05:00.000Z',
-      answer: 'よい',
-    }));
-    expect(result?.answer).toBe('よい');
-    expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
-  });
-
-  it('mutate が null を返したら何も書かず null を返す', async () => {
-    const stores = createFsStores(root);
-    await stores.jobs.putApproval(APPROVAL);
-    const result = await stores.jobs.updateApproval('ap-1', () => null);
-    expect(result).toBeNull();
-    expect(await stores.jobs.getApproval('ap-1')).toEqual(APPROVAL);
   });
 
   it('壊れた承認待ちの行は、書く回にも消さない（#1928 の持ち回り）', async () => {

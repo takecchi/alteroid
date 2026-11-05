@@ -10,10 +10,10 @@ import {
   nextDescribedState,
   sha256Hex,
   stripMemoryContent,
+  toMemoryCreatedAt,
 } from '@alteroid/core';
 import type {
   JournalStore,
-  MemoryCreatedAt,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -542,7 +542,7 @@ function metaOf(
     slug: row.slug,
     title: memoryTitleOf(content, row.slug),
     updatedAt,
-    createdAt: toMemoryCreatedAt(row.createdAt),
+    createdAt: toMemoryCreatedAt(row.createdAt === null ? undefined : toIso(row.createdAt)),
     bytes: currentBytes,
     frontmatter: derived.frontmatter,
     kind: derived.kind,
@@ -568,8 +568,4 @@ function toDocument(row: MemoryRow): MemoryDocument {
     parent: meta.parent,
     descriptionFreshness: meta.descriptionFreshness,
   };
-}
-
-function toMemoryCreatedAt(at: Date | string | null): MemoryCreatedAt {
-  return at === null ? { kind: 'unknown' } : { kind: 'known', at: toIso(at) };
 }

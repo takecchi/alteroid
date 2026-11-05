@@ -8,7 +8,9 @@ import {
   loginRequestSchema,
   UnreadableAccountError,
   assertNoNul,
-  compareCodeUnits,
+  compareAccessTokenOrder,
+  compareAccountOrder,
+  compareIdentityOrder,
   hasNul,
   prepareAccessTokenForWrite,
   prepareAccountForWrite,
@@ -98,29 +100,6 @@ function describeSkippedIdentityRow(params: {
     `alteroid: identities の不正な行を読み飛ばしました` +
     `（${params.index + 1} 行目、${params.reason}）${keyNote}`
   );
-}
-
-// 文字列比較せず実時刻で比べる: オフセット表記の違う行で順が崩れ、pg（`timestamptz` の `asc()`）と食い違うため
-// 単独では使わない: `createdAt` が同着の行どうしの相対順を決めないため
-function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): number {
-  return Date.parse(a.createdAt) - Date.parse(b.createdAt);
-}
-
-// 2次キーに `id` を使う: `putAccount` は既存行を消して末尾へ足すので、`createdAt` 同着の片方だけ更新すると「最後に触られた順」になるため
-function compareAccountOrder(a: AuthAccount, b: AuthAccount): number {
-  return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
-}
-
-function compareIdentityOrder(a: AuthIdentity, b: AuthIdentity): number {
-  return (
-    compareCreatedAt(a, b) ||
-    compareCodeUnits(a.provider, b.provider) ||
-    compareCodeUnits(a.subject, b.subject)
-  );
-}
-
-function compareAccessTokenOrder(a: AccessTokenRecord, b: AccessTokenRecord): number {
-  return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 }
 
 const LOGIN_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;

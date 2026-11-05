@@ -5,13 +5,13 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-// 承認の「未決」の判定（`listApprovals({ pendingOnly: true })`）の、いまの端の振る舞いを固定する（現状の挙動を固定。まとめる PR で見直す）。
-// 本番コードは変えない。fs 実装は `answeredAt === undefined && withdrawnAt === undefined` で見る。メモリ実装（core の testing.ts）と同じ答えのはず。
+// 承認の「未決」の判定（`listApprovals({ pendingOnly: true })`）の、端の振る舞いを固定する。
+// fs 実装もメモリ実装（core の testing.ts）も core の `approvalStateOf(...) === 'unanswered'` で見るので、同じ答えになる。
 // postgres 実装は SQL（`isNull(answeredAt) and isNull(withdrawnAt)`）で別実装のため、ここでは固定しない（DB が要る）。
 
 const AT = '2026-10-29T00:00:00.000Z';
 
-describe('storage-fs jobs.ts listApprovals の未決の判定（現状の挙動を固定。まとめる PR で見直す）', () => {
+describe('storage-fs jobs.ts listApprovals の未決の判定', () => {
   it('どちらも立っていない行だけが未決。回答済・取り下げ・両方立った行は載らない', async () => {
     const root = await makeTempDir('alteroid-test-');
     const stores = createFsStores(root);
