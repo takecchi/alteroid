@@ -1,0 +1,2215 @@
+{
+  "lengths": {
+    "delete-ok#1": 139,
+    "delete-ok#2": 123,
+    "delete-ok#3": 130,
+    "delete-ok#4": 132,
+    "delete-external#1": 122,
+    "delete-external#2": 123,
+    "delete-twice#1": 122,
+    "delete-twice#2": 58,
+    "missing#1": 58,
+    "missing#2": 53,
+    "missing#3": 52,
+    "missing-stray-copy#1": 58,
+    "missing-stray-copy#2": 58,
+    "get-meta-throws": 54,
+    "journal-first-fails#1": 228,
+    "journal-first-fails#2": 227,
+    "journal-first-fails#3": 123,
+    "journal-first-fails-missing": 58,
+    "content-refused#1": 83,
+    "content-refused#2": 119,
+    "content-refused-journal-fails": 83,
+    "already-gone": 57,
+    "already-gone-journal-fails": 57,
+    "remove-throws#1": 53,
+    "remove-throws#2": 52,
+    "remove-throws#3": 114,
+    "remove-throws-multiline": 44,
+    "reason-with-value#1": 127,
+    "reason-with-value#2": 64,
+    "reason-with-value#3": 58,
+    "meta-forms#1": 111,
+    "meta-forms#2": 413,
+    "meta-forms#3": 127,
+    "meta-forms#4": 121,
+    "meta-forms#5": 129,
+    "meta-forms#6": 131
+  },
+  "scenarios": {
+    "delete-ok#1": {
+      "output": {
+        "length": 139,
+        "text": "kept-with-copy.png（id=att-kept-copy、2.0 KiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-plain",
+          "name": "plain.txt",
+          "mediaType": "text/plain",
+          "size": 12,
+          "sha256": "sha-fake-att-plain",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-kept",
+          "name": "kept-no-copy.pdf",
+          "mediaType": "text/plain",
+          "size": 500,
+          "sha256": "sha-fake-att-kept",
+          "uploadedBy": "account:acc-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-plain-copy",
+          "name": "plain-copy.txt",
+          "mediaType": "text/plain",
+          "size": 7,
+          "sha256": "sha-fake-att-plain-copy",
+          "conversationId": "conv-1",
+          "uploadedBy": "manager:mgr-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-untouched",
+          "name": "untouched.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-untouched",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": ["att-plain-copy/plain-copy.txt"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: kept-with-copy.png（id=att-kept-copy）",
+          "grounds": "消す前の控え: id=att-kept-copy name=kept-with-copy.png type=image/png size=2048 sha256=sha-fake-att-kept-copy 出所=人間 保存中だった（2026-10-28T06:00:00.000Z から）"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-kept-copy"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: kept-with-copy.png（id=att-kept-copy）",
+            "grounds": "消す前の控え: id=att-kept-copy name=kept-with-copy.png type=image/png size=2048 sha256=sha-fake-att-kept-copy 出所=人間 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-kept-copy"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "delete-ok#2": {
+      "output": {
+        "length": 123,
+        "text": "plain.txt（id=att-plain、12 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-kept",
+          "name": "kept-no-copy.pdf",
+          "mediaType": "text/plain",
+          "size": 500,
+          "sha256": "sha-fake-att-kept",
+          "uploadedBy": "account:acc-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-plain-copy",
+          "name": "plain-copy.txt",
+          "mediaType": "text/plain",
+          "size": 7,
+          "sha256": "sha-fake-att-plain-copy",
+          "conversationId": "conv-1",
+          "uploadedBy": "manager:mgr-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-untouched",
+          "name": "untouched.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-untouched",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": ["att-plain-copy/plain-copy.txt"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "添付の中身と控えを消す: plain.txt（id=att-plain）",
+          "grounds": "消す前の控え: id=att-plain name=plain.txt type=text/plain size=12 sha256=sha-fake-att-plain 出所=クローン 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-plain"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: plain.txt（id=att-plain）",
+            "grounds": "消す前の控え: id=att-plain name=plain.txt type=text/plain size=12 sha256=sha-fake-att-plain 出所=クローン 保存していなかった"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-plain"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "delete-ok#3": {
+      "output": {
+        "length": 130,
+        "text": "kept-no-copy.pdf（id=att-kept、500 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-plain-copy",
+          "name": "plain-copy.txt",
+          "mediaType": "text/plain",
+          "size": 7,
+          "sha256": "sha-fake-att-plain-copy",
+          "conversationId": "conv-1",
+          "uploadedBy": "manager:mgr-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-untouched",
+          "name": "untouched.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-untouched",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": ["att-plain-copy/plain-copy.txt"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "添付の中身と控えを消す: kept-no-copy.pdf（id=att-kept）",
+          "grounds": "消す前の控え: id=att-kept name=kept-no-copy.pdf type=text/plain size=500 sha256=sha-fake-att-kept 出所=人間 保存中だった（2026-10-28T06:00:00.000Z から）"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-kept"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: kept-no-copy.pdf（id=att-kept）",
+            "grounds": "消す前の控え: id=att-kept name=kept-no-copy.pdf type=text/plain size=500 sha256=sha-fake-att-kept 出所=人間 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-kept"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "delete-ok#4": {
+      "output": {
+        "length": 132,
+        "text": "plain-copy.txt（id=att-plain-copy、7 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-untouched",
+          "name": "untouched.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-untouched",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "添付の中身と控えを消す: plain-copy.txt（id=att-plain-copy）",
+          "grounds": "消す前の控え: id=att-plain-copy name=plain-copy.txt type=text/plain size=7 sha256=sha-fake-att-plain-copy 出所=マネージャー 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-plain-copy"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: plain-copy.txt（id=att-plain-copy）",
+            "grounds": "消す前の控え: id=att-plain-copy name=plain-copy.txt type=text/plain size=7 sha256=sha-fake-att-plain-copy 出所=マネージャー 保存していなかった"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-plain-copy"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "delete-external#1": {
+      "output": {
+        "length": 122,
+        "text": "big.bin（id=att-ext、4.8 MiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-inline",
+          "name": "small.bin",
+          "mediaType": "text/plain",
+          "size": 3,
+          "sha256": "sha-fake-att-inline",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: big.bin（id=att-ext）",
+          "grounds": "消す前の控え: id=att-ext name=big.bin type=text/plain size=5000000 sha256=sha-fake-att-ext 出所=連携 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: big.bin（id=att-ext）",
+            "grounds": "消す前の控え: id=att-ext name=big.bin type=text/plain size=5000000 sha256=sha-fake-att-ext 出所=連携 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "true"
+        },
+        {
+          "op": "externalBlob.delete",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "ok"
+        }
+      ]
+    },
+    "delete-external#2": {
+      "output": {
+        "length": 123,
+        "text": "small.bin（id=att-inline、3 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "添付の中身と控えを消す: small.bin（id=att-inline）",
+          "grounds": "消す前の控え: id=att-inline name=small.bin type=text/plain size=3 sha256=sha-fake-att-inline 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-inline"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: small.bin（id=att-inline）",
+            "grounds": "消す前の控え: id=att-inline name=small.bin type=text/plain size=3 sha256=sha-fake-att-inline 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-inline"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "delete-twice#1": {
+      "output": {
+        "length": 122,
+        "text": "twice.txt（id=att-twice、4 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: twice.txt（id=att-twice）",
+          "grounds": "消す前の控え: id=att-twice name=twice.txt type=text/plain size=4 sha256=sha-fake-att-twice 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-twice"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: twice.txt（id=att-twice）",
+            "grounds": "消す前の控え: id=att-twice name=twice.txt type=text/plain size=4 sha256=sha-fake-att-twice 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-twice"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "delete-twice#2": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-twice は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-twice"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-twice"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "missing#1": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-ghost は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [
+        {
+          "id": "att-other",
+          "name": "other.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-other",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "missing#2": {
+      "output": {
+        "length": 53,
+        "text": "添付 ../x は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [
+        {
+          "id": "att-other",
+          "name": "other.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-other",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "../x"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "../x"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "missing#3": {
+      "output": {
+        "length": 52,
+        "text": "添付 a b は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [
+        {
+          "id": "att-other",
+          "name": "other.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-other",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "a b"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "a b"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "missing-stray-copy#1": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-stray は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-stray"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-stray"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "missing-stray-copy#2": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-stray は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-stray"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-stray"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "get-meta-throws": {
+      "output": {
+        "length": 54,
+        "text": "添付 att-a を消せなかった: Error: 控えが読めない（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": ["att-a/a.txt"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "journal-first-fails#1": {
+      "output": {
+        "length": 228,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nfile_delete は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=37 grounds.chars=126\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "attachments": [
+        {
+          "id": "att-keep",
+          "name": "keep-me.txt",
+          "mediaType": "text/plain",
+          "size": 9,
+          "sha256": "sha-fake-att-keep",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 99,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": ["att-keep/keep-me.txt"],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:00:00.000Z 日誌を記録できませんでした（decision decision.chars=37 grounds.chars=126）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-keep"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: keep-me.txt（id=att-keep）",
+            "grounds": "消す前の控え: id=att-keep name=keep-me.txt type=text/plain size=9 sha256=sha-fake-att-keep 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-first-fails#2": {
+      "output": {
+        "length": 227,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nfile_delete は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=32 grounds.chars=95\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "attachments": [
+        {
+          "id": "att-keep",
+          "name": "keep-me.txt",
+          "mediaType": "text/plain",
+          "size": 9,
+          "sha256": "sha-fake-att-keep",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 99,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": ["att-keep/keep-me.txt"],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（decision decision.chars=32 grounds.chars=95）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+            "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=99 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-first-fails#3": {
+      "output": {
+        "length": 123,
+        "text": "keep-me.txt（id=att-keep、9 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 99,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "添付の中身と控えを消す: keep-me.txt（id=att-keep）",
+          "grounds": "消す前の控え: id=att-keep name=keep-me.txt type=text/plain size=9 sha256=sha-fake-att-keep 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-keep"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: keep-me.txt（id=att-keep）",
+            "grounds": "消す前の控え: id=att-keep name=keep-me.txt type=text/plain size=9 sha256=sha-fake-att-keep 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-keep"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "journal-first-fails-missing": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-ghost は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "false"
+        }
+      ]
+    },
+    "content-refused#1": {
+      "output": {
+        "length": 83,
+        "text": "添付 att-ext は消していない（控えも残した）。中身を置き場から消せなかった。理由: 置き場が応答しない。もう一度 file_delete を呼ぶと再試行する。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": ["att-ext/ext.bin"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+          "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身を置き場から消せなかったので、消していない（控えも残した）: ext.bin（id=att-ext）",
+          "grounds": "理由: 置き場が応答しない。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+            "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "threw AttachmentContentRemoveError"
+        },
+        {
+          "op": "externalBlob.delete",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "threw AttachmentContentRemoveError"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身を置き場から消せなかったので、消していない（控えも残した）: ext.bin（id=att-ext）",
+            "grounds": "理由: 置き場が応答しない。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "content-refused#2": {
+      "output": {
+        "length": 119,
+        "text": "ext.bin（id=att-ext、10 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+          "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+            "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "true"
+        },
+        {
+          "op": "externalBlob.delete",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "ok"
+        }
+      ]
+    },
+    "content-refused-journal-fails": {
+      "output": {
+        "length": 83,
+        "text": "添付 att-ext は消していない（控えも残した）。中身を置き場から消せなかった。理由: 置き場が応答しない。もう一度 file_delete を呼ぶと再試行する。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+          "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:00:00.000Z 日誌（file_delete）を記録できませんでした（decision decision.chars=55 grounds.chars=58）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+            "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "threw AttachmentContentRemoveError"
+        },
+        {
+          "op": "externalBlob.delete",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "threw AttachmentContentRemoveError"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身を置き場から消せなかったので、消していない（控えも残した）: ext.bin（id=att-ext）",
+            "grounds": "理由: 置き場が応答しない。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "already-gone": {
+      "output": {
+        "length": 57,
+        "text": "添付 att-gone は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: gone.txt（id=att-gone）",
+          "grounds": "消す前の控え: id=att-gone name=gone.txt type=text/plain size=6 sha256=sha-fake-att-gone 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "直前の添付の削除の行は効いていない（この呼びでは消していない）: gone.txt（id=att-gone）",
+          "grounds": "消す直前に、添付が置き場から無くなっていた（期限切れ・別の手で消された）"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-gone"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: gone.txt（id=att-gone）",
+            "grounds": "消す前の控え: id=att-gone name=gone.txt type=text/plain size=6 sha256=sha-fake-att-gone 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-gone"
+          },
+          "outcome": "false"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "直前の添付の削除の行は効いていない（この呼びでは消していない）: gone.txt（id=att-gone）",
+            "grounds": "消す直前に、添付が置き場から無くなっていた（期限切れ・別の手で消された）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "already-gone-journal-fails": {
+      "output": {
+        "length": 57,
+        "text": "添付 att-gone は無い（保持期限が過ぎて消えた、または id の誤り）。取り出していた写しがあれば消した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: gone.txt（id=att-gone）",
+          "grounds": "消す前の控え: id=att-gone name=gone.txt type=text/plain size=6 sha256=sha-fake-att-gone 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:00:00.000Z 日誌（file_delete）を記録できませんでした（decision decision.chars=54 grounds.chars=36）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-gone"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: gone.txt（id=att-gone）",
+            "grounds": "消す前の控え: id=att-gone name=gone.txt type=text/plain size=6 sha256=sha-fake-att-gone 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-gone"
+          },
+          "outcome": "false"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "直前の添付の削除の行は効いていない（この呼びでは消していない）: gone.txt（id=att-gone）",
+            "grounds": "消す直前に、添付が置き場から無くなっていた（期限切れ・別の手で消された）"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "remove-throws#1": {
+      "output": {
+        "length": 53,
+        "text": "添付 att-a を消せなかった: Error: 行を消せない（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": ["att-a/a.txt"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+          "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+            "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "remove-throws#2": {
+      "output": {
+        "length": 52,
+        "text": "添付 att-a を消せなかった: raw string failure（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": ["att-a/a.txt"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+          "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+            "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "threw string"
+        }
+      ]
+    },
+    "remove-throws#3": {
+      "output": {
+        "length": 114,
+        "text": "a.txt（id=att-a、1 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+          "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+            "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "remove-throws-multiline": {
+      "output": {
+        "length": 44,
+        "text": "添付 att-a を消せなかった: Error: 一行目（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+          "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+            "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "reason-with-value#1": {
+      "output": {
+        "length": 127,
+        "text": "添付 att-ext は消していない（控えも残した）。中身を置き場から消せなかった。理由: 認証に失敗した export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789。もう一度 file_delete を呼ぶと再試行する。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        },
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+          "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身を置き場から消せなかったので、消していない（控えも残した）: ext.bin（id=att-ext）",
+          "grounds": "理由: 認証に失敗した export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: ext.bin（id=att-ext）",
+            "grounds": "消す前の控え: id=att-ext name=ext.bin type=text/plain size=10 sha256=sha-fake-att-ext 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "threw AttachmentContentRemoveError"
+        },
+        {
+          "op": "externalBlob.delete",
+          "args": {
+            "id": "att-ext"
+          },
+          "outcome": "threw AttachmentContentRemoveError"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身を置き場から消せなかったので、消していない（控えも残した）: ext.bin（id=att-ext）",
+            "grounds": "理由: 認証に失敗した export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "reason-with-value#2": {
+      "output": {
+        "length": 64,
+        "text": "添付 att-a を消せなかった: Error: 接続できない TOKEN=[REDACTED]（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        },
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+          "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+            "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "reason-with-value#3": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-a を消せなかった: Error: 接続できない [REDACTED]（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "attachments": [
+        {
+          "id": "att-ext",
+          "name": "ext.bin",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-fake-att-ext",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": true
+        },
+        {
+          "id": "att-a",
+          "name": "a.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-fake-att-a",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": ["att-ext"],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+          "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a.txt（id=att-a）",
+            "grounds": "消す前の控え: id=att-a name=a.txt type=text/plain size=1 sha256=sha-fake-att-a 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-a"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "meta-forms#1": {
+      "output": {
+        "length": 111,
+        "text": "a（id=att-m1、0 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-m2",
+          "name": "longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon",
+          "mediaType": "text/plain",
+          "size": 1023,
+          "sha256": "sha-fake-att-m2",
+          "uploadedBy": "operator",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m3",
+          "name": "日本語のファイル名.txt",
+          "mediaType": "text/plain",
+          "size": 1024,
+          "sha256": "sha-fake-att-m3",
+          "uploadedBy": "manager:mgr-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m4",
+          "name": "no-type",
+          "mediaType": "",
+          "size": 1048576,
+          "sha256": "sha-fake-att-m4",
+          "uploadedBy": "integration:key-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m5",
+          "name": "unknown-from",
+          "mediaType": "text/plain",
+          "size": 1048575,
+          "sha256": "sha-fake-att-m5",
+          "uploadedBy": "something-else",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m6",
+          "name": "name with  spaces",
+          "mediaType": "text/plain",
+          "size": 1536,
+          "sha256": "sha-fake-att-m6",
+          "conversationId": "conv-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:00:00.000Z",
+          "decision": "添付の中身と控えを消す: a（id=att-m1）",
+          "grounds": "消す前の控え: id=att-m1 name=a type=text/plain size=0 sha256=sha-fake-att-m1 出所=クローン 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-m1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: a（id=att-m1）",
+            "grounds": "消す前の控え: id=att-m1 name=a type=text/plain size=0 sha256=sha-fake-att-m1 出所=クローン 保存していなかった"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-m1"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "meta-forms#2": {
+      "output": {
+        "length": 413,
+        "text": "longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon（id=att-m2、1023 B） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-m3",
+          "name": "日本語のファイル名.txt",
+          "mediaType": "text/plain",
+          "size": 1024,
+          "sha256": "sha-fake-att-m3",
+          "uploadedBy": "manager:mgr-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m4",
+          "name": "no-type",
+          "mediaType": "",
+          "size": 1048576,
+          "sha256": "sha-fake-att-m4",
+          "uploadedBy": "integration:key-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m5",
+          "name": "unknown-from",
+          "mediaType": "text/plain",
+          "size": 1048575,
+          "sha256": "sha-fake-att-m5",
+          "uploadedBy": "something-else",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m6",
+          "name": "name with  spaces",
+          "mediaType": "text/plain",
+          "size": 1536,
+          "sha256": "sha-fake-att-m6",
+          "conversationId": "conv-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "添付の中身と控えを消す: longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon（id=att-m2）",
+          "grounds": "消す前の控え: id=att-m2 name=longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon type=text/plain size=1023 sha256=sha-fake-att-m2 出所=人間 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-m2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon（id=att-m2）",
+            "grounds": "消す前の控え: id=att-m2 name=longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon type=text/plain size=1023 sha256=sha-fake-att-m2 出所=人間 保存していなかった"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-m2"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "meta-forms#3": {
+      "output": {
+        "length": 127,
+        "text": "日本語のファイル名.txt（id=att-m3、1.0 KiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-m4",
+          "name": "no-type",
+          "mediaType": "",
+          "size": 1048576,
+          "sha256": "sha-fake-att-m4",
+          "uploadedBy": "integration:key-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m5",
+          "name": "unknown-from",
+          "mediaType": "text/plain",
+          "size": 1048575,
+          "sha256": "sha-fake-att-m5",
+          "uploadedBy": "something-else",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m6",
+          "name": "name with  spaces",
+          "mediaType": "text/plain",
+          "size": 1536,
+          "sha256": "sha-fake-att-m6",
+          "conversationId": "conv-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "添付の中身と控えを消す: 日本語のファイル名.txt（id=att-m3）",
+          "grounds": "消す前の控え: id=att-m3 name=日本語のファイル名.txt type=text/plain size=1024 sha256=sha-fake-att-m3 出所=マネージャー 保存中だった（2026-10-28T06:00:00.000Z から）"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-m3"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: 日本語のファイル名.txt（id=att-m3）",
+            "grounds": "消す前の控え: id=att-m3 name=日本語のファイル名.txt type=text/plain size=1024 sha256=sha-fake-att-m3 出所=マネージャー 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-m3"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "meta-forms#4": {
+      "output": {
+        "length": 121,
+        "text": "no-type（id=att-m4、1.0 MiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-m5",
+          "name": "unknown-from",
+          "mediaType": "text/plain",
+          "size": 1048575,
+          "sha256": "sha-fake-att-m5",
+          "uploadedBy": "something-else",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "expiresAt": "2026-11-27T00:00:00.000Z",
+          "external": false
+        },
+        {
+          "id": "att-m6",
+          "name": "name with  spaces",
+          "mediaType": "text/plain",
+          "size": 1536,
+          "sha256": "sha-fake-att-m6",
+          "conversationId": "conv-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "添付の中身と控えを消す: no-type（id=att-m4）",
+          "grounds": "消す前の控え: id=att-m4 name=no-type type= size=1048576 sha256=sha-fake-att-m4 出所=連携 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-m4"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: no-type（id=att-m4）",
+            "grounds": "消す前の控え: id=att-m4 name=no-type type= size=1048576 sha256=sha-fake-att-m4 出所=連携 保存していなかった"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-m4"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "meta-forms#5": {
+      "output": {
+        "length": 129,
+        "text": "unknown-from（id=att-m5、1024.0 KiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [
+        {
+          "id": "att-m6",
+          "name": "name with  spaces",
+          "mediaType": "text/plain",
+          "size": 1536,
+          "sha256": "sha-fake-att-m6",
+          "conversationId": "conv-1",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "keptAt": "2026-10-28T06:00:00.000Z",
+          "external": false
+        }
+      ],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "添付の中身と控えを消す: unknown-from（id=att-m5）",
+          "grounds": "消す前の控え: id=att-m5 name=unknown-from type=text/plain size=1048575 sha256=sha-fake-att-m5 出所=不明 保存していなかった"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-m5"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: unknown-from（id=att-m5）",
+            "grounds": "消す前の控え: id=att-m5 name=unknown-from type=text/plain size=1048575 sha256=sha-fake-att-m5 出所=不明 保存していなかった"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-m5"
+          },
+          "outcome": "true"
+        }
+      ]
+    },
+    "meta-forms#6": {
+      "output": {
+        "length": 131,
+        "text": "name with  spaces（id=att-m6、1.5 KiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "attachment",
+      "attachments": [],
+      "externalBlobs": [],
+      "copies": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "添付の中身と控えを消す: name with  spaces（id=att-m6）",
+          "grounds": "消す前の控え: id=att-m6 name=name with  spaces type=text/plain size=1536 sha256=sha-fake-att-m6 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-m6"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "添付の中身と控えを消す: name with  spaces（id=att-m6）",
+            "grounds": "消す前の控え: id=att-m6 name=name with  spaces type=text/plain size=1536 sha256=sha-fake-att-m6 出所=不明 保存中だった（2026-10-28T06:00:00.000Z から）"
+          },
+          "outcome": "ok id-6"
+        },
+        {
+          "op": "attachments.remove",
+          "args": {
+            "id": "att-m6"
+          },
+          "outcome": "true"
+        }
+      ]
+    }
+  }
+}
