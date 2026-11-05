@@ -26,6 +26,8 @@ export type OutboundAttachmentResult =
         readonly ids: readonly string[];
         readonly conversationId: string;
         readonly reason: string;
+        /** 断りの先頭の競合の文（「添付が結ぶ間に…: x」） */
+        readonly conflict: string;
       };
     };
 
@@ -163,6 +165,7 @@ async function checkAndBind(
               ids: [...bound.newlyBound],
               conversationId: options.conversationId,
               reason,
+              conflict,
             },
           };
         }

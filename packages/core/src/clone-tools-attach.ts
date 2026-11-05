@@ -238,11 +238,10 @@ async function journalLeftBound(
 ): Promise<void> {
   const left = refused.leftBound;
   if (left === undefined) return;
-  const conflict = refused.message.split('。何も添えていない')[0];
   await appendJournalOrDrop(toolName, stores.journal, {
     type: 'decision',
     decision: `添付の結び付けが会話 ${left.conversationId} に残った（結ぶ間の競合のあと、戻せなかった）: ${left.ids.join(', ')}`,
-    grounds: `理由: ${left.reason}。${toolName} は何も添えずに断った（${conflict}）。`,
+    grounds: `理由: ${left.reason}。${toolName} は何も添えずに断った（${left.conflict}）。`,
   });
 }
 
