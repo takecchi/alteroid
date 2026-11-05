@@ -1,10 +1,8 @@
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { defaultRoot } from '@alteroid/storage-fs';
 
 export function alteroidRoot(): string {
-  const fromEnv = process.env.ALTEROID_HOME;
-  if (fromEnv && fromEnv.length > 0) return fromEnv;
-  return join(homedir(), '.alteroid');
+  return defaultRoot();
 }
 
 export function stateDir(): string {

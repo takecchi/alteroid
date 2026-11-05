@@ -125,7 +125,7 @@ function fakeAppServer(requests: { method: string; params: Json }[], rolloutFile
   }) as unknown as AgentChildProcess;
 }
 
-async function setup() {
+async function setup(env: NodeJS.ProcessEnv = {}) {
   const home = makeTempDirSync('alteroid-peer-resume-home-');
   const rolloutFile = join(home, '.codex', 'sessions', REL);
   const requests: { method: string; params: Json }[] = [];
@@ -146,7 +146,7 @@ async function setup() {
     emit: (event) => events.push(event),
     queryFn: sdk.fn,
     // API キーで走る peer の CODEX_HOME は、子の HOME/.codex。chown は自分自身へ（試験は root とは限らない）
-    env: {},
+    env,
     childUser: { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0, home },
     spawnAgentProcessFn: () => fakeAppServer(requests, rolloutFile),
     credentials: createCredentialStore({
@@ -293,6 +293,27 @@ describe('runner: 戻された peer を置いて、peer_reply が続きから起
     expect(
       s.notes().some((note) => note.includes('[peer-aaaa]') && note.includes('続きから起こした')),
     ).toBe(true);
+    await client.close();
+    await s.host.shutdown();
+  });
+
+  it('CODEX_HOME が空白だけなら置かれていないものとして、子の HOME/.codex へ置く', async () => {
+    const s = await setup({ CODEX_HOME: '   ' });
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-main',
+      cwd: '/work',
+      request: 'やって',
+      peers: peers(),
+    });
+    const client = await s.connect();
+
+    await client.callTool({
+      name: 'peer_reply',
+      arguments: { session_id: 'peer-aaaa', message: '前の続きをお願い' },
+    });
+
+    expect(existsSync(s.rolloutFile)).toBe(true);
     await client.close();
     await s.host.shutdown();
   });
