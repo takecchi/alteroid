@@ -905,9 +905,8 @@ export interface ManagerPool {
   /**
    * 1件だけ読む（#5089）。`list()` の該当の1件と同じ像を返す（ただし一覧の並べ替えと、一覧のついでに書く計器は無い）。
    * 無ければ `undefined`。台帳の行が読めなければ `UnreadableJobError`。
-   * 省略可能: テストの偽のプールは持たなくてよく、呼び出し側は `list()` から探す形に倒す。
    */
-  get?(managerId: string): Promise<ManagerSummary | undefined>;
+  get(managerId: string): Promise<ManagerSummary | undefined>;
   /**
    * `ManagerSummary` には載せない: デーモンのプロセス内の像で、台帳には無い（器を作り直せば数え直し）。
    * 台帳から作る `ManagerSummary` を汚さずに、読む側が状態へ添えられる。
@@ -928,12 +927,12 @@ export interface ManagerPool {
    */
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined;
   /**
-   * `GET /runners` が `pushHealthOf` と同じ理由で経由する。省略可能: 実装しないプールでは呼び出し側が
-   * 「観測なし」に倒す。`undefined` は「読み込みに失敗した」とも「0件」とも読まない。
+   * `GET /runners` が `pushHealthOf` と同じ理由で経由する。`undefined` は「観測なし」で、
+   * 「読み込みに失敗した」とも「0件」とも読まない。
    */
-  pluginLoadOf?(runnerId: string): RunnerPluginLoadObservation | undefined;
-  /** `pushHealthOf` と同じ理由で `GET /runners` が経由する。省略可能: 実装しないプールでは呼び出し側が `unknown` に倒す。 */
-  managerPeersOf?(runnerId: string | undefined): RunnerManagerPeers;
+  pluginLoadOf(runnerId: string): RunnerPluginLoadObservation | undefined;
+  /** `pushHealthOf` と同じ理由で `GET /runners` が経由する。 */
+  managerPeersOf(runnerId: string | undefined): RunnerManagerPeers;
   /**
    * ネットワークを叩かない（`RunnerBacklogSnapshot` の doc）。`identity()` を持たない runner は
    * 観測していなければ出てこない: 滞留が0件だからではないので、呼び出し側は「行が無い＝0件」と読まない。
@@ -966,17 +965,16 @@ export interface ManagerPool {
    * 表示用。名乗りを受けていない・欄を送らない旧い runner は `undefined`（不明。既定の帯で埋めない）。
    * 片方だけ名乗られたら、名乗られた側だけ持つ。
    */
-  runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
+  runnerReportedModels(runnerId: string): { manager?: string; worker?: string } | undefined;
   /** 表示用。`undefined` は不明で、`[]` の「何も置かれていない」とは別。 */
-  runnerReportedAnthropicRoute?(runnerId: string): readonly string[] | undefined;
+  runnerReportedAnthropicRoute(runnerId: string): readonly string[] | undefined;
   /**
    * 新しい往復・周期処理は無い: `#place` が既に払った `resources()` の応答を使う（判定・実行は
    * `AutoFold#foldIdleOnRunnerIfUnderPressure` と共有し、ロジックを2つに増やさない）。
    * `manager_start` の応答を待たせない（`void` で切り離す）: 配置の点数計算は終わっていて、
    * 畳んだ分の pids は今回の配置に反映されないのに、`unpushedWork()` の往復ぶん配置が遅くなる。
-   * 省略可能なのは `runnerHasCapability?` と同じ理由。
    */
-  autoFoldOnPlacementPressure?(
+  autoFoldOnPlacementPressure(
     runnerId: string,
     pids: { readonly current: number; readonly max: number },
   ): void;
@@ -985,9 +983,9 @@ export interface ManagerPool {
    * `runner_list resources:true`・配置・鍵の回転の前、のどれの契機も来ない間に器が飽和しても畳めるようにする口。
    * 判定と実行は `AutoFold#foldIdleOnRunnerIfUnderPressure` と共有し、条件は変えない。
    * 走らせる間隔は 30 分で、ここで間引く（毎分の呼び出しは何もせず返る）。前の回が終わっていなければ何もしない。
-   * 1つの runner の失敗で残りを止めない。省略可能なのは `sweepRescueRefs` と同じ理由。
+   * 1つの runner の失敗で残りを止めない。
    */
-  autoFoldUnderPressure?(): Promise<void>;
+  autoFoldUnderPressure(): Promise<void>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
@@ -1032,11 +1030,9 @@ export interface ManagerPool {
    * （`archive-folder.ts`）が1件も前へ進めなかった。末尾でない一致は無視する。
    *
    * 使ってよいのは `guardArchiveRemoval` の `requireContainment` が `true` のときだけ
-   * （`selectArchiveRemovalTargets` の「含有の証明」の上にしか成り立たない）。省略可能なのは
-   * この機能を使わない既存のスタブを書き換えずに済ませるためで、`guardArchiveRemoval` は
-   * このメソッドを持たない像に当たったら安全側（広い保護）へ倒す。ネットワークは叩かない。
+   * （`selectArchiveRemovalTargets` の「含有の証明」の上にしか成り立たない）。ネットワークは叩かない。
    */
-  runningManagerPinning?(archiveId: string): string | undefined;
+  runningManagerPinning(archiveId: string): string | undefined;
   /**
    * デーモン起動時に、走行中だったマネージャーを台帳と runner から拾い直す。
    * 戻り値は「中断されていて実際に resume した」分。
@@ -1124,19 +1120,19 @@ export interface ManagerPool {
    */
   renotifyStalledDenials(): Promise<void>;
   /**
-   * 退避 ref（`refs/alteroid-rescue/…`）の後始末を1周する。省略できる（`unpushedWork` の口と同じ）。
+   * 退避 ref（`refs/alteroid-rescue/…`）の後始末を1周する。
    * 台帳（`Job.lastRescue`）に無い ref は触らない（孤児を消さない）。消した印は `pushed.removal` に残し、
    * `pushed` は消さない。走査の間隔はここで空ける（全委譲の台帳を読むので毎分は撃たない）。
    * 1件の失敗で残りを止めない。
    */
-  sweepRescueRefs?(): Promise<void>;
+  sweepRescueRefs(): Promise<void>;
   /**
    * `manager_send` が預かった伝言（`Job.heldMessages`）を、委譲ごとに古い順に1通へまとめ、`send()` と同じ経路でもう一度届ける。
    * 届けられる条件は `send()` の判定そのまま（背景処理・確認待ちが片付けば畳んで新しい鍵で起こし直す・抱えている鍵が ready なら旧セッションへ・器が替わっていれば resume）で、ここに別の判定を書かない。
    * 届けたら日誌とクローンへ知らせる。期限切れ・委譲の終端では捨て、その本文ごと日誌とクローンへ返す（黙って消さない）。
-   * 1件の失敗で残りを止めない。省略できる（周期の呼び手はデーモンのポーラー）。
+   * 1件の失敗で残りを止めない（周期の呼び手はデーモンのポーラー）。
    */
-  deliverHeldMessages?(): Promise<void>;
+  deliverHeldMessages(): Promise<void>;
   /**
    * 合流窓（`#synthesizedNotices`）に残った積みは必ず flush する: 窓の中で止まると `setTimeout` が
    * 二度と発火せず失われる（`#queueSynthesizedNotice` / `#flushSynthesizedNotices` の doc）。
@@ -1182,7 +1178,6 @@ interface ManagerPoolStopOptions {
  * `requireContainment: true` のときだけ、保護を `runningManagerOwning`（`archiveIds` 全件）から
  * `runningManagerPinning`（末尾1本）へ狭める。含有の証明（`archive-prune.ts` の `selectArchiveRemovalTargets`）が
  * 前提で、`false` / `undefined` で狭めると証明の無い行を走行中の委譲から奪う。
- * `runningManagerPinning` を持たない像は安全側（広い保護）へ倒す。
  */
 type ArchiveRemovalGuard =
   | { readonly kind: 'allowed' }
@@ -1201,7 +1196,7 @@ export function guardArchiveRemoval(
   // `??` で繋がない: `runningManagerPinning` が `undefined`（末尾に無い）を返したときに
   // `runningManagerOwning` へ fallback すると、狭めた意味が消える。
   const managerId =
-    requireContainment === true && managers.runningManagerPinning !== undefined
+    requireContainment === true
       ? managers.runningManagerPinning(archiveId)
       : managers.runningManagerOwning(archiveId);
   if (managerId === undefined) return { kind: 'allowed' };

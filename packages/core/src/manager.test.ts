@@ -11227,16 +11227,6 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
         await s.pool.stop();
       }
     });
-
-    it('runningManagerPinning を持たない像では、requireContainment: true でも狭めない（安全側）', () => {
-      const stub = {
-        runningManagerOwning: (archiveId: string) =>
-          archiveId === 'old-copy' ? 'mgr-x' : undefined,
-      } as unknown as ManagerPool;
-
-      const guard = guardArchiveRemoval(stub, 'old-copy', undefined, true);
-      expect(guard).toEqual({ kind: 'denied', managerId: 'mgr-x' });
-    });
   });
 });
 

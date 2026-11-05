@@ -4,8 +4,9 @@ import type { ManagerPool } from './manager.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
-const NO_ONE_RUNNING = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+const NO_ONE_RUNNING = fakeManagerPool({ runningManagerOwning: () => undefined });
 
 function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) {
   const context: ToolContext = {

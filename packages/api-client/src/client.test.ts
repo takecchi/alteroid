@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 
 import { serve, type ServerType } from '@hono/node-server';
 import type { ChatStreamEvent, CloneHost, ManagerPool, Stores } from '@alteroid/core';
-import { createMemoryStores } from '@alteroid/core';
+import { createMemoryStores, fakeManagerPool } from '@alteroid/core';
 import { createApp, createJournalBus } from '@alteroid/daemon';
 import createClient from 'openapi-fetch';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -17,7 +17,7 @@ function fakeClone(stores: Stores) {
     for (const listener of listeners.get(conversationId) ?? []) listener(event);
   };
 
-  const managers: ManagerPool = {
+  const managers: ManagerPool = fakeManagerPool({
     async start() {
       throw new Error('この偽クローンからはマネージャーを起こさない');
     },
@@ -72,7 +72,7 @@ function fakeClone(stores: Stores) {
     },
     async renotifyStalledDenials() {},
     async stop() {},
-  };
+  });
 
   const clone: CloneHost = {
     // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）

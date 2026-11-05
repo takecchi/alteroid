@@ -1,10 +1,10 @@
-import { createMemoryStores, type Stores } from '@alteroid/core';
+import { createMemoryStores, fakeManagerPool, type Stores } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { ARCHIVE_FOLD_GRACE_MS, foldArchiveOnce } from './archive-folder.js';
 
 const FAR_FUTURE = () => new Date(Date.now() + ARCHIVE_FOLD_GRACE_MS + 60_000);
-const noRunningManagers = { runningManagerOwning: () => undefined };
+const noRunningManagers = fakeManagerPool();
 
 /** 2件目の `remove` だけ例外を投げる置き場（1件目は本当に消す）。 */
 function failingSecondRemove(stores: Stores): { stores: Stores; removed: string[] } {

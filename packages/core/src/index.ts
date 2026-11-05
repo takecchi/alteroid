@@ -754,6 +754,7 @@ export {
 } from './testing.js';
 
 export { createSyntheticJournalStore } from './journal-scan.test-support.js';
+export { fakeManagerPool } from './manager-pool.test-support.js';
 export {
   createPeerSocketHost,
   DEFAULT_PEER_SOCKET_DIR,

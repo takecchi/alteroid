@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 import { MODEL_UNKNOWN_LABEL, RUNNER_MODELS_UNVERIFIED } from './manager-models.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -22,48 +23,7 @@ const SELF: SelfFacts = {
 };
 
 function poolWith(failRunners = false): ManagerPool {
-  const base: ManagerPool = {
-    start: () => {
-      throw new Error('not implemented');
-    },
-    send: () => {
-      throw new Error('not implemented');
-    },
-    abort: () => {
-      throw new Error('not implemented');
-    },
-    list: () => Promise.resolve([]),
-    denials: () => [],
-    pushHealthOf: () => undefined,
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
-    runners: () => {
-      throw new Error('not implemented');
-    },
-    transcript: () => {
-      throw new Error('not implemented');
-    },
-    unpushedWork: () => {
-      throw new Error('not implemented');
-    },
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: () => {
-      throw new Error('not implemented');
-    },
-    vacate: () => {
-      throw new Error('not implemented');
-    },
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
-  };
-  return {
-    ...base,
+  return fakeManagerPool({
     runners: () =>
       failRunners
         ? Promise.reject(new Error('boom'))
@@ -77,7 +37,7 @@ function poolWith(failRunners = false): ManagerPool {
           }) as unknown as ReturnType<ManagerPool['runners']>),
     runnerReportedModels: (runnerId) =>
       runnerId === 'r1' ? { manager: 'opus', worker: 'sonnet' } : undefined,
-  };
+  });
 }
 
 function boot(failRunners = false) {

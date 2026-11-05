@@ -7,6 +7,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 import { createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
@@ -230,48 +231,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
 
   it('managers.list() が投げても、ターンは落ちず、いまの文言のまま届く', async () => {
     const { fn, calls } = fakeSdk();
-    const throwingPool: ManagerPool = {
-      start: () => {
-        throw new Error('not implemented');
-      },
-      send: () => {
-        throw new Error('not implemented');
-      },
-      abort: () => {
-        throw new Error('not implemented');
-      },
+    const throwingPool: ManagerPool = fakeManagerPool({
       list: () => {
         throw new Error('list() が壊れている（実測を模す）');
       },
-      denials: () => [],
-      pushHealthOf: () => undefined,
-      runnerBacklog: () => [],
-      runnerIdOf: () => Promise.resolve(undefined),
-      runners: () => {
-        throw new Error('not implemented');
-      },
-      transcript: () => {
-        throw new Error('not implemented');
-      },
-      unpushedWork: () => {
-        throw new Error('not implemented');
-      },
-      runningManagerOwning: () => undefined,
-      restore: () => Promise.resolve([]),
-      resumeStoppedByUsage: () => Promise.resolve([]),
-      reattachRunner: () => Promise.resolve(),
-      relocateFrom: () => {
-        throw new Error('not implemented');
-      },
-      vacate: () => {
-        throw new Error('not implemented');
-      },
-      probeTurnEnds: () => Promise.resolve(),
-      flushWithheldReports: () => Promise.resolve(),
-      settleStalledUsageWakes: () => Promise.resolve([]),
-      renotifyStalledDenials: () => Promise.resolve(),
-      stop: () => Promise.resolve(),
-    };
+    });
 
     const clone = createClone({
       reportSettleMs: 2500,

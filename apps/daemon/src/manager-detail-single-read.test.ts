@@ -231,31 +231,3 @@ describe.each([
     expect(JSON.stringify(detail?.body)).not.toContain(BAD_SUMMARY);
   });
 });
-
-describe('get を持たない偽のプールでは一覧から探す（#5089）', () => {
-  it('list() から同じ1件を返す', async () => {
-    const stores = createMemoryStores();
-    await stores.jobs.putJob(job('mgr-1', '2026-09-01T00:00:00.000Z'));
-    const real = createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() });
-    const withoutGet: ManagerPool = new Proxy(real, {
-      get(target, property, receiver) {
-        if (property === 'get') return undefined;
-        const value: unknown = Reflect.get(target, property, receiver);
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
-    const app = createApp({
-      clone: cloneOver(withoutGet),
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-    });
-    const response = await app.request('/managers/mgr-1', {
-      headers: { authorization: 'Bearer test-token' },
-    });
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as { manager: { managerId: string } }).manager.managerId).toBe(
-      'mgr-1',
-    );
-  });
-});

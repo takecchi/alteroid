@@ -9,6 +9,7 @@ import {
   wireEvents,
   withoutQueueNotice,
 } from './clone-test-harness.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 import type { ScriptedStep } from './clone-test-harness.js';
 import type { ManagerPool, ManagerStartInput, ManagerSummary } from './manager.js';
 import type { RunnerFleetOverview } from './manager.js';
@@ -58,10 +59,7 @@ function stubPool(
   started: ManagerStartInput[] = [],
   overrides: Partial<ManagerPool> = {},
 ): ManagerPool {
-  const notImplemented = () => {
-    throw new Error('not implemented');
-  };
-  return {
+  return fakeManagerPool({
     start: (input: ManagerStartInput): Promise<ManagerSummary> => {
       started.push(input);
       return Promise.resolve({
@@ -76,13 +74,6 @@ function stubPool(
         runnerId: 'runner-a',
       });
     },
-    send: notImplemented,
-    abort: notImplemented,
-    list: () => Promise.resolve([]),
-    denials: () => [],
-    pushHealthOf: () => undefined,
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
     runners: (): Promise<RunnerFleetOverview> =>
       Promise.resolve({
         runners: [
@@ -97,21 +88,8 @@ function stubPool(
         unassigned: [],
         daemonRevision: { status: 'unknown' as const, reason: 'テスト' },
       }),
-    transcript: notImplemented,
-    unpushedWork: notImplemented,
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: notImplemented,
-    vacate: notImplemented,
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
     ...overrides,
-  };
+  });
 }
 
 const say = (text: string): ScriptedStep[] => [

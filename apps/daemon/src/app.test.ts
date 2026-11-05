@@ -45,6 +45,7 @@ import {
   createTokenPoolService,
   DEFAULT_SSE_HEARTBEAT_MS,
   droppedTraceLedgerSince,
+  fakeManagerPool,
   fingerprintOf,
   JOURNAL_ENTRY_TYPES,
   mcpServersFingerprintOf,
@@ -126,7 +127,7 @@ function fakeClone() {
   const pluginLoadByRunnerId = new Map<string, RunnerPluginLoadObservation>();
   let clonePluginLoad: ClonePluginLoadObservation | undefined;
 
-  const managers: ManagerPool = {
+  const managers: ManagerPool = fakeManagerPool({
     async start() {
       throw new Error('この偽クローンからはマネージャーを起こさない');
     },
@@ -218,7 +219,7 @@ function fakeClone() {
     },
     async renotifyStalledDenials() {},
     async stop() {},
-  };
+  });
 
   const clone: CloneHost = {
     // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）
@@ -10719,10 +10720,11 @@ describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
     });
   });
 
-  it('読み口を持たないプールでは「不明」に倒す', async () => {
-    const { managerPeersOf: _omitted, ...withoutReader } = fake.clone.managers;
-    void _omitted;
-    const entry = await runnersBody(withoutReader);
+  it('プールが「不明」と答えた runner の行は「不明」のまま出る', async () => {
+    const entry = await runnersBody({
+      ...fake.clone.managers,
+      managerPeersOf: () => ({ status: 'unknown' }),
+    });
     expect(entry?.managerPeers).toEqual({ status: 'unknown' });
   });
 });

@@ -13,6 +13,7 @@ import {
   recentDroppedTraces,
   setStderrSinkForTesting,
 } from './dropped-record.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 import type { ManagerDenial } from './denial-key.js';
 import type { ManagerUnpushedWork } from './unpushed-work-observation.js';
 import type {
@@ -184,7 +185,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   let conversationId: string | undefined;
   let queuedInMemory: number | undefined;
 
-  const managers: ManagerPool = {
+  const managers: ManagerPool = fakeManagerPool({
     async start(input) {
       started.push(input);
       const summary: ManagerSummary = {
@@ -301,7 +302,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     async renotifyStalledDenials() {},
     async stop() {},
-  };
+  });
 
   const distributed: string[] = [];
   const runners = {
@@ -17860,7 +17861,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
         const oldId = (await stores.archive.archive('sess-case-18', 'AAA')).id;
         await stores.archive.archive('sess-case-18', 'AAABBB');
-        const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+        const managers = fakeManagerPool({ runningManagerOwning: () => undefined });
         const tools = createCloneTools({
           stores,
           emit: () => {},

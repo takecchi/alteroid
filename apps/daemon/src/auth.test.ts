@@ -7,6 +7,7 @@ import {
   createMcpServerService,
   createMemoryStores,
   DEFAULT_SSE_HEARTBEAT_MS,
+  fakeManagerPool,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,32 +24,18 @@ import {
 import { accountWithIdentitiesSchema } from './openapi.js';
 
 function stubClone(): CloneHost {
-  const managers: ManagerPool = {
+  const managers: ManagerPool = fakeManagerPool({
     start: () => Promise.reject(new Error('起こさない')),
     send: () => Promise.reject(new Error('送らない')),
     abort: () => Promise.reject(new Error('止めない')),
-    list: () => Promise.resolve([]),
-    denials: () => [],
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
     runners: () =>
       Promise.resolve({ runners: [], unassigned: [], daemonRevision: { status: 'unknown' } }),
-    pushHealthOf: () => undefined,
     transcript: () => Promise.resolve({ kind: 'missing' as const }),
     unpushedWork: () =>
       Promise.resolve({ kind: 'unavailable' as const, reason: '(この検証では未使用)' }),
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
     relocateFrom: () => undefined,
     vacate: () => Promise.resolve({}),
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
-  };
+  });
   return {
     managers,
     post: () => 'conversation-1',

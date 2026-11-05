@@ -1,11 +1,11 @@
 import type { CloneHost, ManagerPool } from '@alteroid/core';
-import { createMemoryStores } from '@alteroid/core';
+import { createMemoryStores, fakeManagerPool } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
 function stubManagerPool(): ManagerPool {
-  return {
+  return fakeManagerPool({
     async start() {
       throw new Error('このスタブからはマネージャーを起こさない（このテストの主題ではない）');
     },
@@ -60,7 +60,7 @@ function stubManagerPool(): ManagerPool {
     },
     async renotifyStalledDenials() {},
     async stop() {},
-  };
+  });
 }
 
 function stubCloneHost(): CloneHost {

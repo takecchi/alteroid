@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { selectArchiveRemovalTargets } from './archive-prune.js';
-import type { ManagerPool } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 async function withFrozenNow<T>(frozenMs: number, run: () => Promise<T>): Promise<T> {
   const RealDate = Date;
@@ -58,7 +58,7 @@ describe('インメモリの archive は、同じミリ秒に10本以上積ん�
       emit: () => undefined,
       memoryCause: () => 'clone',
       conversationId: () => undefined,
-      managers: { runningManagerOwning: () => undefined } as unknown as ManagerPool,
+      managers: fakeManagerPool({ runningManagerOwning: () => undefined }),
     }).find((entry) => entry.name === 'archive_remove_many');
     expect(tool, 'archive_remove_many という道具が無い').toBeDefined();
     await tool?.handler(

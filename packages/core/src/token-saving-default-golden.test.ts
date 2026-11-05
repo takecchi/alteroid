@@ -13,6 +13,7 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { createCloneTools } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 // 既定（S1・S2 はどちらも外した。外す前は無効 = 本番の既定）で、
 // モデルへ渡す入力の全文・日誌に書く行・道具の応答の全文を、スナップショットで1字ずつ縛る。
@@ -73,39 +74,16 @@ function summary(id: string, status: ManagerSummary['status'], live: boolean): M
 
 /** 動いている担当が居る状況（situation の節が空でない形）を作る。 */
 function pool(): ManagerPool {
-  const notImplemented = () => {
-    throw new Error('not implemented');
-  };
-  return {
-    start: notImplemented,
-    send: notImplemented,
-    abort: notImplemented,
+  return fakeManagerPool({
     list: () =>
       Promise.resolve([summary('mgr-run', 'running', true), summary('mgr-idle', 'done', true)]),
-    denials: () => [],
-    pushHealthOf: () => undefined,
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
     runners: (): Promise<RunnerFleetOverview> =>
       Promise.resolve({
         runners: [],
         unassigned: [],
         daemonRevision: { status: 'unknown' as const, reason: 'テスト' },
       }),
-    transcript: notImplemented,
-    unpushedWork: notImplemented,
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: notImplemented,
-    vacate: notImplemented,
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
-  };
+  });
 }
 
 const CONTEXT_USAGE = () => ({

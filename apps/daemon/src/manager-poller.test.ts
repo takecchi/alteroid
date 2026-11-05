@@ -1,4 +1,4 @@
-import { setStderrSinkForTesting, type ManagerPool } from '@alteroid/core';
+import { fakeManagerPool, setStderrSinkForTesting, type ManagerPool } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { startManagerPolling } from './manager-poller.js';
@@ -21,40 +21,8 @@ function fakeManagers(
   let settleCalls = 0;
   let renotifyCalls = 0;
   const order: string[] = [];
-  const managers: ManagerPool = {
-    start: () => {
-      throw new Error('not implemented');
-    },
-    send: () => {
-      throw new Error('not implemented');
-    },
-    abort: () => {
-      throw new Error('not implemented');
-    },
+  const managers: ManagerPool = fakeManagerPool({
     list: () => {
-      throw new Error('not implemented');
-    },
-    denials: () => [],
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
-    runners: () => {
-      throw new Error('not implemented');
-    },
-    pushHealthOf: () => undefined,
-    transcript: () => {
-      throw new Error('not implemented');
-    },
-    unpushedWork: () => {
-      throw new Error('not implemented');
-    },
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: () => {
-      throw new Error('not implemented');
-    },
-    vacate: () => {
       throw new Error('not implemented');
     },
     async probeTurnEnds() {
@@ -78,8 +46,7 @@ function fakeManagers(
       order.push('renotifyStalledDenials');
       await renotify();
     },
-    stop: () => Promise.resolve(),
-  };
+  });
   return {
     managers,
     calls: () => calls,
