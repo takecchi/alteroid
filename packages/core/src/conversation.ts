@@ -487,8 +487,6 @@ export class InvalidConversationCursorError extends Error {
   }
 }
 
-const NEWER_IDS_PAGE = 1000;
-
 /**
  * 並びは会話ごとの最新の人間との発言の日誌の順序。継続点（`{ id, at }`）で辿れば、同じミリ秒の同着も
  * 日誌の順序が割るので、飛ばさず重複しない。
@@ -512,34 +510,13 @@ async function conversationIdsNewerThan(
   anchor: ConversationCursor,
   until?: string,
 ): Promise<Set<string>> {
-  // 会話 id だけを引く口を持つ器ではそちらを使う: 頁で読み切ると、継続点より新しい往復を本文ごと全部読み、頁を進めるほど読む量が増えるため
-  if (journal.conversationIdsAfter !== undefined) {
-    return new Set(
-      await journal.conversationIdsAfter({
-        after: anchor,
-        ...(until === undefined ? {} : { until }),
-      }),
-    );
-  }
-  const ids = new Set<string>();
-  let after: JournalCursor = anchor;
-  for (;;) {
-    const page = await journal.listPage({
-      types: ['exchange'],
-      with: ['human'],
-      order: 'asc',
-      after,
+  // 会話 id だけを引く口を使う: 頁で読み切ると、継続点より新しい往復を本文ごと全部読み、頁を進めるほど読む量が増えるため
+  return new Set(
+    await journal.conversationIdsAfter({
+      after: anchor,
       ...(until === undefined ? {} : { until }),
-      limit: NEWER_IDS_PAGE,
-    });
-    for (const entry of page.entries) {
-      if (entry.type === 'exchange' && entry.conversationId !== undefined) {
-        ids.add(entry.conversationId);
-      }
-    }
-    if (page.next === null) return ids;
-    after = page.next;
-  }
+    }),
+  );
 }
 
 /**

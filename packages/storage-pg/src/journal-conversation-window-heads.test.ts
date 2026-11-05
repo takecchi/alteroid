@@ -36,9 +36,7 @@ function fullTextOnly(
     ...(store.withdrawnClientMessageIds === undefined
       ? {}
       : { withdrawnClientMessageIds: (query) => store.withdrawnClientMessageIds!(query) }),
-    ...(store.conversationIdsAfter === undefined
-      ? {}
-      : { conversationIdsAfter: (query) => store.conversationIdsAfter!(query) }),
+    conversationIdsAfter: (query) => store.conversationIdsAfter(query),
   };
 }
 

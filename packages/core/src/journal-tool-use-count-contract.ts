@@ -3,7 +3,6 @@ import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つよう、期待値は積んだ行の `at` から自分で導く。
-// 口は省略可能（`JournalStore.countToolUsesByActor`）だが、3実装は持つので、持たないことを契約の破れとして扱う
 type JournalStoreToolUseCountContractSubject = Pick<
   JournalStore,
   'append' | 'countToolUsesByActor'
@@ -22,8 +21,7 @@ function plusMs(at: string, ms: number): string {
 export async function verifyJournalStoreToolUseCountContract(
   journal: JournalStoreToolUseCountContractSubject,
 ): Promise<void> {
-  const count = journal.countToolUsesByActor?.bind(journal);
-  if (count === undefined) fail('口', 'countToolUsesByActor を持っていない');
+  const count = journal.countToolUsesByActor.bind(journal);
 
   const actorA = `${MARKER}:a`;
   const actorB = `${MARKER}:b`;

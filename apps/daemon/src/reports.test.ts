@@ -50,6 +50,12 @@ function fakeJournal(appended: readonly JournalEntry[]) {
     async clear() {
       throw new Error('このテストでは消さない');
     },
+    async countToolUsesByActor() {
+      throw new Error('このテストでは使わない');
+    },
+    async conversationIdsAfter() {
+      throw new Error('このテストでは使わない');
+    },
   };
   return { journal, windows };
 }

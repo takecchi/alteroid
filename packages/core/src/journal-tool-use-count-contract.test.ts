@@ -9,15 +9,6 @@ describe('verifyJournalStoreToolUseCountContract（インメモリ）', () => {
     await expect(verifyJournalStoreToolUseCountContract(stores.journal)).resolves.toBeUndefined();
   });
 
-  it('口を持たない器は契約の破れとして落とす', async () => {
-    const stores = createMemoryStores();
-    await expect(
-      verifyJournalStoreToolUseCountContract({
-        append: stores.journal.append.bind(stores.journal),
-      }),
-    ).rejects.toThrow('countToolUsesByActor を持っていない');
-  });
-
   it('種別で絞らず窓の内の行を全部数える実装は落ちる', async () => {
     const stores = createMemoryStores();
     const unfiltered = {

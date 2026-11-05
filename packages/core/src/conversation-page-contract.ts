@@ -4,7 +4,10 @@ import type { JournalEntry } from './schema.js';
 import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg が core を実行時に読むため。append した行は後始末しないので、使い捨てのストアを渡す
-type ConversationPageContractSubject = Pick<JournalStore, 'append' | 'list' | 'listPage' | 'get'>;
+type ConversationPageContractSubject = Pick<
+  JournalStore,
+  'append' | 'list' | 'listPage' | 'get' | 'conversationIdsAfter'
+>;
 
 function fail(property: string, detail: string): never {
   throw new Error(`会話の頁送りの契約（${property}）が破れている — ${detail}`);

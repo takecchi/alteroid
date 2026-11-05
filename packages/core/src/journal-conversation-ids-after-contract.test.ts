@@ -52,16 +52,6 @@ describe('verifyJournalStoreConversationIdsAfterContract（インメモリ）', 
     ).resolves.toBeUndefined();
   });
 
-  it('口を持たない器は契約の破れとして落とす', async () => {
-    const stores = createMemoryStores();
-    await expect(
-      verifyJournalStoreConversationIdsAfterContract({
-        append: stores.journal.append.bind(stores.journal),
-        listPage: stores.journal.listPage.bind(stores.journal),
-      }),
-    ).rejects.toThrow('conversationIdsAfter を持っていない');
-  });
-
   it('錨の行そのものを含める実装は落ちる', async () => {
     const stores = createMemoryStores();
     const subject = withBrokenIdsAfter(stores, (journal, query) =>

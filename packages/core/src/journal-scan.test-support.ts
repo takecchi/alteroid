@@ -1,3 +1,4 @@
+import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalEntry } from './schema.js';
 import type { JournalPage, JournalQuery, JournalStore } from './store.js';
@@ -129,6 +130,7 @@ export function createSyntheticJournalStore(
     );
   };
 
+  // 口は fs と同じく頁で読み切る写しで実装する（本物の `listPage` 越しに数えるので、`calls` に呼びが残る）
   return {
     store: {
       list,
@@ -137,6 +139,8 @@ export function createSyntheticJournalStore(
       get: notImplemented('get'),
       oldestAt,
       clear: notImplemented('clear'),
+      countToolUsesByActor: (query) => countToolUsesByActorFromPages({ listPage }, query),
+      conversationIdsAfter: (query) => conversationIdsAfterFromPages({ listPage }, query),
     },
     calls,
     get totalReturned() {

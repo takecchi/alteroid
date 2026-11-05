@@ -381,9 +381,9 @@ export interface JournalStore {
    * `tool_use` の行を `actor` ごとに数える（`since` 以降・`until` 以前。両端を含む。`listPage` の `since` / `until` と同じ境界）。並びは契約しない。
    * 活動の要約（`buildActivityDigest`）が、窓の大半を占める `tool_use` を本文（道具の入力）ごと頁で運ばずに、層ごとの件数だけ取るための口。
    * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。`actor` が文字列でない行は `list` が読み出しで落とすので、数えない。
-   * 省略可能: 持たない器では、呼び手が `listPage` で読んだ行から同じものを作る。
+   * 必須: 全ての器が持つ（頁で読み切る写しは `countToolUsesByActorFromPages`）。
    */
-  countToolUsesByActor?(query: {
+  countToolUsesByActor(query: {
     since: string;
     until: string;
   }): Promise<{ actor: string; count: number }[]>;
@@ -393,9 +393,9 @@ export interface JournalStore {
    * `listPage({ types: ['exchange'], with: ['human'], order: 'asc', after, until })` を最後まで読んだときに現れる行のうち、`conversationId` が文字列のものと同じ集合。並びは契約しない。
    * 会話の一覧の続き（`readConversationPage`）が、継続点より新しい往復を本文ごと頁で読み切らずに、出し済みの会話を外すための口。
    * 削除した会話の行・墓標が名指しした行は `list` と同じく外す。`after` の行が見つからないときは `listPage` と同じく `JournalAnchorNotFoundError` を投げる。
-   * 省略可能: 持たない器では、呼び手（`conversationIdsNewerThan`）が `listPage` を頁で読み切って同じものを作る。
+   * 必須: 全ての器が持つ（頁で読み切る写しは `conversationIdsAfterFromPages`）。
    */
-  conversationIdsAfter?(query: { after: JournalCursor; until?: string }): Promise<string[]>;
+  conversationIdsAfter(query: { after: JournalCursor; until?: string }): Promise<string[]>;
 
   /**
    * 人間との往復の窓を、本文（`text`・`attachments`）を運ばずに読む。

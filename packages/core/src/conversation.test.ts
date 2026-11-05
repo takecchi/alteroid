@@ -847,7 +847,6 @@ describe('継続点つきの一覧は、継続点より新しい往復を頁送�
   // 頁を全部たどって、出た会話 id の並びと、listPage の呼びを返す
   async function walk(
     journal: Awaited<ReturnType<typeof seeded>>,
-    withIdsAfter: boolean,
   ): Promise<{ ids: string[]; calls: Parameters<typeof journal.listPage>[0][] }> {
     const calls: Parameters<typeof journal.listPage>[0][] = [];
     const subject = {
@@ -856,9 +855,7 @@ describe('継続点つきの一覧は、継続点より新しい往復を頁送�
         return journal.listPage(query);
       },
       get: journal.get.bind(journal),
-      ...(withIdsAfter
-        ? { conversationIdsAfter: journal.conversationIdsAfter!.bind(journal) }
-        : {}),
+      conversationIdsAfter: journal.conversationIdsAfter.bind(journal),
     };
     const ids: string[] = [];
     let cursor: { id: string; at: string } | undefined;
@@ -875,19 +872,14 @@ describe('継続点つきの一覧は、継続点より新しい往復を頁送�
     return { ids, calls };
   }
 
-  it('⭐ 口を持つ器では、after を持つ order: asc の listPage を呼ばず、返る会話は口なしの器と同じ', async () => {
+  it('⭐ after を持つ order: asc の listPage を呼ばず、会話を重複なく返す', async () => {
     const journal = await seeded();
 
-    const withMouth = await walk(journal, true);
-    const without = await walk(journal, false);
+    const walked = await walk(journal);
 
-    expect(withMouth.ids).toEqual(['c5', 'c4', 'c3', 'c2', 'c1']);
-    expect(withMouth.ids).toEqual(without.ids);
-    const newerReads = (calls: typeof withMouth.calls) =>
-      calls.filter((q) => q?.order === 'asc' && q.after !== undefined);
-    expect(newerReads(withMouth.calls)).toEqual([]);
-    // 口なしの器は、同じ読みを頁送りで行う（上の「無い」が、呼びの形の見落としではないことの確認）
-    expect(newerReads(without.calls).length).toBeGreaterThan(0);
+    expect(walked.ids).toEqual(['c5', 'c4', 'c3', 'c2', 'c1']);
+    const newerReads = walked.calls.filter((q) => q?.order === 'asc' && q.after !== undefined);
+    expect(newerReads).toEqual([]);
   });
 });
 

@@ -7,7 +7,6 @@ import {
   describeSessionMissingKind,
   describeUnobservedOutcome,
   DIGEST_BODY_SHAPE_LIMIT,
-  DIGEST_JOURNAL_SCAN_LIMIT,
   DIGEST_RETAIN_LIMIT,
   DIGEST_SOURCE_TALLY_LIMIT,
   isManagerAwaitingJudgement,
@@ -17,7 +16,6 @@ import {
   type UnobservedReportState,
 } from './digest.js';
 import { TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
-import { JOURNAL_SCAN_PAGE_SIZE } from './journal-scan.js';
 import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import type { SessionMissingKind } from './manager.js';
 import { UnreadableApprovalError } from './store.js';
@@ -1750,8 +1748,7 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
     while (Date.now() === start) await Promise.resolve();
   };
 
-  // 口を消したストアは、口を持たない器（呼び手が listPage の行から作る）の代わり
-  function spiedStores(options: { withPort: boolean }) {
+  function spiedStores() {
     const stores = createMemoryStores();
     const types: (readonly string[] | undefined)[] = [];
     let insidePort = false;
@@ -1761,19 +1758,15 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
       if (!insidePort) types.push(query?.types);
       return listPage(query);
     };
-    const count = stores.journal.countToolUsesByActor?.bind(stores.journal);
-    if (!options.withPort || count === undefined) {
-      delete stores.journal.countToolUsesByActor;
-    } else {
-      stores.journal.countToolUsesByActor = async (query) => {
-        insidePort = true;
-        try {
-          return await count(query);
-        } finally {
-          insidePort = false;
-        }
-      };
-    }
+    const count = stores.journal.countToolUsesByActor.bind(stores.journal);
+    stores.journal.countToolUsesByActor = async (query) => {
+      insidePort = true;
+      try {
+        return await count(query);
+      } finally {
+        insidePort = false;
+      }
+    };
     return { stores, types };
   }
 
@@ -1796,76 +1789,53 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
     await stores.journal.append({ type: 'decision', decision: '別の種別の行', grounds: 'g' });
   }
 
-  it('⭐ 口がある器では、2本目の走査に tool_use が渡らず、件数（clone / delegated）は口が無い器と同じ', async () => {
-    const withPort = spiedStores({ withPort: true });
-    const withoutPort = spiedStores({ withPort: false });
-    // 時計を止める: 2つの店へ書く行の `at` がミリ秒の境をまたぐと、本文の比べ（「聞かずに決めたこと」の時刻）が揺れて落ちるため
+  it('⭐ 2本目の走査に tool_use が渡らず、件数は clone / delegated に分かれる', async () => {
+    const spied = spiedStores();
     vi.useFakeTimers({ toFake: ['Date'] });
-    let viaPort: string;
-    let viaPages: string;
+    let digest: string;
     try {
-      await appendMixed(withPort.stores);
-      await appendMixed(withoutPort.stores);
+      await appendMixed(spied.stores);
       const since = new Date(Date.now() - 60_000);
 
-      viaPort = await buildActivityDigest(withPort.stores, { since });
-      viaPages = await buildActivityDigest(withoutPort.stores, { since });
+      digest = await buildActivityDigest(spied.stores, { since });
     } finally {
       vi.useRealTimers();
     }
 
-    expect(withPort.types.flat()).not.toContain('tool_use');
-    expect(withoutPort.types.flat()).toContain('tool_use');
-    expect(viaPort).toContain('委譲側のツール実行 2 /');
-    expect(viaPort).toContain('自分の手（委譲せず使った道具）3 /');
-    expect(viaPort).toContain('自分で決めたこと 1 /');
-    // 期間の行は窓の終わり（`Date.now()` 由来）が違うので、そこだけ外して比べる
-    const body = (text: string) => text.split('\n').filter((line) => !line.startsWith('期間:'));
-    expect(body(viaPort)).toEqual(body(viaPages));
+    expect(spied.types.flat()).not.toContain('tool_use');
+    expect(digest).toContain('委譲側のツール実行 2 /');
+    expect(digest).toContain('自分の手（委譲せず使った道具）3 /');
+    expect(digest).toContain('自分で決めたこと 1 /');
   });
 
-  it('⭐ 窓の終わり（含まない）ちょうどの tool_use は、口があってもなくても数えない', async () => {
-    const withPort = spiedStores({ withPort: true });
-    const withoutPort = spiedStores({ withPort: false });
-    const rows: { at: string }[] = [];
-    for (const { stores } of [withPort, withoutPort]) {
-      const first = await stores.journal.append({
-        type: 'tool_use',
-        actor: 'clone',
-        tool: 'Bash',
-        input: {},
-      });
-      await nextMillisecond();
-      const edge = await stores.journal.append({
-        type: 'tool_use',
-        actor: 'manager:mgr-1234abcd',
-        tool: 'Edit',
-        input: {},
-      });
-      await nextMillisecond();
-      await stores.journal.append({ type: 'tool_use', actor: 'clone', tool: 'Bash', input: {} });
-      rows.push(first, edge);
-    }
+  it('⭐ 窓の終わり（含まない）ちょうどの tool_use は数えない', async () => {
+    const { stores } = spiedStores();
+    const first = await stores.journal.append({
+      type: 'tool_use',
+      actor: 'clone',
+      tool: 'Bash',
+      input: {},
+    });
+    await nextMillisecond();
+    const edge = await stores.journal.append({
+      type: 'tool_use',
+      actor: 'manager:mgr-1234abcd',
+      tool: 'Edit',
+      input: {},
+    });
+    await nextMillisecond();
+    await stores.journal.append({ type: 'tool_use', actor: 'clone', tool: 'Bash', input: {} });
     const since = new Date(Date.now() - 60_000);
-    const [, portEdge, , pagesEdge] = rows;
+    expect(first.at < edge.at).toBe(true);
 
-    const viaPort = await buildActivityDigest(withPort.stores, {
-      since,
-      until: new Date(portEdge!.at),
-    });
-    const viaPages = await buildActivityDigest(withoutPort.stores, {
-      since,
-      until: new Date(pagesEdge!.at),
-    });
+    const digest = await buildActivityDigest(stores, { since, until: new Date(edge.at) });
 
-    for (const digest of [viaPort, viaPages]) {
-      expect(digest).toContain('委譲側のツール実行 0 /');
-      expect(digest).toContain('自分の手（委譲せず使った道具）1 /');
-    }
+    expect(digest).toContain('委譲側のツール実行 0 /');
+    expect(digest).toContain('自分の手（委譲せず使った道具）1 /');
   });
 
   it('⭐ 窓の始まり（含む）ちょうどの tool_use は数える', async () => {
-    const { stores } = spiedStores({ withPort: true });
+    const { stores } = spiedStores();
     await stores.journal.append({ type: 'tool_use', actor: 'clone', tool: 'Bash', input: {} });
     await nextMillisecond();
     const edge = await stores.journal.append({
@@ -1906,59 +1876,12 @@ describe('tool_use は件数の口で数え、走査には載せない', () => {
     expect(digest).toContain('自分の手（委譲せず使った道具）7 /');
     expect(fake.calls.flatMap((call) => call.types ?? [])).not.toContain('tool_use');
   });
-
-  it('口が無い器で打ち切ったときは、ツール実行の件数が別に数えたとは言わない', async () => {
-    const fake = createSyntheticJournalStore({
-      total: 150_000,
-      baseTimeMs: Date.now(),
-      entryAt: () => ({ type: 'tool_use', actor: 'manager:mgr-oom', tool: 'Bash', input: {} }),
-    });
-
-    const digest = await buildActivityDigest(
-      { ...createMemoryStores(), journal: fake.store },
-      { since: new Date(0) },
-    );
-
-    expect(digest).toContain('DIGEST_JOURNAL_SCAN_LIMIT');
-    expect(digest).not.toContain('打ち切りの影響を受けない');
-  });
 });
 
 describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単位に有界化する', () => {
   function storesWithSyntheticJournal(journal: Stores['journal']): Stores {
     return { ...createMemoryStores(), journal };
   }
-
-  it('⭐ 窓に大量の tool_use 行があっても、渡した limit は常に有限で、渡ってきた総件数が上限で頭打ちになる（ヒープが有界であることの代理指標）', async () => {
-    // `total` は固定の数値リテラルにする: 定数から掛け算で作ると、変異で `Infinity` になり偽ストアの走査が終わらなくなるため
-    const total = 150_000;
-    const fake = createSyntheticJournalStore({
-      total,
-      baseTimeMs: Date.now(),
-      entryAt: () => ({ type: 'tool_use', actor: 'manager:mgr-oom', tool: 'Bash', input: {} }),
-    });
-
-    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
-      since: new Date(0),
-    });
-
-    expect(fake.totalReturned).toBeLessThanOrEqual(
-      DIGEST_JOURNAL_SCAN_LIMIT + JOURNAL_SCAN_PAGE_SIZE,
-    );
-    expect(fake.totalReturned).toBeLessThan(total);
-
-    expect(fake.calls.length).toBeGreaterThan(0);
-    for (const call of fake.calls) {
-      expect(Number.isFinite(call.limit)).toBe(true);
-      expect(call.limit).toBeGreaterThan(0);
-    }
-
-    expect(fake.calls.length).toBeLessThan(250);
-
-    expect(digest).toContain('DIGEST_JOURNAL_SCAN_LIMIT');
-
-    expect(digest).toContain(`委譲側のツール実行 ${DIGEST_JOURNAL_SCAN_LIMIT} /`);
-  });
 
   it('打ち切っていない普通の窓では、件数が正確で、打ち切りの名乗りが出力に無い', async () => {
     const total = 12;

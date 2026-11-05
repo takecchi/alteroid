@@ -21,6 +21,7 @@ import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
 import { JournalAnchorNotFoundError, describeUnreadableSchedules } from './store.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 import { listPageByOverfetch } from './journal-page.js';
+import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
 import { createMemoryStores } from './testing.js';
 
 function fakeJournal(entries: JournalEntry[]): JournalStore {
@@ -69,6 +70,8 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
     async clear() {
       throw new Error('このテストでは消さない');
     },
+    countToolUsesByActor: (query) => countToolUsesByActorFromPages(journal, query),
+    conversationIdsAfter: (query) => conversationIdsAfterFromPages(journal, query),
   };
   return journal;
 }

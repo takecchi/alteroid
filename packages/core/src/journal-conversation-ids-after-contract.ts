@@ -4,7 +4,6 @@ import { scanJournalPages } from './journal-scan.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つよう、`until` の期待値は積んだ行の `at` から自分で導く。
-// 口は省略可能（`JournalStore.conversationIdsAfter`）だが、3実装は持つので、持たないことを契約の破れとして扱う
 type JournalStoreConversationIdsAfterContractSubject = Pick<
   JournalStore,
   'append' | 'listPage' | 'conversationIdsAfter'
@@ -25,8 +24,7 @@ function plusMs(at: string, ms: number): string {
 export async function verifyJournalStoreConversationIdsAfterContract(
   journal: JournalStoreConversationIdsAfterContractSubject,
 ): Promise<void> {
-  const idsAfter = journal.conversationIdsAfter?.bind(journal);
-  if (idsAfter === undefined) fail('口', 'conversationIdsAfter を持っていない');
+  const idsAfter = journal.conversationIdsAfter.bind(journal);
 
   const conv = (name: string) => `${MARKER}:${name}`;
   const exchange = (

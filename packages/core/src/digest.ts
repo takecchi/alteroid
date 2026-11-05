@@ -593,30 +593,21 @@ export async function buildActivityDigest(
   let cloneToolUsesCount = 0;
   let delegatedToolUsesCount = 0;
 
-  // 口が在れば `tool_use` を走査から外す: 窓の行の大半は `tool_use` で、使うのは層ごとの件数だけなのに、頁ごとに全件を本文（道具の入力）ごと運んでいたため。
+  // `tool_use` を走査から外す: 窓の行の大半は `tool_use` で、使うのは層ごとの件数だけなのに、頁ごとに全件を本文（道具の入力）ごと運んでいたため。
   // 口の `until` は含む側なので `until` の1ms 前を渡す: `withinWindow`（`until` を含まない）と同じ答えにするため。`at` はミリ秒精度で、1ms 前までが「`until` より前」の全部になる
-  const countToolUsesByActor = stores.journal.countToolUsesByActor?.bind(stores.journal);
-  if (countToolUsesByActor !== undefined) {
-    const counted = await countToolUsesByActor({
-      since: sinceIso,
-      until: new Date(until.getTime() - 1).toISOString(),
-    });
-    for (const { actor, count } of counted) {
-      if (isCloneActor(actor)) cloneToolUsesCount += count;
-      else delegatedToolUsesCount += count;
-    }
+  const counted = await stores.journal.countToolUsesByActor({
+    since: sinceIso,
+    until: new Date(until.getTime() - 1).toISOString(),
+  });
+  for (const { actor, count } of counted) {
+    if (isCloneActor(actor)) cloneToolUsesCount += count;
+    else delegatedToolUsesCount += count;
   }
 
   const activityScan = await scanJournalPages(
     stores.journal,
     {
-      types: [
-        'decision',
-        'escalation',
-        'memory_update',
-        'external_event',
-        ...(countToolUsesByActor === undefined ? (['tool_use'] as const) : []),
-      ],
+      types: ['decision', 'escalation', 'memory_update', 'external_event'],
       since: sinceIso,
       until: untilIso,
       order: 'desc',
@@ -641,10 +632,6 @@ export async function buildActivityDigest(
             // `retained` の上限の外で数える: 内側で数えると `DIGEST_RETAIN_LIMIT` を超えた日に保持した行だけを数える形に戻るため
             externalSourceTally.push(entry.source);
             break;
-          case 'tool_use':
-            if (isCloneActor(entry.actor)) cloneToolUsesCount += 1;
-            else delegatedToolUsesCount += 1;
-            break;
         }
       }
     },
@@ -652,10 +639,7 @@ export async function buildActivityDigest(
   );
 
   const journalScanTruncated = exchangeScan.truncated || activityScan.truncated;
-  const journalScanTruncatedNotice =
-    countToolUsesByActor === undefined
-      ? JOURNAL_SCAN_TRUNCATED_NOTICE
-      : `${JOURNAL_SCAN_TRUNCATED_NOTICE}${TOOL_USE_COUNTED_IN_FULL_NOTICE}`;
+  const journalScanTruncatedNotice = `${JOURNAL_SCAN_TRUNCATED_NOTICE}${TOOL_USE_COUNTED_IN_FULL_NOTICE}`;
 
   const decisions = decisionBucket.retained;
   const decisionsCount = decisionBucket.count;
