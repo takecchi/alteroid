@@ -1,0 +1,4570 @@
+{
+  "lengths": {
+    "reason-missing#1": 49,
+    "reason-missing#2": 54,
+    "reason-missing#3": 49,
+    "reason-invalid#1": 22,
+    "reason-invalid#2": 22,
+    "reason-invalid#3": 34,
+    "reason-invalid#4": 34,
+    "reason-invalid#5": 22,
+    "reason-invalid#6": 22,
+    "reason-invalid#7": 34,
+    "reason-invalid#8": 22,
+    "reason-invalid#9": 34,
+    "open-moves#1": 34,
+    "open-moves#2": 42,
+    "open-moves#3": 41,
+    "open-moves#4": 34,
+    "open-moves#5": 36,
+    "open-moves#6": 41,
+    "open-moves#7": 41,
+    "close#1": 31,
+    "close#2": 37,
+    "close#3": 39,
+    "close#4": 36,
+    "unchanged#1": 28,
+    "unchanged#2": 29,
+    "unchanged#3": 36,
+    "unchanged#4": 26,
+    "unchanged#5": 31,
+    "rejected#1": 56,
+    "rejected#2": 56,
+    "rejected#3": 54,
+    "rejected#4": 66,
+    "not-found#1": 51,
+    "not-found#2": 51,
+    "not-found#3": 51,
+    "reopen#1": 47,
+    "reopen#2": 52,
+    "reopen#3": 47,
+    "reopen#4": 28,
+    "reopen#5": 47,
+    "reopen-get-fails#1": 49,
+    "reopen-get-fails#2": 12,
+    "reopen-get-fails#3": 49,
+    "reopen-get-fails#4": 12,
+    "reopen-get-fails#5": 31,
+    "reopen-setstatus-fails#1": 49,
+    "reopen-setstatus-fails#2": 18,
+    "reopen-setstatus-fails#3": 49,
+    "reopen-setstatus-fails#4": 18,
+    "reopen-setstatus-fails#5": 49,
+    "reopen-setstatus-fails#6": 18,
+    "reopen-retract-fails-setstatus": 49,
+    "reopen-removed": 49,
+    "reopen-removed-retract-fails": 49,
+    "reopen-other-reopened": 28,
+    "reopen-other-reopened-retract-fails": 28,
+    "reopen-reclosed#1": 47,
+    "reopen-reclosed#2": 47,
+    "reopen-reclosed-same-time": 47,
+    "reopen-other-moved": 34,
+    "journal-fails#1": 231,
+    "journal-fails#2": 191,
+    "journal-fails#3": 191,
+    "journal-fails#4": 26,
+    "journal-fails#5": 51,
+    "journal-fails#6": 54
+  },
+  "scenarios": {
+    "reason-missing#1": {
+      "output": {
+        "length": 49,
+        "text": "status=done には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-missing#2": {
+      "output": {
+        "length": 54,
+        "text": "status=cancelled には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-missing#3": {
+      "output": {
+        "length": 49,
+        "text": "status=done には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#1": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#2": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#3": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#4": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#5": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#6": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#7": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#8": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#9": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "open-moves#1": {
+      "output": {
+        "length": 34,
+        "text": "task q-1 を queued から waiting へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（q-1）: queued → waiting（返事待ち）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "waiting",
+            "options": {
+              "reason": "返事待ち",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: queued → waiting（返事待ち）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "open-moves#2": {
+      "output": {
+        "length": 42,
+        "text": "task w-1 を waiting から needs_decision へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（w-1）: waiting → needs_decision",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "w-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "w-1",
+            "status": "needs_decision",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "w-1"
+            },
+            "decision": "task の状態を変えた（w-1）: waiting → needs_decision",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "open-moves#3": {
+      "output": {
+        "length": 41,
+        "text": "task n-1 を needs_decision から queued へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の状態を変えた（n-1）: needs_decision → queued（判断が出た）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "n-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "n-1"
+          },
+          "outcome": "found needs_decision"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "n-1",
+            "status": "queued",
+            "options": {
+              "reason": "判断が出た",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "n-1"
+            },
+            "decision": "task の状態を変えた（n-1）: needs_decision → queued（判断が出た）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "open-moves#4": {
+      "output": {
+        "length": 34,
+        "text": "task q-1 を waiting から queued へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の状態を変えた（q-1）: waiting → queued",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-1"
+          },
+          "outcome": "found waiting"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "queued",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: waiting → queued",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "open-moves#5": {
+      "output": {
+        "length": 36,
+        "text": "task w-1 は既に needs_decision。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "w-1",
+            "status": "needs_decision",
+            "options": {
+              "reason": "同じ状態",
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "open-moves#6": {
+      "output": {
+        "length": 41,
+        "text": "task q-1 を queued から needs_decision へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "task の状態を変えた（q-1）: queued → needs_decision",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "needs_decision",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:06:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: queued → needs_decision",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "open-moves#7": {
+      "output": {
+        "length": 41,
+        "text": "task q-1 を needs_decision から queued へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:07:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:07:00.000Z",
+          "decision": "task の状態を変えた（q-1）: needs_decision → queued（戻した）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-1"
+          },
+          "outcome": "found needs_decision"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "queued",
+            "options": {
+              "reason": "戻した",
+              "by": "clone",
+              "at": "2026-10-29T00:07:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: needs_decision → queued（戻した）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "close#1": {
+      "output": {
+        "length": 31,
+        "text": "task q-1 を queued から done へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "片付いた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（q-1）: queued → done（片付いた）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "done",
+            "options": {
+              "reason": "片付いた",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: queued → done（片付いた）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "close#2": {
+      "output": {
+        "length": 37,
+        "text": "task w-1 を waiting から cancelled へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "やめた"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "片付いた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（w-1）: waiting → cancelled（やめた）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "w-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "w-1",
+            "status": "cancelled",
+            "options": {
+              "reason": "やめた",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "w-1"
+            },
+            "decision": "task の状態を変えた（w-1）: waiting → cancelled（やめた）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "close#3": {
+      "output": {
+        "length": 39,
+        "text": "task n-1 を needs_decision から done へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "  前後に空白  "
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "やめた"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "片付いた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の状態を変えた（n-1）: needs_decision → done（  前後に空白  ）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "n-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "n-1",
+            "status": "done",
+            "options": {
+              "reason": "  前後に空白  ",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "n-1"
+            },
+            "decision": "task の状態を変えた（n-1）: needs_decision → done（  前後に空白  ）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "close#4": {
+      "output": {
+        "length": 36,
+        "text": "task q-2 を queued から cancelled へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2",
+          "closedAt": "2026-10-29T00:04:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "一行目\n二行目"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "  前後に空白  "
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "やめた"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "片付いた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の状態を変えた（q-2）: queued → cancelled（一行目\n二行目）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-2"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-2",
+            "status": "cancelled",
+            "options": {
+              "reason": "一行目\n二行目",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-2"
+            },
+            "decision": "task の状態を変えた（q-2）: queued → cancelled（一行目\n二行目）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "unchanged#1": {
+      "output": {
+        "length": 28,
+        "text": "task q-1 は既に queued。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:05:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-1"
+          },
+          "outcome": "found queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "queued",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "unchanged#2": {
+      "output": {
+        "length": 29,
+        "text": "task w-1 は既に waiting。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:05:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "w-1",
+            "status": "waiting",
+            "options": {
+              "reason": "まだ待つ",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "unchanged#3": {
+      "output": {
+        "length": 36,
+        "text": "task n-1 は既に needs_decision。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:05:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "n-1",
+            "status": "needs_decision",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "unchanged#4": {
+      "output": {
+        "length": 26,
+        "text": "task d-1 は既に done。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:05:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "done",
+            "options": {
+              "reason": "別の理由で閉じ直したい",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "unchanged#5": {
+      "output": {
+        "length": 31,
+        "text": "task c-1 は既に cancelled。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:05:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c-1",
+            "status": "cancelled",
+            "options": {
+              "reason": "別の理由",
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "rejected#1": {
+      "output": {
+        "length": 56,
+        "text": "done から cancelled へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "cancelled",
+            "options": {
+              "reason": "やっぱりやめた",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "rejected"
+        }
+      ]
+    },
+    "rejected#2": {
+      "output": {
+        "length": 56,
+        "text": "cancelled から done へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c-1",
+            "status": "done",
+            "options": {
+              "reason": "やっぱり終わった",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "rejected"
+        }
+      ]
+    },
+    "rejected#3": {
+      "output": {
+        "length": 54,
+        "text": "done から waiting へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "waiting",
+            "options": {
+              "reason": "待ちに戻す",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "rejected"
+        }
+      ]
+    },
+    "rejected#4": {
+      "output": {
+        "length": 66,
+        "text": "cancelled から needs_decision へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c-1",
+            "status": "needs_decision",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "rejected"
+        }
+      ]
+    },
+    "not-found#1": {
+      "output": {
+        "length": 51,
+        "text": "task ghost は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "ghost",
+            "status": "done",
+            "options": {
+              "reason": "消えた",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#2": {
+      "output": {
+        "length": 51,
+        "text": "task ghost は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "ghost"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "ghost",
+            "status": "queued",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#3": {
+      "output": {
+        "length": 51,
+        "text": "task ghost は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "ghost",
+            "status": "waiting",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "reopen#1": {
+      "output": {
+        "length": 47,
+        "text": "task d-1 を done から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "b-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b-1",
+          "body": "本文 b-1",
+          "closedAt": "2026-10-03T00:00:00.000Z"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "もう要らない"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        }
+      ]
+    },
+    "reopen#2": {
+      "output": {
+        "length": 52,
+        "text": "task c-1 を cancelled から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1"
+        },
+        {
+          "id": "b-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b-1",
+          "body": "本文 b-1",
+          "closedAt": "2026-10-03T00:00:00.000Z"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（c-1）: cancelled → queued",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=もう要らない",
+          "target": {
+            "kind": "task",
+            "id": "c-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "c-1"
+          },
+          "outcome": "found cancelled"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c-1"
+            },
+            "decision": "task の状態を変えた（c-1）: cancelled → queued",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=もう要らない"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c-1",
+            "status": "queued",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        }
+      ]
+    },
+    "reopen#3": {
+      "output": {
+        "length": 47,
+        "text": "task b-1 を done から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1"
+        },
+        {
+          "id": "b-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b-1",
+          "body": "本文 b-1"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の状態を変えた（b-1）: done → queued（記録なしの行）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=（記録なし） / 理由=（理由の記録なし）",
+          "target": {
+            "kind": "task",
+            "id": "b-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b-1"
+            },
+            "decision": "task の状態を変えた（b-1）: done → queued（記録なしの行）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=（記録なし） / 理由=（理由の記録なし）"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b-1",
+            "status": "queued",
+            "options": {
+              "reason": "記録なしの行",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        }
+      ]
+    },
+    "reopen#4": {
+      "output": {
+        "length": 28,
+        "text": "task d-1 は既に queued。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1"
+        },
+        {
+          "id": "b-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b-1",
+          "body": "本文 b-1"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "もう一度",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "reopen#5": {
+      "output": {
+        "length": 47,
+        "text": "task d-2 を done から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "c-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c-1",
+          "body": "本文 c-1"
+        },
+        {
+          "id": "b-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b-1",
+          "body": "本文 b-1"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の状態を変えた（d-2）: done → queued（ここは別の行）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-2"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-2"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-2"
+            },
+            "decision": "task の状態を変えた（d-2）: done → queued（ここは別の行）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-2",
+            "status": "queued",
+            "options": {
+              "reason": "ここは別の行",
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        }
+      ]
+    },
+    "reopen-get-fails#1": {
+      "output": {
+        "length": 49,
+        "text": "task d-1 は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "reopen-get-fails#2": {
+      "output": {
+        "length": 12,
+        "text": "ストアが落ちた（get）",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "threw Error: ストアが落ちた（get）"
+        }
+      ]
+    },
+    "reopen-get-fails#3": {
+      "output": {
+        "length": 49,
+        "text": "task q-1 は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-1"
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "reopen-get-fails#4": {
+      "output": {
+        "length": 12,
+        "text": "ストアが落ちた（get）",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-1"
+          },
+          "outcome": "threw Error: ストアが落ちた（get）"
+        }
+      ]
+    },
+    "reopen-get-fails#5": {
+      "output": {
+        "length": 31,
+        "text": "task q-2 を queued から done へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2",
+          "closedAt": "2026-10-29T00:05:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の状態を変えた（q-2）: queued → done（閉じる）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "q-2"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-2",
+            "status": "done",
+            "options": {
+              "reason": "閉じる",
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-2"
+            },
+            "decision": "task の状態を変えた（q-2）: queued → done（閉じる）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "reopen-setstatus-fails#1": {
+      "output": {
+        "length": 49,
+        "text": "task d-1 は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に行が読めない形になった",
+          "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に行が読めない形になった",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "reopen-setstatus-fails#2": {
+      "output": {
+        "length": 18,
+        "text": "ストアが落ちた（setStatus）",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（d-2）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-2"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-2"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-2"
+            },
+            "decision": "task の状態を変えた（d-2）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-2",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（setStatus）"
+        }
+      ]
+    },
+    "reopen-setstatus-fails#3": {
+      "output": {
+        "length": 49,
+        "text": "task q-1 は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "done",
+            "options": {
+              "reason": "閉じる",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "reopen-setstatus-fails#4": {
+      "output": {
+        "length": 18,
+        "text": "ストアが落ちた（setStatus）",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "done",
+            "options": {
+              "reason": "閉じる",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（setStatus）"
+        }
+      ]
+    },
+    "reopen-setstatus-fails#5": {
+      "output": {
+        "length": 49,
+        "text": "task q-2 は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-2"
+          },
+          "outcome": "found queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-2",
+            "status": "queued",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "reopen-setstatus-fails#6": {
+      "output": {
+        "length": 18,
+        "text": "ストアが落ちた（setStatus）",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-2",
+            "status": "waiting",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:06:00.000Z"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（setStatus）"
+        }
+      ]
+    },
+    "reopen-retract-fails-setstatus": {
+      "output": {
+        "length": 49,
+        "text": "task d-1 は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に行が読めない形になった",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "reopen-removed": {
+      "output": {
+        "length": 49,
+        "text": "task d-1 は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に task が消えていた",
+          "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "not-found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に task が消えていた",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "reopen-removed-retract-fails": {
+      "output": {
+        "length": 49,
+        "text": "task d-1 は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "not-found"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に task が消えていた",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "reopen-other-reopened": {
+      "output": {
+        "length": 28,
+        "text": "task d-1 は既に queued。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-28T12:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に別の手で状態が変わっていた",
+          "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に別の手で状態が変わっていた",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "reopen-other-reopened-retract-fails": {
+      "output": {
+        "length": 28,
+        "text": "task d-1 は既に queued。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-28T12:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に別の手で状態が変わっていた",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "reopen-reclosed#1": {
+      "output": {
+        "length": 47,
+        "text": "task d-1 を done から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: 閉じた時刻=2026-10-28T13:00:00.000Z / 閉じた主体=human / 理由=別の手が閉じ直した",
+          "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: 閉じた時刻=2026-10-28T13:00:00.000Z / 閉じた主体=human / 理由=別の手が閉じ直した",
+            "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "reopen-reclosed#2": {
+      "output": {
+        "length": 47,
+        "text": "task d-2 を done から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（d-2）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-2"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-2"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-2"
+            },
+            "decision": "task の状態を変えた（d-2）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-2",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-2"
+            },
+            "decision": "開き直し（d-2）の間に閉じ直されていた。実際に行から外した記録: 閉じた時刻=2026-10-28T13:00:00.000Z / 閉じた主体=human / 理由=別の手が閉じ直した",
+            "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "reopen-reclosed-same-time": {
+      "output": {
+        "length": 47,
+        "text": "task d-1 を done から queued へ移した（閉じた記録は日誌に残してある）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        }
+      ]
+    },
+    "reopen-other-moved": {
+      "output": {
+        "length": 34,
+        "text": "task d-1 を waiting から queued へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: （閉じた記録なし）",
+          "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: （閉じた記録なし）",
+            "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "journal-fails#1": {
+      "output": {
+        "length": 231,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\ntask_set_status は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=38 grounds.chars=88\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#2": {
+      "output": {
+        "length": 191,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\ntask_set_status は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=37 grounds.chars=22\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "done",
+            "options": {
+              "reason": "閉じる",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: queued → done（閉じる）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#3": {
+      "output": {
+        "length": 191,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\ntask_set_status は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=39 grounds.chars=22\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-2",
+            "status": "waiting",
+            "options": {
+              "reason": "待つ",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-2"
+            },
+            "decision": "task の状態を変えた（q-2）: queued → waiting（待つ）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#4": {
+      "output": {
+        "length": 26,
+        "text": "task d-2 は既に done。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-2",
+            "status": "done",
+            "options": {
+              "reason": "同じ",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "journal-fails#5": {
+      "output": {
+        "length": 51,
+        "text": "task ghost は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "ghost",
+            "status": "done",
+            "options": {
+              "reason": "無い",
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "journal-fails#6": {
+      "output": {
+        "length": 54,
+        "text": "done から waiting へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": false,
+      "tasks": [
+        {
+          "id": "q-2",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 q-2",
+          "body": "本文 q-2"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "d-2",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-03T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d-2",
+          "body": "本文 d-2",
+          "closedAt": "2026-10-03T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-2",
+            "status": "waiting",
+            "options": {
+              "by": "clone",
+              "at": "2026-10-29T00:06:00.000Z"
+            }
+          },
+          "outcome": "rejected"
+        }
+      ]
+    }
+  }
+}
