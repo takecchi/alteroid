@@ -6,7 +6,7 @@ import type { JournalStore } from './store.js';
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg が core を実行時に読むため。append した行は後始末しないので、使い捨てのストアを渡す
 type ConversationPageContractSubject = Pick<
   JournalStore,
-  'append' | 'list' | 'listPage' | 'get' | 'conversationIdsAfter'
+  'append' | 'list' | 'listPage' | 'get' | 'conversationIdsAfter' | 'withdrawnClientMessageIds'
 >;
 
 function fail(property: string, detail: string): never {

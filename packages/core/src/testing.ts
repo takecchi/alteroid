@@ -12,7 +12,12 @@ import { tailByCodePoints } from './excerpt.js';
 import { approvalStateOf } from './approval-state.js';
 import { deriveMemoryFrontmatter, nextDescribedState, toMemoryCreatedAt } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
-import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
+import {
+  conversationIdsAfterFromPages,
+  conversationIdsWithPrefixFromPages,
+  countToolUsesByActorFromPages,
+  withdrawnClientMessageIdsFromPages,
+} from './journal-scan.js';
 import {
   isHiddenJournalEntry,
   journalTombstonesOf,
@@ -161,6 +166,11 @@ import {
   setTaskRowStatus,
   type TaskRow,
 } from './task.js';
+import {
+  claimScheduledRunRow,
+  completeScheduledRunRow,
+  editScheduledRequestRow,
+} from './schedule-run-transition.js';
 import { assertValidCredentialEntries, assertValidCredentialNames } from './credential-input.js';
 import {
   stripNulFromUnmeteredRecord,
@@ -527,6 +537,12 @@ export function createMemoryStores(): Stores {
     async conversationIdsAfter(query) {
       return conversationIdsAfterFromPages(journal, query);
     },
+    async withdrawnClientMessageIds(query) {
+      return withdrawnClientMessageIdsFromPages(journal, query);
+    },
+    async conversationIdsWithPrefix(query) {
+      return conversationIdsWithPrefixFromPages(journal, query);
+    },
     async get(id: string) {
       const found = entries.find((entry) => entry.id === id) ?? null;
       if (found !== null && isHiddenJournalEntry(found, tombstones())) return null;
@@ -661,30 +677,20 @@ export function createMemoryStores(): Stores {
         throw new ScheduleConflictError(kind, found === undefined ? null : isolate(found));
       }
       if (!found) return null;
-      const next = scheduledRequestSchema.parse({
-        ...found,
-        request: stripNul(changes.request),
-        spec: changes.spec,
-        updatedAt,
-      });
+      const next = editScheduledRequestRow(found, changes, updatedAt);
       schedules.set(kind, next);
       return isolate(next);
     },
     async claimRun(kind, expectedUpdatedAt, at, cause) {
-      const existing = schedules.get(kind);
-      // 消された・書き換わったなら古い本文で動かさない
-      if (!existing || existing.updatedAt !== expectedUpdatedAt) return null;
-      // updatedAt は版の識別子なので動かさない。定期の基準は completeRun まで進めない
-      schedules.set(kind, { ...existing, lastRunAt: at, pendingRun: { at, cause } });
-      return existing;
+      const claim = claimScheduledRunRow(schedules.get(kind), expectedUpdatedAt, at, cause);
+      if (claim === null) return null;
+      schedules.set(kind, claim.next);
+      return claim.before;
     },
     async completeRun(kind, at, cause) {
       const existing = schedules.get(kind);
-      // 別の発火の印が付いているなら触らない
-      if (!existing || existing.pendingRun?.at !== at) return;
-      const rest = { ...existing };
-      delete rest.pendingRun;
-      schedules.set(kind, cause === 'schedule' ? { ...rest, lastScheduledRunAt: at } : rest);
+      if (!existing) return;
+      schedules.set(kind, completeScheduledRunRow(existing, at, cause));
     },
     async getPhase(kind) {
       return schedulePhases.get(kind) ?? null;

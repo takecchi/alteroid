@@ -151,6 +151,7 @@ export { verifyJournalStoreDeletedConversationContract } from './journal-deleted
 export { verifyJournalStoreWithdrawnContract } from './journal-withdrawn-contract.js';
 export { verifyJournalStoreToolUseCountContract } from './journal-tool-use-count-contract.js';
 export { verifyJournalStoreConversationIdsAfterContract } from './journal-conversation-ids-after-contract.js';
+export { verifyJournalStoreConversationPrefixContract } from './journal-conversation-prefix-contract.js';
 export { verifyJournalStoreOrderContract } from './journal-order-with-contract.js';
 export { verifyConversationPageContract } from './conversation-page-contract.js';
 export { verifyJournalStoreQueryEdgeContract } from './journal-query-edge-contract.js';
@@ -189,8 +190,10 @@ export { wrapJournalStore } from './journal-wrap.js';
 export { verifyJournalStorePageContract } from './journal-page-contract.js';
 export {
   conversationIdsAfterFromPages,
+  conversationIdsWithPrefixFromPages,
   countToolUsesByActorFromPages,
   scanJournalPages,
+  withdrawnClientMessageIdsFromPages,
 } from './journal-scan.js';
 export {
   describeSelectionsViolation,
@@ -242,6 +245,11 @@ export { verifyTaskStoreContract } from './task-store-contract.js';
 export { verifyTaskRemoveForConversationContract } from './task-remove-for-conversation-contract.js';
 export { TASK_TITLE_MAX, describeTaskPlacement } from './task-tools.js';
 export { scheduleReplaceEntry } from './schedule-replace.js';
+export {
+  claimScheduledRunRow,
+  completeScheduledRunRow,
+  editScheduledRequestRow,
+} from './schedule-run-transition.js';
 export { dropUnreadTimersOfKind, removeScheduleJournalFirst } from './schedule-remove.js';
 export {
   removeArchiveChunkJournalFirst,
@@ -806,8 +814,22 @@ export { preparePermissionGrantForPut } from './permission-grant-input.js';
 export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
 export { verifySessionRegistryGraveQueueContract } from './session-registry-grave-queue-contract.js';
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
+export {
+  verifyPersonaWriteContract,
+  verifyPersonaIfMatchContract,
+  verifyPersonaProtectionStatusContract,
+  verifyPersonaCreatedAtContract,
+  verifyPersonaDescribedAtContract,
+  verifyPersonaDescribedBytesContract,
+} from './persona-contract.js';
+export type {
+  PersonaProtectionStatusHooks,
+  PersonaCreatedAtHooks,
+  PersonaDescribedBytesHooks,
+} from './persona-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
+export { verifyScheduleRunContract } from './schedule-run-contract.js';
 export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
@@ -821,6 +843,19 @@ export {
   prepareLoginRequestForWrite,
 } from './auth-input.js';
 export { verifyAuthNulContract } from './auth-nul-contract.js';
+export {
+  verifyAuthRecordsContract,
+  verifyAuthListOrderContract,
+  verifyAuthTieByteOrderContract,
+  verifyAuthRevokeAccessTokenContract,
+  verifyAuthAccountFieldsContract,
+  verifyAuthLoginRequestContract,
+  verifyAuthConcurrentWritesContract,
+  verifyAuthVerifiedEmailContract,
+  verifyAuthLogoutRaceContract,
+  verifyAuthWriteValidationContract,
+} from './auth-contract.js';
+export type { MakeAuthStore } from './auth-contract.js';
 
 export {
   compareIntegrationKeyOrder,

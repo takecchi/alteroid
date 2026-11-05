@@ -1,5 +1,4 @@
 import { readConversationWindowPage } from './conversation.js';
-import { scanJournalPages } from './journal-scan.js';
 import type { JournalStore } from './store.js';
 
 /**
@@ -38,47 +37,23 @@ export async function lookupConversation(
   conversationId: string,
 ): Promise<ConversationLookup> {
   // 在る会話は、その会話の行だけを1行引いて答える（#5140）: 頁送りだと、古い会話ほど新しい側の他の会話を読み切るまで見つからないため。
-  // 1行も返らなければ、下の頁送りへそのまま落とす: 候補（前方一致）を集めるのと、読めない行を捨てて空に見えた頁を「無い」と取り違えないのは頁送りの受け持ちのため
+  // 1行も返らなければ、下の前方一致の読みへそのまま落とす: 候補を集めるのと、読めない行を捨てて空に見えた頁を「無い」と取り違えないのは、そちらの受け持ちのため
   const exact = await readConversationWindowPage(journal, { scan: 1, conversationId });
   if (exact.entries.some((entry) => entry.type === 'exchange')) return { found: true };
 
-  // 前方一致の候補を DB で集める口を持つ器ではそちらを使う（#5140）: 頁送りは人間との往復を本文ごと全部運び、
+  // 前方一致の候補は DB で集める口で引く（#5140）: 頁送りは人間との往復を本文ごと全部運び、
   // クローンが会話 id の先頭 8 文字だけを渡すたびに（#5130）往復の総数ぶんの本文を読んでいたため
-  if (journal.conversationIdsWithPrefix !== undefined) {
-    const matched = await journal.conversationIdsWithPrefix({
-      prefix: conversationId,
-      limit: CONVERSATION_CANDIDATE_LIMIT + 1,
-    });
-    // 頁送りと同じく、完全一致が現れたら在る（1行目の確かめと頁送りの間に書かれた発言）
-    if (matched.includes(conversationId)) return { found: true };
-    return {
-      found: false,
-      candidates: matched.slice(0, CONVERSATION_CANDIDATE_LIMIT),
-      moreCandidates: matched.length > CONVERSATION_CANDIDATE_LIMIT,
-    };
-  }
-
-  let found = false;
-  const candidates = new Set<string>();
-  let moreCandidates = false;
-  await scanJournalPages(journal, { types: ['exchange'], with: ['human'] }, (page) => {
-    for (const entry of page) {
-      if (entry.type !== 'exchange' || entry.conversationId === undefined) continue;
-      if (entry.conversationId === conversationId) {
-        found = true;
-        return false;
-      }
-      if (
-        entry.conversationId.startsWith(conversationId) &&
-        !candidates.has(entry.conversationId)
-      ) {
-        if (candidates.size < CONVERSATION_CANDIDATE_LIMIT) candidates.add(entry.conversationId);
-        else moreCandidates = true;
-      }
-    }
-    return true;
+  const matched = await journal.conversationIdsWithPrefix({
+    prefix: conversationId,
+    limit: CONVERSATION_CANDIDATE_LIMIT + 1,
   });
-  return found ? { found: true } : { found: false, candidates: [...candidates], moreCandidates };
+  // 完全一致が現れたら在る（1行目の確かめと、この読みの間に書かれた発言）
+  if (matched.includes(conversationId)) return { found: true };
+  return {
+    found: false,
+    candidates: matched.slice(0, CONVERSATION_CANDIDATE_LIMIT),
+    moreCandidates: matched.length > CONVERSATION_CANDIDATE_LIMIT,
+  };
 }
 
 /** クローンの道具が前方一致を受け付ける、会話 id の先頭の最短の長さ（#5130）。 */

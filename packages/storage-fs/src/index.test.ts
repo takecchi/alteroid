@@ -2,22 +2,34 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 
 import {
-  MemoryConflictError,
-  memoryVersion,
   captureStderr,
-  createAuthProviderRegistry,
-  createAuthService,
-  decodeState,
   renderMemoryDocuments,
+  verifyAuthRecordsContract,
+  verifyAuthListOrderContract,
+  verifyAuthTieByteOrderContract,
+  verifyAuthRevokeAccessTokenContract,
+  verifyAuthAccountFieldsContract,
+  verifyAuthLoginRequestContract,
+  verifyAuthConcurrentWritesContract,
+  verifyAuthVerifiedEmailContract,
+  verifyAuthLogoutRaceContract,
+  verifyAuthWriteValidationContract,
   verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
   verifyMcpServersIfMatchContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
   verifyPersonaNulContract,
+  verifyPersonaWriteContract,
+  verifyPersonaIfMatchContract,
+  verifyPersonaProtectionStatusContract,
+  verifyPersonaCreatedAtContract,
+  verifyPersonaDescribedAtContract,
+  verifyPersonaDescribedBytesContract,
   verifyJobNulContract,
   verifyScheduleNulContract,
   verifyScheduleIfMatchContract,
+  verifyScheduleRunContract,
   verifyScheduleUnreadableContract,
   verifySessionRegistryGraveQueueContract,
   verifySessionRegistryNulContract,
@@ -36,11 +48,12 @@ import {
   verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreToolUseCountContract,
   verifyJournalStoreConversationIdsAfterContract,
+  verifyJournalStoreConversationPrefixContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
-import type { JournalEntry, OAuthProfile, OAuthProvider } from '@alteroid/core';
+import type { JournalEntry } from '@alteroid/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -85,108 +98,56 @@ describe('initWorkspace', () => {
 });
 
 describe('FsPersonaStore', () => {
+  // 索引（`.index.json`）を器の外から直す: 派生値だけを失った行を作るため。契約が器の裏側を知らずに済むよう、フックで渡す。
+  const editIndex = async (edit: (index: Record<string, Record<string, unknown>>) => void) => {
+    const indexPath = join(root, 'memory', '.index.json');
+    const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    edit(index);
+    await writeFile(indexPath, JSON.stringify(index), 'utf8');
+  };
+
   it('本文の NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifyPersonaNulContract(stores.persona);
   });
 
-  describe('write の前提の版 ifMatch（Issue #2743。fs・pg・インメモリで同じ挙動）', () => {
-    it('読んだ版と同じなら書ける。違えば書かずに MemoryConflictError（current は書かれている文書）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const read = await stores.persona.read('values');
-      const v1 = memoryVersion(read?.content ?? '');
-      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
+  it('書き込みの正規化と追記の契約（fs・pg・インメモリで同じ挙動）', async () => {
+    await verifyPersonaWriteContract(stores.persona);
+  });
 
-      const error = await stores.persona
-        .write('values', '# 価値観\n\n人間の編集\n', { ifMatch: v1 })
-        .catch((e: unknown) => e);
+  it('write / remove の前提の版 ifMatch の契約（Issue #2743・#2881。fs・pg・インメモリで同じ挙動）', async () => {
+    await verifyPersonaIfMatchContract(stores.persona);
+  });
 
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
-      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
-
-      const latest = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      const ok = await stores.persona.write('values', '# 価値観\n\n人間の編集\n', {
-        ifMatch: latest,
-      });
-      expect(ok.content).toBe('# 価値観\n\n人間の編集\n');
-    });
-
-    it('null は「無かった」: 無ければ作れ、在れば書かない。在るものを null 前提で書かない', async () => {
-      await stores.persona.write('values', '# A\n', { ifMatch: null });
-      const error = await stores.persona
-        .write('values', '# B\n', { ifMatch: null })
-        .catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((await stores.persona.read('values'))?.content).toBe('# A\n');
-    });
-
-    it('文書が無いのに版を指定したら 409（current は null）。書かれない', async () => {
-      const error = await stores.persona
-        .write('values', '# B\n', { ifMatch: memoryVersion('# 昔あった\n') })
-        .catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current).toBeNull();
-      expect(await stores.persona.read('values')).toBeNull();
-    });
-
-    it('同じ版を前提にした2つの書き込みが重なっても、勝つのは1つだけ', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      const results = await Promise.allSettled([
-        stores.persona.write('values', '# 一\n', { ifMatch: v }),
-        stores.persona.write('values', '# 二\n', { ifMatch: v }),
-      ]);
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    });
-
-    it('ifMatch を付けなければ従来どおり後勝ち（後方互換）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      await stores.persona.write('values', '# 価値観\n\nV2\n');
-      await stores.persona.write('values', '# 価値観\n\nV3\n', {});
-      expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV3\n');
+  it('protectionStatus（保護状態の派生値）の契約', async () => {
+    await verifyPersonaProtectionStatusContract(stores.persona, {
+      rewriteBehindStore: (slug, content) =>
+        writeFile(join(root, 'memory', `${slug}.md`), content, 'utf8'),
     });
   });
 
-  describe('remove の前提の版 ifMatch（Issue #2881。fs・pg・インメモリで同じ挙動）', () => {
-    it('読んだ後に別の書き手が書いたなら、消さずに MemoryConflictError（current は書かれている文書）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const v1 = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
-
-      const error = await stores.persona.remove('values', { ifMatch: v1 }).catch((e: unknown) => e);
-
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
-      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
+  it('createdAt（作成時刻の派生値）の契約', async () => {
+    await verifyPersonaCreatedAtContract(stores.persona, {
+      forgetCreatedAt: (slug) =>
+        editIndex((index) => {
+          delete index[slug]?.createdAt;
+        }),
     });
+  });
 
-    it('版が合えば消せる。無い文書に版を指定したら MemoryConflictError（current は null）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      await stores.persona.remove('values', { ifMatch: v });
-      expect(await stores.persona.read('values')).toBeNull();
+  it('describedAt（要旨の鮮度の派生値）の契約', async () => {
+    await verifyPersonaDescribedAtContract(stores.persona);
+  });
 
-      const error = await stores.persona.remove('values', { ifMatch: v }).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current).toBeNull();
-    });
-
-    it('同じ版を前提にした書き込みと削除が重なっても、勝つのは1つだけ', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      const results = await Promise.allSettled([
-        stores.persona.write('values', '# 一\n', { ifMatch: v }),
-        stores.persona.remove('values', { ifMatch: v }),
-      ]);
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    });
-
-    it('ifMatch を付けなければ従来どおり無条件に消す（後方互換）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.remove('values');
-      expect(await stores.persona.read('values')).toBeNull();
+  it('describedBytes（本文の変化量の派生値、#913）の契約', async () => {
+    await verifyPersonaDescribedBytesContract(stores.persona, {
+      forgetDescribedBytes: (slug, { withAt }) =>
+        editIndex((index) => {
+          delete index[slug]?.describedBytes;
+          if (withAt) delete index[slug]?.describedBytesAt;
+        }),
     });
   });
 
@@ -212,44 +173,6 @@ describe('FsPersonaStore', () => {
     expect(cardAfter).toContain('# 価値観');
     expect(cardAfter).not.toContain('人間が書き換えた');
     expect(cardAfter).not.toContain('もとの内容');
-  });
-
-  it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
-    const written = await stores.persona.write('values', '# 価値観');
-
-    expect(written.content).toBe('# 価値観\n');
-    expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n');
-  });
-
-  it('append は末尾に足す', async () => {
-    await stores.persona.write('log', '# ログ\n');
-    await stores.persona.append('log', '- 追記された学び\n');
-
-    expect((await stores.persona.read('log'))?.content).toBe('# ログ\n\n- 追記された学び\n');
-  });
-
-  it('末尾の行が見出しの文書へ追記しても、その見出しの行が壊れない', async () => {
-    // 片方だけ外してもこの歯は落ちない: fs は append の `ensureTrailingNewline(existing.content)` と #writeNow の `ensureTrailingNewline(content)` で二重に守っており、もう片方が効くため。
-    await stores.persona.write('log', '# ログ\n\n## 最後の節');
-    const doc = await stores.persona.append('log', '追記した1行');
-
-    expect(doc.content.split('\n')).toContain('## 最後の節');
-    expect(doc.content).toContain('追記した1行');
-  });
-
-  it('同時に追記しても取りこぼさない（蒸留は並行して同じ文書に書く）', async () => {
-    await stores.persona.write('log', '# ログ\n');
-
-    await Promise.all([
-      stores.persona.append('log', '- AAA'),
-      stores.persona.append('log', '- BBB'),
-      stores.persona.append('log', '- CCC'),
-    ]);
-
-    const content = (await stores.persona.read('log'))?.content ?? '';
-    expect(content).toContain('AAA');
-    expect(content).toContain('BBB');
-    expect(content).toContain('CCC');
   });
 
   it('書き込みは一時ファイル経由（人間に壊れた途中経過を読ませない）', async () => {
@@ -283,136 +206,13 @@ describe('FsPersonaStore', () => {
     expect(all).toContain('memory: b.md');
   });
 
-  describe('protectionStatus（保護状態の派生値）', () => {
-    it('索引ファイルが無ければ unknown（守る側の既定）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+  it('list() は .index.json を拾わない（*.md しか見ない）', async () => {
+    await stores.persona.write('values', '# 価値観\n');
+    await stores.persona.markHumanTouched('values', new Date().toISOString());
 
-      expect(await stores.persona.protectionStatus('nope')).toEqual({ kind: 'unknown' });
-    });
+    const list = await stores.persona.list();
 
-    it('markHumanTouched を呼んだ文書は human になる', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('write() だけの文書は clone-only になる（human 印が無い）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('append 経路でもハッシュが更新される（誤検出しない）', async () => {
-      await stores.persona.write('log', '# ログ\n');
-      await stores.persona.append('log', '- 追記');
-
-      expect(await stores.persona.protectionStatus('log')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('索引が確定した後の write でも、ハッシュ更新は組み直しに頼らない', async () => {
-      // 一度 protectionStatus を呼んで索引ファイルを確定させてから2回目を書く: 索引が無い状態から読むと組み直しが現在の本文を基準化し、#writeNow のハッシュ更新を削っても救われて落ちないため。
-      await stores.persona.write('values', '# 版1\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-
-      await stores.persona.write('values', '# 版2\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('索引が確定した後の append でも、ハッシュ更新は組み直しに頼らない', async () => {
-      await stores.persona.write('log2', '# ログ\n');
-      expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
-
-      await stores.persona.append('log2', '- 追記');
-      expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('道具経由（write）の直後は unknown にならない', async () => {
-      await stores.persona.write('values', '# 価値観\n\n本文\n');
-
-      const status = await stores.persona.protectionStatus('values');
-
-      expect(status).not.toEqual({ kind: 'unknown' });
-      expect(status).toEqual({ kind: 'clone-only' });
-    });
-
-    it('外部から本文が変わったとき、保護状態が古いまま返らない（unknown になる）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
-
-      expect((await stores.persona.read('values'))?.content).toContain('外から書き換えた');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
-    });
-
-    it('human 印は外部編集があっても降りない（human が unknown より優先）', async () => {
-      await stores.persona.write('values', '# 価値観\n\n人間が書いた\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('markHumanTouched は降ろさない（古い時刻を渡しても human のまま）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', '2026-01-02T00:00:00.000Z');
-      await stores.persona.markHumanTouched('values', '2020-01-01T00:00:00.000Z');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('write の humanTouchedAt は本文と同時に human 印を立てる（新規作成・置換とも）', async () => {
-      await stores.persona.write('fresh', '# 新規\n', {
-        ifMatch: null,
-        humanTouchedAt: '2026-01-02T00:00:00.000Z',
-      });
-      expect(await stores.persona.protectionStatus('fresh')).toEqual({ kind: 'human' });
-
-      await stores.persona.write('values', '# 版1\n');
-      await stores.persona.write('values', '# 版2\n', {
-        humanTouchedAt: '2026-01-02T00:00:00.000Z',
-      });
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('write の humanTouchedAt は、書けなかった（版違い）回は印を立てない', async () => {
-      await stores.persona.write('values', '# 版1\n');
-      await expect(
-        stores.persona.write('values', '# 版2\n', {
-          ifMatch: 'stale',
-          humanTouchedAt: '2026-01-02T00:00:00.000Z',
-        }),
-      ).rejects.toThrow();
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('humanTouchedAt の無い write は既存の human 印を降ろさない', async () => {
-      await stores.persona.write('values', '# 版1\n', {
-        humanTouchedAt: '2026-01-02T00:00:00.000Z',
-      });
-      await stores.persona.write('values', '# 版2\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('list() は .index.json を拾わない（*.md しか見ない）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      const list = await stores.persona.list();
-
-      expect(list.map((doc) => doc.slug)).toEqual(['values']);
-    });
-
-    it('remove() で保護状態も一緒に消える（実体の無い印を残さない）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      await stores.persona.remove('values');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
-    });
+    expect(list.map((doc) => doc.slug)).toEqual(['values']);
   });
 
   describe('索引の組み直し（保護状態の派生値を失ったとき）', () => {
@@ -475,46 +275,7 @@ describe('FsPersonaStore', () => {
     });
   });
 
-  describe('createdAt（作成時刻の派生値）', () => {
-    it('write() は新規作成のとき、backfill を通さずその場で createdAt を known にする（updatedAt と一致）', async () => {
-      const doc = await stores.persona.write('values', '# 価値観\n');
-
-      const read = await stores.persona.read('values');
-
-      expect(read?.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
-      expect(read?.createdAt).toEqual({ kind: 'known', at: read?.updatedAt });
-    });
-
-    it('既存の文書を更新しても createdAt は変わらない（updatedAt は進む）', async () => {
-      const first = await stores.persona.write('values', '# 価値観\n');
-      // ファイルシステムの mtime 分解能に負けないよう、確実に時刻を進める
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
-
-      expect(second.createdAt).toEqual(first.createdAt);
-      expect(second.updatedAt).not.toBe(first.updatedAt);
-      expect((await stores.persona.read('values'))?.createdAt).toEqual(first.createdAt);
-    });
-
-    it('append() が文書を新規作成したときも createdAt が付く', async () => {
-      const doc = await stores.persona.append('notes', '最初のメモ');
-
-      expect(doc.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
-      expect((await stores.persona.read('notes'))?.createdAt).toEqual(doc.createdAt);
-    });
-
-    it('append() が既存の文書へ追記したときは createdAt が変わらない', async () => {
-      const first = await stores.persona.write('notes', '# ノート\n');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      const second = await stores.persona.append('notes', '追記した行');
-
-      expect(second.createdAt).toEqual(first.createdAt);
-      expect(second.updatedAt).not.toBe(first.updatedAt);
-      expect((await stores.persona.read('notes'))?.createdAt).toEqual(first.createdAt);
-    });
-
+  describe('索引の無い生ファイルの createdAt（契約は write() で作った文書から派生値だけを失わせて測る）', () => {
     it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
       // write() ではなく索引の無い生ファイルを置く: write() が createdAt を立てて markCreatedAt 単体の効果が隠れるため
       await mkdir(join(root, 'memory'), { recursive: true });
@@ -528,54 +289,6 @@ describe('FsPersonaStore', () => {
       });
       const meta = (await stores.persona.list()).find((entry) => entry.slug === 'values');
       expect(meta?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
-    });
-
-    it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
-      await mkdir(join(root, 'memory'), { recursive: true });
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
-
-      const first = await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
-      const second = await stores.persona.markCreatedAt('values', '2020-01-01T00:00:00.000Z');
-
-      expect(first).toBe(true);
-      expect(second).toBe(false);
-      expect((await stores.persona.read('values'))?.createdAt).toEqual({
-        kind: 'known',
-        at: '2026-01-02T03:04:05.000Z',
-      });
-    });
-
-    it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
-      await mkdir(join(root, 'memory'), { recursive: true });
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
-
-      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
-      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
-
-      expect((await stores.persona.read('values'))?.createdAt).toEqual({
-        kind: 'known',
-        at: '2026-01-02T03:04:05.000Z',
-      });
-    });
-
-    it('実体の無い slug には新しく行を作らない（削除済み記憶が復活しない）', async () => {
-      const wrote = await stores.persona.markCreatedAt('ghost', '2026-01-02T03:04:05.000Z');
-
-      expect(wrote).toBe(false);
-      expect(await stores.persona.read('ghost')).toBeNull();
-      expect(await stores.persona.list()).toEqual([]);
-    });
-
-    it('削除して同じ slug を作り直すと、新しい createdAt になる', async () => {
-      const first = await stores.persona.write('values', '# 価値観\n');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await stores.persona.remove('values');
-      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
-
-      expect(second.createdAt.kind).toBe('known');
-      expect(second.createdAt).not.toEqual(first.createdAt);
-      expect((await stores.persona.read('values'))?.createdAt).toEqual(second.createdAt);
     });
 
     it('markCreatedAt は createdAt 以外を1つも書き換えない', async () => {
@@ -602,278 +315,6 @@ describe('FsPersonaStore', () => {
       expect(afterProtection).toEqual(beforeProtection);
       expect(before?.createdAt).toEqual({ kind: 'unknown' });
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
-    });
-
-    it('markCreatedAt は（human 印を経由しない場合でも）contentSha256 と describedAt を書き換えない', async () => {
-      // markHumanTouched を呼ばない: 呼ぶと protectionStatus が human の分岐で即返り、contentSha256 を一度も見ないため。
-      // write() の直後に索引から createdAt のキーだけを取り除く: write() は createdAt も立て、markCreatedAt は既に値が在れば触らないので、そのままでは変異が発火する前に false を返して終わる。
-      await stores.persona.write(
-        'runbook',
-        ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
-      );
-
-      const indexPath = join(root, 'memory', '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8'));
-      delete index.runbook.createdAt;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      const before = await stores.persona.read('runbook');
-      const beforeProtection = await stores.persona.protectionStatus('runbook');
-      expect(beforeProtection).toEqual({ kind: 'clone-only' });
-      expect(before?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(before?.createdAt).toEqual({ kind: 'unknown' });
-
-      const wrote = await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
-
-      const after = await stores.persona.read('runbook');
-      const afterProtection = await stores.persona.protectionStatus('runbook');
-      expect(wrote).toBe(true);
-      expect(after?.content).toBe(before?.content);
-      expect(after?.updatedAt).toBe(before?.updatedAt);
-      expect(after?.description).toBe(before?.description);
-      expect(afterProtection).toEqual(beforeProtection);
-      expect(after?.descriptionFreshness).toEqual(before?.descriptionFreshness);
-      expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
-    });
-  });
-
-  describe('describedAt（要旨の鮮度の派生値）', () => {
-    it('description を書いた直後は fresh になる（describedAt === updatedAt）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(doc?.description).toBe('費用の推移');
-      expect(doc?.kind).toBe('fact');
-    });
-
-    it('同じ書き込みで本文と description を両方変えても fresh のまま（同じ writtenAt で確定するため）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n旧本文\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移（改訂）\ntype: fact\n---\n# 定点観測\n新本文\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(doc?.description).toBe('費用の推移（改訂）');
-    });
-
-    it('本文だけを書き直すと stale になる（description は本文の変更に追従しない）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      // `staleForMs` は実時計・mtime 分解能に依存するので厳密値で固定せず、正であることだけを見る
-      expect(doc?.descriptionFreshness.kind).toBe('stale');
-      if (doc?.descriptionFreshness.kind === 'stale') {
-        expect(doc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
-      }
-      expect(doc?.description).toBe('費用の推移');
-    });
-
-    it('stale になった後、description を書き直すと fresh に戻る', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-      const staleDoc = await stores.persona.read('runbook');
-      expect(staleDoc?.descriptionFreshness.kind).toBe('stale');
-      if (staleDoc?.descriptionFreshness.kind === 'stale') {
-        expect(staleDoc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
-      }
-
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移（書き直した）\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      expect((await stores.persona.read('runbook'))?.descriptionFreshness).toEqual({
-        kind: 'fresh',
-      });
-    });
-
-    it('description を書かなければ absent のまま（premise の既定と同じ安全側）', async () => {
-      await stores.persona.write('about-me', '# 私\n\n前提の本文\n');
-
-      const doc = await stores.persona.read('about-me');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'absent' });
-      expect(doc?.kind).toBe('premise');
-    });
-  });
-
-  describe('describedBytes（本文の変化量の派生値、#913）', () => {
-    it('要旨を書いた直後は drift の deltaBytes が厳密に0（describedBytes と bytes の測り方が揃っている）', async () => {
-      const written = await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(doc?.bytes).toBe(written.bytes);
-    });
-
-    it('append の後、describedAt/describedBytes は据え置きで、deltaBytes は追記したバイト数と一致する', async () => {
-      const before = await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      const appended = '追記した1行\n';
-      await stores.persona.append('runbook', appended);
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness.kind).toBe('stale');
-      if (doc?.descriptionFreshness.kind === 'stale') {
-        expect(doc.descriptionFreshness.drift).toEqual({
-          kind: 'measured',
-          describedBytes: before.bytes,
-          currentBytes: doc.bytes,
-          deltaBytes: doc.bytes - before.bytes,
-        });
-        // 範囲で比べる: `ensureTrailingNewline` が足す改行を別に数えないため
-        expect(doc.descriptionFreshness.drift.kind === 'measured').toBe(true);
-        if (doc.descriptionFreshness.drift.kind === 'measured') {
-          expect(doc.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
-            Buffer.byteLength(appended, 'utf8'),
-          );
-        }
-      }
-    });
-
-    it('describedAt を持つが describedBytes を持たない既存の行は unrecorded になり、deltaBytes: 0 にならない', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const indexPath = join(stores.paths.memory, '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
-        string,
-        { describedBytes?: number }
-      >;
-      expect(index.runbook?.describedBytes).toBeGreaterThan(0);
-      delete index.runbook?.describedBytes;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness.kind).toBe('stale');
-      if (doc?.descriptionFreshness.kind === 'stale') {
-        expect(doc.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
-      }
-    });
-
-    it('describedBytes を持たない既存の行へ append すると、その場で基準点が立ち drift が at-least になる（deltaBytes は0にならない、#821 残課題）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const indexPath = join(stores.paths.memory, '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
-        string,
-        { describedBytes?: number; describedBytesAt?: string }
-      >;
-      delete index.runbook?.describedBytes;
-      delete index.runbook?.describedBytesAt;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      const before = await stores.persona.read('runbook');
-      expect(before?.descriptionFreshness.kind).toBe('stale');
-      if (before?.descriptionFreshness.kind === 'stale') {
-        expect(before.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      const appended = '基準点を立てるための追記\n';
-      await stores.persona.append('runbook', appended);
-
-      const after = await stores.persona.read('runbook');
-      expect(after?.descriptionFreshness.kind).toBe('stale');
-      if (after?.descriptionFreshness.kind === 'stale') {
-        expect(after.descriptionFreshness.drift.kind).toBe('at-least');
-        if (after.descriptionFreshness.drift.kind === 'at-least') {
-          expect(after.descriptionFreshness.drift.deltaBytes).not.toBe(0);
-          expect(after.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
-            Buffer.byteLength(appended, 'utf8'),
-          );
-        }
-      }
-    });
-
-    it('一度立った基準点は、2回目の append で動かない（#821 残課題）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const indexPath = join(stores.paths.memory, '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
-        string,
-        { describedBytes?: number; describedBytesAt?: string }
-      >;
-      delete index.runbook?.describedBytes;
-      delete index.runbook?.describedBytesAt;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.append('runbook', '1回目の追記\n');
-      const afterFirst = await stores.persona.read('runbook');
-      expect(afterFirst?.descriptionFreshness.kind).toBe('stale');
-      if (afterFirst?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
-      expect(afterFirst.descriptionFreshness.drift.kind).toBe('at-least');
-      if (afterFirst.descriptionFreshness.drift.kind !== 'at-least') throw new Error('unreachable');
-      const firstBaselineBytes = afterFirst.descriptionFreshness.drift.baselineBytes;
-      const firstBaselineAt = afterFirst.descriptionFreshness.drift.baselineAt;
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.append('runbook', '2回目の追記\n');
-      const afterSecond = await stores.persona.read('runbook');
-      expect(afterSecond?.descriptionFreshness.kind).toBe('stale');
-      if (afterSecond?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
-      expect(afterSecond.descriptionFreshness.drift.kind).toBe('at-least');
-      if (afterSecond.descriptionFreshness.drift.kind !== 'at-least')
-        throw new Error('unreachable');
-      expect(afterSecond.descriptionFreshness.drift.baselineBytes).toBe(firstBaselineBytes);
-      expect(afterSecond.descriptionFreshness.drift.baselineAt).toBe(firstBaselineAt);
-      expect(afterSecond.descriptionFreshness.drift.deltaBytes).toBeGreaterThan(
-        afterFirst.descriptionFreshness.drift.deltaBytes,
-      );
     });
   });
 });
@@ -1219,6 +660,12 @@ describe('FsJournalStore', () => {
   describe('継続点より後ろの会話 id の契約', () => {
     it('錨より後ろの人間との往復の会話 id だけが重複なく返り、until で切れ、錨の行・他の相手・消した会話は含まず、錨が無ければ例外を投げる', async () => {
       await verifyJournalStoreConversationIdsAfterContract(stores.journal);
+    });
+  });
+
+  describe('会話 id の前方一致の契約', () => {
+    it('前方一致する会話 id が最新の発言の新しい順に重複なく上限まで返り、消した会話・他の相手の会話は含まない', async () => {
+      await verifyJournalStoreConversationPrefixContract(stores.journal);
     });
   });
 
@@ -1611,6 +1058,10 @@ describe('FsScheduleStore', () => {
     await verifyScheduleIfMatchContract(stores.schedules);
   });
 
+  it('発火の印と編集の契約（claimRun・completeRun・editRequest。3実装で同じことを測る）', async () => {
+    await verifyScheduleRunContract(stores.schedules);
+  });
+
   it('読めない行の契約（Issue #3859。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
     const path = join(root, 'jobs', 'schedules.json');
     await captureStderr(async () => {
@@ -1716,115 +1167,6 @@ describe('FsScheduleStore', () => {
     const plans = (await stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]?.request).toBe('直した依頼');
-  });
-
-  it('発火を確定できる。返るのは更新前の姿（前回いつ動いたかが分かる）', async () => {
-    await stores.schedules.put(plan);
-
-    const claimed = await stores.schedules.claimRun(
-      'issue-round',
-      plan.updatedAt,
-      '2026-08-13T00:00:00.000Z',
-      'schedule',
-    );
-
-    expect(claimed?.request).toBe(plan.request);
-    expect(claimed?.lastRunAt).toBeUndefined();
-    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
-    expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
-  });
-
-  it('引き受けた印は完了で消える。印が残っていれば配り直せる', async () => {
-    await stores.schedules.put(plan);
-
-    await stores.schedules.claimRun(
-      'issue-round',
-      plan.updatedAt,
-      '2026-08-13T00:00:00.000Z',
-      'schedule',
-    );
-
-    // claim だけでは定期の基準を進めない（ここで進めると、直後に落ちた回が消える）
-    const claimed = await stores.schedules.get('issue-round');
-    expect(claimed?.pendingRun).toEqual({ at: '2026-08-13T00:00:00.000Z', cause: 'schedule' });
-    expect(claimed?.lastScheduledRunAt).toBeUndefined();
-
-    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
-
-    const done = await stores.schedules.get('issue-round');
-    expect(done?.pendingRun).toBeUndefined();
-    expect(done?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
-  });
-
-  it('別の発火の完了で、いま引き受けている印を消さない', async () => {
-    await stores.schedules.put(plan);
-    await stores.schedules.claimRun(
-      'issue-round',
-      plan.updatedAt,
-      '2026-08-13T00:00:00.000Z',
-      'schedule',
-    );
-
-    await stores.schedules.completeRun('issue-round', '2026-08-12T00:00:00.000Z', 'schedule');
-
-    const held = await stores.schedules.get('issue-round');
-    expect(held?.pendingRun?.at).toBe('2026-08-13T00:00:00.000Z');
-    expect(held?.lastScheduledRunAt).toBeUndefined();
-  });
-
-  it('手で起こした分は観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
-    await stores.schedules.put(plan);
-
-    await stores.schedules.claimRun(
-      'issue-round',
-      plan.updatedAt,
-      '2026-08-13T00:00:00.000Z',
-      'manual',
-    );
-    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'manual');
-
-    const after = await stores.schedules.get('issue-round');
-    expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
-    // これを動かすと、再起動した瞬間に定期の予定が手動実行の時刻へずれる
-    expect(after?.lastScheduledRunAt).toBeUndefined();
-  });
-
-  it('消された・書き換わった依頼は確定できない（古い本文で走らせない）', async () => {
-    expect(
-      await stores.schedules.claimRun(
-        'しらない',
-        plan.updatedAt,
-        '2026-08-13T00:00:00.000Z',
-        'schedule',
-      ),
-    ).toBeNull();
-
-    await stores.schedules.put(plan);
-    await stores.schedules.removeIfPresent('issue-round');
-    expect(
-      await stores.schedules.claimRun(
-        'issue-round',
-        plan.updatedAt,
-        '2026-08-13T00:00:00.000Z',
-        'schedule',
-      ),
-    ).toBeNull();
-
-    await stores.schedules.put(plan);
-    await stores.schedules.put({
-      ...plan,
-      request: '人間が直した依頼',
-      updatedAt: '2026-08-12T10:00:00.000Z',
-    });
-    expect(
-      await stores.schedules.claimRun(
-        'issue-round',
-        plan.updatedAt,
-        '2026-08-13T00:00:00.000Z',
-        'schedule',
-      ),
-    ).toBeNull();
-    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
   });
 
   it('読んでから確定するまでに removeIfPresent / put が割り込んでも、古い版では確定しない', async () => {
@@ -2502,815 +1844,49 @@ describe('FsSessionRegistry', () => {
 });
 
 describe('AuthStore', () => {
-  const account = {
-    id: 'account-1',
-    displayName: 'Owner',
-    email: 'owner@example.test',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    lastLoginAt: '2026-01-01T00:00:00.000Z',
-    grantedAt: null,
-    grantedBy: null,
-  };
+  // ケースごとに空の器を立てる（契約は固定の id で始めるので、器を使い回さない）
+  const makeAuth = async () => createFsStores(await makeTempDir('alteroid-test-')).auth;
 
-  it('listAccounts は createdAt の実時刻順（オフセット表記が違っても崩れない）', async () => {
-    const early = {
-      ...account,
-      id: 'account-early-utc',
-      email: 'early@example.test',
-      createdAt: '2024-01-01T23:00:00+09:00',
-    };
-    const late = {
-      ...account,
-      id: 'account-late-utc',
-      email: 'late@example.test',
-      createdAt: '2024-01-01T15:00:00+00:00',
-    };
-    await stores.auth.putAccount(early);
-    await stores.auth.putAccount(late);
-
-    const ids = (await stores.auth.listAccounts()).map((it) => it.id);
-    expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  it('保存と読み戻しの契約（fs・pg・インメモリで同じ挙動）', async () => {
+    await verifyAuthRecordsContract(makeAuth);
   });
 
-  it('listIdentities は createdAt の実時刻順（後から lastLoginAt を更新しても順が動かない）', async () => {
-    await stores.auth.putAccount(account);
-    const first = {
-      provider: 'google',
-      subject: 'sub-first',
-      accountId: 'account-1',
-      email: 'first@example.test',
-      emailVerified: true,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      lastLoginAt: '2026-01-01T00:00:00.000Z',
-    };
-    const second = {
-      provider: 'google',
-      subject: 'sub-second',
-      accountId: 'account-1',
-      email: 'second@example.test',
-      emailVerified: true,
-      createdAt: '2026-01-02T00:00:00.000Z',
-      lastLoginAt: '2026-01-02T00:00:00.000Z',
-    };
-    await stores.auth.putIdentity(first);
-    await stores.auth.putIdentity(second);
-    await stores.auth.putIdentity({ ...first, lastLoginAt: '2026-01-03T00:00:00.000Z' });
-
-    const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
-    expect(subjects).toEqual(['sub-first', 'sub-second']);
+  it('一覧の並びの契約（createdAt の実時刻順・同着の2次キー、issue #1688）', async () => {
+    await verifyAuthListOrderContract(makeAuth);
   });
 
-  it('listAccessTokens は createdAt の実時刻順（後から lastUsedAt を更新しても順が動かない）', async () => {
-    await stores.auth.putAccount(account);
-    const first = {
-      id: 'token-first',
-      accountId: 'account-1',
-      sha256: 'a'.repeat(64),
-      label: 'first',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: null,
-      lastUsedAt: null,
-      revokedAt: null,
-    };
-    const second = {
-      id: 'token-second',
-      accountId: 'account-1',
-      sha256: 'b'.repeat(64),
-      label: 'second',
-      createdAt: '2026-01-02T00:00:00.000Z',
-      expiresAt: null,
-      lastUsedAt: null,
-      revokedAt: null,
-    };
-    await stores.auth.putAccessToken(first);
-    await stores.auth.putAccessToken(second);
-    await stores.auth.putAccessToken({ ...first, lastUsedAt: '2026-01-03T00:00:00.000Z' });
-
-    const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
-    expect(ids).toEqual(['token-first', 'token-second']);
+  it('同着の2次キーはバイト順の契約（issue #2458）', async () => {
+    await verifyAuthTieByteOrderContract(makeAuth);
   });
 
-  describe('同着（createdAt が同一）の並び（issue #1688）', () => {
-    const TIE = '2026-01-05T00:00:00.000Z';
-
-    it('listAccounts: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
-      const first = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
-      const second = { ...account, id: 'account-b', email: 'b@example.test', createdAt: TIE };
-      await stores.auth.putAccount(first);
-      await stores.auth.putAccount(second);
-      await stores.auth.putAccount({ ...first, displayName: 'Owner (renamed)' });
-
-      const ids = (await stores.auth.listAccounts()).map((it) => it.id);
-      expect(ids).toEqual(['account-a', 'account-b']);
-    });
-
-    it('listAccounts: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
-      const first = { ...account, id: 'account-z', email: 'z@example.test', createdAt: TIE };
-      const second = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
-      await stores.auth.putAccount(first);
-      await stores.auth.putAccount(second);
-
-      const ids = (await stores.auth.listAccounts()).map((it) => it.id);
-      expect(ids).toEqual(['account-a', 'account-z']);
-    });
-
-    it('listIdentities: 同着の2行のうち先に作ったほうだけ後から更新すると、(provider, subject) 昇順のまま動かない', async () => {
-      await stores.auth.putAccount(account);
-      const first = {
-        provider: 'google',
-        subject: 'sub-first',
-        accountId: 'account-1',
-        email: 'first@example.test',
-        emailVerified: true,
-        createdAt: TIE,
-        lastLoginAt: TIE,
-      };
-      const second = {
-        provider: 'google',
-        subject: 'sub-second',
-        accountId: 'account-1',
-        email: 'second@example.test',
-        emailVerified: true,
-        createdAt: TIE,
-        lastLoginAt: TIE,
-      };
-      await stores.auth.putIdentity(first);
-      await stores.auth.putIdentity(second);
-      await stores.auth.putIdentity({ ...first, lastLoginAt: '2026-01-06T00:00:00.000Z' });
-
-      const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
-      expect(subjects).toEqual(['sub-first', 'sub-second']);
-    });
-
-    it('listIdentities: 同着2行を2次キー（subject）と逆順に挿入しても、subject 昇順で返る', async () => {
-      await stores.auth.putAccount(account);
-      const first = {
-        provider: 'google',
-        subject: 'sub-z',
-        accountId: 'account-1',
-        email: 'z@example.test',
-        emailVerified: true,
-        createdAt: TIE,
-        lastLoginAt: TIE,
-      };
-      const second = {
-        provider: 'google',
-        subject: 'sub-a',
-        accountId: 'account-1',
-        email: 'a@example.test',
-        emailVerified: true,
-        createdAt: TIE,
-        lastLoginAt: TIE,
-      };
-      await stores.auth.putIdentity(first);
-      await stores.auth.putIdentity(second);
-
-      const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
-      expect(subjects).toEqual(['sub-a', 'sub-z']);
-    });
-
-    it('listAccessTokens: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
-      await stores.auth.putAccount(account);
-      const first = {
-        id: 'token-first',
-        accountId: 'account-1',
-        sha256: 'a'.repeat(64),
-        label: 'first',
-        createdAt: TIE,
-        expiresAt: null,
-        lastUsedAt: null,
-        revokedAt: null,
-      };
-      const second = {
-        id: 'token-second',
-        accountId: 'account-1',
-        sha256: 'b'.repeat(64),
-        label: 'second',
-        createdAt: TIE,
-        expiresAt: null,
-        lastUsedAt: null,
-        revokedAt: null,
-      };
-      await stores.auth.putAccessToken(first);
-      await stores.auth.putAccessToken(second);
-      await stores.auth.putAccessToken({ ...first, lastUsedAt: '2026-01-06T00:00:00.000Z' });
-
-      const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
-      expect(ids).toEqual(['token-first', 'token-second']);
-    });
-
-    it('listAccessTokens: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
-      await stores.auth.putAccount(account);
-      const first = {
-        id: 'token-z',
-        accountId: 'account-1',
-        sha256: 'a'.repeat(64),
-        label: 'z',
-        createdAt: TIE,
-        expiresAt: null,
-        lastUsedAt: null,
-        revokedAt: null,
-      };
-      const second = {
-        id: 'token-a',
-        accountId: 'account-1',
-        sha256: 'b'.repeat(64),
-        label: 'a',
-        createdAt: TIE,
-        expiresAt: null,
-        lastUsedAt: null,
-        revokedAt: null,
-      };
-      await stores.auth.putAccessToken(first);
-      await stores.auth.putAccessToken(second);
-
-      const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
-      expect(ids).toEqual(['token-a', 'token-z']);
-    });
+  it('revokeAccessToken と markAccessTokenUsed の契約', async () => {
+    await verifyAuthRevokeAccessTokenContract(makeAuth);
   });
 
-  it('アカウントを保存して読み戻せる', async () => {
-    await stores.auth.putAccount(account);
-
-    expect(await stores.auth.getAccount('account-1')).toEqual(account);
-    expect(await stores.auth.listAccounts()).toEqual([account]);
-    expect(await stores.auth.getAccount('居ない')).toBeNull();
+  it('markAccountLoggedIn と revokeAccountAccess の契約（issue #1870・#1915）', async () => {
+    await verifyAuthAccountFieldsContract(makeAuth);
   });
 
-  it('許可の2値を書き換えられる（alteroid access grant の実体）', async () => {
-    await stores.auth.putAccount(account);
-    await stores.auth.putAccount({
-      ...account,
-      grantedAt: '2026-01-02T00:00:00.000Z',
-      grantedBy: 'operator',
-    });
-
-    const stored = await stores.auth.getAccount('account-1');
-    expect(stored?.grantedAt).toBe('2026-01-02T00:00:00.000Z');
-    expect(stored?.grantedBy).toBe('operator');
-    expect(await stores.auth.listAccounts()).toHaveLength(1);
+  it('ログイン要求の引き取りと交換への着手の契約', async () => {
+    await verifyAuthLoginRequestContract(makeAuth);
   });
 
-  it('検証済みメールからアカウントを引ける（相乗りの検査に使う）', async () => {
-    await stores.auth.putAccount(account);
-
-    expect((await stores.auth.findAccountByEmail('owner@example.test'))?.id).toBe('account-1');
-    expect(await stores.auth.findAccountByEmail('別人@example.test')).toBeNull();
+  it('同時の許可と同時のアカウント作成の契約', async () => {
+    await verifyAuthConcurrentWritesContract(makeAuth);
   });
 
-  it('identity は (provider, subject) で一意（同じ人の入り直しで増えない）', async () => {
-    await stores.auth.putAccount(account);
-    const identity = {
-      provider: 'google',
-      subject: 'sub-1',
-      accountId: 'account-1',
-      email: 'owner@example.test',
-      emailVerified: true,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      lastLoginAt: '2026-01-01T00:00:00.000Z',
-    };
-    await stores.auth.putIdentity(identity);
-    await stores.auth.putIdentity({ ...identity, lastLoginAt: '2026-01-05T00:00:00.000Z' });
-
-    const identities = await stores.auth.listIdentities('account-1');
-    expect(identities).toHaveLength(1);
-    expect(identities[0]?.lastLoginAt).toBe('2026-01-05T00:00:00.000Z');
-    expect((await stores.auth.findIdentity('google', 'sub-1'))?.accountId).toBe('account-1');
-    expect(await stores.auth.findIdentity('google', '別の sub')).toBeNull();
+  it('同じ検証済みメール（大小文字だけの違いを含む）の契約（#1702・#1741・#1714）', async () => {
+    await verifyAuthVerifiedEmailContract(makeAuth);
   });
 
-  it('アクセストークンは sha256 で引ける（素の値は持たない）', async () => {
-    await stores.auth.putAccount(account);
-    const token = {
-      id: 'token-1',
-      accountId: 'account-1',
-      sha256: 'a'.repeat(64),
-      label: 'laptop',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2026-02-01T00:00:00.000Z',
-      lastUsedAt: null,
-      revokedAt: null,
-    };
-    await stores.auth.putAccessToken(token);
-
-    expect(await stores.auth.findAccessTokenBySha256('a'.repeat(64))).toEqual(token);
-    expect(await stores.auth.findAccessTokenBySha256('b'.repeat(64))).toBeNull();
-    expect(await stores.auth.listAccessTokens('account-1')).toEqual([token]);
+  it('ログアウトと同時の authenticate が失効を巻き戻さない契約（issue #1782）', async () => {
+    await verifyAuthLogoutRaceContract(makeAuth);
   });
 
-  describe('revokeAccessToken', () => {
-    const token = {
-      id: 'token-1',
-      accountId: 'account-1',
-      sha256: 'a'.repeat(64),
-      label: 'laptop',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: null,
-      lastUsedAt: null,
-      revokedAt: null,
-    };
-
-    it('失効させる（revokedAt が立ち、他のトークンは影響を受けない）', async () => {
-      await stores.auth.putAccount(account);
-      await stores.auth.putAccessToken(token);
-      const other = { ...token, id: 'token-2', sha256: 'b'.repeat(64) };
-      await stores.auth.putAccessToken(other);
-
-      const result = await stores.auth.revokeAccessToken('token-1', '2026-01-02T00:00:00.000Z');
-      expect(result).toEqual({
-        status: 'revoked',
-        token: { ...token, revokedAt: '2026-01-02T00:00:00.000Z' },
-      });
-      expect((await stores.auth.findAccessTokenBySha256('a'.repeat(64)))?.revokedAt).toBe(
-        '2026-01-02T00:00:00.000Z',
-      );
-      expect((await stores.auth.findAccessTokenBySha256('b'.repeat(64)))?.revokedAt).toBeNull();
-    });
-
-    it('もう一度呼んでも、先に立った時刻を動かさない（冪等）', async () => {
-      await stores.auth.putAccount(account);
-      await stores.auth.putAccessToken(token);
-
-      await stores.auth.revokeAccessToken('token-1', '2026-01-02T00:00:00.000Z');
-      const second = await stores.auth.revokeAccessToken('token-1', '2026-01-03T00:00:00.000Z');
-
-      expect(second).toEqual({
-        status: 'already_revoked',
-        token: { ...token, revokedAt: '2026-01-02T00:00:00.000Z' },
-      });
-      expect((await stores.auth.findAccessTokenBySha256('a'.repeat(64)))?.revokedAt).toBe(
-        '2026-01-02T00:00:00.000Z',
-      );
-    });
-
-    it('無い id は not_found', async () => {
-      expect(await stores.auth.revokeAccessToken('居ない', '2026-01-02T00:00:00.000Z')).toEqual({
-        status: 'not_found',
-      });
-    });
-  });
-
-  it('ログイン要求を保存して読み戻せる（ブラウザ往復の突き合わせ）', async () => {
-    const request = {
-      id: 'login-1',
-      provider: 'google',
-      nonce: 'nonce',
-      codeVerifier: 'verifier',
-      claimSha256: 'c'.repeat(64),
-      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
-      label: 'laptop',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2999-01-01T00:00:00.000Z',
-      status: 'pending' as const,
-      accountId: null,
-      error: null,
-    };
-    await stores.auth.putLoginRequest(request);
-    expect(await stores.auth.getLoginRequest('login-1')).toEqual(request);
-
-    await stores.auth.putLoginRequest({ ...request, status: 'consumed' as const });
-    expect((await stores.auth.getLoginRequest('login-1'))?.status).toBe('consumed');
-    expect(await stores.auth.getLoginRequest('居ない')).toBeNull();
-  });
-  it('ログイン要求の引き取りは1回だけ成功する（並行でも二重発行させない）', async () => {
-    const request = {
-      id: 'login-2',
-      provider: 'google',
-      nonce: 'nonce',
-      codeVerifier: 'verifier',
-      claimSha256: 'd'.repeat(64),
-      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
-      label: 'laptop',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2999-01-01T00:00:00.000Z',
-      status: 'authenticated' as const,
-      accountId: 'account-1',
-      error: null,
-    };
-    await stores.auth.putAccount(account);
-    await stores.auth.putLoginRequest(request);
-
-    // 読んでから書く形だと、ここで全部が authenticated を掴んでしまう。
-    let issued = 0;
-    const results = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        stores.auth.claimLoginRequest('login-2', (request) => ({
-          id: `token-race-${++issued}`,
-          accountId: request.accountId ?? '',
-          sha256: String(issued).repeat(64).slice(0, 64),
-          label: request.label,
-          createdAt: '2026-01-02T00:00:00.000Z',
-          expiresAt: null,
-          lastUsedAt: null,
-          revokedAt: null,
-        })),
-      ),
-    );
-
-    expect(results.filter((result) => result !== null)).toHaveLength(1);
-    expect((await stores.auth.getLoginRequest('login-2'))?.status).toBe('consumed');
-    // 保存されたトークンも1本だけ見る: 応答が1件でも器に2本あれば通ってしまうため
-    expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
-    expect(await stores.auth.claimLoginRequest('login-2', () => neverIssued())).toBeNull();
-  });
-
-  it('pending のログイン要求は引き取れない（ブラウザ側が終わる前に発行しない）', async () => {
-    await stores.auth.putLoginRequest({
-      id: 'login-3',
-      provider: 'google',
-      nonce: 'nonce',
-      codeVerifier: 'verifier',
-      claimSha256: 'e'.repeat(64),
-      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
-      label: '',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2999-01-01T00:00:00.000Z',
-      status: 'pending',
-      accountId: null,
-      error: null,
-    });
-
-    expect(await stores.auth.claimLoginRequest('login-3', () => neverIssued())).toBeNull();
-    expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
-    expect(await stores.auth.claimLoginRequest('居ない', () => neverIssued())).toBeNull();
-  });
-  it('別々のアカウントへ同時に grant すると、両方通る（上限が無い）', async () => {
-    const other = { ...account, id: 'account-2', email: 'other@example.test' };
-    await stores.auth.putAccount(account);
-    await stores.auth.putAccount(other);
-
-    const at = '2026-01-02T00:00:00.000Z';
-    const results = await Promise.all([
-      stores.auth.grantAccess('account-1', at, 'operator'),
-      stores.auth.grantAccess('account-2', at, 'operator'),
-    ]);
-
-    expect(results.filter((result) => result.status === 'granted')).toHaveLength(2);
-    const granted = (await stores.auth.listAccounts()).filter((it) => it.grantedAt !== null);
-    expect(granted).toHaveLength(2);
-  });
-
-  it('同じアカウントへ同時に grant しても、grantedBy は先に書いた側のまま', async () => {
-    await stores.auth.putAccount(account);
-
-    const at = '2026-01-02T00:00:00.000Z';
-    const results = await Promise.all([
-      stores.auth.grantAccess('account-1', at, 'operator'),
-      stores.auth.grantAccess('account-1', at, 'account-9'),
-    ]);
-
-    expect(results.every((result) => result.status === 'granted')).toBe(true);
-    const stored = (await stores.auth.listAccounts()).find((it) => it.id === 'account-1');
-    // 2つの応答が器の中身と一致すること。片方が自分の書いた値を返すと、
-    // 呼び出し側は「自分が通した」と読んで日誌にそう書く。
-    expect(
-      results.map((result) => (result.status === 'granted' ? result.account.grantedBy : null)),
-    ).toEqual([stored?.grantedBy, stored?.grantedBy]);
-  });
-
-  it('createAccountWithIdentity を同じ identity で並行に呼んでも、1つだけ作られる', async () => {
-    const makeInput = (accountId: string) => ({
-      account: {
-        id: accountId,
-        displayName: 'Someone',
-        email: null,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        lastLoginAt: '2026-01-01T00:00:00.000Z',
-        grantedAt: null,
-        grantedBy: null,
-      },
-      identity: {
-        provider: 'google',
-        subject: 'sub-race',
-        accountId,
-        email: 'race@example.test',
-        emailVerified: true,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        lastLoginAt: '2026-01-01T00:00:00.000Z',
-      },
-    });
-
-    const results = await Promise.all([
-      stores.auth.createAccountWithIdentity(makeInput('account-race-a')),
-      stores.auth.createAccountWithIdentity(makeInput('account-race-b')),
-    ]);
-
-    expect(results.filter((result) => result.created)).toHaveLength(1);
-    const loser = results.find((result) => !result.created);
-    expect(loser).toBeDefined();
-    if (loser !== undefined && !loser.created) {
-      expect(loser.existing.subject).toBe('sub-race');
-    }
-
-    const identities = await stores.auth.listIdentities('account-race-a');
-    const identitiesB = await stores.auth.listIdentities('account-race-b');
-    expect(identities.length + identitiesB.length).toBe(1);
-
-    const accounts = (await stores.auth.listAccounts()).filter((it) =>
-      it.id.startsWith('account-race-'),
-    );
-    expect(accounts).toHaveLength(1);
-  });
-
-  it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
-    const makeInput = (accountId: string, subject: string) => ({
-      account: {
-        id: accountId,
-        displayName: 'Someone',
-        email: 'shared@example.test',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        lastLoginAt: '2026-01-01T00:00:00.000Z',
-        grantedAt: null,
-        grantedBy: null,
-      },
-      identity: {
-        provider: 'google',
-        subject,
-        accountId,
-        email: 'shared@example.test',
-        emailVerified: true,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        lastLoginAt: '2026-01-01T00:00:00.000Z',
-      },
-    });
-
-    const results = await Promise.all([
-      stores.auth.createAccountWithIdentity(makeInput('account-diff-identity-a', 'sub-diff-a')),
-      stores.auth.createAccountWithIdentity(makeInput('account-diff-identity-b', 'sub-diff-b')),
-    ]);
-
-    expect(results.every((result) => result.created)).toBe(true);
-    const emails = results.map((result) => (result.created ? result.account.email : null));
-    expect(emails.filter((email) => email !== null)).toHaveLength(1);
-
-    const accounts = (await stores.auth.listAccounts()).filter((it) =>
-      it.id.startsWith('account-diff-identity-'),
-    );
-    expect(accounts).toHaveLength(2);
-    expect(accounts.filter((it) => it.email !== null)).toHaveLength(1);
-  });
-
-  it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {
-    await stores.auth.putAccount(account);
-    await stores.auth.putLoginRequest({
-      id: 'login-4',
-      provider: 'google',
-      nonce: 'nonce',
-      codeVerifier: 'verifier',
-      claimSha256: 'f'.repeat(64),
-      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
-      label: '',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2999-01-01T00:00:00.000Z',
-      status: 'authenticated',
-      accountId: 'account-1',
-      error: null,
-    });
-
-    // 消費だけ先に確定してしまうと、トークンは返らないのに二度と引き取れなくなる。
-    await expect(
-      stores.auth.claimLoginRequest('login-4', () => {
-        throw new Error('トークンを作れなかった');
-      }),
-    ).rejects.toThrow();
-    expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('authenticated');
-
-    const claimed = await stores.auth.claimLoginRequest('login-4', (request) => ({
-      id: 'token-4',
-      accountId: request.accountId ?? '',
-      sha256: 'b'.repeat(64),
-      label: request.label,
-      createdAt: '2026-01-02T00:00:00.000Z',
-      expiresAt: null,
-      lastUsedAt: null,
-      revokedAt: null,
-    }));
-    expect(claimed?.token.id).toBe('token-4');
-    expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('consumed');
-    expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
-  });
-  it('交換へ進む権利は1つのリクエストしか取れない', async () => {
-    await stores.auth.putLoginRequest({
-      id: 'login-5',
-      provider: 'google',
-      nonce: 'nonce',
-      codeVerifier: 'verifier',
-      claimSha256: 'a'.repeat(64),
-      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
-      label: '',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2999-01-01T00:00:00.000Z',
-      status: 'pending',
-      accountId: null,
-      error: null,
-    });
-
-    // 読んでから書く形だと、全部が pending を通過して全部が交換へ進む。
-    const results = await Promise.all(
-      Array.from({ length: 5 }, () => stores.auth.beginLoginExchange('login-5')),
-    );
-
-    expect(results.filter((result) => result !== null)).toHaveLength(1);
-    expect((await stores.auth.getLoginRequest('login-5'))?.status).toBe('processing');
-    expect(await stores.auth.beginLoginExchange('login-5')).toBeNull();
-    expect(await stores.auth.beginLoginExchange('居ない')).toBeNull();
-  });
-
-  describe('大小文字だけが違う検証済みメール（#1702）', () => {
-    function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
-      return {
-        kind: 'oauth2',
-        id: 'fake',
-        label: 'Fake',
-        authorizationUrl: (request) => `https://example.test/authorize?state=${request.state}`,
-        exchange: async ({ code }) => {
-          const profile = profiles[code];
-          if (profile === undefined) throw new Error(`未知の code: ${code}`);
-          return profile;
-        },
-      };
-    }
-
-    it('大小文字だけが違う検証済みメールも衝突として検出し、2つ目のアカウントには乗せない', async () => {
-      const service = createAuthService({
-        store: stores.auth,
-        providers: createAuthProviderRegistry([
-          fakeProvider({
-            'code-alice': {
-              subject: 'sub-alice',
-              email: 'alice@example.test',
-              emailVerified: true,
-              displayName: 'Alice',
-            },
-            'code-impostor-case': {
-              subject: 'sub-impostor-case',
-              email: 'ALICE@EXAMPLE.TEST',
-              emailVerified: true,
-              displayName: 'Not Alice (case)',
-            },
-          }),
-        ]),
-      });
-
-      async function login(code: string): Promise<{ requestId: string; claimSecret: string }> {
-        const started = await service.startLogin({
-          provider: 'fake',
-          redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
-        });
-        const state = decodeState(
-          new URL(started.authorizationUrl).searchParams.get('state') ?? '',
-        );
-        expect(state).not.toBeNull();
-        const completed = await service.completeLogin({
-          state: `${state?.requestId}.${state?.nonce}`,
-          code,
-        });
-        expect(completed.status).toBe('ok');
-        return { requestId: started.requestId, claimSecret: started.claimSecret };
-      }
-
-      const alice = await login('code-alice');
-      const claimedAlice = await service.claim(alice);
-      if (claimedAlice.status !== 'ready') throw new Error('ログインできていない');
-      expect(claimedAlice.account.email).toBe('alice@example.test');
-
-      const impostorCase = await login('code-impostor-case');
-      const claimedImpostorCase = await service.claim(impostorCase);
-      if (claimedImpostorCase.status !== 'ready') throw new Error('ログインできていない');
-
-      expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
-      expect(claimedImpostorCase.account.email).toBeNull();
-    });
-
-    it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
-      const service = createAuthService({
-        store: stores.auth,
-        providers: createAuthProviderRegistry([
-          fakeProvider({
-            'code-alice': {
-              subject: 'sub-alice',
-              email: 'alice@example.test',
-              emailVerified: true,
-              displayName: 'Alice',
-            },
-            'code-impostor-case': {
-              subject: 'sub-impostor-case',
-              email: 'ALICE@EXAMPLE.TEST',
-              emailVerified: true,
-              displayName: 'Not Alice (case)',
-            },
-          }),
-        ]),
-      });
-
-      const first = await service.startLogin({
-        provider: 'fake',
-        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
-      });
-      const second = await service.startLogin({
-        provider: 'fake',
-        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
-      });
-      const stateFirst = decodeState(
-        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
-      );
-      const stateSecond = decodeState(
-        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
-      );
-      expect(stateFirst).not.toBeNull();
-      expect(stateSecond).not.toBeNull();
-
-      const [resultA, resultB] = await Promise.all([
-        service.completeLogin({
-          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
-          code: 'code-alice',
-        }),
-        service.completeLogin({
-          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
-          code: 'code-impostor-case',
-        }),
-      ]);
-
-      expect(resultA.status).toBe('ok');
-      expect(resultB.status).toBe('ok');
-      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
-        throw new Error('ログインできていない');
-      }
-      expect(resultA.accountId).not.toBe(resultB.accountId);
-
-      const accounts = await stores.auth.listAccounts();
-      expect(accounts).toHaveLength(2);
-      const withVerifiedEmail = accounts.filter((account) => account.email !== null);
-      expect(withVerifiedEmail).toHaveLength(1);
-    });
-
-    it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
-      const service = createAuthService({
-        store: stores.auth,
-        providers: createAuthProviderRegistry([
-          fakeProvider({
-            'code-alice': {
-              subject: 'sub-alice',
-              email: 'alice@example.test',
-              emailVerified: true,
-              displayName: 'Alice',
-            },
-            'code-impostor-samecase': {
-              subject: 'sub-impostor-samecase',
-              email: 'alice@example.test',
-              emailVerified: true,
-              displayName: 'Not Alice (same case)',
-            },
-          }),
-        ]),
-      });
-
-      const first = await service.startLogin({
-        provider: 'fake',
-        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
-      });
-      const second = await service.startLogin({
-        provider: 'fake',
-        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
-      });
-      const stateFirst = decodeState(
-        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
-      );
-      const stateSecond = decodeState(
-        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
-      );
-      expect(stateFirst).not.toBeNull();
-      expect(stateSecond).not.toBeNull();
-
-      const [resultA, resultB] = await Promise.all([
-        service.completeLogin({
-          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
-          code: 'code-alice',
-        }),
-        service.completeLogin({
-          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
-          code: 'code-impostor-samecase',
-        }),
-      ]);
-
-      expect(resultA.status).toBe('ok');
-      expect(resultB.status).toBe('ok');
-      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
-        throw new Error('ログインできていない');
-      }
-      expect(resultA.accountId).not.toBe(resultB.accountId);
-
-      const accounts = await stores.auth.listAccounts();
-      expect(accounts).toHaveLength(2);
-      const withVerifiedEmail = accounts.filter((account) => account.email !== null);
-      expect(withVerifiedEmail).toHaveLength(1);
-    });
+  it('書き込みの形式検査の契約', async () => {
+    await verifyAuthWriteValidationContract(makeAuth);
   });
 });
-
-function neverIssued(): never {
-  throw new Error('引き取れないはずの要求でトークンを作ろうとした');
-}
 
 describe('FsConversationReadStore', () => {
   it('器の契約（3実装で同じことを測る）', async () => {

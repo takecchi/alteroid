@@ -14,11 +14,13 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // `journal-deleted-conversation-contract.ts` も同じ理由: 削除した会話を外す絞りがストアの `list` の各分岐（`with` 無し・`limit` だけ）で効くことを、ストアを直に呼んで測る道具である。
 // `journal-withdrawn-contract.ts` も同じ理由: 取り下げの印の行（`with: 'self'`。人間との往復の窓には入らない）が各ストアの `list` で書き戻せることを、ストアを直に呼んで測る道具である。
 // `journal-conversation-id-contract.ts` も同じ理由: `conversationId` の絞りが `limit` より前に効くことを、ストアの `list` を直に呼んで測る道具である。
+// `journal-scan.ts` も窓ではない: 取り下げの印の行（`with: 'self'`。人間との往復の窓には入らない）を頁で読み切る写し（`withdrawnClientMessageIdsFromPages`）で、会話の窓を組み立てていない。
 // `initiative-gate.ts` も窓ではない: 発意 tick の門（#5469 P6a）が「直近24時間に tick のターンを回したか」を日誌の `with: 'self'` の行（人間との往復の窓には入らない）から1件探すだけで、会話の窓を組み立てていない。
 const ALLOWED_FILES = new Set([
   'packages/core/src/conversation.ts',
   'packages/core/src/initiative-gate.ts',
   'packages/core/src/journal-conversation-id-contract.ts',
+  'packages/core/src/journal-scan.ts',
   'packages/core/src/journal-with-contract.ts',
   'packages/core/src/journal-deleted-conversation-contract.ts',
   'packages/core/src/journal-withdrawn-contract.ts',
@@ -56,8 +58,9 @@ describe('会話の走査窓は conversation.ts の readConversationWindow 1か�
     expect(allFiles.length).toBeGreaterThan(0);
   });
 
-  it('前提: 検出パターンは conversation.ts 自身の readConversationWindow に当たる（検出できることの確認）', () => {
-    const text = readFileSync(path.join(ROOT, 'packages/core/src/conversation.ts'), 'utf8');
+  // 取り下げの印の頁送りを journal-scan.ts へ移したので、手組みの形が残っている journal-scan.ts で確かめる
+  it('前提: 検出パターンは手組みの listPage（journal-scan.ts の取り下げの印の頁送り）に当たる（検出できることの確認）', () => {
+    const text = readFileSync(path.join(ROOT, 'packages/core/src/journal-scan.ts'), 'utf8');
     const matches = [...text.matchAll(HAND_BUILT_WINDOW)];
     expect(
       matches.length,

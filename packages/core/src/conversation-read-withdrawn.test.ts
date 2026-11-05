@@ -131,7 +131,7 @@ describe('conversation_read — 取り下げた発言（#5456）', () => {
     }
   });
 
-  it('速い口（withdrawnClientMessageIds を持つ器）でも同じ注記が付く。since と会話の絞りを渡して引く', async () => {
+  it('印を引く口（withdrawnClientMessageIds）の答えで注記が付く。since と会話の絞りを渡して引く', async () => {
     const stores = await seeded();
     const queries: { since: string; conversationId?: string }[] = [];
     stores.journal.withdrawnClientMessageIds = async (query) => {
@@ -149,9 +149,8 @@ describe('conversation_read — 取り下げた発言（#5456）', () => {
     expect(queries[1]?.since).toBe(queries[0]?.since);
   });
 
-  it('持たない器（listPage を頁で読み切る口）でも同じ注記が付く', async () => {
+  it('インメモリの器（listPage を頁で読み切る口）でも同じ注記が付く', async () => {
     const stores = await seeded();
-    expect(stores.journal.withdrawnClientMessageIds).toBeUndefined();
     const read = tools(stores);
     const out = await read({ conversationId: 'conv-w' });
     expect(lineOf(out, '本番の X を消して')).toContain(MARK);

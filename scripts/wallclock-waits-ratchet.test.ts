@@ -11,6 +11,7 @@ import {
   compareWithBaseline,
   countWallclockWaits,
   describeRatchetFailure,
+  isContractFile,
   isTestFile,
   // @ts-expect-error -- 素の .mjs
 } from './wallclock-waits-core.mjs';
@@ -88,7 +89,9 @@ describe('実物の repo: テストの中の実時間の待ちが基準値から
     const baseline = JSON.parse(readFileSync(path.join(ROOT, BASELINE_REL), 'utf8')) as Counts;
     const actual: Counts = {};
     // この歯自身は数えない: 数え方を測るために例の文字列を持つため。
-    const files = collectRepoFiles(ROOT).filter((f) => isTestFile(f) && f !== SELF_REL);
+    const files = collectRepoFiles(ROOT).filter(
+      (f) => (isTestFile(f) || isContractFile(f)) && f !== SELF_REL,
+    );
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       const n = countWallclockWaits(readFileSync(path.join(ROOT, file), 'utf8')) as number;

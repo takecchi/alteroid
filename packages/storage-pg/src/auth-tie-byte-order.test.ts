@@ -1,20 +1,21 @@
-import type { AccessTokenRecord, AuthAccount, AuthIdentity } from '@alteroid/core';
+import type { AuthAccount } from '@alteroid/core';
+import { verifyAuthTieByteOrderContract } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createPgStoresFromDb } from './index.js';
 import {
   createMigratedTestDb,
   realPostgresUrl,
   type TestDbHandle,
 } from './test-db.test-support.js';
 
+// 並びの契約そのもの（同着の2次キーはバイト順）は core の `verifyAuthTieByteOrderContract`。ここに残すのは pg 固有の「照合順序」の前提だけ:
+// DB の既定の照合順・列の照合順が C でないときに、素の `order by` では契約の順にならないこと（契約が空振りしていないことの確認）。
 const TIE = '2026-01-05T00:00:00.000Z';
 const INSERT_ORDER = ['ab', 'a-x', '_z', 'B_x', 'Ab', '9'];
 const EXPECTED = ['9', 'Ab', 'B_x', '_z', 'a-x', 'ab'];
-const PROVIDER_INSERT_ORDER = ['ab', 'a_b', 'a0', 'a-b'];
-const PROVIDER_EXPECTED = ['a-b', 'a0', 'a_b', 'ab'];
 
 const account = (id: string): AuthAccount => ({
   id,
@@ -26,112 +27,52 @@ const account = (id: string): AuthAccount => ({
   grantedBy: null,
 });
 
-const identity = (provider: string, subject: string): AuthIdentity => ({
-  provider,
-  subject,
-  accountId: 'account-1',
-  email: null,
-  emailVerified: false,
-  createdAt: TIE,
-  lastLoginAt: TIE,
-});
-
-const token = (id: string, n: number): AccessTokenRecord => ({
-  id,
-  accountId: 'account-1',
-  sha256: n.toString(16).padStart(64, '0'),
-  label: id,
-  createdAt: TIE,
-  expiresAt: null,
-  lastUsedAt: null,
-  revokedAt: null,
-});
-
-let client: TestDbHandle;
-let db: Db;
-let stores: PgStores;
-
-beforeEach(async () => {
-  ({ client, db } = await createMigratedTestDb());
-  stores = createPgStoresFromDb(db);
-});
+const opened: TestDbHandle[] = [];
 
 afterEach(async () => {
-  await client.close();
+  await Promise.all(opened.splice(0).map((client) => client.close()));
 });
 
-function defineTieCases(): void {
-  it('listAccounts: 同着の id はバイト順', async () => {
-    for (const id of INSERT_ORDER) await stores.auth.putAccount(account(id));
+async function openDb(): Promise<{ client: TestDbHandle; db: Db }> {
+  const handle = await createMigratedTestDb();
+  opened.push(handle.client);
+  return handle;
+}
 
-    expect((await stores.auth.listAccounts()).map((it) => it.id)).toEqual(EXPECTED);
-  });
-
-  it('listIdentities: 同着の subject はバイト順', async () => {
-    await stores.auth.putAccount({
-      ...account('account-1'),
-      createdAt: '2026-01-01T00:00:00.000Z',
-    });
-    for (const subject of INSERT_ORDER) await stores.auth.putIdentity(identity('google', subject));
-
-    expect((await stores.auth.listIdentities('account-1')).map((it) => it.subject)).toEqual(
-      EXPECTED,
-    );
-  });
-
-  it('listIdentities: 同着の provider はバイト順', async () => {
-    await stores.auth.putAccount({
-      ...account('account-1'),
-      createdAt: '2026-01-01T00:00:00.000Z',
-    });
-    for (const provider of PROVIDER_INSERT_ORDER) {
-      await stores.auth.putIdentity(identity(provider, 's'));
-    }
-
-    expect((await stores.auth.listIdentities('account-1')).map((it) => it.provider)).toEqual(
-      PROVIDER_EXPECTED,
-    );
-  });
-
-  it('listAccessTokens: 同着の id はバイト順', async () => {
-    await stores.auth.putAccount({
-      ...account('account-1'),
-      createdAt: '2026-01-01T00:00:00.000Z',
-    });
-    let n = 1;
-    for (const id of INSERT_ORDER) await stores.auth.putAccessToken(token(id, n++));
-
-    expect((await stores.auth.listAccessTokens('account-1')).map((it) => it.id)).toEqual(EXPECTED);
-  });
+// 列の照合順を C でないものへ替える
+async function useUnicodeCollation(db: Db): Promise<void> {
+  await db.execute(sql`alter table auth_accounts alter column id type text collate "unicode"`);
+  await db.execute(sql`alter table auth_access_tokens alter column id type text collate "unicode"`);
+  await db.execute(
+    sql`alter table auth_identities alter column provider type text collate "unicode"`,
+  );
+  await db.execute(
+    sql`alter table auth_identities alter column subject type text collate "unicode"`,
+  );
 }
 
 describe('AuthStore の同着の2次キーはバイト順（pg 実装・既定の照合順、issue #2458）', () => {
   // 「既定が C」を前提にしない: 本物の PostgreSQL の照合順は接続先で決まり、前提は PGlite でだけ成り立つため。
   it.skipIf(realPostgresUrl() !== undefined)('前提: この DB の既定の照合順は C', async () => {
+    const { client } = await openDb();
     const result = await client.query<{ datcollate: string }>(
       'select datcollate from pg_database where datname = current_database()',
     );
     expect(result.rows).toEqual([{ datcollate: 'C' }]);
   });
 
-  defineTieCases();
+  it('同着の2次キーはバイト順の契約', async () => {
+    await verifyAuthTieByteOrderContract(
+      async () => createPgStoresFromDb((await openDb()).db).auth,
+    );
+  }, 60_000);
 });
 
 describe('AuthStore の同着の2次キーはバイト順（pg 実装・列の照合順が C でない DB、issue #2458）', () => {
-  beforeEach(async () => {
-    await db.execute(sql`alter table auth_accounts alter column id type text collate "unicode"`);
-    await db.execute(
-      sql`alter table auth_access_tokens alter column id type text collate "unicode"`,
-    );
-    await db.execute(
-      sql`alter table auth_identities alter column provider type text collate "unicode"`,
-    );
-    await db.execute(
-      sql`alter table auth_identities alter column subject type text collate "unicode"`,
-    );
-  });
-
   it('前提: 列の照合順のまま並べると C の順にならない', async () => {
+    const { client, db } = await openDb();
+    await useUnicodeCollation(db);
+    const stores = createPgStoresFromDb(db);
     for (const id of INSERT_ORDER) await stores.auth.putAccount(account(id));
     const result = await client.query<{ id: string }>(
       'select id from auth_accounts order by id asc',
@@ -142,5 +83,11 @@ describe('AuthStore の同着の2次キーはバイト順（pg 実装・列の�
     expect(plain).not.toEqual(EXPECTED);
   });
 
-  defineTieCases();
+  it('同着の2次キーはバイト順の契約', async () => {
+    await verifyAuthTieByteOrderContract(async () => {
+      const { db } = await openDb();
+      await useUnicodeCollation(db);
+      return createPgStoresFromDb(db).auth;
+    });
+  }, 60_000);
 });
