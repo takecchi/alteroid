@@ -1,5 +1,6 @@
 import {
   createGoogleProvider,
+  placedEnvValue,
   sha256Hex,
   timingSafeEqualHex,
   type AuthAccount,
@@ -32,14 +33,9 @@ export function planAuth(
 ): AuthPlan {
   const providers: AuthProvider[] = [];
 
-  const googleId = env[GOOGLE_CLIENT_ID_ENV];
-  const googleSecret = env[GOOGLE_CLIENT_SECRET_ENV];
-  if (
-    googleId !== undefined &&
-    googleId.length > 0 &&
-    googleSecret !== undefined &&
-    googleSecret.length > 0
-  ) {
+  const googleId = placedEnvValue(env, GOOGLE_CLIENT_ID_ENV);
+  const googleSecret = placedEnvValue(env, GOOGLE_CLIENT_SECRET_ENV);
+  if (googleId !== null && googleSecret !== null) {
     providers.push(createGoogleProvider({ clientId: googleId, clientSecret: googleSecret }));
   }
 
@@ -55,6 +51,19 @@ export function planAuth(
     publicBaseUrl: publicBaseUrl.length > 0 ? publicBaseUrl : `http://127.0.0.1:${options.port}`,
     description: describe(enabled, providers, mode),
   };
+}
+
+/**
+ * `ALTEROID_AUTH` の知らない値（`false`・`0` など）への注意。読み方は変えない: 知らない値は今までどおり自動として扱う。
+ * `auto` は知っている値として扱う（自動を明示する綴り。`planAuth` は on / off 以外を自動として読むので、扱いは同じ）。
+ * `planAuth` の結果に載せない: `AuthPlan` を組む試験の写しが多く、起動時に1度だけ出す文であって計画の一部ではないため。
+ */
+export function unknownAuthModeNote(env: NodeJS.ProcessEnv = process.env): string | null {
+  const given = placedEnvValue(env, AUTH_ENV);
+  if (given === null) return null;
+  const mode = given.toLowerCase();
+  if (mode === 'on' || mode === 'off' || mode === 'auto') return null;
+  return `${AUTH_ENV} の値 ${given} は知らない値なので自動として扱う（使えるのは on / off / auto。空なら自動）`;
 }
 
 function parseTokenTtlDays(raw: string | undefined): number | null {

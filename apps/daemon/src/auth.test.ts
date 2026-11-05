@@ -17,6 +17,7 @@ import {
   GOOGLE_CLIENT_SECRET_ENV,
   PUBLIC_URL_ENV,
   planAuth,
+  unknownAuthModeNote,
   type AuthPlan,
 } from './auth.js';
 import { accountWithIdentitiesSchema } from './openapi.js';
@@ -210,6 +211,66 @@ describe('planAuth', () => {
   it('戻り先の起点は ALTEROID_PUBLIC_URL で差し替えられる（クラウド常駐のため）', () => {
     const plan = planAuth({ [PUBLIC_URL_ENV]: 'https://alteroid.example/' }, { port: 4517 });
     expect(plan.publicBaseUrl).toBe('https://alteroid.example');
+  });
+
+  it('Google の id か secret が空白だけなら置かれていないものとして、ログイン手段を作らない', () => {
+    const onlyId = planAuth(
+      { [GOOGLE_CLIENT_ID_ENV]: 'id', [GOOGLE_CLIENT_SECRET_ENV]: '   ' },
+      { port: 4517 },
+    );
+    const onlySecret = planAuth(
+      { [GOOGLE_CLIENT_ID_ENV]: '  ', [GOOGLE_CLIENT_SECRET_ENV]: 'secret' },
+      { port: 4517 },
+    );
+    expect(onlyId.providers).toEqual([]);
+    expect(onlyId.enabled).toBe(false);
+    expect(onlySecret.providers).toEqual([]);
+    expect(onlySecret.enabled).toBe(false);
+  });
+
+  it('ALTEROID_AUTH の知らない値は、今までどおり自動として扱う（鍵が無ければ無効、揃えば有効）', () => {
+    expect(planAuth({ [AUTH_ENV]: 'false' }, { port: 4517 }).enabled).toBe(false);
+    const withKeys = planAuth(
+      {
+        [AUTH_ENV]: 'false',
+        [GOOGLE_CLIENT_ID_ENV]: 'id',
+        [GOOGLE_CLIENT_SECRET_ENV]: 'secret',
+      },
+      { port: 4517 },
+    );
+    expect(withKeys.enabled).toBe(true);
+  });
+
+  it('ALTEROID_AUTH=auto は自動を明示する値で、空のときと同じに扱う（鍵が無ければ無効、揃えば有効）', () => {
+    expect(planAuth({ [AUTH_ENV]: 'auto' }, { port: 4517 }).enabled).toBe(false);
+    const withKeys = planAuth(
+      {
+        [AUTH_ENV]: 'auto',
+        [GOOGLE_CLIENT_ID_ENV]: 'id',
+        [GOOGLE_CLIENT_SECRET_ENV]: 'secret',
+      },
+      { port: 4517 },
+    );
+    expect(withKeys.enabled).toBe(true);
+  });
+});
+
+describe('unknownAuthModeNote', () => {
+  it('知らない値なら、値を添えて自動として扱う旨を1行で返す', () => {
+    expect(unknownAuthModeNote({ [AUTH_ENV]: 'false' })).toBe(
+      'ALTEROID_AUTH の値 false は知らない値なので自動として扱う（使えるのは on / off / auto。空なら自動）',
+    );
+  });
+
+  it.each(['on', 'off', 'auto', 'ON', ' Off ', ' AUTO ', '', '   ', undefined])(
+    '知っている値と未設定（%j）では出さない',
+    (value) => {
+      expect(unknownAuthModeNote({ [AUTH_ENV]: value })).toBeNull();
+    },
+  );
+
+  it('env に無ければ出さない', () => {
+    expect(unknownAuthModeNote({})).toBeNull();
   });
 });
 
