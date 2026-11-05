@@ -662,7 +662,7 @@ const SCENARIOS: Scenario[] = [
     name: 'put-fails',
     group: '書き込みが落ちる',
     covers:
-      'putApproval が落ちる: 「未記録・確認は人間へ届いていない・やり直してよい」の例外（ApprovalNotRecordedError）。stderr に落とした跡が残る。承認の行は無く、日誌も足さず、noteQuestionAsked も emit も呼ばない。flushReply は先に呼ばれている。id は消費される（次の呼びは …02）',
+      'putApproval が落ちる: 「未記録・確認は人間へ届いていない・やり直してよい」の例外（ApprovalNotRecordedError。文は request_permission と名乗る。#6490）。stderr に落とした跡が残る。承認の行は無く、日誌も足さず、noteQuestionAsked も emit も呼ばない。flushReply は先に呼ばれている。id は消費される（次の呼びは …02）',
     ctx: { conv: 'conv-1', taskIds: ['task-a'] },
     steps: [
       { args: rq(), writes: 'none', hooks: { putFails: true } },
@@ -673,7 +673,7 @@ const SCENARIOS: Scenario[] = [
     name: 'journal-fails',
     group: '書き込みが落ちる',
     covers:
-      '日誌が書けない（act-completed）: 承認の行を書いた後なので行は残ったまま、「完了済み・未記録・やり直し禁止」の例外（JournalNotRecordedError）。noteQuestionAsked も emit も呼ばない。stderr に跡が残る。やり直すと行がもう1つ積まれる',
+      '日誌が書けない（act-completed）: 承認の行を書いた後なので行は残ったまま、「完了済み・未記録・やり直し禁止」の例外（JournalNotRecordedError）。人間には確認が届いているので、日誌より先に noteQuestionAsked と emit を呼ぶ（#6490）。stderr に跡が残る。やり直すと行がもう1つ積まれる',
     ctx: { conv: 'conv-1' },
     steps: [
       { args: rq(), writes: 'approval-only', hooks: { journalFails: true } },
@@ -982,15 +982,15 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
         expect((got?.journal.length ?? -1) > 0, `${key}: 日誌の行の有無が宣言と違う`).toBe(
           step.writes === 'both',
         );
-        // 知らせ（emit）は日誌まで書けた呼びだけ。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
+        // 知らせ（emit）は承認の行を積めた呼びすべて（日誌が書けなくても知らせる。#6490）。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
         expect(ops.includes('context.emit'), `${key}: emit の有無が宣言と違う`).toBe(
-          step.writes === 'both',
+          step.writes !== 'none',
         );
         const hasNote = scenario.ctx?.noNote !== true;
         expect(
           ops.includes('context.noteQuestionAsked'),
           `${key}: noteQuestionAsked の有無が宣言と違う`,
-        ).toBe(step.writes === 'both' && hasNote);
+        ).toBe(step.writes !== 'none' && hasNote);
       }
     }
   });
@@ -1089,9 +1089,9 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
       'context.recentDenials',
       'context.flushReply',
       'jobs.putApproval',
-      'journal.append',
       'context.noteQuestionAsked',
       'context.emit',
+      'journal.append',
     ];
     // 規則の形の断り
     for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
@@ -1240,8 +1240,8 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     expect(ops('no-optional-hooks')).toEqual([
       'context.conversationId',
       'jobs.putApproval',
-      'journal.append',
       'context.emit',
+      'journal.append',
     ]);
     // 書き込みが落ちる
     expect(actual['flush-fails']?.output.thrown).toBe(true);
@@ -1254,6 +1254,9 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     expect(actual['put-fails#1']?.output.thrown).toBe(true);
     expect(actual['put-fails#1']?.output.errorName).toBe('ApprovalNotRecordedError');
     expect(text('put-fails#1')).toContain('⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい');
+    // 例外の文は呼んだ道具の名前で名乗る（#6490）
+    expect(text('put-fails#1')).toContain('request_permission は承認待ちキューへの記録に失敗した');
+    expect(text('put-fails#1')).not.toContain('ask_human');
     expect(ops('put-fails#1')).toEqual([
       'context.conversationId',
       'context.recentDenials',
@@ -1270,7 +1273,13 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     expect(text('journal-fails#1')).toContain('request_permission は完了した');
     expect(actual['journal-fails#1']?.journal).toEqual([]);
     expect(actual['journal-fails#1']?.approvals.map((entry) => entry.id)).toEqual([u(1)]);
-    expect(ops('journal-fails#1').slice(-2)).toEqual(['jobs.putApproval', 'journal.append']);
+    // 日誌が書けなくても、積んだ確認は先に知らせる（#6490）
+    expect(ops('journal-fails#1').slice(-4)).toEqual([
+      'jobs.putApproval',
+      'context.noteQuestionAsked',
+      'context.emit',
+      'journal.append',
+    ]);
     expect(actual['journal-fails#1']?.stderr.join('')).toContain('日誌を記録できませんでした');
     expect(actual['journal-fails#2']?.approvals.map((entry) => entry.id)).toEqual([u(1), u(2)]);
   });
