@@ -300,11 +300,9 @@ function renderLedgerCrossReference(
 type SelfStatusStores = CloneToolsShared['stores'];
 type SelfStatusRuntime = NonNullable<ReturnType<NonNullable<ToolContext['runtime']>>>;
 type SelfStatusRunnerModels =
-  | Awaited<ReturnType<NonNullable<ToolContext['runnerModels']>>>
-  | undefined;
+  Awaited<ReturnType<NonNullable<ToolContext['runnerModels']>>> | undefined;
 type SelfStatusRunnerRoutes =
-  | Awaited<ReturnType<NonNullable<ToolContext['runnerAnthropicRoutes']>>>
-  | undefined;
+  Awaited<ReturnType<NonNullable<ToolContext['runnerAnthropicRoutes']>>> | undefined;
 
 function renderSelfStatusRuntimeUnavailable(): string {
   return (
