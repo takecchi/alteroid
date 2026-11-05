@@ -755,6 +755,7 @@ export {
 
 export { createSyntheticJournalStore } from './journal-scan.test-support.js';
 export { fakeManagerPool } from './manager-pool.test-support.js';
+export { FakeRunnerClientBase, fakeRunnerClient } from './runner-client.test-support.js';
 export {
   createPeerSocketHost,
   DEFAULT_PEER_SOCKET_DIR,

@@ -1,21 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type {
-  RunnerAnswerOutcome,
-  RunnerClient,
-  RunnerCredentialFingerprint,
-  RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
-  RunnerRequestStages,
-} from './runner-protocol.js';
+import type { RunnerClient, RunnerManagerState, RunnerRequestStages } from './runner-protocol.js';
 
-class FakeRunner implements RunnerClient {
+class FakeRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
   runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   pings = 0;
   reply: 'ok' | 'error' | 'hang' = 'ok';
   closed = false;
@@ -30,6 +21,7 @@ class FakeRunner implements RunnerClient {
   lastListSignal: AbortSignal | undefined;
 
   constructor(runnerId: string) {
+    super();
     this.runnerId = runnerId;
   }
 
@@ -44,20 +36,6 @@ class FakeRunner implements RunnerClient {
   stagesSince?: (sinceMs: number) => RunnerRequestStages = (): RunnerRequestStages =>
     this.stages ?? {};
 
-  async connect(): Promise<void> {}
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
   async list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]> {
     this.listCalls += 1;
     this.lastListSignal = options?.signal;
@@ -82,21 +60,6 @@ class FakeRunner implements RunnerClient {
         ? { pendingPeerApprovals: this.peerApprovalsToReturn[managerId] }
         : {}),
     }));
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
   }
   async close(): Promise<void> {
     this.closed = true;

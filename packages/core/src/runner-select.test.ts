@@ -1,26 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type {
-  RunnerAnswerOutcome,
-  RunnerClient,
-  RunnerCredentialFingerprint,
-  RunnerManagerState,
-  RunnerPlacementResources,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
-} from './runner-protocol.js';
+import type { RunnerClient, RunnerPlacementResources } from './runner-protocol.js';
 
-class FakeRunner implements RunnerClient {
+class FakeRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   reply: 'ok' | 'error' = 'ok';
   started: string[] = [];
 
   constructor(runnerId: string, report?: RunnerPlacementResources) {
+    super();
     this.runnerId = runnerId;
     this.report = report;
   }
@@ -33,40 +24,10 @@ class FakeRunner implements RunnerClient {
     if (this.reply === 'error') throw new Error('fetch failed');
   }
 
-  async connect(): Promise<void> {}
   async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
     this.started.push(command.managerId);
     return { cwd: command.cwd };
   }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 describe('指名（select({ runnerId })）', () => {
