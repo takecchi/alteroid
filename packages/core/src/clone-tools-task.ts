@@ -1307,8 +1307,7 @@ function describeTaskAddViolation(
   if (titleError !== null) return titleError;
   if (/[\r\n]/.test(title)) return 'title は使えない（改行を含まない一行のみ）。';
   const bodyError =
-    describeStringLengthViolation('body', body, { min: 1 }) ??
-    describeBlankViolation('body', body);
+    describeStringLengthViolation('body', body, { min: 1 }) ?? describeBlankViolation('body', body);
   if (bodyError !== null) return bodyError;
   for (const [field, value] of [['source', source]] as const) {
     if (value !== undefined && stripNul(value).trim().length === 0) {
