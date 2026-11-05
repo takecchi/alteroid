@@ -469,7 +469,7 @@ describe('預けた退避を取りに行く呼び出しが落ちても、やり�
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
     const fake = fakeRunner(new Map([[ARCHIVE_ID, '一時的に取れなかった生ログ']]));
-    const fetchOnce = fake.runner.fetchArchive!.bind(fake.runner);
+    const fetchOnce = fake.runner.fetchArchive.bind(fake.runner);
     let attempts = 0;
     fake.runner.fetchArchive = async (managerId, archiveId) => {
       attempts += 1;

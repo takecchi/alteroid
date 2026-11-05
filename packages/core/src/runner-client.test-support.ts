@@ -15,6 +15,7 @@ import type {
  * 試験が見る口だけ `overrides` で上書きする。
  * 既定を置くのは、いま必須の口だけ: 省略可能な口（`ping`・`identity`・`resources`・`unpushedWork` など）は既定を置かない。
  * ピックアップの口は、`openPickupFile` が何も開けず（`undefined`）、`deletePickupFile` が何もしない。
+ * アーカイブの口は、`fetchArchive` が何も預かっておらず（`undefined`）、`deleteArchive` が何もしない。
  * 置くと「口が無いとき」の道を通っていた試験の道が変わるため（持たない偽は、呼ぶ側がその口が無い場合の道へ倒す）。
  * クラスの偽は {@link FakeRunnerClientBase} を継ぐ（既定は同じ）。
  */
@@ -38,6 +39,8 @@ export function fakeRunnerClient(overrides: Partial<RunnerClient> = {}): RunnerC
     setProfile: () => Promise.resolve({ ok: true }),
     openPickupFile: () => Promise.resolve(undefined),
     deletePickupFile: () => Promise.resolve(),
+    fetchArchive: () => Promise.resolve(undefined),
+    deleteArchive: () => Promise.resolve(),
     close: () => Promise.resolve(),
     ...overrides,
   };
@@ -92,5 +95,9 @@ export const FakeRunnerClientBase: abstract new () => RunnerClient = class imple
     return undefined;
   }
   async deletePickupFile(): Promise<void> {}
+  async fetchArchive(): Promise<string | undefined> {
+    return undefined;
+  }
+  async deleteArchive(): Promise<void> {}
   async close(): Promise<void> {}
 };

@@ -242,7 +242,7 @@ export class SessionLoaders {
 
   /**
    * runner に預けた退避の本文を取りに行く。器が名簿に居ない・取りに行く呼び出しが落ちた回は、`ARCHIVE_FETCH_RETRY_DELAYS_MS` の間を置いてやり直す。
-   * やり直すのは、そのうち取れる見込みのある失敗だけ: 本文が無い（期限切れ・既に消された）・口を持たない器は、何度聞いても同じ答えなので、すぐ投げる。
+   * やり直すのは、そのうち取れる見込みのある失敗だけ: 本文が無い（期限切れ・既に消された）は、何度聞いても同じ答えなので、すぐ投げる。
    */
   async fetchArchiveRetrying(
     managerId: string,
@@ -257,9 +257,6 @@ export class SessionLoaders {
       if (runner === null) {
         failure = new Error(`退避を預けた器（${fromRunnerId}）が名簿に居ない`);
       } else {
-        if (runner.fetchArchive === undefined) {
-          throw new Error('この器のクライアントは、預けた退避を取りに行く口を持たない');
-        }
         let fetched: string | undefined;
         try {
           fetched = await runner.fetchArchive(managerId, archiveId);

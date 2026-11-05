@@ -159,7 +159,7 @@ export class ArchiveReceiver {
       // 置き場へ入れてから消させる: 先に消すと、置き場への書き込みが失敗した回に本文がどこにも残らないため。消せなくても runner の期限が消す
       if (fetchedFrom !== undefined) {
         await fetchedFrom.runner
-          .deleteArchive?.(event.managerId, fetchedFrom.archiveId)
+          .deleteArchive(event.managerId, fetchedFrom.archiveId)
           .catch(() => undefined);
       }
       // `#journal` は自分で失敗を握るので、退避と台帳への記録の成功を日誌の失敗に道連れにしない。

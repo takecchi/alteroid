@@ -91,6 +91,10 @@ class EventfulRunner implements RunnerClient {
     return undefined;
   }
   async deletePickupFile(): Promise<void> {}
+  async fetchArchive(): Promise<undefined> {
+    return undefined;
+  }
+  async deleteArchive(): Promise<void> {}
   async close(): Promise<void> {}
 }
 

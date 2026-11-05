@@ -29,16 +29,16 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
   it('rescue-files / archive は 404 を undefined にし、500 は投げる', async () => {
     const missing = await clientWith(() => new Response('{}', { status: 404 })).client;
     expect(await missing.openPickupFile('rescue', 'm', ID)).toBeUndefined();
-    expect(await missing.fetchArchive?.('m', ID)).toBeUndefined();
+    expect(await missing.fetchArchive('m', ID)).toBeUndefined();
 
     const broken = await clientWith(() => new Response('boom', { status: 500 })).client;
     await expect(broken.openPickupFile('rescue', 'm', ID)).rejects.toThrow('500');
-    await expect(broken.fetchArchive?.('m', ID)).rejects.toThrow('500');
+    await expect(broken.fetchArchive('m', ID)).rejects.toThrow('500');
   });
 
   it('archive は本文を文字列で返し、経路は managerId・archiveId を符号化する', async () => {
     const { client, calls } = clientWith(() => new Response('退避'));
-    expect(await (await client).fetchArchive?.('m 1', ID)).toBe('退避');
+    expect(await (await client).fetchArchive('m 1', ID)).toBe('退避');
     expect(calls).toEqual([{ method: 'GET', path: `/managers/m%201/archive/${ID}` }]);
   });
 
@@ -56,7 +56,7 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
     const ok = clientWith(() => new Response(null, { status: 204 }));
     const runner = await ok.client;
     await runner.deletePickupFile('rescue', 'm', ID);
-    await runner.deleteArchive?.('m', ID);
+    await runner.deleteArchive('m', ID);
     expect(ok.calls).toEqual([
       { method: 'DELETE', path: `/managers/m/rescue-files/${ID}` },
       { method: 'DELETE', path: `/managers/m/archive/${ID}` },
@@ -64,7 +64,7 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
 
     const bad = await clientWith(() => new Response('{}', { status: 400 })).client;
     await expect(bad.deletePickupFile('rescue', 'm', ID)).rejects.toThrow('400');
-    await expect(bad.deleteArchive?.('m', ID)).rejects.toThrow('400');
+    await expect(bad.deleteArchive('m', ID)).rejects.toThrow('400');
   });
 });
 

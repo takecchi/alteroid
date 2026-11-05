@@ -1584,15 +1584,16 @@ export interface RunnerClient {
   ): Promise<void>;
   /**
    * runner に預けた生ログの退避の本文（`archive` の出来事の `ref`。#4485）。無ければ `undefined`（404・期限切れで捨てられた）。
-   * 取れなかった（接続断・期限切れ・非2xx）ときは投げる。口を持たない実装は、`ref` の出来事を受け取れない。
+   * 取れなかった（接続断・期限切れ・非2xx）ときは投げる。
+   * 試験の偽の既定（`fakeRunnerClient`）は、何も預かっていない（`undefined`）。
    */
-  fetchArchive?(
+  fetchArchive(
     managerId: string,
     archiveId: string,
     options?: { signal?: AbortSignal },
   ): Promise<string | undefined>;
   /** 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の期限が消す）。 */
-  deleteArchive?(
+  deleteArchive(
     managerId: string,
     archiveId: string,
     options?: { signal?: AbortSignal },
