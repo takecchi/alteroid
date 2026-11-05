@@ -40,8 +40,7 @@ export interface PageCursor {
   at: string;
 }
 
-// 頁の続きは `next` だけで決める（件数からは推定しない。新しい側も `next` が尽きるまで辿る）。デーモンは `next` を常に返す（#2623）。
-// 欄の無い応答（`next` を返さなかった頃のデーモン）は型の外だが、`null` と同じ終端として止める: 続きの位置が無いので読み進めようが無い。
+// 頁の続きは `next` だけで決める（件数からは推定しない。新しい側も `next` が尽きるまで辿る）。`next` が尽きたら終端。
 export type OlderOutcome = 'progress' | 'end';
 
 function outcomeFromNext(next: PageCursor | null): OlderOutcome {

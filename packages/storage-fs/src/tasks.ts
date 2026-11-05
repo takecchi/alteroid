@@ -87,7 +87,7 @@ function toPublicUnreadable(row: UnreadableRow): UnreadableTask {
 }
 
 function unreadableError(id: string, reason: string): UnreadableTaskError {
-  return new UnreadableTaskError(`task ${id} が読めない形で入っている: ${reason}`);
+  return UnreadableTaskError.forRow({ id, reason });
 }
 
 /**

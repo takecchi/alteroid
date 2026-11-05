@@ -53,6 +53,9 @@ export {
   accessTokenRecordSchema,
   authAccountSchema,
   authIdentitySchema,
+  compareAccessTokenOrder,
+  compareAccountOrder,
+  compareIdentityOrder,
   decodeState,
   isAccountGranted,
   loginRequestSchema,
@@ -100,6 +103,7 @@ export {
   nextDescribedState,
   renderMemoryDocuments,
   resolveMemoryDescriptionFreshness,
+  toMemoryCreatedAt,
 } from './memory.js';
 export {
   buildActivityDigest,

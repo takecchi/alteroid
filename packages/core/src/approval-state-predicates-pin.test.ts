@@ -4,8 +4,8 @@ import { traceApproval } from './approval-trace.js';
 import type { PendingApproval } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-// 承認の状態（未回答・回答済・取り下げ）を見る判定の、いまの端の振る舞いを固定する（現状の挙動を固定。まとめる PR で見直す）。
-// 本番コードは変えない。状態は `answeredAt` と `withdrawnAt` の有無の組み合わせで決まり、両方立った行（回答の後で取り下げた・取り下げの後に回答が届いた）が端になる。
+// 承認の状態（未回答・回答済・取り下げ）を見る判定の、端の振る舞いを固定する。
+// メモリ実装の未決の判定は core の `approvalStateOf` に寄せてある。状態は `answeredAt` と `withdrawnAt` の有無の組み合わせで決まり、両方立った行（回答の後で取り下げた・取り下げの後に回答が届いた）が端になる。
 
 const AT = '2026-10-29T00:00:00.000Z';
 const LATER = '2026-10-29T01:00:00.000Z';
@@ -24,7 +24,7 @@ function approval(id: string, shape: Shape): PendingApproval {
   return { id, createdAt: AT, question: `q-${id}`, ...SHAPES[shape] };
 }
 
-describe('承認の状態 × 組み合わせ（現状の挙動を固定。まとめる PR で見直す）', () => {
+describe('承認の状態 × 組み合わせ', () => {
   it('approval-trace.ts traceApproval の state: 両方立った行は withdrawn（取り下げが先）', async () => {
     const stores = createMemoryStores();
     for (const shape of SHAPE_NAMES) await stores.jobs.putApproval(approval(shape, shape));
