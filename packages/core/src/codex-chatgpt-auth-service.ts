@@ -261,7 +261,7 @@ export function createCodexChatgptAuthService(
     if (runner === null) {
       await note(
         `runner ${runnerId} の書き換え（指紋 ${fingerprint}）を取りに行けなかった`,
-        'runner が繋がっていない、または取り出す口を持たない。正本は前の版のまま。',
+        'runner が繋がっていない。正本は前の版のまま。',
       );
       return;
     }
