@@ -306,11 +306,7 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": [
-        "tokens.list",
-        "tokens.listUnreadable",
-        "tokens.readSettings"
-      ]
+      "readCalls": ["tokens.list", "tokens.listUnreadable", "tokens.readSettings"]
     },
     "settings-other-error#2": {
       "output": {
@@ -321,11 +317,7 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": [
-        "tokens.list",
-        "tokens.listUnreadable",
-        "tokens.readSettings"
-      ]
+      "readCalls": ["tokens.list", "tokens.listUnreadable", "tokens.readSettings"]
     },
     "settings-other-error#3": {
       "output": {
@@ -336,9 +328,7 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": [
-        "tokens.list"
-      ]
+      "readCalls": ["tokens.list"]
     },
     "settings-other-error#4": {
       "output": {
@@ -349,10 +339,7 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": [
-        "tokens.list",
-        "tokens.listUnreadable"
-      ]
+      "readCalls": ["tokens.list", "tokens.listUnreadable"]
     },
     "active-states#1": {
       "output": {
@@ -1467,11 +1454,7 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": [
-        "tokens.list",
-        "tokens.listUnreadable",
-        "tokens.readSettings"
-      ]
+      "readCalls": ["tokens.list", "tokens.listUnreadable", "tokens.readSettings"]
     }
   }
 }
