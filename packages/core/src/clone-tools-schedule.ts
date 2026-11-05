@@ -358,6 +358,157 @@ function renderScheduleCreateReplaced(args: {
   );
 }
 
+type ScheduleListRead = { kind: 'read'; plan: ScheduledRequest | null } | { kind: 'unreadable' };
+
+function describeScheduleListViolation(offset: number): string | null {
+  return describeIntRangeViolation('offset', offset, { min: 0 });
+}
+
+// 読めない行は案内する文で返す: 書き直しの手段が無く、`schedule_remove` で外す以外に回復手段が無いため
+async function readScheduleListRow(
+  stores: ScheduleCreateStores,
+  kind: string,
+): Promise<ScheduleListRead> {
+  try {
+    return { kind: 'read', plan: await stores.schedules.get(kind) };
+  } catch (error) {
+    if (!(error instanceof UnreadableScheduleError)) throw error;
+    return { kind: 'unreadable' };
+  }
+}
+
+function renderScheduleListUnreadable(kind: string): string {
+  return (
+    `継続中の依頼 ${kind} は読めない形で入っている（消されたのではない）。` +
+    `schedule_remove kind=${kind} で外せる。`
+  );
+}
+
+function renderScheduleListMissing(kind: string): string {
+  return `継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`;
+}
+
+function renderScheduleListFullHead(context: ToolContext, plan: ScheduledRequest): string {
+  return (
+    `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
+    ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
+    ` 次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`
+  );
+}
+
+function renderScheduleListFullTail(plan: ScheduledRequest, part: ReturnType<typeof page>): string {
+  return part.more
+    ? `\n\n…（ここで切れている。続きは schedule_list kind=${plan.kind} offset=${part.to}）`
+    : '';
+}
+
+async function renderScheduleListFull(args: {
+  context: ToolContext;
+  stores: ScheduleCreateStores;
+  kind: string;
+  offset: number;
+}): Promise<string> {
+  const { context, stores, kind, offset } = args;
+  const read = await readScheduleListRow(stores, kind);
+  if (read.kind === 'unreadable') return renderScheduleListUnreadable(kind);
+  const plan = read.plan;
+  if (!plan) return renderScheduleListMissing(kind);
+  const head = renderScheduleListFullHead(context, plan);
+  const part = page(plan.request, offset, SCHEDULE_PAGE);
+  const tail = renderScheduleListFullTail(plan, part);
+  return `${head}（依頼本文: ${describePage(part)}）\n\n${part.body}${tail}`;
+}
+
+// 読めない行は一覧から消さず、件数と kind で言う
+function renderScheduleListEmpty(unreadableNote: string | null): string {
+  return unreadableNote === null
+    ? '（継続中の依頼は無い）'
+    : `（読めた継続中の依頼は無い）\n${unreadableNote}`;
+}
+
+function renderScheduleListCursorMalformed(): string {
+  return (
+    'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+    '一覧を先頭から読み直すには cursor を付けずに schedule_list を呼ぶこと。'
+  );
+}
+
+// 打ち切られる行の分も含め、`view` の全件ぶん `scheduleNextAtOf` を呼ぶ（呼びの回数と順は元のまま）
+function renderScheduleListItems(
+  context: ToolContext,
+  view: readonly ScheduledRequest[],
+): string[] {
+  return view.map((plan) =>
+    renderListingEntry({
+      id: plan.kind,
+      title: describeScheduleSpec(plan.spec),
+      createdAt: plan.createdAt,
+      updatedAt: plan.updatedAt,
+      summary: `依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
+      extra: [
+        `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+        `  次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`,
+      ],
+    }),
+  );
+}
+
+// 母数は cursor を当てる前の `plans.length`: `renderListing` が渡す `total` は cursor 以降の残りで、頁が進むと変わるため
+function renderScheduleListOmitted(args: {
+  plans: readonly ScheduledRequest[];
+  view: readonly ScheduledRequest[];
+  rest: number;
+  shown: number;
+}): string {
+  const { plans, view, rest, shown } = args;
+  const total = plans.length;
+  const lastShown = view[shown - 1]!;
+  const nextCursor = encodeScheduleCursor({ kind: lastShown.kind });
+  return (
+    `…ほか ${rest} 件は省略（継続中の依頼は ${total} 件あり、${shown} 件だけ出した。` +
+    'kind の昇順で並んでいるので、省いたのはこれより後ろ（kind の綴りが後）の依頼である。' +
+    `続きは schedule_list cursor=${nextCursor} で取れる）。`
+  );
+}
+
+function renderScheduleListBody(args: {
+  plans: readonly ScheduledRequest[];
+  view: readonly ScheduledRequest[];
+  items: readonly string[];
+}): string {
+  const { plans, view, items } = args;
+  return view.length === 0
+    ? '（cursor より後ろの継続中の依頼は無い。これが最後の頁）'
+    : renderListing(items, {
+        budget: SCHEDULE_LIST_BUDGET,
+        omitted: ({ rest, shown }) => renderScheduleListOmitted({ plans, view, rest, shown }),
+      });
+}
+
+async function renderScheduleListAll(args: {
+  context: ToolContext;
+  stores: ScheduleCreateStores;
+  cursor: string | undefined;
+}): Promise<string> {
+  const { context, stores, cursor } = args;
+  const scheduleList = await stores.schedules.list();
+  const plans = scheduleList.entries;
+  const unreadableNote = describeUnreadableSchedules(scheduleList.unreadable);
+  if (plans.length === 0) return renderScheduleListEmpty(unreadableNote);
+
+  const cursorOutcome = resolveScheduleCursor(plans, cursor);
+  if (cursorOutcome.kind === 'malformed') return renderScheduleListCursorMalformed();
+  const view = cursorOutcome.view;
+  const items = renderScheduleListItems(context, view);
+  const lines = [renderScheduleListBody({ plans, view, items })];
+  // 今回の応答に実際に載った件数（`view.length`）で見る: 最後の頁で1件も出していないのにこの行だけが付くのを避けるため
+  if (view.length > 0) {
+    lines.push('（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）');
+  }
+  if (unreadableNote !== null) lines.push(unreadableNote);
+  return lines.join('\n');
+}
+
 export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -389,89 +540,11 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ kind, offset = 0, cursor }) => {
-        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        const offsetError = describeScheduleListViolation(offset);
         if (offsetError !== null) return text(offsetError);
-        if (kind !== undefined) {
-          // 読めない行は案内する文で返す: 書き直しの手段が無く、`schedule_remove` で外す以外に回復手段が無いため
-          let plan: Awaited<ReturnType<typeof stores.schedules.get>>;
-          try {
-            plan = await stores.schedules.get(kind);
-          } catch (error) {
-            if (!(error instanceof UnreadableScheduleError)) throw error;
-            return text(
-              `継続中の依頼 ${kind} は読めない形で入っている（消されたのではない）。` +
-                `schedule_remove kind=${kind} で外せる。`,
-            );
-          }
-          if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
-          const head =
-            `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
-            ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
-            ` 次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`;
-          const part = page(plan.request, offset, SCHEDULE_PAGE);
-          const tail = part.more
-            ? `\n\n…（ここで切れている。続きは schedule_list kind=${plan.kind} offset=${part.to}）`
-            : '';
-          return text(`${head}（依頼本文: ${describePage(part)}）\n\n${part.body}${tail}`);
-        }
-
-        const scheduleList = await stores.schedules.list();
-        const plans = scheduleList.entries;
-        // 読めない行は一覧から消さず、件数と kind で言う
-        const unreadableNote = describeUnreadableSchedules(scheduleList.unreadable);
-        if (plans.length === 0) {
-          return text(
-            unreadableNote === null
-              ? '（継続中の依頼は無い）'
-              : `（読めた継続中の依頼は無い）\n${unreadableNote}`,
-          );
-        }
-
-        const cursorOutcome = resolveScheduleCursor(plans, cursor);
-        if (cursorOutcome.kind === 'malformed') {
-          return text(
-            'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
-              '一覧を先頭から読み直すには cursor を付けずに schedule_list を呼ぶこと。',
-          );
-        }
-        const view = cursorOutcome.view;
-        const items = view.map((plan) =>
-          renderListingEntry({
-            id: plan.kind,
-            title: describeScheduleSpec(plan.spec),
-            createdAt: plan.createdAt,
-            updatedAt: plan.updatedAt,
-            summary: `依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
-            extra: [
-              `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
-              `  次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`,
-            ],
-          }),
-        );
-        const lines = [
-          view.length === 0
-            ? '（cursor より後ろの継続中の依頼は無い。これが最後の頁）'
-            : renderListing(items, {
-                budget: SCHEDULE_LIST_BUDGET,
-                // 母数は cursor を当てる前の `plans.length`: `renderListing` が渡す `total` は cursor 以降の残りで、頁が進むと変わるため
-                omitted: ({ rest, shown }) => {
-                  const total = plans.length;
-                  const lastShown = view[shown - 1]!;
-                  const nextCursor = encodeScheduleCursor({ kind: lastShown.kind });
-                  return (
-                    `…ほか ${rest} 件は省略（継続中の依頼は ${total} 件あり、${shown} 件だけ出した。` +
-                    'kind の昇順で並んでいるので、省いたのはこれより後ろ（kind の綴りが後）の依頼である。' +
-                    `続きは schedule_list cursor=${nextCursor} で取れる）。`
-                  );
-                },
-              }),
-        ];
-        // 今回の応答に実際に載った件数（`view.length`）で見る: 最後の頁で1件も出していないのにこの行だけが付くのを避けるため
-        if (view.length > 0) {
-          lines.push('（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）');
-        }
-        if (unreadableNote !== null) lines.push(unreadableNote);
-        return text(lines.join('\n'));
+        if (kind !== undefined)
+          return text(await renderScheduleListFull({ context, stores, kind, offset }));
+        return text(await renderScheduleListAll({ context, stores, cursor }));
       },
     ),
 
