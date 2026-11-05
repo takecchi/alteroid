@@ -71,7 +71,7 @@ describe('HttpRunner の「404 だけ undefined」の取り出しと DELETE', ()
 describe('HttpRunner の応答の検証', () => {
   it('ok が true でない応答は、操作ごとの文で投げる', async () => {
     const runner = await clientWith(() => Response.json({ ok: false })).client;
-    await expect(runner.setMcpServers?.({})).rejects.toThrow(
+    await expect(runner.setMcpServers({})).rejects.toThrow(
       'runner の応答を読めなかった（MCP の登録）',
     );
     await expect(runner.setPermissionRules?.([])).rejects.toThrow(
@@ -91,7 +91,7 @@ describe('HttpRunner の応答の検証', () => {
   it('ok でも欄の形が崩れていれば、指紋ごとの文で投げ、欄が無いものは undefined / null', async () => {
     const broken = await clientWith(() => Response.json({ ok: true, mcpServers: 1, plugins: 1 }))
       .client;
-    await expect(broken.setMcpServers?.({})).rejects.toThrow(
+    await expect(broken.setMcpServers({})).rejects.toThrow(
       'runner の応答を読めなかった（MCP の登録の指紋）',
     );
     await expect(broken.retainPlugins?.([])).rejects.toThrow(
@@ -100,14 +100,14 @@ describe('HttpRunner の応答の検証', () => {
     await expect(broken.takeCodexAuthWriteBack?.('fp')).resolves.toBeNull();
 
     const absent = await clientWith(() => Response.json({ ok: true })).client;
-    expect(await absent.setMcpServers?.({})).toBeUndefined();
+    expect(await absent.setMcpServers({})).toBeUndefined();
     expect(await absent.retainPlugins?.([])).toBeUndefined();
   });
 
   it('/health の欄は、無ければ undefined、在るのに崩れていれば欄名つきで投げる', async () => {
     const absent = await clientWith(() => Response.json({}), { profile: null }).client;
     expect(await absent.profile?.()).toBeUndefined();
-    expect(await absent.mcpServers?.()).toBeUndefined();
+    expect(await absent.mcpServers()).toBeUndefined();
     expect(await absent.plugins?.()).toBeUndefined();
 
     const broken = await clientWith(() => Response.json({}), {
@@ -118,7 +118,7 @@ describe('HttpRunner の応答の検証', () => {
     await expect(broken.profile?.()).rejects.toThrow(
       'runner の /health の profile の欄を読めなかった',
     );
-    await expect(broken.mcpServers?.()).rejects.toThrow(
+    await expect(broken.mcpServers()).rejects.toThrow(
       'runner の /health の mcpServers の欄を読めなかった',
     );
     await expect(broken.plugins?.()).rejects.toThrow(

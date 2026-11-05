@@ -6522,25 +6522,17 @@ class FakePoolRunner extends FakeRunnerClientBase {
   mcpServersCalls = 0;
   fakeMcpServers: RunnerMcpServersFingerprint | undefined;
   mcpServersError: string | undefined;
-  // プロパティで持たせる: クラスのメソッドにすると全インスタンスが持ち、
-  // `mcpServers` を持たない古い runner を模せないため。
-  mcpServers?: () => Promise<RunnerMcpServersFingerprint | undefined>;
 
-  constructor(
-    runnerId: string,
-    report?: RunnerPlacementResources,
-    options?: { supportsMcpServers?: boolean },
-  ) {
+  constructor(runnerId: string, report?: RunnerPlacementResources) {
     super();
     this.runnerId = runnerId;
     this.report = report;
-    if (options?.supportsMcpServers === true) {
-      this.mcpServers = async () => {
-        this.mcpServersCalls += 1;
-        if (this.mcpServersError !== undefined) throw new Error(this.mcpServersError);
-        return this.fakeMcpServers;
-      };
-    }
+  }
+
+  async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
+    this.mcpServersCalls += 1;
+    if (this.mcpServersError !== undefined) throw new Error(this.mcpServersError);
+    return this.fakeMcpServers;
   }
 
   resourcesError: string | undefined;
@@ -7124,7 +7116,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   it('fingerprints を渡さなければ credentials()/profile()/mcpServers() を呼ばず、指紋も probe も載せない', async () => {
-    const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+    const a = new FakePoolRunner('runner-a');
     a.fakeCredentials = [
       { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
     ];
@@ -7239,7 +7231,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   describe('runner_list の MCP の登録の指紋（mcpServersProbe、Issue #1949）', () => {
-    it('口を持たない runner（fake が supportsMcpServers を渡していない）は unsupported になる', async () => {
+    it('何も置いていない runner は asked になり、指紋は載らない（口は必須なので unsupported にはならない）', async () => {
       const a = new FakePoolRunner('runner-a');
       const stores = createMemoryStores();
       const registry = createRunnerRegistry([a]);
@@ -7248,14 +7240,14 @@ describe('runner の一覧（ManagerPool.runners）', () => {
       const overview = await pool.runners({ fingerprints: true });
 
       expect(overview.runners[0]?.mcpServers).toBeUndefined();
-      expect(overview.runners[0]?.mcpServersProbe).toEqual({ status: 'unsupported' });
+      expect(overview.runners[0]?.mcpServersProbe).toEqual({ status: 'asked' });
 
       await pool.stop();
       await registry.stop();
     });
 
-    it('口を持つ runner が聞けたら asked になり、指紋と名前が載る', async () => {
-      const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+    it('runner が聞けたら asked になり、指紋と名前が載る', async () => {
+      const a = new FakePoolRunner('runner-a');
       a.fakeMcpServers = {
         sha256: 'abc123abc123',
         names: ['github', 'remote'],
@@ -7275,8 +7267,8 @@ describe('runner の一覧（ManagerPool.runners）', () => {
       await registry.stop();
     });
 
-    it('口を持つ runner が聞いて失敗したら failed になる（unsupported とは別の文言）', async () => {
-      const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+    it('runner が聞いて失敗したら failed になる', async () => {
+      const a = new FakePoolRunner('runner-a');
       a.mcpServersError = 'mcpServers RPC failed (test)';
       const stores = createMemoryStores();
       const registry = createRunnerRegistry([a]);
@@ -7294,8 +7286,8 @@ describe('runner の一覧（ManagerPool.runners）', () => {
       await registry.stop();
     });
 
-    it('fingerprints を渡さなければ、口を持つ runner でも mcpServers() を呼ばず probe も無い', async () => {
-      const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+    it('fingerprints を渡さなければ、mcpServers() を呼ばず probe も無い', async () => {
+      const a = new FakePoolRunner('runner-a');
       a.fakeMcpServers = {
         sha256: 'abc123abc123',
         names: ['github'],

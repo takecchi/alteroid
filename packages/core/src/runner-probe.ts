@@ -17,7 +17,7 @@ export type RunnerFingerprintProbe =
 /**
  * `unsupported`（呼べる口が無い）を `failed`（呼んだが RPC が落ちた）と潰さない:
  * 鍵を配り直せば直る故障と、runner を上げないと直らない故障が同じ文言に見える。
- * `client.mcpServers` は `RunnerClient` の任意メソッド。
+ * `mcpServers` の探りでは、口が必須になったので `unsupported` は返らない。`resources`（任意の口）の探りが同じ型を使う。
  */
 export type RunnerMcpServersProbe = RunnerFingerprintProbe | { status: 'unsupported' };
 
@@ -46,8 +46,8 @@ export async function probeRunnerFingerprint<T>(
 }
 
 /**
- * **`probeRunnerFingerprint` と分けたのは `unsupported` という4つ目の状態を持つから**: 呼べる口が無いことと、
- * 呼んだが RPC が落ちたことを混ぜない。
+ * **`probeRunnerFingerprint` と分けたのは、返す型が `unsupported` を含む型のまま（`RunnerMcpServersProbe`）で、
+ * `GET /runners` の応答の形と揃えているから。**
  */
 export async function probeRunnerMcpServersFingerprint(
   client: RunnerClient | undefined,
@@ -58,8 +58,6 @@ export async function probeRunnerMcpServersFingerprint(
 }> {
   if (!fingerprints) return { value: undefined, probe: undefined };
   if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
-  if (client.mcpServers === undefined)
-    return { value: undefined, probe: { status: 'unsupported' } };
   try {
     return { value: await client.mcpServers(), probe: { status: 'asked' } };
   } catch (error) {

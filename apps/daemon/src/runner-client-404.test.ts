@@ -40,7 +40,7 @@ const PLUGIN: RunnerPlugin = {
 describe('HttpRunner: 口が 404 のとき、専用の例外に付け替えず RunnerHttpError を投げる（#5717）', () => {
   it('setMcpServers / setPermissionRules', async () => {
     const client = await rig404();
-    expectHttp404(await caught(client.setMcpServers?.({})));
+    expectHttp404(await caught(client.setMcpServers({})));
     expectHttp404(await caught(client.setPermissionRules?.(['Bash(ls)'])));
   });
 
