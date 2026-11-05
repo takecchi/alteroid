@@ -46,8 +46,8 @@ describe('HttpRunner: 口が 404 のとき、専用の例外に付け替えず R
 
   it('setPlugin / retainPlugins', async () => {
     const client = await rig404();
-    expectHttp404(await caught(client.setPlugin?.(PLUGIN)));
-    expectHttp404(await caught(client.retainPlugins?.([])));
+    expectHttp404(await caught(client.setPlugin(PLUGIN)));
+    expectHttp404(await caught(client.retainPlugins([])));
   });
 
   it('setCodexAuth / takeCodexAuthWriteBack', async () => {

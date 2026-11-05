@@ -98,13 +98,9 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
   };
 
   function pushAll(servers: McpServers): Promise<McpServersRunnerResult[]> {
-    return pushToRunners<McpServersRunnerResult>(
-      runners,
-      () => true,
-      async (runner) => {
-        const placed = await runner.setMcpServers(servers);
-        return placed === undefined ? undefined : { mcpServers: placed };
-      },
-    );
+    return pushToRunners<McpServersRunnerResult>(runners, async (runner) => {
+      const placed = await runner.setMcpServers(servers);
+      return placed === undefined ? undefined : { mcpServers: placed };
+    });
   }
 }

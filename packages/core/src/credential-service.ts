@@ -335,10 +335,8 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   function pushAll(
     payload: readonly CredentialEntry[],
   ): Promise<ApplyCredentialsResult['runners']> {
-    return pushToRunners<ApplyCredentialsResult['runners'][number]>(
-      runners,
-      () => true,
-      async (runner) => ({ credentials: await runner.setCredentials([...payload]) }),
-    );
+    return pushToRunners<ApplyCredentialsResult['runners'][number]>(runners, async (runner) => ({
+      credentials: await runner.setCredentials([...payload]),
+    }));
   }
 }

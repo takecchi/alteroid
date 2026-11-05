@@ -1655,13 +1655,13 @@ export interface RunnerClient {
   setPermissionRules?(rules: readonly string[]): Promise<RunnerPermissionRulesResult>;
   /**
    * 持っていなければ `undefined`（`/health` に欄が無い runner も同じ）。
-   * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。
+   * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。試験の偽の既定（`fakeRunnerClient`）は `undefined`。
    */
-  plugins?(): Promise<RunnerPluginsFingerprint | undefined>;
-  /** 同名は置き換え。 */
-  setPlugin?(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
-  /** 一覧に無いものを runner はメモリから外す。 */
-  retainPlugins?(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
+  plugins(): Promise<RunnerPluginsFingerprint | undefined>;
+  /** 同名は置き換え。試験の偽の既定（`fakeRunnerClient`）は、受け取った plugin の指紋をそのまま返す。 */
+  setPlugin(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
+  /** 一覧に無いものを runner はメモリから外す。試験の偽の既定（`fakeRunnerClient`）は何も外さず指紋も返さない（`undefined`）。 */
+  retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
   /** `null` は外す。runner が繋ぎ直すたびに降ろし直す。 */
   setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
   /** 指紋が一致するものが無ければ `null`。 */

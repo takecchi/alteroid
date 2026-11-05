@@ -97,7 +97,7 @@ function setup(): Setup {
   });
   // 展開は実ファイル I/O で偽の時計では進まないので、時間ではなく完了の promise を待つ。
   const pending = new Set<Promise<unknown>>();
-  const realSetPlugin = runner.setPlugin?.bind(runner);
+  const realSetPlugin = runner.setPlugin.bind(runner);
   if (realSetPlugin !== undefined) {
     runner.setPlugin = (plugin) => {
       const p = realSetPlugin(plugin);
@@ -138,7 +138,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
     await s.stores.plugins.put(pluginInput('p-runner', { scope: 'runner' }));
     await s.stores.plugins.put(pluginInput('p-app', { scope: 'app' }));
     const sent: string[] = [];
-    const real = s.runner.setPlugin?.bind(s.runner);
+    const real = s.runner.setPlugin.bind(s.runner);
     s.runner.setPlugin = async (plugin) => {
       sent.push(plugin.name);
       return real!(plugin);
@@ -148,7 +148,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
 
     expect(result.names).toEqual(['p-all', 'p-runner']);
     expect(sent.sort()).toEqual(['p-all', 'p-runner']);
-    expect((await s.runner.plugins?.())?.plugins.map((p) => p.name)).toEqual(['p-all', 'p-runner']);
+    expect((await s.runner.plugins())?.plugins.map((p) => p.name)).toEqual(['p-all', 'p-runner']);
   });
 
   it('結果に files の中身（バイト）を載せない。指紋は runner が返すものと一致する', async () => {
@@ -184,8 +184,8 @@ describe('plugin を配る（apply / syncRunner）', () => {
     await s.service.apply();
     let sent = 0;
     let retained = 0;
-    const realSet = s.runner.setPlugin?.bind(s.runner);
-    const realRetain = s.runner.retainPlugins?.bind(s.runner);
+    const realSet = s.runner.setPlugin.bind(s.runner);
+    const realRetain = s.runner.retainPlugins.bind(s.runner);
     s.runner.setPlugin = async (plugin) => {
       sent += 1;
       return realSet!(plugin);
@@ -206,14 +206,14 @@ describe('plugin を配る（apply / syncRunner）', () => {
     for (const flags of [{ enableMcp: true }, { enableHooks: true }, {}]) {
       await s.stores.plugins.put(pluginInput('p-all', flags));
       const sent: boolean[] = [];
-      const realSet = s.runner.setPlugin?.bind(s.runner);
+      const realSet = s.runner.setPlugin.bind(s.runner);
       s.runner.setPlugin = async (plugin) => {
         sent.push(plugin.enableHooks || plugin.enableMcp);
         return realSet!(plugin);
       };
       await s.service.syncRunner(s.runner);
       expect(sent).toHaveLength(1);
-      const held = (await s.runner.plugins?.())?.plugins[0];
+      const held = (await s.runner.plugins())?.plugins[0];
       expect(held).toMatchObject({
         enableHooks: 'enableHooks' in flags,
         enableMcp: 'enableMcp' in flags,
@@ -233,8 +233,8 @@ describe('plugin を配る（apply / syncRunner）', () => {
       }),
     );
     const calls: string[] = [];
-    const realSet = s.runner.setPlugin?.bind(s.runner);
-    const realRetain = s.runner.retainPlugins?.bind(s.runner);
+    const realSet = s.runner.setPlugin.bind(s.runner);
+    const realRetain = s.runner.retainPlugins.bind(s.runner);
     s.runner.setPlugin = async (plugin) => {
       calls.push(`set:${plugin.name}`);
       return realSet!(plugin);
@@ -247,13 +247,13 @@ describe('plugin を配る（apply / syncRunner）', () => {
     await s.service.syncRunner(s.runner);
 
     expect(calls).toEqual(['set:p-two', 'retain:p-one,p-two']);
-    expect((await s.runner.plugins?.())?.plugins.find((p) => p.name === 'p-two')?.sha).toBe(SHA_B);
+    expect((await s.runner.plugins())?.plugins.find((p) => p.name === 'p-two')?.sha).toBe(SHA_B);
   });
 
   it('全部外したとき、runner に残っていたものを外させる（空の一覧を送る）', async () => {
     await s.stores.plugins.put(pluginInput('p-all'));
     await s.service.apply();
-    expect(await s.runner.plugins?.()).toBeDefined();
+    expect(await s.runner.plugins()).toBeDefined();
 
     await s.stores.plugins.remove('p-all');
     const result = await s.service.apply();
@@ -261,7 +261,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
     expect(result.names).toEqual([]);
     expect(result.sha256).toBeUndefined();
     expect(result.runners).toEqual([{ runnerId: 'runner-test', ok: true }]);
-    expect(await s.runner.plugins?.()).toBeUndefined();
+    expect(await s.runner.plugins()).toBeUndefined();
   });
 
   it('scope を app へ変えたものも、runner からは外れる', async () => {
@@ -269,7 +269,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
     await s.service.apply();
     await s.stores.plugins.put(pluginInput('p-all', { scope: 'app' }));
     await s.service.apply();
-    expect(await s.runner.plugins?.()).toBeUndefined();
+    expect(await s.runner.plugins()).toBeUndefined();
   });
 
   it('対照: 何も無く、runner も何も持たないなら何も呼ばない', async () => {
@@ -294,7 +294,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
     };
     const sent: string[] = [];
     const retained: string[][] = [];
-    const realSet = s.runner.setPlugin?.bind(s.runner);
+    const realSet = s.runner.setPlugin.bind(s.runner);
     s.runner.setPlugin = async (plugin) => {
       sent.push(plugin.name);
       return realSet!(plugin);
@@ -355,7 +355,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
         source: { kind: 'url', url: 'https://example.invalid/plugins.git', sha: SHA_B },
       }),
     );
-    const realSet = s.runner.setPlugin?.bind(s.runner);
+    const realSet = s.runner.setPlugin.bind(s.runner);
     s.runner.setPlugin = async (plugin) => {
       if (plugin.name === 'p-a-broken') throw new Error('extract failed (test)');
       return realSet!(plugin);
@@ -364,19 +364,18 @@ describe('plugin を配る（apply / syncRunner）', () => {
     await s.service.syncRunner(s.runner).catch(() => undefined);
     await s.service.syncRunner(s.runner).catch(() => undefined);
 
-    const held = (await s.runner.plugins?.())?.plugins ?? [];
+    const held = (await s.runner.plugins())?.plugins ?? [];
     expect(held.find((p) => p.name === 'p-b-good')?.sha).toBe(SHA_B);
     expect(held.map((p) => p.name)).not.toContain('p-old');
     // 失敗した plugin は、runner が持っている旧版のまま残る（外さない）
     expect(held.find((p) => p.name === 'p-a-broken')?.sha).toBe(SHA_A);
   });
 
-  it('口を持たない実装（setPlugin が無い）へは配ったとも失敗したとも言わない', async () => {
+  it('指紋を返さない実装（retainPlugins が undefined を返す）へは、置けたとだけ言い、指紋は載せない', async () => {
     await s.stores.plugins.put(pluginInput('p-all'));
-    (s.runner as { setPlugin?: unknown }).setPlugin = undefined;
+    s.runner.retainPlugins = async () => undefined;
     const result = await s.service.apply();
-    expect(result.runners).toEqual([]);
-    expect(await s.service.syncRunner(s.runner)).toBeNull();
+    expect(result.runners).toEqual([{ runnerId: 'runner-test', ok: true }]);
   });
 
   it('serial: 同時に呼んでも、1本ずつ順に走る（古い一覧が新しい一覧を上書きしない）', async () => {
@@ -386,7 +385,7 @@ describe('plugin を配る（apply / syncRunner）', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const realSet = s.runner.setPlugin?.bind(s.runner);
+    const realSet = s.runner.setPlugin.bind(s.runner);
     let first = true;
     s.runner.setPlugin = async (plugin) => {
       order.push('set:start');
@@ -421,7 +420,7 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
     await s.stores.plugins.put(pluginInput('p-all'));
     await s.pool.start({ request: '走る' });
     expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
-    expect((await s.runner.plugins?.())?.plugins.map((p) => p.name)).toEqual(['p-all']);
+    expect((await s.runner.plugins())?.plugins.map((p) => p.name)).toEqual(['p-all']);
     await s.pool.stop();
   });
 
@@ -429,18 +428,18 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
     const s = setup();
     await s.stores.plugins.put(pluginInput('p-all'));
     await s.pool.start({ request: '走る' });
-    await s.runner.retainPlugins?.([]);
-    expect(await s.runner.plugins?.()).toBeUndefined();
+    await s.runner.retainPlugins([]);
+    expect(await s.runner.plugins()).toBeUndefined();
 
     await s.pool.reattachRunner('runner-test');
-    expect((await s.runner.plugins?.())?.plugins.map((p) => p.name)).toEqual(['p-all']);
+    expect((await s.runner.plugins())?.plugins.map((p) => p.name)).toEqual(['p-all']);
     await s.pool.stop();
   });
 
   it('一時障害は日誌に残し、次の hello を待たずに挑み直し、直れば ok になる', async () => {
     const s = setup();
     await s.stores.plugins.put(pluginInput('p-all'));
-    const real = s.runner.setPlugin?.bind(s.runner);
+    const real = s.runner.setPlugin.bind(s.runner);
     let broken = true;
     s.runner.setPlugin = async (plugin) => {
       if (broken) throw new Error('plugin sync failed (test)');
@@ -459,7 +458,7 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await s.settle();
     expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
-    expect((await s.runner.plugins?.())?.plugins.map((p) => p.name)).toEqual(['p-all']);
+    expect((await s.runner.plugins())?.plugins.map((p) => p.name)).toEqual(['p-all']);
     await s.pool.stop();
   });
 
@@ -498,7 +497,7 @@ describe('plugin の降ろし直しと挑み直し（名乗り）', () => {
     await s.pool.start({ request: '走る' });
     expect(s.pool.pushHealthOf('runner-test')?.plugins?.status).toBe('ok');
     await s.stores.plugins.put(pluginInput('p-all'));
-    const real = s.runner.setPlugin?.bind(s.runner);
+    const real = s.runner.setPlugin.bind(s.runner);
     let broken = true;
     s.runner.setPlugin = async (plugin) => {
       if (broken) throw new Error('plugin sync failed (test)');

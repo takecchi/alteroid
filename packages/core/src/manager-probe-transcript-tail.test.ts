@@ -101,6 +101,21 @@ class EventfulRunner implements RunnerClient {
   async setMcpServers(): Promise<undefined> {
     return undefined;
   }
+  async plugins(): Promise<undefined> {
+    return undefined;
+  }
+  async setPlugin(plugin: Parameters<RunnerClient['setPlugin']>[0]) {
+    return {
+      name: plugin.name,
+      sha: plugin.sourceSha,
+      contentSha256: plugin.contentSha256,
+      enableHooks: plugin.enableHooks,
+      enableMcp: plugin.enableMcp,
+    };
+  }
+  async retainPlugins(): Promise<undefined> {
+    return undefined;
+  }
   async close(): Promise<void> {}
 }
 

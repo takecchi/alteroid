@@ -1158,7 +1158,7 @@ describe('器の入れ替えの判定材料', () => {
       client.credentials(),
       client.profile(),
       client.mcpServers(),
-      client.plugins?.(),
+      client.plugins(),
     ]);
     expect(credentials).toEqual([]);
     expect(healthReads).toBe(1);

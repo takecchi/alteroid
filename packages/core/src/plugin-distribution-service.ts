@@ -64,14 +64,13 @@ export function createPluginDistributionService(
   async function syncOne(
     runner: RunnerClient,
   ): Promise<{ plugins?: RunnerPluginsFingerprint } | null> {
-    if (runner.setPlugin === undefined || runner.retainPlugins === undefined) return null;
     const summaries = await wanted();
 
     // 指紋が読めなかったら「差がある」に倒して全部送り直す: 「何も持っていない」に潰すと送り損ねて plugin が0本のまま走る。
     let unreadable = false;
     let current: RunnerPluginsFingerprint | undefined;
     try {
-      current = await runner.plugins?.();
+      current = await runner.plugins();
     } catch {
       unreadable = true;
     }
@@ -127,7 +126,6 @@ export function createPluginDistributionService(
   const pushAll = (): Promise<PluginsRunnerResult[]> =>
     pushToRunners<PluginsRunnerResult>(
       runners,
-      (runner) => runner.setPlugin !== undefined && runner.retainPlugins !== undefined,
       async (runner) => (await syncOne(runner)) ?? undefined,
     );
 

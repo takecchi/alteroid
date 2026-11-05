@@ -38,18 +38,17 @@ interface RunnerPushResultBase {
 }
 
 /**
- * 開いている全 runner のうち `accepts` が通したものへ `send` し、runner ごとの成否を集める（1台の失敗で他を止めない）。
+ * 開いている全 runner へ `send` し、runner ごとの成否を集める（1台の失敗で他を止めない）。
  * `runners` が無ければ空。名簿（`list()`）の失敗は投げる。
  */
 export async function pushToRunners<R extends RunnerPushResultBase>(
   runners: RunnerRegistry | undefined,
-  accepts: (runner: RunnerClient) => boolean,
   send: (runner: RunnerClient) => Promise<Omit<R, keyof RunnerPushResultBase> | undefined>,
 ): Promise<R[]> {
   if (runners === undefined) return [];
   const open = await runners.list();
   return Promise.all(
-    open.filter(accepts).map(async (runner): Promise<R> => {
+    open.map(async (runner): Promise<R> => {
       try {
         const placed = await send(runner);
         return { runnerId: runner.runnerId, ok: true, ...placed } as R;

@@ -1,3 +1,4 @@
+import type { RunnerPlugin as RunnerPluginPush } from './plugins.js';
 import type {
   RunnerAnswerOutcome,
   RunnerClient,
@@ -5,11 +6,23 @@ import type {
   RunnerManagerState,
   RunnerMcpServersFingerprint,
   RunnerOutboxContent,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
   RunnerStartCommand,
 } from './runner-protocol.js';
+
+function pluginFingerprintEntryOf(plugin: RunnerPluginPush): RunnerPluginFingerprintEntry {
+  return {
+    name: plugin.name,
+    sha: plugin.sourceSha,
+    contentSha256: plugin.contentSha256,
+    enableHooks: plugin.enableHooks,
+    enableMcp: plugin.enableMcp,
+  };
+}
 
 /**
  * 試験の偽の `RunnerClient` の工場。口の既定は「何もしない・空・`undefined`」で、`start` / `resume` は頼まれた `cwd` をそのまま返す。
@@ -18,6 +31,7 @@ import type {
  * ピックアップの口は、`openPickupFile` が何も開けず（`undefined`）、`deletePickupFile` が何もしない。
  * アーカイブの口は、`fetchArchive` が何も預かっておらず（`undefined`）、`deleteArchive` が何もしない。
  * MCP の口は、`mcpServers` が何も置いていない（`undefined`）、`setMcpServers` が何も置かず指紋も返さない（`undefined`）。
+ * plugin の口は、`plugins` が何も持っていない（`undefined`）、`setPlugin` が受け取った plugin の指紋をそのまま返し、`retainPlugins` が何も外さず指紋も返さない（`undefined`）。
  * 置くと「口が無いとき」の道を通っていた試験の道が変わるため（持たない偽は、呼ぶ側がその口が無い場合の道へ倒す）。
  * クラスの偽は {@link FakeRunnerClientBase} を継ぐ（既定は同じ）。
  */
@@ -45,6 +59,9 @@ export function fakeRunnerClient(overrides: Partial<RunnerClient> = {}): RunnerC
     deleteArchive: () => Promise.resolve(),
     mcpServers: () => Promise.resolve(undefined),
     setMcpServers: () => Promise.resolve(undefined),
+    plugins: () => Promise.resolve(undefined),
+    setPlugin: (plugin: RunnerPluginPush) => Promise.resolve(pluginFingerprintEntryOf(plugin)),
+    retainPlugins: () => Promise.resolve(undefined),
     close: () => Promise.resolve(),
     ...overrides,
   };
@@ -107,6 +124,15 @@ export const FakeRunnerClientBase: abstract new () => RunnerClient = class imple
     return undefined;
   }
   async setMcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
+    return undefined;
+  }
+  async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
+    return undefined;
+  }
+  async setPlugin(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry> {
+    return pluginFingerprintEntryOf(plugin);
+  }
+  async retainPlugins(): Promise<RunnerPluginsFingerprint | undefined> {
     return undefined;
   }
   async close(): Promise<void> {}

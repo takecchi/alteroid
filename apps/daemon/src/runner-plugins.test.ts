@@ -177,7 +177,7 @@ describe('HttpRunner: plugin の送り', () => {
     const r = await rig();
     const input = plugin('p-one');
 
-    const placed = await r.client.setPlugin?.(input);
+    const placed = await r.client.setPlugin(input);
 
     expect(placed).toEqual({
       name: 'p-one',
@@ -207,40 +207,40 @@ describe('HttpRunner: plugin の送り', () => {
 
   it('plugins() は /health の指紋を読む。持っていなければ undefined', async () => {
     const r = await rig();
-    expect(await r.client.plugins?.()).toBeUndefined();
-    await r.client.setPlugin?.(plugin('p-one'));
-    const fp = await r.client.plugins?.();
+    expect(await r.client.plugins()).toBeUndefined();
+    await r.client.setPlugin(plugin('p-one'));
+    const fp = await r.client.plugins();
     expect(fp?.plugins.map((p) => p.name)).toEqual(['p-one']);
     expect(JSON.stringify(fp)).not.toContain('dummy-content');
   });
 
   it('retainPlugins は一覧に無いものを外し、残った指紋を返す', async () => {
     const r = await rig();
-    await r.client.setPlugin?.(plugin('p-one'));
-    await r.client.setPlugin?.(plugin('p-two'));
-    const fp = await r.client.retainPlugins?.(['p-two']);
+    await r.client.setPlugin(plugin('p-one'));
+    await r.client.setPlugin(plugin('p-two'));
+    const fp = await r.client.retainPlugins(['p-two']);
     expect(fp?.plugins.map((p) => p.name)).toEqual(['p-two']);
-    expect(await r.client.retainPlugins?.([])).toBeUndefined();
+    expect(await r.client.retainPlugins([])).toBeUndefined();
     expect(r.host.plugins()).toBeUndefined();
   });
 
   it('古い runner の 404 は RunnerHttpError のまま、/health の欠けは undefined になる', async () => {
     const r = await rig({ oldRunner: true });
-    await expect(r.client.setPlugin?.(plugin('p-one'))).rejects.toBeInstanceOf(RunnerHttpError);
-    await expect(r.client.retainPlugins?.([])).rejects.toBeInstanceOf(RunnerHttpError);
-    expect(await r.client.plugins?.()).toBeUndefined();
+    await expect(r.client.setPlugin(plugin('p-one'))).rejects.toBeInstanceOf(RunnerHttpError);
+    await expect(r.client.retainPlugins([])).rejects.toBeInstanceOf(RunnerHttpError);
+    expect(await r.client.plugins()).toBeUndefined();
   });
 
   it('/health の plugins の欄が在るのに読めない形なら、undefined ではなく投げる', async () => {
     const r = await rig({ garbleHealth: true });
-    await expect(r.client.plugins?.()).rejects.toThrow('plugins の欄を読めなかった');
+    await expect(r.client.plugins()).rejects.toThrow('plugins の欄を読めなかった');
   });
 
   it('runner が 400 で拒んだものは、404 に化けず普通の失敗として投げる（前の状態が残る）', async () => {
     const r = await rig();
-    await r.client.setPlugin?.(plugin('p-one'));
+    await r.client.setPlugin(plugin('p-one'));
     const bad = plugin('p-one', { contentSha256: 'f'.repeat(64) });
-    const error = await r.client.setPlugin?.(bad).catch((e: unknown) => e);
+    const error = await r.client.setPlugin(bad).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(Error);
     expect((error as RunnerHttpError).status).toBe(400);
     expect(r.host.plugins()?.plugins[0]?.contentSha256).toBe(plugin('p-one').contentSha256);

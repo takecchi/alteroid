@@ -161,7 +161,7 @@ describe('plugin の送りの期限（本文の大きさに見合う）', () => 
     });
 
     // 約 8MB の本文: 転送の余裕が 20ms の基準へ足される。
-    await expect(client.setPlugin?.(pluginOf('p-one', 6 * 1024 * 1024))).resolves.toMatchObject({
+    await expect(client.setPlugin(pluginOf('p-one', 6 * 1024 * 1024))).resolves.toMatchObject({
       name: 'p-one',
     });
     await expect(client.send('mgr-1', 'ping')).rejects.toBeInstanceOf(RunnerUnknownError);
@@ -175,7 +175,7 @@ describe('plugin の送りの期限（本文の大きさに見合う）', () => 
       fetchFn,
       deadlineMs: 20,
     });
-    await expect(client.setPlugin?.(pluginOf('p-one', 10))).rejects.toBeInstanceOf(
+    await expect(client.setPlugin(pluginOf('p-one', 10))).rejects.toBeInstanceOf(
       RunnerUnknownError,
     );
   });
@@ -188,7 +188,7 @@ describe('plugin の送りの期限（本文の大きさに見合う）', () => 
       fetchFn,
       deadlineMs: 20,
     });
-    await expect(client.retainPlugins?.(['p-one'])).rejects.toBeInstanceOf(RunnerUnknownError);
+    await expect(client.retainPlugins(['p-one'])).rejects.toBeInstanceOf(RunnerUnknownError);
   });
 });
 
