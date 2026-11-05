@@ -807,6 +807,7 @@ export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
 export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
+export { verifyJobStoreContract } from './job-store-contract.js';
 export { verifyInboxStoreContract } from './inbox-store-contract.js';
 export { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
 export {
