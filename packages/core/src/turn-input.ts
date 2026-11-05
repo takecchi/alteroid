@@ -113,7 +113,7 @@ export interface TurnInputText {
   readonly redelivery: string;
   readonly validity: string;
   readonly mergedBatchTruncation: string;
-  // 待ち行列（Task）の断り。欄名は廃止した台帳のころの `commitment` のまま: `context-size-measure.ts`（触らない約束）が `parts['commitment'] ?? sizeOf('')` と文字列の鍵で内訳を引くので、欄名を変えると型は通ったまま、その列だけが黙って 0 になるため
+  // 待ち行列（Task）の断り。欄名は廃止した台帳のころの `commitment` のまま（改名だけの変更は、このターンの入力の組み立てに触らないために見送った）
   readonly commitment: string;
   readonly situation: string;
   readonly body: string;

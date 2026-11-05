@@ -329,7 +329,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#journalRestoreUnreadPassEnd': 'gauge',
     '#journalRestoreUnreadPassStart': 'gauge',
     '#journalSupersededTokenPoolNotice': 'thinning',
-    '#noteCallerGauge': 'gauge',
     '#noteDenial': 'decision',
     '#noteDroppedSignals': 'decision',
     '#noteFoldedTick': 'thinning',

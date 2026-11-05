@@ -98,15 +98,6 @@ import {
 } from './exchange-kind.js';
 import { decideInitiativeTick, type InitiativeGateDecision } from './initiative-gate.js';
 import {
-  CallerGauge,
-  hookGaugeLabel,
-  MAIN_GAUGE_LIMIT,
-  SUBAGENT_GAUGE_LIMIT,
-  toolKindOf,
-  verdictGaugeLabel,
-  type ToolUseIdProbe,
-} from './subagent-caller-gauge.js';
-import {
   DAEMON_ATTACHMENT_USAGE_SOURCE,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
@@ -130,7 +121,6 @@ import {
   noteDroppedInboxEvent,
   noteDroppedRecord,
   noteDuplicateHumanAnswer,
-  noteToolUseIdMissing,
   noteInboxEventKeptInMemoryOnly,
   noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
@@ -471,9 +461,6 @@ const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 const RECENT_DENIAL_LIMIT = 32;
 
 const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
-
-// 同時に走るサブエージェントの呼びは多くて数十本。その百倍ほどに取る: 溢れて印が落ちると、サブの呼びが本体扱いになり本体の畳みの控えを更新してしまうため
-const SUBAGENT_TOOL_USE_MEMORY_LIMIT = 4096;
 
 // コマンド本文を持たない: 覚える必要があるのは人間が承認済みの規則（`grant.rule`）とその行の id だけのため
 interface AllowedByGrantRecord {
@@ -980,24 +967,6 @@ class Clone implements CloneHost {
   readonly #unparsedToolInputJournaled = createRecentMap<true>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
   });
-  // サブエージェントが呼んでいる道具の tool_use_id → agentId（#5428）。`#onPreToolUse` で足し、決着（`#onPostToolUse` / `#onPostToolUseFailure`）と `#onSubagentStop` で消す。hook は handler より先に走るので、handler が `ToolContext.isSubagentCall` で引ける
-  // 無制限には覚えない: 決着の hook が来ない呼びが残り続けても伸びないように。忘れたら `onForget` で日誌へ残す
-  readonly #subagentToolUses = createRecentMap<string>({
-    limit: SUBAGENT_TOOL_USE_MEMORY_LIMIT,
-    onForget: (ids) => {
-      void this.#journalSelf(
-        'inbound',
-        `${EXCHANGE_KIND_THINNING_PREFIX}サブエージェントの呼びの印が上限` +
-          `（${SUBAGENT_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
-          `${ids.join(', ')}。この tool_use_id の呼びが後から道具に届くと、` +
-          '本体の呼びとして扱われ、固定の文言の畳みの控えを更新しうる。',
-      );
-    },
-  });
-  // tool_use_id が取れなかった事実を stderr へ出したか。デーモン1回につき1回だけ（セッションが替わっても戻さない: 取れない器は会話が替わっても取れないままで、同じ事実を会話ごとに繰り返さないため。本体扱いに倒すので、黙ると畳みの前提が崩れていても気づけない）
-  #toolUseIdMissingWarned = false;
-  // 呼び手の判定の計器（種類ごとに最初の N 回だけ日誌へ書く。理由は `CallerGauge`）。1デーモン1つ
-  readonly #callerGauge = new CallerGauge();
   // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
@@ -6158,7 +6127,8 @@ class Clone implements CloneHost {
       emit: (event) => this.#emit(this.#sdkSession.turn?.conversationId ?? null, event),
       flushReply: () => this.#flushReply(),
       managers: this.#managers,
-      isSubagentCall: (toolUseId, probe) => this.#isSubagentCall(toolUseId, probe),
+      // 道具側の呼びを外す次の PR まで残す口。判定は誰も使わないので、常に本体の呼びとして答え、日誌には何も書かない
+      isSubagentCall: () => false,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
@@ -6286,16 +6256,6 @@ class Clone implements CloneHost {
    * - `allow` を返した呼び出しは `#allowedByGrantToolUses` に控える: SDK が allow を分類器へ回して拒否することがあり、その拒否を `#noteDenial` で見分けるため。`agentId` が読めれば同じ控えへ足す（`#onSubagentStop` は欄が無い控えを拾わない）。
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
-    // Bash 以外でも控える（Bash を continue する前）: 畳みの呼び手の判定が見るのはクローンの MCP 道具で、Bash ではない
-    if (typeof record.toolUseId === 'string' && typeof record.agentId === 'string') {
-      if (record.agentId !== '') this.#subagentToolUses.set(record.toolUseId, record.agentId);
-    }
-    // 本体の呼びは agent_id が欠ける（空文字とは限らない）ので、非空だけをサブとし、残りは基準の「本体」として数える
-    const isSubagent = typeof record.agentId === 'string' && record.agentId !== '';
-    this.#noteCallerGauge(
-      hookGaugeLabel(isSubagent, toolKindOf(record.toolName ?? '')),
-      isSubagent ? SUBAGENT_GAUGE_LIMIT : MAIN_GAUGE_LIMIT,
-    );
     if (record.toolName !== 'Bash') return { kind: 'continue' };
 
     const toolInput = record.toolInput as { command?: unknown } | null | undefined;
@@ -6331,42 +6291,6 @@ class Clone implements CloneHost {
   }
 
   /**
-   * `ToolContext.isSubagentCall` の実装（#5428）。tool_use_id が取れないときは本体扱い（`false`）に倒す。
-   * 取れなかった事実は捨てず、デーモン1回につき1回だけ stderr へ出す。
-   */
-  #isSubagentCall(toolUseId: string | undefined, probe?: ToolUseIdProbe): boolean {
-    let subagent = false;
-    if (toolUseId === undefined) {
-      if (!this.#toolUseIdMissingWarned) {
-        this.#toolUseIdMissingWarned = true;
-        noteToolUseIdMissing();
-      }
-    } else {
-      subagent = this.#subagentToolUses.has(toolUseId);
-    }
-    // 判定の後に計器を残す: 計器は判定を変えない（書けなくても `subagent` はそのまま返る）
-    const seen = probe ?? (toolUseId === undefined ? 'missing' : 'present');
-    this.#noteCallerGauge(
-      verdictGaugeLabel(seen, subagent),
-      subagent ? SUBAGENT_GAUGE_LIMIT : MAIN_GAUGE_LIMIT,
-    );
-    return subagent;
-  }
-
-  /**
-   * 計器の1行を日誌へ（`CallerGauge` が間引いた残りだけ）。同期の判定から呼ぶので待たない: `#journal` は失敗しても投げない（stderr に跡を残す）。
-   * 行全体を `redactErrorText` に通す: 値は元から入れないが、将来ラベルが増えても鍵の形が出ない網として。
-   */
-  #noteCallerGauge(label: string, limit: number): void {
-    const body = this.#callerGauge.note(label, limit);
-    if (body === undefined) return;
-    void this.#journalSelf(
-      'outbound',
-      `${EXCHANGE_KIND_GAUGE_PREFIX}${redactErrorText(body, this.#env)}`,
-    );
-  }
-
-  /**
    * 自前で日誌へ書く道具（`SELF_JOURNALING_CLONE_TOOLS`）だけを除く: 重ねて書くと日誌が自分の記録で埋まる。自作ツール全部を除かない（読む道具は何も書かず、「どちらで見たかは日誌に残す」から落ちる）。名簿の誤りは「誤って除く」ほうが監査の穴になるので、迷ったら除かない側（`TRACELESS_CLONE_TOOLS`）へ倒す。
    * 除外の前提が崩れる回: MCP の入力検証が落ちるとハンドラが一度も呼ばれず、SDK は成功扱いの `isError` 応答にするので、除外だけが効いて何も残らない。除外する前に検証落ちかを見て（`detectMcpInputValidationFailure`）、`#journalSelfJournalingToolValidationFailure` が `tool_use` として残す。
    * 例外を投げない: ツール実行の後続に影響しうる。
@@ -6378,7 +6302,6 @@ class Clone implements CloneHost {
     // 決着したので控えから忘れる: `PreToolUse` は実行前にしか発火せず、成功した呼び出しに後から拒否は届かない
     if (typeof record.toolUseId === 'string') {
       this.#allowedByGrantToolUses.delete(record.toolUseId);
-      this.#subagentToolUses.delete(record.toolUseId);
     }
 
     await this.#journalToolUse(record, CLONE_ACTOR_ID);
@@ -6514,7 +6437,6 @@ class Clone implements CloneHost {
     this.#noteTranscriptPath(record.transcriptPath);
     if (typeof record.toolUseId === 'string') {
       this.#allowedByGrantToolUses.delete(record.toolUseId);
-      this.#subagentToolUses.delete(record.toolUseId);
     }
 
     await this.#journalToolUseFailure(record, CLONE_ACTOR_ID);
@@ -6695,11 +6617,6 @@ class Clone implements CloneHost {
   async #onSubagentStop(record: AgentSubagentStopRecord): Promise<void> {
     if (typeof record.agentId !== 'string') return;
     const agentId = record.agentId;
-
-    // 決着の hook が来ないまま終わった呼びの印を掃く（`#subagentToolUses` が育ち続けないように）
-    for (const [toolUseId, owner] of this.#subagentToolUses.entries()) {
-      if (owner === agentId) this.#subagentToolUses.delete(toolUseId);
-    }
 
     for (const [toolUseId, funneled] of this.#allowedByGrantToolUses.entries()) {
       if (funneled.agentId !== agentId) continue;

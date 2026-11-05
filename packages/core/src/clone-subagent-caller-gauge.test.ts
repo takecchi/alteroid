@@ -8,17 +8,11 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 import { createCloneMcpServer, createCloneTools, type ToolContext } from './tools.js';
-import {
-  CALLER_VERDICT_GAUGE_PHRASE,
-  MAIN_GAUGE_LIMIT,
-  SUBAGENT_GAUGE_LIMIT,
-  SUBAGENT_HOOK_GAUGE_PHRASE,
-} from './subagent-caller-gauge.js';
 
-// サブエージェント呼びの計器（日誌の type=exchange・接頭辞 [計器]）。有無・種類・件数だけを残し、値は残さない。
-// 計器は判定（全文を返すか畳むか）を変えない。
+// かつて「サブエージェント呼びの計器」が日誌（type=exchange・接頭辞 [計器]）へ残していた行は、もう出ない。
+// 判定の結果を使う所が無かったため外した（道具が呼ぶ口 `ToolContext.isSubagentCall` だけは、次の PR まで何もしない形で残してある）。
 
-const FULL_MARK = 'インメモリ';
+const GAUGE_PHRASES = ['サブエージェント呼びの確認', '呼び手の判定'];
 
 type Hook = (input: never, id: undefined, options: never) => Promise<unknown>;
 
@@ -121,11 +115,10 @@ async function turn(s: Boot): Promise<void> {
 
 const metaOf = (toolUseId: unknown): unknown => ({ _meta: { 'claudecode/toolUseId': toolUseId } });
 
-async function runnerList(s: Boot, extra: unknown): Promise<string> {
+async function runnerList(s: Boot, extra: unknown): Promise<void> {
   const tool = createCloneTools(s.context()).find((entry) => entry.name === 'runner_list');
   if (!tool) throw new Error('runner_list が無い');
-  const result = await tool.handler({} as never, extra as never);
-  return (result.content ?? []).map((block) => (block.type === 'text' ? block.text : '')).join('');
+  await tool.handler({} as never, extra as never);
 }
 
 const preOf = (toolName: string, toolUseId: string, agentId?: string, toolInput: unknown = {}) =>
@@ -136,198 +129,49 @@ const preOf = (toolName: string, toolUseId: string, agentId?: string, toolInput:
     ...(agentId === undefined ? {} : { agent_id: agentId }),
   }) as never;
 
-const RUNNER_LIST = 'mcp__alteroid__runner_list';
-
-async function gaugeTexts(s: Boot, phrase: string): Promise<string[]> {
+async function journalTexts(s: Boot): Promise<string[]> {
   await flushPendingMicrotasks();
-  const rows = (await s.stores.journal.list({ types: ['exchange'], limit: 1000 })) as {
-    text: string;
-  }[];
-  // 並びに依存しない（list の順は実装次第）: 文字列順に揃える
-  return rows
-    .map((row) => row.text)
-    .filter((text) => text.includes(phrase))
-    .sort();
+  const rows = (await s.stores.journal.list({ limit: 1000 })) as { text?: string }[];
+  return rows.map((row) => row.text ?? '');
 }
 
-describe('サブエージェント呼びの計器: hook 側', () => {
-  it('サブの呼び（agent_id が非空）は、道具の種類つきで [計器] の行になる', async () => {
+describe('サブエージェント呼びの計器は日誌へ何も書かない', () => {
+  it('hook（サブ・本体・各種の道具）と handler（_meta の有・無・型違い）の呼びのあとも、[計器] の呼び手の行は出ない', async () => {
     const s = boot();
     await turn(s);
+    const before = (await journalTexts(s)).length;
     const pre = s.pre();
-    await pre(preOf(RUNNER_LIST, 'tu-1', 'agent-1'), undefined, {} as never);
+    await pre(preOf('mcp__alteroid__runner_list', 'tu-1', 'agent-1'), undefined, {} as never);
     await pre(preOf('Bash', 'tu-2', 'agent-1', { command: 'ls' }), undefined, {} as never);
     await pre(preOf('mcp__github__list', 'tu-3', 'agent-1'), undefined, {} as never);
+    await pre(preOf('mcp__alteroid__runner_list', 'tu-4'), undefined, {} as never);
+    await pre(preOf('mcp__alteroid__runner_list', 'tu-5', ''), undefined, {} as never);
 
-    const lines = await gaugeTexts(s, SUBAGENT_HOOK_GAUGE_PHRASE);
-    expect(lines).toEqual(
-      [
-        `[計器] ${SUBAGENT_HOOK_GAUGE_PHRASE}（hook: サブの呼び・道具の種類 mcp-alteroid）`,
-        `[計器] ${SUBAGENT_HOOK_GAUGE_PHRASE}（hook: サブの呼び・道具の種類 組込み）`,
-        `[計器] ${SUBAGENT_HOOK_GAUGE_PHRASE}（hook: サブの呼び・道具の種類 mcp-他）`,
-      ].sort(),
-    );
-    await s.clone.stop();
-  });
-
-  it('本体の呼び（agent_id が無い・空）は基準として「本体の呼び」の行になる', async () => {
-    const s = boot();
-    await turn(s);
-    const pre = s.pre();
-    await pre(preOf(RUNNER_LIST, 'tu-1'), undefined, {} as never);
-    await pre(preOf('mcp__alteroid-peer__peer_run', 'tu-2', ''), undefined, {} as never);
-
-    const lines = await gaugeTexts(s, SUBAGENT_HOOK_GAUGE_PHRASE);
-    // agent_id が欠ける呼びも空文字の呼びも、同じ「本体の呼び」の種類として2回数えられる
-    expect(lines).toEqual([
-      `[計器] ${SUBAGENT_HOOK_GAUGE_PHRASE}（hook: 本体の呼び・道具の種類 mcp-alteroid）`,
-      `[計器] ${SUBAGENT_HOOK_GAUGE_PHRASE}（hook: 本体の呼び・道具の種類 mcp-alteroid）`,
-    ]);
-    await s.clone.stop();
-  });
-});
-
-describe('サブエージェント呼びの計器: handler 側', () => {
-  it('_meta の有／無／型違いと、サブ／本体の判定が行になる', async () => {
-    const s = boot();
-    await turn(s);
-    const pre = s.pre();
-    await pre(preOf(RUNNER_LIST, 'tu-sub', 'agent-1'), undefined, {} as never);
-    await pre(preOf(RUNNER_LIST, 'tu-main'), undefined, {} as never);
-
-    await runnerList(s, metaOf('tu-sub'));
-    await runnerList(s, metaOf('tu-main'));
-    await captureStderr(async () => {
+    await runnerList(s, metaOf('tu-1'));
+    await runnerList(s, metaOf('tu-4'));
+    const stderr = await captureStderr(async () => {
       await runnerList(s, {});
       await runnerList(s, metaOf(42));
       await runnerList(s, metaOf(''));
     });
 
-    const lines = await gaugeTexts(s, CALLER_VERDICT_GAUGE_PHRASE);
-    // 型違い（数値）と空文字は同じ種類として2回数えられる
-    expect(lines).toEqual(
-      [
-        `[計器] ${CALLER_VERDICT_GAUGE_PHRASE}（_meta の toolUseId: 有・サブと判定）`,
-        `[計器] ${CALLER_VERDICT_GAUGE_PHRASE}（_meta の toolUseId: 有・本体と判定）`,
-        `[計器] ${CALLER_VERDICT_GAUGE_PHRASE}（_meta の toolUseId: 無・本体と判定）`,
-        `[計器] ${CALLER_VERDICT_GAUGE_PHRASE}（_meta の toolUseId: 型違い・本体と判定）`,
-        `[計器] ${CALLER_VERDICT_GAUGE_PHRASE}（_meta の toolUseId: 型違い・本体と判定）`,
-      ].sort(),
-    );
+    const texts = await journalTexts(s);
+    for (const phrase of GAUGE_PHRASES) {
+      expect(texts.filter((text) => text.includes(phrase))).toEqual([]);
+    }
+    // hook と handler の呼びだけでは、日誌は1行も増えない
+    expect(texts.length).toBe(before);
+    expect(stderr.filter((line) => line.includes('tool_use_id'))).toEqual([]);
     await s.clone.stop();
   });
-});
 
-describe('サブエージェント呼びの計器: 値は書かない', () => {
-  it('tool_use_id・agent_id・入力の本文は、どの行にも出ない', async () => {
+  it('道具が呼ぶ口 isSubagentCall は残してあり、常に本体の呼び（false）と答える', async () => {
     const s = boot();
     await turn(s);
     const pre = s.pre();
-    await pre(
-      preOf('Bash', 'tu-secret-ZZ9', 'agent-secret-ZZ9', { command: 'echo token-secret-ZZ9' }),
-      undefined,
-      {} as never,
-    );
-    await pre(preOf(RUNNER_LIST, 'tu-secret-ZZ9', 'agent-secret-ZZ9'), undefined, {} as never);
-    await runnerList(s, metaOf('tu-secret-ZZ9'));
-
-    const lines = [
-      ...(await gaugeTexts(s, SUBAGENT_HOOK_GAUGE_PHRASE)),
-      ...(await gaugeTexts(s, CALLER_VERDICT_GAUGE_PHRASE)),
-    ];
-    expect(lines.length).toBe(3);
-    for (const line of lines) expect(line).not.toContain('secret-ZZ9');
-    await s.clone.stop();
-  });
-});
-
-describe('サブエージェント呼びの計器: 上限', () => {
-  it(`サブの呼びは種類ごとに最初の ${String(SUBAGENT_GAUGE_LIMIT)} 回だけ書かれ、超えたら間引きの1行が1回だけ出る`, async () => {
-    const s = boot();
-    await turn(s);
-    const pre = s.pre();
-    for (let i = 0; i < SUBAGENT_GAUGE_LIMIT + 10; i += 1) {
-      await pre(preOf('Bash', `tu-${String(i)}`, 'agent-1'), undefined, {} as never);
-    }
-    // 別の種類は別に数える
-    await pre(preOf(RUNNER_LIST, 'tu-other', 'agent-1'), undefined, {} as never);
-
-    const lines = await gaugeTexts(s, SUBAGENT_HOOK_GAUGE_PHRASE);
-    const builtin = lines.filter((line) => line.includes('組込み'));
-    expect(builtin.length).toBe(SUBAGENT_GAUGE_LIMIT + 1);
-    expect(builtin.filter((line) => line.includes('以降は間引く')).length).toBe(1);
-    expect(builtin.find((line) => line.includes('以降は間引く'))).toContain(
-      `以降は間引く（累計 ${String(SUBAGENT_GAUGE_LIMIT + 1)}）`,
-    );
-    expect(lines.filter((line) => line.includes('mcp-alteroid')).length).toBe(1);
-    await s.clone.stop();
-  });
-
-  it(`本体の呼びは種類ごとに最初の ${String(MAIN_GAUGE_LIMIT)} 回だけ`, async () => {
-    const s = boot();
-    await turn(s);
-    const pre = s.pre();
-    for (let i = 0; i < MAIN_GAUGE_LIMIT + 4; i += 1) {
-      await pre(preOf('Bash', `tu-${String(i)}`), undefined, {} as never);
-    }
-
-    const lines = await gaugeTexts(s, SUBAGENT_HOOK_GAUGE_PHRASE);
-    expect(lines.length).toBe(MAIN_GAUGE_LIMIT + 1);
-    expect(lines.filter((line) => line.includes('以降は間引く')).length).toBe(1);
-    await s.clone.stop();
-  });
-
-  it(`handler 側の「サブと判定」は最初の ${String(SUBAGENT_GAUGE_LIMIT)} 回だけ書かれ、超えたら間引きの1行が1回だけ出る`, async () => {
-    const s = boot();
-    await turn(s);
-    const pre = s.pre();
-    const total = SUBAGENT_GAUGE_LIMIT + 5;
-    for (let i = 0; i < total; i += 1) {
-      await pre(preOf(RUNNER_LIST, `tu-sub-${String(i)}`, 'agent-1'), undefined, {} as never);
-    }
-    for (let i = 0; i < total; i += 1) {
-      await runnerList(s, metaOf(`tu-sub-${String(i)}`));
-    }
-    const lines = (await gaugeTexts(s, CALLER_VERDICT_GAUGE_PHRASE)).filter((line) =>
-      line.includes('toolUseId: 有・サブと判定'),
-    );
-    expect(lines.length).toBe(SUBAGENT_GAUGE_LIMIT + 1);
-    expect(lines.filter((line) => line.includes('以降は間引く')).length).toBe(1);
-    await s.clone.stop();
-  });
-
-  it('handler 側も同じ上限で間引く', async () => {
-    const s = boot();
-    await turn(s);
-    for (let i = 0; i < MAIN_GAUGE_LIMIT + 4; i += 1) {
-      await runnerList(s, metaOf(`tu-main-${String(i)}`));
-    }
-    const lines = await gaugeTexts(s, CALLER_VERDICT_GAUGE_PHRASE);
-    expect(lines.length).toBe(MAIN_GAUGE_LIMIT + 1);
-    expect(lines.filter((line) => line.includes('以降は間引く')).length).toBe(1);
-    await s.clone.stop();
-  });
-});
-
-describe('サブエージェント呼びの計器: 日誌が書けなくても判定は変わらない', () => {
-  it('サブの呼びも本体の2回目も全文（判定の計器が書けなくても応答は変わらない）', async () => {
-    const stores = createMemoryStores();
-    stores.journal.append = () => Promise.reject(new Error('日誌が書けない'));
-    const s = boot(stores);
-    await turn(s);
-    const pre = s.pre();
-    await pre(preOf(RUNNER_LIST, 'tu-sub', 'agent-1'), undefined, {} as never);
-    await pre(preOf(RUNNER_LIST, 'tu-main-1'), undefined, {} as never);
-    await pre(preOf(RUNNER_LIST, 'tu-main-2'), undefined, {} as never);
-
-    await captureStderr(async () => {
-      const main1 = await runnerList(s, metaOf('tu-main-1'));
-      const sub = await runnerList(s, metaOf('tu-sub'));
-      const main2 = await runnerList(s, metaOf('tu-main-2'));
-      expect(main1).toContain(FULL_MARK);
-      expect(sub).toContain(FULL_MARK);
-      expect(main2).toContain(FULL_MARK);
-    });
+    await pre(preOf('mcp__alteroid__runner_list', 'tu-sub', 'agent-1'), undefined, {} as never);
+    expect(s.context().isSubagentCall?.('tu-sub')).toBe(false);
+    expect(s.context().isSubagentCall?.(undefined, 'missing')).toBe(false);
     await s.clone.stop();
   });
 });
