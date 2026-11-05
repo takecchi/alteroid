@@ -584,7 +584,7 @@ type WorkspaceLocator =
   | { kind: 'runner-volume'; runnerId: string; path: string }  // ALTEROID_WORKSPACE_KIND=runner-volume のとき
   | { kind: 'shared-volume'; path: string }                    // 共有 FS（M5）
   | { kind: 'unknown'; runnerId: string; path: string; reason: string } // 永続性を確かめられなかった
-  | { kind: 'git'; repository: string; ref: string; patchId?: string }; // 再構築（M5）
+  | { kind: 'git'; repository: string; ref: string }; // 再構築（M5）
 ```
 
 `ALTEROID_WORKSPACE_KIND` が無いか読めないときは `unknown` に倒れる。いまの配備はこれを設定していないので、本番で書かれるのは `unknown` だけである（#216 で導入）。
