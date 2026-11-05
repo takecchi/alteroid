@@ -1,12 +1,11 @@
-import { readWithdrawnClientMessageIds } from './conversation.js';
 import type { JournalStore } from './store.js';
 
 // vitest に依存しない素の非同期関数にする: storage-fs / storage-pg へ vitest を持ち込まないため。
 // 時刻の待ちは使わない: 同じミリ秒に積まれても成り立つ形にする。
-// 印だけを引く口（`withdrawnClientMessageIds`）を持つ器では、`readWithdrawnClientMessageIds` がそちらを通るので、同じ契約がその口に掛かる
+// 印だけを引く口（`withdrawnClientMessageIds`）に直に掛ける: 全部の器（fs・pg・インメモリ）が持つ
 type JournalStoreWithdrawnContractSubject = Pick<
   JournalStore,
-  'append' | 'list' | 'listPage' | 'withdrawnClientMessageIds'
+  'append' | 'list' | 'withdrawnClientMessageIds'
 >;
 
 const MARKER = 'journal-withdrawn-contract';
@@ -16,8 +15,9 @@ function fail(property: string, detail: string): never {
   throw new Error(`JournalStore の取り下げの印の契約（${property}）が破れている — ${detail}`);
 }
 
-function sorted(set: ReadonlySet<string>): string {
-  return [...set].sort().join(', ');
+// 重なって返ってもよい（並びと重複は口の契約に無い。呼び手が集合にする）
+function sorted(ids: readonly string[]): string {
+  return [...new Set(ids)].sort().join(', ');
 }
 
 export async function verifyJournalStoreWithdrawnContract(
@@ -63,7 +63,9 @@ export async function verifyJournalStoreWithdrawnContract(
     fail('書き戻し', '印の行の withdrawnClientMessageId が list で読み戻せない');
   }
 
-  const collected = await readWithdrawnClientMessageIds(journal, conversation, EPOCH);
+  const withdrawn = journal.withdrawnClientMessageIds.bind(journal);
+
+  const collected = await withdrawn({ since: EPOCH, conversationId: conversation });
   if (sorted(collected) !== 'cm-1') {
     fail(
       '絞り',
@@ -72,18 +74,18 @@ export async function verifyJournalStoreWithdrawnContract(
   }
 
   const after = new Date(Date.parse(human.at) + 1).toISOString();
-  const none = await readWithdrawnClientMessageIds(journal, conversation, after);
-  if (none.size !== 0) {
+  const none = await withdrawn({ since: after, conversationId: conversation });
+  if (none.length !== 0) {
     fail('since', `since より前の印が集まっている [${sorted(none)}]`);
   }
 
   for (let i = 0; i < 5; i += 1) await plainSelf(conversation);
   await mark(conversation, 'cm-late');
-  const paged = await readWithdrawnClientMessageIds(journal, conversation, EPOCH, 2);
-  if (sorted(paged) !== 'cm-1, cm-late') {
+  const later = await withdrawn({ since: EPOCH, conversationId: conversation });
+  if (sorted(later) !== 'cm-1, cm-late') {
     fail(
       '頁',
-      `頁をまたいで両方の印が集まるはずが [${sorted(paged)}]（頁の継続で後ろの印を読み落としている）`,
+      `間に印の無い行を挟んでも両方の印が集まるはずが [${sorted(later)}]（頁の継続で後ろの印を読み落としている）`,
     );
   }
 }

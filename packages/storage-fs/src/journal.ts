@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   addJournalTombstone,
   conversationIdsAfterFromPages,
+  conversationIdsWithPrefixFromPages,
   countToolUsesByActorFromPages,
   emptyJournalTombstones,
   isHiddenJournalEntry,
@@ -17,6 +18,7 @@ import {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   UnreadableJournalEntryError,
+  withdrawnClientMessageIdsFromPages,
 } from '@alteroid/core';
 import type {
   JournalCursor,
@@ -161,6 +163,17 @@ export class FsJournalStore implements JournalStore {
 
   async conversationIdsAfter(query: { after: JournalCursor; until?: string }): Promise<string[]> {
     return conversationIdsAfterFromPages(this, query);
+  }
+
+  async withdrawnClientMessageIds(query: {
+    since: string;
+    conversationId?: string;
+  }): Promise<string[]> {
+    return withdrawnClientMessageIdsFromPages(this, query);
+  }
+
+  async conversationIdsWithPrefix(query: { prefix: string; limit: number }): Promise<string[]> {
+    return conversationIdsWithPrefixFromPages(this, query);
   }
 
   async get(id: string): Promise<JournalEntry | null> {

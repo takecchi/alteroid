@@ -56,6 +56,12 @@ function fakeJournal(appended: readonly JournalEntry[]) {
     async conversationIdsAfter() {
       throw new Error('このテストでは使わない');
     },
+    async withdrawnClientMessageIds() {
+      throw new Error('このテストでは使わない');
+    },
+    async conversationIdsWithPrefix() {
+      throw new Error('このテストでは使わない');
+    },
   };
   return { journal, windows };
 }

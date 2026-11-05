@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { lookupConversation, resolveConversationId } from './conversation-lookup.js';
+import { conversationIdsWithPrefixFromPages } from './journal-scan.js';
 import type { JournalQuery, JournalStore } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-// 在る会話は、その会話の行だけを1行引いて答える（#5140）。無い・前方一致は今までどおり頁送りで読む
+// 在る会話は、その会話の行だけを1行引いて答える（#5140）。無い・前方一致は前方一致の口で読む（インメモリの口は頁送りの写し）
 
 async function journalWith(conversations: readonly string[]) {
   const { journal } = createMemoryStores();
@@ -21,16 +22,19 @@ async function journalWith(conversations: readonly string[]) {
 }
 
 function counting(journal: JournalStore): {
-  journal: Pick<JournalStore, 'listPage'>;
+  journal: Pick<JournalStore, 'listPage' | 'conversationIdsWithPrefix'>;
   queries: JournalQuery[];
 } {
   const queries: JournalQuery[] = [];
+  const listPage: JournalStore['listPage'] = (query = {}) => {
+    queries.push(query);
+    return journal.listPage(query);
+  };
   return {
+    // 前方一致の口は、数える `listPage` を通る頁送りの写しにする（呼びが `queries` に残る）
     journal: {
-      listPage: (query = {}) => {
-        queries.push(query);
-        return journal.listPage(query);
-      },
+      listPage,
+      conversationIdsWithPrefix: (query) => conversationIdsWithPrefixFromPages({ listPage }, query),
     },
     queries,
   };

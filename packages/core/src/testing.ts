@@ -12,7 +12,12 @@ import { tailByCodePoints } from './excerpt.js';
 import { approvalStateOf } from './approval-state.js';
 import { deriveMemoryFrontmatter, nextDescribedState, toMemoryCreatedAt } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
-import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
+import {
+  conversationIdsAfterFromPages,
+  conversationIdsWithPrefixFromPages,
+  countToolUsesByActorFromPages,
+  withdrawnClientMessageIdsFromPages,
+} from './journal-scan.js';
 import {
   isHiddenJournalEntry,
   journalTombstonesOf,
@@ -526,6 +531,12 @@ export function createMemoryStores(): Stores {
     },
     async conversationIdsAfter(query) {
       return conversationIdsAfterFromPages(journal, query);
+    },
+    async withdrawnClientMessageIds(query) {
+      return withdrawnClientMessageIdsFromPages(journal, query);
+    },
+    async conversationIdsWithPrefix(query) {
+      return conversationIdsWithPrefixFromPages(journal, query);
     },
     async get(id: string) {
       const found = entries.find((entry) => entry.id === id) ?? null;

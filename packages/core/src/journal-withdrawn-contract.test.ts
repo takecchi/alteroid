@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { verifyJournalStoreWithdrawnContract } from './journal-withdrawn-contract.js';
+import { withdrawnClientMessageIdsFromPages } from './journal-scan.js';
 import { createMemoryStores } from './testing.js';
 
 describe('JournalStore の取り下げの印の契約（インメモリ実装）', () => {
@@ -19,7 +20,7 @@ describe('JournalStore の取り下げの印の契約（インメモリ実装）
         return stores.journal.append(stripped as typeof input);
       },
       list: stores.journal.list.bind(stores.journal),
-      listPage: stores.journal.listPage.bind(stores.journal),
+      withdrawnClientMessageIds: stores.journal.withdrawnClientMessageIds.bind(stores.journal),
     };
 
     await expect(verifyJournalStoreWithdrawnContract(dropping)).rejects.toThrow(
@@ -27,20 +28,34 @@ describe('JournalStore の取り下げの印の契約（インメモリ実装）
     );
   });
 
-  it('歯: 頁の継続を持たない（最初の頁しか読まない）ストアでは契約が落ちる', async () => {
+  it('歯: 最初の頁の印しか返さない口では契約が落ちる', async () => {
     const stores = createMemoryStores();
     const firstPageOnly = {
       append: stores.journal.append.bind(stores.journal),
-      list: (query: Parameters<typeof stores.journal.list>[0]) => {
-        return stores.journal.list({ ...query, after: undefined });
-      },
-      listPage: (query: Parameters<typeof stores.journal.listPage>[0]) => {
-        return stores.journal.listPage({ ...query, after: undefined });
-      },
+      list: stores.journal.list.bind(stores.journal),
+      withdrawnClientMessageIds: (query: { since: string; conversationId?: string }) =>
+        withdrawnClientMessageIdsFromPages(
+          {
+            listPage: (page) => stores.journal.listPage({ ...page, limit: 2, after: undefined }),
+          },
+          query,
+        ),
     };
 
     await expect(verifyJournalStoreWithdrawnContract(firstPageOnly)).rejects.toThrow(
       /継続点が進まない/,
     );
+  });
+
+  it('歯: 同じ会話の印以外（別の会話の印）まで返す口では契約が落ちる', async () => {
+    const stores = createMemoryStores();
+    const unscoped = {
+      append: stores.journal.append.bind(stores.journal),
+      list: stores.journal.list.bind(stores.journal),
+      withdrawnClientMessageIds: (query: { since: string }) =>
+        stores.journal.withdrawnClientMessageIds({ since: query.since }),
+    };
+
+    await expect(verifyJournalStoreWithdrawnContract(unscoped)).rejects.toThrow(/絞り/);
   });
 });

@@ -36,6 +36,7 @@ import {
   verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreToolUseCountContract,
   verifyJournalStoreConversationIdsAfterContract,
+  verifyJournalStoreConversationPrefixContract,
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
@@ -1219,6 +1220,12 @@ describe('FsJournalStore', () => {
   describe('継続点より後ろの会話 id の契約', () => {
     it('錨より後ろの人間との往復の会話 id だけが重複なく返り、until で切れ、錨の行・他の相手・消した会話は含まず、錨が無ければ例外を投げる', async () => {
       await verifyJournalStoreConversationIdsAfterContract(stores.journal);
+    });
+  });
+
+  describe('会話 id の前方一致の契約', () => {
+    it('前方一致する会話 id が最新の発言の新しい順に重複なく上限まで返り、消した会話・他の相手の会話は含まない', async () => {
+      await verifyJournalStoreConversationPrefixContract(stores.journal);
     });
   });
 

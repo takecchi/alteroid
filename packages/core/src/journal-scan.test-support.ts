@@ -1,4 +1,9 @@
-import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
+import {
+  conversationIdsAfterFromPages,
+  conversationIdsWithPrefixFromPages,
+  countToolUsesByActorFromPages,
+  withdrawnClientMessageIdsFromPages,
+} from './journal-scan.js';
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalEntry } from './schema.js';
 import type { JournalPage, JournalQuery, JournalStore } from './store.js';
@@ -141,6 +146,8 @@ export function createSyntheticJournalStore(
       clear: notImplemented('clear'),
       countToolUsesByActor: (query) => countToolUsesByActorFromPages({ listPage }, query),
       conversationIdsAfter: (query) => conversationIdsAfterFromPages({ listPage }, query),
+      withdrawnClientMessageIds: (query) => withdrawnClientMessageIdsFromPages({ listPage }, query),
+      conversationIdsWithPrefix: (query) => conversationIdsWithPrefixFromPages({ listPage }, query),
     },
     calls,
     get totalReturned() {

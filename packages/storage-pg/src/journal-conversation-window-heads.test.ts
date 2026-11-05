@@ -33,9 +33,7 @@ function fullTextOnly(
   return {
     listPage: (query) => store.listPage(query),
     get: (id) => store.get(id),
-    ...(store.withdrawnClientMessageIds === undefined
-      ? {}
-      : { withdrawnClientMessageIds: (query) => store.withdrawnClientMessageIds!(query) }),
+    withdrawnClientMessageIds: (query) => store.withdrawnClientMessageIds(query),
     conversationIdsAfter: (query) => store.conversationIdsAfter(query),
   };
 }
