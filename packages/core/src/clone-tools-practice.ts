@@ -11,6 +11,7 @@ import {
   describeUnreadablePractices,
   PracticeConflictError,
   practiceVersion,
+  type Stores,
 } from './store.js';
 import {
   describeIntRangeViolation,
@@ -70,6 +71,182 @@ function describePracticeConflict(
     `${now}**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。` +
     `practice_read slug=${slug} で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、` +
     '読み直した版の base_version を付けて書き直すこと。'
+  );
+}
+
+type PracticeWriteWritten = Awaited<ReturnType<Stores['practices']['write']>>;
+
+type PracticeWriteInput = Pick<Practice, 'slug' | 'kind' | 'title' | 'content'>;
+
+type PracticeWriteBefore = {
+  before: Practice | null;
+  beforeWasUnreadable: boolean;
+};
+
+// `practice_write` のスラッグの断り（無ければ null）
+function describePracticeWriteSlugViolation(slug: string): string | null {
+  if (!practiceSlugSchema.safeParse(slug).success) {
+    return `やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`;
+  }
+  return null;
+}
+
+// `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `write()` まで届かず、壊れた行を書き直す唯一の回復手段が塞がるため
+async function readPracticeBeforeWrite(stores: Stores, slug: string): Promise<PracticeWriteBefore> {
+  let before: Practice | null;
+  let beforeWasUnreadable = false;
+  try {
+    before = await stores.practices.read(slug);
+  } catch (error) {
+    if (!(error instanceof UnreadablePracticeError)) throw error;
+    before = null;
+    beforeWasUnreadable = true;
+  }
+  return { before, beforeWasUnreadable };
+}
+
+// 読めない形で入っていた行だけ版の前提なしで通す: 版が無く、書き直しの回復手段を塞がないため
+function describePracticeWriteMissingVersion(
+  slug: string,
+  before: Practice | null,
+  baseVersion: string | undefined,
+): string | null {
+  if (before !== null && baseVersion === undefined) {
+    return (
+      `やり方 ${slug} は既に在る。全文を書き直すには、先に practice_read slug=${slug} で読み、` +
+      '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+      '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**'
+    );
+  }
+  return null;
+}
+
+// 版つきで書く。競合（PracticeConflictError）だけを断りにして返し、ほかの失敗はそのまま投げる
+async function writePracticeDocument(args: {
+  stores: Stores;
+  input: PracticeWriteInput;
+  before: Practice | null;
+  beforeWasUnreadable: boolean;
+  baseVersion: string | undefined;
+}): Promise<
+  { kind: 'written'; written: PracticeWriteWritten } | { kind: 'refused'; body: string }
+> {
+  const { stores, input, before, beforeWasUnreadable, baseVersion } = args;
+  let written;
+  try {
+    written = await stores.practices.write(
+      input,
+      beforeWasUnreadable
+        ? undefined
+        : { ifMatch: before === null ? (baseVersion ?? null) : baseVersion! },
+    );
+  } catch (error) {
+    if (error instanceof PracticeConflictError) {
+      return {
+        kind: 'refused',
+        body: describePracticeConflict(input.slug, '書き直し', error.current),
+      };
+    }
+    throw error;
+  }
+  return { kind: 'written', written };
+}
+
+// 日誌の decision・grounds（読めない行の書き直し・新規・書き直しの3通り）
+function describePracticeWriteJournalEntry(args: {
+  input: Pick<PracticeWriteInput, 'slug' | 'kind' | 'title'>;
+  before: Practice | null;
+  beforeWasUnreadable: boolean;
+}): { decision: string; grounds: string } {
+  const { input, before, beforeWasUnreadable } = args;
+  const { slug, kind, title } = input;
+  if (beforeWasUnreadable) {
+    return {
+      decision: `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`,
+      grounds:
+        '読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかった' +
+        'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる）',
+    };
+  }
+  if (before === null) {
+    return {
+      decision: `やり方 ${slug}（${kind}）を作った: ${title}`,
+      grounds: '新しいやり方を器に置いた',
+    };
+  }
+  return {
+    decision: `やり方 ${slug}（${kind}）を書き直した: ${title}`,
+    grounds:
+      'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
+      '前の本文は版の履歴（practice_history）に残る）',
+  };
+}
+
+// 書いた後の日誌
+async function journalPracticeWrite(args: {
+  stores: Stores;
+  input: Pick<PracticeWriteInput, 'slug' | 'kind' | 'title'>;
+  before: Practice | null;
+  beforeWasUnreadable: boolean;
+}): Promise<void> {
+  const { stores, input, before, beforeWasUnreadable } = args;
+  const { decision, grounds } = describePracticeWriteJournalEntry({
+    input,
+    before,
+    beforeWasUnreadable,
+  });
+  await appendJournalOrThrow(
+    'practice_write',
+    stores.journal,
+    {
+      type: 'decision',
+      decision,
+      grounds,
+      target: { kind: 'practice', slug: input.slug },
+    },
+    'act-completed',
+  );
+}
+
+// 応答の頭（読めない行の書き直し・新規・書き直しの3通り）
+function renderPracticeWriteHeadline(args: {
+  slug: string;
+  before: Practice | null;
+  beforeWasUnreadable: boolean;
+  written: PracticeWriteWritten;
+}): string {
+  const { slug, before, beforeWasUnreadable, written } = args;
+  const verb = beforeWasUnreadable
+    ? '（読めない形で入っていたやり方を）書き直した'
+    : before === null
+      ? '新しく作った'
+      : '書き直した';
+  return (
+    `やり方 ${slug} を${verb}` +
+    `（${String(written.chars)} 文字。前の版は practice_history slug=${slug} で読める）。` +
+    'practice_list で一覧に出る。'
+  );
+}
+
+// トークンの差（出さないときは空文字列）。`compared` は差を取る後ろ側の本文
+function renderPracticeWriteTokenDiff(before: Practice | null, compared: string): string {
+  const note = describeTokenDiff(before === null ? null : before.content, compared);
+  return note === null ? '' : `\n${note}`;
+}
+
+// 書けたときの応答の全体
+function renderPracticeWriteResult(args: {
+  slug: string;
+  before: Practice | null;
+  beforeWasUnreadable: boolean;
+  content: string;
+  written: PracticeWriteWritten;
+}): string {
+  const { slug, before, beforeWasUnreadable, content, written } = args;
+  return (
+    renderPracticeWriteHeadline({ slug, before, beforeWasUnreadable, written }) +
+    renderPracticeWriteTokenDiff(before, content) +
+    `\n\n${practiceVersionLine(written)}`
   );
 }
 
@@ -276,77 +453,31 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ slug, kind, title, content, base_version: baseVersion }) => {
-        if (!practiceSlugSchema.safeParse(slug).success) {
-          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
-        }
+        const slugViolation = describePracticeWriteSlugViolation(slug);
+        if (slugViolation !== null) return text(slugViolation);
         // `kind` も書く前に見る: 見ないと保存層の `parse` が生の ZodError を投げ、そのままクローンへ返るため
         const kindError = describePracticeKindViolation(kind);
         if (kindError !== null) return text(kindError);
-        // `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `write()` まで届かず、壊れた行を書き直す唯一の回復手段が塞がるため
-        let before: Practice | null;
-        let beforeWasUnreadable = false;
-        try {
-          before = await stores.practices.read(slug);
-        } catch (error) {
-          if (!(error instanceof UnreadablePracticeError)) throw error;
-          before = null;
-          beforeWasUnreadable = true;
-        }
-        // 読めない形で入っていた行だけ版の前提なしで通す: 版が無く、書き直しの回復手段を塞がないため
-        if (before !== null && baseVersion === undefined) {
-          return text(
-            `やり方 ${slug} は既に在る。全文を書き直すには、先に practice_read slug=${slug} で読み、` +
-              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
-              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
-          );
-        }
-        let written;
-        try {
-          written = await stores.practices.write(
-            { slug, kind, title, content },
-            beforeWasUnreadable
-              ? undefined
-              : { ifMatch: before === null ? (baseVersion ?? null) : baseVersion! },
-          );
-        } catch (error) {
-          if (error instanceof PracticeConflictError) {
-            return text(describePracticeConflict(slug, '書き直し', error.current));
-          }
-          throw error;
-        }
-        await appendJournalOrThrow(
-          'practice_write',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: beforeWasUnreadable
-              ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
-              : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
-            grounds: beforeWasUnreadable
-              ? '読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかった' +
-                'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる）'
-              : before === null
-                ? '新しいやり方を器に置いた'
-                : 'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
-                  '前の本文は版の履歴（practice_history）に残る）',
-            target: { kind: 'practice', slug },
-          },
-          'act-completed',
-        );
+        const { before, beforeWasUnreadable } = await readPracticeBeforeWrite(stores, slug);
+        const versionViolation = describePracticeWriteMissingVersion(slug, before, baseVersion);
+        if (versionViolation !== null) return text(versionViolation);
+        const outcome = await writePracticeDocument({
+          stores,
+          input: { slug, kind, title, content },
+          before,
+          beforeWasUnreadable,
+          baseVersion,
+        });
+        if (outcome.kind === 'refused') return text(outcome.body);
+        const { written } = outcome;
+        await journalPracticeWrite({
+          stores,
+          input: { slug, kind, title },
+          before,
+          beforeWasUnreadable,
+        });
         return text(
-          `やり方 ${slug} を${
-            beforeWasUnreadable
-              ? '（読めない形で入っていたやり方を）書き直した'
-              : before === null
-                ? '新しく作った'
-                : '書き直した'
-          }` +
-            `（${String(written.chars)} 文字。前の版は practice_history slug=${slug} で読める）。` +
-            'practice_list で一覧に出る。' +
-            ((note) => (note === null ? '' : `\n${note}`))(
-              describeTokenDiff(before === null ? null : before.content, content),
-            ) +
-            `\n\n${practiceVersionLine(written)}`,
+          renderPracticeWriteResult({ slug, before, beforeWasUnreadable, content, written }),
         );
       },
     ),
