@@ -161,7 +161,7 @@ const SCENARIOS: Scenario[] = [
     name: 'already-answered',
     group: '読んだ時点で決着済み',
     covers:
-      '読んだ時点で回答済み: 断りの文（回答の本文あり・本文が undefined の「（本文なし）」・空文字の本文は空のまま）。回答済みかつ取り下げ済みの行は回答の文が先。updateApproval を呼ばない',
+      '読んだ時点で回答済み: 断りの文（回答の本文あり・本文が undefined と空文字は「（本文なし）」）。回答済みかつ取り下げ済みの行は回答の文が先。updateApproval を呼ばない',
     seed: [
       ap('ap-1', 1, { answeredAt: ANSWERED_ISO, answer: 'はい、進めて' }),
       ap('ap-2', 2, { answeredAt: ANSWERED_ISO }),
@@ -179,6 +179,14 @@ const SCENARIOS: Scenario[] = [
       { args: wd('ap-3', '取り下げたい'), writes: 'none' },
       { args: wd('ap-4', '取り下げたい'), writes: 'none' },
     ],
+  },
+  {
+    name: 'already-answered-blank',
+    group: '読んだ時点で決着済み',
+    covers:
+      '読んだ時点で回答済みで、回答の本文が空白だけ（半角空白・改行・全角空白）: 空文字と同じく「（本文なし）」（task の題と同じ規則）',
+    seed: [ap('ap-1', 1, { answeredAt: ANSWERED_ISO, answer: ' \n　' })],
+    steps: [{ args: wd('ap-1', '取り下げたい'), writes: 'none' }],
   },
   {
     name: 'already-withdrawn',
@@ -761,7 +769,8 @@ describe('approval_withdraw の出力と呼んだあとの状態の固定（場�
       `ap-1 は既に ${ANSWERED_ISO} に回答済みなので取り下げられない（回答: はい、進めて）。`,
     );
     expect(text('already-answered#2')).toContain('（回答: （本文なし））。');
-    expect(text('already-answered#3')).toContain('（回答: ）。');
+    expect(text('already-answered#3')).toContain('（回答: （本文なし））。');
+    expect(text('already-answered-blank')).toContain('（回答: （本文なし））。');
     expect(text('already-answered#4')).toContain('（回答: 回答が先）。');
     expect(text('already-withdrawn#1')).toBe(
       `ap-1 は既に ${OTHER_WITHDRAWN_ISO} に取り下げ済み（理由: 先に取り下げた）。`,

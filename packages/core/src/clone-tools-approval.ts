@@ -188,6 +188,11 @@ function describeApprovalEvent(at: string | undefined, word: string): string {
   return at === undefined ? `${word}（時刻の記録が無い）` : `${at} に${word}`;
 }
 
+// 回答の本文の出し方（approvals_list と approval_withdraw で共有）。空文字・空白だけの本文も「（本文なし）」にする: task の題（`taskTitleFromBody`）と同じ規則にそろえるため
+function renderApprovalAnswer(answer: string | undefined): string {
+  return answer === undefined || answer.trim() === '' ? '（本文なし）' : answer;
+}
+
 function describeApprovalFullStatus(approval: PendingApproval): string {
   const answered = approval.answeredAt !== undefined || approval.answer !== undefined;
   const withdrawn = approval.withdrawnAt !== undefined || approval.withdrawnReason !== undefined;
@@ -218,7 +223,7 @@ function renderApprovalFullBody(approval: PendingApproval): string {
     ...(approval.questions === undefined
       ? []
       : [`設問:\n${describeQuestionLines(approval.questions).join('\n')}`]),
-    ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
+    ...(approval.answer === undefined ? [] : [`回答: ${renderApprovalAnswer(approval.answer)}`]),
     ...(approval.withdrawnReason === undefined
       ? []
       : [`取り下げた理由: ${approval.withdrawnReason}`]),
@@ -371,17 +376,12 @@ function renderApprovalWithdrawMissing(id: string): string {
   return `承認待ち ${id} は無い（id が違う）。`;
 }
 
-// 回答の本文の出し方はここだけに置く
-function renderApprovalWithdrawAnswer(row: PendingApproval): string {
-  return row.answer ?? '（本文なし）';
-}
-
 // 回答済み・取り下げ済みの断り（どちらでもなければ null）。回答済みを先に見る。読んだ直後と書き込みの後の両方で使う
 function renderApprovalWithdrawSettled(id: string, row: PendingApproval): string | null {
   if (row.answeredAt !== undefined) {
     return (
       `${id} は既に ${row.answeredAt} に回答済みなので取り下げられない` +
-      `（回答: ${renderApprovalWithdrawAnswer(row)}）。`
+      `（回答: ${renderApprovalAnswer(row.answer)}）。`
     );
   }
   if (row.withdrawnAt !== undefined) {
