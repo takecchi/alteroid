@@ -12,7 +12,7 @@ import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { createCloneTools, TOOL_USE_ID_META_KEY } from './tools.js';
+import { createCloneTools } from './tools.js';
 
 // 既定（S1・S2 はどちらも外した。外す前は無効 = 本番の既定）で、
 // モデルへ渡す入力の全文・日誌に書く行・道具の応答の全文を、スナップショットで1字ずつ縛る。
@@ -364,9 +364,7 @@ function toolHarness() {
   const call = async (tool: string, args: Record<string, unknown> = {}): Promise<string> => {
     const found = tools.find((entry) => entry.name === tool);
     if (!found) throw new Error(`${tool} が無い`);
-    const result = await found.handler(args as never, {
-      _meta: { [TOOL_USE_ID_META_KEY]: 'toolu-main' },
-    });
+    const result = await found.handler(args as never, {});
     return (result.content ?? [])
       .map((block) => (block.type === 'text' ? block.text : ''))
       .join('');

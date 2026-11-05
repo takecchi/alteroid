@@ -42,7 +42,6 @@ import {
   USAGE_AXIS_LIMIT,
   tool,
   text,
-  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
@@ -358,8 +357,7 @@ export function selfTools(context: ToolContext, shared: CloneToolsShared) {
               'そのまま渡す（自分で組み立てない。実行時の事実・記憶の大きさは出ない）',
           ),
       },
-      async ({ ledgerCursor }, extra: unknown) => {
-        noteSubagentCallerGauge(context, extra);
+      async ({ ledgerCursor }) => {
         const runtime = context.runtime?.();
         if (runtime === undefined) {
           return text(

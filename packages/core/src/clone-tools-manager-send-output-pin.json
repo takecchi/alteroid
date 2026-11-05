@@ -565,8 +565,7 @@
       "calls": [
         "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
         "stores.jobs.listJobs()",
-        "context.noteDelegationStarted(undefined)",
-        "context.isSubagentCall()"
+        "context.noteDelegationStarted(undefined)"
       ],
       "journal": [],
       "tasksAfter": [],

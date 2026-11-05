@@ -29,7 +29,7 @@ import { createCloneTools } from './tools.js';
 //   - `stores.tasks.get(<id>)` / `stores.tasks.setStatus(<id>)`: `closes` の読みと書き
 //   - `stores.jobs.listJobs()`: 委譲に結び付いた task の探し（`noteDelegationStarted` が無ければ引かない）
 //   - `stores.attachments.getMeta(<id>)` / `stores.attachments.get(<id>)`: 添付の読み（大きい添付は get しない）
-//   - `context.noteDelegationStarted(<taskId>)` / `context.isSubagentCall()`: 文脈の口
+//   - `context.noteDelegationStarted(<taskId>)`: 文脈の口
 // `journal` は呼んだあとに日誌へ足された行（種類・本文・grounds・id・at）。`tasksAfter` は呼んだあとの task の状態、
 // `tasksUnchanged` / `jobsUnchanged` は task・委譲の台帳が呼ぶ前と同じか。`sendOutcome` は偽の pool が返した outcome（呼ばれなければ null）。
 //
@@ -77,8 +77,6 @@ interface Scenario {
   /** `journal.append` の n 回目（1 から。書けなかった回も数える）を投げさせる */
   journalFailsAt?: number[];
   send?: SendFake;
-  /** `isSubagentCall` の渡し方。'none'＝口なし・'subagent'＝口は在り、呼びがサブエージェント */
-  fold?: 'none' | 'subagent';
   /** 真なら `noteDelegationStarted` を渡さない */
   noNote?: boolean;
 }
@@ -355,9 +353,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'deliver-fold-subagent',
-    covers: '届いた・サブエージェントの呼び（呼び手の判定の口が在っても全文のまま）',
+    covers: 'かつてサブエージェントの呼びとして扱った場面（呼び手の判定は外した）。全文のまま',
     args: a(),
-    fold: 'subagent',
     send: delivered,
   },
   {
@@ -982,7 +979,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedOutput> {
     },
   } as unknown as ManagerPool;
 
-  const fold = scenario.fold ?? 'none';
   const tools = createCloneTools({
     stores,
     emit: () => {
@@ -998,14 +994,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedOutput> {
       : {
           noteDelegationStarted: (taskId: string | undefined) => {
             calls.push(`context.noteDelegationStarted(${String(taskId)})`);
-          },
-        }),
-    ...(fold === 'none'
-      ? {}
-      : {
-          isSubagentCall: () => {
-            calls.push('context.isSubagentCall()');
-            return fold === 'subagent';
           },
         }),
     ...(scenario.noPool === true ? {} : { managers: pool }),
@@ -1315,9 +1303,7 @@ describe('manager_send の出力の固定（場面ごとの全文・字数・日
     // 伝言
     expect(text('deliver-plain')).toContain(`[${ID}] ${ID} へ追加指示として届けた。`);
     expect(text('deliver-plain')).toContain('（「届けた」は resume の口が成功を返したところまで。');
-    expect(calls('deliver-plain')).not.toContain('context.isSubagentCall()');
     expect(text('deliver-fold-subagent')).toBe(text('deliver-plain'));
-    expect(calls('deliver-fold-subagent')).toContain('context.isSubagentCall()');
     expect(text('deliver-decision-unused')).toContain('decision（allow）を付けたが');
     expect(text('deliver-decision-unused')).toContain(UNUSED);
     expect(text('deliver-decision-unused')).toContain('本文は追加指示として届けた。');

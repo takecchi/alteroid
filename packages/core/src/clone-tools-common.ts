@@ -11,9 +11,7 @@ import type { JournalEntry, JournalEntryInput } from './schema.js';
 import type { JournalStore } from './store.js';
 import type { UsageRow } from './usage.js';
 import { strictToolInput } from './strict-tool-input.js';
-import type { ToolUseIdProbe } from './subagent-caller-gauge.js';
 import type { CloneToolName } from './clone-tools-names.js';
-import type { ToolContext } from './clone-tools-context.js';
 
 const MISSING_ARG_HINT =
   '引数が届いていない（received undefined ＝ 呼び出しの JSON にその鍵が最初から無かった。道具が受け取ってから落としたのではない）。書いたつもりなら、まず呼び出しの生の形を疑うこと —— タグの接頭辞の脱落など、呼び出しの組み立てが壊れていると引数は静かに落ちる。決定的な対照: 引数の並びも長さも1文字も変えず、タグだけ正しく書いて1回送り直す。それで通れば、原因は呼び出しの形であって、この道具でも引数の中身でもない';
@@ -191,43 +189,6 @@ export const NO_POOL = text(
   'いまは委譲できない場面である（記憶へ移すための内部ターン）。' +
     '実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。',
 );
-
-/** CLI が MCP 呼びの `_meta` に積む tool_use_id のキー。SDK の型に無い CLI の内部実装で、公開契約ではない（#5428）。 */
-export const TOOL_USE_ID_META_KEY = 'claudecode/toolUseId';
-
-/** handler の第2引数（SDK 型では `unknown`）から呼びの tool_use_id を読む。文字列でなければ `undefined`。 */
-export function toolUseIdFromExtra(extra: unknown): string | undefined {
-  if (typeof extra !== 'object' || extra === null) return undefined;
-  const meta = (extra as { _meta?: unknown })._meta;
-  if (typeof meta !== 'object' || meta === null) return undefined;
-  const id = (meta as Record<string, unknown>)[TOOL_USE_ID_META_KEY];
-  return typeof id === 'string' && id !== '' ? id : undefined;
-}
-
-/** 計器用: tool_use_id が「取れた／無かった／あったが文字列でない（空文字を含む）」のどれか。値は返さない。 */
-export function toolUseIdProbeFromExtra(extra: unknown): ToolUseIdProbe {
-  if (typeof extra !== 'object' || extra === null) return 'missing';
-  const meta = (extra as { _meta?: unknown })._meta;
-  if (typeof meta !== 'object' || meta === null) return 'missing';
-  const id = (meta as Record<string, unknown>)[TOOL_USE_ID_META_KEY];
-  if (id === undefined) return 'missing';
-  return typeof id === 'string' && id !== '' ? 'present' : 'wrongType';
-}
-
-/** サブエージェントの呼びか。口の無い器は本体と同じ（`false`）。 */
-export function isSubagentCaller(context: ToolContext, extra: unknown): boolean {
-  return (
-    context.isSubagentCall?.(toolUseIdFromExtra(extra), toolUseIdProbeFromExtra(extra)) ?? false
-  );
-}
-
-/**
- * 判定の結果を使わずに、計器（`ToolContext.isSubagentCall` が残す `CallerGauge` の行）だけを残す。
- * 以前は固定文を畳む口を選ぶために呼んでいた。畳みを外した後も道具の呼びごとに1行ずつ残る件数を変えないため、呼び自体は残す。
- */
-export function noteSubagentCallerGauge(context: ToolContext, extra: unknown): void {
-  isSubagentCaller(context, extra);
-}
 
 // 軸ごとに上限を置き、打ち切ったことを必ず書く: 「全部でこれだけ」と読める出力を黙って作ると嘘になるため
 export const USAGE_AXIS_LIMIT = 14;

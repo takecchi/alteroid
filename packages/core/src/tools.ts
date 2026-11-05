@@ -98,11 +98,6 @@ export {
   resolveMemoryGuard,
 } from './clone-tools-memory.js';
 export type { MemoryGuardValue } from './clone-tools-memory.js';
-export {
-  TOOL_USE_ID_META_KEY,
-  toolUseIdFromExtra,
-  toolUseIdProbeFromExtra,
-} from './clone-tools-common.js';
 export { CLONE_TOOL_NAMES } from './clone-tools-names.js';
 export type { CloneToolName } from './clone-tools-names.js';
 export type { ReplyAttachments, ToolContext } from './clone-tools-context.js';

@@ -32,13 +32,7 @@ import {
 } from './store.js';
 import { describeIntRangeViolation, formatIntRangeJa } from './tool-arg-checks.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
-import {
-  tool,
-  appendJournalOrDrop,
-  text,
-  noteSubagentCallerGauge,
-  appendJournalOrThrow,
-} from './clone-tools-common.js';
+import { tool, appendJournalOrDrop, text, appendJournalOrThrow } from './clone-tools-common.js';
 
 const PROFILE_DISTRIBUTION_EXCERPT = 400;
 
@@ -414,8 +408,7 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
               '（自分で組み立てない）。省略すると先頭から。',
           ),
       },
-      async ({ cursor }, extra: unknown) => {
-        noteSubagentCallerGauge(context, extra);
+      async ({ cursor }) => {
         // `readSettings()` と `readActive()` を素の `Promise.all` に入れない: どちらかが壊れているだけで一覧まで道連れになり、`token_list` そのものが使えなくなるため
         const allTokens = await stores.tokens.list();
         // 読めなかった行を言う: `list()` は読めない行を飛ばすので、プールが「空」に見えても壊れた行が在るかもしれないため

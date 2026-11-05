@@ -12,7 +12,7 @@ import { tokenGenerationMismatched } from './manager-summary.js';
 import { describeUnreadableManagerRow } from './store.js';
 import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import { describeIntRangeViolation, formatIntRangeJa } from './tool-arg-checks.js';
-import { text, TRANSCRIPT_PAGE, tool, NO_POOL, isSubagentCaller } from './clone-tools-common.js';
+import { text, TRANSCRIPT_PAGE, tool, NO_POOL } from './clone-tools-common.js';
 import type { ToolContext } from './clone-tools-context.js';
 import {
   describeDenials,
@@ -491,7 +491,7 @@ export function managerReportTool(context: ToolContext) {
           '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、種類ごとの本数と、退避できていない作業ツリーの本数・代表の1本だけ）',
         ),
     },
-    async ({ managerId, part = 'report', offset = 0, rescueAll = false }, extra: unknown) => {
+    async ({ managerId, part = 'report', offset = 0, rescueAll = false }) => {
       const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
       if (offsetError !== null) return text(offsetError);
       if (!context.managers) return NO_POOL;
@@ -524,8 +524,6 @@ export function managerReportTool(context: ToolContext) {
       const preamble =
         renderManagerReportDriftNote(found, part, foldedTurn) +
         renderManagerReportNoteBlock(failure, notes);
-      // 結果は使わない: 本体の呼びかを判定すると計器（`#noteCallerGauge`）が1行残るので、畳みを外した後も同じ条件で呼ぶ
-      if (part === 'report' && offset === 0) isSubagentCaller(context, extra);
       return text(renderManagerReportPage({ head, modelLine, preamble, managerId, part, part1 }));
     },
   );

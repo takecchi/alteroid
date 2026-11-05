@@ -656,22 +656,12 @@
     },
     "shown-subagent#1": {
       "length": 180,
-      "calls": [
-        "pool.list",
-        "pool.runnerReportedModels(runner-1)",
-        "pool.denials(mgr-001)",
-        "isSubagentCall(tu-sub)"
-      ],
+      "calls": ["pool.list", "pool.runnerReportedModels(runner-1)", "pool.denials(mgr-001)"],
       "text": "マネージャー mgr-001 の直近の報告（全 8 文字） — lastReportAt: 2026-10-27T01:00:00.000Z / いまの status: `done`\n\nモデル: マネージャー 不明 / 作業者 不明\n\n報告。終わった。\n\n（さらに掘るなら manager_transcript managerId=mgr-001 で生ログへ）"
     },
     "shown-subagent#2": {
       "length": 180,
-      "calls": [
-        "pool.list",
-        "pool.runnerReportedModels(runner-1)",
-        "pool.denials(mgr-001)",
-        "isSubagentCall(tu-main)"
-      ],
+      "calls": ["pool.list", "pool.runnerReportedModels(runner-1)", "pool.denials(mgr-001)"],
       "text": "マネージャー mgr-001 の直近の報告（全 8 文字） — lastReportAt: 2026-10-27T01:00:00.000Z / いまの status: `done`\n\nモデル: マネージャー 不明 / 作業者 不明\n\n報告。終わった。\n\n（さらに掘るなら manager_transcript managerId=mgr-001 で生ログへ）"
     }
   }
