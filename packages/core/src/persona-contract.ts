@@ -1,3 +1,4 @@
+import { expectEqual as sharedExpectEqual, stable } from './contract-assert.js';
 import { MemoryConflictError, memoryVersion } from './store.js';
 import type { PersonaStore } from './store.js';
 
@@ -9,17 +10,8 @@ function fail(area: string, message: string): never {
   throw new Error(`PersonaStore の契約違反（${area}）: ${message}`);
 }
 
-function stable(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) => {
-    if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
-    return Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-  });
-}
-
 function expectEqual(area: string, label: string, actual: unknown, expected: unknown): void {
-  if (stable(actual) !== stable(expected)) {
-    fail(area, `${label}: 期待 ${stable(expected)} / 実際 ${stable(actual)}`);
-  }
+  sharedExpectEqual((message) => fail(area, message), label, actual, expected);
 }
 
 async function conflictOf(run: () => Promise<unknown>): Promise<MemoryConflictError | null> {

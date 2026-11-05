@@ -828,6 +828,19 @@ export {
   prepareLoginRequestForWrite,
 } from './auth-input.js';
 export { verifyAuthNulContract } from './auth-nul-contract.js';
+export {
+  verifyAuthRecordsContract,
+  verifyAuthListOrderContract,
+  verifyAuthTieByteOrderContract,
+  verifyAuthRevokeAccessTokenContract,
+  verifyAuthAccountFieldsContract,
+  verifyAuthLoginRequestContract,
+  verifyAuthConcurrentWritesContract,
+  verifyAuthVerifiedEmailContract,
+  verifyAuthLogoutRaceContract,
+  verifyAuthWriteValidationContract,
+} from './auth-contract.js';
+export type { MakeAuthStore } from './auth-contract.js';
 
 export {
   compareIntegrationKeyOrder,
