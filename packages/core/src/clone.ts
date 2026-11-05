@@ -6127,8 +6127,6 @@ class Clone implements CloneHost {
       emit: (event) => this.#emit(this.#sdkSession.turn?.conversationId ?? null, event),
       flushReply: () => this.#flushReply(),
       managers: this.#managers,
-      // 道具側の呼びを外す次の PR まで残す口。判定は誰も使わないので、常に本体の呼びとして答え、日誌には何も書かない
-      isSubagentCall: () => false,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),

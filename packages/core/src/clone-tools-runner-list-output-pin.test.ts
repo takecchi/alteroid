@@ -43,8 +43,6 @@ interface Scenario {
   noPool?: boolean;
   fleet?: () => RunnerFleetOverview;
   steps: Step[];
-  /** 真なら、この呼びをサブエージェントのものとして扱う（畳まない） */
-  subagent?: boolean;
 }
 
 const FROZEN_NOW = '2026-10-27T02:00:00.000Z';
@@ -696,8 +694,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'fold-subagent',
-    covers: 'サブエージェントの呼びは畳みの口があっても全文のまま',
-    subagent: true,
+    covers: 'かつてサブエージェントの呼びとして扱った場面（呼び手の判定は外した）。畳みの口があっても全文のまま',
     fleet: () => fleet([rn(1), rn(2)]),
     steps: [{}, {}, { args: { resources: true } }, { args: { resources: true } }],
   },
@@ -732,7 +729,6 @@ async function runScenario(scenario: Scenario): Promise<RunResult> {
     memoryCause: () => 'clone',
     conversationId: () => undefined,
     ...(scenario.noPool === true ? {} : { managers: pool }),
-    ...(scenario.subagent === true ? { isSubagentCall: () => true } : {}),
   });
   const found = tools.find((entry) => entry.name === 'runner_list');
   if (!found) throw new Error('runner_list が無い');

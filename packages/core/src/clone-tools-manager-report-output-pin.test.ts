@@ -17,7 +17,7 @@ import { createCloneTools } from './tools.js';
 //   pnpm -C <作業ツリー> exec prettier --write packages/core/src/clone-tools-manager-report-output-pin.json
 // 手で json を書き換えない。作り直したら `git diff` で、どの場面が何字から何字に動いたかを読む。
 // json の先頭の `lengths` が場面ごとの字数の一覧（どの部分が何字を出しているかを見る基準）。
-// 各場面の `calls` は、道具が pool・ストア・控えの口（managerReportShownAt）・サブエージェント判定・emit へ出した呼びの並び。
+// 各場面の `calls` は、道具が pool・ストア・控えの口（managerReportShownAt）・emit へ出した呼びの並び。
 // この道具は読むだけなので、書き込みの呼び（ストアの put 系・emit）が出たらここに現れて差分になる。
 //
 // 時計は Date だけを固定する（`setTimeout` などは本物のまま。実時間の待ちは使わない）。
@@ -28,8 +28,6 @@ interface Step {
   args: Args;
   /** この呼びの前に委譲の一覧を差し替える */
   mutate?: (managers: ManagerSummary[]) => ManagerSummary[];
-  /** この呼びの `_meta` に積む tool_use_id（サブエージェント判定の入力） */
-  toolUseId?: string;
 }
 
 interface Scenario {
@@ -47,8 +45,6 @@ interface Scenario {
   transcript?: () => ManagerTranscript | Error;
   /** 真なら `transcriptTail` を持たない pool（全文を読む口へ落ちる） */
   noTail?: boolean;
-  /** 真なら `isSubagentCall` の口を渡す（tool_use_id が `tu-sub` の呼びだけサブエージェント） */
-  subagentHook?: boolean;
 }
 
 const FROZEN_NOW = '2026-10-27T02:00:00.000Z';
@@ -836,13 +832,9 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'shown-subagent',
-    covers: 'サブエージェントの呼びは控えが在っても本文・控えを引かない。本体の呼びは注記だけ',
+    covers: 'かつてサブエージェントの呼びとして扱った場面（呼び手の判定は外した）。2回続けても同じ',
     managers: () => [mgr()],
-    subagentHook: true,
-    steps: [
-      { args: { managerId: 'mgr-001' }, toolUseId: 'tu-sub' },
-      { args: { managerId: 'mgr-001' }, toolUseId: 'tu-main' },
-    ],
+    steps: [{ args: { managerId: 'mgr-001' } }, { args: { managerId: 'mgr-001' } }],
   },
 ];
 
@@ -934,14 +926,6 @@ async function runScenario(scenario: Scenario): Promise<Observed[]> {
     memoryCause: () => 'clone',
     conversationId: () => undefined,
     ...(scenario.noPool === true ? {} : { managers: pool }),
-    ...(scenario.subagentHook === true
-      ? {
-          isSubagentCall: (toolUseId: string | undefined) => {
-            calls.push(`isSubagentCall(${String(toolUseId)})`);
-            return toolUseId === 'tu-sub';
-          },
-        }
-      : {}),
   });
   const found = tools.find((entry) => entry.name === 'manager_report');
   if (!found) throw new Error('manager_report が無い');
@@ -949,9 +933,7 @@ async function runScenario(scenario: Scenario): Promise<Observed[]> {
   for (const step of scenario.steps) {
     if (step.mutate !== undefined) managers = step.mutate(managers);
     calls.length = 0;
-    const extra =
-      step.toolUseId === undefined ? {} : { _meta: { 'claudecode/toolUseId': step.toolUseId } };
-    const result = await found.handler(step.args as never, extra as never);
+    const result = await found.handler(step.args as never, {} as never);
     observed.push({
       text: (result.content ?? [])
         .map((block) => (block.type === 'text' ? block.text : ''))

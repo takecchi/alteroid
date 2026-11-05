@@ -14,7 +14,7 @@ import type {
   TokenRotationSettings,
 } from './token-pool.js';
 import { createMemoryStores } from './testing.js';
-import { createCloneTools, TOOL_USE_ID_META_KEY } from './tools.js';
+import { createCloneTools } from './tools.js';
 
 // `token_list` の出力（全文と字数）と、呼んだあとの状態（トークンの行・設定・現役の指名・日誌・ストアの書き込み口が呼ばれたか）を、
 // 場面ごとにコミットした固定値（clone-tools-token-list-output-pin.json）と丸ごと比べる。
@@ -72,14 +72,10 @@ interface Hooks {
   active?: 'unreadable' | 'other';
 }
 
-type Caller = 'main' | 'subagent' | 'bare';
-
 interface Step {
   /** 前の呼びの出力の全文（先頭の呼びは空）を受けて引数を作れる（cursor の取り出し用） */
   args: Args | ((previous: string) => Args);
   hooks?: Hooks;
-  /** 省略は main。subagent は isSubagentCall が真になる呼び。bare は _meta が無い呼び */
-  caller?: Caller;
   /** この呼びの直前に、別の経路がストアを動かす（呼ぶ前の状態を作る。道具の書き込みではない） */
   before?: (base: Stores) => Promise<void>;
 }
@@ -104,7 +100,6 @@ const PIN_URL = new URL('./clone-tools-token-list-output-pin.json', import.meta.
 const UPDATE = process.env.UPDATE_TOKENLIST_PIN === '1';
 
 const TOKEN_LIST_BUDGET = 6_000;
-const SUBAGENT_CALL_ID = 'toolu-from-subagent';
 
 /** 入力に使った偽のトークンの値（全部）。出力・json に1つも出ないことを確かめる */
 const ALL_VALUES = new Set<string>();
@@ -871,7 +866,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => 'conv-1',
-    isSubagentCall: (toolUseId: string | undefined) => toolUseId === SUBAGENT_CALL_ID,
   });
   const found = tools.find((entry) => entry.name === 'token_list');
   if (!found) throw new Error('token_list が無い');
@@ -885,18 +879,9 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
     calls.reads.length = 0;
     calls.writes.length = 0;
     const args = typeof step.args === 'function' ? step.args(previous) : step.args;
-    const caller = step.caller ?? 'main';
-    const extra =
-      caller === 'bare'
-        ? {}
-        : {
-            _meta: {
-              [TOOL_USE_ID_META_KEY]: caller === 'subagent' ? SUBAGENT_CALL_ID : 'toolu-main',
-            },
-          };
     let output: PinnedOutput;
     try {
-      const result = await found.handler(args as never, extra);
+      const result = await found.handler(args as never, {});
       const text = (result.content ?? [])
         .map((block) => (block.type === 'text' ? block.text : ''))
         .join('');
