@@ -7,6 +7,7 @@ import {
   MODEL_UNKNOWN_LABEL,
   RUNNER_MODELS_UNVERIFIED,
 } from './manager-models.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 const POOL = {
   runnerReportedModels: (id: string) => {
@@ -32,7 +33,11 @@ describe('managerModelsOf（#3921・#3947）', () => {
     expect(managerModelsOf(POOL, { runnerId: 'r2' })).toEqual({});
     expect(managerModelsOf(POOL, {})).toEqual({});
     expect(managerModelsOf(undefined, { runnerId: 'r1' })).toEqual({});
-    expect(managerModelsOf({}, { runnerId: 'r1' })).toEqual({});
+    expect(
+      managerModelsOf(fakeManagerPool({ runnerReportedModels: () => undefined }), {
+        runnerId: 'r1',
+      }),
+    ).toEqual({});
   });
 });
 
@@ -69,8 +74,14 @@ describe('collectRunnerModelLines（#3947）', () => {
     ]);
   });
 
-  it('名乗りを引く口を持たないプールは何も足さない', async () => {
-    expect(await collectRunnerModelLines({ runners })).toEqual([]);
+  it('名乗りを引く口が何も返さないプールは、接続中の runner を不明と書く', async () => {
+    expect(
+      await collectRunnerModelLines({ runners, runnerReportedModels: () => undefined }),
+    ).toEqual([
+      `runner a: ${MODEL_UNKNOWN_LABEL}`,
+      `runner b: ${MODEL_UNKNOWN_LABEL}`,
+      `runner half: ${MODEL_UNKNOWN_LABEL}`,
+    ]);
   });
 
   it('runner の一覧が読めなければ「確かめられなかった」と言う', async () => {

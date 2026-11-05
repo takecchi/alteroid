@@ -1,8 +1,7 @@
 import { ANTHROPIC_ROUTE_NONE_LINE } from './anthropic-route-env.js';
+import type { ManagerPool } from './manager.js';
 
-interface ManagerModelSource {
-  runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
-}
+type ManagerModelSource = Pick<ManagerPool, 'runnerReportedModels'>;
 
 export interface ManagerModels {
   managerModel?: string;
@@ -15,7 +14,7 @@ export function managerModelsOf(
   summary: { runnerId?: string | undefined },
 ): ManagerModels {
   if (summary.runnerId === undefined) return {};
-  const models = pool?.runnerReportedModels?.(summary.runnerId);
+  const models = pool?.runnerReportedModels(summary.runnerId);
   if (models === undefined) return {};
   return {
     ...(models.manager === undefined ? {} : { managerModel: models.manager }),
@@ -40,7 +39,6 @@ export const RUNNER_MODELS_UNVERIFIED =
 
 // 名乗りの無い runner は既定の帯で埋めず「不明」と書く: 動いていないモデルを名乗ることになるため。
 export async function collectRunnerModelLines(pool: RunnerModelSource): Promise<string[]> {
-  if (pool.runnerReportedModels === undefined) return [];
   try {
     const fleet = await pool.runners();
     const lines: string[] = [];
@@ -60,8 +58,7 @@ export async function collectRunnerModelLines(pool: RunnerModelSource): Promise<
   }
 }
 
-interface RunnerRouteSource {
-  runnerReportedAnthropicRoute?(runnerId: string): readonly string[] | undefined;
+interface RunnerRouteSource extends Pick<ManagerPool, 'runnerReportedAnthropicRoute'> {
   runners(): Promise<{
     runners: readonly { label: string; state: string; runnerId?: string }[];
   }>;
@@ -71,7 +68,6 @@ interface RunnerRouteSource {
 export const RUNNER_ROUTE_UNREPORTED_LABEL = '名乗っていない（古い runner）';
 
 export async function collectRunnerRouteLines(pool: RunnerRouteSource): Promise<string[]> {
-  if (pool.runnerReportedAnthropicRoute === undefined) return [];
   try {
     const fleet = await pool.runners();
     const lines: string[] = [];
