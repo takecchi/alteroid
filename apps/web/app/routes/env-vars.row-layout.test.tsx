@@ -19,7 +19,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const LONG_NAME = 'ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT';
+const LONG_NAME = 'ALTEROID_TOKEN_SAVING_EXCERPT_LAYOUT_SAMPLE';
 
 function stubList() {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ATTACHMENT_LIMITS } from './attachment.js';
 import type { TurnAttachmentLimits } from './attachment.js';
 import { createClone } from './clone.js';
-import { TOKEN_SAVING_ENABLED_ENV, fakeSdk, waitFor, wireEvents } from './clone-test-harness.js';
+import { fakeSdk, waitFor, wireEvents } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -77,7 +77,7 @@ function build(attachmentLimits: TurnAttachmentLimits) {
     reportSettleMs: 0,
     stores,
     queryFn: fn,
-    env: { ...TOKEN_SAVING_ENABLED_ENV },
+    env: {},
     attachmentLimits,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),

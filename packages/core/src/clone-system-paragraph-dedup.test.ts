@@ -6,7 +6,7 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
 import { createClone } from './clone.js';
-import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
+import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -32,7 +32,7 @@ interface Script {
   failFirstStarts?: number;
   /** 1ターンへ束ねる合図の上限（`createClone` の `mergedBatchLimit`）。 */
   mergedBatchLimit?: number;
-  /** クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）。 */
+  /** クローンの env。既定は空（畳みの節約は外した）。 */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -92,7 +92,7 @@ function boot(script: Script = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
+    env: script.env ?? {},
     inboxSettleMs: 0,
     reportSettleMs: 0,
     ...(script.mergedBatchLimit === undefined ? {} : { mergedBatchLimit: script.mergedBatchLimit }),

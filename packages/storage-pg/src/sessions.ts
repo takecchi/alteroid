@@ -38,8 +38,6 @@ function parseStoredJson<T>(
 }
 
 const CLONE_SESSION_KEY = 'clone_session_id';
-// 畳みの控え。id と別の key に置く（fs と同じ）。行が無ければ「控え無し」なので、古い版のデータはそのまま読め、migrate は要らない
-const CLONE_FOLD_STATE_KEY = 'clone_fold_state';
 const CLONE_PROJECT_KEY = 'clone_project_key';
 // 墓標の列（#4884）。別の key に置く（fs 側は同居させると丸ごと消えるため、器で振る舞いが変わらないよう揃える）。JSON 配列を1行に置く。行が無ければ空として読め、表の変更（migrate）は要らない。
 // 墓標を1つだけ置いていた古い行（`clone_transcript_grave`・`clone_lost_session`）は読み書きしない: 読めなくても失われて困らない記録として捨てる（#5869）。
@@ -162,33 +160,13 @@ export class PgSessionRegistry implements SessionRegistry {
   async setCloneSessionId(sessionId: string | null): Promise<void> {
     if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
     if (sessionId === null) {
-      // 控えも同じ文で消す: id だけが消えて控えが残る窓を作らない
-      await this.#db
-        .delete(daemonState)
-        .where(inArray(daemonState.key, [CLONE_SESSION_KEY, CLONE_FOLD_STATE_KEY]));
+      await this.#db.delete(daemonState).where(eq(daemonState.key, CLONE_SESSION_KEY));
       return;
     }
     await this.#db
       .insert(daemonState)
       .values({ key: CLONE_SESSION_KEY, value: sessionId })
       .onConflictDoUpdate({ target: daemonState.key, set: { value: sessionId } });
-  }
-
-  // 中身を解釈しない（壊れていれば呼び出し側が捨てる）。`daemon_state` は key/value なので migrate は要らない
-  async getFoldState(): Promise<string | null> {
-    return readDaemonState(this.#db, CLONE_FOLD_STATE_KEY);
-  }
-
-  async setFoldState(state: string | null): Promise<void> {
-    if (state === null) {
-      await this.#db.delete(daemonState).where(eq(daemonState.key, CLONE_FOLD_STATE_KEY));
-      return;
-    }
-    assertNoNul('session.foldState', state);
-    await this.#db
-      .insert(daemonState)
-      .values({ key: CLONE_FOLD_STATE_KEY, value: state })
-      .onConflictDoUpdate({ target: daemonState.key, set: { value: state } });
   }
 
   // 列の行を `for update` でロックし、同じトランザクションの中で読んでから書く: 読みと書きが別々だと、足す回と下ろす回が互いの書き込みを消すため。
@@ -306,7 +284,6 @@ export class PgSessionRegistry implements SessionRegistry {
       .where(
         inArray(daemonState.key, [
           CLONE_SESSION_KEY,
-          CLONE_FOLD_STATE_KEY,
           CLONE_TRANSCRIPT_GRAVE_QUEUE_KEY,
           CLONE_LOST_SESSION_QUEUE_KEY,
           CLONE_PROJECT_KEY,

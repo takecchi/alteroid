@@ -315,7 +315,6 @@ export function createMemoryStores(): Stores {
   >();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
-  let foldState: string | null = null;
   // 墓標の列（古い順。#4884）
   let transcriptGraveQueue: TranscriptGrave[] = [];
   let lostSessionGraveQueue: LostSessionGrave[] = [];
@@ -1010,14 +1009,6 @@ export function createMemoryStores(): Stores {
     async setCloneSessionId(sessionId) {
       if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
       cloneSessionId = sessionId;
-      if (sessionId === null) foldState = null;
-    },
-    async getFoldState() {
-      return foldState;
-    },
-    async setFoldState(state) {
-      if (state !== null) assertNoNul('session.foldState', state);
-      foldState = state;
     },
     // 判定と書き込みの間に `await` を置かない: 同期なら割り込まれる窓が無く、挟むと窓が生まれる（`SessionRegistry.clearTranscriptGraveIf` の doc）。
     async clearTranscriptGraveIf(archiveId) {
@@ -1073,14 +1064,13 @@ export function createMemoryStores(): Stores {
     },
     async clear() {
       const removed =
-        [cloneSessionId, foldState, projectKey].filter((value) => value !== null).length +
+        [cloneSessionId, projectKey].filter((value) => value !== null).length +
         [transcriptGraveQueue.length, lostSessionGraveQueue.length].filter((n) => n > 0).length +
         Object.values(distillFailureRecords).filter((counts) => Object.keys(counts).length > 0)
           .length;
       distillFailureRecords.transcript = {};
       distillFailureRecords.lost_session = {};
       cloneSessionId = null;
-      foldState = null;
       transcriptGraveQueue = [];
       lostSessionGraveQueue = [];
       projectKey = null;

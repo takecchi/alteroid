@@ -168,11 +168,6 @@ interface DistillPromptOptions {
    * 本題で、的の一覧を足すと薄まる。文字列で受け取る: 文書から組み立てると指示文が記憶の構造を知ることになる。
    */
   tidyTargets?: string;
-  /**
-   * 固定の本体（理由によらず同じ2つの塊）を通す関数。畳む関数を渡すと、同じ会話の2回目以降は
-   * `ref`（短い参照）になる。省略すると常に全文。pre_compact は別の短命セッションなので渡さない。
-   */
-  fold?: (id: string, full: string, ref: string) => string;
 }
 
 export function buildDistillPrompt(
@@ -196,21 +191,8 @@ ${options.tidyTargets}
 
 **上に名前が出ている文書から手を付けよ。** 出ていなければ、下の「統合」を通常どおり行えばよい。
 `;
-  // 固定の本体（理由ごとに変わらない部分）だけを `fold` に通す。枕（`why`）と棚卸しの的は毎回そのまま出す
-  const fold = options.fold ?? ((_id: string, full: string) => full);
-  return (
-    `[system] ${why}\n\n` +
-    fold('distill-instructions-intro', DISTILL_INTRO, DISTILL_INTRO_REF) +
-    `\n\n${tidySection}\n` +
-    fold('distill-instructions-consolidation', DISTILL_CONSOLIDATION, DISTILL_CONSOLIDATION_REF)
-  );
+  return `[system] ${why}\n\n` + DISTILL_INTRO + `\n\n${tidySection}\n` + DISTILL_CONSOLIDATION;
 }
-
-/** 同じ会話で2回目以降の蒸留に、固定の本体の代わりに出す参照。会話の上に全文があることが前提。 */
-const DISTILL_INTRO_REF =
-  '（蒸留の手順は、先の蒸留の指示と同じ。この会話の上にある。記憶へ移すべきものの確認・書き方・断りの扱いはそれに従え）';
-const DISTILL_CONSOLIDATION_REF =
-  '（「統合」「タイトルの水準」「畳まないもの」「畳むもの」「未了の問い」も、先の蒸留の指示と同じ。この会話の上にある）';
 
 const DISTILL_INTRO = `忘れる前に、記憶へ移すべきものがあるか確認せよ。
 
@@ -312,11 +294,9 @@ ${digest}`,
 interface SelfInitiativePromptInput {
   reason: string;
   digest: string;
-  /** 固定の指示文の代わりに出す文（#4937）。同じ会話で全文を出していれば、clone が短い参照を渡す。省略は全文（`SELF_INITIATIVE_INSTRUCTIONS`）。 */
-  fixedInstruction?: string;
 }
 
-/** 発意 tick の固定の指示文（`reason` を含まない）。同じ会話の2回目以降は短い参照に置き換えられる（#4937）。 */
+/** 発意 tick の固定の指示文（`reason` を含まない）。 */
 export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
 
 - 状況の「待ち行列の先頭」が先にやるもの。動かせるなら先頭から始める。実作業なら \`manager_start\` で委譲し、その task の id を \`taskId\` に渡す（渡さないと task は queued のまま先頭に残り、次の tick で同じ task からもう一本委譲しうる）。
@@ -330,15 +310,11 @@ export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いま�
 
 聞かずに動いたなら \`journal_write\` に残せ。`;
 
-export function buildSelfInitiativePrompt({
-  reason,
-  digest,
-  fixedInstruction = SELF_INITIATIVE_INSTRUCTIONS,
-}: SelfInitiativePromptInput): string {
+export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativePromptInput): string {
   return excerpt(
     `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
 
-${fixedInstruction}
+${SELF_INITIATIVE_INSTRUCTIONS}
 
 以下は直近の状況である。
 
@@ -357,8 +333,6 @@ interface ExternalEventPromptInput {
   viaKeyNames?: readonly string[];
   /** 本文より前に置く: 本文は長いと切られるので、添付の在り処を切られる側に置かない。 */
   attachmentNoticeLines?: readonly string[];
-  /** 2行の指示を同じ会話の2回目から参照にする口（#5301）。省略すると常に全文。 */
-  fold?: ExternalInstructionFold;
 }
 
 export function externalAttachmentSection(lines: readonly string[] | undefined): string[] {
@@ -382,28 +356,15 @@ export function externalViaLine(
 }
 
 /**
- * 外部イベントの2行の指示。同じ会話の2回目から参照にする（#5301）。
- * `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）はここに含めない: 毎回出す。
- * 短い形にも「根拠が無く放っておけないなら `ask_human`、聞かずに動いたなら `journal_write`」は残す（失敗に直結するため）。
+ * 外部イベントの2行の指示。
+ * `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）はここに含めない。
  */
 const EXTERNAL_EVENT_INSTRUCTION =
   '中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。\n' +
   '判断の根拠が記憶に無く、しかも放っておけないことなら `ask_human` に積む。聞かずに動いたなら `journal_write` に残せ。';
-const EXTERNAL_EVENT_INSTRUCTION_REF =
-  '（判断の仕方は前の出来事と同じ。会話の上にある）根拠が無く放っておけないなら `ask_human`、聞かずに動いたなら `journal_write`。';
-const EXTERNAL_EVENT_INSTRUCTION_FOLD_ID = 'external-event-instruction';
 
-/** 固定文の畳み（`clone.ts` の `FixedTextFold` と同じ形。循環を避けてここでも型を持つ）。 */
-type ExternalInstructionFold = (id: string, full: string, ref: string) => string;
-
-export function externalEventInstruction(fold?: ExternalInstructionFold): string {
-  return fold === undefined
-    ? EXTERNAL_EVENT_INSTRUCTION
-    : fold(
-        EXTERNAL_EVENT_INSTRUCTION_FOLD_ID,
-        EXTERNAL_EVENT_INSTRUCTION,
-        EXTERNAL_EVENT_INSTRUCTION_REF,
-      );
+export function externalEventInstruction(): string {
+  return EXTERNAL_EVENT_INSTRUCTION;
 }
 
 export function buildExternalEventPrompt({
@@ -411,14 +372,13 @@ export function buildExternalEventPrompt({
   body,
   viaKeyNames,
   attachmentNoticeLines,
-  fold,
 }: ExternalEventPromptInput): string {
   const via = externalViaLine(viaKeyNames);
   const attachmentSection = externalAttachmentSection(attachmentNoticeLines);
   return `[system] 外部から出来事が届いた（source: ${source}）。人間はこれを見ていない。
 ${via === null ? '' : `${via}\n`}${EXTERNAL_EVENT_FRAMING}${attachmentSection.length === 0 ? '' : `\n${attachmentSection.join('\n')}`}
 
-${externalEventInstruction(fold)}
+${externalEventInstruction()}
 
 ---
 
@@ -441,10 +401,6 @@ interface TimerPromptInput {
    */
   unfinishedAt?: string;
   digest: string;
-  /** 固定の指示文の代わりに出す文（#4937）。省略は全文（`request` の有無に応じた `TIMER_*_INSTRUCTION(S)`）。 */
-  fixedInstruction?: string;
-  /** 依頼の本文の代わりに出す文（#4937）。同じ会話で同じ依頼を全文で出していれば、clone が短い参照を渡す。省略は全文。 */
-  requestRef?: string;
 }
 
 /** 本文の無い定期ジョブの固定の指示文。 */
@@ -470,18 +426,18 @@ export function buildTimerPrompt({
   lastRunAt,
   unfinishedAt,
   digest,
-  fixedInstruction,
-  requestRef,
 }: TimerPromptInput): string {
   const head = `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。`;
 
   const body =
     request === undefined
-      ? (fixedInstruction ?? TIMER_PLAIN_INSTRUCTION)
+      ? TIMER_PLAIN_INSTRUCTION
       : [
-          `これは継続中の依頼である。${requestRef === undefined ? '本文はこうなっている。' : ''}`,
+          `これは継続中の依頼である。本文はこうなっている。`,
           '',
-          ...(requestRef === undefined ? ['---', request.trim(), '---'] : [requestRef]),
+          '---',
+          request.trim(),
+          '---',
           '',
           `前回この依頼で動いた時刻: ${lastRunAt ?? '（まだ一度も動いていない）'}`,
           ...(unfinishedAt === undefined
@@ -493,7 +449,7 @@ export function buildTimerPrompt({
                   '`manager_list` と日誌でその時刻の前後に何をしたかを確かめてから決めよ（取り消せない操作を二度やらないこと）。',
               ]),
           '',
-          fixedInstruction ?? TIMER_REQUEST_INSTRUCTIONS,
+          TIMER_REQUEST_INSTRUCTIONS,
         ].join('\n');
 
   return excerpt(

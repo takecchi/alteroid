@@ -1,8 +1,8 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { createClone, REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF } from './clone.js';
-import { TOKEN_SAVING_ENABLED_ENV, waitFor, withoutQueueNotice } from './clone-test-harness.js';
+import { createClone, REPORT_FOLLOW_UP_GUIDE } from './clone.js';
+import { waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -39,7 +39,7 @@ interface SdkScript {
   failResultAt?: number;
   /** 入力の受け付けが終わった後、この Promise が解けるまで出来事の列を閉じない（作り直しの窓を開けておく）。 */
   holdAfterInputEnd?: Promise<void>;
-  /** クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）。 */
+  /** クローンの env。既定は空（畳みの節約は外した）。 */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -166,7 +166,7 @@ function boot(script: SdkScript = {}): Boot {
   const clone = createClone({
     stores,
     queryFn: fn,
-    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
+    env: script.env ?? {},
     inboxSettleMs: 0,
     reportSettleMs: 0,
     runners: createRunnerRegistry([
@@ -366,15 +366,9 @@ function countsLineOf(text: string): string {
   return text.split('\n').find((line) => line.startsWith('- 件数')) ?? '';
 }
 
-// ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が未設定（本番の既定）・無効の綴りなら、どの畳みの出口も止まって、2回目以降も毎回全文になる。
-// 畳みを外したので、有効の綴りでも同じ（既定の全文を固定する）。
-describe('畳みが切り（既定）なら、tick・報告の包みの固定文も毎回全文のまま', () => {
-  const OFF_ENVS = [
-    ['未設定', {}],
-    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
-    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
-    ['false', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'false' }],
-  ] as const;
+// 畳みを外したので、2回目以降も毎回全文になる（既定の全文を固定する）。
+describe('畳みを外したので、tick・報告の包みの固定文も毎回全文のまま', () => {
+  const OFF_ENVS = [['未設定', {}]] as const;
 
   it.each(OFF_ENVS)(
     '⭐ 定期の tick（%s）: 依頼の本文・固定の指示・件数の形の固定の注記・継続中の依頼の行が毎回全文',
@@ -458,7 +452,6 @@ describe('畳みが切り（既定）なら、tick・報告の包みの固定文
 
     for (const text of [first, second, third]) {
       expect(text).toContain(REPORT_FOLLOW_UP_GUIDE);
-      expect(text).not.toContain(REPORT_FOLLOW_UP_GUIDE_REF);
     }
     await s.clone.stop();
   });

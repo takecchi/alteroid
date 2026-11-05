@@ -1,12 +1,8 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
-import {
-  compactionLikelyThisTurn,
-  createClone,
-  SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS,
-} from './clone.js';
+import { createClone } from './clone.js';
+import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -142,7 +138,7 @@ function bootClone(
   stores: Stores,
   managers: ManagerPool,
   mergedBatchLimit?: number,
-  env: NodeJS.ProcessEnv = TOKEN_SAVING_ENABLED_ENV,
+  env: NodeJS.ProcessEnv = {},
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk();
   const clone = createClone({
@@ -628,7 +624,7 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
       reportSettleMs: 2500,
       stores: createMemoryStores(),
       queryFn: fn,
-      env: TOKEN_SAVING_ENABLED_ENV,
+      env: {},
       managers: busyPool(),
       // 束の上限を1にする: 上の試験と同じ理由（別々の担当の報告が A のターンへまとまり、待ち行列に残らないため）
       mergedBatchLimit: 1,
@@ -689,14 +685,8 @@ describe('同じ会話の2ターン目も、状況の説明文と数の行を全
     return s.inputs[n - 1] ?? '';
   }
 
-  // ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が未設定（既定）・無効の綴りなら、2ターン目も全文
-  it.each([
-    ['未設定', {}],
-    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
-    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
-    ['false', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'false' }],
-  ] as const)('⭐ 畳みが切り（%s）なら、2ターン目も状況の全文が出る', async (_name, env) => {
-    const s = bootClone(createMemoryStores(), busyPool(), undefined, env);
+  it('⭐ 畳みを外したので、2ターン目も状況の全文が出る', async () => {
+    const s = bootClone(createMemoryStores(), busyPool(), undefined, {});
 
     const first = await humanTurn(s, 1);
     const second = await humanTurn(s, 2);
@@ -708,24 +698,5 @@ describe('同じ会話の2ターン目も、状況の説明文と数の行を全
     }
     expect(second).not.toContain('いまの全体: 前のターンと変化なし');
     await s.clone.stop();
-  });
-});
-
-describe('自動の要約が走りうるターンの見込み（#4489）', () => {
-  const near = { totalTokens: 195_000, autoCompactThreshold: 200_000, isAutoCompactEnabled: true };
-
-  it('伸びの下限を足して閾値に届けば走りうる', () => {
-    expect(SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS).toBe(10_000);
-    expect(compactionLikelyThisTurn(near, 0)).toBe(true);
-    expect(compactionLikelyThisTurn({ ...near, totalTokens: 189_999 }, 0)).toBe(false);
-    expect(compactionLikelyThisTurn({ ...near, totalTokens: 150_000 }, 50_000)).toBe(true);
-  });
-
-  it('観測が無い・自動の要約が切ってある・閾値が分からない回は見込まない', () => {
-    expect(compactionLikelyThisTurn(null, 0)).toBe(false);
-    expect(compactionLikelyThisTurn({ ...near, isAutoCompactEnabled: false }, 0)).toBe(false);
-    expect(compactionLikelyThisTurn({ totalTokens: 195_000, isAutoCompactEnabled: true }, 0)).toBe(
-      false,
-    );
   });
 });

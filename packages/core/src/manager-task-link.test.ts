@@ -724,9 +724,6 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
       '人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す',
     );
     expect(text).not.toContain('結び付いた task〔');
-    expect(
-      describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' }, (_id, _full, ref) => ref),
-    ).toContain('task_list で探した task へ task_say で書く。無ければ task_add');
   });
 
   it('結び付いていなければ、行そのものを出さない', () => {

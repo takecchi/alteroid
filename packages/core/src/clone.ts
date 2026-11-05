@@ -62,11 +62,9 @@ import {
   type ManagerLiveness,
   TASK_QUEUE_SECTION_HEADING_HEAD,
 } from './digest.js';
-import { DigestSessionDelta } from './digest-session-delta.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingSwitches, type TokenSavingSwitches } from './token-saving-switches.js';
-import { parseFoldState, serializeFoldState, type FoldState } from './fold-state.js';
 import {
   describeAnthropicRoute,
   describeToolSearch,
@@ -188,13 +186,7 @@ import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
-import {
-  describeSituation,
-  describeSituationUnavailable,
-  readAtLabel,
-  TASK_QUEUE_HEAD_KEY,
-  type SituationExplained,
-} from './situation.js';
+import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import {
   describeQuotaRecovery,
@@ -392,94 +384,12 @@ export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env):
   return placedEnvValue(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
-/** 「いまの全体」の説明文を、変わっていなくても全文へ戻す間隔（ターン数。2026-10-11 のオーナー回答「20ターンごとは全文」）。 */
-export const SITUATION_FULL_EVERY_TURNS = 20;
-
-/**
- * 自動の要約が走りうるターンを見込むときの、1ターンの伸びの下限（トークン）。
- * 直前のターンの伸びが小さすぎる回（短い返事だけのターン）に、次の長いターンで閾値を越えるのを見落とさないため。
- */
-export const SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS = 10_000;
-
-/**
- * このターンで自動の要約が走りうるか（#4489）。前のターンの終わりの文脈の量に、直前のターンの伸び（下限あり）を足して閾値に届けば走りうる。
- * 要約は入力を受けた後・推論の前に走るので、組み立てる時点では確かめられない。見込みで判定する。
- */
-export function compactionLikelyThisTurn(
-  usage: {
-    totalTokens?: number;
-    autoCompactThreshold?: number;
-    isAutoCompactEnabled?: boolean;
-  } | null,
-  lastGrowthTokens: number,
-): boolean {
-  if (usage === null || usage.isAutoCompactEnabled !== true) return false;
-  if (usage.totalTokens === undefined || usage.autoCompactThreshold === undefined) return false;
-  const growth = Math.max(lastGrowthTokens, SITUATION_COMPACTION_GROWTH_FLOOR_TOKENS);
-  return usage.totalTokens + growth >= usage.autoCompactThreshold;
-}
-
-/**
- * 使用量の観測から固定文を全文へ戻す理由のラベル（日誌の計測用。#4941）。`compactionLikelyThisTurn` の見込みに加えて、見込みの材料が取れない回（使用量の観測が無い・閾値や量が不明・自動要約の有無が不明）も戻す（安全側）。戻さない回は null。
- * 自動要約が無効と分かっている回（`isAutoCompactEnabled === false`）は、要約が走らないので null。
- */
-type DigestUsageResetReason =
-  'usage_null' | 'usage_error' | 'usage_threshold_missing' | 'compaction_likely';
-
-export function digestUsageResetReason(
-  usage: {
-    totalTokens?: number;
-    autoCompactThreshold?: number;
-    isAutoCompactEnabled?: boolean;
-    error?: string;
-  } | null,
-  lastGrowthTokens: number,
-): DigestUsageResetReason | null {
-  if (usage === null) return 'usage_null';
-  if (usage.isAutoCompactEnabled === false) return null;
-  if (
-    usage.isAutoCompactEnabled === undefined ||
-    usage.totalTokens === undefined ||
-    usage.autoCompactThreshold === undefined
-  ) {
-    return usage.error === undefined ? 'usage_threshold_missing' : 'usage_error';
-  }
-  return compactionLikelyThisTurn(usage, lastGrowthTokens) ? 'compaction_likely' : null;
-}
-
-/** 固定文を全文へ戻した理由（日誌の計測用）。 */
-type DigestResetLabel =
-  | DigestUsageResetReason
-  | 'query_null'
-  | 'recycle_window'
-  | 'turn_failed'
-  | 'session_changed'
-  | 'compact_boundary';
-
-/** 生ログの大きさの測りの結果。測れなかった理由を分けて持つ（読み戻さなかった理由の日誌のため）。 */
+/** 生ログの大きさの測りの結果。測れなかった理由を分けて持つ。 */
 type RawLogMeasure =
   | { readonly state: 'measured'; readonly bytes: number | null }
   | { readonly state: 'no_store' }
   | { readonly state: 'no_project_key' }
   | { readonly state: 'failed' };
-
-/**
- * 読み戻さない理由の日誌の語。読み戻してよい（生ログが実在する）なら `null`。
- * 測れない・0 は全文へ倒す（`#resumeCandidateWithinBudget` は resume してよいとみなすが、読み戻しは倒れ側が逆）。
- */
-function foldReadbackSkipLabel(measure: RawLogMeasure): string | null {
-  switch (measure.state) {
-    case 'no_store':
-      return '預け先なし';
-    case 'no_project_key':
-      return 'projectKey なし';
-    case 'failed':
-      return '計測失敗';
-    case 'measured':
-      if (measure.bytes === null) return '測れない';
-      return measure.bytes <= 0 ? '生ログ0' : null;
-  }
-}
 
 /**
  * 起動時の拾い直しで、同じ墓標の蒸留が続けて失敗しても日誌へ書く回数の上限（#4752）。
@@ -984,37 +894,8 @@ class Clone implements CloneHost {
   #lastPluginsDigest = '';
   /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
   #lastPluginLoadDigest: string | null = null;
-  /**
-   * 畳みの控えの situation 側（`SituationExplained`）。situation の畳みは撤去済みなので、書き込むのは預けた控えの読み戻しだけで、
-   * 説明文の組み立ては読まない。控えの保存（`#captureFold`）を次の撤去まで変えないために残してある。
-   */
-  readonly #situationExplained: SituationExplained = new Map();
-  #situationExplainedSessionId: string | undefined;
-  #situationTurnsSinceFull = 0;
-  /**
-   * tick の要約・固定の文言・依頼の本文の控え（#4937）の入れ物。畳みを外したので控えは常に空で、預けた控え（`fold-state.ts`）の書き出しと読み戻しの口・全文へ戻す口（`reset()` / `forgetFixed()`）だけが残っている。
-   */
-  readonly #digestDelta: DigestSessionDelta;
   // 節約スイッチ（`token-saving-switches.ts`）。構築時に1回だけ読み、以後 env を読み直さない（`#inboxSettleMs` と同じ形）
   readonly #tokenSaving: TokenSavingSwitches;
-  // 畳みの控え（上の2つ＋周期の数え）を再起動をまたいで resume に付ける仕組み（`fold-state.ts`）。
-  // 読み戻しは起動後の最初の束で1回だけ（`#restoreFoldStateOnce`）。読み戻した控えが指す会話の usage だけが、最初のターンの「要約が走りうるか」の判定の材料になる
-  #foldRestoreAttempted = false;
-  #restoredFold: Pick<FoldState, 'sessionId' | 'usage' | 'growthTokens'> | null = null;
-  // 読み戻しで測った resume の判定を `#ensureQuery` へ渡す（予算超過の行を日誌へ2度書かないため）
-  #resumeVerdict: { stored: string; resume: string | null } | null = null;
-  // 1ターン前の終わりの控え。預けるのは常にこちら（今の控えではない）: 今のターンの入力が生ログに載りきる前に落ちると、今のターンで初めて出した全文を「会話にある」と言い張る控えが残るため。
-  // 生ログがいつ書かれるかは確かめられない（pg の預け先は非同期に書く）ので、後続のターンまで終わったなら1つ前の入力は載っていると見なす安全側の仮定を置く。代償: 再起動の直後は1ターン分だけ余計に全文が出る
-  #prevFold: FoldState | null = null;
-  // 預け先に控えがあるかもしれない（不明を含む）か。無いと分かっていれば消しに行かない
-  #foldStoreMayHold = true;
-  // 生ログのミラーが1束を捨てた会話の id（`transcript_mirror_failed`）。その会話の控えは預けない・預けた分は消す: 生ログに欠けがあれば、控えが「会話にある」と言う全文が再起動後の resume に載っているとは言えないため。
-  // 検出できるのは SDK が `mirror_error` を返した回だけで、返す前にプロセスが落ちた回は分からない（`#prevFold` の注と同じ限界）
-  readonly #mirrorGapSessions = new Set<string>();
-  #foldLastWritten: string | null = null;
-  #foldWrites: Promise<void> = Promise.resolve();
-  // 全文へ戻した理由を、このターンで日誌へ書いたか（1ターン1行。`#pump` の先頭で下ろす。観測のみ）
-  #digestResetLoggedThisTurn = false;
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
@@ -1081,8 +962,6 @@ class Clone implements CloneHost {
   #pluginLoadInfo: ClonePluginLoadObservation | null = null;
   // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
-  /** 直前のターンで文脈が伸びた量（トークン）。自動の要約が走りうるターンの見込みに使う（#4489）。 */
-  #lastContextGrowthTokens = 0;
   // 無制限には覚えない: 長く走る1本のセッションでメモリが伸び続けるため。忘れたら `onForget` で日誌へ残す（忘れた id が `permission_denials` に再び載ると同じ拒否が二重に載る）
   readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
@@ -1361,7 +1240,6 @@ class Clone implements CloneHost {
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
     this.#tokenSaving = resolveTokenSavingSwitches(envSource);
-    this.#digestDelta = new DigestSessionDelta();
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
@@ -2370,14 +2248,6 @@ class Clone implements CloneHost {
     this.#turnTimer = timer;
     const prepareStartedAt = Date.now();
 
-    // 全文へ戻す条件に当たれば記録を消す（#4937）: 待ち行列の断りより先に行う
-    this.#digestResetLoggedThisTurn = false;
-    // 預けた控えの読み戻し（起動後の最初の束だけ）: 次の全文へ戻す判定より前に行う
-    await this.#restoreFoldStateOnce();
-    // #4941: 入力を閉じて作り直しを待っている窓（`query` は非 null のまま）も新しい会話になる。使用量の観測が取れない回も全文（安全側）
-    this.#resetDigestDeltaIfNewConversation();
-    // 周期・会話の切り替えの全文戻しは、断り書き（待ち行列の先頭・末尾の固定1文）と「いまの全体」の両方より前に、1か所で行う
-    this.#applyFoldPeriod(batch);
     this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
     // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
     this.#notices.set(
@@ -2422,15 +2292,6 @@ class Clone implements CloneHost {
    */
   async #settleTurn(batch: InboxEvent[], timer: TurnTimer): Promise<void> {
     this.#notices.clearTurn();
-    // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする。
-    // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
-    // 預けた控えは `#resetDigestDelta` が `#forgetFoldState` で捨てる（成功したターンの後だけ預ける `#persistFoldStateAfterTurn` と合わせて、片方だけ残らない）
-    if (this.#pumpTurnFailed) {
-      this.#returnToFullText({
-        situation: true,
-        digest: { label: 'turn_failed' },
-      });
-    }
     // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
     const defer = this.#usageBlocked !== null;
     const failedOutsideUsage = !defer && this.#pumpTurnFailed;
@@ -2693,7 +2554,6 @@ class Clone implements CloneHost {
       origin,
       new Date(),
       attached?.linesOf,
-      NO_FOLD,
       this.#reportBodyLimit(),
     );
     await this.#runInternal(prompt, 'normal', attached?.images, origin.conversationId);
@@ -2735,8 +2595,7 @@ class Clone implements CloneHost {
       const liveness = await this.#confirmationLivenessOf(event);
       const origin = await this.#managerOrigin(event.managerId);
       origins.add(origin.conversationId);
-      this.#resetDigestDeltaBeforeConfirmation(event);
-      items.push(managerPrompt(event, origin, liveness, now, [], NO_FOLD, this.#reportBodyLimit()));
+      items.push(managerPrompt(event, origin, liveness, now, [], this.#reportBodyLimit()));
     }
     // 同じ担当の報告が隣り合って2件以上続く所は塊にする（見出しと「補足・訂正がある可能性」の注意を保つ）。質問・確認・external・別の担当を挟んだ報告は塊にしない: 順序を入れ替えないため
     const grouped: MixedBatchItem[] = [];
@@ -3408,8 +3267,6 @@ class Clone implements CloneHost {
       taskList = await this.#stores.tasks.list();
     } catch (error) {
       noteDroppedRecord('待ち行列の読み出し', inboxEventShape(event), error);
-      // 読めなかった回は先頭を出していない: 控えを消して、次に読めた回は全文にする
-      this.#situationExplained.delete(TASK_QUEUE_HEAD_KEY);
       return {
         head: [
           `[system] **待ち行列を読めなかった（${readAtLabel(Date.now())} に試みた材料。理由: ${reasonOf(error)}）。** ` +
@@ -3434,264 +3291,18 @@ class Clone implements CloneHost {
     return this.#delivery.inbox.size + this.#delivery.deferredCount;
   }
 
-  // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
-  // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
-  // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
-  /**
-   * この入力を受け取る会話が、前の全文の載った会話と同じと言えない回か（#4941）。
-   * `query === null`（`#ensureQuery` が resume の有無を問わず開き直す）に加え、入力を閉じて作り直しを待っている窓（`inputEndedForRecycle`。`clearQuery()` まで `query` は非 null で、`#ensureQuery` は resume なしの新しい会話を開く）。
-   * 使用量の観測が取れない回も真（`digestUsageResetReason`）。
-   */
-  #conversationMayDifferFromLastFull(): boolean {
-    return this.#fullReasonThisTurn() !== null;
-  }
-
-  /**
-   * 全文へ戻す理由: 会話が変わった・作り直しの窓（会話の上に何も残らない）、使用量の観測が無い・閾値や量が不明（要約の有無が確かめられない。安全側）、要約が走るという見込み。
-   */
-  #fullReasonThisTurn(): { label: DigestResetLabel } | null {
-    // 読み戻した控えがあるあいだ（起動後の最初のターンで、`#ensureQuery` が resume を開くまで）は、`query === null` を会話が変わった理由にしない:
-    // resume が同じ id で戻ると確かめた上で読み戻しており、会話の上には控えの全文が残っている。使用量は再起動で消えているので、預けた時点の観測で判定する
-    const restored = this.#sdkSession.query === null ? this.#restoredFold : null;
-    if (this.#sdkSession.query === null && restored === null) {
-      return { label: 'query_null' };
-    }
-    if (this.#sdkSession.inputEndedForRecycle) return { label: 'recycle_window' };
-    const label = digestUsageResetReason(
-      restored === null ? this.#lastContextUsage : restored.usage,
-      restored === null ? this.#lastContextGrowthTokens : restored.growthTokens,
-    );
-    if (label === null) return null;
-    return { label };
-  }
-
-  /**
-   * 畳みの控えを全文へ戻す経路の、唯一の入口。どの控えを何のために捨てるかを呼び出し元ごとに引数で名乗る（以前は `clear()`・`#resetDigestDelta`・`forgetFixed()` などが5〜6か所に対で書かれていた）。
-   * 順序は固定: situation 側の控え → 周期の数え → セッション id → digest 側（`reset` か `forgetFixed`）。呼び出し元ごとの組み合わせは変えていない:
-   * - 失敗したターン・会話の切り替え・要約: situation と digest の両方（`reset`）
-   * - 周期: situation・周期の数え・digest の固定の文言だけ（`forgetFixed`）
-   * - 作り直しで読み戻した控えを捨てる回: 上に加えて周期の数えとセッション id
-   * - `#resetDigestDeltaIfNewConversation`（断り書きの先頭より前）・PreCompact: digest 側だけ（situation 側は直後の `#applyFoldPeriod` / `compaction` の合図が消す）
-   * 預けた控えは `#resetDigestDelta` が捨てる（周期の `forgetFixed` は預けた控えに触れない。従来どおり）。
-   */
-  #returnToFullText(target: {
-    situation?: true;
-    turnsSinceFull?: true;
-    sessionId?: true;
-    digest: { label: DigestResetLabel } | 'fixed';
-  }): void {
-    if (target.situation === true) this.#situationExplained.clear();
-    if (target.turnsSinceFull === true) this.#situationTurnsSinceFull = 0;
-    if (target.sessionId === true) this.#situationExplainedSessionId = undefined;
-    if (target.digest === 'fixed') this.#digestDelta.forgetFixed();
-    else this.#resetDigestDelta(target.digest.label);
-  }
-
-  /**
-   * 差分の記録を捨てる口（観測つき）。畳んだ記録が実際に残っていて捨てた回（`reset()` が真）だけ、理由を日誌へ1行残す（本番で畳めた割合を数えるため）。
-   * 同じターンで理由が重なっても、2回目以降は捨てる記録が無いので書かない（最初に当たった理由だけ）。起動直後の最初の全文は、捨てる記録が無いので書かない。
-   * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
-   * 呼ぶのは `#returnToFullText` だけ。
-   */
-  #resetDigestDelta(label: DigestResetLabel): void {
-    // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
-    this.#forgetFoldState();
-    if (!this.#digestDelta.reset()) return;
-    // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
-    if (this.#digestResetLoggedThisTurn) return;
-    this.#digestResetLoggedThisTurn = true;
-    void this.#journalSelf(
-      'outbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}固定文を全文へ戻す: 理由=${label}`,
-    );
-  }
-
-  // 待たない・握る: 同期の呼び出し元から呼び、書き込みの失敗はターンを落とさない（`#journal` と同じ扱い）。書き込みは1本の鎖に並べる: 消す・書くの順が入れ替わると、捨てたはずの控えが残るため
-  #enqueueFoldWrite(raw: string | null): void {
-    this.#foldWrites = this.#foldWrites
-      .then(() => this.#stores.sessions.setFoldState(raw))
-      .catch((error: unknown) => {
-        noteDroppedRecord('畳みの控えの保存', 'clone', error);
-      });
-  }
-
-  /** 預けた控えと、1ターン前の控えの写しを捨てる。預け先に無いと分かっていれば何も書かない。 */
-  #forgetFoldState(): void {
-    this.#prevFold = null;
-    this.#foldLastWritten = null;
-    if (!this.#foldStoreMayHold) return;
-    this.#foldStoreMayHold = false;
-    this.#enqueueFoldWrite(null);
-  }
-
-  // 控えは確定した分だけ写す（staged は会話に載ったと言えない）。id が分からない（init が来ていない）なら写さない
-  #captureFold(): FoldState | null {
-    const sessionId = this.#situationExplainedSessionId;
-    if (sessionId === undefined) return null;
-    const usage = this.#lastContextUsage;
-    return {
-      v: 1,
-      sessionId,
-      situation: [...this.#situationExplained],
-      turnsSinceFull: this.#situationTurnsSinceFull,
-      digest: this.#digestDelta.exportState(),
-      usage:
-        usage === null
-          ? null
-          : {
-              ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
-              ...(usage.autoCompactThreshold === undefined
-                ? {}
-                : { autoCompactThreshold: usage.autoCompactThreshold }),
-              ...(usage.isAutoCompactEnabled === undefined
-                ? {}
-                : { isAutoCompactEnabled: usage.isAutoCompactEnabled }),
-              ...(usage.error === undefined ? {} : { error: usage.error }),
-            },
-      growthTokens: this.#lastContextGrowthTokens,
-    };
-  }
-
-  /**
-   * 成功したターンの終わりに、控えを預ける（`turn_ended`。入力は押し込め済みで、確定した控えが今のターンまで進んでいる）。
-   * 預けるのは1ターン前の控え（`#prevFold`）に、今の使用量の観測を載せたもの。同じ会話の控えでなければ預けない。
-   */
-  #persistFoldStateAfterTurn(): void {
-    const current = this.#captureFold();
-    const confirmed = this.#prevFold;
-    const raw =
-      confirmed === null ||
-      current === null ||
-      confirmed.sessionId !== current.sessionId ||
-      this.#mirrorGapSessions.has(current.sessionId)
-        ? null
-        : serializeFoldState({
-            ...confirmed,
-            usage: current.usage,
-            growthTokens: current.growthTokens,
-          });
-    if (raw === null) {
-      this.#forgetFoldState();
-      this.#prevFold = current;
-      return;
-    }
-    this.#prevFold = current;
-    if (raw === this.#foldLastWritten) return;
-    this.#foldLastWritten = raw;
-    this.#foldStoreMayHold = true;
-    this.#enqueueFoldWrite(raw);
-  }
-
-  /**
-   * 起動後の最初の束で1回だけ、預けた控えを読み戻す。次の5つがすべて揃ったときだけ使う。1つでも欠ければ今までどおり空から始める（全文）:
-   * (1) 預けた控えが読めて形が合う (2) 控えの sessionId が、保存してある resume 用の id と一致する (3) 大きすぎる resume として捨てられない（`#resumeCandidateWithinBudget`）
-   * (4) その会話の生ログが実在する（`#rawLogBytes` が測れて 0 より大きい。測れない・0 は全文）
-   * (5) 控えの使用量の観測から「要約が走りうる」と言われない（`#fullReasonThisTurn`）。
-   * 使えなかった控えは預け先からも消す: 残すと、次の起動が同じ古い控えを読み直す。
-   * 周期の数えは1つ進めて戻す（預けたのは1ターン前の控えなので、実際の数えは進んでいる）: 20ターンごとの全文が遅れる側へ倒れない。
-   */
-  async #restoreFoldStateOnce(): Promise<void> {
-    if (this.#foldRestoreAttempted) return;
-    this.#foldRestoreAttempted = true;
-    try {
-      const raw = await this.#stores.sessions.getFoldState();
-      if (raw === null) {
-        this.#foldStoreMayHold = false;
-        return;
-      }
-      const state = parseFoldState(raw);
-      const storedSessionId = await this.#stores.sessions.getCloneSessionId();
-      if (state === null || storedSessionId === null || state.sessionId !== storedSessionId) {
-        this.#forgetFoldState();
-        return;
-      }
-      // 測りは1回だけ。resume の可否と読み戻しの条件の両方へ渡す（`#measureRawLog`）
-      const measured = await this.#measureRawLog(storedSessionId);
-      const resume = await this.#resumeCandidateWithinBudget(storedSessionId, measured);
-      this.#resumeVerdict = { stored: storedSessionId, resume };
-      if (resume !== storedSessionId) {
-        this.#forgetFoldState();
-        return;
-      }
-      // 生ログが実在するときだけ読み戻す: `#resumeCandidateWithinBudget` は「測れない」も「0 バイト」も resume してよいとみなす（能力を削らないため）が、
-      // その resume が空の会話を開くなら、畳んだ最初の入力（「前と変化なし」）が指す全文はどこにも載っていない
-      const notRestoredLabel = foldReadbackSkipLabel(measured);
-      if (notRestoredLabel !== null) {
-        this.#forgetFoldState();
-        // 待たない・握る: 起動の最初の束を遅らせず、書き込みの失敗でターンを落とさない（`#journal` は投げない）。1回の起動で1行（この関数は起動後1回だけ走る）
-        void this.#journalSelf(
-          'outbound',
-          `${EXCHANGE_KIND_GAUGE_PREFIX}畳みの控えを読み戻さなかった: 理由=${notRestoredLabel}`,
-        );
-        return;
-      }
-      this.#situationExplained.clear();
-      for (const [key, text] of state.situation) {
-        // 知らない鍵は `get` に引かれないだけで害が無い（形の検査は `parseFoldState`）
-        this.#situationExplained.set(key as Parameters<SituationExplained['set']>[0], text);
-      }
-      this.#situationTurnsSinceFull = state.turnsSinceFull + 1;
-      this.#digestDelta.importState(state.digest);
-      this.#situationExplainedSessionId = state.sessionId;
-      this.#restoredFold = {
-        sessionId: state.sessionId,
-        usage: state.usage,
-        growthTokens: state.growthTokens,
-      };
-      this.#foldLastWritten = raw;
-    } catch (error) {
-      noteDroppedRecord('畳みの控えの読み戻し', 'clone', error);
-      this.#forgetFoldState();
-    }
-  }
-
-  /** 全文へ戻す条件に当たれば、tick の要約の差分の記録を消す。`#pump` の先頭と、要約を組む直前（組む前の `await` の間に窓が開きうる）から呼ぶ。 */
-  #resetDigestDeltaIfNewConversation(): void {
-    const found = this.#fullReasonThisTurn();
-    if (found !== null) this.#returnToFullText({ digest: found });
-  }
-
-  /**
-   * 担当からの確認（`permission`）の文を組む前の、全文へ戻す判定し直し。確認の文の固定の段落を畳む仕組みは外したが、この判定の副作用（預けた控えの消し込み）は既定でも走っていたので、同じ位置・同じ条件（`permission` の件だけ）で残す。
-   */
-  #resetDigestDeltaBeforeConfirmation(
-    event: Extract<InboxEvent, { type: 'manager_message' }>,
-  ): void {
-    if (event.kind === 'permission') this.#resetDigestDeltaIfNewConversation();
-  }
-
   // 系統3のスイッチが無効なら報告の本文を切らない（#5466 の前の形）
   #reportBodyLimit(): number {
     return this.#tokenSaving.excerpt ? MANAGER_REPORT_BODY_LIMIT : Number.POSITIVE_INFINITY;
   }
 
-  /**
-   * 周期と「会話が前の全文の載った会話と同じと言えない回」の全文戻しを、断り書きを組む前の1か所で行う。
-   * 以前は situation 側が `#situationNoticeFor`（断り書きの後）、digest 側の `fixed` が同じ関数の中で消えていたため、断り書きの待ち行列の先頭と末尾の固定1文が20ターンごとに1ターンずれていた（#6302 が固定した振る舞い）。
-   * 一定ターンごとに全文へ戻す: 要約の合図を取りこぼしても、全文が会話から消えたまま要点だけが続く長さに上限を置くため。
-   * セッションが閉じていればこのターンで開き直す（resume が効かなければ別の会話になる）: 全文が会話に残っているとは言えないので全文へ戻す。
-   * 自動の要約が走りうるターンも全文にする（#4489。2026-10-11 のクローン teto の決定）: 要約で文脈が潰れた直後は同じ会話とみなせず、「同じ会話の中なら畳んでよい」というオーナーの承認の外になるため。要約は入力を受けた後に走るので、要約の合図を受けてからでは間に合わない。
-   * #4941: 作り直しの窓（`inputEndedForRecycle`）と使用量の観測が取れない回も全文（`#conversationMayDifferFromLastFull`）。
-   * 蒸留には行わない（`#situationNoticeFor` と同じ。蒸留は断り書きも組まない）。
-   */
-  #applyFoldPeriod(events: InboxEvent[]): void {
-    const event = events[0];
-    if (event === undefined || event.type === 'distill') return;
-    this.#situationTurnsSinceFull += 1;
-    if (
-      this.#situationTurnsSinceFull >= SITUATION_FULL_EVERY_TURNS ||
-      this.#conversationMayDifferFromLastFull()
-    ) {
-      // 固定の文言の控え（道具の応答 `manager_list` ・報告の包み・断り書きの末尾）も同じ周期で全文へ戻す: 同じ線にしないと、周期の保険が situation にしか無いため
-      this.#returnToFullText({ situation: true, turnsSinceFull: true, digest: 'fixed' });
-    }
-  }
-
+  // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
+  // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
+  // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
     if (event.type === 'distill') return '';
-    // 周期の全文戻しは `#applyFoldPeriod`（断り書きを組む前に `#pump` が呼ぶ）が済ませている
     try {
       const managers = await this.#managers.list();
       const fleet = await this.#managers.runners();
@@ -5236,8 +4847,6 @@ class Clone implements CloneHost {
         tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
       }
     }
-    // 組む直前に判定し直す（上の `await` の間に作り直しの窓が開きうる）
-    this.#resetDigestDeltaIfNewConversation();
     const distillReason = event.reason === 'shutdown' ? 'conversation_end' : event.reason;
     const tidyOption = tidyTargets === undefined ? {} : { tidyTargets };
     const distillPrompt = buildDistillPrompt(distillReason, tidyOption);
@@ -5356,14 +4965,12 @@ class Clone implements CloneHost {
       event.kind === 'report' && hasReportFiles(event)
         ? await this.#resolveManagerReportAttachments([event])
         : null;
-    this.#resetDigestDeltaBeforeConfirmation(event);
     const prompt = managerPrompt(
       event,
       origin,
       liveness,
       new Date(),
       attached?.linesOf.get(event.id),
-      NO_FOLD,
       this.#reportBodyLimit(),
     );
     await this.#runInternal(prompt, 'normal', attached?.images ?? [], origin.conversationId);
@@ -5411,8 +5018,6 @@ class Clone implements CloneHost {
     const plan = claimed.status === 'ok' ? claimed.plan : null;
     // #4938 の案2: 要約の全体ではなく、担当の節・継続中の依頼の節と、他の節の件数の行だけを付ける。
     const timerDigest = await this.#recentDigestCounts();
-    // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
-    this.#resetDigestDeltaIfNewConversation();
     // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
     await this.#journal(
       turnInputEntry({
@@ -5529,7 +5134,6 @@ class Clone implements CloneHost {
       return;
     }
     const digest = await this.#recentDigest();
-    this.#resetDigestDeltaIfNewConversation(); // #4941: 組む直前の判定し直し
     await this.#journal(
       turnInputEntry({
         type: 'self_initiative',
@@ -6330,8 +5934,8 @@ class Clone implements CloneHost {
   // SDK セッション
   // -------------------------------------------------------------------------
 
-  // 生ログの大きさを1回測る。resume の可否（`#resumeCandidateWithinBudget`）と読み戻しの条件（`#restoreFoldStateOnce`）が同じ測りを使う: 起動直後の最初の束で2度測らないため。
-  // 値は呼び出し側の1回の呼び出しの中だけで持ち回し、フィールドへは置かない: 置くと、生ログが育った後の古い値で次の判定をするため。
+  // 生ログの大きさを1回測る（resume の可否 `#resumeCandidateWithinBudget` の材料）。
+  // 値はフィールドへ置かない: 置くと、生ログが育った後の古い値で次の判定をするため。
   // `getProjectKey` の失敗は握らず呼び出し側へ返す（resume の可否の判定は、これまでもそこで落ちていた）
   async #measureRawLog(sessionId: string): Promise<RawLogMeasure> {
     const tail = this.#stores.sessionTranscriptTail;
@@ -6351,11 +5955,8 @@ class Clone implements CloneHost {
   // `load()` には触れない: 大きすぎる鍵は `load()` を呼ばないことで SDK の契約（返す内容は削れない）を守るため。
   // 測れないとき（預け先が無い・`projectKey` が不明・計測の失敗）は黙って resume する側へ倒す: 能力を削らないためと、通常の起動のたびに同じ1行が日誌に積もるのを避けるため（`#noteLostSession` と同じ）。予算を超えたときだけ日誌へ1行残す。
   // 古い resume 素材を捨てない: 次のセッションの `init` が `session_started` を新しい id で上書きするため。
-  async #resumeCandidateWithinBudget(
-    sessionId: string,
-    measured?: RawLogMeasure,
-  ): Promise<string | null> {
-    const measure = measured ?? (await this.#measureRawLog(sessionId));
+  async #resumeCandidateWithinBudget(sessionId: string): Promise<string | null> {
+    const measure = await this.#measureRawLog(sessionId);
     if (measure.state !== 'measured') return sessionId;
     const bytes = measure.bytes;
     if (bytes === null) return sessionId;
@@ -6389,26 +5990,8 @@ class Clone implements CloneHost {
 
     const storedResume = await this.#stores.sessions.getCloneSessionId();
     // `load()` を呼ぶ前に大きさを測る: 超えた resume を読むと OOM になるため（`#resumeCandidateWithinBudget`）
-    // 読み戻しが同じ id で測っていればその判定を使う（予算超過の行を2度書かない）
-    const verdict = this.#resumeVerdict;
-    this.#resumeVerdict = null;
     const resume =
-      storedResume === null
-        ? null
-        : verdict?.stored === storedResume
-          ? verdict.resume
-          : await this.#resumeCandidateWithinBudget(storedResume);
-    // 読み戻した控えが指す会話と違う会話を開くなら捨てる（読み戻した後に id が捨てられた回。通常は起きない）。この回の断り書きは既に組んである
-    const restored = this.#restoredFold;
-    this.#restoredFold = null;
-    if (restored !== null && resume !== restored.sessionId) {
-      this.#returnToFullText({
-        situation: true,
-        turnsSinceFull: true,
-        sessionId: true,
-        digest: { label: 'session_changed' },
-      });
-    }
+      storedResume === null ? null : await this.#resumeCandidateWithinBudget(storedResume);
     this.#sdkSession.beginSession(resume);
     this.#sessionOrdinal += 1;
     // 以下はセッションごとに戻す: 持ち越すと、別セッションの生ログを今の名前で退避する／暴走の止めが前のセッションの成功で解ける／畳みの敷居へ近い状態から始まる
@@ -6679,7 +6262,6 @@ class Clone implements CloneHost {
     this.#pluginLoadInfo = null;
     this.#sdkSession.setSdkSessionId(null);
     this.#lastContextUsage = null;
-    this.#lastContextGrowthTokens = 0;
   }
 
   // `typeof` で検査し、読めない形は `null` のままにする: 読み違えて投げると本セッションの起動そのものが壊れる。読めた配列だけが「0本」を名乗れる。
@@ -7225,8 +6807,6 @@ class Clone implements CloneHost {
 
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
-    // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）。
-    this.#returnToFullText({ digest: { label: 'compact_boundary' } });
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -7722,13 +7302,6 @@ class Clone implements CloneHost {
         return this.#applyCompaction(event);
       }
 
-      case 'transcript_mirror_failed': {
-        this.#mirrorGapSessions.add(event.sessionId);
-        // 既に預けた控えも捨てる（預けた後に届いた欠けを含む）。以後の預け入れは `#persistFoldStateAfterTurn` が止める
-        if (event.sessionId === this.#situationExplainedSessionId) this.#forgetFoldState();
-        return;
-      }
-
       case 'refusal': {
         return this.#applyRefusal(event);
       }
@@ -7744,8 +7317,10 @@ class Clone implements CloneHost {
         return this.#applyDelegationNotified(event);
       }
 
+      // `transcript_mirror_failed` は何もしない: 生ログの欠けを読む控え（畳みの控え）を外したため
       case 'delegation_started':
       case 'background_tasks':
+      case 'transcript_mirror_failed':
         return;
 
       // 既定で無視へ倒さない: provider が名乗り始めた事実が黙って網の外へ出る。枝が増えたらここが型で落ちる。
@@ -7760,11 +7335,6 @@ class Clone implements CloneHost {
   /** SDK `compaction` の1件を処理する（`#apply` が振り分ける）。 */
   async #applyCompaction(event: Extract<AgentEvent, { type: 'compaction' }>): Promise<void> {
     this.#sdkSession.turn?.timer?.compactionEnded();
-    // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
-    this.#returnToFullText({
-      situation: true,
-      digest: { label: 'compact_boundary' },
-    });
     // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
     this.#sdkSession.turn?.compactions.push({
       trigger: event.trigger,
@@ -7823,18 +7393,6 @@ class Clone implements CloneHost {
     event: Extract<AgentEvent, { type: 'session_started' }>,
   ): Promise<void> {
     this.#sdkSession.markSawInit();
-    // 会話が変わったら「いまの全体」の説明文の控えを捨てる: 前の会話で出した全文は、この会話には無いため
-    // 初めての init（控えが無い → 有る）では捨てない: このターンの全文は、いま開いたこの会話に載せたもののため
-    if (
-      this.#situationExplainedSessionId !== undefined &&
-      this.#situationExplainedSessionId !== event.sessionId
-    ) {
-      this.#returnToFullText({
-        situation: true,
-        digest: { label: 'session_changed' },
-      });
-    }
-    this.#situationExplainedSessionId = event.sessionId;
     // 投げない: 控えの失敗でセッションを殺さない。跡は残す: 諦め方が「素材が無かった」正常な経路と区別できなくなるため。
     await this.#stores.sessions.setCloneSessionId(event.sessionId).catch((error: unknown) => {
       noteCloneSessionIdNotRecorded(error);
@@ -7994,12 +7552,6 @@ class Clone implements CloneHost {
     const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
     if (contextUsage?.totalTokens !== undefined) timer?.contextObserved(contextUsage.totalTokens);
     // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
-    // 伸びは前の観測があって両方測れた回だけ取る: 開き直しの直後や測れなかった回の差は伸びではないため
-    const previousTotal = this.#lastContextUsage?.totalTokens;
-    this.#lastContextGrowthTokens =
-      previousTotal !== undefined && contextUsage?.totalTokens !== undefined
-        ? Math.max(0, contextUsage.totalTokens - previousTotal)
-        : 0;
     this.#lastContextUsage = contextUsage ?? null;
 
     // `turn_usage` に相乗りさせない: `#recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
@@ -8115,8 +7667,6 @@ class Clone implements CloneHost {
     // 答えの返った合図を `defer` し、次の合図で同じ発言が二重実行される。
     // `rate_limit_event` の `rejected` でも課金枠（overage）に落ちてターンは成功しうる（通常の遷移）。
     // `#notices` は降ろさない: 同じ文言を二度書かないための別の関心。
-    // 控えの預け入れは成功したターンの後だけ: 失敗したターンの入力が履歴に残るかは SDK の挙動に頼らない（`turn_failed` の reset と同じ）
-    this.#persistFoldStateAfterTurn();
     this.#usageBlocked = null;
     // 抑止した再武装・畳んだ内部の失敗の件数も0へ戻す: この解除は `#pump` 先頭の解除ブロックを経由せず、古い件数が次の枠当たりへ残るため。
     this.#usageBlockSuppressedRearms = 0;
@@ -8394,10 +7944,7 @@ function mixableSignalChars(event: MixableSignal): number {
 /**
  * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）をそのまま並べる（要約しない）。
  */
-export function mixedSignalBatchPrompt(
-  items: readonly MixedBatchItem[],
-  fold: FixedTextFold = NO_FOLD,
-): string {
+export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string {
   const total = items.reduce(
     (sum, item) => sum + (typeof item === 'string' ? 1 : item.parts.length),
     0,
@@ -8414,11 +7961,7 @@ export function mixedSignalBatchPrompt(
     const chunk = [
       `---`,
       `**マネージャー ${item.managerId} からの報告が続けて ${String(item.parts.length)} 件（(${String(first)})〜(${String(last)})）。** ` +
-        fold(
-          'batch-mixed-report-run-notice',
-          '後の報告が前の報告を補足・訂正していることがある。**この続きの報告は最後まで読んでから判断すること。**',
-          '（補足・訂正があるので最後まで読んでから判断する。同じ注意が会話の上にある）',
-        ),
+        '後の報告が前の報告を補足・訂正していることがある。**この続きの報告は最後まで読んでから判断すること。**',
       '',
     ];
     for (const part of item.parts) {
@@ -8430,11 +7973,7 @@ export function mixedSignalBatchPrompt(
   return [
     `[system] 処理待ちのあいだに届いた合図を **${String(total)} 件** まとめて渡す（届いた順。要約していない）。` +
       '別々の担当・外部からの件が混ざっている。',
-    fold(
-      'batch-mixed-heading-guide',
-      '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
-      '（最後まで読んでから1件ずつ打つ。質問は各宛先で答える。同じ注意が会話の上にある）',
-    ),
+    '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
     '',
     ...lines,
   ].join('\n');
@@ -8466,7 +8005,6 @@ export function humanTurnText(
   events: HumanMessage[],
   priorTexts: ReadonlyMap<string, string> = new Map(),
   attachmentNotices: ReadonlyMap<string, string> = new Map(),
-  fold: FixedTextFold = NO_FOLD,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -8481,12 +8019,8 @@ export function humanTurnText(
   return [
     `[system] 前のターンを処理しているあいだに人間から届いた発言を、続けて **${events.length} 件** ` +
       'まとめて渡す（届いた順の全文で、要約していない）。',
-    fold(
-      'batch-human-heading-guide',
-      '**まとめて1つの応答で答えよ。** 1件目に答えたうえで、後の発言が' +
-        'それを言い直している・取り消している・条件を足していることがある。**最後まで読んでから答えること。**',
-      '（1つの応答で答える。言い直し・取り消しがあるので最後まで読む。同じ注意が会話の上にある）',
-    ),
+    '**まとめて1つの応答で答えよ。** 1件目に答えたうえで、後の発言が' +
+      'それを言い直している・取り消している・条件を足していることがある。**最後まで読んでから答えること。**',
     '',
     '---',
     '',
@@ -8581,6 +8115,16 @@ async function confirmationLiveness(
   return summary.waiting.some((item) => item.requestId === requestId) ? 'live' : 'settled';
 }
 
+/** 報告への応じ方の案内（単発の報告の末尾）。 */
+export const REPORT_FOLLOW_UP_GUIDE =
+  '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。\n' +
+  '学びや判断の基準になったことがあれば記憶へ移すこと。';
+
+/** 束ねた報告への応じ方の案内。 */
+const BATCH_REPORT_FOLLOW_UP_GUIDE =
+  '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。\n' +
+  '学びや判断の基準になったことがあれば記憶へ移すこと。';
+
 /**
  * マネージャーからの一件をクローンの言葉に直す。
  *
@@ -8588,32 +8132,12 @@ async function confirmationLiveness(
  * `now` は呼び出し元から渡す: 純関数に保つため `new Date()` を呼ばない（既定値は本番用で、テストは明示的に渡す）。
  * `event.foldedTurn` の回は見出しを「直近のターンの中身」にする。判定は構造化された印だけで、本文の文言は見ない。
  */
-/**
- * 固定の文言を、同じ会話の2回目から短い参照にする口。
- * 既定は畳まない: 試験と、控えを持たない呼び出しでは今までどおり全文を出すため。
- */
-export type FixedTextFold = (id: string, full: string, ref: string) => string;
-
-const NO_FOLD: FixedTextFold = (_id, full) => full;
-
-/** 報告への応じ方の案内（単発の報告の末尾）。毎回同じ文なので、同じ会話の2回目からは参照にする。 */
-export const REPORT_FOLLOW_UP_GUIDE =
-  '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。\n' +
-  '学びや判断の基準になったことがあれば記憶へ移すこと。';
-export const REPORT_FOLLOW_UP_GUIDE_REF = '（応じ方の案内は前の報告と同じ。会話の上にある）';
-
-/** 束ねた報告への応じ方の案内。 */
-const BATCH_REPORT_FOLLOW_UP_GUIDE =
-  '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。\n' +
-  '学びや判断の基準になったことがあれば記憶へ移すこと。';
-
 function managerPrompt(
   event: Extract<InboxEvent, { type: 'manager_message' }>,
   origin: ManagerOrigin,
   liveness: ConfirmationLiveness,
   now: Date = new Date(),
   attachmentLines: readonly string[] = [],
-  fold: FixedTextFold = NO_FOLD,
   bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
 ): string {
   const head = `[system] マネージャー ${event.managerId} から届いた。`;
@@ -8629,9 +8153,9 @@ function managerPrompt(
       '',
       // 経過も印も本文の後ろに置く: 前に置くと「読まなくてよい」と読まれて本文を飛ばされる。
       describeReportAge(event.at, now),
-      describeManagerOrigin(origin, fold),
+      describeManagerOrigin(origin),
       '',
-      fold('report-follow-up', REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF),
+      REPORT_FOLLOW_UP_GUIDE,
     ].join('\n');
   }
 
@@ -8645,7 +8169,7 @@ function managerPrompt(
       event.text,
       '',
       'この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。答え直す必要は無い。',
-      describeManagerOrigin(origin, fold),
+      describeManagerOrigin(origin),
     ].join('\n');
   }
 
@@ -8656,8 +8180,6 @@ function managerPrompt(
       : `managerId: "${event.managerId}", requestId: "${event.requestId}"`;
 
   const decisionLine = '許可確認なので `decision` に allow / deny を明示すること。';
-  // 骨組みの説明だけを、同じ会話の2回目から参照にする（#5299）。宛先（managerId・requestId）と decision の指定は、返事の書き方に直接効くので短い形にも残す。
-  // 質問と許可確認は骨組みが違うので控えの id を分ける。
   const guide = [
     `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
     `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
@@ -8667,23 +8189,7 @@ function managerPrompt(
   ]
     .filter((line) => line !== '')
     .join('\n');
-  const guideRef = [
-    // 返事（`manager_send`）と根拠が無いとき（`ask_human`）は同じ宛先を取るので、宛先は1回だけ書く。
-    // `ask_human` の添え損ねが再開できなくなる点は、短い形にも残す。
-    `（応じ方は前の${label}と同じ。会話の上にある）返事は \`manager_send\`、根拠が無ければ \`ask_human\`。どちらにも宛先 ${to} を添える（\`ask_human\` で添え損ねると人間が答えても再開できない）。`,
-    event.kind === 'permission' ? decisionLine : '',
-  ]
-    .filter((line) => line !== '')
-    .join('\n');
-
-  return [
-    `${head}（${label}）`,
-    '',
-    event.text,
-    '',
-    describeManagerOrigin(origin, fold),
-    fold(`confirmation-${event.kind}`, guide, guideRef),
-  ]
+  return [`${head}（${label}）`, '', event.text, '', describeManagerOrigin(origin), guide]
     .filter((line) => line !== '')
     .join('\n');
 }
@@ -8705,20 +8211,16 @@ const HUMAN_ANSWER_CRITERIA_GUIDE =
   '基準が読み取れないなら、推測で書かずに人間に訊くこと。';
 
 /**
- * 委譲が task に結び付いていないときの案内（起点の会話の有無によらず同じ。会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。
+ * 委譲が task に結び付いていないときの案内（起点の会話の有無によらず同じ）。
  * 起点の会話が無い委譲に別の手順を書かない: task_add はこのターンの起点の会話へ、無ければ新しい会話へ器が結ぶ（`task_add` の `getWorkConversationId() ?? randomUUID()`）ので、クローンの手順は同じになるため（#5469）。
  */
 export const ORIGIN_NO_TASK_GUIDE =
   '（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。' +
   '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）';
-const ORIGIN_NO_TASK_GUIDE_REF =
-  '（扱いは前に出した案内と同じ: task_list で探した task へ task_say で書く。無ければ task_add。知らせるだけの task は done にする）';
 
 /** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */
 const ORIGIN_TASK_GUIDE =
   '（人間へ知らせるなら、結び付いた task へ `task_say` で書く。書いたら、知らせるだけの task は task_set_status で done にする）';
-const ORIGIN_TASK_GUIDE_REF =
-  '（扱いは前に出した案内と同じ: 結び付いた task へ task_say で書き、知らせるだけの task は done にする）';
 
 /** 委譲が task に結び付いているときだけ出す1行（#5469 P3）。委譲が終わった task は判断待ち（needs_decision）に戻っているので、結果の扱いはその task の上で決める。 */
 function describeOriginTask(taskId: string | undefined): string {
@@ -8727,17 +8229,12 @@ function describeOriginTask(taskId: string | undefined): string {
     : `\n結び付いた task: ${taskId}（task_say で書ける。task_list で読める）`;
 }
 
-export function describeManagerOrigin(
-  origin: ManagerOrigin,
-  fold: FixedTextFold = NO_FOLD,
-): string {
+export function describeManagerOrigin(origin: ManagerOrigin): string {
   switch (origin.kind) {
     case 'job':
       return (
         `起点の会話: ${origin.conversationId ?? '無し（会話の外で起こした委譲）'}` +
-        (origin.taskId === undefined
-          ? fold('origin-no-task', ORIGIN_NO_TASK_GUIDE, ORIGIN_NO_TASK_GUIDE_REF)
-          : fold('origin-task', ORIGIN_TASK_GUIDE, ORIGIN_TASK_GUIDE_REF)) +
+        (origin.taskId === undefined ? ORIGIN_NO_TASK_GUIDE : ORIGIN_TASK_GUIDE) +
         describeOriginTask(origin.taskId)
       );
     case 'missing':
@@ -8813,7 +8310,6 @@ export function managerReportBatchPrompt(
   origin: ManagerOrigin,
   now: Date,
   attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
-  fold: FixedTextFold = NO_FOLD,
   bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
 ): string {
   const head = events[0];
@@ -8831,12 +8327,7 @@ export function managerReportBatchPrompt(
 
   return [
     `[system] マネージャー ${head.managerId} から届いた報告を、処理待ちのあいだに続けて **${events.length} 件** まとめて渡す（要約していない）。`,
-    // 件数・担当名は上の行で毎回出す。固定の注意だけを、同じ会話の2回目から参照にする（要点は参照にも残す）
-    fold(
-      'batch-report-heading-guide',
-      '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
-      '（補足・訂正があるので最後まで読んでから判断する。同じ注意が会話の上にある）',
-    ),
+    '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
     '',
     '---',
     '',
@@ -8848,9 +8339,9 @@ export function managerReportBatchPrompt(
         ` ${managerReportRetrievalHint(head)}`,
     }),
     '',
-    describeManagerOrigin(origin, fold),
+    describeManagerOrigin(origin),
     '',
-    fold('batch-report-follow-up', BATCH_REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF),
+    BATCH_REPORT_FOLLOW_UP_GUIDE,
   ].join('\n');
 }
 
@@ -8863,7 +8354,6 @@ export function managerReportBatchPrompt(
 export function externalBatchPrompt(
   events: ExternalEvent[],
   attachmentNoticeLines: readonly string[] = [],
-  fold?: FixedTextFold,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -8883,14 +8373,10 @@ export function externalBatchPrompt(
       '（本文は1回だけ。全件で `source` と中身が一致している）。',
     `届いた時刻（届いた順）: ${timestamps}`,
     '',
-    (fold ?? NO_FOLD)(
-      'batch-external-same-content-warning',
-      '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
-        '——外の世界で別々に発行された合図である可能性がある。',
-      '（同じ中身でも同じ出来事の繰り返しとは限らない。同じ注意が会話の上にある）',
-    ),
+    '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
+      '——外の世界で別々に発行された合図である可能性がある。',
     '',
-    externalEventInstruction(fold),
+    externalEventInstruction(),
     '',
     '---',
     '',

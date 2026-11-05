@@ -47,7 +47,7 @@ describe('findEnglishSentences: 引っかけない', () => {
     'runner-pids-pressure.ts',
     // 型の名前・識別子だけの行
     'RunnerSession',
-    'DigestSessionDelta#foldParagraphs',
+    'ManagerPool#runners',
     'ALTEROID_REPORT_LANGUAGE',
     // 短い札
     'OK',

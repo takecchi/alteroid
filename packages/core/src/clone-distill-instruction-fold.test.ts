@@ -67,8 +67,6 @@ describe('蒸留の指示の固定の本体は、同じ会話の2回目も全文
       expect(plain).toContain(INTRO_FULL);
       expect(plain).toContain(CONSOLIDATION_FULL);
       expect(plain).not.toContain(REF_MARK);
-      // 畳まない fold（常に全文）は、既定と1文字も違わない
-      expect(buildDistillPrompt(reason, { fold: (_id, full) => full })).toBe(plain);
     }
   });
 });

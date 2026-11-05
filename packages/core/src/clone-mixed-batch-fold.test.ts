@@ -55,12 +55,8 @@ async function mergedInput(
 const count = (text: string, needle: string): number => text.split(needle).length - 1;
 
 describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎件全文で出す', () => {
-  it.each([
-    ['未設定', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: undefined }],
-    ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
-    ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
-  ] as const)(
-    '⭐ 畳みが切り（%s）なら、起点が同じ3件でも枠と案内と経過を毎件全文で出す',
+  it.each([['未設定', {}]] as const)(
+    '⭐ 畳みを外したので（%s）、起点が同じ3件でも枠と案内と経過を毎件全文で出す',
     async (_name, env) => {
       const { merged, stop } = await mergedInput(
         [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-1'), job('mgr-C', 'conv-1')],

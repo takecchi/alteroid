@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { createClone } from './clone.js';
-import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
+import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -21,7 +21,7 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
-  // クローンの env。既定は畳みを有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
+  // クローンの env。既定は空（畳みの節約は外した）
   env?: NodeJS.ProcessEnv;
 }
 
@@ -132,7 +132,7 @@ function boot(script: SdkScript = {}): Boot {
   const clone = createClone({
     stores: createMemoryStores(),
     queryFn: fn,
-    env: script.env ?? TOKEN_SAVING_ENABLED_ENV,
+    env: script.env ?? {},
     managers,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),

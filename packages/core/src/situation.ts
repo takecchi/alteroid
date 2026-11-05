@@ -23,21 +23,6 @@ import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
 // 後から grep で全部拾えるように固定する
 const SITUATION_HEAD = '[system] いまの全体';
 
-/**
- * 預けた畳みの控え（fold-state）の situation 側の型（鍵 → 出した本文）。situation と待ち行列の先頭の畳みは撤去済みで、
- * 説明文の組み立ては読み書きしない。控えの保存（clone.ts の `#captureFold`・読み戻し）を次の撤去まで変えないために型だけ残してある。
- */
-export type SituationExplained = Map<
-  SituationExplanationKey | 'materials' | typeof TASK_QUEUE_HEAD_KEY,
-  string
->;
-
-// 預けた控えの鍵（以前は断り書きの待ち行列の先頭を前回出した形のまま控えていた）。clone.ts が待ち行列を読めなかった回に消す。
-export const TASK_QUEUE_HEAD_KEY = 'taskQueueHead';
-
-type SituationExplanationKey =
-  'lost' | 'lastFailure' | 'usageStopped' | 'runnerVanished' | 'readings' | 'tokenInvariant';
-
 // 数えた時刻を名乗る: 節は会話履歴に溜まり、数が変わらなければ古い節と新しい節が1バイトも違わず、どれが最新か判定できないため。
 // 秒までしか出さず日付を出さない: 毎ターンの文字数を増やさないことを優先したため。
 // export して使い回す: 同じ判定関数を2つ持つと、片方だけ直して忘れる形が再発するため

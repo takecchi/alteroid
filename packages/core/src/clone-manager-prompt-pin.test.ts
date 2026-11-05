@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { createClone } from './clone.js';
-import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
+import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -119,7 +119,7 @@ function boot(): Boot {
     reportSettleMs: 0,
     stores,
     queryFn: fn,
-    env: TOKEN_SAVING_ENABLED_ENV,
+    env: {},
     managers,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),

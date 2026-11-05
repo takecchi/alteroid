@@ -562,6 +562,8 @@ export const STATEMENTS = [
   `create table if not exists manager_credential_removals (
      name text primary key
    )`,
+  // 畳みの控え（クローンの固定文を畳むために預けていた）は外した: 読む所も書く所も無いので、残っている行を消す。
+  `delete from daemon_state where key = 'clone_fold_state'`,
 ] as const;
 
 /** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */

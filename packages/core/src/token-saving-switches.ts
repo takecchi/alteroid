@@ -4,13 +4,10 @@ import { clearEnvSwitchNotesForTesting, resolveEnvSwitch } from './env-switch.js
 // 値の綴り: `on` / `1` / `true` / `yes` / `enabled` が有効、`off` / `0` / `false` / `no` / `disabled` が無効、未設定と空は既定。大文字小文字は問わない。
 // それ以外の綴りは既定へ倒して `noteUnreadableRecord` で残す（`resolveInboxSettleMs` と同じ作法）。デーモンの起動は落とさない。
 
-/** 系統2「決まった文の折り畳み」。既定は無効＝2回目以降も毎回、元の全文が出る。 */
-export const TOKEN_SAVING_FOLD_FIXED_TEXT_ENV = 'ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT';
 /** 系統3「可変内容の抜粋・予算」。既定は有効＝現状のまま。無効にすると抜粋・予算を節約改修の前の形に戻す。 */
 export const TOKEN_SAVING_EXCERPT_ENV = 'ALTEROID_TOKEN_SAVING_EXCERPT';
 
 export interface TokenSavingSwitches {
-  readonly foldFixedText: boolean;
   readonly excerpt: boolean;
 }
 
@@ -20,10 +17,6 @@ const resolveSwitch = resolveEnvSwitch;
 /** テスト用: 読めない綴りの痕跡の「1回だけ」の控えを空にする。 */
 export const clearTokenSavingNotesForTesting = clearEnvSwitchNotesForTesting;
 
-export function resolveTokenSavingFoldFixedText(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveSwitch(env, TOKEN_SAVING_FOLD_FIXED_TEXT_ENV, false, '固定文の折り畳みの設定');
-}
-
 export function resolveTokenSavingExcerpt(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveSwitch(env, TOKEN_SAVING_EXCERPT_ENV, true, '抜粋・予算の節約の設定');
 }
@@ -32,7 +25,6 @@ export function resolveTokenSavingSwitches(
   env: NodeJS.ProcessEnv = process.env,
 ): TokenSavingSwitches {
   return {
-    foldFixedText: resolveTokenSavingFoldFixedText(env),
     excerpt: resolveTokenSavingExcerpt(env),
   };
 }

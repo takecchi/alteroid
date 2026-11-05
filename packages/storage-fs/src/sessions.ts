@@ -20,7 +20,6 @@ import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
-const foldStateSchema = z.object({ state: z.string() });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
 // 墓標の列（#4884）。古い版が書いた1枠のファイル（transcript-grave.json・lost-session-grave.json）は読まない: 読めなくても失われて困らない記録として捨てる（#5869）。列のファイルが無ければ列は空として扱う。
 const graveQueueSchema = z.object({ graves: z.array(graveSchema) });
@@ -64,8 +63,6 @@ export class FsSessionRegistry implements SessionRegistry {
   // 別のファイルに置く: `#graveQueuePath` と同時に立ちうるうえ、`#path` と同居すると `setCloneSessionId(null)` で消えるため
   readonly #lostSessionQueuePath: string;
   readonly #projectKeyPath: string;
-  // `#path` と別のファイルに置く: id の書き込み（init のたび）が控えを巻き込まず、読み戻す側が id の一致で突き合わせられるため
-  readonly #foldStatePath: string;
   // 墓標の本体と別のファイルに置く: 墓標の形と `clear…If` の突き合わせに触れないため（#4752）
   readonly #distillFailuresPaths: Record<'transcript' | 'lost_session', string>;
 
@@ -75,7 +72,6 @@ export class FsSessionRegistry implements SessionRegistry {
     this.#graveQueuePath = join(dir, 'transcript-grave-queue.json');
     this.#lostSessionQueuePath = join(dir, 'lost-session-grave-queue.json');
     this.#projectKeyPath = join(dir, 'project-key.json');
-    this.#foldStatePath = join(dir, 'fold-state.json');
     this.#distillFailuresPaths = {
       transcript: join(dir, 'transcript-grave-distill-failures.json'),
       lost_session: join(dir, 'lost-session-grave-distill-failures.json'),
@@ -93,32 +89,11 @@ export class FsSessionRegistry implements SessionRegistry {
   async setCloneSessionId(sessionId: string | null): Promise<void> {
     if (sessionId !== null) assertNoNul('session.cloneSessionId', sessionId);
     if (sessionId === null) {
-      // 控えを先に消す: id だけが消えて控えが残る（逆順）窓を作らないため
-      await rm(this.#foldStatePath, { force: true });
       await rm(this.#path, { force: true });
       return;
     }
     await mkdir(this.#dir, { recursive: true });
     await writeFileAtomic(this.#path, `${JSON.stringify({ cloneSessionId: sessionId })}\n`);
-  }
-
-  // 中身を解釈しない（壊れていれば呼び出し側が捨てる）。ファイルの形は `{ state: string }`
-  async getFoldState(): Promise<string | null> {
-    return readSessionMaterial(
-      this.#foldStatePath,
-      '畳みの控え（fold-state.json）',
-      (raw) => foldStateSchema.parse(JSON.parse(raw)).state,
-    );
-  }
-
-  async setFoldState(state: string | null): Promise<void> {
-    if (state === null) {
-      await rm(this.#foldStatePath, { force: true });
-      return;
-    }
-    assertNoNul('session.foldState', state);
-    await mkdir(this.#dir, { recursive: true });
-    await writeFileAtomic(this.#foldStatePath, `${JSON.stringify({ state })}\n`);
   }
 
   async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
@@ -290,7 +265,6 @@ export class FsSessionRegistry implements SessionRegistry {
   async clear(): Promise<number> {
     const paths = [
       this.#path,
-      this.#foldStatePath,
       this.#graveQueuePath,
       this.#lostSessionQueuePath,
       this.#projectKeyPath,

@@ -1669,14 +1669,6 @@ export interface SessionRegistry {
   /** NUL を含む id は `NulNotAllowedError` で断る。墓標は JSON 文字列で持つので NUL を含んでも往復する。 */
   setCloneSessionId(sessionId: string | null): Promise<void>;
   /**
-   * 畳みの控え（`clone.ts` の `FoldState` を JSON にしたもの）を、セッション id とは別の欄に置く不透明な文字列として預かる。無ければ `null`。
-   * 中身の形と、読み戻してよいかの判定（sessionId の一致・安全条件）は呼び出し側が持つ: ここは壊れた中身を解釈せず、そのまま返す。
-   * `setCloneSessionId(null)`（resume 素材を捨てる）はこの欄も消す: セッションが無いのに「その会話に全文が載っている」という控えだけが残らないため。
-   * NUL を含む値は `NulNotAllowedError` で断る。
-   */
-  getFoldState(): Promise<string | null>;
-  setFoldState(state: string | null): Promise<void>;
-  /**
    * 列に `archiveId` の墓標があるときにだけ下ろす。下ろしたら `true`、既に無ければ `false`（ほかの墓標には触れない）。
    *
    * `list` → 比較 → 列ごと書き戻す形で代用しない: 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、拾っている間に新しい墓標が立ち（文脈窓で畳む回はいつでも起きる）、

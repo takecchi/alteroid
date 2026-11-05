@@ -14,7 +14,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { createCloneTools, TOOL_USE_ID_META_KEY } from './tools.js';
 
-// 既定（S1 `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`・S2 `ALTEROID_TOKEN_SAVING_COMPACTION` がどちらも無効 = 本番の既定）で、
+// 既定（S1・S2 はどちらも外した。外す前は無効 = 本番の既定）で、
 // モデルへ渡す入力の全文・日誌に書く行・道具の応答の全文を、スナップショットで1字ずつ縛る。
 // 目的: S1・S2 を有効のときだけ通る経路ごと消すとき、既定の動きが1字も変わっていないことを、この試験が1つも更新されずに通ることで言えるようにする。
 // env は一切渡さない（`setup` の env は空 = 既定）。有効にした動きは別の試験が見る。
@@ -458,101 +458,5 @@ describe('既定（S1 無効）の道具の応答の全文（output-pin の無�
     const second = await h.call('conversation_read');
     expect(second).toBe(first);
     expect(first).toMatchSnapshot();
-  });
-});
-
-// ---- 畳みの控えの永続化と読み戻し ----
-// 以下は S1 を消すと変わりうる既定の副作用（daemon_state / fold-state.json への書き込みと、日誌の gauge 行）。
-// モデルへ渡す入力は変えない。変わったら意図して変えた差としてスナップショットを作り直し、PR 本文に書く。
-
-function storesWithTranscriptTail(measureSize: () => Promise<number | null>): Stores {
-  const stores = createMemoryStores();
-  stores.sessions.getProjectKey = () => Promise.resolve('proj');
-  return {
-    ...stores,
-    sessionTranscriptTail: {
-      readTail: () => Promise.resolve(null),
-      measureSize,
-    },
-  };
-}
-
-function recordFoldStateWrites(stores: Stores): (string | null)[] {
-  const writes: (string | null)[] = [];
-  const original = stores.sessions.setFoldState.bind(stores.sessions);
-  stores.sessions.setFoldState = (value: string | null) => {
-    writes.push(value);
-    return original(value);
-  };
-  return writes;
-}
-
-async function gaugeSkipLines(stores: Stores): Promise<string[]> {
-  const entries = (await stores.journal.list({ types: ['exchange'] })) as unknown as {
-    text: string;
-  }[];
-  return entries
-    .map((entry) => entry.text)
-    .filter((text) => text.includes('畳みの控えを読み戻さなかった'));
-}
-
-describe('S1 を消すと変わる: 畳みの控えの永続化と読み戻し（既定 env の今の姿）', () => {
-  it('S1 を消すと変わる: 既定でも setFoldState が毎ターンの終わりに書く内容', async () => {
-    const stores = storesWithTranscriptTail(() => Promise.resolve(4096));
-    const writes = recordFoldStateWrites(stores);
-    const s = setup(undefined, stores, { getContextUsage: CONTEXT_USAGE });
-    await humanTurn(s, '1ターン目');
-    await humanTurn(s, '2ターン目');
-    await humanTurn(s, '3ターン目');
-    await waitFor(() => writes.length >= 1, '控えの預け入れ');
-    const persisted = await stores.sessions.getFoldState();
-    expect({ writes, persisted }).toMatchSnapshot();
-    await stopAll(s.clone);
-  });
-
-  it('S1 を消すと変わる: 開き直しで生ログが 0 のとき「畳みの控えを読み戻さなかった」が出て、控えが消える', async () => {
-    const stores = storesWithTranscriptTail(() => Promise.resolve(4096));
-    const writes = recordFoldStateWrites(stores);
-    const a = setup(undefined, stores, { getContextUsage: CONTEXT_USAGE });
-    await humanTurn(a, 'A1');
-    await humanTurn(a, 'A2');
-    await waitFor(async () => (await stores.sessions.getFoldState()) !== null, '控えの預け入れ');
-
-    // 開き直し（前のプロセスは止めない: 落ちた形）。生ログが測れて 0 なら読み戻さない
-    const reopened = storesWithTranscriptTail(() => Promise.resolve(0));
-    reopened.sessions = stores.sessions;
-    reopened.journal = stores.journal;
-    const b = setup(undefined, reopened, { getContextUsage: CONTEXT_USAGE });
-    const firstAfterReopen = await humanTurn(b, 'B1');
-    await waitFor(
-      async () => (await gaugeSkipLines(stores)).length > 0,
-      '読み戻さなかった gauge 行',
-    );
-    await waitFor(async () => (await stores.sessions.getFoldState()) === null, '控えの消し込み');
-    expect({
-      resumes: (b.calls[0] as FakeCall).options.resume ?? null,
-      skipLines: await gaugeSkipLines(stores),
-      foldStateAfter: await stores.sessions.getFoldState(),
-      writeCount: writes.length,
-      firstAfterReopen,
-    }).toMatchSnapshot();
-    await stopAll(a.clone, b.clone);
-  });
-
-  it('S1 を消すと変わる: 開き直しで生ログが実在し読み戻せるときは gauge 行が出ない', async () => {
-    const stores = storesWithTranscriptTail(() => Promise.resolve(4096));
-    const a = setup(undefined, stores, { getContextUsage: CONTEXT_USAGE });
-    await humanTurn(a, 'A1');
-    await humanTurn(a, 'A2');
-    await waitFor(async () => (await stores.sessions.getFoldState()) !== null, '控えの預け入れ');
-
-    const b = setup(undefined, stores, { getContextUsage: CONTEXT_USAGE });
-    const firstAfterReopen = await humanTurn(b, 'B1');
-    expect({
-      skipLines: await gaugeSkipLines(stores),
-      foldStateKept: (await stores.sessions.getFoldState()) !== null,
-      firstAfterReopen,
-    }).toMatchSnapshot();
-    await stopAll(a.clone, b.clone);
   });
 });

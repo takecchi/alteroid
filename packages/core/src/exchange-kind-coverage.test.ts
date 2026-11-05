@@ -356,8 +356,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#reopenSession': 'decision',
     '#reportDroppedGraves': 'failure',
     '#reportFailure': 'failure,human,thinning',
-    '#resetDigestDelta': 'decision',
-    '#restoreFoldStateOnce': 'gauge',
     '#restoreUnreadPass': 'thinning',
     '#resumeCandidateWithinBudget': 'decision',
     '#salvageTranscript': 'failure,recovery',

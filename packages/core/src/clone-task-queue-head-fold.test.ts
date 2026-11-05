@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createClone } from './clone.js';
 import { waitFor } from './clone-test-harness.js';
-import { parseFoldState, serializeFoldState } from './fold-state.js';
-import type { FoldState } from './fold-state.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -130,32 +128,5 @@ describe('断り書きの待ち行列の先頭は、同じ待ち行列でも毎�
       expect(result.input).toContain(HEAD);
     }
     await s.clone.stop();
-  });
-});
-
-describe('預けた控え（fold-state）の互換: 鍵が増えても読める。鍵が無い古い控えは全文になる', () => {
-  const base = (situation: [string, string][]): FoldState => ({
-    v: 1,
-    sessionId: 'sess-1',
-    situation,
-    turnsSinceFull: 3,
-    digest: { sections: null, fixed: [], requests: [], paragraphs: [], reports: [] },
-    usage: null,
-    growthTokens: 0,
-  });
-
-  it('新しい鍵（taskQueueHead）入りの控えは、そのまま預けて読み戻せる', () => {
-    const raw = serializeFoldState(base([['taskQueueHead', '- 待ち行列: 開いている 1 件']]));
-    expect(raw).not.toBeNull();
-    expect(parseFoldState(raw!)?.situation).toEqual([
-      ['taskQueueHead', '- 待ち行列: 開いている 1 件'],
-    ]);
-  });
-
-  it('鍵が無い古い控えも読める（読み戻した後 `get` が undefined なので全文になる）', () => {
-    const raw = serializeFoldState(base([['materials', 'm']]));
-    const parsed = parseFoldState(raw!);
-    expect(parsed).not.toBeNull();
-    expect(new Map(parsed!.situation).get('taskQueueHead')).toBeUndefined();
   });
 });
