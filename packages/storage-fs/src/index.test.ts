@@ -2,8 +2,6 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 
 import {
-  MemoryConflictError,
-  memoryVersion,
   captureStderr,
   createAuthProviderRegistry,
   createAuthService,
@@ -15,6 +13,12 @@ import {
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
   verifyPersonaNulContract,
+  verifyPersonaWriteContract,
+  verifyPersonaIfMatchContract,
+  verifyPersonaProtectionStatusContract,
+  verifyPersonaCreatedAtContract,
+  verifyPersonaDescribedAtContract,
+  verifyPersonaDescribedBytesContract,
   verifyJobNulContract,
   verifyScheduleNulContract,
   verifyScheduleIfMatchContract,
@@ -85,108 +89,56 @@ describe('initWorkspace', () => {
 });
 
 describe('FsPersonaStore', () => {
+  // 索引（`.index.json`）を器の外から直す: 派生値だけを失った行を作るため。契約が器の裏側を知らずに済むよう、フックで渡す。
+  const editIndex = async (edit: (index: Record<string, Record<string, unknown>>) => void) => {
+    const indexPath = join(root, 'memory', '.index.json');
+    const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    edit(index);
+    await writeFile(indexPath, JSON.stringify(index), 'utf8');
+  };
+
   it('本文の NUL の契約（issue #2927。3実装で同じことを測る）', async () => {
     await verifyPersonaNulContract(stores.persona);
   });
 
-  describe('write の前提の版 ifMatch（Issue #2743。fs・pg・インメモリで同じ挙動）', () => {
-    it('読んだ版と同じなら書ける。違えば書かずに MemoryConflictError（current は書かれている文書）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const read = await stores.persona.read('values');
-      const v1 = memoryVersion(read?.content ?? '');
-      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
+  it('書き込みの正規化と追記の契約（fs・pg・インメモリで同じ挙動）', async () => {
+    await verifyPersonaWriteContract(stores.persona);
+  });
 
-      const error = await stores.persona
-        .write('values', '# 価値観\n\n人間の編集\n', { ifMatch: v1 })
-        .catch((e: unknown) => e);
+  it('write / remove の前提の版 ifMatch の契約（Issue #2743・#2881。fs・pg・インメモリで同じ挙動）', async () => {
+    await verifyPersonaIfMatchContract(stores.persona);
+  });
 
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
-      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
-
-      const latest = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      const ok = await stores.persona.write('values', '# 価値観\n\n人間の編集\n', {
-        ifMatch: latest,
-      });
-      expect(ok.content).toBe('# 価値観\n\n人間の編集\n');
-    });
-
-    it('null は「無かった」: 無ければ作れ、在れば書かない。在るものを null 前提で書かない', async () => {
-      await stores.persona.write('values', '# A\n', { ifMatch: null });
-      const error = await stores.persona
-        .write('values', '# B\n', { ifMatch: null })
-        .catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((await stores.persona.read('values'))?.content).toBe('# A\n');
-    });
-
-    it('文書が無いのに版を指定したら 409（current は null）。書かれない', async () => {
-      const error = await stores.persona
-        .write('values', '# B\n', { ifMatch: memoryVersion('# 昔あった\n') })
-        .catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current).toBeNull();
-      expect(await stores.persona.read('values')).toBeNull();
-    });
-
-    it('同じ版を前提にした2つの書き込みが重なっても、勝つのは1つだけ', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      const results = await Promise.allSettled([
-        stores.persona.write('values', '# 一\n', { ifMatch: v }),
-        stores.persona.write('values', '# 二\n', { ifMatch: v }),
-      ]);
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    });
-
-    it('ifMatch を付けなければ従来どおり後勝ち（後方互換）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      await stores.persona.write('values', '# 価値観\n\nV2\n');
-      await stores.persona.write('values', '# 価値観\n\nV3\n', {});
-      expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n\nV3\n');
+  it('protectionStatus（保護状態の派生値）の契約', async () => {
+    await verifyPersonaProtectionStatusContract(stores.persona, {
+      rewriteBehindStore: (slug, content) =>
+        writeFile(join(root, 'memory', `${slug}.md`), content, 'utf8'),
     });
   });
 
-  describe('remove の前提の版 ifMatch（Issue #2881。fs・pg・インメモリで同じ挙動）', () => {
-    it('読んだ後に別の書き手が書いたなら、消さずに MemoryConflictError（current は書かれている文書）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const v1 = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      await stores.persona.write('values', '# 価値観\n\nV1\n\nクローンの判断\n');
-
-      const error = await stores.persona.remove('values', { ifMatch: v1 }).catch((e: unknown) => e);
-
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current?.content).toContain('クローンの判断');
-      expect((await stores.persona.read('values'))?.content).toContain('クローンの判断');
+  it('createdAt（作成時刻の派生値）の契約', async () => {
+    await verifyPersonaCreatedAtContract(stores.persona, {
+      forgetCreatedAt: (slug) =>
+        editIndex((index) => {
+          delete index[slug]?.createdAt;
+        }),
     });
+  });
 
-    it('版が合えば消せる。無い文書に版を指定したら MemoryConflictError（current は null）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nV1\n');
-      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      await stores.persona.remove('values', { ifMatch: v });
-      expect(await stores.persona.read('values')).toBeNull();
+  it('describedAt（要旨の鮮度の派生値）の契約', async () => {
+    await verifyPersonaDescribedAtContract(stores.persona);
+  });
 
-      const error = await stores.persona.remove('values', { ifMatch: v }).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(MemoryConflictError);
-      expect((error as MemoryConflictError).current).toBeNull();
-    });
-
-    it('同じ版を前提にした書き込みと削除が重なっても、勝つのは1つだけ', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      const v = memoryVersion((await stores.persona.read('values'))?.content ?? '');
-      const results = await Promise.allSettled([
-        stores.persona.write('values', '# 一\n', { ifMatch: v }),
-        stores.persona.remove('values', { ifMatch: v }),
-      ]);
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    });
-
-    it('ifMatch を付けなければ従来どおり無条件に消す（後方互換）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.remove('values');
-      expect(await stores.persona.read('values')).toBeNull();
+  it('describedBytes（本文の変化量の派生値、#913）の契約', async () => {
+    await verifyPersonaDescribedBytesContract(stores.persona, {
+      forgetDescribedBytes: (slug, { withAt }) =>
+        editIndex((index) => {
+          delete index[slug]?.describedBytes;
+          if (withAt) delete index[slug]?.describedBytesAt;
+        }),
     });
   });
 
@@ -212,44 +164,6 @@ describe('FsPersonaStore', () => {
     expect(cardAfter).toContain('# 価値観');
     expect(cardAfter).not.toContain('人間が書き換えた');
     expect(cardAfter).not.toContain('もとの内容');
-  });
-
-  it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
-    const written = await stores.persona.write('values', '# 価値観');
-
-    expect(written.content).toBe('# 価値観\n');
-    expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n');
-  });
-
-  it('append は末尾に足す', async () => {
-    await stores.persona.write('log', '# ログ\n');
-    await stores.persona.append('log', '- 追記された学び\n');
-
-    expect((await stores.persona.read('log'))?.content).toBe('# ログ\n\n- 追記された学び\n');
-  });
-
-  it('末尾の行が見出しの文書へ追記しても、その見出しの行が壊れない', async () => {
-    // 片方だけ外してもこの歯は落ちない: fs は append の `ensureTrailingNewline(existing.content)` と #writeNow の `ensureTrailingNewline(content)` で二重に守っており、もう片方が効くため。
-    await stores.persona.write('log', '# ログ\n\n## 最後の節');
-    const doc = await stores.persona.append('log', '追記した1行');
-
-    expect(doc.content.split('\n')).toContain('## 最後の節');
-    expect(doc.content).toContain('追記した1行');
-  });
-
-  it('同時に追記しても取りこぼさない（蒸留は並行して同じ文書に書く）', async () => {
-    await stores.persona.write('log', '# ログ\n');
-
-    await Promise.all([
-      stores.persona.append('log', '- AAA'),
-      stores.persona.append('log', '- BBB'),
-      stores.persona.append('log', '- CCC'),
-    ]);
-
-    const content = (await stores.persona.read('log'))?.content ?? '';
-    expect(content).toContain('AAA');
-    expect(content).toContain('BBB');
-    expect(content).toContain('CCC');
   });
 
   it('書き込みは一時ファイル経由（人間に壊れた途中経過を読ませない）', async () => {
@@ -283,136 +197,13 @@ describe('FsPersonaStore', () => {
     expect(all).toContain('memory: b.md');
   });
 
-  describe('protectionStatus（保護状態の派生値）', () => {
-    it('索引ファイルが無ければ unknown（守る側の既定）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+  it('list() は .index.json を拾わない（*.md しか見ない）', async () => {
+    await stores.persona.write('values', '# 価値観\n');
+    await stores.persona.markHumanTouched('values', new Date().toISOString());
 
-      expect(await stores.persona.protectionStatus('nope')).toEqual({ kind: 'unknown' });
-    });
+    const list = await stores.persona.list();
 
-    it('markHumanTouched を呼んだ文書は human になる', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('write() だけの文書は clone-only になる（human 印が無い）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('append 経路でもハッシュが更新される（誤検出しない）', async () => {
-      await stores.persona.write('log', '# ログ\n');
-      await stores.persona.append('log', '- 追記');
-
-      expect(await stores.persona.protectionStatus('log')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('索引が確定した後の write でも、ハッシュ更新は組み直しに頼らない', async () => {
-      // 一度 protectionStatus を呼んで索引ファイルを確定させてから2回目を書く: 索引が無い状態から読むと組み直しが現在の本文を基準化し、#writeNow のハッシュ更新を削っても救われて落ちないため。
-      await stores.persona.write('values', '# 版1\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-
-      await stores.persona.write('values', '# 版2\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('索引が確定した後の append でも、ハッシュ更新は組み直しに頼らない', async () => {
-      await stores.persona.write('log2', '# ログ\n');
-      expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
-
-      await stores.persona.append('log2', '- 追記');
-      expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('道具経由（write）の直後は unknown にならない', async () => {
-      await stores.persona.write('values', '# 価値観\n\n本文\n');
-
-      const status = await stores.persona.protectionStatus('values');
-
-      expect(status).not.toEqual({ kind: 'unknown' });
-      expect(status).toEqual({ kind: 'clone-only' });
-    });
-
-    it('外部から本文が変わったとき、保護状態が古いまま返らない（unknown になる）', async () => {
-      await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
-
-      expect((await stores.persona.read('values'))?.content).toContain('外から書き換えた');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
-    });
-
-    it('human 印は外部編集があっても降りない（human が unknown より優先）', async () => {
-      await stores.persona.write('values', '# 価値観\n\n人間が書いた\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('markHumanTouched は降ろさない（古い時刻を渡しても human のまま）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', '2026-01-02T00:00:00.000Z');
-      await stores.persona.markHumanTouched('values', '2020-01-01T00:00:00.000Z');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('write の humanTouchedAt は本文と同時に human 印を立てる（新規作成・置換とも）', async () => {
-      await stores.persona.write('fresh', '# 新規\n', {
-        ifMatch: null,
-        humanTouchedAt: '2026-01-02T00:00:00.000Z',
-      });
-      expect(await stores.persona.protectionStatus('fresh')).toEqual({ kind: 'human' });
-
-      await stores.persona.write('values', '# 版1\n');
-      await stores.persona.write('values', '# 版2\n', {
-        humanTouchedAt: '2026-01-02T00:00:00.000Z',
-      });
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('write の humanTouchedAt は、書けなかった（版違い）回は印を立てない', async () => {
-      await stores.persona.write('values', '# 版1\n');
-      await expect(
-        stores.persona.write('values', '# 版2\n', {
-          ifMatch: 'stale',
-          humanTouchedAt: '2026-01-02T00:00:00.000Z',
-        }),
-      ).rejects.toThrow();
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
-    });
-
-    it('humanTouchedAt の無い write は既存の human 印を降ろさない', async () => {
-      await stores.persona.write('values', '# 版1\n', {
-        humanTouchedAt: '2026-01-02T00:00:00.000Z',
-      });
-      await stores.persona.write('values', '# 版2\n');
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
-    });
-
-    it('list() は .index.json を拾わない（*.md しか見ない）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      const list = await stores.persona.list();
-
-      expect(list.map((doc) => doc.slug)).toEqual(['values']);
-    });
-
-    it('remove() で保護状態も一緒に消える（実体の無い印を残さない）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markHumanTouched('values', new Date().toISOString());
-
-      await stores.persona.remove('values');
-
-      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
-    });
+    expect(list.map((doc) => doc.slug)).toEqual(['values']);
   });
 
   describe('索引の組み直し（保護状態の派生値を失ったとき）', () => {
@@ -475,46 +266,7 @@ describe('FsPersonaStore', () => {
     });
   });
 
-  describe('createdAt（作成時刻の派生値）', () => {
-    it('write() は新規作成のとき、backfill を通さずその場で createdAt を known にする（updatedAt と一致）', async () => {
-      const doc = await stores.persona.write('values', '# 価値観\n');
-
-      const read = await stores.persona.read('values');
-
-      expect(read?.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
-      expect(read?.createdAt).toEqual({ kind: 'known', at: read?.updatedAt });
-    });
-
-    it('既存の文書を更新しても createdAt は変わらない（updatedAt は進む）', async () => {
-      const first = await stores.persona.write('values', '# 価値観\n');
-      // ファイルシステムの mtime 分解能に負けないよう、確実に時刻を進める
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
-
-      expect(second.createdAt).toEqual(first.createdAt);
-      expect(second.updatedAt).not.toBe(first.updatedAt);
-      expect((await stores.persona.read('values'))?.createdAt).toEqual(first.createdAt);
-    });
-
-    it('append() が文書を新規作成したときも createdAt が付く', async () => {
-      const doc = await stores.persona.append('notes', '最初のメモ');
-
-      expect(doc.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
-      expect((await stores.persona.read('notes'))?.createdAt).toEqual(doc.createdAt);
-    });
-
-    it('append() が既存の文書へ追記したときは createdAt が変わらない', async () => {
-      const first = await stores.persona.write('notes', '# ノート\n');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      const second = await stores.persona.append('notes', '追記した行');
-
-      expect(second.createdAt).toEqual(first.createdAt);
-      expect(second.updatedAt).not.toBe(first.updatedAt);
-      expect((await stores.persona.read('notes'))?.createdAt).toEqual(first.createdAt);
-    });
-
+  describe('索引の無い生ファイルの createdAt（契約は write() で作った文書から派生値だけを失わせて測る）', () => {
     it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
       // write() ではなく索引の無い生ファイルを置く: write() が createdAt を立てて markCreatedAt 単体の効果が隠れるため
       await mkdir(join(root, 'memory'), { recursive: true });
@@ -528,54 +280,6 @@ describe('FsPersonaStore', () => {
       });
       const meta = (await stores.persona.list()).find((entry) => entry.slug === 'values');
       expect(meta?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
-    });
-
-    it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
-      await mkdir(join(root, 'memory'), { recursive: true });
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
-
-      const first = await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
-      const second = await stores.persona.markCreatedAt('values', '2020-01-01T00:00:00.000Z');
-
-      expect(first).toBe(true);
-      expect(second).toBe(false);
-      expect((await stores.persona.read('values'))?.createdAt).toEqual({
-        kind: 'known',
-        at: '2026-01-02T03:04:05.000Z',
-      });
-    });
-
-    it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
-      await mkdir(join(root, 'memory'), { recursive: true });
-      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
-
-      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
-      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
-
-      expect((await stores.persona.read('values'))?.createdAt).toEqual({
-        kind: 'known',
-        at: '2026-01-02T03:04:05.000Z',
-      });
-    });
-
-    it('実体の無い slug には新しく行を作らない（削除済み記憶が復活しない）', async () => {
-      const wrote = await stores.persona.markCreatedAt('ghost', '2026-01-02T03:04:05.000Z');
-
-      expect(wrote).toBe(false);
-      expect(await stores.persona.read('ghost')).toBeNull();
-      expect(await stores.persona.list()).toEqual([]);
-    });
-
-    it('削除して同じ slug を作り直すと、新しい createdAt になる', async () => {
-      const first = await stores.persona.write('values', '# 価値観\n');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await stores.persona.remove('values');
-      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
-
-      expect(second.createdAt.kind).toBe('known');
-      expect(second.createdAt).not.toEqual(first.createdAt);
-      expect((await stores.persona.read('values'))?.createdAt).toEqual(second.createdAt);
     });
 
     it('markCreatedAt は createdAt 以外を1つも書き換えない', async () => {
@@ -602,278 +306,6 @@ describe('FsPersonaStore', () => {
       expect(afterProtection).toEqual(beforeProtection);
       expect(before?.createdAt).toEqual({ kind: 'unknown' });
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
-    });
-
-    it('markCreatedAt は（human 印を経由しない場合でも）contentSha256 と describedAt を書き換えない', async () => {
-      // markHumanTouched を呼ばない: 呼ぶと protectionStatus が human の分岐で即返り、contentSha256 を一度も見ないため。
-      // write() の直後に索引から createdAt のキーだけを取り除く: write() は createdAt も立て、markCreatedAt は既に値が在れば触らないので、そのままでは変異が発火する前に false を返して終わる。
-      await stores.persona.write(
-        'runbook',
-        ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
-      );
-
-      const indexPath = join(root, 'memory', '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8'));
-      delete index.runbook.createdAt;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      const before = await stores.persona.read('runbook');
-      const beforeProtection = await stores.persona.protectionStatus('runbook');
-      expect(beforeProtection).toEqual({ kind: 'clone-only' });
-      expect(before?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(before?.createdAt).toEqual({ kind: 'unknown' });
-
-      const wrote = await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
-
-      const after = await stores.persona.read('runbook');
-      const afterProtection = await stores.persona.protectionStatus('runbook');
-      expect(wrote).toBe(true);
-      expect(after?.content).toBe(before?.content);
-      expect(after?.updatedAt).toBe(before?.updatedAt);
-      expect(after?.description).toBe(before?.description);
-      expect(afterProtection).toEqual(beforeProtection);
-      expect(after?.descriptionFreshness).toEqual(before?.descriptionFreshness);
-      expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
-    });
-  });
-
-  describe('describedAt（要旨の鮮度の派生値）', () => {
-    it('description を書いた直後は fresh になる（describedAt === updatedAt）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(doc?.description).toBe('費用の推移');
-      expect(doc?.kind).toBe('fact');
-    });
-
-    it('同じ書き込みで本文と description を両方変えても fresh のまま（同じ writtenAt で確定するため）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n旧本文\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移（改訂）\ntype: fact\n---\n# 定点観測\n新本文\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(doc?.description).toBe('費用の推移（改訂）');
-    });
-
-    it('本文だけを書き直すと stale になる（description は本文の変更に追従しない）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      // `staleForMs` は実時計・mtime 分解能に依存するので厳密値で固定せず、正であることだけを見る
-      expect(doc?.descriptionFreshness.kind).toBe('stale');
-      if (doc?.descriptionFreshness.kind === 'stale') {
-        expect(doc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
-      }
-      expect(doc?.description).toBe('費用の推移');
-    });
-
-    it('stale になった後、description を書き直すと fresh に戻る', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-      const staleDoc = await stores.persona.read('runbook');
-      expect(staleDoc?.descriptionFreshness.kind).toBe('stale');
-      if (staleDoc?.descriptionFreshness.kind === 'stale') {
-        expect(staleDoc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
-      }
-
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移（書き直した）\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      expect((await stores.persona.read('runbook'))?.descriptionFreshness).toEqual({
-        kind: 'fresh',
-      });
-    });
-
-    it('description を書かなければ absent のまま（premise の既定と同じ安全側）', async () => {
-      await stores.persona.write('about-me', '# 私\n\n前提の本文\n');
-
-      const doc = await stores.persona.read('about-me');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'absent' });
-      expect(doc?.kind).toBe('premise');
-    });
-  });
-
-  describe('describedBytes（本文の変化量の派生値、#913）', () => {
-    it('要旨を書いた直後は drift の deltaBytes が厳密に0（describedBytes と bytes の測り方が揃っている）', async () => {
-      const written = await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
-      );
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
-      expect(doc?.bytes).toBe(written.bytes);
-    });
-
-    it('append の後、describedAt/describedBytes は据え置きで、deltaBytes は追記したバイト数と一致する', async () => {
-      const before = await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      const appended = '追記した1行\n';
-      await stores.persona.append('runbook', appended);
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness.kind).toBe('stale');
-      if (doc?.descriptionFreshness.kind === 'stale') {
-        expect(doc.descriptionFreshness.drift).toEqual({
-          kind: 'measured',
-          describedBytes: before.bytes,
-          currentBytes: doc.bytes,
-          deltaBytes: doc.bytes - before.bytes,
-        });
-        // 範囲で比べる: `ensureTrailingNewline` が足す改行を別に数えないため
-        expect(doc.descriptionFreshness.drift.kind === 'measured').toBe(true);
-        if (doc.descriptionFreshness.drift.kind === 'measured') {
-          expect(doc.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
-            Buffer.byteLength(appended, 'utf8'),
-          );
-        }
-      }
-    });
-
-    it('describedAt を持つが describedBytes を持たない既存の行は unrecorded になり、deltaBytes: 0 にならない', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const indexPath = join(stores.paths.memory, '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
-        string,
-        { describedBytes?: number }
-      >;
-      expect(index.runbook?.describedBytes).toBeGreaterThan(0);
-      delete index.runbook?.describedBytes;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness.kind).toBe('stale');
-      if (doc?.descriptionFreshness.kind === 'stale') {
-        expect(doc.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
-      }
-    });
-
-    it('describedBytes を持たない既存の行へ append すると、その場で基準点が立ち drift が at-least になる（deltaBytes は0にならない、#821 残課題）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const indexPath = join(stores.paths.memory, '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
-        string,
-        { describedBytes?: number; describedBytesAt?: string }
-      >;
-      delete index.runbook?.describedBytes;
-      delete index.runbook?.describedBytesAt;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      const before = await stores.persona.read('runbook');
-      expect(before?.descriptionFreshness.kind).toBe('stale');
-      if (before?.descriptionFreshness.kind === 'stale') {
-        expect(before.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      const appended = '基準点を立てるための追記\n';
-      await stores.persona.append('runbook', appended);
-
-      const after = await stores.persona.read('runbook');
-      expect(after?.descriptionFreshness.kind).toBe('stale');
-      if (after?.descriptionFreshness.kind === 'stale') {
-        expect(after.descriptionFreshness.drift.kind).toBe('at-least');
-        if (after.descriptionFreshness.drift.kind === 'at-least') {
-          expect(after.descriptionFreshness.drift.deltaBytes).not.toBe(0);
-          expect(after.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
-            Buffer.byteLength(appended, 'utf8'),
-          );
-        }
-      }
-    });
-
-    it('一度立った基準点は、2回目の append で動かない（#821 残課題）', async () => {
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.write(
-        'runbook',
-        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
-      );
-
-      const indexPath = join(stores.paths.memory, '.index.json');
-      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
-        string,
-        { describedBytes?: number; describedBytesAt?: string }
-      >;
-      delete index.runbook?.describedBytes;
-      delete index.runbook?.describedBytesAt;
-      await writeFile(indexPath, JSON.stringify(index), 'utf8');
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.append('runbook', '1回目の追記\n');
-      const afterFirst = await stores.persona.read('runbook');
-      expect(afterFirst?.descriptionFreshness.kind).toBe('stale');
-      if (afterFirst?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
-      expect(afterFirst.descriptionFreshness.drift.kind).toBe('at-least');
-      if (afterFirst.descriptionFreshness.drift.kind !== 'at-least') throw new Error('unreachable');
-      const firstBaselineBytes = afterFirst.descriptionFreshness.drift.baselineBytes;
-      const firstBaselineAt = afterFirst.descriptionFreshness.drift.baselineAt;
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await stores.persona.append('runbook', '2回目の追記\n');
-      const afterSecond = await stores.persona.read('runbook');
-      expect(afterSecond?.descriptionFreshness.kind).toBe('stale');
-      if (afterSecond?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
-      expect(afterSecond.descriptionFreshness.drift.kind).toBe('at-least');
-      if (afterSecond.descriptionFreshness.drift.kind !== 'at-least')
-        throw new Error('unreachable');
-      expect(afterSecond.descriptionFreshness.drift.baselineBytes).toBe(firstBaselineBytes);
-      expect(afterSecond.descriptionFreshness.drift.baselineAt).toBe(firstBaselineAt);
-      expect(afterSecond.descriptionFreshness.drift.deltaBytes).toBeGreaterThan(
-        afterFirst.descriptionFreshness.drift.deltaBytes,
-      );
     });
   });
 });

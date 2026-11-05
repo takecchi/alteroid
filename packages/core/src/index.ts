@@ -802,6 +802,19 @@ export { preparePermissionGrantForPut } from './permission-grant-input.js';
 export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
 export { verifySessionRegistryGraveQueueContract } from './session-registry-grave-queue-contract.js';
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
+export {
+  verifyPersonaWriteContract,
+  verifyPersonaIfMatchContract,
+  verifyPersonaProtectionStatusContract,
+  verifyPersonaCreatedAtContract,
+  verifyPersonaDescribedAtContract,
+  verifyPersonaDescribedBytesContract,
+} from './persona-contract.js';
+export type {
+  PersonaProtectionStatusHooks,
+  PersonaCreatedAtHooks,
+  PersonaDescribedBytesHooks,
+} from './persona-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
 export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
