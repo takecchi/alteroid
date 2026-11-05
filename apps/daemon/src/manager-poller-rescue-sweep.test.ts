@@ -3,13 +3,15 @@ import { describe, expect, it } from 'vitest';
 
 import { startManagerPolling } from './manager-poller.js';
 
-function poolWith(sweep: (() => Promise<void>) | undefined): ManagerPool {
+function poolWith(sweep: () => Promise<void>): ManagerPool {
   return {
     probeTurnEnds: async () => [],
     flushWithheldReports: async () => undefined,
     settleStalledUsageWakes: async () => [],
     renotifyStalledDenials: async () => undefined,
-    ...(sweep === undefined ? {} : { sweepRescueRefs: sweep }),
+    deliverHeldMessages: async () => undefined,
+    autoFoldUnderPressure: async () => undefined,
+    sweepRescueRefs: sweep,
     stop: () => Promise.resolve(),
   } as unknown as ManagerPool;
 }
@@ -38,8 +40,11 @@ describe('ManagerPoller と退避 ref の後始末（#1266）', () => {
     poller.stop();
   });
 
-  it('口を持たない実装でも回る', async () => {
-    const poller = startManagerPolling({ managers: poolWith(undefined), intervalMs: 3_600_000 });
+  it('何もせず返す実装でも回る', async () => {
+    const poller = startManagerPolling({
+      managers: poolWith(async () => undefined),
+      intervalMs: 3_600_000,
+    });
     await expect(poller.refresh()).resolves.toBeUndefined();
     poller.stop();
   });

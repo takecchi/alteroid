@@ -4,6 +4,7 @@ import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { ManagerPool } from './manager.js';
 import { createCloneTools } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 function harness() {
   const stores = createMemoryStores();
@@ -16,7 +17,7 @@ function harness() {
     conversationId: () => undefined,
     memoryCause: () => 'clone',
     dropQueuedInboxEvents: async (ids) => ids.length,
-    managers: { runningManagerOwning: () => undefined } as unknown as ManagerPool,
+    managers: fakeManagerPool({ runningManagerOwning: () => undefined }),
   });
   return {
     stores,

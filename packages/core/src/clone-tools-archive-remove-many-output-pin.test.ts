@@ -6,6 +6,7 @@ import type { ManagerPool } from './manager.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, seedFingerprintlessArchiveRow } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 // `archive_remove_many` の出力（全文と字数）と、呼んだあとの状態（アーカイブの行・日誌へ足された行・墓標の列）を、
 // 場面ごとにコミットした固定値（clone-tools-archive-remove-many-output-pin.json）と丸ごと比べる。
@@ -867,16 +868,16 @@ function buildManagers(
     case 'unwired':
       return undefined;
     case 'idle':
-      return { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+      return fakeManagerPool({ runningManagerOwning: () => undefined });
     case 'owning':
-      return {
+      return fakeManagerPool({
         runningManagerOwning: (id: string) => (owned.has(id) ? 'mgr-running' : undefined),
-      } as unknown as ManagerPool;
+      });
     case 'pinning':
-      return {
+      return fakeManagerPool({
         runningManagerOwning: (id: string) => (owned.has(id) ? 'mgr-running' : undefined),
         runningManagerPinning: (id: string) => (pinned.has(id) ? 'mgr-running' : undefined),
-      } as unknown as ManagerPool;
+      });
   }
 }
 

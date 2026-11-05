@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { startManagerPolling } from './manager-poller.js';
 
 function poolWith(
-  autoFold: (() => Promise<void>) | undefined,
+  autoFold: () => Promise<void>,
   probeTurnEnds: () => Promise<never[]> = async () => [],
 ): ManagerPool {
   return {
@@ -12,7 +12,9 @@ function poolWith(
     flushWithheldReports: async () => undefined,
     settleStalledUsageWakes: async () => [],
     renotifyStalledDenials: async () => undefined,
-    ...(autoFold === undefined ? {} : { autoFoldUnderPressure: autoFold }),
+    sweepRescueRefs: async () => undefined,
+    deliverHeldMessages: async () => undefined,
+    autoFoldUnderPressure: autoFold,
     stop: () => Promise.resolve(),
   } as unknown as ManagerPool;
 }
@@ -66,8 +68,11 @@ describe('ManagerPoller と周回の自動の畳み（#5157）', () => {
     poller.stop();
   });
 
-  it('口を持たない実装でも回る', async () => {
-    const poller = startManagerPolling({ managers: poolWith(undefined), intervalMs: 3_600_000 });
+  it('何もせず返す実装でも回る', async () => {
+    const poller = startManagerPolling({
+      managers: poolWith(async () => undefined),
+      intervalMs: 3_600_000,
+    });
     await expect(poller.refresh()).resolves.toBeUndefined();
     poller.stop();
   });

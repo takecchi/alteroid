@@ -4,8 +4,9 @@ import type { ManagerPool } from './manager.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
-const NO_ONE_RUNNING = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+const NO_ONE_RUNNING = fakeManagerPool({ runningManagerOwning: () => undefined });
 
 function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) {
   const context: ToolContext = {
@@ -115,10 +116,10 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
   it('走行中のマネージャーが使っている行は飛ばして数える（overrideReason 無し）', async () => {
     const stores = createMemoryStores();
     const { oldId, newId } = await seedRemovableSession(stores, 'sess-running');
-    const managers = {
+    const managers = fakeManagerPool({
       runningManagerOwning: (archiveId: string) =>
         archiveId === oldId ? 'mgr-running-1' : undefined,
-    } as unknown as ManagerPool;
+    });
     const call = remover(stores, managers);
 
     const reply = await call({
@@ -136,10 +137,10 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
   it('一括に override の口は無い——入力の形に overrideReason が無く、渡しても開かない', async () => {
     const stores = createMemoryStores();
     const { oldId } = await seedRemovableSession(stores, 'sess-no-override');
-    const managers = {
+    const managers = fakeManagerPool({
       runningManagerOwning: (archiveId: string) =>
         archiveId === oldId ? 'mgr-running-2' : undefined,
-    } as unknown as ManagerPool;
+    });
 
     expect(Object.keys(inputShape(stores))).not.toContain('overrideReason');
 
@@ -215,10 +216,10 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     await stores.archive.remove(goneOld);
     await stores.archive.archive('sess-inv-div', 'XYZ');
     await stores.archive.archive('sess-inv-div', 'QQQ');
-    const managers = {
+    const managers = fakeManagerPool({
       runningManagerOwning: (archiveId: string) =>
         archiveId === runningOld ? 'mgr-inv' : undefined,
-    } as unknown as ManagerPool;
+    });
     const call = remover(stores, managers);
 
     const numbersOf = (reply: string) => {

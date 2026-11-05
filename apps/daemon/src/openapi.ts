@@ -1740,6 +1740,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
     },
+    get() {
+      throw new Error('spec 生成専用のスタブ: マネージャーは1件も読まない');
+    },
     denials() {
       throw new Error('spec 生成専用のスタブ: 拒否は数えていない');
     },
@@ -1749,8 +1752,23 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     pushHealthOf() {
       throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
     },
+    pluginLoadOf() {
+      throw new Error('spec 生成専用のスタブ: plugin の読み込みは観測していない');
+    },
     managerPeersOf() {
       throw new Error('spec 生成専用のスタブ: peer の名乗りは持たない');
+    },
+    runnerReportedModels() {
+      throw new Error('spec 生成専用のスタブ: runner のモデルの名乗りは持たない');
+    },
+    runnerReportedAnthropicRoute() {
+      throw new Error('spec 生成専用のスタブ: runner の経路の名乗りは持たない');
+    },
+    autoFoldOnPlacementPressure() {
+      throw new Error('spec 生成専用のスタブ: 配置の逼迫で畳まない');
+    },
+    autoFoldUnderPressure() {
+      throw new Error('spec 生成専用のスタブ: 逼迫の見回りで畳まない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');
@@ -1765,6 +1783,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
       throw new Error('spec 生成専用のスタブ: 未 push の実装は数えない');
     },
     runningManagerOwning() {
+      throw new Error('spec 生成専用のスタブ: 走行中の像は持たない');
+    },
+    runningManagerPinning() {
       throw new Error('spec 生成専用のスタブ: 走行中の像は持たない');
     },
     restore() {
@@ -1793,6 +1814,12 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     renotifyStalledDenials() {
       throw new Error('spec 生成専用のスタブ: 止まった拒否は知らせ直さない');
+    },
+    sweepRescueRefs() {
+      throw new Error('spec 生成専用のスタブ: 退避 ref は掃かない');
+    },
+    deliverHeldMessages() {
+      throw new Error('spec 生成専用のスタブ: 預かった伝言は届けない');
     },
     stop() {
       throw new Error('spec 生成専用のスタブ');
