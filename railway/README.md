@@ -485,11 +485,11 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
 
-| 要るもの       | 置き場                   | 状態                                                                                  |
-| -------------- | ------------------------ | ------------------------------------------------------------------------------------- |
-| `gh` コマンド  | イメージ（`Dockerfile`） | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
-| 書き込みの鍵   | **Shared Variables**     | `GH_TOKEN` を置く（下記）                                                             |
-| コミットの身元 | **Shared Variables**     | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
+| 要るもの       | 置き場                                | 状態                                                                                  |
+| -------------- | ------------------------------------- | ------------------------------------------------------------------------------------- |
+| `gh` コマンド  | イメージ（`Dockerfile`）              | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
+| 書き込みの鍵   | **正本**（`alteroid credential set`） | `GH_TOKEN` を置く（下記。Variables に置いてもマネージャーには届かない）               |
+| コミットの身元 | **Shared Variables か正本**           | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
 
 **これは下＝外の世界へ手を伸ばす鍵なので、渡すのが正しい**（記憶ストアの鍵と逆。伏せると人間が Claude Code でできる `gh pr create` が層を下りた瞬間にできなくなる＝デグレード。north_star 禁止1）。
 
@@ -515,12 +515,11 @@ GitHub → Settings → Developer settings → Personal access tokens → **Fine
 
 **初回はこれでよい。差し替え（ローテーション）はこの手順ではない** — 走行中のプロセスには届かないので、下の「鍵を回す」を使う。
 
-ダッシュボードの **Shared Variables** に5つ置くのがいちばん早い（他の変数と同じ場所で済む）。CLI から入れるなら Service ごとに1回ずつになる。
+**`GH_TOKEN` は正本へ置く**（下の「変数の代わりに正本へ置く」の手順）。Shared Variables や runner の Service 変数に置いても、**マネージャーには届かない** —— runner は自分の環境変数から鍵の名前（`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`）を落としてからマネージャーを起こし、鍵はクローンが正本から配った分だけを使う（`packages/core/src/runner.ts` の `childEnvLayers`）。
+
+**`GIT_*` の4つは鍵ではないので、Shared Variables（runner の Service 変数）に置けばマネージャーまで届く**（runner は鍵の名前以外の環境変数をそのままマネージャーへ渡す）。正本へ置いてもよい。CLI から入れるなら Service ごとに1回ずつになる。
 
 ```bash
-# 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
-printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
-
 railway variable set GIT_AUTHOR_NAME=takecchi --service runner --skip-deploys
 railway variable set GIT_AUTHOR_EMAIL=takeaki.kobayashi@gmail.com --service runner --skip-deploys
 railway variable set GIT_COMMITTER_NAME=takecchi --service runner --skip-deploys
@@ -531,7 +530,7 @@ railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service r
 
 ### ローカル（`docker compose`）でも同じ
 
-同じ5つを `.env` に置けば両方へ渡る（`compose.yaml` の `x-shared-env`）。確認は `docker compose exec -u 1001 runner gh auth status`。
+`GIT_*` の4つは `.env` に置けば app と runner の両方へ渡る（`compose.yaml` の `x-shared-env`）。**`GH_TOKEN` は `.env` に置いてもクローン（app）の子プロセスにしか効かない**ので、マネージャーに渡すなら `docker compose exec app alteroid credential set GH_TOKEN -f ./pat.txt` で正本へ置く。確認は `docker compose exec -u 1001 runner gh auth status`。
 
 ### 鍵を回す（走行中でも）
 
