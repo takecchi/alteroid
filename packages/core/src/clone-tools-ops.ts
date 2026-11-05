@@ -1111,6 +1111,102 @@ function renderManagerTranscriptPage(args: {
   return `${snapshot.filterNote}${head}${reuseNote}\n\n${part1.body}${tail}`;
 }
 
+type ArchiveRemoveGuard = ReturnType<typeof guardArchiveRemoval>;
+type ArchiveRemoveJournalResult = Awaited<ReturnType<typeof removeArchiveJournalFirst>>;
+type ArchiveRemoveAlready = Extract<ArchiveRemoveJournalResult, { kind: 'already' }>;
+type ArchiveRemoveDone = Extract<ArchiveRemoveJournalResult, { kind: 'removed' | 'already' }>;
+
+// 引数の検査。断る文を返す（通れば null）
+function describeArchiveRemoveViolation(summary: string): string | null {
+  return (
+    describeStringLengthViolation('summary', summary, { min: 1 }) ??
+    describeBlankViolation('summary', summary)
+  );
+}
+
+function renderArchiveRemoveGuardUnknown(): string {
+  return (
+    '消せない——いまは委譲の道具が配線されていない内部ターンで、走行中の' +
+    'マネージャーがこの退避を使っているかどうかを確かめる材料が無い' +
+    '（安全側に倒して拒む）。'
+  );
+}
+
+function renderArchiveRemoveDenied(managerId: string): string {
+  return (
+    `消せない——マネージャー ${managerId} がいま走行中で、この退避を使っている` +
+    '（走行中の委譲を追う最後の手段が消えるため。それでも消すなら overrideReason に' +
+    '理由を書くこと）。'
+  );
+}
+
+// override の注と日誌の grounds: 先の行・後の行・応答が同じ値を使う
+function describeArchiveRemoveOverride(
+  guard: ArchiveRemoveGuard,
+  summary: string,
+): { overrideNote: string; grounds: string } {
+  const overrideNote =
+    guard.kind === 'allowed-with-override'
+      ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だが、` +
+        `理由「${guard.reason}」により消す）`
+      : '';
+  const grounds = guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary;
+  return { overrideNote, grounds };
+}
+
+// 消す前に書く先の行（`removeArchiveJournalFirst` が呼ぶ）
+function buildArchiveRemoveEntry(args: {
+  archiveId: string;
+  summary: string;
+  overrideNote: string;
+  grounds: string;
+}): JournalEntryInput {
+  const { archiveId, summary, overrideNote, grounds } = args;
+  return {
+    type: 'decision',
+    decision: `退避済み生ログの本文を消す: ${archiveId}: ${summary}${overrideNote}`,
+    grounds,
+  };
+}
+
+// 消した後に足す後の行（バイト数と「前から消されていたか」は消した後でないと分からない）
+function buildArchiveRemoveAfterEntry(args: {
+  archiveId: string;
+  grounds: string;
+  done: ArchiveRemoveDone;
+}): JournalEntryInput {
+  const { archiveId, grounds, done } = args;
+  return {
+    type: 'decision',
+    decision:
+      `退避済み生ログの本文を消した結果: ${archiveId}（${done.bytes} バイト${describeArchiveRemovedBytesUnit()}。` +
+      `${done.kind === 'already' ? '前から消されていたので今回は何も変わっていない' : 'いま消した'}）`,
+    grounds,
+  };
+}
+
+function renderArchiveRemoveMissing(archiveId: string): string {
+  return `アーカイブ ${archiveId} は存在しない（消せない。何も変わっていない）。`;
+}
+
+function renderArchiveRemoveAlready(archiveId: string, result: ArchiveRemoveAlready): string {
+  return (
+    `アーカイブ ${archiveId} は前から消されている（${result.removedAt} に ` +
+    `${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}）。何も変わっていない。`
+  );
+}
+
+function renderArchiveRemoveRemoved(
+  archiveId: string,
+  bytes: number,
+  overrideNote: string,
+): string {
+  return (
+    `アーカイブ ${archiveId} の本文を消した（${bytes.toLocaleString('ja-JP')} バイト${describeArchiveRemovedBytesUnit()}）。` +
+    `行そのものは残っている（list には引き続き出る）。${overrideNote}`
+  );
+}
+
 export function opsTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
 
@@ -1246,47 +1342,21 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ archiveId, summary, overrideReason }) => {
         // 消す・日誌を書くより前に断る（`archive_remove_many` と同じ2検査）: 理由が空の「本文を消す」行が日誌に残るため
-        const summaryError =
-          describeStringLengthViolation('summary', summary, { min: 1 }) ??
-          describeBlankViolation('summary', summary);
+        const summaryError = describeArchiveRemoveViolation(summary);
         if (summaryError !== null) return text(summaryError);
         const guard = guardArchiveRemoval(context.managers, archiveId, overrideReason);
         if (guard.kind === 'unknown') {
-          return text(
-            '消せない——いまは委譲の道具が配線されていない内部ターンで、走行中の' +
-              'マネージャーがこの退避を使っているかどうかを確かめる材料が無い' +
-              '（安全側に倒して拒む）。',
-          );
+          return text(renderArchiveRemoveGuardUnknown());
         }
         if (guard.kind === 'denied') {
-          return text(
-            `消せない——マネージャー ${guard.managerId} がいま走行中で、この退避を使っている` +
-              '（走行中の委譲を追う最後の手段が消えるため。それでも消すなら overrideReason に' +
-              '理由を書くこと）。',
-          );
+          return text(renderArchiveRemoveDenied(guard.managerId));
         }
         // 本文は消すと戻らないので、日誌を先に書いてから消す（`removeArchiveJournalFirst`）。書けなければ消さない（`act-not-performed`）。
         // 消す対象・理由・override は消す前に決まるので先の行へ。バイト数と「前から消されていたか」は消した後でないと分からないので2行目に足す（落ちても握る）。
-        const overrideNote =
-          guard.kind === 'allowed-with-override'
-            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だが、` +
-              `理由「${guard.reason}」により消す）`
-            : '';
-        const grounds =
-          guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary;
+        const { overrideNote, grounds } = describeArchiveRemoveOverride(guard, summary);
         const result = await removeArchiveJournalFirst(stores, archiveId, {
-          buildEntry: () => ({
-            type: 'decision',
-            decision: `退避済み生ログの本文を消す: ${archiveId}: ${summary}${overrideNote}`,
-            grounds,
-          }),
-          buildAfterEntry: (done) => ({
-            type: 'decision',
-            decision:
-              `退避済み生ログの本文を消した結果: ${archiveId}（${done.bytes} バイト${describeArchiveRemovedBytesUnit()}。` +
-              `${done.kind === 'already' ? '前から消されていたので今回は何も変わっていない' : 'いま消した'}）`,
-            grounds,
-          }),
+          buildEntry: () => buildArchiveRemoveEntry({ archiveId, summary, overrideNote, grounds }),
+          buildAfterEntry: (done) => buildArchiveRemoveAfterEntry({ archiveId, grounds, done }),
         });
         if (result.kind === 'journal-failed') {
           // 消す前に落ちたので何も起きていない（`act-not-performed`）
@@ -1299,18 +1369,12 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
           );
         }
         if (result.kind === 'missing') {
-          return text(`アーカイブ ${archiveId} は存在しない（消せない。何も変わっていない）。`);
+          return text(renderArchiveRemoveMissing(archiveId));
         }
         if (result.kind === 'already') {
-          return text(
-            `アーカイブ ${archiveId} は前から消されている（${result.removedAt} に ` +
-              `${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}）。何も変わっていない。`,
-          );
+          return text(renderArchiveRemoveAlready(archiveId, result));
         }
-        return text(
-          `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト${describeArchiveRemovedBytesUnit()}）。` +
-            `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
-        );
+        return text(renderArchiveRemoveRemoved(archiveId, result.bytes, overrideNote));
       },
     ),
 
