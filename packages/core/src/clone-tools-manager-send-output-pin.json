@@ -456,9 +456,7 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": [
-        "stores.attachments.getMeta(\"att-gone\")"
-      ],
+      "calls": ["stores.attachments.getMeta(\"att-gone\")"],
       "journal": [],
       "tasksAfter": [
         {
@@ -477,9 +475,7 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": [
-        "stores.attachments.getMeta(\"att-1\")"
-      ],
+      "calls": ["stores.attachments.getMeta(\"att-1\")"],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -492,10 +488,7 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": [
-        "stores.attachments.getMeta(\"att-1\")",
-        "stores.attachments.get(\"att-1\")"
-      ],
+      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -508,10 +501,7 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": [
-        "stores.attachments.getMeta(\"att-1\")",
-        "stores.attachments.get(\"att-1\")"
-      ],
+      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -542,10 +532,7 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": [
-        "stores.attachments.getMeta(\"a1\")",
-        "stores.attachments.getMeta(\"a2\")"
-      ],
+      "calls": ["stores.attachments.getMeta(\"a1\")", "stores.attachments.getMeta(\"a2\")"],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
