@@ -1,4 +1,9 @@
-import { createManagerPool, createRunnerRegistry } from '@alteroid/core';
+import {
+  createManagerPool,
+  createRunnerRegistry,
+  listApprovalsSettledAroundFromApprovals,
+  listApprovalSettledAtsFromApprovals,
+} from '@alteroid/core';
 import type { CloneHost, JobStore, PendingApproval, Stores } from '@alteroid/core';
 import { createPgStoresFromDb, migrate, tables } from '@alteroid/storage-pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -44,11 +49,16 @@ function cloneOver(stores: Stores): CloneHost {
   };
 }
 
+// DB の側の2つの口を、全部読んで答える写し（fs・メモリと同じ作り）に差し替える
 function withoutSettledMethods(base: Stores): Stores {
   const jobs = new Proxy(base.jobs, {
     get(target, property, receiver) {
-      if (property === 'listApprovalsSettledAround' || property === 'listApprovalSettledAts') {
-        return undefined;
+      if (property === 'listApprovalsSettledAround') {
+        return (_range: unknown, options: { conversationId?: string } = {}) =>
+          listApprovalsSettledAroundFromApprovals(target, options);
+      }
+      if (property === 'listApprovalSettledAts') {
+        return () => listApprovalSettledAtsFromApprovals(target);
       }
       const value: unknown = Reflect.get(target, property, receiver);
       return typeof value === 'function' ? value.bind(target) : value;

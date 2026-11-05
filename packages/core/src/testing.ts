@@ -10,6 +10,10 @@ import { assertArchivableSessionId } from './archive-session-id.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
 import { approvalStateOf } from './approval-state.js';
+import {
+  listApprovalsSettledAroundFromApprovals,
+  listApprovalSettledAtsFromApprovals,
+} from './approval-settled.js';
 import { deriveMemoryFrontmatter, nextDescribedState, toMemoryCreatedAt } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
 import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
@@ -589,6 +593,13 @@ export function createMemoryStores(): Stores {
             : pending.filter((a) => a.conversationId === options.conversationId),
         unreadable: [],
       };
+    },
+    // 全部読んで答える。型違いの行は元から無い（メモリは書き込み時に型を通す）
+    async listApprovalsSettledAround(_range, options = {}) {
+      return listApprovalsSettledAroundFromApprovals(jobStore, options);
+    },
+    async listApprovalSettledAts() {
+      return listApprovalSettledAtsFromApprovals(jobStore);
     },
     async getApproval(id) {
       const found = approvals.get(id);

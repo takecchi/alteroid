@@ -174,4 +174,115 @@ export async function verifyJobStoreContract(makeStore: JobStoreFactory): Promis
       APPROVAL,
     );
   }
+
+  // 承認の決着の時刻を引く2つの口（#5089）。型の合う行についてだけ揃える。
+  // 意図した差（契約の期待にしない）: pg は決着の列だけを読むので、`listApprovals` が落とす型違いの行も `listApprovalSettledAts` が数える。fs・メモリは `listApprovals` から作るので数えない。
+  // 並びは契約しない。範囲の外の行・未決着の行が `listApprovalsSettledAround` に混ざるのは許す（pg は絞り、fs・メモリは全件を返す）。
+  {
+    const store = await makeStore();
+    await store.putApproval({ ...APPROVAL, id: 'ap-open' });
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-answered',
+      answeredAt: '2026-09-10T00:00:00.000Z',
+      answer: 'よい',
+    });
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-withdrawn',
+      withdrawnAt: '2026-09-11T00:00:00.000Z',
+      withdrawnReason: '要らない',
+    });
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-both',
+      answeredAt: '2026-09-12T00:00:00.000Z',
+      answer: 'よい',
+      withdrawnAt: '2026-09-20T00:00:00.000Z',
+    });
+    expectEqual(
+      'listApprovalSettledAts',
+      '決着した行の時刻だけ（回答の時刻が取り下げより先）。未決着の行は無い',
+      (await store.listApprovalSettledAts()).sort(),
+      ['2026-09-10T00:00:00.000Z', '2026-09-11T00:00:00.000Z', '2026-09-12T00:00:00.000Z'],
+    );
+  }
+  {
+    const store = await makeStore();
+    expectEqual('listApprovalSettledAts', '空の器は空', await store.listApprovalSettledAts(), []);
+    expectEqual(
+      'listApprovalsSettledAround',
+      '空の器は空',
+      await store.listApprovalsSettledAround({
+        since: '2026-09-10T00:00:00.000Z',
+        until: '2026-09-11T00:00:00.000Z',
+      }),
+      { entries: [], unreadable: [] },
+    );
+  }
+  {
+    const store = await makeStore();
+    const range = { since: '2026-09-10T00:00:00.000Z', until: '2026-09-11T00:00:00.000Z' };
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-at-since',
+      conversationId: 'conv-a',
+      answeredAt: '2026-09-10T00:00:00.000Z',
+      answer: 'よい',
+    });
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-before-until',
+      conversationId: 'conv-b',
+      answeredAt: '2026-09-10T23:59:59.999Z',
+      answer: 'よい',
+    });
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-withdrawn-inside',
+      conversationId: 'conv-a',
+      withdrawnAt: '2026-09-10T12:00:00.000Z',
+      withdrawnReason: '要らない',
+    });
+    await store.putApproval({
+      ...APPROVAL,
+      id: 'ap-far-outside',
+      conversationId: 'conv-a',
+      answeredAt: '2026-08-01T00:00:00.000Z',
+      answer: 'よい',
+    });
+    const idsOf = (list: { entries: { id: string }[] }) => list.entries.map((a) => a.id);
+    const all = idsOf(await store.listApprovalsSettledAround(range));
+    for (const id of ['ap-at-since', 'ap-before-until', 'ap-withdrawn-inside']) {
+      if (!all.includes(id)) {
+        fail(
+          'listApprovalsSettledAround',
+          `範囲の内（境界を含む）の ${id} を取りこぼした: ${show(all)}`,
+        );
+      }
+    }
+    const conversationA = await store.listApprovalsSettledAround(range, {
+      conversationId: 'conv-a',
+    });
+    for (const id of ['ap-at-since', 'ap-withdrawn-inside']) {
+      if (!idsOf(conversationA).includes(id)) {
+        fail(
+          'listApprovalsSettledAround',
+          `会話の絞りで範囲の内の ${id} を取りこぼした: ${show(idsOf(conversationA))}`,
+        );
+      }
+    }
+    if (conversationA.entries.some((a) => a.conversationId !== 'conv-a')) {
+      fail(
+        'listApprovalsSettledAround',
+        `会話の絞りに他の会話の行が混ざった: ${show(idsOf(conversationA))}`,
+      );
+    }
+    expectEqual(
+      'listApprovalsSettledAround',
+      '無い会話は空',
+      (await store.listApprovalsSettledAround(range, { conversationId: 'conv-none' })).entries,
+      [],
+    );
+  }
 }
