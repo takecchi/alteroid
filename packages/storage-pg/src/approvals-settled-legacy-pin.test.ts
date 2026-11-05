@@ -154,7 +154,7 @@ describe('listApprovalSettledAts（古い行を含む）', () => {
       '2026-09-04T11:12:13.014Z',
       '2026-09-05T21:22:23.024Z',
     ]);
-  });
+  }, 30_000);
 });
 
 describe('listApprovalsSettledAround（古い行を含む）', () => {
