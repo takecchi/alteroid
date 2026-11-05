@@ -469,8 +469,6 @@ export function managerReportTool(context: ToolContext) {
       '全部（ref 名・退避できていない作業ツリーのすべて）は rescueAll: true で作業ツリーごとに読む。',
       '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
       'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
-      '直近の報告の全文が既にあなたの発言（会話の上）に載っているときは、本文を繰り返さず、載っている時刻を示す注記だけを返す。引き直したいときは refetch: true を付ける（offset で頁を送る・依頼文は影響を受けない）。',
-      '全文が載っている報告に未 push などの状態の注記だけが要るなら、引き直さず manager_list の行を見る。',
       'report が「まだ無い」と返ったときは、内部で生ログも見ている（#323）——',
       '「まだ書いていない」のか「書いたのに配られていない」のかを、応答の文言（⚠ の有無）で見分けられる。',
     ].join(' '),
@@ -492,17 +490,8 @@ export function managerReportTool(context: ToolContext) {
         .describe(
           '真なら退避 ref を畳まず作業ツリーごとに全部出す（既定は、種類ごとの本数と、退避できていない作業ツリーの本数・代表の1本だけ）',
         ),
-      refetch: z
-        .boolean()
-        .optional()
-        .describe(
-          '真なら、報告の全文が既に会話の上に載っていても本文を必ず返す（既定は、載っているときは注記だけ返す）',
-        ),
     },
-    async (
-      { managerId, part = 'report', offset = 0, rescueAll = false, refetch = false },
-      extra: unknown,
-    ) => {
+    async ({ managerId, part = 'report', offset = 0, rescueAll = false }, extra: unknown) => {
       const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
       if (offsetError !== null) return text(offsetError);
       if (!context.managers) return NO_POOL;
@@ -536,7 +525,7 @@ export function managerReportTool(context: ToolContext) {
         renderManagerReportDriftNote(found, part, foldedTurn) +
         renderManagerReportNoteBlock(failure, notes);
       // 結果は使わない: 本体の呼びかを判定すると計器（`#noteCallerGauge`）が1行残るので、畳みを外した後も同じ条件で呼ぶ
-      if (part === 'report' && offset === 0 && !refetch) isSubagentCaller(context, extra);
+      if (part === 'report' && offset === 0) isSubagentCaller(context, extra);
       return text(renderManagerReportPage({ head, modelLine, preamble, managerId, part, part1 }));
     },
   );

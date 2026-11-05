@@ -223,13 +223,13 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'request-paging',
-    covers: 'part=request の頁（続きの案内に part=request が入る・最後の頁・refetch は影響しない）',
+    covers: 'part=request の頁（続きの案内に part=request が入る・最後の頁・先頭の引き直し）',
     managers: () => [mgr({ request: numbered(REPORT_PAGE * 2 + 500) })],
     steps: [
       { args: { managerId: 'mgr-001', part: 'request' } },
       { args: { managerId: 'mgr-001', part: 'request', offset: REPORT_PAGE } },
       { args: { managerId: 'mgr-001', part: 'request', offset: REPORT_PAGE * 2 } },
-      { args: { managerId: 'mgr-001', part: 'request', refetch: true } },
+      { args: { managerId: 'mgr-001', part: 'request' } },
     ],
   },
   // --- 報告が無い（生ログの言い分け）
@@ -797,7 +797,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'shown-note-only',
     covers:
-      '本文が既に載っている（注記だけ・本文なし）。注記の状態は残す（drift・失敗・枠・拒否・未 push）。refetch・offset>0・part=request は本文',
+      '同じ報告を続けて引く（毎回、本文と注記の状態〔drift・失敗・枠・拒否・未 push〕を出す）。offset>0・part=request も本文',
     managers: () => [
       mgr({
         status: 'stopped',
@@ -811,7 +811,7 @@ const SCENARIOS: Scenario[] = [
     steps: [
       { args: { managerId: 'mgr-001' } },
       { args: { managerId: 'mgr-001' } },
-      { args: { managerId: 'mgr-001', refetch: true } },
+      { args: { managerId: 'mgr-001' } },
       { args: { managerId: 'mgr-001', offset: 100 } },
       { args: { managerId: 'mgr-001', part: 'request' } },
       { args: { managerId: 'mgr-001', rescueAll: true } },
