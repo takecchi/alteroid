@@ -70,6 +70,7 @@ import {
   isSubagentCaller,
   NO_FIXED_FOLD,
   type FixedFold,
+  type ToolText,
   describeUnreadableJournalEntry,
 } from './clone-tools-common.js';
 
@@ -165,6 +166,148 @@ function attachmentLines(
   );
 }
 
+type TaskSayStores = CloneToolsShared['stores'];
+type TaskSayAttached = Extract<OutboundAttachmentResult, { ok: true }>;
+type TaskSayTaskRead = { kind: 'unreadable' } | { kind: 'missing' } | { kind: 'found'; task: Task };
+type TaskSayBound =
+  { kind: 'bound'; attached: TaskSayAttached } | { kind: 'refused'; result: ToolText };
+
+// 引数の検査。断る文を返す（通れば null）
+function describeTaskSayViolation(
+  taskId: string,
+  rawBody: string | undefined,
+  withAttachments: boolean,
+): string | null {
+  if (!withAttachments) {
+    if (rawBody === undefined) {
+      return 'text か attachments のどちらかが要る（どちらも空の発言は書かない）。';
+    }
+    const textError = describeStringLengthViolation('text', rawBody, { min: 1 });
+    if (textError !== null) return textError;
+  }
+  return describeStringLengthViolation('taskId', taskId, { min: 1 });
+}
+
+// `UnreadableTaskError` だけを「読めない」にし、ほかは投げ直す
+async function readTaskSayTask(stores: TaskSayStores, taskId: string): Promise<TaskSayTaskRead> {
+  let task: Task | null;
+  try {
+    task = await stores.tasks.get(taskId);
+  } catch (error) {
+    if (error instanceof UnreadableTaskError) return { kind: 'unreadable' };
+    throw error;
+  }
+  return task === null ? { kind: 'missing' } : { kind: 'found', task };
+}
+
+function renderTaskSayUnreadable(taskId: string): string {
+  return `task ${taskId} は読めない形で入っている。何も書かなかった。`;
+}
+
+function renderTaskSayMissing(taskId: string): string {
+  return `task ${taskId} は無いので、何も書かなかった（task_list で実在する id を確かめること）。`;
+}
+
+function renderTaskSayNoOrigin(taskId: string): string {
+  return `task ${taskId} は起点の会話を持たない古い task なので、何も書かなかった。task_add で足し直すと起点の会話が付く。`;
+}
+
+function renderTaskSayCurrentConversation(
+  taskId: string,
+  target: string,
+  withAttachments: boolean,
+): string {
+  return (
+    `task ${taskId} の起点の会話 ${target} はいまのターンの会話なので、この道具では書かなかった。` +
+    (withAttachments
+      ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
+      : 'このターンの返答として書けば、その会話へ届く。')
+  );
+}
+
+function renderTaskSayAttachmentRefusal(message: string): string {
+  return `会話へは書かなかった。${message}`;
+}
+
+// 添付の検査と結び付け、その断り（検査に落ちたら何も結ばず、断りの戻りを返す）
+async function bindTaskSayAttachments(
+  context: ToolContext,
+  stores: TaskSayStores,
+  attachmentIds: readonly string[] | undefined,
+  target: string,
+): Promise<TaskSayBound> {
+  const withAttachments = attachmentIds !== undefined && attachmentIds.length > 0;
+  const attached = withAttachments
+    ? await checkAndBindOutboundAttachments(stores, attachmentIds, {
+        conversationId: target,
+        limits: context.attachmentLimits ?? readAttachmentLimits().limits,
+      })
+    : ({ ok: true, refs: [], newlyBound: [] } satisfies OutboundAttachmentResult);
+  if (!attached.ok) {
+    return { kind: 'refused', result: text(renderTaskSayAttachmentRefusal(attached.message)) };
+  }
+  return { kind: 'bound', attached };
+}
+
+function buildTaskSayJournalEntry(body: string, target: string, attached: TaskSayAttached) {
+  return {
+    type: 'exchange' as const,
+    with: 'human' as const,
+    role: 'outbound' as const,
+    text: body,
+    conversationId: target,
+    ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+  };
+}
+
+// 日誌を書く。書けなかったら添付の結び付けを戻してから投げ直す
+async function journalTaskSay(
+  stores: TaskSayStores,
+  body: string,
+  target: string,
+  attached: TaskSayAttached,
+) {
+  try {
+    return await appendJournalOrThrow(
+      'task_say',
+      stores.journal,
+      buildTaskSayJournalEntry(body, target, attached),
+      'act-not-performed',
+    );
+  } catch (error) {
+    // 書けなかった発言に添付を結んだままにしない: 結んだままだと、掃除が未結び付けとして消す前に1時間ぶん居座る
+    await releaseOutboundAttachments(stores, attached.newlyBound, target).catch(() => undefined);
+    throw error;
+  }
+}
+
+// 器への知らせ（書いた印と会話への投稿）。添付が無いときは3つ目の引数を渡さない
+function announceTaskSay(
+  context: ToolContext,
+  taskId: string,
+  target: string,
+  body: string,
+  refs: TaskSayAttached['refs'],
+): void {
+  context.noteTaskSaid?.(taskId);
+  if (refs.length === 0) context.postToConversation?.(target, body);
+  else context.postToConversation?.(target, body, refs);
+}
+
+function renderTaskSaySaid(
+  taskId: string,
+  target: string,
+  attachmentCount: number,
+  entryId: string,
+  status: Task['status'],
+): string {
+  const withNote = attachmentCount === 0 ? '' : `（添付 ${attachmentCount} 件つき）`;
+  return (
+    `task ${taskId} の起点の会話 ${target} へ書いた${withNote}（${entryId}）。` +
+    (!isTaskClosed(status) ? '\n知らせるだけの task なら task_set_status で done にすること。' : '')
+  );
+}
+
 export function attachTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId } = shared;
   return [
@@ -205,97 +348,34 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ taskId, text: rawBody, attachments: attachmentIds }) => {
         const withAttachments = attachmentIds !== undefined && attachmentIds.length > 0;
-        if (!withAttachments) {
-          if (rawBody === undefined) {
-            return text('text か attachments のどちらかが要る（どちらも空の発言は書かない）。');
-          }
-          const textError = describeStringLengthViolation('text', rawBody, { min: 1 });
-          if (textError !== null) return text(textError);
-        }
+        const violation = describeTaskSayViolation(taskId, rawBody, withAttachments);
+        if (violation !== null) return text(violation);
         const body = rawBody ?? '';
-        const taskIdError = describeStringLengthViolation('taskId', taskId, { min: 1 });
-        if (taskIdError !== null) return text(taskIdError);
-        let task: Task | null;
-        try {
-          task = await stores.tasks.get(taskId);
-        } catch (error) {
-          if (error instanceof UnreadableTaskError) {
-            return {
-              ...text(`task ${taskId} は読めない形で入っている。何も書かなかった。`),
-              isError: true,
-            };
-          }
-          throw error;
+        const read = await readTaskSayTask(stores, taskId);
+        if (read.kind === 'unreadable') {
+          return { ...text(renderTaskSayUnreadable(taskId)), isError: true };
         }
-        if (task === null) {
-          return {
-            ...text(
-              `task ${taskId} は無いので、何も書かなかった（task_list で実在する id を確かめること）。`,
-            ),
-            isError: true,
-          };
+        if (read.kind === 'missing') {
+          return { ...text(renderTaskSayMissing(taskId)), isError: true };
         }
+        const task = read.task;
         const target = task.originConversationId;
         if (target === undefined) {
-          return {
-            ...text(
-              `task ${taskId} は起点の会話を持たない古い task なので、何も書かなかった。task_add で足し直すと起点の会話が付く。`,
-            ),
-            isError: true,
-          };
+          return { ...text(renderTaskSayNoOrigin(taskId)), isError: true };
         }
         // 解決を挟まず、そのままの一致で断る: いまのターンの会話は、1通目がまだ日誌に載っていないことがあるため
         if (target === getConversationId()) {
           return {
-            ...text(
-              `task ${taskId} の起点の会話 ${target} はいまのターンの会話なので、この道具では書かなかった。` +
-                (withAttachments
-                  ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
-                  : 'このターンの返答として書けば、その会話へ届く。'),
-            ),
+            ...text(renderTaskSayCurrentConversation(taskId, target, withAttachments)),
             isError: true,
           };
         }
-        const attached = withAttachments
-          ? await checkAndBindOutboundAttachments(stores, attachmentIds, {
-              conversationId: target,
-              limits: context.attachmentLimits ?? readAttachmentLimits().limits,
-            })
-          : ({ ok: true, refs: [], newlyBound: [] } satisfies OutboundAttachmentResult);
-        if (!attached.ok) return text(`会話へは書かなかった。${attached.message}`);
-        let entry;
-        try {
-          entry = await appendJournalOrThrow(
-            'task_say',
-            stores.journal,
-            {
-              type: 'exchange',
-              with: 'human',
-              role: 'outbound',
-              text: body,
-              conversationId: target,
-              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-            },
-            'act-not-performed',
-          );
-        } catch (error) {
-          // 書けなかった発言に添付を結んだままにしない: 結んだままだと、掃除が未結び付けとして消す前に1時間ぶん居座る
-          await releaseOutboundAttachments(stores, attached.newlyBound, target).catch(
-            () => undefined,
-          );
-          throw error;
-        }
-        context.noteTaskSaid?.(taskId);
-        if (attached.refs.length === 0) context.postToConversation?.(target, body);
-        else context.postToConversation?.(target, body, attached.refs);
-        const withNote =
-          attached.refs.length === 0 ? '' : `（添付 ${attached.refs.length} 件つき）`;
-        return text(
-          `task ${taskId} の起点の会話 ${target} へ書いた${withNote}（${entry.id}）。` +
-            (!isTaskClosed(task.status)
-              ? '\n知らせるだけの task なら task_set_status で done にすること。'
-              : ''),
-        );
+        const bound = await bindTaskSayAttachments(context, stores, attachmentIds, target);
+        if (bound.kind === 'refused') return bound.result;
+        const attached = bound.attached;
+        const entry = await journalTaskSay(stores, body, target, attached);
+        announceTaskSay(context, taskId, target, body, attached.refs);
+        return text(renderTaskSaySaid(taskId, target, attached.refs.length, entry.id, task.status));
       },
     ),
 
