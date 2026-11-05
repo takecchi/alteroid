@@ -309,7 +309,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'create-with-base-version',
     covers:
-      '無い文書の新規作成に base_version を渡す: ifMatch にそのまま渡り、ストアが断る（いまその文書は無い・何も書かない）。そのあと版なしで作ると通る',
+      '無い文書の新規作成に base_version を渡す: ifMatch にそのまま渡り、ストアが断る（読んだ時点でも無かったと言い、「読んだ後に消された」とは言わない・何も書かない。#6445）。そのあと版なしで作ると通る',
     seed: [],
     steps: [
       {
@@ -835,7 +835,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'failures',
     covers:
-      '例外: persona.write が落ちる（更新・新規）・persona.read が落ちる・persona.documents が書く前に落ちる（何も書かない）・書いた後に落ちる（記憶は書けているが日誌は空）・日誌が書けない（記憶は書けているが日誌は空・「完了済み・未記録・やり直し禁止」の例外。更新・新規）',
+      '例外: persona.write が落ちる（更新・新規）・persona.read が落ちる・persona.documents が書く前に落ちる（何も書かない）・書いた後に落ちる（記憶も日誌も書けていて、応答はストアの例外。日誌を読み直しより先に書く。#6445）・日誌が書けない（記憶は書けているが日誌は空・「完了済み・未記録・やり直し禁止」の例外で、読み直しへは進まない。更新・新規）',
     seed: [
       { slug: 'f1', content: ABOUT },
       { slug: 'f2', content: ABOUT },
@@ -1463,8 +1463,8 @@ describe('memory_write の出力と呼んだあとの状態の固定（場面ご
       'persona.read',
       'persona.documents',
       'persona.write',
-      'persona.documents',
       'journal.append',
+      'persona.documents',
     ];
 
     // スラッグの検査: ストアを1つも呼ばない
@@ -1507,9 +1507,9 @@ describe('memory_write の出力と呼んだあとの状態の固定（場面ご
     expect(text('create-content-forms#5')).toContain('（1,506 文字）');
 
     // 版の前提
-    expect(text('create-with-base-version#1')).toContain(
-      'いまその文書は無い（読んだ後に消された）',
-    );
+    // 読んだ時点でも無かった文書へ版を渡した: 「読んだ後に消された」とは言わない（#6445）
+    expect(text('create-with-base-version#1')).toContain('は無い（読んだ時点でも無かった）');
+    expect(text('create-with-base-version#1')).not.toContain('読んだ後に消された');
     expect(ops('create-with-base-version#1')).toEqual([
       'persona.read',
       'persona.documents',
@@ -1647,12 +1647,20 @@ describe('memory_write の出力と呼んだあとの状態の固定（場面ご
     expect(doc('failures#4', 'f3')).toBe(ABOUT);
     expect(actual['failures#5']?.output.text).toBe('ストアが落ちた（documents）');
     expect(doc('failures#5', 'f4')).toBe(ABOUT.replace('残る', '残らない'));
-    expect(journal('failures#5')).toEqual([]);
+    // 書いた後の読み直しが落ちても、日誌は先に書いてある（記憶と日誌が食い違わない。#6445）
+    expect(journal('failures#5')).toHaveLength(1);
+    expect(ops('failures#5')).toEqual(WRITE_ALL);
     for (const key of ['failures#6', 'failures#7']) {
       expect(actual[key]?.output.errorName, key).toBe('JournalNotRecordedError');
       expect(text(key).split('\n')[0], key).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
       expect(journal(key), key).toEqual([]);
-      expect(ops(key), key).toEqual(WRITE_ALL);
+      // 日誌が落ちたら読み直しへは進まない
+      expect(ops(key), key).toEqual([
+        'persona.read',
+        'persona.documents',
+        'persona.write',
+        'journal.append',
+      ]);
     }
     expect(doc('failures#6', 'f5')).toBe(ABOUT.replace('残る', '残らない'));
 
