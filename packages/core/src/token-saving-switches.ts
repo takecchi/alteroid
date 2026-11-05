@@ -7,24 +7,10 @@ import { clearEnvSwitchNotesForTesting, resolveEnvSwitch } from './env-switch.js
 /** 系統3「可変内容の抜粋・予算」。既定は有効＝現状のまま。無効にすると抜粋・予算を節約改修の前の形に戻す。 */
 export const TOKEN_SAVING_EXCERPT_ENV = 'ALTEROID_TOKEN_SAVING_EXCERPT';
 
-export interface TokenSavingSwitches {
-  readonly excerpt: boolean;
-}
-
-// 読み方は `env-switch.ts`。セッションを組むたびに呼ばれうるので、痕跡は同じ名前・同じ値で1回だけ残る。
-const resolveSwitch = resolveEnvSwitch;
-
 /** テスト用: 読めない綴りの痕跡の「1回だけ」の控えを空にする。 */
 export const clearTokenSavingNotesForTesting = clearEnvSwitchNotesForTesting;
 
+// 読み方は `env-switch.ts`。セッションを組むたびに呼ばれうるので、痕跡は同じ名前・同じ値で1回だけ残る。
 export function resolveTokenSavingExcerpt(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveSwitch(env, TOKEN_SAVING_EXCERPT_ENV, true, '抜粋・予算の節約の設定');
-}
-
-export function resolveTokenSavingSwitches(
-  env: NodeJS.ProcessEnv = process.env,
-): TokenSavingSwitches {
-  return {
-    excerpt: resolveTokenSavingExcerpt(env),
-  };
+  return resolveEnvSwitch(env, TOKEN_SAVING_EXCERPT_ENV, true, '抜粋・予算の節約の設定');
 }

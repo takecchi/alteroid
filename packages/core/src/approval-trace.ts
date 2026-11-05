@@ -97,7 +97,7 @@ function isCloneAction(entry: JournalEntry): boolean {
       // 計器の行は丸ごと行動でない: 個別に除くと、新しい計器の行を足すたびに行動へ数えられる誤りが戻るため
       // `with: 'human'` は除かない: 計器の行は `self` / `manager` でしか書かれず、人間への返事はモデルの本文が接頭辞なしで書かれるので、返事が `[計器] ` で始まっても行動である
       if (entry.with !== 'human' && entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX)) return false;
-      // 固定文を全文へ戻した観測の行は行動でない（`[判断]` の頭なので計器の除外では拾えない）
+      // 過去の日誌に残る、固定文を全文へ戻した観測の行は行動でない（`[判断]` の頭なので計器の除外では拾えない。書き手はもう無い）
       if (entry.text.startsWith(DIGEST_RESET_JOURNAL_HEAD)) return false;
       return entry.role === 'outbound' && (entry.with === 'human' || entry.with === 'self');
     default:

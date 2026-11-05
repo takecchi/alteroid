@@ -4,7 +4,6 @@ import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-reco
 import {
   clearTokenSavingNotesForTesting,
   resolveTokenSavingExcerpt,
-  resolveTokenSavingSwitches,
   TOKEN_SAVING_EXCERPT_ENV,
 } from './token-saving-switches.js';
 
@@ -15,9 +14,7 @@ afterEach(() => {
 
 describe('トークン節約スイッチの既定', () => {
   it('⭐ 環境が空なら、抜粋は有効', () => {
-    expect(resolveTokenSavingSwitches({})).toEqual({
-      excerpt: true,
-    });
+    expect(resolveTokenSavingExcerpt({})).toBe(true);
   });
 
   it('変数名は仕様どおり', () => {

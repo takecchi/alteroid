@@ -29,7 +29,7 @@ const DISPATCHERS: readonly {
   { file: 'clone.ts', method: '#handle', minCases: 7 },
   { file: 'clone.ts', method: '#apply', minCases: 15 },
   { file: 'manager.ts', method: '#handleEvent', minCases: 27 },
-  { file: 'runner.ts', method: '#apply', minCases: 16 },
+  { file: 'runner.ts', method: '#apply', minCases: 15 },
 ];
 
 /** 振り分けのメソッドの、最初の `switch (event.type) {` の中を返す。 */

@@ -64,7 +64,7 @@ import {
 } from './digest.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
-import { resolveTokenSavingSwitches, type TokenSavingSwitches } from './token-saving-switches.js';
+import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import {
   describeAnthropicRoute,
   describeToolSearch,
@@ -895,7 +895,7 @@ class Clone implements CloneHost {
   /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
   #lastPluginLoadDigest: string | null = null;
   // 節約スイッチ（`token-saving-switches.ts`）。構築時に1回だけ読み、以後 env を読み直さない（`#inboxSettleMs` と同じ形）
-  readonly #tokenSaving: TokenSavingSwitches;
+  readonly #tokenSavingExcerpt: boolean;
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
@@ -1239,7 +1239,7 @@ class Clone implements CloneHost {
     this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
-    this.#tokenSaving = resolveTokenSavingSwitches(envSource);
+    this.#tokenSavingExcerpt = resolveTokenSavingExcerpt(envSource);
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
@@ -1282,7 +1282,7 @@ class Clone implements CloneHost {
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
         ...(agentTokenPushes === undefined ? {} : { agentTokenPushes }),
         ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
-        tokenSavingExcerpt: this.#tokenSaving.excerpt,
+        tokenSavingExcerpt: this.#tokenSavingExcerpt,
       });
     // 握り潰さない: 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない（落ちて再起動すれば `#restoreUnread` が配り直す）
     // `.catch(...)` まで含めた Promise を保持する: 素の `#pump()` だと、`stop()` が待つより前に投げた分が unhandled rejection になるため
@@ -3293,7 +3293,7 @@ class Clone implements CloneHost {
 
   // 系統3のスイッチが無効なら報告の本文を切らない（#5466 の前の形）
   #reportBodyLimit(): number {
-    return this.#tokenSaving.excerpt ? MANAGER_REPORT_BODY_LIMIT : Number.POSITIVE_INFINITY;
+    return this.#tokenSavingExcerpt ? MANAGER_REPORT_BODY_LIMIT : Number.POSITIVE_INFINITY;
   }
 
   // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
@@ -5449,7 +5449,7 @@ class Clone implements CloneHost {
         { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
         axes.liveness,
         axes.awaitingBackground,
-        { shape, trimHistory: this.#tokenSaving.excerpt },
+        { shape, trimHistory: this.#tokenSavingExcerpt },
       );
     } catch (error) {
       // 件数の形（定期の依頼の tick）は断り書き側が先頭を持つので足さない
@@ -5564,7 +5564,7 @@ class Clone implements CloneHost {
       range === null || axes === null
         ? await this.#recentDigestBare()
         : await buildActivityDigest(this.#stores, range, axes.liveness, axes.awaitingBackground, {
-            trimHistory: this.#tokenSaving.excerpt,
+            trimHistory: this.#tokenSavingExcerpt,
           }).catch(
             async (error: unknown) =>
               `（この日の記録をまとめられなかった: ${reasonOf(error)}）${await this.#taskQueueHeadAfterDigestFailure()}`,
@@ -5719,7 +5719,6 @@ class Clone implements CloneHost {
 
     // 載せる文字列を先に作って長さを日誌へ残す: 数える対象が実際に会話へ載る文字列そのものになるため。
     // 要約の後は全文書の索引を丸ごと載せ直す: 「出ていない文書はシステムプロンプトのまま」と言える根拠（焼いた控え）を持たないため。
-    // 日誌の diff は全文書を `added`（焼いた時点に無かった）に数える: 焼いた控えを持たないので、どの文書も焼いた時点に在ったとは言えない。
     const reinjectedIndex = refreshIndex ? renderMemoryDocuments(documents) : null;
     if (reinjectedIndex !== null) {
       await this.#journalSelf(
@@ -5727,7 +5726,7 @@ class Clone implements CloneHost {
         EXCHANGE_KIND_GAUGE_PREFIX +
           redactErrorText(
             describeMemoryIndexRefresh({
-              diff: { changed: [], added: documents.map((doc) => doc.slug), removed: [] },
+              slugs: documents.map((doc) => doc.slug),
               renderedChars: reinjectedIndex.length,
               totalDocuments: documents.length,
             }),
@@ -7317,10 +7316,8 @@ class Clone implements CloneHost {
         return this.#applyDelegationNotified(event);
       }
 
-      // `transcript_mirror_failed` は何もしない: 生ログの欠けを読む控え（畳みの控え）を外したため
       case 'delegation_started':
       case 'background_tasks':
-      case 'transcript_mirror_failed':
         return;
 
       // 既定で無視へ倒さない: provider が名乗り始めた事実が黙って網の外へ出る。枝が増えたらここが型で落ちる。
