@@ -8,7 +8,6 @@ import {
 } from './approval-trace.js';
 import {
   EXCHANGE_KIND_GAUGE_PREFIX,
-  FOLD_READBACK_SKIPPED_JOURNAL_HEAD,
   MEMORY_INDEX_REINJECTED_JOURNAL_HEAD,
 } from './exchange-kind.js';
 import { journalEntrySchema, type JournalEntryInput, type PendingApproval } from './schema.js';
@@ -241,19 +240,6 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
       slug: 'values',
       cause: 'distill',
       summary: 's',
-    });
-    expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
-  });
-
-  it('畳みの控えを読み戻さなかった観測の行は、区間の中でも行動に数えない（印も持たない）', async () => {
-    const stores = createMemoryStores();
-    await answered(stores, 'ap-1');
-    await stores.journal.append(turnStart('ap-1', true));
-    await stores.journal.append({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `${FOLD_READBACK_SKIPPED_JOURNAL_HEAD}生ログ0`,
     });
     expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
   });

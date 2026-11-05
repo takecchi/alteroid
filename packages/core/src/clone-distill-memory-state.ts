@@ -27,13 +27,6 @@ export interface ReopenRecord {
   initPending: boolean;
 }
 
-/** 焼いた時点との差の文書の slug（本文は持たない）。 */
-interface BakedMemoryDiff {
-  readonly changed: readonly string[];
-  readonly added: readonly string[];
-  readonly removed: readonly string[];
-}
-
 // 語の持ち主は exchange-kind.ts（承認の追跡が行頭の定数で除外するため）。ここからも引けるように再 export する。
 export { MEMORY_INDEX_REINJECTED_PHRASE };
 
@@ -42,18 +35,15 @@ const REFRESH_DIFF_SLUG_LIMIT = 10;
 
 /**
  * 要約後の索引の載せ直しの日誌1行の本文（接頭辞は書き手の `text:` に置く）。
- * slug・違いの種類・文字数・件数だけを書く: 記憶の本文・要旨は日誌に写さないため。
+ * slug・文字数・件数だけを書く: 記憶の本文・要旨は日誌に写さないため。
+ * `slugs` は載せ直した全文書: 焼いた控えを持たないので、どの文書も焼いた時点に在ったとは言えず、全部を「無かった」に数える。
  */
 export function describeMemoryIndexRefresh(input: {
-  readonly diff: BakedMemoryDiff;
+  readonly slugs: readonly string[];
   readonly renderedChars: number;
   readonly totalDocuments: number;
 }): string {
-  const entries = [
-    ...input.diff.changed.map((slug) => `${slug}（内容が変わった）`),
-    ...input.diff.added.map((slug) => `${slug}（焼いた時点に無かった）`),
-    ...input.diff.removed.map((slug) => `${slug}（消えた）`),
-  ];
+  const entries = input.slugs.map((slug) => `${slug}（焼いた時点に無かった）`);
   const shown = entries.slice(0, REFRESH_DIFF_SLUG_LIMIT).join(' / ');
   const rest = entries.length - REFRESH_DIFF_SLUG_LIMIT;
   return (
