@@ -61,7 +61,7 @@ describe('蒸留の指示の固定の本体は、同じ会話の2回目も全文
     await s.clone.stop();
   });
 
-  it('⭐ 畳みを渡さない buildDistillPrompt（pre_compact を含む）は、全文のまま変わらない', () => {
+  it('⭐ buildDistillPrompt を直接呼んでも（pre_compact を含む）、全文のまま変わらない', () => {
     for (const reason of ['conversation_end', 'scheduled', 'pre_compact'] as const) {
       const plain = buildDistillPrompt(reason);
       expect(plain).toContain(INTRO_FULL);

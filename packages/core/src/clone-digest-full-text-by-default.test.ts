@@ -9,7 +9,7 @@ import { createLocalRunner } from './runner-local.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-// #4937: tick の要約を、同じ会話の中では前回からの差分にする
+// #4937: tick の要約は、同じ会話の中でも前回からの差分にせず、毎回全文で出す
 
 const TIMER_KIND = 'issue-round';
 const REQUEST_BODY = `open issue を見て、着手できるものから進める。${'依頼の本文の長い説明。'.repeat(40)}`;
@@ -39,7 +39,7 @@ interface SdkScript {
   failResultAt?: number;
   /** 入力の受け付けが終わった後、この Promise が解けるまで出来事の列を閉じない（作り直しの窓を開けておく）。 */
   holdAfterInputEnd?: Promise<void>;
-  /** クローンの env。既定は空（畳みの節約は外した）。 */
+  /** クローンの env。既定は空。 */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -212,7 +212,7 @@ function expectCompleteFull(text: string): void {
   expect(text).toContain('発行元（source）別の件数');
 }
 
-describe('tick の要約は、同じ会話の中では前回からの差分になる（#4937）', () => {
+describe('tick の要約は、同じ会話の中でも前回からの差分にならず全文で出る（#4937）', () => {
   it('日報は全文のまま（差分にしない）', async () => {
     const s = boot();
     await seed(s.stores);
@@ -292,7 +292,7 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
   });
 });
 
-// 定期の tick（件数の形）の固定の説明文（#5392）。全文と参照は全文一致で固定する
+// 定期の tick（件数の形）の固定の説明文（#5392）。全文は全文一致で固定し、省略形（REF）は出ないことを見る。
 const COUNTS_TOOLS_NOTE_FULL =
   '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
   '待ち行列は `task_list`、回答待ちは `approvals_list`、' +
@@ -329,7 +329,7 @@ function expectCountsFull(text: string): void {
   expect(text).not.toContain(IDLE_MANAGERS_NOTE_REF);
 }
 
-// 定期の tick の「継続中の依頼」の行は、前回の入力と1字も違わなければ、同じ会話の2回目から1行の参照にまとめる
+// 定期の tick の「継続中の依頼」の行は、前回の入力と1字も違わなくても、同じ会話の2回目以降も毎回全文で出す（1行の参照にまとめない）
 const STANDING_FOLD_HEAD = '件は、この会話で最後に全文で出した版と1字も変わっていない: ';
 const EXTRA_KINDS = ['extra-a', 'extra-b', 'extra-c'] as const;
 
@@ -359,15 +359,15 @@ function expectAllStandingRowsFull(text: string): void {
   expect(text).not.toContain(STANDING_FOLD_HEAD);
 }
 
-// 自発の tick の件数の行の項目名（固定ラベル）は、同じ会話の2回目から参照になる。数字は毎回出る
+// 自発の tick の件数の行の項目名（固定ラベル）も、2回目以降に参照の形（これ）にならず毎回全文で出る。数字は毎回出る
 const COUNTS_LABEL_REF_HEAD = '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: ';
 
 function countsLineOf(text: string): string {
   return text.split('\n').find((line) => line.startsWith('- 件数')) ?? '';
 }
 
-// 畳みを外したので、2回目以降も毎回全文になる（既定の全文を固定する）。
-describe('畳みを外したので、tick・報告の包みの固定文も毎回全文のまま', () => {
+// 2回目以降も毎回全文になる（既定の全文を固定する）。
+describe('tick・報告の包みの固定文は、2回目以降も毎回全文のまま', () => {
   const OFF_ENVS = [['未設定', {}]] as const;
 
   it.each(OFF_ENVS)(
@@ -393,7 +393,7 @@ describe('畳みを外したので、tick・報告の包みの固定文も毎回
         expectCountsFull(text);
         expect(text).not.toContain(COUNTS_TOOLS_NOTE_REF);
         expect(text).not.toContain(IDLE_MANAGERS_NOTE_REF);
-        // 継続中の依頼の行（foldStandingRows）
+        // 継続中の依頼の行（1行の参照にまとめない）
         expectAllStandingRowsFull(text);
       }
       // 2回目の字数も1回目と同じ形（前回との差が出るのは「前回動いた時刻」の行だけ）

@@ -64,7 +64,7 @@ function boot(): Boot {
     return Object.assign(generate(), {
       close: () => undefined,
       interrupt: async () => undefined,
-      // 使用量を返す: 返さないと「観測が取れない回は全文（安全側）」へ倒れ、同じ会話の2回目の畳みが観測できないため（`clone-confirmation-fold.test.ts` と同じ形）
+      // 使用量を返す: 返さないと「観測が取れない回は全文（安全側）」へ倒れ、同じ会話の2回目の畳みが観測できないため（`clone-confirmation-full-text-by-default.test.ts` と同じ形）
       getContextUsage: async () => ({
         categories: [],
         totalTokens: 10_000,

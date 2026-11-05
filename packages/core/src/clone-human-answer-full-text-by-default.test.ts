@@ -8,7 +8,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores } from './testing.js';
 
-// #5301: 人間の答えを受けたターンの末尾（基準として記憶へ書く指示）は、2回目以降も全文のまま出す（同じ会話の中でも畳まない）。
+// #5301: 人間の答えを受けたターンの末尾（基準として記憶へ書く指示）は、2回目以降も全文のまま出す（同じ会話の中でも省略しない）。
 
 /** 全文にだけ在る説明の文。 */
 const EXPLANATION = 'あなたが自分で決めるための材料である';
@@ -98,7 +98,7 @@ function tailOf(input: string): string {
   return input.slice(at + marker.length).trim();
 }
 
-describe('human_answer の末尾は、同じ会話の2回目以降も基準の指示が全文のまま（#5301 の畳みは外した）', () => {
+describe('human_answer の末尾は、同じ会話の2回目以降も基準の指示が全文のまま（#5301）', () => {
   it('⭐ 2回目以降も基準の指示が全文のまま', async () => {
     const s = boot();
     const inputs = [
