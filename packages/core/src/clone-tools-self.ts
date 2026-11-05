@@ -297,6 +297,137 @@ function renderLedgerCrossReference(
   return lines.join('\n');
 }
 
+type SelfStatusStores = CloneToolsShared['stores'];
+type SelfStatusRuntime = NonNullable<ReturnType<NonNullable<ToolContext['runtime']>>>;
+type SelfStatusRunnerModels =
+  | Awaited<ReturnType<NonNullable<ToolContext['runnerModels']>>>
+  | undefined;
+type SelfStatusRunnerRoutes =
+  | Awaited<ReturnType<NonNullable<ToolContext['runnerAnthropicRoutes']>>>
+  | undefined;
+
+function renderSelfStatusRuntimeUnavailable(): string {
+  return (
+    'いまは自分の実行時の事実を読めない場面である（記憶へ移すための内部ターン）。' +
+    '次の会話で呼ぶこと。'
+  );
+}
+
+async function readSelfStatusLedgerPage(
+  stores: SelfStatusStores,
+  runtime: SelfStatusRuntime,
+  ledgerCursor: string,
+): Promise<string> {
+  const aggregate = runtime.sdkModel === null ? null : await stores.usage.aggregate({});
+  return renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor);
+}
+
+// 読めなければ黙らずに言う
+function renderSelfStatusCodexAuth(
+  record: Parameters<typeof codexChatgptAuthStatusOf>[0] | null,
+): string | null {
+  return record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record));
+}
+
+function renderSelfStatusCodexAuthUnreadable(error: unknown): string {
+  return `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`;
+}
+
+function renderSelfStatusTurnTiming(entries: { type: string }[]): string {
+  return renderTurnTimingSummary(
+    entries.filter((entry): entry is TurnTimingEntry => entry.type === 'turn_timing'),
+  );
+}
+
+function renderSelfStatusTurnTimingUnreadable(error: unknown): string {
+  return `直近のターンの時間: 日誌を読めなかった（${reasonOf(error)}）。`;
+}
+
+function renderSelfStatusHttpTiming(entries: { type: string }[]): string {
+  return renderHttpTimingSummary(
+    entries.filter((entry): entry is HttpTimingEntry => entry.type === 'http_timing'),
+  );
+}
+
+function renderSelfStatusHttpTimingUnreadable(error: unknown): string {
+  return `HTTP API の時間: 日誌を読めなかった（${reasonOf(error)}）。`;
+}
+
+function renderSelfStatusFull(args: {
+  runtime: SelfStatusRuntime;
+  runnerModels: SelfStatusRunnerModels;
+  runnerAnthropicRoutes: SelfStatusRunnerRoutes;
+  documents: Awaited<ReturnType<SelfStatusStores['persona']['list']>>;
+  memoryDocuments: Awaited<ReturnType<SelfStatusStores['persona']['documents']>>;
+  aggregate: UsageAggregate | null;
+  codexAuth: string | null;
+  turnTiming: string;
+  httpTiming: string;
+  peerReach: string[];
+}): string {
+  const { runtime, runnerModels, runnerAnthropicRoutes } = args;
+  return [
+    describeCloneRuntime({
+      ...runtime,
+      ...(runnerModels === undefined ? {} : { runnerModels }),
+      ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
+    }),
+    ...(args.codexAuth === null ? [] : [args.codexAuth]),
+    '',
+    // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
+    renderMemorySize(
+      args.documents,
+      args.memoryDocuments,
+      renderMemoryDocuments(args.memoryDocuments),
+    ),
+    '',
+    renderLedgerCrossReference(runtime.sdkModel, args.aggregate),
+    '',
+    args.turnTiming,
+    '',
+    args.httpTiming,
+    ...args.peerReach,
+  ].join('\n');
+}
+
+async function readSelfStatusFull(
+  context: ToolContext,
+  stores: SelfStatusStores,
+  runtime: SelfStatusRuntime,
+): Promise<string> {
+  const runnerModels = await context.runnerModels?.();
+  const runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
+  const [documents, memoryDocuments, aggregate, codexAuth, turnTiming, httpTiming] =
+    await Promise.all([
+      stores.persona.list(),
+      stores.persona.documents(),
+      runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
+      stores.codexAuth.get().then(renderSelfStatusCodexAuth, renderSelfStatusCodexAuthUnreadable),
+      // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
+      stores.journal
+        .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
+        .then(renderSelfStatusTurnTiming, renderSelfStatusTurnTimingUnreadable),
+      // HTTP API の時間（#5089）。同じく種別と件数で絞って読む
+      stores.journal
+        .list({ types: ['http_timing'], limit: SELF_STATUS_HTTP_TIMING_LIMIT })
+        .then(renderSelfStatusHttpTiming, renderSelfStatusHttpTimingUnreadable),
+    ]);
+
+  const peerReach = await renderPeerReach(context.managers);
+  return renderSelfStatusFull({
+    runtime,
+    runnerModels,
+    runnerAnthropicRoutes,
+    documents,
+    memoryDocuments,
+    aggregate,
+    codexAuth,
+    turnTiming,
+    httpTiming,
+    peerReach,
+  });
+}
+
 export function selfTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -359,81 +490,13 @@ export function selfTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ ledgerCursor }) => {
         const runtime = context.runtime?.();
-        if (runtime === undefined) {
-          return text(
-            'いまは自分の実行時の事実を読めない場面である（記憶へ移すための内部ターン）。' +
-              '次の会話で呼ぶこと。',
-          );
-        }
+        if (runtime === undefined) return text(renderSelfStatusRuntimeUnavailable());
 
         // 続きを取りに来た呼び出しは、その節だけを返す: 続きを辿るたびに同じ全体が返ると、辿るほど入力を食うため
         if (ledgerCursor !== undefined) {
-          const aggregate = runtime.sdkModel === null ? null : await stores.usage.aggregate({});
-          return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
+          return text(await readSelfStatusLedgerPage(stores, runtime, ledgerCursor));
         }
-
-        const runnerModels = await context.runnerModels?.();
-        const runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
-        const [documents, memoryDocuments, aggregate, codexAuth, turnTiming, httpTiming] =
-          await Promise.all([
-            stores.persona.list(),
-            stores.persona.documents(),
-            runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
-            // 読めなければ黙らずに言う
-            stores.codexAuth.get().then(
-              (record) =>
-                record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
-              (error: unknown) =>
-                `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
-            ),
-            // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
-            stores.journal
-              .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
-              .then(
-                (entries) =>
-                  renderTurnTimingSummary(
-                    entries.filter(
-                      (entry): entry is TurnTimingEntry => entry.type === 'turn_timing',
-                    ),
-                  ),
-                (error: unknown) =>
-                  `直近のターンの時間: 日誌を読めなかった（${reasonOf(error)}）。`,
-              ),
-            // HTTP API の時間（#5089）。同じく種別と件数で絞って読む
-            stores.journal
-              .list({ types: ['http_timing'], limit: SELF_STATUS_HTTP_TIMING_LIMIT })
-              .then(
-                (entries) =>
-                  renderHttpTimingSummary(
-                    entries.filter(
-                      (entry): entry is HttpTimingEntry => entry.type === 'http_timing',
-                    ),
-                  ),
-                (error: unknown) => `HTTP API の時間: 日誌を読めなかった（${reasonOf(error)}）。`,
-              ),
-          ]);
-
-        const peerReach = await renderPeerReach(context.managers);
-        return text(
-          [
-            describeCloneRuntime({
-              ...runtime,
-              ...(runnerModels === undefined ? {} : { runnerModels }),
-              ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
-            }),
-            ...(codexAuth === null ? [] : [codexAuth]),
-            '',
-            // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
-            renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
-            '',
-            renderLedgerCrossReference(runtime.sdkModel, aggregate),
-            '',
-            turnTiming,
-            '',
-            httpTiming,
-            ...peerReach,
-          ].join('\n'),
-        );
+        return text(await readSelfStatusFull(context, stores, runtime));
       },
     ),
 
