@@ -1,0 +1,3350 @@
+{
+  "lengths": {
+    "question-invalid-length#1": 38,
+    "question-invalid-length#2": 38,
+    "question-invalid-length#3": 38,
+    "question-invalid-blank#1": 50,
+    "question-invalid-blank#2": 50,
+    "question-invalid-blank#3": 50,
+    "question-undefined": 54,
+    "questions-dup-id#1": 70,
+    "questions-dup-id#2": 70,
+    "questions-dup-id#3": 70,
+    "questions-dup-option#1": 73,
+    "questions-dup-option#2": 70,
+    "questions-ok#1": 59,
+    "questions-ok#2": 59,
+    "questions-empty-array": 59,
+    "questions-direct-bad-shape": 226,
+    "ok-minimal": 59,
+    "ok-background#1": 59,
+    "ok-background#2": 59,
+    "ok-background#3": 59,
+    "ok-question-shapes#1": 59,
+    "ok-question-shapes#2": 59,
+    "ok-question-shapes#3": 59,
+    "ok-question-shapes#4": 59,
+    "ok-twice#1": 59,
+    "ok-twice#2": 59,
+    "ids-manager-only": 59,
+    "ids-request-only": 59,
+    "ids-manager-request": 59,
+    "ids-all-fields": 59,
+    "chain-human-turn": 59,
+    "chain-human-turn-no-work-mouth": 59,
+    "chain-manager-origin": 59,
+    "chain-manager-origin-no-work-mouth": 59,
+    "chain-manager-job-without-origin": 59,
+    "chain-manager-job-missing": 59,
+    "chain-manager-list-fails#1": 59,
+    "chain-manager-list-fails#2": 59,
+    "chain-work-conversation": 59,
+    "chain-work-conversation-fallback": 59,
+    "chain-none": 59,
+    "chain-work-undefined-human-null": 59,
+    "task-none": 59,
+    "task-empty": 59,
+    "task-ids": 59,
+    "no-flush": 59,
+    "no-note": 59,
+    "no-optional-hooks": 59,
+    "flush-fails": 10,
+    "put-fails#1": 291,
+    "put-fails#2": 59,
+    "journal-fails#1": 218,
+    "journal-fails#2": 59
+  },
+  "scenarios": {
+    "question-invalid-length#1": {
+      "output": {
+        "length": 38,
+        "text": "承認待ちには積まなかった: question は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "question-invalid-length#2": {
+      "output": {
+        "length": 38,
+        "text": "承認待ちには積まなかった: question は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "question-invalid-length#3": {
+      "output": {
+        "length": 38,
+        "text": "承認待ちには積まなかった: question は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "question-invalid-blank#1": {
+      "output": {
+        "length": 50,
+        "text": "承認待ちには積まなかった: question は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "question-invalid-blank#2": {
+      "output": {
+        "length": 50,
+        "text": "承認待ちには積まなかった: question は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "question-invalid-blank#3": {
+      "output": {
+        "length": 50,
+        "text": "承認待ちには積まなかった: question は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "question-undefined": {
+      "output": {
+        "length": 54,
+        "text": "Cannot read properties of undefined (reading 'length')",
+        "isError": true,
+        "thrown": true,
+        "errorName": "TypeError"
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "context": "本番の切り替えを今週中にしたい"
+          },
+          "outcome": "threw ZodError (store)"
+        }
+      ],
+      "stderr": []
+    },
+    "questions-dup-id#1": {
+      "output": {
+        "length": 70,
+        "text": "承認待ちには積まなかった: questions の設問 id \"target\" が重複している（設問の id は承認待ちの中で一意にする）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "questions-dup-id#2": {
+      "output": {
+        "length": 70,
+        "text": "承認待ちには積まなかった: questions の設問 id \"target\" が重複している（設問の id は承認待ちの中で一意にする）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "questions-dup-id#3": {
+      "output": {
+        "length": 70,
+        "text": "承認待ちには積まなかった: questions の設問 id \"target\" が重複している（設問の id は承認待ちの中で一意にする）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "questions-dup-option#1": {
+      "output": {
+        "length": 73,
+        "text": "承認待ちには積まなかった: 設問 \"target\" の選択肢 id \"railway\" が重複している（選択肢の id は設問の中で一意にする）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "questions-dup-option#2": {
+      "output": {
+        "length": 70,
+        "text": "承認待ちには積まなかった: 設問 \"notify\" の選択肢 id \"mail\" が重複している（選択肢の id は設問の中で一意にする）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [],
+      "stderr": []
+    },
+    "questions-ok#1": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "デプロイ先は？",
+              "options": [
+                {
+                  "id": "railway",
+                  "label": "Railway",
+                  "recommended": true
+                },
+                {
+                  "id": "fly",
+                  "label": "Fly.io",
+                  "description": "東京リージョンがある"
+                }
+              ]
+            },
+            {
+              "id": "notify",
+              "prompt": "通知する先（複数可）",
+              "options": [
+                {
+                  "id": "slack",
+                  "label": "Slack"
+                },
+                {
+                  "id": "mail",
+                  "label": "メール"
+                }
+              ],
+              "multiple": true,
+              "allowOther": false
+            }
+          ]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "questions": [
+              {
+                "id": "target",
+                "prompt": "デプロイ先は？",
+                "options": [
+                  {
+                    "id": "railway",
+                    "label": "Railway",
+                    "recommended": true
+                  },
+                  {
+                    "id": "fly",
+                    "label": "Fly.io",
+                    "description": "東京リージョンがある"
+                  }
+                ]
+              },
+              {
+                "id": "notify",
+                "prompt": "通知する先（複数可）",
+                "multiple": true,
+                "allowOther": false,
+                "options": [
+                  {
+                    "id": "slack",
+                    "label": "Slack"
+                  },
+                  {
+                    "id": "mail",
+                    "label": "メール"
+                  }
+                ]
+              }
+            ]
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "questions-ok#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "デプロイ先は？",
+              "options": [
+                {
+                  "id": "railway",
+                  "label": "Railway",
+                  "recommended": true
+                },
+                {
+                  "id": "fly",
+                  "label": "Fly.io",
+                  "description": "東京リージョンがある"
+                }
+              ]
+            },
+            {
+              "id": "notify",
+              "prompt": "通知する先（複数可）",
+              "options": [
+                {
+                  "id": "slack",
+                  "label": "Slack"
+                },
+                {
+                  "id": "mail",
+                  "label": "メール"
+                }
+              ],
+              "multiple": true,
+              "allowOther": false
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "デプロイ先は？",
+              "options": [
+                {
+                  "id": "railway",
+                  "label": "Railway",
+                  "recommended": true
+                },
+                {
+                  "id": "fly",
+                  "label": "Fly.io",
+                  "description": "東京リージョンがある"
+                }
+              ]
+            },
+            {
+              "id": "again",
+              "prompt": "同じ選択肢 id",
+              "options": [
+                {
+                  "id": "railway",
+                  "label": "R"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "questions": [
+              {
+                "id": "target",
+                "prompt": "デプロイ先は？",
+                "options": [
+                  {
+                    "id": "railway",
+                    "label": "Railway",
+                    "recommended": true
+                  },
+                  {
+                    "id": "fly",
+                    "label": "Fly.io",
+                    "description": "東京リージョンがある"
+                  }
+                ]
+              },
+              {
+                "id": "again",
+                "prompt": "同じ選択肢 id",
+                "options": [
+                  {
+                    "id": "railway",
+                    "label": "R"
+                  }
+                ]
+              }
+            ]
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "questions-empty-array": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "questions-direct-bad-shape": {
+      "output": {
+        "length": 226,
+        "text": "⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい\nask_human は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。\n記録できなかった確認: escalation approvalId=00000000-0000-4000-8000-000000000001 question.chars=10\n理由: ZodError: [\nやり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "ApprovalNotRecordedError"
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "questions": [
+              {
+                "id": "empty",
+                "prompt": "選択肢の無い設問",
+                "options": []
+              }
+            ]
+          },
+          "outcome": "threw ZodError (store)"
+        }
+      ],
+      "stderr": [
+        "alteroid: 2026-10-29T00:01:00.000Z 承認待ちを記録できませんでした（escalation approvalId=00000000-0000-4000-8000-000000000001 question.chars=10）: ZodError: [\n"
+      ]
+    },
+    "ok-minimal": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-background#1": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": "本番の切り替えを今週中にしたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "context": "本番の切り替えを今週中にしたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-background#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": "本番の切り替えを今週中にしたい"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": ""
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "context": ""
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-background#3": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000003）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": "本番の切り替えを今週中にしたい"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": ""
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": "  前後に空白\n二行目  "
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000003"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "createdAt": "2026-10-29T00:03:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "context": "  前後に空白\n二行目  "
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000003"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000003",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-question-shapes#1": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "  前後に空白  "
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "  前後に空白  ",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "  前後に空白  "
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "  前後に空白  ",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "  前後に空白  "
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-question-shapes#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "  前後に空白  "
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "一行目\n二行目\n\n四行目"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "一行目\n二行目\n\n四行目",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "一行目\n二行目\n\n四行目"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "一行目\n二行目\n\n四行目",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "一行目\n二行目\n\n四行目"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-question-shapes#3": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000003）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "  前後に空白  "
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "一行目\n二行目\n\n四行目"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+          "approvalId": "00000000-0000-4000-8000-000000000003"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "createdAt": "2026-10-29T00:03:00.000Z",
+            "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+            "approvalId": "00000000-0000-4000-8000-000000000003"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000003",
+            "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-question-shapes#4": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000004）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "  前後に空白  "
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "一行目\n二行目\n\n四行目"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "createdAt": "2026-10-29T00:04:00.000Z",
+          "question": "前後"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "question": "前後",
+          "approvalId": "00000000-0000-4000-8000-000000000004"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "createdAt": "2026-10-29T00:04:00.000Z",
+            "question": "前\u0000後"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "前\u0000後",
+            "approvalId": "00000000-0000-4000-8000-000000000004"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000004",
+            "question": "前\u0000後"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-twice#1": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ok-twice#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ids-manager-only": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 0 jobs"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ids-request-only": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "requestId": "req-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "requestId": "req-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ids-manager-request": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "requestId": "req-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 1 jobs"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1",
+            "requestId": "req-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "ids-all-fields": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "context": "本番の切り替えを今週中にしたい",
+          "jobId": "mgr-1",
+          "requestId": "req-1",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "デプロイ先は？",
+              "options": [
+                {
+                  "id": "railway",
+                  "label": "Railway",
+                  "recommended": true
+                },
+                {
+                  "id": "fly",
+                  "label": "Fly.io",
+                  "description": "東京リージョンがある"
+                }
+              ]
+            },
+            {
+              "id": "notify",
+              "prompt": "通知する先（複数可）",
+              "options": [
+                {
+                  "id": "slack",
+                  "label": "Slack"
+                },
+                {
+                  "id": "mail",
+                  "label": "メール"
+                }
+              ],
+              "multiple": true,
+              "allowOther": false
+            }
+          ],
+          "conversationId": "conv-human",
+          "taskIds": ["task-a", "task-b"]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "context.currentTaskIds"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "context": "本番の切り替えを今週中にしたい",
+            "questions": [
+              {
+                "id": "target",
+                "prompt": "デプロイ先は？",
+                "options": [
+                  {
+                    "id": "railway",
+                    "label": "Railway",
+                    "recommended": true
+                  },
+                  {
+                    "id": "fly",
+                    "label": "Fly.io",
+                    "description": "東京リージョンがある"
+                  }
+                ]
+              },
+              {
+                "id": "notify",
+                "prompt": "通知する先（複数可）",
+                "multiple": true,
+                "allowOther": false,
+                "options": [
+                  {
+                    "id": "slack",
+                    "label": "Slack"
+                  },
+                  {
+                    "id": "mail",
+                    "label": "メール"
+                  }
+                ]
+              }
+            ],
+            "jobId": "mgr-1",
+            "requestId": "req-1",
+            "conversationId": "conv-human",
+            "taskIds": ["task-a", "task-b"]
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-human"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-human-turn": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "conversationId": "conv-human"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1",
+            "conversationId": "conv-human"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-human"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-human-turn-no-work-mouth": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-human"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "conversationId": "conv-human"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-human"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-manager-origin": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "conversationId": "conv-job"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 2 jobs"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1",
+            "conversationId": "conv-job"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-job"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-manager-origin-no-work-mouth": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "conversationId": "conv-job"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 1 jobs"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1",
+            "conversationId": "conv-job"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-job"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-manager-job-without-origin": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-cron",
+          "conversationId": "conv-work"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 1 jobs"
+        },
+        {
+          "op": "context.workConversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-cron",
+            "conversationId": "conv-work"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-work"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-manager-job-missing": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-unknown",
+          "conversationId": "conv-work"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 1 jobs"
+        },
+        {
+          "op": "context.workConversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-unknown",
+            "conversationId": "conv-work"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-work"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-manager-list-fails#1": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "conversationId": "conv-work"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "threw Error: 台帳が読めない（listJobs）"
+        },
+        {
+          "op": "context.workConversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1",
+            "conversationId": "conv-work"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-work"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-manager-list-fails#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "conversationId": "conv-work"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1",
+          "conversationId": "conv-job"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 1 jobs"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1",
+            "conversationId": "conv-job"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-job"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-work-conversation": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-work"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.workConversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "conversationId": "conv-work"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-work"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-work-conversation-fallback": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 0 jobs"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-none": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "jobId": "mgr-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.listJobs",
+          "outcome": "ok 1 jobs"
+        },
+        {
+          "op": "context.workConversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "jobId": "mgr-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "chain-work-undefined-human-null": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.workConversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "task-none": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "task-empty": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "context.currentTaskIds"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "task-ids": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-1",
+          "taskIds": ["task-a", "task-b"]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "context.currentTaskIds"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "conversationId": "conv-1",
+            "taskIds": ["task-a", "task-b"]
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "no-flush": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "(undefined)"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "no-note": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "no-optional-hooks": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000001）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "flush-fails": {
+      "output": {
+        "length": 10,
+        "text": "flush が落ちた",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "threw Error: flush が落ちた"
+        }
+      ],
+      "stderr": []
+    },
+    "put-fails#1": {
+      "output": {
+        "length": 291,
+        "text": "⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい\nask_human は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。\n記録できなかった確認: escalation approvalId=00000000-0000-4000-8000-000000000001 managerId=mgr-1 requestId=req-1 question.chars=10 context.chars=15\n理由: Error: ストアが落ちた（putApproval）\nやり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "ApprovalNotRecordedError"
+      },
+      "wrote": false,
+      "approvals": [],
+      "journal": [],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "context.currentTaskIds"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "context": "本番の切り替えを今週中にしたい",
+            "questions": [
+              {
+                "id": "target",
+                "prompt": "デプロイ先は？",
+                "options": [
+                  {
+                    "id": "railway",
+                    "label": "Railway",
+                    "recommended": true
+                  },
+                  {
+                    "id": "fly",
+                    "label": "Fly.io",
+                    "description": "東京リージョンがある"
+                  }
+                ]
+              }
+            ],
+            "jobId": "mgr-1",
+            "requestId": "req-1",
+            "conversationId": "conv-1",
+            "taskIds": ["task-a"]
+          },
+          "outcome": "threw Error: ストアが落ちた（putApproval）"
+        }
+      ],
+      "stderr": [
+        "alteroid: 2026-10-29T00:01:00.000Z 承認待ちを記録できませんでした（escalation approvalId=00000000-0000-4000-8000-000000000001 managerId=mgr-1 requestId=req-1 question.chars=10 context.chars=15）: Error: ストアが落ちた（putApproval）\n"
+      ]
+    },
+    "put-fails#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-1",
+          "taskIds": ["task-a"]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "context.currentTaskIds"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "conversationId": "conv-1",
+            "taskIds": ["task-a"]
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    },
+    "journal-fails#1": {
+      "output": {
+        "length": 218,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\nask_human は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: escalation approvalId=00000000-0000-4000-8000-000000000001 question.chars=10\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-10-29T00:01:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "conversationId": "conv-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ],
+      "stderr": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（escalation approvalId=00000000-0000-4000-8000-000000000001 question.chars=10）: Error: 日誌が落ちた\n"
+      ]
+    },
+    "journal-fails#2": {
+      "output": {
+        "length": 59,
+        "text": "承認待ちキューに積んだ（00000000-0000-4000-8000-000000000002）。回答は後から届く。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-1"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "conversationId": "conv-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "デプロイ先を決めたい",
+          "approvalId": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "calls": [
+        {
+          "op": "context.conversationId"
+        },
+        {
+          "op": "context.flushReply",
+          "outcome": "ok"
+        },
+        {
+          "op": "jobs.putApproval",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "createdAt": "2026-10-29T00:02:00.000Z",
+            "question": "デプロイ先を決めたい",
+            "conversationId": "conv-1"
+          },
+          "outcome": "ok"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000002",
+            "question": "デプロイ先を決めたい"
+          }
+        }
+      ],
+      "stderr": []
+    }
+  }
+}
