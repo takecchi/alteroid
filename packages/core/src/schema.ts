@@ -1159,7 +1159,6 @@ export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
     kind: z.literal('git'),
     repository: z.string(),
     ref: z.string(),
-    patchId: z.string().optional(),
   }),
 ]);
 

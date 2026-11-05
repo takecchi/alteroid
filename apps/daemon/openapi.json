@@ -27626,9 +27626,6 @@
                                   },
                                   "ref": {
                                     "type": "string"
-                                  },
-                                  "patchId": {
-                                    "type": "string"
                                   }
                                 },
                                 "required": ["kind", "repository", "ref"],
@@ -28587,9 +28584,6 @@
                                   "type": "string"
                                 },
                                 "ref": {
-                                  "type": "string"
-                                },
-                                "patchId": {
                                   "type": "string"
                                 }
                               },
