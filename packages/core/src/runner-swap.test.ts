@@ -1,20 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type {
-  RunnerAnswerOutcome,
-  RunnerClient,
-  RunnerCredentialFingerprint,
-  RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
-} from './runner-protocol.js';
 
-class IdentifyingRunner implements RunnerClient {
+class IdentifyingRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
   runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   probes = 0;
   instanceId: string | undefined;
   claimedRunnerId: string;
@@ -23,6 +14,7 @@ class IdentifyingRunner implements RunnerClient {
   oldestPendingAt: string | undefined;
 
   constructor(runnerId: string, instanceId: string | undefined) {
+    super();
     this.runnerId = runnerId;
     this.claimedRunnerId = runnerId;
     this.instanceId = instanceId;
@@ -47,40 +39,6 @@ class IdentifyingRunner implements RunnerClient {
       ...(this.oldestPendingAt === undefined ? {} : { oldestPendingAt: this.oldestPendingAt }),
     };
   }
-
-  async connect(): Promise<void> {}
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 class PingOnlyRunner extends IdentifyingRunner {
