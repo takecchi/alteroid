@@ -739,7 +739,7 @@
   },
   {
     "name": "task_set_status",
-    "description": "task の状態を変える。queued / waiting / needs_decision（開いている3つ）は互いに行き来できる。 done / cancelled（閉じる）へはどの状態からも行ける。**閉じるときは reason が要る**（何をもって終わりとしたか、なぜ取りやめたか。人間が読んで後から否定する）。 閉じた件から戻せるのは queued だけ（開き直し。閉じた記録は行から外れ、日誌へ逐語で残る）。同じ状態への変更は何もしない。",
+    "description": "task の状態を変える。queued / waiting / needs_decision（開いている3つ）は互いに行き来できる。 開いている件からは done / cancelled（閉じる）へ行ける（閉じた件どうし、done と cancelled の間は移せない）。**閉じるときは reason が要る**（何をもって終わりとしたか、なぜ取りやめたか。人間が読んで後から否定する）。 閉じた件から戻せるのは queued だけ（開き直し。閉じた記録は行から外れ、日誌へ逐語で残る）。同じ状態への変更は何もしない。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
