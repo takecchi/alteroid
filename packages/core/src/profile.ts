@@ -457,10 +457,21 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
 }
 
 function tail(text: string, limit = PROFILE_FAILURE_TEXT_LIMIT): string {
-  return text.length <= limit ? text : `${TAIL_MARK}${text.slice(-limit)}`;
+  if (text.length <= limit) return text;
+  let start = text.length - limit;
+  // 切り口が伏せ字の印の途中に当たったら、印の後ろから残す: 欠けた印（`REDACTED] …`）を出さない。
+  // 前へ広げると上限を超え、出口でもう一度切られて前略の印を壊す。
+  const mark = text.lastIndexOf(REDACTED_MARK, start);
+  if (mark !== -1 && mark < start && mark + REDACTED_MARK.length > start) {
+    start = mark + REDACTED_MARK.length;
+  }
+  return `${TAIL_MARK}${text.slice(start)}`;
 }
 
 const TAIL_MARK = '…（前略）\n';
+
+/** `redactErrorText` が値を置き換える印（`denial-input-head.ts` の `REDACTED` と同じ文字列）。 */
+const REDACTED_MARK = '[REDACTED]';
 
 const PROFILE_FAILURE_TEXT_LIMIT = 4_000;
 

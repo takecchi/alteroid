@@ -308,13 +308,21 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
     if (!result.stored) {
       await appendJournalOrDrop(tool, stores.journal, {
         type: 'decision',
-        decision: `実行環境プロファイルを差し替えられなかった（読めなかった）${profileRowLabel(name)}: ${summary}`,
+        // 外す道具では「差し替え」「置けなかった」と書かない（`profileToolFailed` の外す側の文に揃える）
+        decision:
+          tool === 'profile_remove'
+            ? `実行環境プロファイルの行 ${name} を外せなかった（読めなかった）: ${summary}`
+            : `実行環境プロファイルを差し替えられなかった（読めなかった）${profileRowLabel(name)}: ${summary}`,
         grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
       });
       // クローンの文脈に鍵の値を入れない: シェルの stderr は入力の行を引用し `set -x` は値ごと吐くため伏せる
       const failure = redactProfileFailure(result.clone, process.env);
       return text(
-        `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${failure.error}` +
+        `${
+          tool === 'profile_remove'
+            ? `実行環境プロファイルの行 ${name} を外せなかった`
+            : '実行環境プロファイルを置けなかった'
+        }（保存も配布もしていない）: ${failure.error}` +
           `${failure.output.length === 0 ? '' : `\n${failure.output}`}`,
       );
     }
