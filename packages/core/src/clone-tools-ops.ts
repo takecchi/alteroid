@@ -1277,7 +1277,7 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
         const result = await removeArchiveJournalFirst(stores, archiveId, {
           buildEntry: () => ({
             type: 'decision',
-            decision: `退避済み生ログの本文を消す: ${archiveId}: ${summary}${overrideNote}`,
+            decision: `退避済み生ログの本文を消す。${archiveId}: ${summary}${overrideNote}`,
             grounds,
           }),
           buildAfterEntry: (done) => ({
