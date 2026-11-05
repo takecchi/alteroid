@@ -84,7 +84,7 @@
     "no-note": 117,
     "no-optional-hooks": 117,
     "flush-fails": 10,
-    "put-fails#1": 260,
+    "put-fails#1": 269,
     "put-fails#2": 117,
     "journal-fails#1": 228,
     "journal-fails#2": 117
@@ -762,15 +762,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: undefined\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -781,6 +772,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: undefined\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: undefined\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -851,15 +851,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: undefined\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -870,6 +861,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: undefined\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: undefined\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -932,15 +932,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -951,6 +942,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1013,15 +1013,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh pr view 12) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh pr view 12\n通らない例: gh pr view 13 / gh pr view 12 --web / gh pr\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1032,6 +1023,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh pr view 12) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh pr view 12\n通らない例: gh pr view 13 / gh pr view 12 --web / gh pr\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh pr view 12) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh pr view 12\n通らない例: gh pr view 13 / gh pr view 12 --web / gh pr\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1114,15 +1114,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit / gh release edit v1 --draft / gh release edit v1 --title \"a (b)\" / gh release edit 'x;y'\n通らない例: gh release delete v1 / gh release edit; rm -rf / / gh release edit v1\nrm x / ghx release edit\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1133,6 +1124,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit / gh release edit v1 --draft / gh release edit v1 --title \"a (b)\" / gh release edit 'x;y'\n通らない例: gh release delete v1 / gh release edit; rm -rf / / gh release edit v1\nrm x / ghx release edit\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit / gh release edit v1 --draft / gh release edit v1 --title \"a (b)\" / gh release edit 'x;y'\n通らない例: gh release delete v1 / gh release edit; rm -rf / / gh release edit v1\nrm x / ghx release edit\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1195,15 +1195,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由:   前後に空白  \n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1214,6 +1205,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由:   前後に空白  \n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由:   前後に空白  \n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1287,15 +1287,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: 一行目\n二行目\n\n四行目\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1306,6 +1297,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: 一行目\n二行目\n\n四行目\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: 一行目\n二行目\n\n四行目\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -1390,15 +1390,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000003"
-          },
-          "outcome": "ok id-3"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1409,6 +1400,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000003",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000003"
+          },
+          "outcome": "ok id-3"
         }
       ],
       "stderr": []
@@ -1471,15 +1471,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1490,6 +1481,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1563,15 +1563,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1582,6 +1573,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -1644,15 +1644,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1663,6 +1654,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1725,15 +1725,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft / gh release edit v2\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1744,6 +1735,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft / gh release edit v2\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft / gh release edit v2\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1831,15 +1831,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1850,6 +1841,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1912,15 +1912,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1931,6 +1922,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1993,15 +1993,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2012,6 +2003,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2074,15 +2074,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2093,6 +2084,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2155,15 +2155,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2174,6 +2165,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2236,15 +2236,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission to use Bash has been denied.\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2255,6 +2246,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission to use Bash has been denied.\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission to use Bash has been denied.\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2317,15 +2317,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2336,6 +2327,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2398,15 +2398,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 拒否文 拒否文だけ\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2417,6 +2408,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 拒否文 拒否文だけ\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 拒否文 拒否文だけ\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2479,15 +2479,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:02.000Z / 道具 Bash / 先頭の語 gh / 理由 新しい拒否\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2498,6 +2489,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:02.000Z / 道具 Bash / 先頭の語 gh / 理由 新しい拒否\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:02.000Z / 道具 Bash / 先頭の語 gh / 理由 新しい拒否\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2560,15 +2560,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（50 文字省略。全 450 文字） / 理由 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（54 文字省略。全 454 文字） / 拒否文 一行目 二行目 三行目\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2579,6 +2570,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（50 文字省略。全 450 文字） / 理由 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（54 文字省略。全 454 文字） / 拒否文 一行目 二行目 三行目\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（50 文字省略。全 450 文字） / 理由 ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（54 文字省略。全 454 文字） / 拒否文 一行目 二行目 三行目\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2641,15 +2641,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh pr view 12) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh pr view 12\n通らない例: gh pr view 13\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission to use Bash has been denied.\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2660,6 +2651,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh pr view 12) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh pr view 12\n通らない例: gh pr view 13\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission to use Bash has been denied.\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh pr view 12) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh pr view 12\n通らない例: gh pr view 13\n直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh / 分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission to use Bash has been denied.\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2719,15 +2719,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(./deploy.sh:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: ./deploy.sh prod\n通らない例: ./other.sh\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2738,6 +2729,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(./deploy.sh:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: ./deploy.sh prod\n通らない例: ./other.sh\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(./deploy.sh:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: ./deploy.sh prod\n通らない例: ./other.sh\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2808,15 +2808,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(FOO=bar make:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: FOO=bar make x\n通らない例: make x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2827,6 +2818,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "以降 Bash(FOO=bar make:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: FOO=bar make x\n通らない例: make x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(FOO=bar make:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: FOO=bar make x\n通らない例: make x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -2908,15 +2908,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x y\n通らない例: gh x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000003"
-          },
-          "outcome": "ok id-3"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2927,6 +2918,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000003",
             "question": "以降 Bash(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x y\n通らない例: gh x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x y\n通らない例: gh x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000003"
+          },
+          "outcome": "ok id-3"
         }
       ],
       "stderr": []
@@ -3019,15 +3019,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(AKIAIOSFODNN7EXAMPLE x:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: AKIAIOSFODNN7EXAMPLE x y\n通らない例: gh x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000004"
-          },
-          "outcome": "ok id-4"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -3038,6 +3029,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000004",
             "question": "以降 Bash(AKIAIOSFODNN7EXAMPLE x:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: AKIAIOSFODNN7EXAMPLE x y\n通らない例: gh x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(AKIAIOSFODNN7EXAMPLE x:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: AKIAIOSFODNN7EXAMPLE x y\n通らない例: gh x\n直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000004"
+          },
+          "outcome": "ok id-4"
         }
       ],
       "stderr": []
@@ -3100,15 +3100,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -3119,6 +3110,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3183,15 +3183,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -3202,6 +3193,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3266,15 +3266,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-origin"
         },
@@ -3285,6 +3276,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3347,15 +3347,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -3366,6 +3357,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3428,15 +3428,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -3447,6 +3438,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3512,15 +3512,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -3531,6 +3522,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3600,15 +3600,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -3619,6 +3610,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3677,15 +3677,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -3696,6 +3687,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3758,6 +3758,14 @@
           "outcome": "ok"
         },
         {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
+          }
+        },
+        {
           "op": "journal.append",
           "args": {
             "type": "escalation",
@@ -3765,14 +3773,6 @@
             "approvalId": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "ok id-1"
-        },
-        {
-          "op": "context.emit",
-          "args": {
-            "type": "ask_human",
-            "approvalId": "00000000-0000-4000-8000-000000000001",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
-          }
         }
       ],
       "stderr": []
@@ -3828,6 +3828,14 @@
           "outcome": "ok"
         },
         {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
+          }
+        },
+        {
           "op": "journal.append",
           "args": {
             "type": "escalation",
@@ -3835,14 +3843,6 @@
             "approvalId": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "ok id-1"
-        },
-        {
-          "op": "context.emit",
-          "args": {
-            "type": "ask_human",
-            "approvalId": "00000000-0000-4000-8000-000000000001",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
-          }
         }
       ],
       "stderr": []
@@ -3874,8 +3874,8 @@
     },
     "put-fails#1": {
       "output": {
-        "length": 260,
-        "text": "⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい\nask_human は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。\n記録できなかった確認: escalation approvalId=00000000-0000-4000-8000-000000000001 question.chars=210 context.chars=13\n理由: Error: ストアが落ちた（putApproval）\nやり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。",
+        "length": 269,
+        "text": "⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい\nrequest_permission は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。\n記録できなかった確認: escalation approvalId=00000000-0000-4000-8000-000000000001 question.chars=210 context.chars=13\n理由: Error: ストアが落ちた（putApproval）\nやり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。",
         "isError": true,
         "thrown": true,
         "errorName": "ApprovalNotRecordedError"
@@ -3984,15 +3984,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -4003,6 +3994,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -4057,6 +4057,18 @@
             "conversationId": "conv-1"
           },
           "outcome": "ok"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
+          }
         },
         {
           "op": "journal.append",
@@ -4144,15 +4156,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -4163,6 +4166,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "以降 Bash(gh release edit:*) を聞かずに通してよいか。理由: リリースの下書きを直したい\n通る例: gh release edit v1 --draft\n通らない例: gh release delete v1\n直前の拒否: この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い。\n許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []

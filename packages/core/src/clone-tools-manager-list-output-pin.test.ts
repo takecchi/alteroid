@@ -668,9 +668,8 @@ function buildPool(scenario: Scenario, state: { managers: ManagerSummary[] }): M
       return scenario.backlog ?? [];
     },
     ...(scenario.capable === true ? { runnerHasCapability: () => true } : {}),
-    ...(scenario.models === undefined
-      ? {}
-      : { runnerReportedModels: (runnerId: string) => scenario.models?.[runnerId] }),
+    // 口は必須（#6488）。名乗りの無い場面は `undefined` を返す（口が無かった頃の `?.` と同じ答え）
+    runnerReportedModels: (runnerId: string) => scenario.models?.[runnerId],
     start: notUsed,
     send: notUsed,
     abort: notUsed,
