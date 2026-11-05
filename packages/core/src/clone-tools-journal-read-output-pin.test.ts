@@ -56,8 +56,6 @@ interface Scenario {
   steps: Step[];
   /** 語の検索の口（now・clock・予算）。省くと本物の口（時計は performance.now、「いま」は固定の Date） */
   search?: SearchOptions;
-  /** 真なら、この呼びをサブエージェントのものとして扱う */
-  subagent?: boolean;
 }
 
 const FROZEN_NOW = '2026-10-29T00:00:00.000Z';
@@ -1109,8 +1107,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'subagent-ignored',
-    covers: 'サブエージェントの呼びも出力は変わらない（2回目も全文のまま）',
-    subagent: true,
+    covers:
+      'かつてサブエージェントの呼びとして扱った場面（呼び手の判定は外した）。2回目も全文のまま',
     seed: seedMixed,
     steps: [{ args: { limit: 3 } }, { args: { limit: 3 } }, { args: { id: 'id-1' } }],
   },
@@ -1157,7 +1155,6 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
             ...(search.sliceMs === undefined ? {} : { sliceMs: search.sliceMs }),
           },
         }),
-    ...(scenario.subagent === true ? { isSubagentCall: () => true } : {}),
   });
   const found = tools.find((entry) => entry.name === 'journal_read');
   if (!found) throw new Error('journal_read が無い');

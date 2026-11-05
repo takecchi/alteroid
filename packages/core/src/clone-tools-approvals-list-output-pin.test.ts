@@ -9,7 +9,7 @@ import type { ApprovalQuestion, PendingApproval } from './schema.js';
 import { UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
-import { createCloneTools, TOOL_USE_ID_META_KEY } from './tools.js';
+import { createCloneTools } from './tools.js';
 
 // `approvals_list` の出力（全文と字数）と、呼んだあとの状態（承認のストア・委譲・日誌の行・書き込み口が呼ばれたか）を、
 // 場面ごとにコミットした固定値（clone-tools-approvals-list-output-pin.json）と丸ごと比べる。
@@ -50,8 +50,6 @@ interface Hooks {
 interface Step {
   args?: Args;
   hooks?: Hooks;
-  /** 'subagent' ならサブエージェントの呼び（畳まない・控えない）。省略は main */
-  caller?: 'main' | 'subagent';
   /** 道具の説明文（description）を出力として固定する */
   desc?: boolean;
   /** この呼びの直前に、別の経路が承認を動かす（呼ぶ前の状態を作る。道具の書き込みではない） */
@@ -985,7 +983,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   const found = tools.find((entry) => entry.name === 'approvals_list');
   if (!found) throw new Error('approvals_list が無い');
 
-  const subagentId = 'toolu-from-subagent';
   const results: PinnedStep[] = [];
   for (const [index, step] of scenario.steps.entries()) {
     if (step.before !== undefined) await step.before(base);
@@ -993,18 +990,13 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
     const before = await snapshot(base);
     writeCalls.length = 0;
     readCalls.length = 0;
-    const extra = {
-      _meta: {
-        [TOOL_USE_ID_META_KEY]: step.caller === 'subagent' ? subagentId : 'toolu-main',
-      },
-    };
     let output: PinnedOutput;
     if (step.desc === true) {
       const text = found.description;
       output = { length: text.length, text, isError: false, thrown: false };
     } else {
       try {
-        const result = await found.handler((step.args ?? {}) as never, extra);
+        const result = await found.handler((step.args ?? {}) as never, {});
         const text = (result.content ?? [])
           .map((block) => (block.type === 'text' ? block.text : ''))
           .join('');

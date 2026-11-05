@@ -10,7 +10,6 @@ import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import type { JournalSlicedSearchOptions } from './journal-sliced-search.js';
-import type { ToolUseIdProbe } from './subagent-caller-gauge.js';
 
 /** いまのターンの返信に添える添付の口（`reply_attach`）。 */
 export interface ReplyAttachments {
@@ -66,12 +65,6 @@ export interface ToolContext {
   // 無い器（テスト等）では `reply_attach` は断る: 返信に添える先が無いまま「添えた」と言わないため
   replyAttachments?: ReplyAttachments;
   managers?: ManagerPool;
-  /**
-   * この道具の呼びがサブエージェント（作業者）のものか。計器は外した（#6448）ので、クローンが渡す実装は常に `false` を返す。
-   * 道具の側で使う所は `memory_append` の呼びだけが残っていて、次の PR で口ごと外す。
-   * 無い器（テスト・蒸留）は常に本体と同じ。
-   */
-  isSubagentCall?: (toolUseId: string | undefined, probe?: ToolUseIdProbe) => boolean;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
   runtime?: () => CloneRuntimeFacts;

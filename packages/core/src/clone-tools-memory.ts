@@ -48,7 +48,7 @@ import {
   formatStringLengthJa,
 } from './tool-arg-checks.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
-import { tool, text, appendJournalOrThrow, noteSubagentCallerGauge } from './clone-tools-common.js';
+import { tool, text, appendJournalOrThrow } from './clone-tools-common.js';
 
 const MEMORY_PAGE = 8_000;
 
@@ -1356,7 +1356,7 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           .describe(`追記する Markdown（${formatStringLengthJa({ min: 1 })}。空白だけは断る）`),
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
-      async ({ slug, content, summary }, extra: unknown) => {
+      async ({ slug, content, summary }) => {
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -1392,7 +1392,6 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           before === null ? null : before.content,
           written.content,
         );
-        noteSubagentCallerGauge(context, extra);
         const floor = memoryFloorNote(
           memoryBefore,
           memoryAfter,
