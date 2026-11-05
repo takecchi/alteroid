@@ -66,9 +66,7 @@ import {
   TRANSCRIPT_PAGE,
   JournalNotRecordedError,
   RUNNER_MANAGER_PEERS_EXCERPT,
-  isSubagentCaller,
-  NO_FIXED_FOLD,
-  type FixedFold,
+  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
@@ -541,10 +539,9 @@ function describeRunnerBlock(runner: RunnerOverview, show: RunnerListShow): stri
   return lines.join('\n');
 }
 
-// 末尾の注記。固定の2文は、同じ会話の2回目から札にする（fold は道具の式が作って渡す。呼ぶ順は since-note → pids-note のまま）
+// 末尾の注記
 function describeRunnerListTail(
   autoFoldedNote: string,
-  fold: FixedFold,
   resources: boolean,
   unassigned: RunnerManagerEntry[],
 ): string[] {
@@ -552,27 +549,19 @@ function describeRunnerListTail(
   if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
   // 「この状態になった」の注記は器ごとに繰り返さず末尾に1度だけ添える: 名簿はインメモリで再起動すると `since` が巻き戻り、「ずっと保持されている記録」と誤読されないため
   tail.push(
-    fold(
-      'runner-list:since-note',
-      '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
-        'デーモンを再起動すると作り直される。',
-      '「この状態になった」は名簿の値で、デーモンの再起動で作り直される。',
-    ),
+    '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
+      'デーモンを再起動すると作り直される。',
   );
   // pids を出したなら、その数字が言えないことを必ず添える: 言えないことを書いていない計器は、読む側が言えると思い込むため
   if (resources) {
     tail.push(
-      fold(
-        'runner-list:pids-note',
-        'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
-          'この2つの数字だけからは、何がその数を持っているかは分からない。' +
-          '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
-          'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
-          '対応していない runner——古い版——では内訳の行自体が出ない）。' +
-          '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
-          'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
-        'pids について: **現在値/上限は器の合計であって内訳ではない。空きは「次に何本置けるか」を意味しない**（内訳は対応する runner のブロックに出る）。',
-      ),
+      'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
+        'この2つの数字だけからは、何がその数を持っているかは分からない。' +
+        '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
+        'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（' +
+        '対応していない runner——古い版——では内訳の行自体が出ない）。' +
+        '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
+        'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
     );
   }
   if (unassigned.length > 0) {
@@ -1575,13 +1564,9 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
         const show = { fingerprints: fingerprints === true, resources: resources === true };
         const blocks = pageCheck.view.map((runner) => describeRunnerBlock(runner, show));
 
-        // 末尾の固定の2文は、同じ会話の2回目から札にする（`manager_list` と同じ口。札にも結論を残す）。返す直前のここで1度だけ呼ぶ
-        const foldRunnerTail = isSubagentCaller(context, extra)
-          ? NO_FIXED_FOLD
-          : (context.foldFixed ?? NO_FIXED_FOLD);
+        noteSubagentCallerGauge(context, extra);
         const tail = describeRunnerListTail(
           autoFoldedNote,
-          foldRunnerTail,
           resources === true,
           overview.unassigned,
         );

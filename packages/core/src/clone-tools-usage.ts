@@ -29,8 +29,6 @@ import {
 import { describeStringLengthViolation, formatStringLengthJa } from './tool-arg-checks.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 import {
-  type FixedFold,
-  NO_FIXED_FOLD,
   USAGE_AXIS_PAGE,
   maxUpdatedAt,
   renderRisenSection,
@@ -38,7 +36,7 @@ import {
   tool,
   appendJournalOrThrow,
   text,
-  isSubagentCaller,
+  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 
 export const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site', 'token'] as const;
@@ -213,11 +211,8 @@ function renderUsage(
     cursor?: string;
     // `undefined` は「軸モードなので出さない」であって「取りこぼしが無い」ではない
     unrecordedManagers?: readonly string[];
-    // 脚注（毎回同文の注記）を同じ会話の2回目から参照にする口。無ければ全文
-    fold?: FixedFold;
   } = {},
 ): string {
-  const fold = view.fold ?? NO_FIXED_FOLD;
   const {
     rows,
     turnRows,
@@ -237,11 +232,7 @@ function renderUsage(
   if (since === null) {
     return [
       '台帳にはまだ1件も記録が無い。',
-      fold(
-        'usage-read:empty-ledger-note',
-        '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
-        '（記録は機能を入れた時点から。それ以前は残っていない）',
-      ),
+      '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
       ...unreadableRowsLines,
       ...unmeteredLines,
       ...(view.unrecordedManagers === undefined ? [] : ['', ...view.unrecordedManagers]),
@@ -357,11 +348,7 @@ function renderUsage(
     if (summary.turns !== undefined) {
       lines.push(
         '',
-        fold(
-          'usage-read:model-turns-note',
-          'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
-          'モデル別に回数は出さない（回数をモデルへ帰属させられない）。',
-        ),
+        'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
       );
     }
   }
@@ -409,7 +396,7 @@ function renderUsage(
         'その分の回数は **0 ではなく「取れていない」**。',
     );
   }
-  lines.push(fold('usage-read:estimate-notice', notice, '推定値であり請求明細ではない。'));
+  lines.push(notice);
   return lines.join('\n');
 }
 
@@ -488,9 +475,7 @@ export function usageTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ from, to, managerId, layer, site, tokenId, axis, cursor }, extra: unknown) => {
-        const fold = isSubagentCaller(context, extra)
-          ? NO_FIXED_FOLD
-          : (context.foldFixed ?? NO_FIXED_FOLD);
+        noteSubagentCallerGauge(context, extra);
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
         // `from` / `to` は形を確かめてから店へ渡す: 店は日付を文字列の大小で比べるだけで、`2026-02-30` などが黙って絞り込みになるため
@@ -519,7 +504,7 @@ export function usageTools(context: ToolContext, shared: CloneToolsShared) {
           dateOrderNotice === null ? body : `${dateOrderNotice}\n${body}`;
         // 軸モードでは続きの1軸だけを返す: 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるため
         if (axis !== undefined) {
-          return text(withNotice(renderUsage(aggregate, { axis, cursor, fold })));
+          return text(withNotice(renderUsage(aggregate, { axis, cursor })));
         }
         const unrecordedManagers = await unrecordedManagersLines(context, stores, aggregate.since);
         return text(
@@ -528,7 +513,7 @@ export function usageTools(context: ToolContext, shared: CloneToolsShared) {
               renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
               '',
               '## alteroid が使った分（台帳）',
-              renderUsage(aggregate, { unrecordedManagers, fold }),
+              renderUsage(aggregate, { unrecordedManagers }),
             ].join('\n'),
           ),
         );

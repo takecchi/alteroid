@@ -36,15 +36,13 @@ import { formatUsd, type UsageAggregate } from './usage.js';
 import { describeIntRangeViolation, formatIntRangeJa } from './tool-arg-checks.js';
 import {
   RUNNER_MANAGER_PEERS_EXCERPT,
-  type FixedFold,
-  NO_FIXED_FOLD,
   USAGE_AXIS_PAGE,
   renderRisenSection,
   maxUpdatedAt,
   USAGE_AXIS_LIMIT,
   tool,
   text,
-  isSubagentCaller,
+  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
@@ -106,7 +104,6 @@ function renderMemorySize(
   documents: MemoryDocumentMeta[],
   memoryDocuments: readonly MemoryPart[],
   totalMemory: string,
-  fold: FixedFold = NO_FIXED_FOLD,
 ): string {
   const lines = [
     '## 記憶の大きさ（いま stores.persona を読み直した値）',
@@ -159,9 +156,9 @@ function renderMemorySize(
         'カードを落とし、1行になっている（節の目次は焼かれていない。' +
         '落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける）';
   lines.push(
-    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。${fold('self-status:memory-premise', '毎ターン「要旨＋節の目次」が焼かれる', '要旨＋節の目次が焼かれる')}${demotedSuffix}）`,
-    `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。${fold('self-status:memory-indexed', '毎ターン要旨だけが焼かれる。節の目次は焼かれない', '要旨だけが焼かれる')}）`,
-    `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。${fold('self-status:memory-fact', '目次の1行だけが焼かれる', '目次の1行だけ')}）`,
+    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる${demotedSuffix}）`,
+    `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）`,
+    `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');
 }
@@ -362,10 +359,7 @@ export function selfTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ ledgerCursor }, extra: unknown) => {
-        // サブエージェントの呼びは全文で返し、控えも更新しない（manager_list と同じ）
-        const fold = isSubagentCaller(context, extra)
-          ? NO_FIXED_FOLD
-          : (context.foldFixed ?? NO_FIXED_FOLD);
+        noteSubagentCallerGauge(context, extra);
         const runtime = context.runtime?.();
         if (runtime === undefined) {
           return text(
@@ -421,27 +415,18 @@ export function selfTools(context: ToolContext, shared: CloneToolsShared) {
               ),
           ]);
 
-        // 非同期の読みは `fold` を呼ぶ前に済ませる: 途中で落ちると、出していない全文を「出した」と控えてしまうため
         const peerReach = await renderPeerReach(context.managers);
         return text(
           [
-            describeCloneRuntime(
-              {
-                ...runtime,
-                ...(runnerModels === undefined ? {} : { runnerModels }),
-                ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
-              },
-              fold,
-            ),
+            describeCloneRuntime({
+              ...runtime,
+              ...(runnerModels === undefined ? {} : { runnerModels }),
+              ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
+            }),
             ...(codexAuth === null ? [] : [codexAuth]),
             '',
             // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
-            renderMemorySize(
-              documents,
-              memoryDocuments,
-              renderMemoryDocuments(memoryDocuments),
-              fold,
-            ),
+            renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
             '',

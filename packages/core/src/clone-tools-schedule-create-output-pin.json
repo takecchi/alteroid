@@ -125,11 +125,7 @@
     "journal-fails-failure-entry#3": 136,
     "journal-fails-failure-entry#4": 96,
     "journal-fails-final#1": 38,
-    "journal-fails-final#2": 113,
-    "forget-absent#1": 38,
-    "forget-absent#2": 113,
-    "forget-throws": 119,
-    "forget-throws-replace": 186
+    "journal-fails-final#2": 113
   },
   "scenarios": {
     "arg-kind#1": {
@@ -157,7 +153,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#2": {
@@ -185,7 +180,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#3": {
@@ -213,7 +207,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#4": {
@@ -241,7 +234,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#5": {
@@ -269,7 +261,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#6": {
@@ -297,7 +288,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#7": {
@@ -325,7 +315,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#8": {
@@ -353,7 +342,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#9": {
@@ -381,7 +369,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-kind#10": {
@@ -409,7 +396,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#1": {
@@ -437,7 +423,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#2": {
@@ -465,7 +450,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#3": {
@@ -493,7 +477,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#4": {
@@ -521,7 +504,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#5": {
@@ -549,7 +531,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#6": {
@@ -577,7 +558,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#7": {
@@ -605,7 +585,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#8": {
@@ -633,7 +612,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#9": {
@@ -661,7 +639,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-request#10": {
@@ -689,7 +666,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-reserved#1": {
@@ -717,7 +693,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-reserved#2": {
@@ -745,7 +720,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-reserved#3": {
@@ -773,7 +747,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-reserved#4": {
@@ -801,7 +774,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-reserved#5": {
@@ -829,7 +801,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-reserved#6": {
@@ -857,7 +828,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#1": {
@@ -885,7 +855,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#2": {
@@ -913,7 +882,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#3": {
@@ -941,7 +909,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#4": {
@@ -969,7 +936,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#5": {
@@ -997,7 +963,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#6": {
@@ -1025,7 +990,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#7": {
@@ -1053,7 +1017,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#8": {
@@ -1081,7 +1044,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#9": {
@@ -1109,7 +1071,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#10": {
@@ -1137,7 +1098,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#11": {
@@ -1165,7 +1125,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#12": {
@@ -1193,7 +1152,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#13": {
@@ -1221,7 +1179,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#14": {
@@ -1249,7 +1206,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#15": {
@@ -1277,7 +1233,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#16": {
@@ -1305,7 +1260,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#17": {
@@ -1333,7 +1287,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#18": {
@@ -1361,7 +1314,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#19": {
@@ -1389,7 +1341,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#20": {
@@ -1417,7 +1368,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#21": {
@@ -1445,7 +1395,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#22": {
@@ -1473,7 +1422,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#23": {
@@ -1501,7 +1449,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#24": {
@@ -1529,7 +1476,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#25": {
@@ -1557,7 +1503,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#26": {
@@ -1585,7 +1530,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#27": {
@@ -1613,7 +1557,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#28": {
@@ -1641,7 +1584,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#29": {
@@ -1669,7 +1611,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#30": {
@@ -1697,7 +1638,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-period#31": {
@@ -1725,7 +1665,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-spec-schema#1": {
@@ -1753,7 +1692,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-spec-schema#2": {
@@ -1781,7 +1719,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-spec-schema#3": {
@@ -1809,7 +1746,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "arg-spec-schema#4": {
@@ -1837,7 +1773,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "new-daily#1": {
@@ -1880,7 +1815,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -1964,7 +1898,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-short"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2058,7 +1991,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-midnight"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2162,7 +2094,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-last"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2236,7 +2167,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2320,7 +2250,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-min"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2414,7 +2343,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-max"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2518,7 +2446,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-hour"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2592,7 +2519,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2676,7 +2602,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-five"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2745,7 +2670,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "new-cron#4": {
@@ -2808,7 +2732,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["k-yearly"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2882,7 +2805,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -2966,7 +2888,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["a.b_c-d"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3060,7 +2981,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["1abc"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3164,7 +3084,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["nul-body"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3278,7 +3197,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["spaced-body"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3402,7 +3320,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["multi-body"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3536,7 +3453,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["long-body"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3610,7 +3526,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3684,7 +3599,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3742,7 +3656,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3850,7 +3763,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["r-period"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -3958,7 +3870,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["r-request"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4066,7 +3977,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["r-both"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4174,7 +4084,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["r-same"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4282,7 +4191,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["r-daily"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4390,7 +4298,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["r-cron"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4454,7 +4361,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4512,7 +4418,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4610,7 +4515,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["x-199"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4708,7 +4612,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["x-200"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4806,7 +4709,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["x-201"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -4904,7 +4806,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["x-500"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5002,7 +4903,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["x-multi"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5054,7 +4954,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5106,7 +5005,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5164,7 +5062,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5222,7 +5119,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5310,7 +5206,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5396,7 +5291,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5453,7 +5347,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "get-plain-error#2": {
@@ -5496,7 +5389,6 @@
           "grounds": "日誌を先に書いたが、依頼の書き込みが実行されなかったため打ち消して読み直す"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5568,7 +5460,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5668,7 +5559,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5782,7 +5672,6 @@
           "grounds": "日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5882,7 +5771,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -5987,7 +5875,6 @@
           "grounds": "日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6101,7 +5988,6 @@
           "grounds": "日誌を先に書いたが、依頼の書き込みが別の書き手との競合で最後まで実行されなかったため打ち消す"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6217,7 +6103,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6319,7 +6204,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6391,7 +6275,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6449,7 +6332,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6523,7 +6405,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6595,7 +6476,6 @@
           "grounds": "継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6652,7 +6532,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "journal-fails-first#2": {
@@ -6680,7 +6559,6 @@
         "unreadable": []
       },
       "journal": [],
-      "forgotten": [],
       "storeCalls": []
     },
     "journal-fails-first-after-retry": {
@@ -6723,7 +6601,6 @@
           "grounds": "日誌を先に書いたが、依頼の書き込みが実行されなかったため打ち消して読み直す"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6788,7 +6665,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6853,7 +6729,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6920,7 +6795,6 @@
           "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -6971,7 +6845,6 @@
           "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -7050,7 +6923,6 @@
           "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
         }
       ],
-      "forgotten": [],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -7139,7 +7011,6 @@
           "grounds": "継続する依頼を時間起点として持つ判断"
         }
       ],
-      "forgotten": ["fresh"],
       "storeCalls": [
         {
           "op": "editRequest",
@@ -7216,297 +7087,12 @@
           "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
         }
       ],
-      "forgotten": ["weekly-review"],
       "storeCalls": [
         {
           "op": "editRequest",
           "kind": "weekly-review",
           "ifMatch": "2026-10-01T00:00:00.000Z",
           "updatedAt": "2026-10-29T00:02:00.000Z",
-          "changes": {
-            "request": "新しい本文",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            }
-          },
-          "outcome": "edited"
-        }
-      ]
-    },
-    "forget-absent#1": {
-      "output": {
-        "length": 38,
-        "text": "fresh を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "wrote": true,
-      "schedules": {
-        "entries": [
-          {
-            "kind": "fresh",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:01:00.000Z",
-            "updatedAt": "2026-10-29T00:01:00.000Z"
-          },
-          {
-            "kind": "weekly-review",
-            "spec": {
-              "type": "every",
-              "minutes": 60
-            },
-            "request": "旧い本文",
-            "createdAt": "2026-10-01T00:00:00.000Z",
-            "updatedAt": "2026-10-01T00:00:00.000Z"
-          }
-        ],
-        "unreadable": []
-      },
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-1",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定しようとしている: fresh: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        },
-        {
-          "type": "decision",
-          "id": "id-2",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を仕込んだ: fresh（30 分ごと）: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        }
-      ],
-      "forgotten": [],
-      "storeCalls": [
-        {
-          "op": "editRequest",
-          "kind": "fresh",
-          "ifMatch": null,
-          "updatedAt": "2026-10-29T00:01:00.000Z",
-          "changes": {
-            "request": "週次の見直しをする",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            }
-          },
-          "outcome": "null"
-        },
-        {
-          "op": "put",
-          "kind": "fresh",
-          "ifMatch": null,
-          "entry": {
-            "kind": "fresh",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:01:00.000Z",
-            "updatedAt": "2026-10-29T00:01:00.000Z"
-          },
-          "outcome": "put"
-        }
-      ]
-    },
-    "forget-absent#2": {
-      "output": {
-        "length": 113,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "wrote": true,
-      "schedules": {
-        "entries": [
-          {
-            "kind": "fresh",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:01:00.000Z",
-            "updatedAt": "2026-10-29T00:01:00.000Z"
-          },
-          {
-            "kind": "weekly-review",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "新しい本文",
-            "createdAt": "2026-10-01T00:00:00.000Z",
-            "updatedAt": "2026-10-29T00:02:00.000Z"
-          }
-        ],
-        "unreadable": []
-      },
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-3",
-          "at": "2026-10-29T00:02:00.000Z",
-          "decision": "定期の依頼を置き換えようとしている: weekly-review: 置き換え前（60 分ごと）「旧い本文」→ 置き換え後（30 分ごと）「新しい本文」",
-          "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
-        },
-        {
-          "type": "decision",
-          "id": "id-4",
-          "at": "2026-10-29T00:02:00.000Z",
-          "decision": "定期の依頼を直した: weekly-review（30 分ごと）: 新しい本文",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        }
-      ],
-      "forgotten": [],
-      "storeCalls": [
-        {
-          "op": "editRequest",
-          "kind": "weekly-review",
-          "ifMatch": "2026-10-01T00:00:00.000Z",
-          "updatedAt": "2026-10-29T00:02:00.000Z",
-          "changes": {
-            "request": "新しい本文",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            }
-          },
-          "outcome": "edited"
-        }
-      ]
-    },
-    "forget-throws": {
-      "output": {
-        "length": 119,
-        "text": "weekly-review を 30 分ごとで仕込んだ。時刻が来たら依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、以前の版と同じとして畳まれることがある）",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "wrote": true,
-      "schedules": {
-        "entries": [
-          {
-            "kind": "weekly-review",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:01:00.000Z",
-            "updatedAt": "2026-10-29T00:01:00.000Z"
-          }
-        ],
-        "unreadable": []
-      },
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-1",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を設定しようとしている: weekly-review: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        },
-        {
-          "type": "decision",
-          "id": "id-2",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を仕込んだ: weekly-review（30 分ごと）: 週次の見直しをする",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        }
-      ],
-      "forgotten": ["weekly-review"],
-      "storeCalls": [
-        {
-          "op": "editRequest",
-          "kind": "weekly-review",
-          "ifMatch": null,
-          "updatedAt": "2026-10-29T00:01:00.000Z",
-          "changes": {
-            "request": "週次の見直しをする",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            }
-          },
-          "outcome": "null"
-        },
-        {
-          "op": "put",
-          "kind": "weekly-review",
-          "ifMatch": null,
-          "entry": {
-            "kind": "weekly-review",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "週次の見直しをする",
-            "createdAt": "2026-10-29T00:01:00.000Z",
-            "updatedAt": "2026-10-29T00:01:00.000Z"
-          },
-          "outcome": "put"
-        }
-      ]
-    },
-    "forget-throws-replace": {
-      "output": {
-        "length": 186,
-        "text": "weekly-review は既に在ったので置き換えた（30 分ごとで仕込み直した）。置き換え前は 60 分ごと、依頼本文は「旧い本文」だった（置き換え前の本文は日誌にも残してある）。時刻が来たら新しい依頼の本文とともに届く。（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、以前の版と同じとして畳まれることがある）",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "wrote": true,
-      "schedules": {
-        "entries": [
-          {
-            "kind": "weekly-review",
-            "spec": {
-              "type": "every",
-              "minutes": 30
-            },
-            "request": "新しい本文",
-            "createdAt": "2026-10-01T00:00:00.000Z",
-            "updatedAt": "2026-10-29T00:01:00.000Z"
-          }
-        ],
-        "unreadable": []
-      },
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-1",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を置き換えようとしている: weekly-review: 置き換え前（60 分ごと）「旧い本文」→ 置き換え後（30 分ごと）「新しい本文」",
-          "grounds": "同じ kind の依頼を置き換える判断（置き換え前の本文と周期は日誌に残す）"
-        },
-        {
-          "type": "decision",
-          "id": "id-2",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "定期の依頼を直した: weekly-review（30 分ごと）: 新しい本文",
-          "grounds": "継続する依頼を時間起点として持つ判断"
-        }
-      ],
-      "forgotten": ["weekly-review"],
-      "storeCalls": [
-        {
-          "op": "editRequest",
-          "kind": "weekly-review",
-          "ifMatch": "2026-10-01T00:00:00.000Z",
-          "updatedAt": "2026-10-29T00:01:00.000Z",
           "changes": {
             "request": "新しい本文",
             "spec": {

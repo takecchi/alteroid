@@ -13,7 +13,6 @@ import { createCloneMcpServer, createCloneTools, type ToolContext } from './tool
 // サブエージェントの呼びは畳まず、本体の控えも更新しない（#5428）。呼び手は PreToolUse の agent_id と、handler が読む extra._meta の tool_use_id で結ぶ
 
 const FULL_MARK = 'インメモリ';
-const REF_MARK = 'デーモンの再起動で作り直される。';
 
 type Hook = (input: never, id: undefined, options: never) => Promise<unknown>;
 
@@ -178,43 +177,6 @@ describe('固定の文言の畳みの呼び手の区別（#5428）', () => {
     await s.clone.stop();
   });
 
-  it('⭐ (b) 本体の呼びの後のサブエージェントの呼びは全文で、本体の控えを更新しない', async () => {
-    const s = boot();
-    await turn(s);
-    const { pre } = s.hooks();
-    await pre(preOf('tu-main-1'), undefined, {} as never);
-    await pre(preOf('tu-sub', 'agent-1'), undefined, {} as never);
-    await pre(preOf('tu-main-2'), undefined, {} as never);
-
-    const main1 = await runnerList(s, metaOf('tu-main-1'));
-    const sub = await runnerList(s, metaOf('tu-sub'));
-    const main2 = await runnerList(s, metaOf('tu-main-2'));
-
-    expect(main1).toContain(FULL_MARK);
-    expect(sub).toContain(FULL_MARK);
-    expect(main2).not.toContain(FULL_MARK);
-    expect(main2).toContain(REF_MARK);
-    await s.clone.stop();
-  });
-
-  it('⭐ (c) tool_use_id が取れないときは今までどおり畳み、警告はデーモン1回につき1回だけ', async () => {
-    const s = boot();
-    await turn(s);
-
-    const lines = await captureStderr(async () => {
-      const first = await runnerList(s, {});
-      const second = await runnerList(s, { _meta: { 'claudecode/toolUseId': 42 } });
-      const third = await runnerList(s, undefined);
-      expect(first).toContain(FULL_MARK);
-      expect(second).not.toContain(FULL_MARK);
-      expect(third).not.toContain(FULL_MARK);
-    });
-
-    const warnings = lines.filter((line) => line.includes('tool_use_id'));
-    expect(warnings.length).toBe(1);
-    await s.clone.stop();
-  });
-
   it('⭐ (c2) 会話（セッション）が替わっても、tool_use_id が取れない警告は2回目が出ない', async () => {
     const s = boot();
     await turn(s);
@@ -230,29 +192,6 @@ describe('固定の文言の畳みの呼び手の区別（#5428）', () => {
     await s.clone.stop();
   });
 
-  it('⭐ (d) 並列の呼び（サブと本体が重なる）は tool_use_id ごとに判定される', async () => {
-    const s = boot();
-    await turn(s);
-    const { pre } = s.hooks();
-    // 本体の呼びが走っている間にサブエージェントの呼びが始まり、決着の前に両方の handler が走る
-    await pre(preOf('tu-main'), undefined, {} as never);
-    await pre(preOf('tu-sub-a', 'agent-1'), undefined, {} as never);
-    await pre(preOf('tu-sub-b', 'agent-2'), undefined, {} as never);
-
-    const [main, subA, subB] = await Promise.all([
-      runnerList(s, metaOf('tu-main')),
-      runnerList(s, metaOf('tu-sub-a')),
-      runnerList(s, metaOf('tu-sub-b')),
-    ]);
-    const mainAgain = await runnerList(s, metaOf('tu-main'));
-
-    expect(main).toContain(FULL_MARK);
-    expect(subA).toContain(FULL_MARK);
-    expect(subB).toContain(FULL_MARK);
-    expect(mainAgain).not.toContain(FULL_MARK);
-    await s.clone.stop();
-  });
-
   describe('(e) 印の掃除', () => {
     const isSub = (s: Boot, id: string): boolean => s.context().isSubagentCall?.(id) ?? false;
 
@@ -261,19 +200,6 @@ describe('固定の文言の畳みの呼び手の区別（#5428）', () => {
       await turn(s);
       await s.hooks().pre(preOf('tu-1', ''), undefined, {} as never);
       expect(isSub(s, 'tu-1')).toBe(false);
-      await s.clone.stop();
-    });
-
-    it('空の agent_id の呼びは本体の呼びとして畳まれる（サブの呼びのように全文にならない）', async () => {
-      const s = boot();
-      await turn(s);
-      const { pre } = s.hooks();
-      await pre(preOf('tu-1', ''), undefined, {} as never);
-      await pre(preOf('tu-2', ''), undefined, {} as never);
-      const first = await runnerList(s, metaOf('tu-1'));
-      const second = await runnerList(s, metaOf('tu-2'));
-      expect(first).toContain(FULL_MARK);
-      expect(second).not.toContain(FULL_MARK);
       await s.clone.stop();
     });
 

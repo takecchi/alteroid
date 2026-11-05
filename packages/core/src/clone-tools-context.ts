@@ -67,27 +67,7 @@ export interface ToolContext {
   replyAttachments?: ReplyAttachments;
   managers?: ManagerPool;
   /**
-   * この報告の全文を、いまの会話の発言にそのまま載せたか。載せていれば、その時刻（確定した控えだけ。reset 後・押し込めなかった回・切り詰めた報告は `null`）。
-   * 無い器（テスト・蒸留）は常に `null` と同じ: 引き直せば全文が返る（安全側）。
-   */
-  managerReportShownAt?: (managerId: string, text: string) => Date | null;
-  /**
-   * 固定の文言を、同じ会話の2回目から短い参照にする口（`manager_list` の件数行・「…ほか N 件」の固定文）。
-   * 無い器（テスト・蒸留）は常に全文を返す口と同じ: 参照が指す先（会話の上の全文）が無いので、安全側に倒す。
-   */
-  foldFixed?: (id: string, full: string, ref: string, supersedes?: string) => string;
-  /**
-   * 継続中の依頼 `kind` を、この呼びで書き換えた・外した・一覧で見せた。定期の tick の要約が「会話で最後に全文で出した版と同じ」と畳む控えのうち、その kind の分を捨てる
-   * （道具の応答で見えた版と、控えの版がずれるため。次の定期の tick は全文）。無い器（テスト・蒸留）は何もしない。サブエージェントの呼びでも捨てる（捨てるのは安全側）。
-   */
-  forgetStandingRow?: (kind: string) => void;
-  /**
-   * `schedule_list` が継続中の依頼 `kind` の行を見せた（`rowFullText` は定期の tick の行と同じ字面）。控えがその版と同じなら残し、違う・無いなら `forgetStandingRow` と同じく捨てる。
-   * 無い器（テスト・蒸留）は何もしない（`forgetStandingRow` も無いので控えが無い）。
-   */
-  keepStandingRowIfSame?: (kind: string, rowFullText: string) => void;
-  /**
-   * この道具の呼びがサブエージェント（作業者）のものか。`foldFixed` と `managerReportShownAt` が指す「会話の上の全文」は本体の会話にしか無いので、サブエージェントの呼びは畳まず、控えも更新しない（#5428）。
+   * この道具の呼びがサブエージェント（作業者）のものか。判定のたびに計器（`CallerGauge`）が1行を残す（#5428）。
    * 引数は呼びの tool_use_id（取れなければ `undefined`）。取れないときの倒し方は実装が決める（クローンは本体扱い＋警告）。
    * 無い器（テスト・蒸留）は常に本体と同じ。
    */

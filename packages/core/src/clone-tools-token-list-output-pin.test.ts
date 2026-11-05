@@ -92,8 +92,6 @@ interface Scenario {
   seed: SeedToken[];
   settings?: TokenRotationSettings;
   active?: ActiveAgentToken;
-  /** true なら foldFixed の口を渡さない器（テストの ToolContext 相当） */
-  noFold?: boolean;
   hooks?: Hooks;
   steps: Step[];
 }
@@ -569,103 +567,6 @@ const SCENARIOS: Scenario[] = [
     ],
   },
 
-  // ---- 呼び手（畳み方）----
-  {
-    name: 'fold-main-twice',
-    group: '呼び手（本体・サブエージェント）',
-    covers:
-      '本体の呼びは同じ会話の2回目から固定の脚注が短い札になる（1回目は全文）。サブエージェントの呼びは畳まず全文で、控えも更新しない。そのあとの本体の呼びも2回目の札のまま。数・id・ラベルは畳まれない',
-    seed: FOLD_POOL,
-    steps: [{ args: {} }, { args: {} }, { args: {}, caller: 'subagent' }, { args: {} }],
-  },
-  {
-    name: 'fold-subagent-first',
-    group: '呼び手（本体・サブエージェント）',
-    covers:
-      'サブエージェントが先に呼んでも控えは付かない: 次の本体の呼びは全文（1回目）、その次の本体の呼びが札',
-    seed: FOLD_POOL,
-    steps: [
-      { args: {}, caller: 'subagent' },
-      { args: {}, caller: 'subagent' },
-      { args: {} },
-      { args: {} },
-    ],
-  },
-  {
-    name: 'fold-no-hook',
-    group: '呼び手（本体・サブエージェント）',
-    covers:
-      'foldFixed の口が無い器（テストの ToolContext）: 本体の呼びでも毎回全文。空のプールの登録の案内も全文',
-    seed: FOLD_POOL,
-    noFold: true,
-    steps: [
-      { args: {} },
-      { args: {} },
-      {
-        args: {},
-        before: async (base) => {
-          await base.tokens.replace([]);
-        },
-      },
-      { args: {} },
-    ],
-  },
-  {
-    name: 'fold-bare-meta',
-    group: '呼び手（本体・サブエージェント）',
-    covers: '_meta の無い呼び（tool_use_id が取れない）は本体として扱う: 畳む（2回目は札）',
-    seed: FOLD_POOL,
-    steps: [
-      { args: {}, caller: 'bare' },
-      { args: {}, caller: 'bare' },
-    ],
-  },
-  {
-    name: 'fold-empty-pool',
-    group: '呼び手（本体・サブエージェント）',
-    covers:
-      '空のプールの登録の案内の畳み: 本体の1回目は全文、2回目は短い版。サブエージェントは全文。読めない行が在る空のプールでも同じ案内の畳みが効く',
-    seed: [],
-    steps: [
-      { args: {} },
-      { args: {} },
-      { args: {}, caller: 'subagent' },
-      { args: {}, hooks: { unreadable: unreadableRows(1) } },
-    ],
-  },
-  {
-    name: 'fold-ids-separate',
-    group: '呼び手（本体・サブエージェント）',
-    covers:
-      '空のプールの案内（token-list:empty-register）と一覧の脚注（footnote-times / footnote-reason）は別の札: 空のプールを見たあとの最初の一覧は脚注が全文。壊れた cursor・最後の頁の断りは畳みを呼ばない（札を消費しない）',
-    seed: [],
-    steps: [
-      { args: {} },
-      {
-        args: {},
-        before: async (base) => {
-          await base.tokens.replace(FOLD_POOL.map(({ ...spec }) => spec));
-        },
-      },
-      { args: { cursor: 'garbage' } },
-      { args: { cursor: cur('f-b', 1) } },
-      { args: {} },
-    ],
-  },
-  {
-    name: 'fold-early-returns-keep-full',
-    group: '呼び手（本体・サブエージェント）',
-    covers:
-      '壊れた cursor・最後の頁の断りを先に返しても札を消費しない: そのあとの最初の一覧は全文、次の一覧が札',
-    seed: FOLD_POOL,
-    steps: [
-      { args: { cursor: 'garbage' } },
-      { args: { cursor: cur('f-b', 1) } },
-      { args: {} },
-      { args: {} },
-    ],
-  },
-
   // ---- 予算（TOKEN_LIST_BUDGET）----
   {
     name: 'budget-exact-fit',
@@ -965,23 +866,12 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   if (scenario.active !== undefined) await base.tokens.writeActive(scenario.active);
   let hooks: Hooks = {};
   const calls: Calls = { reads: [], writes: [] };
-  const seen = new Set<string>();
   const tools = createCloneTools({
     stores: withHooks(base, () => hooks, calls),
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => 'conv-1',
-    ...(scenario.noFold === true
-      ? {}
-      : {
-          // DigestSessionDelta.fixedInTurn と同じ規則: 同じ札は2回目から短い版
-          foldFixed: (id: string, full: string, ref: string) => {
-            if (seen.has(id)) return ref;
-            seen.add(id);
-            return full;
-          },
-          isSubagentCall: (toolUseId: string | undefined) => toolUseId === SUBAGENT_CALL_ID,
-        }),
+    isSubagentCall: (toolUseId: string | undefined) => toolUseId === SUBAGENT_CALL_ID,
   });
   const found = tools.find((entry) => entry.name === 'token_list');
   if (!found) throw new Error('token_list が無い');
@@ -1169,12 +1059,7 @@ describe('token_list の出力の固定（場面ごとの全文と字数・読�
     const SETTINGS_UNREADABLE = '回転の設定は読めない（cooldownMs が壊れている（テスト用））。';
     const ACTIVE_UNREADABLE = '現役の指名は読めない（tokenId が壊れている（テスト用））。';
     const FOOT_TIMES_FULL = '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。';
-    const FOOT_TIMES_REF = '（作成 = 足した時刻 / 更新 = 最後に変わった時刻。';
-    const FOOT_REASON_FULL =
-      '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）';
-    const FOOT_REASON_REF = '（止まった理由は抜粋。全文は journal_read types=token_rotation）';
     const REGISTER_FULL = '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。';
-    const REGISTER_REF = '登録は人間の手で（`alteroid token add`）。';
     const READ_ALL = [
       'tokens.list',
       'tokens.listUnreadable',
@@ -1308,39 +1193,6 @@ describe('token_list の出力の固定（場面ごとの全文と字数・読�
     expect(text('unreadable-shown-limit#5')).toContain(
       'ほか 1 件。id もラベルも取れない行が 2 件）',
     );
-    // 呼び手（畳み方）
-    expect(text('fold-main-twice#1')).toContain(FOOT_TIMES_FULL);
-    expect(text('fold-main-twice#1')).toContain(FOOT_REASON_FULL);
-    expect(text('fold-main-twice#2')).toContain(FOOT_TIMES_REF);
-    expect(text('fold-main-twice#2')).toContain(FOOT_REASON_REF);
-    expect(text('fold-main-twice#2')).not.toContain(FOOT_TIMES_FULL);
-    expect(text('fold-main-twice#3')).toBe(text('fold-main-twice#1'));
-    expect(text('fold-main-twice#4')).toBe(text('fold-main-twice#2'));
-    expect(text('fold-subagent-first#1')).toBe(text('fold-main-twice#1'));
-    expect(text('fold-subagent-first#2')).toBe(text('fold-main-twice#1'));
-    expect(text('fold-subagent-first#3')).toBe(text('fold-main-twice#1'));
-    expect(text('fold-subagent-first#4')).toBe(text('fold-main-twice#2'));
-    expect(text('fold-no-hook#1')).toContain(FOOT_TIMES_FULL);
-    expect(text('fold-no-hook#2')).toBe(text('fold-no-hook#1'));
-    expect(text('fold-no-hook#3')).toContain(REGISTER_FULL);
-    expect(text('fold-no-hook#4')).toBe(text('fold-no-hook#3'));
-    expect(text('fold-bare-meta#1')).toContain(FOOT_TIMES_FULL);
-    expect(text('fold-bare-meta#2')).toContain(FOOT_TIMES_REF);
-    expect(text('fold-empty-pool#1')).toContain(REGISTER_FULL);
-    expect(text('fold-empty-pool#2')).toContain(REGISTER_REF);
-    expect(text('fold-empty-pool#2')).not.toContain(REGISTER_FULL);
-    expect(text('fold-empty-pool#3')).toContain(REGISTER_FULL);
-    expect(text('fold-empty-pool#4')).toContain(REGISTER_REF);
-    expect(text('fold-empty-pool#4')).toContain(EMPTY_UNREADABLE);
-    expect(text('fold-ids-separate#1')).toContain(REGISTER_FULL);
-    expect(text('fold-ids-separate#2')).toContain(FOOT_TIMES_FULL);
-    expect(text('fold-ids-separate#3')).toContain(MALFORMED);
-    expect(text('fold-ids-separate#4')).toBe(LAST_PAGE);
-    expect(text('fold-ids-separate#5')).toContain(FOOT_TIMES_REF);
-    expect(text('fold-early-returns-keep-full#1')).toContain(MALFORMED);
-    expect(text('fold-early-returns-keep-full#2')).toBe(LAST_PAGE);
-    expect(text('fold-early-returns-keep-full#3')).toContain(FOOT_TIMES_FULL);
-    expect(text('fold-early-returns-keep-full#4')).toContain(FOOT_TIMES_REF);
     // 予算
     for (const key of ['budget-exact-fit', 'budget-under-by-one']) {
       expect(text(key)).not.toContain('…ほか');
@@ -1374,7 +1226,7 @@ describe('token_list の出力の固定（場面ごとの全文と字数・読�
     expect(text('budget-with-notes#1')).toContain('現役の指名: m-02（世代 3、');
     expect(text('budget-with-notes#1')).toContain('読めないトークンの行が 2 件ある');
     expect(text('budget-with-notes#2')).toContain('読めないトークンの行が 2 件ある');
-    expect(text('budget-with-notes#2')).toContain(FOOT_TIMES_REF);
+    expect(text('budget-with-notes#2')).toContain(FOOT_TIMES_FULL);
     expect(text('budget-with-notes#3')).toBe(LAST_PAGE);
     // cursor
     expect(text('cursor-follow#1')).not.toContain('- t-ready ');

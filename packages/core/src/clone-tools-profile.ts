@@ -36,10 +36,8 @@ import {
   tool,
   appendJournalOrDrop,
   text,
-  isSubagentCaller,
-  NO_FIXED_FOLD,
+  noteSubagentCallerGauge,
   appendJournalOrThrow,
-  type FixedFold,
 } from './clone-tools-common.js';
 
 const PROFILE_DISTRIBUTION_EXCERPT = 400;
@@ -130,11 +128,7 @@ function renderTokenListHead(
 }
 
 // 「プールは空である」は読めない行が0件のときだけ言う: 在れば、読めた行が無いとしか言えないため
-function renderTokenListEmpty(
-  head: readonly string[],
-  hasUnreadable: boolean,
-  fold: FixedFold,
-): string {
+function renderTokenListEmpty(head: readonly string[], hasUnreadable: boolean): string {
   return [
     ...head,
     '',
@@ -144,11 +138,7 @@ function renderTokenListEmpty(
             'それが使えるかどうかはここから分からない。',
         ]
       : ['プールは空である。**この状態では回らない**——枠に当たっても次の候補が無い。']),
-    fold(
-      'token-list:empty-register',
-      '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
-      '登録は人間の手で（`alteroid token add`）。',
-    ),
+    '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
   ].join('\n');
 }
 
@@ -209,20 +199,12 @@ function renderTokenListOmitted(args: {
   );
 }
 
-function renderTokenListFootnotes(fold: FixedFold): string[] {
+function renderTokenListFootnotes(): string[] {
   return [
     // 欄の意味を出力に書く: 「作成と更新が同じ」は値を作ったのではなく一度も変わっていないという観測のため
-    fold(
-      'token-list:footnote-times',
-      '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
-        'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
-      '（作成 = 足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。「記録が無い」の行がある）',
-    ),
-    fold(
-      'token-list:footnote-reason',
-      '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
-      '（止まった理由は抜粋。全文は journal_read types=token_rotation）',
-    ),
+    '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
+      'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
+    '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
   ];
 }
 
@@ -231,9 +213,8 @@ function renderTokenListBody(args: {
   items: readonly string[];
   tokens: readonly AgentToken[];
   total: number;
-  fold: FixedFold;
 }): string {
-  const { head, items, tokens, total, fold } = args;
+  const { head, items, tokens, total } = args;
   return [
     ...head,
     '',
@@ -241,7 +222,7 @@ function renderTokenListBody(args: {
       budget: TOKEN_LIST_BUDGET,
       omitted: ({ rest, shown }) => renderTokenListOmitted({ rest, shown, tokens, total }),
     }),
-    ...renderTokenListFootnotes(fold),
+    ...renderTokenListFootnotes(),
   ].join('\n');
 }
 
@@ -434,9 +415,7 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ cursor }, extra: unknown) => {
-        const fold = isSubagentCaller(context, extra)
-          ? NO_FIXED_FOLD
-          : (context.foldFixed ?? NO_FIXED_FOLD);
+        noteSubagentCallerGauge(context, extra);
         // `readSettings()` と `readActive()` を素の `Promise.all` に入れない: どちらかが壊れているだけで一覧まで道連れになり、`token_list` そのものが使えなくなるため
         const allTokens = await stores.tokens.list();
         // 読めなかった行を言う: `list()` は読めない行を飛ばすので、プールが「空」に見えても壊れた行が在るかもしれないため
@@ -455,10 +434,10 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         const now = Date.now();
         const head = renderTokenListHead(settingsLine, activeLine, unreadableTokensNote);
         if (views.length === 0) {
-          return text(renderTokenListEmpty(head, unreadableTokensNote !== null, fold));
+          return text(renderTokenListEmpty(head, unreadableTokensNote !== null));
         }
         const items = renderTokenListItems(views, now, active);
-        return text(renderTokenListBody({ head, items, tokens, total: allTokens.length, fold }));
+        return text(renderTokenListBody({ head, items, tokens, total: allTokens.length }));
       },
     ),
 

@@ -30,7 +30,6 @@
     "attach-too-many": 77,
     "attach-total-too-large": 88,
     "deliver-plain": 104,
-    "deliver-fold-ref": 68,
     "deliver-fold-subagent": 104,
     "deliver-decision-unused": 241,
     "deliver-deny-unused": 240,
@@ -94,8 +93,7 @@
     "closes-setstatus-unreadable": 163,
     "closes-setstatus-throws-plain": 252,
     "closes-journal-fails": 213,
-    "closes-after-answer-journal-fails": 127,
-    "closes-with-fold-ref": 96
+    "closes-after-answer-journal-fails": 127
   },
   "scenarios": {
     "closes-too-many": {
@@ -458,7 +456,9 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": ["stores.attachments.getMeta(\"att-gone\")"],
+      "calls": [
+        "stores.attachments.getMeta(\"att-gone\")"
+      ],
       "journal": [],
       "tasksAfter": [
         {
@@ -477,7 +477,9 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": ["stores.attachments.getMeta(\"att-1\")"],
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")"
+      ],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -490,7 +492,10 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")"
+      ],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -503,7 +508,10 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": ["stores.attachments.getMeta(\"att-1\")", "stores.attachments.get(\"att-1\")"],
+      "calls": [
+        "stores.attachments.getMeta(\"att-1\")",
+        "stores.attachments.get(\"att-1\")"
+      ],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -534,7 +542,10 @@
       "thrown": false,
       "errorName": null,
       "sendOutcome": null,
-      "calls": ["stores.attachments.getMeta(\"a1\")", "stores.attachments.getMeta(\"a2\")"],
+      "calls": [
+        "stores.attachments.getMeta(\"a1\")",
+        "stores.attachments.getMeta(\"a2\")"
+      ],
       "journal": [],
       "tasksAfter": [],
       "tasksUnchanged": true,
@@ -557,25 +568,6 @@
       "tasksUnchanged": true,
       "jobsUnchanged": true,
       "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。同じ本文で新しい委譲を立てないこと）"
-    },
-    "deliver-fold-ref": {
-      "length": 68,
-      "isError": false,
-      "thrown": false,
-      "errorName": null,
-      "sendOutcome": "delivered",
-      "calls": [
-        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
-        "stores.jobs.listJobs()",
-        "context.noteDelegationStarted(undefined)",
-        "context.isSubagentCall()",
-        "context.foldFixed(manager-send:delivered-note)"
-      ],
-      "journal": [],
-      "tasksAfter": [],
-      "tasksUnchanged": true,
-      "jobsUnchanged": true,
-      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）"
     },
     "deliver-fold-subagent": {
       "length": 104,
@@ -2106,46 +2098,6 @@
       "tasksUnchanged": false,
       "jobsUnchanged": true,
       "text": "Bash を許可するか に回答した。\ncloses t-1: **task は done にしている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。人間が後から読めるよう、journal_write で閉じたことを書き残すこと。"
-    },
-    "closes-with-fold-ref": {
-      "length": 96,
-      "isError": false,
-      "thrown": false,
-      "errorName": null,
-      "sendOutcome": "delivered",
-      "calls": [
-        "pool.send({\"managerId\":\"mgr-001\",\"message\":\"続きを調べて。結果は報告に書く。\",\"options\":{\"beforeAnswer\":\"function\"}})",
-        "stores.jobs.listJobs()",
-        "context.noteDelegationStarted(undefined)",
-        "context.isSubagentCall()",
-        "context.foldFixed(manager-send:delivered-note)",
-        "stores.tasks.get(\"t-1\")",
-        "stores.tasks.setStatus(\"t-1\")",
-        "stores.journal.append()"
-      ],
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-1",
-          "at": "2026-10-27T02:00:00.000Z",
-          "decision": "task の状態を変えた（t-1）: queued → done（t-1 は片付いた）",
-          "grounds": "自分で manager_send の closes した",
-          "target": {
-            "kind": "task",
-            "id": "t-1"
-          }
-        }
-      ],
-      "tasksAfter": [
-        {
-          "id": "t-1",
-          "status": "done",
-          "closedReason": "t-1 は片付いた"
-        }
-      ],
-      "tasksUnchanged": false,
-      "jobsUnchanged": true,
-      "text": "[mgr-001] mgr-001 へ追加指示として届けた。\n（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）\ncloses t-1: t-1 を done にした。"
     }
   }
 }

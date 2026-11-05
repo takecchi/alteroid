@@ -30,7 +30,6 @@ import {
   renderMemoryOutline,
   resolveMemoryDocKind,
   scanMemorySections,
-  type MemoryFold,
   type MemoryPart,
   type MemorySection,
   type MemorySectionLookup,
@@ -49,7 +48,7 @@ import {
   formatStringLengthJa,
 } from './tool-arg-checks.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
-import { tool, text, appendJournalOrThrow, foldFixedFor } from './clone-tools-common.js';
+import { tool, text, appendJournalOrThrow, noteSubagentCallerGauge } from './clone-tools-common.js';
 
 const MEMORY_PAGE = 8_000;
 
@@ -140,7 +139,6 @@ function memoryFloorNote(
   slug: string,
   writtenContent: string,
   created: boolean,
-  fold?: MemoryFold,
 ): string {
   return describeMemoryFloor({
     before: measureMemoryFloor(memoryBefore),
@@ -148,7 +146,6 @@ function memoryFloorNote(
     slug,
     kind: resolveMemoryDocKind(parseMemoryFrontmatter(writtenContent)),
     created,
-    ...(fold === undefined ? {} : { fold }),
   });
 }
 
@@ -160,13 +157,11 @@ function memorySessionGrowthNote(
   memoryAfter: readonly MemoryPart[],
   runtime: CloneRuntimeFacts | undefined,
   writtenContents: readonly string[],
-  fold?: MemoryFold,
 ): string {
   const afterChars = measureMemoryFloor(memoryAfter).totalChars;
   const sessionDelta = describeMemorySessionDelta({
     afterChars,
     injectedMemoryChars: runtime?.injectedMemoryChars ?? null,
-    ...(fold === undefined ? {} : { fold }),
   });
   const ranking = describeMemoryPremiseRanking(memoryAfter);
   const touchesPremise = writtenContents.some(
@@ -1263,29 +1258,22 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           before === null ? null : before.content,
           written.content,
         );
-        // 見出し・注記の固定語句だけを、同じ会話の2回目から札にする（数・slug・消えた見出しの名指しは畳まない）。応答を返す直前のここで1度だけ呼ぶ
-        const fold = foldFixedFor(context, extra);
+        noteSubagentCallerGauge(context, extra);
         const floor = memoryFloorNote(
           memoryBefore,
           memoryAfter,
           slug,
           written.content,
           before === null,
-          fold,
         );
         const reinjection = describeMemoryReinjectionEstimate(
           [written],
           memoryAfter,
           seenBefore(slug, before),
-          fold,
         );
-        const growth = memorySessionGrowthNote(
-          memoryBefore,
-          memoryAfter,
-          context.runtime?.(),
-          [written.content],
-          fold,
-        );
+        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+          written.content,
+        ]);
         const head =
           before === null
             ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`

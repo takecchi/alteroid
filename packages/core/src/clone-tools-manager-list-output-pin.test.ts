@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { DigestSessionDelta } from './digest-session-delta.js';
 import type { ManagerPool, ManagerSummary, RunnerBacklogSnapshot } from './manager.js';
 import type { ManagerDenial } from './denial-key.js';
 import { createMemoryStores } from './testing.js';
@@ -41,8 +40,6 @@ interface Scenario {
   covers: string;
   managers: () => ManagerSummary[];
   steps: Step[];
-  /** 控え（同じ会話の2回目からの畳み）を使うか */
-  fold?: boolean;
   /** 台帳の行。省略すると全委譲が `conv-<id>` の起点つきで載る */
   ledger?: LedgerRow[] | 'unreadable';
   unreadableJobs?: { id?: string; reason: string }[];
@@ -252,24 +249,6 @@ const SCENARIOS: Scenario[] = [
     steps: [{}],
   },
   {
-    name: 'mixed-fold',
-    covers:
-      '同じ会話の2回目から固定の文を札にする・行の畳み（前回と同じ）・畳まない行（lost・failed・⚠）・行が変わった回・refetch: true',
-    managers: mixedList,
-    fold: true,
-    steps: [
-      {},
-      {},
-      {
-        mutate: (list) =>
-          list.map((m) =>
-            m.managerId === 'mgr-005' ? { ...m, lastReport: '報告 5。内容が変わった。' } : m,
-          ),
-      },
-      { args: { refetch: true } },
-    ],
-  },
-  {
     name: 'filter-status-running',
     covers: 'status の絞り込み（走行中だけ）。件数は絞る前の全体',
     managers: mixedList,
@@ -346,18 +325,6 @@ const SCENARIOS: Scenario[] = [
     steps: [{ args: { status: ['running', 'done'], q: '委譲' } }],
   },
   {
-    name: 'filter-fold',
-    covers: '絞り込みの注記の固定の言い回しが2回目から札になる（status・q・空の q・空の status）',
-    managers: mixedList,
-    fold: true,
-    steps: [
-      { args: { status: ['running', 'done'], q: '委譲' } },
-      { args: { status: ['running', 'done'], q: '委譲' } },
-      { args: { status: [], q: ' ' } },
-      { args: { status: [], q: ' ' } },
-    ],
-  },
-  {
     name: 'budget-paging',
     covers: '予算（8,000字）を越えて「…ほか N 件は省略」・cursor で頁をたどる',
     managers: bigList,
@@ -378,13 +345,6 @@ const SCENARIOS: Scenario[] = [
         args: (prev) => ({ status: ['done'], q: '依頼', cursor: cursorOf(prev[0]) }),
       },
     ],
-  },
-  {
-    name: 'budget-fold',
-    covers: '予算超過の一覧の2回目（省略の固定の文が札・先頭行の畳み・畳んだ件数）',
-    managers: bigList,
-    fold: true,
-    steps: [{}, {}],
   },
   {
     name: 'cursor-errors',
@@ -430,22 +390,6 @@ const SCENARIOS: Scenario[] = [
       mgr(5, { status: 'running', runnerVanished: true }),
     ],
     steps: [{}],
-  },
-  {
-    name: 'notes-liveness-fold',
-    covers: '印の意味の節が2回目から札になる',
-    managers: () => [
-      mgr(1, { status: 'running', live: false, runnerLostSince: iso(50) }),
-      mgr(3, {
-        status: 'running',
-        live: true,
-        sessionMissingSince: iso(53),
-        sessionMissingKind: 'unlisted',
-      }),
-      mgr(4, { status: 'lost' }),
-    ],
-    fold: true,
-    steps: [{}, {}],
   },
   {
     name: 'notes-failure-usage',
@@ -679,7 +623,6 @@ const SCENARIOS: Scenario[] = [
     covers:
       '受信箱の積み上がり（人間起点つき）・メモリの待ち行列・runner の積み上がり。2回目は内訳が札、refetch で全文',
     managers: () => [mgr(1), mgr(2)],
-    fold: true,
     inbox: stuckInbox(),
     queued: 3,
     backlog: backlogSnapshots(),
@@ -689,7 +632,6 @@ const SCENARIOS: Scenario[] = [
     name: 'inbox-unreadable',
     covers: '受信箱に読めない行がある（内訳は全文のまま）',
     managers: () => [mgr(1)],
-    fold: true,
     inbox: stuckInbox().slice(0, 4),
     unreadableInbox: [{ id: 'ev-bad', reason: 'schema' }],
     steps: [{}, {}],
@@ -774,7 +716,6 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
       });
     }
   }
-  const delta = scenario.fold === true ? new DigestSessionDelta() : null;
   const tools = createCloneTools({
     stores,
     emit: () => undefined,
@@ -782,12 +723,6 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
     conversationId: () => undefined,
     ...(scenario.queued === undefined ? {} : { queuedInMemory: () => scenario.queued }),
     managers: buildPool(scenario, state),
-    ...(delta === null
-      ? {}
-      : {
-          foldFixed: (id: string, full: string, ref: string, supersedes?: string) =>
-            delta.fixedInTurn(id, full, ref, supersedes),
-        }),
   });
   const found = tools.find((entry) => entry.name === 'manager_list');
   if (!found) throw new Error('manager_list が無い');
@@ -902,8 +837,6 @@ describe('manager_list の出力の固定（場面ごとの全文と字数）', 
     const text = (key: string): string => actual[key]?.text ?? '';
     expect(text('empty')).toContain('（マネージャーは1本も居ない）');
     expect(text('empty-with-backlogs')).toContain('読めたマネージャーは無い');
-    expect(text('mixed-fold#2')).toContain('前回と同じ');
-    expect(text('mixed-fold#4')).not.toContain('前回と同じ行');
     expect(text('filter-status-empty-array')).toContain('絞らずに全件を出した');
     expect(text('filter-q-empty#1')).toContain('q が空');
     expect(text('budget-paging#1')).toContain('…ほか');
@@ -915,6 +848,6 @@ describe('manager_list の出力の固定（場面ごとの全文と字数）', 
     expect(text('notes-activity')).toContain('畳む候補');
     expect(text('notes-work')).toContain('未push観測');
     expect(text('inbox-and-runner-backlog#1')).toContain('クローンの受信箱に未処理の合図が');
-    expect(text('inbox-and-runner-backlog#2')).toContain('前回と同じ');
+    expect(text('inbox-and-runner-backlog#2')).toBe(text('inbox-and-runner-backlog#1'));
   });
 });

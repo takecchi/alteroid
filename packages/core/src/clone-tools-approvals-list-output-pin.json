@@ -117,18 +117,7 @@
     "index-budget-exact": 8185,
     "index-budget-over": 8054,
     "index-many": 8201,
-    "index-newest-over": 8287,
-    "fold-full#1": 619,
-    "fold-full#2": 535,
-    "fold-full#3": 619,
-    "fold-full#4": 74,
-    "fold-full#5": 535,
-    "fold-index#1": 8180,
-    "fold-index#2": 8102,
-    "fold-index#3": 8180,
-    "fold-switch-shape#1": 619,
-    "fold-switch-shape#2": 8016,
-    "fold-switch-shape#3": 7993
+    "index-newest-over": 8287
   },
   "scenarios": {
     "tool-description": {
@@ -228,7 +217,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval a-1"]
+      "readCalls": [
+        "getApproval a-1"
+      ]
     },
     "arg-offset#9": {
       "output": {
@@ -239,7 +230,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "id-missing#1": {
       "output": {
@@ -250,7 +243,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval no-such"]
+      "readCalls": [
+        "getApproval no-such"
+      ]
     },
     "id-missing#2": {
       "output": {
@@ -261,7 +256,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval "]
+      "readCalls": [
+        "getApproval "
+      ]
     },
     "id-missing#3": {
       "output": {
@@ -272,7 +269,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval ASK-1"]
+      "readCalls": [
+        "getApproval ASK-1"
+      ]
     },
     "id-missing#4": {
       "output": {
@@ -283,7 +282,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval  ask-1"]
+      "readCalls": [
+        "getApproval  ask-1"
+      ]
     },
     "id-missing#5": {
       "output": {
@@ -294,7 +295,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval no-such"]
+      "readCalls": [
+        "getApproval no-such"
+      ]
     },
     "id-unreadable#1": {
       "output": {
@@ -305,7 +308,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval bad-1"]
+      "readCalls": [
+        "getApproval bad-1"
+      ]
     },
     "id-unreadable#2": {
       "output": {
@@ -316,7 +321,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval bad-1"]
+      "readCalls": [
+        "getApproval bad-1"
+      ]
     },
     "id-unreadable#3": {
       "output": {
@@ -327,7 +334,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval ask-1"]
+      "readCalls": [
+        "getApproval ask-1"
+      ]
     },
     "id-store-error#1": {
       "output": {
@@ -338,7 +347,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval boom"]
+      "readCalls": [
+        "getApproval boom"
+      ]
     },
     "id-store-error#2": {
       "output": {
@@ -349,7 +360,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval bad-1"]
+      "readCalls": [
+        "getApproval bad-1"
+      ]
     },
     "id-store-error#3": {
       "output": {
@@ -360,7 +373,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval ask-2"]
+      "readCalls": [
+        "getApproval ask-2"
+      ]
     },
     "id-each-state#1": {
       "output": {
@@ -371,7 +386,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval ask-1"]
+      "readCalls": [
+        "getApproval ask-1"
+      ]
     },
     "id-each-state#2": {
       "output": {
@@ -382,7 +399,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval ask-2"]
+      "readCalls": [
+        "getApproval ask-2"
+      ]
     },
     "id-each-state#3": {
       "output": {
@@ -393,7 +412,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval perm-1"]
+      "readCalls": [
+        "getApproval perm-1"
+      ]
     },
     "id-each-state#4": {
       "output": {
@@ -404,7 +425,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval done-1"]
+      "readCalls": [
+        "getApproval done-1"
+      ]
     },
     "id-each-state#5": {
       "output": {
@@ -415,7 +438,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval done-2"]
+      "readCalls": [
+        "getApproval done-2"
+      ]
     },
     "id-each-state#6": {
       "output": {
@@ -426,7 +451,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval wd-1"]
+      "readCalls": [
+        "getApproval wd-1"
+      ]
     },
     "id-each-state#7": {
       "output": {
@@ -437,7 +464,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval wd-2"]
+      "readCalls": [
+        "getApproval wd-2"
+      ]
     },
     "id-dest-variants#1": {
       "output": {
@@ -448,7 +477,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval d-job"]
+      "readCalls": [
+        "getApproval d-job"
+      ]
     },
     "id-dest-variants#2": {
       "output": {
@@ -459,7 +490,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval d-both"]
+      "readCalls": [
+        "getApproval d-both"
+      ]
     },
     "id-dest-variants#3": {
       "output": {
@@ -470,7 +503,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval d-req"]
+      "readCalls": [
+        "getApproval d-req"
+      ]
     },
     "id-dest-variants#4": {
       "output": {
@@ -481,7 +516,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval d-empty"]
+      "readCalls": [
+        "getApproval d-empty"
+      ]
     },
     "id-dest-variants#5": {
       "output": {
@@ -492,7 +529,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval d-empty-both"]
+      "readCalls": [
+        "getApproval d-empty-both"
+      ]
     },
     "id-status-priority#1": {
       "output": {
@@ -503,7 +542,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval s-both"]
+      "readCalls": [
+        "getApproval s-both"
+      ]
     },
     "id-status-priority#2": {
       "output": {
@@ -514,7 +555,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval s-reason-only"]
+      "readCalls": [
+        "getApproval s-reason-only"
+      ]
     },
     "id-status-priority#3": {
       "output": {
@@ -525,7 +568,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval s-answer-only"]
+      "readCalls": [
+        "getApproval s-answer-only"
+      ]
     },
     "id-status-times-only#1": {
       "output": {
@@ -536,7 +581,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval t-answered"]
+      "readCalls": [
+        "getApproval t-answered"
+      ]
     },
     "id-status-times-only#2": {
       "output": {
@@ -547,7 +594,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval t-withdrawn"]
+      "readCalls": [
+        "getApproval t-withdrawn"
+      ]
     },
     "id-status-times-only#3": {
       "output": {
@@ -558,7 +607,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval t-both"]
+      "readCalls": [
+        "getApproval t-both"
+      ]
     },
     "id-question-kinds#1": {
       "output": {
@@ -569,7 +620,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval k-empty"]
+      "readCalls": [
+        "getApproval k-empty"
+      ]
     },
     "id-question-kinds#2": {
       "output": {
@@ -580,7 +633,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval k-two"]
+      "readCalls": [
+        "getApproval k-two"
+      ]
     },
     "id-question-kinds#3": {
       "output": {
@@ -591,7 +646,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval k-many"]
+      "readCalls": [
+        "getApproval k-many"
+      ]
     },
     "id-question-kinds#4": {
       "output": {
@@ -602,7 +659,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval k-perm"]
+      "readCalls": [
+        "getApproval k-perm"
+      ]
     },
     "id-text-shape#1": {
       "output": {
@@ -613,7 +672,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval t-multi"]
+      "readCalls": [
+        "getApproval t-multi"
+      ]
     },
     "id-text-shape#2": {
       "output": {
@@ -624,7 +685,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval t-empty"]
+      "readCalls": [
+        "getApproval t-empty"
+      ]
     },
     "id-text-shape#3": {
       "output": {
@@ -635,7 +698,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval t-long"]
+      "readCalls": [
+        "getApproval t-long"
+      ]
     },
     "id-offset-small#1": {
       "output": {
@@ -646,7 +711,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval o-small"]
+      "readCalls": [
+        "getApproval o-small"
+      ]
     },
     "id-offset-small#2": {
       "output": {
@@ -657,7 +724,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval o-small"]
+      "readCalls": [
+        "getApproval o-small"
+      ]
     },
     "id-offset-small#3": {
       "output": {
@@ -668,7 +737,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval o-small"]
+      "readCalls": [
+        "getApproval o-small"
+      ]
     },
     "id-offset-small#4": {
       "output": {
@@ -679,7 +750,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval o-small"]
+      "readCalls": [
+        "getApproval o-small"
+      ]
     },
     "id-offset-small#5": {
       "output": {
@@ -690,7 +763,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval o-small"]
+      "readCalls": [
+        "getApproval o-small"
+      ]
     },
     "id-offset-small#6": {
       "output": {
@@ -701,7 +776,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval o-small"]
+      "readCalls": [
+        "getApproval o-small"
+      ]
     },
     "id-page-edge#1": {
       "output": {
@@ -712,7 +789,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-7999"]
+      "readCalls": [
+        "getApproval e-7999"
+      ]
     },
     "id-page-edge#2": {
       "output": {
@@ -723,7 +802,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8000"]
+      "readCalls": [
+        "getApproval e-8000"
+      ]
     },
     "id-page-edge#3": {
       "output": {
@@ -734,7 +815,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8000"]
+      "readCalls": [
+        "getApproval e-8000"
+      ]
     },
     "id-page-edge#4": {
       "output": {
@@ -745,7 +828,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8001"]
+      "readCalls": [
+        "getApproval e-8001"
+      ]
     },
     "id-page-edge#5": {
       "output": {
@@ -756,7 +841,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8001"]
+      "readCalls": [
+        "getApproval e-8001"
+      ]
     },
     "id-page-edge#6": {
       "output": {
@@ -767,7 +854,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8001"]
+      "readCalls": [
+        "getApproval e-8001"
+      ]
     },
     "id-page-edge#7": {
       "output": {
@@ -778,7 +867,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8001"]
+      "readCalls": [
+        "getApproval e-8001"
+      ]
     },
     "id-page-edge#8": {
       "output": {
@@ -789,7 +880,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8001"]
+      "readCalls": [
+        "getApproval e-8001"
+      ]
     },
     "id-page-edge#9": {
       "output": {
@@ -800,7 +893,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval e-8001"]
+      "readCalls": [
+        "getApproval e-8001"
+      ]
     },
     "id-page-three#1": {
       "output": {
@@ -811,7 +906,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval p-3"]
+      "readCalls": [
+        "getApproval p-3"
+      ]
     },
     "id-page-three#2": {
       "output": {
@@ -822,7 +919,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval p-3"]
+      "readCalls": [
+        "getApproval p-3"
+      ]
     },
     "id-page-three#3": {
       "output": {
@@ -833,7 +932,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval p-3"]
+      "readCalls": [
+        "getApproval p-3"
+      ]
     },
     "id-page-three#4": {
       "output": {
@@ -844,7 +945,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval p-3"]
+      "readCalls": [
+        "getApproval p-3"
+      ]
     },
     "id-page-astral#1": {
       "output": {
@@ -855,7 +958,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval a-1"]
+      "readCalls": [
+        "getApproval a-1"
+      ]
     },
     "id-page-astral#2": {
       "output": {
@@ -866,7 +971,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval a-1"]
+      "readCalls": [
+        "getApproval a-1"
+      ]
     },
     "id-page-astral#3": {
       "output": {
@@ -877,7 +984,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval a-1"]
+      "readCalls": [
+        "getApproval a-1"
+      ]
     },
     "id-page-sections#1": {
       "output": {
@@ -888,7 +997,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval z-1"]
+      "readCalls": [
+        "getApproval z-1"
+      ]
     },
     "id-page-sections#2": {
       "output": {
@@ -899,7 +1010,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval z-1"]
+      "readCalls": [
+        "getApproval z-1"
+      ]
     },
     "id-page-sections#3": {
       "output": {
@@ -910,7 +1023,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval z-2"]
+      "readCalls": [
+        "getApproval z-2"
+      ]
     },
     "id-page-sections#4": {
       "output": {
@@ -921,7 +1036,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval z-2"]
+      "readCalls": [
+        "getApproval z-2"
+      ]
     },
     "list-empty#1": {
       "output": {
@@ -932,7 +1049,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-empty#2": {
       "output": {
@@ -943,7 +1062,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-empty#3": {
       "output": {
@@ -954,7 +1075,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-empty#4": {
       "output": {
@@ -965,7 +1088,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-settled-only#1": {
       "output": {
@@ -976,7 +1101,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-settled-only#2": {
       "output": {
@@ -987,7 +1114,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval done-1"]
+      "readCalls": [
+        "getApproval done-1"
+      ]
     },
     "list-unreadable-only": {
       "output": {
@@ -998,7 +1127,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-no-id#1": {
       "output": {
@@ -1009,7 +1140,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-no-id#2": {
       "output": {
@@ -1020,7 +1153,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-no-id#3": {
       "output": {
@@ -1031,7 +1166,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-ids-shown#1": {
       "output": {
@@ -1042,7 +1179,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-ids-shown#2": {
       "output": {
@@ -1053,7 +1192,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-ids-shown#3": {
       "output": {
@@ -1064,7 +1205,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-ids-shown#4": {
       "output": {
@@ -1075,7 +1218,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-ids-shown#5": {
       "output": {
@@ -1086,7 +1231,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-unreadable-ids-shown#6": {
       "output": {
@@ -1097,7 +1244,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-with-unreadable": {
       "output": {
@@ -1108,7 +1257,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-with-unreadable-indexed": {
       "output": {
@@ -1119,7 +1270,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-fails#1": {
       "output": {
@@ -1130,7 +1283,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-fails#2": {
       "output": {
@@ -1141,7 +1296,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["getApproval ask-1"]
+      "readCalls": [
+        "getApproval ask-1"
+      ]
     },
     "list-mix#1": {
       "output": {
@@ -1152,7 +1309,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-mix#2": {
       "output": {
@@ -1163,7 +1322,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-questions-summary": {
       "output": {
@@ -1174,7 +1335,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-dest-variants": {
       "output": {
@@ -1185,7 +1348,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-order": {
       "output": {
@@ -1196,7 +1361,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-order-offset": {
       "output": {
@@ -1207,7 +1374,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-order-same-instant": {
       "output": {
@@ -1218,7 +1387,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-title-shape": {
       "output": {
@@ -1229,7 +1400,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-title-limit": {
       "output": {
@@ -1240,7 +1413,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "list-summary-limit": {
       "output": {
@@ -1251,7 +1426,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-exact-fit": {
       "output": {
@@ -1262,7 +1439,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-under-by-one": {
       "output": {
@@ -1273,7 +1452,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-over-by-one": {
       "output": {
@@ -1284,7 +1465,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-single-7999": {
       "output": {
@@ -1295,7 +1478,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-single-8000": {
       "output": {
@@ -1306,7 +1491,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-single-8001": {
       "output": {
@@ -1317,7 +1504,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-first-item-over": {
       "output": {
@@ -1328,7 +1517,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-oldest-over": {
       "output": {
@@ -1339,7 +1530,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "budget-single-8000-with-after": {
       "output": {
@@ -1350,7 +1543,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "detail-budget-exact": {
       "output": {
@@ -1361,7 +1556,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "detail-budget-over-by-one": {
       "output": {
@@ -1372,7 +1569,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "index-budget-under": {
       "output": {
@@ -1383,7 +1582,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "index-budget-exact": {
       "output": {
@@ -1394,7 +1595,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "index-budget-over": {
       "output": {
@@ -1405,7 +1608,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "index-many": {
       "output": {
@@ -1416,7 +1621,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     },
     "index-newest-over": {
       "output": {
@@ -1427,128 +1634,9 @@
       },
       "wrote": false,
       "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-full#1": {
-      "output": {
-        "length": 619,
-        "text": "- ask-1 本番に出してよいか\n  作成: 2026-10-01T00:01:00.000Z\n  本番に出してよいか\n- ask-2 デプロイ先を決めたい\n  作成: 2026-10-01T00:02:00.000Z\n  デプロイ先を決めたい\n  設問 2 件（うち複数選択 1）（選択肢つき）（詳細は approvals_list id=<id>）\n  宛先: managerId: \"mgr-77\", requestId: \"req-5\"\n- perm-1 以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため\n  作成: 2026-10-01T00:03:00.000Z\n  以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため 通る例: pnpm test / pnpm test --run 通らない例: pnpm publish 直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。 許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-full#2": {
-      "output": {
-        "length": 535,
-        "text": "- ask-1 本番に出してよいか\n  作成: 2026-10-01T00:01:00.000Z\n  本番に出してよいか\n- ask-2 デプロイ先を決めたい\n  作成: 2026-10-01T00:02:00.000Z\n  デプロイ先を決めたい\n  設問 2 件（うち複数選択 1）（選択肢つき）（詳細は approvals_list id=<id>）\n  宛先: managerId: \"mgr-77\", requestId: \"req-5\"\n- perm-1 以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため\n  作成: 2026-10-01T00:03:00.000Z\n  以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため 通る例: pnpm test / pnpm test --run 通らない例: pnpm publish 直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。 許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。\n（質問は抜粋。全文は id=<id> で取れる）\n（並び: 作成時刻の昇順、同着は id の昇順）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-full#3": {
-      "output": {
-        "length": 619,
-        "text": "- ask-1 本番に出してよいか\n  作成: 2026-10-01T00:01:00.000Z\n  本番に出してよいか\n- ask-2 デプロイ先を決めたい\n  作成: 2026-10-01T00:02:00.000Z\n  デプロイ先を決めたい\n  設問 2 件（うち複数選択 1）（選択肢つき）（詳細は approvals_list id=<id>）\n  宛先: managerId: \"mgr-77\", requestId: \"req-5\"\n- perm-1 以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため\n  作成: 2026-10-01T00:03:00.000Z\n  以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため 通る例: pnpm test / pnpm test --run 通らない例: pnpm publish 直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。 許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-full#4": {
-      "output": {
-        "length": 74,
-        "text": "ask-1（2026-10-01T00:01:00.000Z）回答待ち（全 28 文字）\n\n質問: 本番に出してよいか\n\n背景: 金曜の夕方だが急ぎ",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["getApproval ask-1"]
-    },
-    "fold-full#5": {
-      "output": {
-        "length": 535,
-        "text": "- ask-1 本番に出してよいか\n  作成: 2026-10-01T00:01:00.000Z\n  本番に出してよいか\n- ask-2 デプロイ先を決めたい\n  作成: 2026-10-01T00:02:00.000Z\n  デプロイ先を決めたい\n  設問 2 件（うち複数選択 1）（選択肢つき）（詳細は approvals_list id=<id>）\n  宛先: managerId: \"mgr-77\", requestId: \"req-5\"\n- perm-1 以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため\n  作成: 2026-10-01T00:03:00.000Z\n  以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため 通る例: pnpm test / pnpm test --run 通らない例: pnpm publish 直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。 許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。\n（質問は抜粋。全文は id=<id> で取れる）\n（並び: 作成時刻の昇順、同着は id の昇順）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-index#1": {
-      "output": {
-        "length": 8180,
-        "text": "回答待ちは 22 件ある。まず索引（id・作成時刻・件名。作成の古い順）:\n・b-01（2026-10-01T00:01:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-02（2026-10-01T00:02:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-03（2026-10-01T00:03:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-04（2026-10-01T00:04:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-05（2026-10-01T00:05:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-06（2026-10-01T00:06:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-07（2026-10-01T00:07:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-08（2026-10-01T00:08:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-09（2026-10-01T00:09:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-10（2026-10-01T00:10:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-11（2026-10-01T00:11:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-12（2026-10-01T00:12:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-13（2026-10-01T00:13:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-14（2026-10-01T00:14:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-15（2026-10-01T00:15:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-16（2026-10-01T00:16:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-17（2026-10-01T00:17:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-18（2026-10-01T00:18:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-19（2026-10-01T00:19:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-20（2026-10-01T00:20:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-21（2026-10-01T00:21:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-22（2026-10-01T00:22:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n\n詳細（新しい順）:\n- b-22 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:22:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n  宛先: managerId: \"job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job\"\n- b-21 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:21:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-20 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:20:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-19 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:19:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-18 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:18:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-17 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:17:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-16 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:16:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-15 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:15:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-14 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:14:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-13 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:13:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-12 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:12:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-11 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:11:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-10 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:10:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-09 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:09:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-08 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:08:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-07 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:07:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n…ほか 6 件は詳細を省略（新しい順に先頭から 16 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n読めない承認待ちが 1 件ある（id: bad-1）。壊れた行であって、回答済み・取り下げ済みではない。この一覧には載っていない。\n（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-index#2": {
-      "output": {
-        "length": 8102,
-        "text": "回答待ちは 22 件ある。まず索引（id・作成時刻・件名。作成の古い順）:\n・b-01（2026-10-01T00:01:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-02（2026-10-01T00:02:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-03（2026-10-01T00:03:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-04（2026-10-01T00:04:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-05（2026-10-01T00:05:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-06（2026-10-01T00:06:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-07（2026-10-01T00:07:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-08（2026-10-01T00:08:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-09（2026-10-01T00:09:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-10（2026-10-01T00:10:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-11（2026-10-01T00:11:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-12（2026-10-01T00:12:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-13（2026-10-01T00:13:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-14（2026-10-01T00:14:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-15（2026-10-01T00:15:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-16（2026-10-01T00:16:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-17（2026-10-01T00:17:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-18（2026-10-01T00:18:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-19（2026-10-01T00:19:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-20（2026-10-01T00:20:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-21（2026-10-01T00:21:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-22（2026-10-01T00:22:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n\n詳細（新しい順）:\n- b-22 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:22:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n  宛先: managerId: \"job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job\"\n- b-21 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:21:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-20 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:20:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-19 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:19:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-18 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:18:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-17 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:17:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-16 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:16:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-15 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:15:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-14 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:14:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-13 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:13:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-12 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:12:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-11 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:11:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-10 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:10:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-09 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:09:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-08 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:08:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-07 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:07:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n…ほか 6 件は詳細を省略（新しい順に先頭から 16 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。\n（質問は抜粋。全文は id=<id> で取れる）\n読めない承認待ちが 1 件ある（id: bad-1）。壊れた行であって、回答済み・取り下げ済みではない。この一覧には載っていない。\n（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-index#3": {
-      "output": {
-        "length": 8180,
-        "text": "回答待ちは 22 件ある。まず索引（id・作成時刻・件名。作成の古い順）:\n・b-01（2026-10-01T00:01:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-02（2026-10-01T00:02:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-03（2026-10-01T00:03:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-04（2026-10-01T00:04:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-05（2026-10-01T00:05:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-06（2026-10-01T00:06:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-07（2026-10-01T00:07:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-08（2026-10-01T00:08:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-09（2026-10-01T00:09:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-10（2026-10-01T00:10:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-11（2026-10-01T00:11:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-12（2026-10-01T00:12:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-13（2026-10-01T00:13:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-14（2026-10-01T00:14:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-15（2026-10-01T00:15:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-16（2026-10-01T00:16:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-17（2026-10-01T00:17:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-18（2026-10-01T00:18:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-19（2026-10-01T00:19:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-20（2026-10-01T00:20:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-21（2026-10-01T00:21:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・b-22（2026-10-01T00:22:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n\n詳細（新しい順）:\n- b-22 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:22:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n  宛先: managerId: \"job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job\"\n- b-21 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:21:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-20 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:20:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-19 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:19:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-18 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:18:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-17 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:17:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-16 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:16:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-15 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:15:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-14 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:14:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-13 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:13:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-12 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:12:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-11 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:11:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-10 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:10:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-09 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:09:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-08 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:08:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- b-07 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:07:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n…ほか 6 件は詳細を省略（新しい順に先頭から 16 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n読めない承認待ちが 1 件ある（id: bad-1）。壊れた行であって、回答済み・取り下げ済みではない。この一覧には載っていない。\n（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-switch-shape#1": {
-      "output": {
-        "length": 619,
-        "text": "- ask-1 本番に出してよいか\n  作成: 2026-10-01T00:01:00.000Z\n  本番に出してよいか\n- ask-2 デプロイ先を決めたい\n  作成: 2026-10-01T00:02:00.000Z\n  デプロイ先を決めたい\n  設問 2 件（うち複数選択 1）（選択肢つき）（詳細は approvals_list id=<id>）\n  宛先: managerId: \"mgr-77\", requestId: \"req-5\"\n- perm-1 以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため\n  作成: 2026-10-01T00:03:00.000Z\n  以降 Bash(pnpm test:*) を聞かずに通してよいか。理由: テストを回すため 通る例: pnpm test / pnpm test --run 通らない例: pnpm publish 直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。 許可するなら「許可します」とだけ答える（句点や言い換えがあると記録しない）。\n（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）\n（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-switch-shape#2": {
-      "output": {
-        "length": 8016,
-        "text": "回答待ちは 25 件ある。まず索引（id・作成時刻・件名。作成の古い順）:\n・ask-1（2026-10-01T00:01:00.000Z）本番に出してよいか\n・sw-b-01（2026-10-01T00:01:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・ask-2（2026-10-01T00:02:00.000Z）デプロイ先を決めたい\n・sw-b-02（2026-10-01T00:02:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・perm-1（2026-10-01T00:03:00.000Z）以降 Bash(pnpm test:*) を聞かずに通してよ…（15 文字省略。全 45 文字）\n・sw-b-03（2026-10-01T00:03:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-04（2026-10-01T00:04:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-05（2026-10-01T00:05:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-06（2026-10-01T00:06:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-07（2026-10-01T00:07:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-08（2026-10-01T00:08:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-09（2026-10-01T00:09:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-10（2026-10-01T00:10:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-11（2026-10-01T00:11:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-12（2026-10-01T00:12:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-13（2026-10-01T00:13:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-14（2026-10-01T00:14:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-15（2026-10-01T00:15:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-16（2026-10-01T00:16:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-17（2026-10-01T00:17:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-18（2026-10-01T00:18:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-19（2026-10-01T00:19:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-20（2026-10-01T00:20:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-21（2026-10-01T00:21:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-22（2026-10-01T00:22:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n\n詳細（新しい順）:\n- sw-b-22 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:22:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n  宛先: managerId: \"job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job\"\n- sw-b-21 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:21:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-20 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:20:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-19 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:19:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-18 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:18:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-17 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:17:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-16 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:16:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-15 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:15:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-14 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:14:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-13 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:13:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-12 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:12:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-11 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:11:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-10 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:10:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-09 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:09:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-08 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:08:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n…ほか 10 件は詳細を省略（新しい順に先頭から 15 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。\n（質問は抜粋。全文は id=<id> で取れる）\n（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
-    },
-    "fold-switch-shape#3": {
-      "output": {
-        "length": 7993,
-        "text": "回答待ちは 25 件ある。まず索引（id・作成時刻・件名。作成の古い順）:\n・ask-1（2026-10-01T00:01:00.000Z）本番に出してよいか\n・sw-b-01（2026-10-01T00:01:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・ask-2（2026-10-01T00:02:00.000Z）デプロイ先を決めたい\n・sw-b-02（2026-10-01T00:02:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・perm-1（2026-10-01T00:03:00.000Z）以降 Bash(pnpm test:*) を聞かずに通してよ…（15 文字省略。全 45 文字）\n・sw-b-03（2026-10-01T00:03:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-04（2026-10-01T00:04:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-05（2026-10-01T00:05:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-06（2026-10-01T00:06:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-07（2026-10-01T00:07:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-08（2026-10-01T00:08:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-09（2026-10-01T00:09:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-10（2026-10-01T00:10:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-11（2026-10-01T00:11:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-12（2026-10-01T00:12:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-13（2026-10-01T00:13:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-14（2026-10-01T00:14:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-15（2026-10-01T00:15:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-16（2026-10-01T00:16:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-17（2026-10-01T00:17:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-18（2026-10-01T00:18:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-19（2026-10-01T00:19:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-20（2026-10-01T00:20:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-21（2026-10-01T00:21:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n・sw-b-22（2026-10-01T00:22:00.000Z）quest quest quest quest quest …（50 文字省略。全 80 文字）\n\n詳細（新しい順）:\n- sw-b-22 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:22:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n  宛先: managerId: \"job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job job\"\n- sw-b-21 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:21:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-20 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:20:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-19 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:19:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-18 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:18:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-17 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:17:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-16 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:16:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-15 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:15:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-14 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:14:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-13 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:13:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-12 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:12:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-11 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:11:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-10 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:10:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-09 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:09:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n- sw-b-08 quest quest quest quest quest quest quest quest quest quest …（140 文字省略。全 200 文字）\n  作成: 2026-10-01T00:08:00.000Z\n  quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest quest qu\n…ほか 10 件は詳細を省略（新しい順に先頭から 15 件だけ出した。残りは上の索引の id で approvals_list id=<id> として開ける）。\n（質問は抜粋。全文は id=<id> で取れる）\n（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": false,
-      "writeCalls": [],
-      "readCalls": ["listApprovals {\"pendingOnly\":true}"]
+      "readCalls": [
+        "listApprovals {\"pendingOnly\":true}"
+      ]
     }
   }
 }

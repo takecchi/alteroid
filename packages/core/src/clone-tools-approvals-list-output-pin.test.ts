@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { summarizeQuestions } from './approval-choices.js';
-import { DigestSessionDelta } from './digest-session-delta.js';
 import { excerpt, excerptLine, renderListingEntry } from './excerpt.js';
 import { PERMISSION_GRANT_CONSENT_PHRASE } from './schema.js';
 import type { ApprovalQuestion, PendingApproval } from './schema.js';
@@ -67,8 +66,6 @@ interface Scenario {
   covers: string;
   seed: PendingApproval[];
   hooks?: Hooks;
-  /** true なら foldFixed（同じ会話の2回目から札にする）を有効にする */
-  fold?: boolean;
   steps: Step[];
 }
 
@@ -269,9 +266,6 @@ const MIX: PendingApproval[] = [
 function bodyOf(id: string, minute: number, length: number): PendingApproval {
   return ap(id, minute, { question: spaced(length - QUESTION_HEADING.length) });
 }
-
-/** fold-switch-shape の2回目の前に足す承認（全件の詳細が入りきらなくなる量） */
-const SWITCH_EXTRA = fullTuned(22, LIST_BUDGET + 1).map((a) => ({ ...a, id: `sw-${a.id}` }));
 
 const SCENARIOS: Scenario[] = [
   // ---- 引数の検査・説明文 ----
@@ -877,52 +871,6 @@ const SCENARIOS: Scenario[] = [
     ],
     steps: [{ args: {} }],
   },
-
-  // ---- 畳み（同じ会話の2回目から札にする）----
-  {
-    name: 'fold-full',
-    group: '固定の注記の畳み',
-    covers:
-      '全件の詳細が入る一覧を 1 回目（全文）→ 2 回目（札: 注と並びの注が短くなる）→ サブエージェントの呼び（畳まず全文・控えない）→ 全文読み（畳みの対象外）→ 本体の 3 回目（まだ札）',
-    seed: MIX,
-    fold: true,
-    steps: [
-      { args: {} },
-      { args: {} },
-      { args: {}, caller: 'subagent' },
-      { args: { id: 'ask-1' } },
-      { args: {} },
-    ],
-  },
-  {
-    name: 'fold-index',
-    group: '固定の注記の畳み',
-    covers:
-      '索引つきの一覧を 1 回目（全文）→ 2 回目（札）。索引の並びの注も札になる。全件の一覧と索引つきの一覧は別の控え（全件の一覧の札は別に出る）。読めない行の注は畳まない',
-    seed: fullTuned(22, LIST_BUDGET + 1),
-    hooks: { unreadable: [{ id: 'bad-1', reason: '壊れ' }] },
-    fold: true,
-    steps: [{ args: {} }, { args: {} }, { args: {}, caller: 'subagent' }],
-  },
-  {
-    name: 'fold-switch-shape',
-    group: '固定の注記の畳み',
-    covers:
-      '同じ会話で全件の一覧（1 回目）→ 件が増えて索引つき（2 回目: 抜粋の注は札・索引の並びの注は全文）→ 索引つきの2回目（札）。注の控えは形をまたいで共有される',
-    seed: MIX,
-    fold: true,
-    steps: [
-      { args: {} },
-      {
-        args: {},
-        // 別の経路が承認を足す（呼ぶ前の状態を作る。道具の書き込みではない）
-        before: async (base) => {
-          for (const spec of SWITCH_EXTRA) await base.jobs.putApproval(spec);
-        },
-      },
-      { args: {} },
-    ],
-  },
 ];
 
 function stepKey(scenario: Scenario, index: number): string {
@@ -1028,23 +976,16 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   let hooks: Hooks = {};
   const writeCalls: string[] = [];
   const readCalls: string[] = [];
-  const delta = scenario.fold === true ? new DigestSessionDelta() : null;
-  const subagentId = 'toolu-from-subagent';
   const tools = createCloneTools({
     stores: withHooks(base, () => hooks, writeCalls, readCalls),
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
-    ...(delta === null
-      ? {}
-      : {
-          foldFixed: (id: string, full: string, ref: string) => delta.fixedInTurn(id, full, ref),
-          isSubagentCall: (toolUseId: string | undefined) => toolUseId === subagentId,
-        }),
   });
   const found = tools.find((entry) => entry.name === 'approvals_list');
   if (!found) throw new Error('approvals_list が無い');
 
+  const subagentId = 'toolu-from-subagent';
   const results: PinnedStep[] = [];
   for (const [index, step] of scenario.steps.entries()) {
     if (step.before !== undefined) await step.before(base);
@@ -1212,11 +1153,8 @@ describe('approvals_list の出力の固定（場面ごとの全文と字数・�
     const NO_PENDING = '（人間の回答待ちは無い）';
     const NO_READABLE = '（読めた回答待ちは無い）';
     const NOTE_FULL = '（質問は抜粋。全文は approvals_list id=<id> で取れる。';
-    const NOTE_REF = '（質問は抜粋。全文は id=<id> で取れる）';
     const ORDER_FULL = '（並び順: 作成時刻の昇順。';
-    const ORDER_REF = '（並び: 作成時刻の昇順、同着は id の昇順）';
     const INDEX_ORDER = '（索引の並び: 作成時刻の昇順。';
-    const INDEX_ORDER_REF = '（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）';
     const INDEX_HEAD = 'まず索引（id・作成時刻・件名。作成の古い順）:';
     const OMIT_INDEX = '…索引も古い側の ';
     const OMIT_DETAIL = '件は詳細を省略（新しい順に先頭から ';
@@ -1421,22 +1359,5 @@ describe('approvals_list の出力の固定（場面ごとの全文と字数・�
     expect(text('index-many')).toContain(`${OMIT_INDEX}101 件を省いた`);
     expect(text('index-newest-over')).toContain(`${OMIT_INDEX}29 件を省いた`);
     expect(text('index-newest-over')).toContain('文字省略。全 ');
-    // 畳み
-    expect(text('fold-full#1')).toContain(NOTE_FULL);
-    expect(text('fold-full#1')).toContain(ORDER_FULL);
-    expect(text('fold-full#2')).toContain(NOTE_REF);
-    expect(text('fold-full#2')).toContain(ORDER_REF);
-    expect(text('fold-full#3')).toBe(text('fold-full#1'));
-    expect(text('fold-full#4')).toContain('ask-1（');
-    expect(text('fold-full#5')).toBe(text('fold-full#2'));
-    expect(text('fold-index#1')).toContain(INDEX_ORDER);
-    expect(text('fold-index#2')).toContain(NOTE_REF);
-    expect(text('fold-index#2')).toContain(INDEX_ORDER_REF);
-    expect(text('fold-index#2')).toContain('読めない承認待ちが 1 件ある（id: bad-1）');
-    expect(text('fold-index#3')).toBe(text('fold-index#1'));
-    expect(text('fold-switch-shape#1')).toContain(ORDER_FULL);
-    expect(text('fold-switch-shape#2')).toContain(NOTE_REF);
-    expect(text('fold-switch-shape#2')).toContain(INDEX_ORDER);
-    expect(text('fold-switch-shape#3')).toContain(INDEX_ORDER_REF);
   });
 });

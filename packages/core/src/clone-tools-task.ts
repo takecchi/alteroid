@@ -84,8 +84,7 @@ import {
   tool,
   text,
   appendJournalOrThrow,
-  isSubagentCaller,
-  NO_FIXED_FOLD,
+  noteSubagentCallerGauge,
   JournalNotRecordedError,
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
@@ -1622,13 +1621,10 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ windowHours }, extra: unknown) => {
-        const fold = isSubagentCaller(context, extra)
-          ? NO_FIXED_FOLD
-          : (context.foldFixed ?? NO_FIXED_FOLD);
+        noteSubagentCallerGauge(context, extra);
         try {
-          // 読み終えてから文にする: 読みが落ちる回に `fold` を呼ぶと、出していない全文を「出した」と控えるため
           const view = await readProgress(stores, { now: new Date(), windowHours });
-          return text(describeProgress(view, fold));
+          return text(describeProgress(view));
         } catch (error) {
           if (error instanceof InvalidProgressWindowError) {
             throw new Error(error.message, { cause: error });

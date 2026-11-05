@@ -29,7 +29,7 @@ import { createCloneTools } from './tools.js';
 //   - `stores.tasks.get(<id>)` / `stores.tasks.setStatus(<id>)`: `closes` の読みと書き
 //   - `stores.jobs.listJobs()`: 委譲に結び付いた task の探し（`noteDelegationStarted` が無ければ引かない）
 //   - `stores.attachments.getMeta(<id>)` / `stores.attachments.get(<id>)`: 添付の読み（大きい添付は get しない）
-//   - `context.noteDelegationStarted(<taskId>)` / `context.foldFixed(<id>)` / `context.isSubagentCall()`: 文脈の口
+//   - `context.noteDelegationStarted(<taskId>)` / `context.isSubagentCall()`: 文脈の口
 // `journal` は呼んだあとに日誌へ足された行（種類・本文・grounds・id・at）。`tasksAfter` は呼んだあとの task の状態、
 // `tasksUnchanged` / `jobsUnchanged` は task・委譲の台帳が呼ぶ前と同じか。`sendOutcome` は偽の pool が返した outcome（呼ばれなければ null）。
 //
@@ -77,8 +77,8 @@ interface Scenario {
   /** `journal.append` の n 回目（1 から。書けなかった回も数える）を投げさせる */
   journalFailsAt?: number[];
   send?: SendFake;
-  /** `foldFixed` の渡し方。'none'＝口なし・'ref'＝2回目の札を返す口（本体の呼び）・'subagent'＝口は在るが呼びがサブエージェント */
-  fold?: 'none' | 'ref' | 'subagent';
+  /** `isSubagentCall` の渡し方。'none'＝口なし・'subagent'＝口は在り、呼びがサブエージェント */
+  fold?: 'none' | 'subagent';
   /** 真なら `noteDelegationStarted` を渡さない */
   noNote?: boolean;
 }
@@ -354,15 +354,8 @@ const SCENARIOS: Scenario[] = [
     send: delivered,
   },
   {
-    name: 'deliver-fold-ref',
-    covers: '届いた・foldFixed が札を返す（2回目以降の脚注。isSubagentCall は false）',
-    args: a(),
-    fold: 'ref',
-    send: delivered,
-  },
-  {
     name: 'deliver-fold-subagent',
-    covers: '届いた・サブエージェントの呼び（foldFixed が在っても畳まず全文）',
+    covers: '届いた・サブエージェントの呼び（呼び手の判定の口が在っても全文のまま）',
     args: a(),
     fold: 'subagent',
     send: delivered,
@@ -825,14 +818,6 @@ const SCENARIOS: Scenario[] = [
     journalFailsAt: [2],
     send: answered(),
   },
-  {
-    name: 'closes-with-fold-ref',
-    covers: '届いた・札の脚注のあとに closes の行が並ぶ',
-    args: a({ closes: closes('t-1') }),
-    tasks: [task('t-1')],
-    fold: 'ref',
-    send: delivered,
-  },
 ];
 
 const ALL_KEYS: string[] = SCENARIOS.map((scenario) => scenario.name);
@@ -1018,10 +1003,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedOutput> {
     ...(fold === 'none'
       ? {}
       : {
-          foldFixed: (id: string, _full: string, ref: string) => {
-            calls.push(`context.foldFixed(${id})`);
-            return ref;
-          },
           isSubagentCall: () => {
             calls.push('context.isSubagentCall()');
             return fold === 'subagent';
@@ -1335,12 +1316,8 @@ describe('manager_send の出力の固定（場面ごとの全文・字数・日
     expect(text('deliver-plain')).toContain(`[${ID}] ${ID} へ追加指示として届けた。`);
     expect(text('deliver-plain')).toContain('（「届けた」は resume の口が成功を返したところまで。');
     expect(calls('deliver-plain')).not.toContain('context.isSubagentCall()');
-    expect(text('deliver-fold-ref')).toContain('（届けたのは resume の口まで。');
-    expect(calls('deliver-fold-ref')).toContain('context.foldFixed(manager-send:delivered-note)');
     expect(text('deliver-fold-subagent')).toBe(text('deliver-plain'));
-    expect(calls('deliver-fold-subagent')).not.toContain(
-      'context.foldFixed(manager-send:delivered-note)',
-    );
+    expect(calls('deliver-fold-subagent')).toContain('context.isSubagentCall()');
     expect(text('deliver-decision-unused')).toContain('decision（allow）を付けたが');
     expect(text('deliver-decision-unused')).toContain(UNUSED);
     expect(text('deliver-decision-unused')).toContain('本文は追加指示として届けた。');
@@ -1484,8 +1461,5 @@ describe('manager_send の出力の固定（場面ごとの全文・字数・日
     expect(text('closes-journal-fails')).toContain(`[${ID}] ${ID} へ追加指示として届けた。`);
     expect(text('closes-after-answer-journal-fails')).toContain('日誌に残せていない');
     expect(journal('closes-after-answer-journal-fails')).toHaveLength(1);
-    expect(text('closes-with-fold-ref').indexOf('届けたのは resume の口まで')).toBeLessThan(
-      text('closes-with-fold-ref').indexOf('closes t-1'),
-    );
   });
 });

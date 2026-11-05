@@ -427,41 +427,6 @@ function renderManagerReportNoteBlock(failure: string | null, notes: ManagerRepo
     .join('');
 }
 
-// 本文だけを畳む: 状態の注記（失敗・拒否・退避 ref など）は発言の後に変わりうるので残す。依頼文・頁送り（offset > 0）・refetch は従来どおり本文を出す
-function readManagerReportShownAt(
-  context: ToolContext,
-  extra: unknown,
-  args: {
-    managerId: string;
-    body: string;
-    part: ManagerReportPart;
-    offset: number;
-    refetch: boolean;
-  },
-): Date | null {
-  const { managerId, body, part, offset, refetch } = args;
-  return part === 'report' && offset === 0 && !refetch && !isSubagentCaller(context, extra)
-    ? (context.managerReportShownAt?.(managerId, body) ?? null)
-    : null;
-}
-
-function renderManagerReportShown(args: {
-  head: string;
-  modelLine: string;
-  preamble: string;
-  managerId: string;
-  body: string;
-  shownAt: Date;
-}): string {
-  const { head, modelLine, preamble, managerId, body, shownAt } = args;
-  return (
-    `${head}\n\n${modelLine}\n\n${preamble}` +
-    `この報告の全文（${body.length.toLocaleString('en-US')} 文字）は ${shownAt.toISOString().slice(11, 16)}Z の発言に載っている（会話の上）。` +
-    '引き直すには `refetch: true` を付ける。' +
-    `\n\n（さらに掘るなら manager_transcript managerId=${managerId} で生ログへ）`
-  );
-}
-
 function renderManagerReportPageTail(
   managerId: string,
   part: ManagerReportPart,
@@ -570,18 +535,8 @@ export function managerReportTool(context: ToolContext) {
       const preamble =
         renderManagerReportDriftNote(found, part, foldedTurn) +
         renderManagerReportNoteBlock(failure, notes);
-      const shownAt = readManagerReportShownAt(context, extra, {
-        managerId,
-        body,
-        part,
-        offset,
-        refetch,
-      });
-      if (shownAt !== null) {
-        return text(
-          renderManagerReportShown({ head, modelLine, preamble, managerId, body, shownAt }),
-        );
-      }
+      // 結果は使わない: 本体の呼びかを判定すると計器（`#noteCallerGauge`）が1行残るので、畳みを外した後も同じ条件で呼ぶ
+      if (part === 'report' && offset === 0 && !refetch) isSubagentCaller(context, extra);
       return text(renderManagerReportPage({ head, modelLine, preamble, managerId, part, part1 }));
     },
   );

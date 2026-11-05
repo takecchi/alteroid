@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { encodeConversationCursor } from './conversation.js';
-import { DigestSessionDelta } from './digest-session-delta.js';
 import { UnreadableJournalEntryError } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, dropLastRowPerPage } from './testing.js';
@@ -47,10 +46,6 @@ interface Scenario {
   /** 種を入れた後で器を差し替える（読めない行・印の読みの失敗など） */
   wrap?: (stores: Stores) => Stores;
   steps: Step[];
-  /** 控え（同じ会話の2回目からの畳み）を使うか */
-  fold?: boolean;
-  /** 真なら、この呼びをサブエージェントのものとして扱う（畳まない） */
-  subagent?: boolean;
 }
 
 const FROZEN_NOW = '2026-10-27T02:00:00.000Z';
@@ -585,49 +580,6 @@ const SCENARIOS: Scenario[] = [
       { args: { q: '存在しない語', scan: 100 } },
     ],
   },
-  // ---- 固定文の畳み（同じ会話の2回目から） ----
-  {
-    name: 'fold-list',
-    covers:
-      '一覧の固定の言い回し（続きの案内・各会話の読み方）が2回目から札になる・cursor の行・limit つき',
-    fold: true,
-    seed: async (s) => seedMany(s, 6, '畳みの質問'),
-    steps: [{ args: { limit: 3 } }, { args: { limit: 3 } }, { args: { speaker: 'human' } }],
-  },
-  {
-    name: 'fold-conv',
-    covers: '会話の中身の「本文は抜粋」の固定文が2回目から札になる・q も同じ札・畳まれた版の注記',
-    fold: true,
-    seed: seedEdited,
-    steps: [
-      { args: { conversationId: 'conv-edit' } },
-      { args: { conversationId: 'conv-edit' } },
-      { args: { q: '質問' } },
-      { args: { conversationId: 'conv-nope' } },
-    ],
-  },
-  {
-    name: 'fold-q',
-    covers: 'q の検索で先に出た固定文が、次の呼びで札になる',
-    fold: true,
-    seed: seedBasic,
-    steps: [{ args: { q: 'deploy' } }, { args: { q: 'deploy' } }, { args: {} }],
-  },
-  {
-    name: 'fold-subagent',
-    covers: 'サブエージェントの呼びは畳みの口があっても全文のまま（一覧・会話・q）',
-    fold: true,
-    subagent: true,
-    seed: seedBasic,
-    steps: [
-      { args: { limit: 1 } },
-      { args: { limit: 1 } },
-      { args: { conversationId: 'conv-a' } },
-      { args: { conversationId: 'conv-a' } },
-      { args: { q: 'deploy' } },
-      { args: { q: 'deploy' } },
-    ],
-  },
 ];
 
 function stepKey(scenario: Scenario, index: number): string {
@@ -651,19 +603,11 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
   const anchors = (await scenario.seed?.(seeder)) ?? {};
   vi.setSystemTime(new Date(FROZEN_NOW));
   const stores = scenario.wrap === undefined ? base : scenario.wrap(base);
-  const delta = scenario.fold === true ? new DigestSessionDelta() : null;
   const tools = createCloneTools({
     stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
-    ...(delta === null
-      ? {}
-      : {
-          foldFixed: (id: string, full: string, ref: string, supersedes?: string) =>
-            delta.fixedInTurn(id, full, ref, supersedes),
-        }),
-    ...(scenario.subagent === true ? { isSubagentCall: () => true } : {}),
   });
   const found = tools.find((entry) => entry.name === 'conversation_read');
   if (!found) throw new Error('conversation_read が無い');
@@ -809,10 +753,5 @@ describe('conversation_read の出力の固定（場面ごとの全文と字数�
     expect(text('list-cursor-errors#2')).toContain('cursor が使えない');
     expect(text('list-budget#1')).toContain('limit を増やしても出てこない');
     expect(text('list-window-short#1')).toContain('この窓より古いものは見ていない');
-    expect(text('fold-list#2')).not.toBe(text('fold-list#1'));
-    expect(text('fold-conv#2')).toContain('（本文は抜粋。全文は id=<id>）');
-    expect(text('fold-q#2')).toContain('（本文は抜粋。全文は id=<id>）');
-    expect(text('fold-subagent#2')).toBe(text('fold-subagent#1'));
-    expect(text('fold-subagent#4')).toBe(text('fold-subagent#3'));
   });
 });

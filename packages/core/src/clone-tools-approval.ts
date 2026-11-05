@@ -37,7 +37,7 @@ import {
   formatIntRangeJa,
   formatStringLengthJa,
 } from './tool-arg-checks.js';
-import { tool, text, appendJournalOrThrow, foldFixedFor } from './clone-tools-common.js';
+import { tool, text, appendJournalOrThrow, noteSubagentCallerGauge } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
 const APPROVAL_LIST_BUDGET = 8_000;
@@ -157,8 +157,6 @@ async function jobConversationOf(
 type ApprovalReadOutcome =
   { kind: 'unreadable' } | { kind: 'missing' } | { kind: 'found'; approval: PendingApproval };
 
-type ApprovalListFold = ReturnType<typeof foldFixedFor>;
-
 // 引数の検査。断る文を返す（通れば null）
 function describeApprovalsListViolation(offset: number): string | null {
   return describeIntRangeViolation('offset', offset, { min: 0 });
@@ -277,33 +275,19 @@ function renderApprovalListItems(pending: readonly PendingApproval[]): string[] 
   );
 }
 
-// 末尾の固定の注記は、同じ会話の2回目から札にする（質問が抜粋であること・並びの向きは札にも残す）。
-// 件ごとの行（`（詳細は approvals_list id=<id>）`）は畳まない: 予算で出ない件が先に「全文を出した」と控えられるため
-function renderApprovalListNotes(fold: ApprovalListFold, unreadableNote: string | null): string[] {
+function renderApprovalListNotes(unreadableNote: string | null): string[] {
   return [
-    fold(
-      'approvals-list:note-excerpt',
-      '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
-      '（質問は抜粋。全文は id=<id> で取れる）',
-    ),
+    '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
     ...(unreadableNote === null ? [] : [unreadableNote]),
   ];
 }
 
 // 詳細が予算に入りきれば、今どおり作成の古い順に全件の詳細を出す
-function renderApprovalListAll(
-  items: readonly string[],
-  notes: readonly string[],
-  fold: ApprovalListFold,
-): string {
+function renderApprovalListAll(items: readonly string[], notes: readonly string[]): string {
   return [
     renderListing(items, { budget: APPROVAL_LIST_BUDGET, omitted: () => '' }),
     ...notes,
-    fold(
-      'approvals-list:order-note',
-      '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
-      '（並び: 作成時刻の昇順、同着は id の昇順）',
-    ),
+    '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
   ].join('\n');
 }
 
@@ -333,9 +317,8 @@ function renderApprovalListIndexed(args: {
   pending: readonly PendingApproval[];
   items: readonly string[];
   notes: readonly string[];
-  fold: ApprovalListFold;
 }): string {
-  const { pending, items, notes, fold } = args;
+  const { pending, items, notes } = args;
   const indexLines = renderApprovalListIndexLines(pending);
   const newestFirst = [...items].reverse();
   return [
@@ -348,11 +331,7 @@ function renderApprovalListIndexed(args: {
       omitted: renderApprovalListDetailOmitted,
     }),
     ...notes,
-    fold(
-      'approvals-list:order-note-indexed',
-      '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
-      '（索引は作成時刻の昇順、同着は id の昇順。詳細はその逆順）',
-    ),
+    '（索引の並び: 作成時刻の昇順。同じ作成時刻なら id の昇順。詳細はその逆順。保存先の実装には依存しない）',
   ].join('\n');
 }
 
@@ -566,12 +545,12 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
         const unreadableNote = describeUnreadableApprovals(approvalList.unreadable);
         if (pending.length === 0) return text(renderApprovalsListEmpty(unreadableNote));
         const items = renderApprovalListItems(pending);
-        const fold = foldFixedFor(context, extra);
-        const notes = renderApprovalListNotes(fold, unreadableNote);
+        noteSubagentCallerGauge(context, extra);
+        const notes = renderApprovalListNotes(unreadableNote);
         if (fillListingBudget(items, APPROVAL_LIST_BUDGET, false).rest === 0) {
-          return text(renderApprovalListAll(items, notes, fold));
+          return text(renderApprovalListAll(items, notes));
         }
-        return text(renderApprovalListIndexed({ pending, items, notes, fold }));
+        return text(renderApprovalListIndexed({ pending, items, notes }));
       },
     ),
 

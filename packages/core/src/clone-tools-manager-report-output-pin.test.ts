@@ -28,8 +28,6 @@ interface Step {
   args: Args;
   /** この呼びの前に委譲の一覧を差し替える */
   mutate?: (managers: ManagerSummary[]) => ManagerSummary[];
-  /** この呼びの前に「本文は既に会話に載っている」控えを入れる／外す */
-  shown?: boolean;
   /** この呼びの `_meta` に積む tool_use_id（サブエージェント判定の入力） */
   toolUseId?: string;
 }
@@ -49,14 +47,11 @@ interface Scenario {
   transcript?: () => ManagerTranscript | Error;
   /** 真なら `transcriptTail` を持たない pool（全文を読む口へ落ちる） */
   noTail?: boolean;
-  /** 真なら `managerReportShownAt` の口を渡さない */
-  noShownHook?: boolean;
   /** 真なら `isSubagentCall` の口を渡す（tool_use_id が `tu-sub` の呼びだけサブエージェント） */
   subagentHook?: boolean;
 }
 
 const FROZEN_NOW = '2026-10-27T02:00:00.000Z';
-const SHOWN_AT = new Date('2026-10-27T01:30:00.000Z');
 const PIN_URL = new URL('./clone-tools-manager-report-output-pin.json', import.meta.url);
 const UPDATE = process.env.UPDATE_MANAGER_REPORT_PIN === '1';
 
@@ -218,7 +213,7 @@ const SCENARIOS: Scenario[] = [
       }),
     ],
     denials: { 'mgr-001': denialRows(iso(50)) },
-    steps: [{ args: { managerId: 'mgr-001', part: 'request' }, shown: true }],
+    steps: [{ args: { managerId: 'mgr-001', part: 'request' } }],
   },
   {
     name: 'request-missing',
@@ -708,7 +703,7 @@ const SCENARIOS: Scenario[] = [
     name: 'folded-turn-shown',
     covers: '畳まれたターンの本文が既に会話に載っている（注記だけ）',
     managers: () => [mgr({ lastFoldedTurn: { text: '畳まれた本文。', at: iso(58) } })],
-    steps: [{ args: { managerId: 'mgr-001' }, shown: true }],
+    steps: [{ args: { managerId: 'mgr-001' } }],
   },
   {
     name: 'latest-turn-unreported',
@@ -814,8 +809,8 @@ const SCENARIOS: Scenario[] = [
     ],
     denials: { 'mgr-001': denialRows(iso(50)) },
     steps: [
-      { args: { managerId: 'mgr-001' }, shown: false },
-      { args: { managerId: 'mgr-001' }, shown: true },
+      { args: { managerId: 'mgr-001' } },
+      { args: { managerId: 'mgr-001' } },
       { args: { managerId: 'mgr-001', refetch: true } },
       { args: { managerId: 'mgr-001', offset: 100 } },
       { args: { managerId: 'mgr-001', part: 'request' } },
@@ -831,13 +826,12 @@ const SCENARIOS: Scenario[] = [
     covers: '本文が無い回は控えを引かない（報告が無い側）',
     managers: () => [mgr({ lastReport: undefined })],
     transcript: () => ({ kind: 'missing' }),
-    steps: [{ args: { managerId: 'mgr-001' }, shown: true }],
+    steps: [{ args: { managerId: 'mgr-001' } }],
   },
   {
     name: 'shown-no-hook',
     covers: '控えの口が無い器（テスト・蒸留）は従来どおり全文',
     managers: () => [mgr()],
-    noShownHook: true,
     steps: [{ args: { managerId: 'mgr-001' } }],
   },
   {
@@ -846,7 +840,7 @@ const SCENARIOS: Scenario[] = [
     managers: () => [mgr()],
     subagentHook: true,
     steps: [
-      { args: { managerId: 'mgr-001' }, shown: true, toolUseId: 'tu-sub' },
+      { args: { managerId: 'mgr-001' }, toolUseId: 'tu-sub' },
       { args: { managerId: 'mgr-001' }, toolUseId: 'tu-main' },
     ],
   },
@@ -889,7 +883,6 @@ function recordStores(calls: string[]): ReturnType<typeof createMemoryStores> {
 async function runScenario(scenario: Scenario): Promise<Observed[]> {
   let managers = scenario.managers();
   const calls: string[] = [];
-  const state = { shown: false };
   const unreadable = scenario.unreadableJobs ?? [];
   const stores = recordStores(calls);
   const notUsed = () => {
@@ -933,8 +926,6 @@ async function runScenario(scenario: Scenario): Promise<Observed[]> {
     calls.push('stores.jobs.listUnreadableJobs');
     return unreadable;
   };
-  const latestReports = (): string[] =>
-    managers.map((manager) => manager.lastFoldedTurn?.text ?? manager.lastReport ?? '');
   const tools = createCloneTools({
     stores,
     emit: () => {
@@ -943,14 +934,6 @@ async function runScenario(scenario: Scenario): Promise<Observed[]> {
     memoryCause: () => 'clone',
     conversationId: () => undefined,
     ...(scenario.noPool === true ? {} : { managers: pool }),
-    ...(scenario.noShownHook === true
-      ? {}
-      : {
-          managerReportShownAt: (managerId: string, text: string) => {
-            calls.push(`shownAt(${managerId},${String(text.length)})`);
-            return state.shown && latestReports().includes(text) ? SHOWN_AT : null;
-          },
-        }),
     ...(scenario.subagentHook === true
       ? {
           isSubagentCall: (toolUseId: string | undefined) => {
@@ -965,7 +948,6 @@ async function runScenario(scenario: Scenario): Promise<Observed[]> {
   const observed: Observed[] = [];
   for (const step of scenario.steps) {
     if (step.mutate !== undefined) managers = step.mutate(managers);
-    if (step.shown !== undefined) state.shown = step.shown;
     calls.length = 0;
     const extra =
       step.toolUseId === undefined ? {} : { _meta: { 'claudecode/toolUseId': step.toolUseId } };
@@ -1104,7 +1086,6 @@ describe('manager_report の出力の固定（場面ごとの全文・字数・�
     expect(text('request-missing')).toContain('依頼文が記録に無い');
     expect(calls('request-missing')).not.toContain('pool.transcriptTail(mgr-001,200000)');
     expect(text('request-paging#1')).toContain('part=request offset=8000');
-    expect(calls('request')).not.toContain('shownAt(mgr-001,10)');
     expect(text('missing-tail-found-end-turn')).toContain('生成されたが配られていない（#323）');
     expect(text('missing-tail-tool-use')).toContain('stop_reason=tool_use');
     expect(text('missing-tail-no-stop-reason')).toContain('判定できなかった');
@@ -1131,15 +1112,6 @@ describe('manager_report の出力の固定（場面ごとの全文・字数・�
     expect(text('page-boundary#1')).not.toContain('ここで切れている');
     expect(text('page-boundary#2')).toContain(`offset=${String(REPORT_PAGE)}`);
     expect(text('page-continue#3')).not.toContain('ここで切れている');
-    expect(text('shown-note-only#1')).not.toContain('の発言に載っている');
-    expect(text('shown-note-only#2')).toContain('01:30Z の発言に載っている（会話の上）');
-    expect(text('shown-note-only#3')).not.toContain('の発言に載っている');
-    expect(text('shown-note-only#4')).not.toContain('の発言に載っている');
-    expect(calls('shown-note-only#3')).not.toContain(
-      `shownAt(mgr-001,${String(REPORT_PAGE + 10)})`,
-    );
     expect(text('shown-no-hook')).toContain('報告。終わった。');
-    expect(calls('shown-subagent#1')).not.toContain('shownAt(mgr-001,8)');
-    expect(text('shown-subagent#2')).toContain('の発言に載っている');
   });
 });

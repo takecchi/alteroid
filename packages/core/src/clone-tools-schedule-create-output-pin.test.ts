@@ -44,10 +44,6 @@ type Interference = 'bump' | 'bump-long' | 'create' | 'delete';
 
 /** 書き込み口が投げる例外 */
 type Failure = 'unreadable' | 'plain' | 'conflict';
-
-/** `forgetStandingRow` の配線: 渡る / 口が無い / 投げる */
-type ForgetMode = 'wired' | 'absent' | 'throws';
-
 /** 場面の中で呼びごとに差し替える口（ストアの振る舞い。番号は呼びの中での 1 から数えた回） */
 interface Hooks {
   /** `get` の n 回目を投げさせる */
@@ -74,7 +70,6 @@ interface Scenario {
   covers: string;
   seed: ScheduledRequest[];
   steps: Step[];
-  forget?: ForgetMode;
 }
 
 const BASE_ISO = '2026-10-29T00:00:00.000Z';
@@ -678,34 +673,6 @@ const SCENARIOS: Scenario[] = [
       },
     ],
   },
-  // ---- forgetStandingRow ----
-  {
-    name: 'forget-absent',
-    covers:
-      'forgetStandingRow の口が無い配線（ToolContext の任意の口）: 新規・置き換えとも落ちずに通り、forgotten は空',
-    seed: [old(K, '旧い本文')],
-    forget: 'absent',
-    steps: [
-      { args: call({ kind: 'fresh', everyMinutes: 30 }), writes: 'some' },
-      { args: call({ request: '新しい本文', everyMinutes: 30 }), writes: 'some' },
-    ],
-  },
-  {
-    name: 'forget-throws',
-    covers:
-      'forgetStandingRow が投げる（新規・置き換え）: 例外を飲み込み、最後の日誌は普段どおり書き、成功の応答の末尾に控えを捨てられなかった注が付く（行は書き換わっている）',
-    seed: [],
-    forget: 'throws',
-    steps: [{ args: call({ everyMinutes: 30 }), writes: 'some' }],
-  },
-  {
-    name: 'forget-throws-replace',
-    covers:
-      'forgetStandingRow が投げる（置き換え）: 置き換えの応答の末尾に注が付き、最後の日誌「直した」が書かれる',
-    seed: [old(K, '旧い本文')],
-    forget: 'throws',
-    steps: [{ args: call({ request: '新しい本文', everyMinutes: 30 }), writes: 'some' }],
-  },
 ];
 
 function stepKey(scenario: Scenario, index: number): string {
@@ -735,8 +702,6 @@ interface PinnedStep {
   schedules: { entries: Record<string, unknown>[]; unreadable: Record<string, unknown>[] };
   /** 呼んだあとに日誌へ足された行 */
   journal: Record<string, unknown>[];
-  /** `forgetStandingRow` に渡した kind の並び */
-  forgotten: string[];
   /** スケジュールのストアの書き込み口の呼びの並び */
   storeCalls: Record<string, unknown>[];
 }
@@ -762,7 +727,6 @@ interface Runtime {
   /** この呼びが指す kind（読めない行の一覧に載せる名前） */
   kind: string;
   storeCalls: Record<string, unknown>[];
-  forgotten: string[];
 }
 
 function freshHooks(): Hooks {
@@ -783,7 +747,6 @@ function freshRuntime(): Runtime {
     counts: { get: 0, edit: 0, put: 0, journal: 0 },
     kind: K,
     storeCalls: [],
-    forgotten: [],
   };
 }
 
@@ -944,20 +907,11 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   for (const seed of scenario.seed) await base.schedules.put(seed);
   const runtime = freshRuntime();
   const stores = withHooks(base, runtime);
-  const forget = scenario.forget ?? 'wired';
   const context: ToolContext = {
     stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
-    ...(forget === 'absent'
-      ? {}
-      : {
-          forgetStandingRow: (kind: string) => {
-            runtime.forgotten.push(kind);
-            if (forget === 'throws') throw new Error('控えを捨てる口が落ちた');
-          },
-        }),
   };
   const found = createCloneTools(context).find((entry) => entry.name === 'schedule_create');
   if (!found) throw new Error('schedule_create が無い');
@@ -967,7 +921,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
     runtime.hooks = { ...freshHooks(), ...(step.hooks ?? {}) };
     runtime.counts = { get: 0, edit: 0, put: 0, journal: 0 };
     runtime.storeCalls = [];
-    runtime.forgotten = [];
     runtime.kind = typeof step.args.kind === 'string' ? step.args.kind : K;
     const before = await snapshot(base, runtime);
     vi.setSystemTime(new Date(callTime(index)));
@@ -1003,7 +956,6 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
       wrote,
       schedules: after.schedules,
       journal: after.journal.slice(before.journal.length),
-      forgotten: [...runtime.forgotten],
       storeCalls: plain(runtime.storeCalls),
     });
     if (step.writes === 'none') {
@@ -1144,9 +1096,6 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
           got?.storeCalls,
           `場面 ${key} の書き込み口の呼び（editRequest・put の引数・ifMatch・結果）が固定値からずれた`,
         ).toEqual(want?.storeCalls);
-        expect(got?.forgotten, `場面 ${key} の forgetStandingRow へ渡した kind が変わった`).toEqual(
-          want?.forgotten,
-        );
         expect(got?.wrote, `場面 ${key} の書き込みの有無が変わった`).toBe(want?.wrote);
       });
 
@@ -1230,7 +1179,6 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     for (const key of ALL_KEYS.filter((name) => name.startsWith('arg-'))) {
       expect(step(key)?.storeCalls, `${key}: 検査で断る場面が書き込み口を呼んだ`).toEqual([]);
       expect(step(key)?.journal, `${key}: 検査で断る場面が日誌を書いた`).toEqual([]);
-      expect(step(key)?.forgotten, `${key}: 検査で断る場面が控えを捨てた`).toEqual([]);
     }
     // 新規
     expect(text('new-daily#1')).toBe(
@@ -1240,7 +1188,6 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(calls('new-daily#1')).toEqual(['editRequest ifMatch=null null', 'put ifMatch=null put']);
     expect(startsWith('new-daily#1', SETTING)).toBe(1);
     expect(startsWith('new-daily#1', CREATED)).toBe(1);
-    expect(step('new-daily#1')?.forgotten).toEqual(['weekly-review']);
     expect(text('new-every#3')).toContain('525600 分ごと');
     expect(text('new-cron#3')).toContain('cron " 0 10 * * 1 " は前後に空白がある');
     expect(rowOf('new-forms#4', 'nul-body')?.request).toBe('本文です');
@@ -1284,7 +1231,6 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(step('unreadable-row#1')?.schedules.unreadable).toEqual([
       { kind: K, reason: '行が読めない形' },
     ]);
-    expect(step('unreadable-row#1')?.forgotten).toEqual([]);
     expect(decisions('unreadable-on-write#1')[0]).toContain(REPLACING);
     expect(decisions('unreadable-on-write#1')[1]).toContain(`${FAILED}（読めない形で入っている）`);
     expect(calls('unreadable-on-write#2')).toEqual([
@@ -1318,7 +1264,6 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(startsWith('conflict-replace-limit', RETRACT)).toBe(3);
     expect(decisions('conflict-replace-limit').at(-1)).toContain('3 回試して諦めた');
     expect(startsWith('conflict-replace-limit', FAILED)).toBe(0);
-    expect(step('conflict-replace-limit')?.forgotten).toEqual([]);
     expect(calls('conflict-new-put-race')).toEqual([
       'editRequest ifMatch=null null',
       'put ifMatch=null threw ScheduleConflictError',
@@ -1375,24 +1320,7 @@ describe('schedule_create の出力と呼んだあとの状態の固定（場面
     expect(text('journal-fails-failure-entry#4')).toContain(CONFLICT_TEXT);
     expect(startsWith('journal-fails-failure-entry#4', FAILED)).toBe(0);
     expect(step('journal-fails-final#1')?.journal).toHaveLength(1);
-    expect(step('journal-fails-final#1')?.forgotten).toEqual(['fresh']);
     expect(text('journal-fails-final#2')).toContain('は既に在ったので置き換えた');
     expect(startsWith('journal-fails-final#2', EDITED)).toBe(0);
-    // forgetStandingRow
-    expect(step('forget-absent#1')?.forgotten).toEqual([]);
-    expect(text('forget-absent#2')).toContain('は既に在ったので置き換えた');
-    const FORGET_NOTE =
-      '（定期の tick の控えを捨てられなかった: Error: 控えを捨てる口が落ちた。次の tick で、';
-    expect(text('forget-throws')).toContain(
-      `で仕込んだ。時刻が来たら依頼の本文とともに届く。${FORGET_NOTE}`,
-    );
-    expect(text('forget-throws')).toMatch(/以前の版と同じとして畳まれることがある）$/);
-    expect(step('forget-throws')?.output.isError).toBe(false);
-    expect(step('forget-throws')?.journal).toHaveLength(2);
-    expect(startsWith('forget-throws', CREATED)).toBe(1);
-    expect(rowOf('forget-throws', K)?.request).toBe('週次の見直しをする');
-    expect(text('forget-throws-replace')).toContain(FORGET_NOTE);
-    expect(startsWith('forget-throws-replace', EDITED)).toBe(1);
-    expect(rowOf('forget-throws-replace', K)?.request).toBe('新しい本文');
   });
 });

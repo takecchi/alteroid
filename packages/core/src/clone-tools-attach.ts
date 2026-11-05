@@ -67,9 +67,7 @@ import {
   appendJournalOrThrow,
   appendJournalOrDrop,
   JournalNotRecordedError,
-  isSubagentCaller,
-  NO_FIXED_FOLD,
-  type FixedFold,
+  noteSubagentCallerGauge,
   describeUnreadableJournalEntry,
 } from './clone-tools-common.js';
 
@@ -684,9 +682,7 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
         },
         extra: unknown,
       ) => {
-        const fold = isSubagentCaller(context, extra)
-          ? NO_FIXED_FOLD
-          : (context.foldFixed ?? NO_FIXED_FOLD);
+        noteSubagentCallerGauge(context, extra);
         const argViolation = describeConversationReadArgViolation(scan, limit, offset);
         if (argViolation !== null) return text(argViolation);
         // 読み方 1: id（1発言の全文）
@@ -742,15 +738,12 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
               conversationId,
               { speaker, q, includeSuperseded },
               view,
-              fold,
             ),
           );
         }
         // 読み方 3: q（会話をまたぐ検索）
         if (q !== undefined) {
-          return text(
-            await readConversationSearchText(stores.journal, entries, q, speaker, view, fold),
-          );
+          return text(await readConversationSearchText(stores.journal, entries, q, speaker, view));
         }
         // 読み方 4: 一覧。`speaker` が効かないことを黙らない（一覧の関数が注記する）
         return text(
@@ -758,7 +751,6 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
             listPage as ConversationPage,
             { limit, scan, sinceInput, untilInput, speaker, cursor },
             view,
-            fold,
           ),
         );
       },
@@ -769,7 +761,6 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
 // ---- `conversation_read` の出力を部分ごとに組む関数 ----
 // 読み方は4つ（1発言の全文＝`id`、1つの会話＝`conversationId`、会話をまたぐ検索＝`q`、一覧）。読み方ごとに1つの関数があり、その中を行・注記・予算の詰めの関数に分ける。
 // 各関数は出力の1つの部分を文字列（または行の配列）で返す。`conversation_read` の式は引数を読み、読み方を選んで、その結果を返すだけにする。
-// `fold` は呼んだ時点で「会話に出した」と控える: 呼ぶ順と回数を変えないこと（呼び出し側の並びがそのまま控えへの書き込みの順になる）。
 
 type ConversationReadJournal = CloneToolsShared['stores']['journal'];
 type ConversationWindowEntries = Awaited<ReturnType<typeof readConversationWindow>>;
@@ -1031,13 +1022,7 @@ function describeCursorIgnoredNote(listMode: boolean, cursorInput: string | unde
 }
 
 /** 会話の読みと検索の読みが末尾に付ける、本文は抜粋だという注記。 */
-function describeExcerptNote(fold: FixedFold): string {
-  return fold(
-    'conversation-read:excerpt-note',
-    '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
-    '（本文は抜粋。全文は id=<id>）',
-  );
-}
+const EXCERPT_NOTE = '（本文は抜粋。全文は conversation_read id=<id> で取れる）';
 
 // ---- 読み方 2: conversationId（1つの会話を古い順に） ----
 
@@ -1153,7 +1138,6 @@ async function readConversationMessagesText(
     includeSuperseded: boolean;
   },
   view: ConversationReadView,
-  fold: FixedFold,
 ): Promise<string> {
   const { matched, supersededCount } = selectConversationMessages(entries, conversationId, filter);
   if (matched.length === 0) return describeConversationNoMessages(conversationId, view);
@@ -1172,7 +1156,7 @@ async function readConversationMessagesText(
   return [
     ...view.resolvedNoteLines,
     rendered,
-    describeExcerptNote(fold),
+    EXCERPT_NOTE,
     ...supersededNote,
     ...withdrawnNotes,
     ...view.cursorIgnoredNote,
@@ -1226,7 +1210,6 @@ async function readConversationSearchText(
   q: string,
   speaker: 'human' | 'clone' | 'both',
   view: ConversationReadView,
-  fold: FixedFold,
 ): Promise<string> {
   const exchanges = bySpeaker(humanExchanges(entries), speaker);
   const matched = searchExchanges(exchanges, q);
@@ -1245,13 +1228,9 @@ async function readConversationSearchText(
   const withdrawnNotes = describeWithdrawnReading(withdrawnLookup, matched, {
     shown: matched.slice(0, shownCount),
   }).notes;
-  return [
-    rendered,
-    describeExcerptNote(fold),
-    ...withdrawnNotes,
-    ...view.cursorIgnoredNote,
-    view.scanNote,
-  ].join('\n');
+  return [rendered, EXCERPT_NOTE, ...withdrawnNotes, ...view.cursorIgnoredNote, view.scanNote].join(
+    '\n',
+  );
 }
 
 // ---- 読み方 4: 一覧（会話の一覧、新しい順） ----
@@ -1260,7 +1239,6 @@ async function readConversationSearchText(
 function describeConversationContinuation(
   resume: ConversationCursor | null,
   request: ConversationListRequest,
-  fold: FixedFold,
 ): string[] {
   if (resume === null) return [];
   const { sinceInput, untilInput, scan, limit } = request;
@@ -1273,11 +1251,7 @@ function describeConversationContinuation(
   ];
   return [
     `続きを読むには: conversation_read ${args.join(' ')}` +
-      fold(
-        'conversation-read:continuation-note',
-        '（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）',
-        '（窓の外もこれで辿れる。続きが無ければ行は出ない）',
-      ),
+      '（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）',
   ];
 }
 
@@ -1286,7 +1260,6 @@ function describeEmptyConversationList(
   listing: ConversationPage,
   request: ConversationListRequest,
   view: ConversationReadView,
-  fold: FixedFold,
 ): string {
   const emptyNote = !view.reached
     ? 'この窓には無い（判定できない）。'
@@ -1295,7 +1268,7 @@ function describeEmptyConversationList(
       : 'この cursor より古い会話は無い。';
   return [
     emptyNote,
-    ...describeConversationContinuation(listing.next, request, fold),
+    ...describeConversationContinuation(listing.next, request),
     view.scanNote,
   ].join('\n');
 }
@@ -1367,15 +1340,13 @@ function readConversationListText(
   listing: ConversationPage,
   request: ConversationListRequest,
   view: ConversationReadView,
-  fold: FixedFold,
 ): string {
   // `limit` で落ちた分も数に入れる: `slice` の後の件数だけだと、`limit` で消えた分が出力のどこにも現れず、日誌の先頭に届いていると読める応答のまま消えるため
   const listLimit = request.limit ?? 20;
   const conversations = listing.conversations;
   const hiddenByLimit = listing.hiddenByLimit;
   const windowTotal = conversations.length + hiddenByLimit;
-  if (conversations.length === 0)
-    return describeEmptyConversationList(listing, request, view, fold);
+  if (conversations.length === 0) return describeEmptyConversationList(listing, request, view);
   const lines = conversations.map(conversationListRow);
   const { body, cutByBudget, shownByBudget } = renderConversationListBody(
     lines,
@@ -1397,14 +1368,8 @@ function readConversationListText(
     ? ((lastShown === undefined ? undefined : listing.positions.get(lastShown.conversationId)) ??
       listing.next)
     : listing.next;
-  notes.push(...describeConversationContinuation(resume, request, fold));
-  notes.push(
-    fold(
-      'conversation-read:list-open-note',
-      '（各会話の中身は conversation_read conversationId=<id> で古い順に読める）',
-      '（中身は conversationId=<id> で読める）',
-    ),
-  );
+  notes.push(...describeConversationContinuation(resume, request));
+  notes.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
   notes.push(...describeSpeakerIgnoredNote(request.speaker));
   notes.push(view.scanNote);
   return [body, ...notes].join('\n');

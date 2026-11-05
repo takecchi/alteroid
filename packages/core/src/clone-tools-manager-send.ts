@@ -24,7 +24,7 @@ import {
   appendJournalOrDrop,
   type ToolText,
   JOURNAL_TEXT_EXCERPT,
-  foldFixedFor,
+  noteSubagentCallerGauge,
 } from './clone-tools-common.js';
 import type { ToolContext } from './clone-tools-context.js';
 import { CLOSES_SCHEMA, describeClosesViolation, finishWithCloses } from './clone-tools-closes.js';
@@ -164,23 +164,12 @@ function renderManagerSendHeld(detail: string, unusedNote: string): string {
 // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
 // 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
 // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
-// 札にする側（2回目から）の結論の「同じ本文で新しい委譲を立てない」も残す。畳みの口を呼ぶので、返す直前に1回だけ呼ぶこと
-function foldManagerSendDeliveredNote(context: ToolContext, extra: unknown): string {
-  return foldFixedFor(context, extra)(
-    'manager-send:delivered-note',
-    '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
-      '同じ本文で新しい委譲を立てないこと）',
-    '（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）',
-  );
-}
+const MANAGER_SEND_DELIVERED_NOTE =
+  '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
+  '同じ本文で新しい委譲を立てないこと）';
 
-function renderManagerSendDelivered(
-  managerId: string,
-  detail: string,
-  unusedNote: string,
-  deliveredNote: string,
-): string {
-  return `[${managerId}] ${detail}${unusedNote}\n${deliveredNote}`;
+function renderManagerSendDelivered(managerId: string, detail: string, unusedNote: string): string {
+  return `[${managerId}] ${detail}${unusedNote}\n${MANAGER_SEND_DELIVERED_NOTE}`;
 }
 
 export function managerSendTool(context: ToolContext, stores: Stores) {
@@ -294,11 +283,10 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
         );
       }
       if (result.outcome === 'delivered') {
-        // 脚注は同じ会話の2回目から札にする。返す直前のここで呼ぶ
-        const deliveredNote = foldManagerSendDeliveredNote(context, extra);
+        noteSubagentCallerGauge(context, extra);
         return finishWithCloses(
           stores,
-          text(renderManagerSendDelivered(managerId, result.detail, unusedNote, deliveredNote)),
+          text(renderManagerSendDelivered(managerId, result.detail, unusedNote)),
           closes,
           sent,
           'manager_send',

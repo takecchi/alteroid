@@ -310,7 +310,7 @@ describe('サブエージェント呼びの計器: 上限', () => {
 });
 
 describe('サブエージェント呼びの計器: 日誌が書けなくても判定は変わらない', () => {
-  it('サブの呼びは全文、本体の2回目は畳みのまま', async () => {
+  it('サブの呼びも本体の2回目も全文（判定の計器が書けなくても応答は変わらない）', async () => {
     const stores = createMemoryStores();
     stores.journal.append = () => Promise.reject(new Error('日誌が書けない'));
     const s = boot(stores);
@@ -326,7 +326,7 @@ describe('サブエージェント呼びの計器: 日誌が書けなくても�
       const main2 = await runnerList(s, metaOf('tu-main-2'));
       expect(main1).toContain(FULL_MARK);
       expect(sub).toContain(FULL_MARK);
-      expect(main2).not.toContain(FULL_MARK);
+      expect(main2).toContain(FULL_MARK);
     });
     await s.clone.stop();
   });

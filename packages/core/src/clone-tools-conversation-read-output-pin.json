@@ -104,23 +104,7 @@
     "list-budget#4": 1072,
     "list-window-short#1": 401,
     "list-window-short#2": 94,
-    "list-window-short#3": 86,
-    "fold-list#1": 555,
-    "fold-list#2": 515,
-    "fold-list#3": 621,
-    "fold-conv#1": 265,
-    "fold-conv#2": 242,
-    "fold-conv#3": 182,
-    "fold-conv#4": 54,
-    "fold-q#1": 501,
-    "fold-q#2": 478,
-    "fold-q#3": 237,
-    "fold-subagent#1": 395,
-    "fold-subagent#2": 395,
-    "fold-subagent#3": 588,
-    "fold-subagent#4": 588,
-    "fold-subagent#5": 501,
-    "fold-subagent#6": 501
+    "list-window-short#3": 86
   },
   "scenarios": {
     "arg-errors#1": {
@@ -542,70 +526,6 @@
     "list-window-short#3": {
       "length": 86,
       "text": "\"存在しない語\" は、この窓には無い（判定できない）。\n（人間との往復を 3 件遡った。この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）"
-    },
-    "fold-list#1": {
-      "length": 555,
-      "text": "conv-005 2026-10-26T00:10:00.000Z〜2026-10-26T00:11:00.000Z（2 件）\n  返答 5 畳みの質問\nconv-004 2026-10-26T00:08:00.000Z〜2026-10-26T00:09:00.000Z（2 件）\n  返答 4 畳みの質問\nconv-003 2026-10-26T00:06:00.000Z〜2026-10-26T00:07:00.000Z（2 件）\n  返答 3 畳みの質問\n…ほか 3 件は省略（この窓に 6 件あり、新しい順に 3 件だけ出した）。省いたのは**古い側**で、切ったのは limit=3 である。予算にはまだ余りがあるので、limit を増やせば出る。\n続きを読むには: conversation_read cursor=eyJpZCI6ImlkLTgiLCJhdCI6IjIwMjYtMTAtMjZUMDA6MDc6MDAuMDAwWiJ9 limit=3（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）\n（各会話の中身は conversation_read conversationId=<id> で古い順に読める）\n（人間との往復を 12 件遡った。先頭に届いている）"
-    },
-    "fold-list#2": {
-      "length": 515,
-      "text": "conv-005 2026-10-26T00:10:00.000Z〜2026-10-26T00:11:00.000Z（2 件）\n  返答 5 畳みの質問\nconv-004 2026-10-26T00:08:00.000Z〜2026-10-26T00:09:00.000Z（2 件）\n  返答 4 畳みの質問\nconv-003 2026-10-26T00:06:00.000Z〜2026-10-26T00:07:00.000Z（2 件）\n  返答 3 畳みの質問\n…ほか 3 件は省略（この窓に 6 件あり、新しい順に 3 件だけ出した）。省いたのは**古い側**で、切ったのは limit=3 である。予算にはまだ余りがあるので、limit を増やせば出る。\n続きを読むには: conversation_read cursor=eyJpZCI6ImlkLTgiLCJhdCI6IjIwMjYtMTAtMjZUMDA6MDc6MDAuMDAwWiJ9 limit=3（窓の外もこれで辿れる。続きが無ければ行は出ない）\n（中身は conversationId=<id> で読める）\n（人間との往復を 12 件遡った。先頭に届いている）"
-    },
-    "fold-list#3": {
-      "length": 621,
-      "text": "conv-005 2026-10-26T00:10:00.000Z〜2026-10-26T00:11:00.000Z（2 件）\n  返答 5 畳みの質問\nconv-004 2026-10-26T00:08:00.000Z〜2026-10-26T00:09:00.000Z（2 件）\n  返答 4 畳みの質問\nconv-003 2026-10-26T00:06:00.000Z〜2026-10-26T00:07:00.000Z（2 件）\n  返答 3 畳みの質問\nconv-002 2026-10-26T00:04:00.000Z〜2026-10-26T00:05:00.000Z（2 件）\n  返答 2 畳みの質問\nconv-001 2026-10-26T00:02:00.000Z〜2026-10-26T00:03:00.000Z（2 件）\n  返答 1 畳みの質問\nconv-000 2026-10-26T00:00:00.000Z〜2026-10-26T00:01:00.000Z（2 件）\n  返答 0 畳みの質問\n（中身は conversationId=<id> で読める）\n（speaker=human はこの一覧には効いていない。会話が在るかどうかは誰が喋ったかで変わらないので、一覧は絞らずに出している。話者で絞るのは conversationId か q のときである）\n（人間との往復を 12 件遡った。先頭に届いている）"
-    },
-    "fold-conv#1": {
-      "length": 265,
-      "text": "2026-10-26T00:02:00.000Z [人間] id=id-3\n  直した質問\n2026-10-26T00:03:00.000Z [クローン] id=id-4\n  直した回答\n（本文は抜粋。全文は conversation_read id=<id> で取れる）\n（この会話には畳まれた版が 2 件ある。読むには conversation_read conversationId=conv-edit includeSuperseded=true を指定する）\n（この会話の人間との往復を 4 件遡った。先頭に届いている）"
-    },
-    "fold-conv#2": {
-      "length": 242,
-      "text": "2026-10-26T00:02:00.000Z [人間] id=id-3\n  直した質問\n2026-10-26T00:03:00.000Z [クローン] id=id-4\n  直した回答\n（本文は抜粋。全文は id=<id>）\n（この会話には畳まれた版が 2 件ある。読むには conversation_read conversationId=conv-edit includeSuperseded=true を指定する）\n（この会話の人間との往復を 4 件遡った。先頭に届いている）"
-    },
-    "fold-conv#3": {
-      "length": 182,
-      "text": "2026-10-26T00:02:00.000Z [人間] id=id-3 conversation=conv-edit\n  直した質問\n2026-10-26T00:00:00.000Z [人間] id=id-1 conversation=conv-edit\n  元の質問\n（本文は抜粋。全文は id=<id>）\n（人間との往復を 4 件遡った。先頭に届いている）"
-    },
-    "fold-conv#4": {
-      "length": 54,
-      "text": "会話 conv-nope に当たる発言は無い。\n（この会話の人間との往復を 0 件遡った。先頭に届いている）"
-    },
-    "fold-q#1": {
-      "length": 501,
-      "text": "2026-10-26T00:08:00.000Z [人間] id=id-9 conversation=(無し)\n  会話 id の無い人間の発言 Deploy\n2026-10-26T00:02:00.000Z [人間] id=id-3 conversation=conv-a\n  スクリーンショットとログを添えます。Deploy が止まる。\n  [添付 2件]\n    id=att-1 name=screenshot.png type=image/png size=2048\n    id=att-2 name=とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても…（56 文字省略。全 136 文字） type=text/plain size=123456\n    （attachment_fetch id=<id> で取り出して Read で開ける）\n（本文は抜粋。全文は conversation_read id=<id> で取れる）\n（人間との往復を 7 件遡った。先頭に届いている）"
-    },
-    "fold-q#2": {
-      "length": 478,
-      "text": "2026-10-26T00:08:00.000Z [人間] id=id-9 conversation=(無し)\n  会話 id の無い人間の発言 Deploy\n2026-10-26T00:02:00.000Z [人間] id=id-3 conversation=conv-a\n  スクリーンショットとログを添えます。Deploy が止まる。\n  [添付 2件]\n    id=att-1 name=screenshot.png type=image/png size=2048\n    id=att-2 name=とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても…（56 文字省略。全 136 文字） type=text/plain size=123456\n    （attachment_fetch id=<id> で取り出して Read で開ける）\n（本文は抜粋。全文は id=<id>）\n（人間との往復を 7 件遡った。先頭に届いている）"
-    },
-    "fold-q#3": {
-      "length": 237,
-      "text": "conv-b 2026-10-26T00:04:00.000Z〜2026-10-26T00:05:00.000Z（2 件）\n  別の会話の返答\nconv-a 2026-10-26T00:00:00.000Z〜2026-10-26T00:03:00.000Z（4 件）\n  ログを見ます。 改行を含む返答です。\n（各会話の中身は conversation_read conversationId=<id> で古い順に読める）\n（人間との往復を 7 件遡った。先頭に届いている）"
-    },
-    "fold-subagent#1": {
-      "length": 395,
-      "text": "conv-b 2026-10-26T00:04:00.000Z〜2026-10-26T00:05:00.000Z（2 件）\n  別の会話の返答\n…ほか 1 件は省略（この窓に 2 件あり、新しい順に 1 件だけ出した）。省いたのは**古い側**で、切ったのは limit=1 である。予算にはまだ余りがあるので、limit を増やせば出る。\n続きを読むには: conversation_read cursor=eyJpZCI6ImlkLTYiLCJhdCI6IjIwMjYtMTAtMjZUMDA6MDU6MDAuMDAwWiJ9 limit=1（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）\n（各会話の中身は conversation_read conversationId=<id> で古い順に読める）\n（人間との往復を 7 件遡った。先頭に届いている）"
-    },
-    "fold-subagent#2": {
-      "length": 395,
-      "text": "conv-b 2026-10-26T00:04:00.000Z〜2026-10-26T00:05:00.000Z（2 件）\n  別の会話の返答\n…ほか 1 件は省略（この窓に 2 件あり、新しい順に 1 件だけ出した）。省いたのは**古い側**で、切ったのは limit=1 である。予算にはまだ余りがあるので、limit を増やせば出る。\n続きを読むには: conversation_read cursor=eyJpZCI6ImlkLTYiLCJhdCI6IjIwMjYtMTAtMjZUMDA6MDU6MDAuMDAwWiJ9 limit=1（limit の上限や窓の外もこれで辿れる。続きが無くなれば、この行は出ない）\n（各会話の中身は conversation_read conversationId=<id> で古い順に読める）\n（人間との往復を 7 件遡った。先頭に届いている）"
-    },
-    "fold-subagent#3": {
-      "length": 588,
-      "text": "2026-10-26T00:00:00.000Z [人間] id=id-1\n  デプロイの手順を教えて。\n2026-10-26T00:01:00.000Z [クローン] id=id-2\n  まず build を回してから push します。\n2026-10-26T00:02:00.000Z [人間] id=id-3\n  スクリーンショットとログを添えます。Deploy が止まる。\n  [添付 2件]\n    id=att-1 name=screenshot.png type=image/png size=2048\n    id=att-2 name=とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても…（56 文字省略。全 136 文字） type=text/plain size=123456\n    （attachment_fetch id=<id> で取り出して Read で開ける）\n2026-10-26T00:03:00.000Z [クローン] id=id-4\n  ログを見ます。 改行を含む返答です。\n（本文は抜粋。全文は conversation_read id=<id> で取れる）\n（この会話の人間との往復を 4 件遡った。先頭に届いている）"
-    },
-    "fold-subagent#4": {
-      "length": 588,
-      "text": "2026-10-26T00:00:00.000Z [人間] id=id-1\n  デプロイの手順を教えて。\n2026-10-26T00:01:00.000Z [クローン] id=id-2\n  まず build を回してから push します。\n2026-10-26T00:02:00.000Z [人間] id=id-3\n  スクリーンショットとログを添えます。Deploy が止まる。\n  [添付 2件]\n    id=att-1 name=screenshot.png type=image/png size=2048\n    id=att-2 name=とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても…（56 文字省略。全 136 文字） type=text/plain size=123456\n    （attachment_fetch id=<id> で取り出して Read で開ける）\n2026-10-26T00:03:00.000Z [クローン] id=id-4\n  ログを見ます。 改行を含む返答です。\n（本文は抜粋。全文は conversation_read id=<id> で取れる）\n（この会話の人間との往復を 4 件遡った。先頭に届いている）"
-    },
-    "fold-subagent#5": {
-      "length": 501,
-      "text": "2026-10-26T00:08:00.000Z [人間] id=id-9 conversation=(無し)\n  会話 id の無い人間の発言 Deploy\n2026-10-26T00:02:00.000Z [人間] id=id-3 conversation=conv-a\n  スクリーンショットとログを添えます。Deploy が止まる。\n  [添付 2件]\n    id=att-1 name=screenshot.png type=image/png size=2048\n    id=att-2 name=とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても…（56 文字省略。全 136 文字） type=text/plain size=123456\n    （attachment_fetch id=<id> で取り出して Read で開ける）\n（本文は抜粋。全文は conversation_read id=<id> で取れる）\n（人間との往復を 7 件遡った。先頭に届いている）"
-    },
-    "fold-subagent#6": {
-      "length": 501,
-      "text": "2026-10-26T00:08:00.000Z [人間] id=id-9 conversation=(無し)\n  会話 id の無い人間の発言 Deploy\n2026-10-26T00:02:00.000Z [人間] id=id-3 conversation=conv-a\n  スクリーンショットとログを添えます。Deploy が止まる。\n  [添付 2件]\n    id=att-1 name=screenshot.png type=image/png size=2048\n    id=att-2 name=とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても長い名前のログ-とても…（56 文字省略。全 136 文字） type=text/plain size=123456\n    （attachment_fetch id=<id> で取り出して Read で開ける）\n（本文は抜粋。全文は conversation_read id=<id> で取れる）\n（人間との往復を 7 件遡った。先頭に届いている）"
     }
   }
 }

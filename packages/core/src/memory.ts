@@ -1596,13 +1596,6 @@ export function describeMemoryWriteDiff(before: string | null, after: string): s
   return [charLine, describeMemoryHeadingDiff(before, after)].join('\n');
 }
 
-/**
- * 固定の文言を札にする口（`ToolContext.foldFixed` と同じ型）。数・slug・文書名は畳まない。
- * 既定は全文を返す口: memory_write など札の指す先（会話の上の全文）を持たない呼び手は、これまでどおり全文を出す。
- */
-export type MemoryFold = (id: string, full: string, ref: string) => string;
-const MEMORY_FOLD_FULL: MemoryFold = (_id, full) => full;
-
 // 矢印（`→`）を使わない: `tools.test.ts` の新規作成の歯が `not.toContain('→')` で固定しており、床の遷移は新規作成のときも言うため
 function formatMemoryFloorTransition(beforeChars: number, afterChars: number): string {
   const delta = afterChars - beforeChars;
@@ -1621,10 +1614,8 @@ export function describeMemoryFloor(input: {
   slug: string;
   kind: MemoryDocKind;
   created: boolean;
-  fold?: MemoryFold;
 }): string {
   const { before, after, slug, kind, created } = input;
-  const fold = input.fold ?? MEMORY_FOLD_FULL;
   const transition = formatMemoryFloorTransition(before.totalChars, after.totalChars);
   // 噛んでいない回は1文字も出さない: 毎回付けると、本当に噛んだときの目印が効かなくなるため
   const demotedNote =
@@ -1673,7 +1664,7 @@ export function describeMemoryFloor(input: {
   }
   const outlineSaturationNote = outlineSaturationNotes.join('');
   const floorLine =
-    `${fold('memory-append:floor-head', '毎ターンの床（焼き込み全体。いま読み直した値）', '毎ターンの床')}: ${transition}。` +
+    `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。` +
     demotedNote +
     outlineSaturationNote;
 
@@ -1713,7 +1704,6 @@ export function describeMemoryReinjectionEstimate(
   parts: readonly [MemoryPart, ...MemoryPart[]],
   memoryAfter: readonly MemoryPart[],
   seenContent: ReadonlyMap<string, string>,
-  fold: MemoryFold = MEMORY_FOLD_FULL,
 ): string {
   if (parts.length === 0) {
     throw new Error('describeMemoryReinjectionEstimate: parts が空（呼び手の実装誤り）');
@@ -1749,11 +1739,7 @@ export function describeMemoryReinjectionEstimate(
 
   const lines = [
     `${subjectLabel}が次のターンの会話へ載る見込み: ${formatMemoryCharCount(chars)} 文字（${breakdown}）。`,
-    fold(
-      'memory-append:estimate-note',
-      MEMORY_REINJECTION_ESTIMATE_NOTE,
-      '⚠️ 予測であって実測ではない。',
-    ),
+    MEMORY_REINJECTION_ESTIMATE_NOTE,
   ];
   if (parts.length > 1) {
     lines.push(
@@ -1777,10 +1763,8 @@ function formatMemoryPercentDelta(percent: number): string {
 export function describeMemorySessionDelta(input: {
   afterChars: number;
   injectedMemoryChars: number | null;
-  fold?: MemoryFold;
 }): string {
   const { afterChars, injectedMemoryChars } = input;
-  const fold = input.fold ?? MEMORY_FOLD_FULL;
 
   if (injectedMemoryChars === null) {
     return (
@@ -1791,11 +1775,7 @@ export function describeMemorySessionDelta(input: {
     );
   }
 
-  const label = fold(
-    'memory-append:session-delta-label',
-    '次に組み立て直されたら焼かれる量（セッション構築時点との差）',
-    '焼かれる量（構築時点との差）',
-  );
+  const label = '次に組み立て直されたら焼かれる量（セッション構築時点との差）';
   const delta = afterChars - injectedMemoryChars;
 
   if (delta === 0) {

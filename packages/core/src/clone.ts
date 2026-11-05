@@ -6829,16 +6829,6 @@ class Clone implements CloneHost {
       emit: (event) => this.#emit(this.#sdkSession.turn?.conversationId ?? null, event),
       flushReply: () => this.#flushReply(),
       managers: this.#managers,
-      managerReportShownAt: (managerId, text) => this.#digestDelta.reportShownAt(managerId, text),
-      foldFixed: (id, full, ref, supersedes) =>
-        this.#digestDelta.fixedInTurn(
-          `tool:${id}`,
-          full,
-          ref,
-          supersedes === undefined ? undefined : `tool:${supersedes}`,
-        ),
-      forgetStandingRow: (kind) => this.#digestDelta.forgetStandingRow(kind),
-      keepStandingRowIfSame: (kind, row) => this.#digestDelta.keepStandingRowIfSame(kind, row),
       isSubagentCall: (toolUseId, probe) => this.#isSubagentCall(toolUseId, probe),
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
@@ -7013,8 +7003,8 @@ class Clone implements CloneHost {
   }
 
   /**
-   * `ToolContext.isSubagentCall` の実装（#5428）。tool_use_id が取れないときは本体扱い（`false`）に倒す: 全文に倒すと畳みの節約が全部消えるため。
-   * ただし取れなかった事実は捨てず、デーモン1回につき1回だけ stderr へ出す（取れない器では、サブエージェントの呼びが本体の控えを更新しうる）。
+   * `ToolContext.isSubagentCall` の実装（#5428）。tool_use_id が取れないときは本体扱い（`false`）に倒す。
+   * 取れなかった事実は捨てず、デーモン1回につき1回だけ stderr へ出す。
    */
   #isSubagentCall(toolUseId: string | undefined, probe?: ToolUseIdProbe): boolean {
     let subagent = false;

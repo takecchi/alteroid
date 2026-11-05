@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { DigestSessionDelta } from './digest-session-delta.js';
 import type {
   ManagerPool,
   RunnerFleetOverview,
@@ -44,8 +43,6 @@ interface Scenario {
   noPool?: boolean;
   fleet?: () => RunnerFleetOverview;
   steps: Step[];
-  /** 控え（同じ会話の2回目からの畳み）を使うか */
-  fold?: boolean;
   /** 真なら、この呼びをサブエージェントのものとして扱う（畳まない） */
   subagent?: boolean;
 }
@@ -698,24 +695,8 @@ const SCENARIOS: Scenario[] = [
     steps: [{}],
   },
   {
-    name: 'fold',
-    covers:
-      '同じ会話の2回目から、末尾の since の注記が札になる（resources 付きは pids の注記も。1回目のあとで初めて resources を付けた回は pids だけ全文）',
-    fold: true,
-    fleet: () => fleet([rn(1), rn(2)], { unassigned: [me(9)] }),
-    steps: [
-      {},
-      {},
-      { args: { resources: true } },
-      { args: { resources: true } },
-      { args: { cursor: encodeRunnerCursor({ label: 'runner-2' }) } },
-      { args: { cursor: 'こわれた' } },
-    ],
-  },
-  {
     name: 'fold-subagent',
     covers: 'サブエージェントの呼びは畳みの口があっても全文のまま',
-    fold: true,
     subagent: true,
     fleet: () => fleet([rn(1), rn(2)]),
     steps: [{}, {}, { args: { resources: true } }, { args: { resources: true } }],
@@ -745,19 +726,12 @@ async function runScenario(scenario: Scenario): Promise<RunResult> {
       return current;
     },
   } as unknown as ManagerPool;
-  const delta = scenario.fold === true ? new DigestSessionDelta() : null;
   const tools = createCloneTools({
     stores: createMemoryStores(),
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
     ...(scenario.noPool === true ? {} : { managers: pool }),
-    ...(delta === null
-      ? {}
-      : {
-          foldFixed: (id: string, full: string, ref: string, supersedes?: string) =>
-            delta.fixedInTurn(id, full, ref, supersedes),
-        }),
     ...(scenario.subagent === true ? { isSubagentCall: () => true } : {}),
   });
   const found = tools.find((entry) => entry.name === 'runner_list');
@@ -1002,11 +976,6 @@ describe('runner_list の出力の固定（場面ごとの全文と字数）', (
     expect(text('budget-resources')).toContain('台は省略');
     expect(text('budget-resources')).toContain('pids について:');
     expect(text('budget-single-huge')).toContain('…');
-    expect(text('fold#1')).toContain('名簿（Registry）はインメモリなので');
-    expect(text('fold#2')).not.toContain('名簿（Registry）はインメモリなので');
-    expect(text('fold#2')).toContain('「この状態になった」は名簿の値で');
-    expect(text('fold#3')).toContain('pids について: **pids の現在値/上限そのものは今も器の合計');
-    expect(text('fold#4')).toContain('pids について: **現在値/上限は器の合計であって内訳ではない');
     expect(text('fold-subagent#2')).toBe(text('fold-subagent#1'));
     expect(text('fold-subagent#4')).toBe(text('fold-subagent#3'));
   });

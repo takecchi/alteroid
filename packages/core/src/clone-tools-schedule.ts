@@ -3,9 +3,7 @@
 
 import { z } from 'zod';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
-import { collapseErrorCause } from './error-cause.js';
 import { encodeScheduleCursor, resolveScheduleCursor } from './schedule-cursor.js';
-import { renderStandingRow } from './digest.js';
 import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
 import {
   describePage,
@@ -406,8 +404,6 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
             );
           }
           if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
-          // 行をこの応答で見せた: 定期の tick が会話の上の別の版を「最後に全文で出した版」と畳まないよう、控えがこの版と違えば捨てる（同じなら残す）
-          context.keepStandingRowIfSame?.(plan.kind, renderStandingRow(plan));
           const head =
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
             ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
@@ -439,9 +435,6 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
           );
         }
         const view = cursorOutcome.view;
-        // 一覧で見せた行の kind も、上と同じ理由で控えを捨てる（予算で切れて載らなかった行まで捨てるのは安全側）。控えと同じ版なら残す
-        for (const plan of view)
-          context.keepStandingRowIfSame?.(plan.kind, renderStandingRow(plan));
         const items = view.map((plan) =>
           renderListingEntry({
             id: plan.kind,
@@ -547,23 +540,13 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
         });
         if (run.kind === 'refused') return text(run.message);
         const { plan, previous, replaceEntryId } = run;
-        // 書き換えた版は応答（置き換えなら旧版も）で会話に載る: 定期の tick の控えが古い版のまま「最後に全文で出した版と同じ」と畳まないよう、その kind の控えを捨てる
-        // 投げても書けた事実は残す: 最後の日誌は普段どおり書き、応答の末尾に注を足す
-        let forgetNote = '';
-        try {
-          context.forgetStandingRow?.(parsedKind);
-        } catch (error) {
-          forgetNote =
-            `（定期の tick の控えを捨てられなかった: ${collapseErrorCause(error)}。` +
-            '次の tick で、以前の版と同じとして畳まれることがある）';
-        }
         await appendJournalOrDrop(
           'schedule_create',
           stores.journal,
           buildScheduleCreateDoneJournalEntry({ replaced: previous !== null, plan, request }),
         );
-        if (previous === null) return text(renderScheduleCreateCreated(plan) + forgetNote);
-        return text(renderScheduleCreateReplaced({ plan, previous, replaceEntryId }) + forgetNote);
+        if (previous === null) return text(renderScheduleCreateCreated(plan));
+        return text(renderScheduleCreateReplaced({ plan, previous, replaceEntryId }));
       },
     ),
 
@@ -602,16 +585,6 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
             stores,
             { dropQueuedInboxEvents: context.dropQueuedInboxEvents },
             kind,
-          );
-        }
-        // 外した行の控えも捨てる: 同じ kind が後で別の本文で作り直されても、古い版を「前回と同じ」と畳まないため
-        try {
-          context.forgetStandingRow?.(kind);
-        } catch (error) {
-          // 行は外れて日誌にも残っている: 例外で返すとクローンが「外せなかった」と受け取るので、事実と注を返す
-          return text(
-            `${kind} を外した。（定期の tick の控えを捨てられなかった: ${collapseErrorCause(error)}。` +
-              '次の tick で、外す前の版と同じとして畳まれることがある）',
           );
         }
         return text(`${kind} を外した。`);

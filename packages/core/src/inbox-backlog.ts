@@ -367,43 +367,25 @@ export function summarizeInboxBacklog(
 // 軸名を `配達回数` と名乗らず `器の入れ替え回数` にする: 断り書きは読み手がそこを通ったときにしか効かず、名前は数字を読む前に必ず通るため
 // `distinct` は改名せず断り書きを足す: 名前は計算しているものを正確に言っており、誤読は名前から引く推論の側で起きるため
 // 人間起点の行で「配達されていない」と断定しない: 見ているのはストアに残っている行で、メモリ上の待ち行列ではないため
-// 固定の言い回しを畳む口（`ToolContext.foldFixed` と同じ形）。無ければ全文のまま（situation・CLI は畳まない）。
-// この関数群の中では、数・時刻・種類の内訳は畳まず固定の言い回しだけを `fold` に包む。
-// 内訳そのものの「前回と同じ」は呼び出し側（tools.ts の `describeInboxBacklog`）が、内訳の指紋で畳む
-type InboxBacklogFold = (id: string, full: string, ref: string) => string;
-const NO_INBOX_FOLD: InboxBacklogFold = (_id, full) => full;
-
-const INBOX_OLDEST_NOTE_FULL =
+const INBOX_OLDEST_NOTE =
   '（Clone#post が受理した時刻——人間が書いた時刻ではない。PendingInboxEvent.at の doc）';
-const INBOX_OLDEST_NOTE_REF = '（受理した時刻。人間が書いた時刻ではない）';
-const INBOX_HUMAN_UNDELIVERED_NOTE_FULL =
+const INBOX_HUMAN_UNDELIVERED_NOTE =
   '（ストアに残っている行を見ているだけで、配達されていないとは言えない）';
-const INBOX_HUMAN_UNDELIVERED_NOTE_REF = '（配達されていないとは言えない）';
-const INBOX_QUEUED_NOTE_FULL =
+const INBOX_QUEUED_NOTE =
   '（配達を待ってプロセスのメモリに載っている分。器の行数（上）とは' +
   '**同じ合図を別の数え方で見た値**で、ふつう両方に数えられている——' +
   '**足しても引いても意味が無い。**食い違ったときだけ、器と配達がずれて' +
   'いる印である。内訳を割る口は無い）。';
-const INBOX_QUEUED_NOTE_REF =
-  '（器の行数とは同じ合図の別の数え方。**足しても引いても意味が無い**）。';
-const INBOX_SOURCE_SCOPE_FULL = '上位5件。source/managerIdを持つ型のみ。';
-const INBOX_SOURCE_SCOPE_REF = '上位5件。';
-const INBOX_DISTINCT_NOTE_FULL =
+const INBOX_SOURCE_SCOPE = '上位5件。source/managerIdを持つ型のみ。';
+const INBOX_DISTINCT_NOTE =
   '⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）';
-const INBOX_DISTINCT_NOTE_REF = '⚠ 本文が同じでも別の出来事。この数は上下どちらへもぶれる';
-const INBOX_CROSS_MANAGER_NOTE_FULL =
+const INBOX_CROSS_MANAGER_NOTE =
   '（managerId を無視して数え直した参考値。inboxBacklogCrossManagerDedupeKey の doc）';
-const INBOX_CROSS_MANAGER_NOTE_REF = '（参考値）';
-const INBOX_DELIVERIES_NOTE_FULL =
+const INBOX_DELIVERIES_NOTE =
   '⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える';
-const INBOX_DELIVERIES_NOTE_REF = '⚠ 配られた回数ではない';
-const INBOX_AGE_NOTE_FULL = '齢は相対値なので、この行を写すときは基準点も一緒に写すこと';
-const INBOX_AGE_NOTE_REF = '齢は相対値';
+const INBOX_AGE_NOTE = '齢は相対値なので、この行を写すときは基準点も一緒に写すこと';
 
-export function describeHumanOriginatedInboxAlert(
-  b: InboxBacklogBreakdown,
-  fold: InboxBacklogFold = NO_INBOX_FOLD,
-): string {
+export function describeHumanOriginatedInboxAlert(b: InboxBacklogBreakdown): string {
   const h = b.humanOriginated;
   if (h.total === 0) return '';
 
@@ -411,28 +393,20 @@ export function describeHumanOriginatedInboxAlert(
   const oldestText =
     h.oldestAt === undefined
       ? ''
-      : `最も古いものは ${h.oldestAt} に受理された` +
-        // 出すときだけ `fold` を呼ぶ: 出していない全文を「出した」と控えないため
-        `${fold('manager-list:inbox-oldest', INBOX_OLDEST_NOTE_FULL, INBOX_OLDEST_NOTE_REF)}。`;
+      : `最も古いものは ${h.oldestAt} に受理された${INBOX_OLDEST_NOTE}。`;
 
   return (
     `⚠ 人間起点（human_message / human_answer）の滞留が ${h.total} 件ある（${byTypeText}）。` +
     `${oldestText}` +
     `そのうち、いまの器になってから積まれ、まだ片付いていない分が ${h.undelivered} 件` +
-    `${fold('manager-list:inbox-human-undelivered', INBOX_HUMAN_UNDELIVERED_NOTE_FULL, INBOX_HUMAN_UNDELIVERED_NOTE_REF)}。`
+    `${INBOX_HUMAN_UNDELIVERED_NOTE}。`
   );
 }
 
 // 器の行数と合算しない: 同じ合図が両方に数えられ、読む側が互いに素な2つの箱と読んで合計や差を取ってしまうため
-export function describeInboxBacklogQueuedInMemory(
-  queued: number | undefined,
-  fold: InboxBacklogFold = NO_INBOX_FOLD,
-): string | null {
+export function describeInboxBacklogQueuedInMemory(queued: number | undefined): string | null {
   if (queued === undefined || queued === 0) return null;
-  return (
-    `メモリの配達待ち行列 ${queued} 件` +
-    fold('manager-list:inbox-queued', INBOX_QUEUED_NOTE_FULL, INBOX_QUEUED_NOTE_REF)
-  );
+  return `メモリの配達待ち行列 ${queued} 件${INBOX_QUEUED_NOTE}`;
 }
 
 // 「未処理の合図は無い」と言わない: その文言は、読めた行も読めない行も0件のときにしか出さないため
@@ -444,10 +418,7 @@ export function describeNoReadableInboxEvents(
   return `読めた未処理の合図は無い（ただし、読めない行が在る——下）。\n${note}`;
 }
 
-export function describeInboxBacklogBreakdown(
-  b: InboxBacklogBreakdown,
-  fold: InboxBacklogFold = NO_INBOX_FOLD,
-): string {
+export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string {
   const byTypeText =
     b.byType.length === 0 ? '（無し）' : b.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
   const bySourceText =
@@ -465,18 +436,18 @@ export function describeInboxBacklogBreakdown(
   const crossManagerText =
     b.distinctAcrossManagers === b.distinct
       ? ''
-      : ` ／ 同じ本文がマネージャーを跨いで ${b.distinctAcrossManagers} 件${fold('manager-list:inbox-cross-manager', INBOX_CROSS_MANAGER_NOTE_FULL, INBOX_CROSS_MANAGER_NOTE_REF)}`;
+      : ` ／ 同じ本文がマネージャーを跨いで ${b.distinctAcrossManagers} 件${INBOX_CROSS_MANAGER_NOTE}`;
 
   const unreadableNote = describeUnreadableInboxEvents(b.unreadable ?? []);
 
   return [
     `内訳（計 ${b.total} 件）:`,
     `種類: ${byTypeText}`,
-    `送信元（${fold('manager-list:inbox-source-scope', INBOX_SOURCE_SCOPE_FULL, INBOX_SOURCE_SCOPE_REF)}溢れ ${b.bySourceOverflowKinds} 種 ${b.bySourceOverflowCount} 件 / source を言えない型 ${b.bySourceUnknownCount} 件）: ${bySourceText}`,
-    `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ${fold('manager-list:inbox-distinct', INBOX_DISTINCT_NOTE_FULL, INBOX_DISTINCT_NOTE_REF)}${crossManagerText}`,
-    `器の入れ替え回数: 0回＝いまの器になってから積まれた ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）${fold('manager-list:inbox-deliveries', INBOX_DELIVERIES_NOTE_FULL, INBOX_DELIVERIES_NOTE_REF)}`,
+    `送信元（${INBOX_SOURCE_SCOPE}溢れ ${b.bySourceOverflowKinds} 種 ${b.bySourceOverflowCount} 件 / source を言えない型 ${b.bySourceUnknownCount} 件）: ${bySourceText}`,
+    `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ${INBOX_DISTINCT_NOTE}${crossManagerText}`,
+    `器の入れ替え回数: 0回＝いまの器になってから積まれた ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）${INBOX_DELIVERIES_NOTE}`,
     `いまの器になってから積まれた分（0回）の内訳（種類別）: ${undeliveredByTypeText}`,
-    `齢（観測 ${b.observedAt} 時点。${fold('manager-list:inbox-age', INBOX_AGE_NOTE_FULL, INBOX_AGE_NOTE_REF)}）: ${ageBucketsText}`,
+    `齢（観測 ${b.observedAt} 時点。${INBOX_AGE_NOTE}）: ${ageBucketsText}`,
     ...(unreadableNote === null ? [] : [`⚠ ${unreadableNote}（上の計には入っていない）`]),
   ].join('\n');
 }

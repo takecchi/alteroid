@@ -192,11 +192,6 @@ export const NO_POOL = text(
     '実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。',
 );
 
-// 固定の文言を畳む口（`ToolContext.foldFixed`）。無ければ全文のまま
-export type FixedFold = NonNullable<ToolContext['foldFixed']>;
-
-export const NO_FIXED_FOLD: FixedFold = (_id, full) => full;
-
 /** CLI が MCP 呼びの `_meta` に積む tool_use_id のキー。SDK の型に無い CLI の内部実装で、公開契約ではない（#5428）。 */
 export const TOOL_USE_ID_META_KEY = 'claudecode/toolUseId';
 
@@ -226,9 +221,12 @@ export function isSubagentCaller(context: ToolContext, extra: unknown): boolean 
   );
 }
 
-/** 固定文を畳む口。サブエージェントの呼びと口の無い器は全文のまま（`foldFixed` の説明のとおり）。 */
-export function foldFixedFor(context: ToolContext, extra: unknown): FixedFold {
-  return isSubagentCaller(context, extra) ? NO_FIXED_FOLD : (context.foldFixed ?? NO_FIXED_FOLD);
+/**
+ * 判定の結果を使わずに、計器（`ToolContext.isSubagentCall` が残す `CallerGauge` の行）だけを残す。
+ * 以前は固定文を畳む口を選ぶために呼んでいた。畳みを外した後も道具の呼びごとに1行ずつ残る件数を変えないため、呼び自体は残す。
+ */
+export function noteSubagentCallerGauge(context: ToolContext, extra: unknown): void {
+  isSubagentCaller(context, extra);
 }
 
 // 軸ごとに上限を置き、打ち切ったことを必ず書く: 「全部でこれだけ」と読める出力を黙って作ると嘘になるため
