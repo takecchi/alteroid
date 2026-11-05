@@ -119,16 +119,6 @@ export async function resolveTurnAttachmentGroups(
   return results;
 }
 
-export async function resolveTurnAttachments(
-  stores: { readonly attachments: AttachmentStore },
-  refs: readonly AttachmentRef[],
-  limits: TurnAttachmentLimits = readAttachmentLimits().limits,
-  routeEnv: NodeJS.ProcessEnv = process.env,
-): Promise<ResolvedTurnAttachments> {
-  const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits, routeEnv);
-  return only ?? { images: [], noticeLines: [] };
-}
-
 /** 画像かどうかを見分けるのに読む先頭の長さ。`sniffAttachmentImageType` が見るのは先頭の12バイトまで。 */
 const IMAGE_SNIFF_HEAD_BYTES = 64;
 

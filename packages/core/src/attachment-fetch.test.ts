@@ -12,7 +12,7 @@ import {
   fetchAttachmentCopy,
   pruneAttachmentCopies,
 } from './attachment-fetch.js';
-import { resolveTurnAttachments } from './attachment-turn.js';
+import { resolveTurnAttachments } from './attachment-turn.test-support.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';

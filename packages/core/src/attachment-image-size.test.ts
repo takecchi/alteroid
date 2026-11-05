@@ -8,7 +8,8 @@ import {
   isImageOverDimension,
   readAttachmentImageSize,
 } from './attachment-image-size.js';
-import { resolveTurnAttachmentGroups, resolveTurnAttachments } from './attachment-turn.js';
+import { resolveTurnAttachmentGroups } from './attachment-turn.js';
+import { resolveTurnAttachments } from './attachment-turn.test-support.js';
 import { DEFAULT_ATTACHMENT_LIMITS, type AttachmentImageMediaType } from './attachment.js';
 import { composeAttachmentInput, placeRunnerAttachments } from './runner-attachments.js';
 import { createMemoryStores } from './testing.js';
