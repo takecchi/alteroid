@@ -2,6 +2,7 @@ import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
   verifyUsageNulContract,
+  verifyUsageQueryContract,
   verifyUsageResetsContract,
   verifyUsageRunnerContract,
   type UsageAccumulation,
@@ -1342,6 +1343,12 @@ describe('PgUsageStore の runner ごとの最後の累積（Issue #3022 仮説1
 describe('PgUsageStore の数え直しの回数と最終時刻（Issue #5409。3実装で同じことを測る）', () => {
   it('aggregate().resets が基準ごとの回数・最終時刻を返し、layer / managerId で絞り、日付では絞らない', async () => {
     await verifyUsageResetsContract(store);
+  });
+});
+
+describe('PgUsageStore の絞り込みと並び（3実装で同じことを測る）', () => {
+  it('3つの表を6条件で絞り、日付 → managerId → モデル → 層 → 場所 → 帰属（無い行は最後）の順で返す', async () => {
+    await verifyUsageQueryContract(store);
   });
 });
 

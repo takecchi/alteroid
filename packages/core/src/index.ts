@@ -774,6 +774,19 @@ export {
 export { verifyUsageNulContract } from './usage-nul-contract.js';
 export { verifyUsageRunnerContract } from './usage-runner-contract.js';
 export { verifyUsageResetsContract } from './usage-resets-contract.js';
+export { verifyUsageQueryContract } from './usage-query-contract.js';
+/** fs の保存先とインメモリの器が、使用量台帳の絞り込み・鍵・並び・足し込みを1か所で共有する。 */
+export {
+  addUsageTotals,
+  compareUsageRows,
+  compareUsageTurnRows,
+  compareUsageUnmeteredRows,
+  matchesUsageQuery,
+  usageBaselineKey,
+  usageRowKey,
+  usageTurnKey,
+  usageUnmeteredKey,
+} from './usage-ledger-query.js';
 export { prepareMcpServersForWrite } from './mcp-servers.js';
 export { assertProfileRowWritable } from './profile-input.js';
 export { preparePermissionGrantForPut } from './permission-grant-input.js';
