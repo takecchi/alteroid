@@ -22,6 +22,7 @@ import {
   taskOriginSchema,
   githubObservationInputSchema,
   taskStatusSchema,
+  type TaskStatus,
   type Task,
   type TaskOrigin,
   type JournalEntryInput,
@@ -1098,6 +1099,176 @@ function renderTaskListUnreadableNote(unreadable: TaskListUnreadable): string {
   }。終わったのではない。**`;
 }
 
+type TaskSetStatusStores = CloneToolsShared['stores'];
+type TaskSetStatusResult = Awaited<ReturnType<TaskSetStatusStores['tasks']['setStatus']>>;
+type TaskSetStatusOutcome =
+  | { kind: 'unreadable' }
+  | { kind: 'moved'; result: TaskSetStatusResult; journaledFirst: Task | undefined };
+
+// 引数の検査。断る文を返す（通れば null）
+function describeTaskSetStatusViolation(
+  status: TaskStatus,
+  reason: string | undefined,
+): string | null {
+  const closing = status === 'done' || status === 'cancelled';
+  if (closing && reason === undefined) {
+    return `status=${status} には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。`;
+  }
+  return (
+    describeStringLengthViolation('reason', reason, { min: 1 }) ??
+    describeBlankViolation('reason', reason)
+  );
+}
+
+function renderTaskSetStatusUnreadable(taskId: string): string {
+  return `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。`;
+}
+
+function renderTaskSetStatusMissing(taskId: string): string {
+  return `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`;
+}
+
+function renderTaskSetStatusUnchanged(taskId: string, status: TaskStatus): string {
+  return `task ${taskId} は既に ${status}。何もしていない。`;
+}
+
+function renderTaskSetStatusRejected(from: TaskStatus, to: TaskStatus): string {
+  return `${from} から ${to} へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。`;
+}
+
+function renderTaskSetStatusMoved(
+  taskId: string,
+  before: Task,
+  status: TaskStatus,
+  reopened: boolean,
+): string {
+  return `task ${taskId} を ${before.status} から ${status} へ移した${
+    reopened ? '（閉じた記録は日誌に残してある）' : ''
+  }。`;
+}
+
+// 開き直し（閉じた件を queued へ）は閉じた記録を行から外すので、日誌を先に書いて、書けてから外す（#5176）:
+// 外した後に日誌が落ちると、閉じた時刻・主体・理由が行にも日誌にも残らない
+async function journalReopenFirst(
+  stores: TaskSetStatusStores,
+  taskId: string,
+  read: Task | null,
+  status: TaskStatus,
+  reason: string | undefined,
+): Promise<Task | undefined> {
+  if (read === null || read.closedAt === undefined) return undefined;
+  await appendJournalOrThrow(
+    'task_set_status',
+    stores.journal,
+    taskStatusChangeEntry(taskId, read, status, reason),
+    'act-not-performed',
+  );
+  return read;
+}
+
+// `setStatus` だけを包む。`UnreadableTaskError` のときだけ（先に書いた行があれば）打ち消して null を返す
+async function runTaskSetStatus(
+  stores: TaskSetStatusStores,
+  taskId: string,
+  status: TaskStatus,
+  reason: string | undefined,
+  journaledFirst: Task | undefined,
+): Promise<TaskSetStatusResult | null> {
+  let result;
+  try {
+    result = await stores.tasks.setStatus(taskId, status, {
+      ...(reason === undefined ? {} : { reason }),
+      by: 'clone',
+      at: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof UnreadableTaskError) {
+      if (journaledFirst !== undefined) {
+        await retractTaskReopenEntry(
+          stores.journal,
+          taskId,
+          '開き直す直前に行が読めない形になった',
+        );
+      }
+      return null;
+    }
+    throw error;
+  }
+  return result;
+}
+
+// 先に書いた開き直しの行の後始末: 変わらなかったなら打ち消し、閉じ直されていたなら注を残す
+async function settleReopenJournal(
+  stores: TaskSetStatusStores,
+  taskId: string,
+  journaledFirst: Task,
+  result: TaskSetStatusResult,
+): Promise<void> {
+  if (result.kind !== 'changed') {
+    // 先に書いた行を打ち消す: 日誌に「開き直した」だけが残ると事実と食い違う
+    await retractTaskReopenEntry(
+      stores.journal,
+      taskId,
+      result.kind === 'not-found'
+        ? '開き直す直前に task が消えていた'
+        : '開き直す直前に別の手で状態が変わっていた',
+    );
+  } else if (result.before.closedAt !== journaledFirst.closedAt) {
+    // 行から実際に外れた記録が日誌に無い状態を作らない
+    await appendJournalOrDrop('task_set_status', stores.journal, {
+      type: 'decision',
+      target: { kind: 'task', id: taskId },
+      decision: `開き直し（${taskId}）の間に閉じ直されていた。実際に行から外した記録: ${describeTaskClosedRecord(result.before)}`,
+      grounds: `先の行の記録: ${describeTaskClosedRecord(journaledFirst)}`,
+    });
+  }
+}
+
+// 開き直しの先の日誌 → setStatus → 打ち消し / 注、の流れ
+async function moveTaskStatus(
+  stores: TaskSetStatusStores,
+  taskId: string,
+  status: TaskStatus,
+  reason: string | undefined,
+): Promise<TaskSetStatusOutcome> {
+  let journaledFirst: Task | undefined;
+  if (status === 'queued') {
+    const read = await readTaskForFullText(stores.tasks, taskId);
+    if (read.kind === 'unreadable') return { kind: 'unreadable' };
+    journaledFirst = await journalReopenFirst(
+      stores,
+      taskId,
+      read.kind === 'found' ? read.task : null,
+      status,
+      reason,
+    );
+  }
+  const result = await runTaskSetStatus(stores, taskId, status, reason, journaledFirst);
+  if (result === null) return { kind: 'unreadable' };
+  if (journaledFirst !== undefined) {
+    await settleReopenJournal(stores, taskId, journaledFirst, result);
+  }
+  return { kind: 'moved', result, journaledFirst };
+}
+
+// 開き直しの行は先に書いてある。ここで書くのはそれ以外（閉じる・開いている状態どうし）だけ
+async function journalPlainStatusChange(
+  stores: TaskSetStatusStores,
+  taskId: string,
+  before: Task,
+  status: TaskStatus,
+  reason: string | undefined,
+  journaledFirst: Task | undefined,
+): Promise<void> {
+  if (journaledFirst !== undefined) return;
+  await appendJournalOrThrow(
+    'task_set_status',
+    stores.journal,
+    taskStatusChangeEntry(taskId, before, status, reason),
+    'act-completed',
+  );
+}
+
 export function taskTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getWorkConversationId } = shared;
   return [
@@ -1361,111 +1532,25 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ taskId, status, reason }) => {
-        const closing = status === 'done' || status === 'cancelled';
-        if (closing && reason === undefined) {
-          return text(
-            `status=${status} には reason が要る（何をもって終わりとしたか、なぜ取りやめたか）。`,
-          );
-        }
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) return text(reasonError);
-        // 開き直し（閉じた件を queued へ）は閉じた記録を行から外すので、日誌を先に書いて、書けてから外す（#5176）:
-        // 外した後に日誌が落ちると、閉じた時刻・主体・理由が行にも日誌にも残らない
-        let journaledFirst: Task | undefined;
-        if (status === 'queued') {
-          let read: Task | null;
-          try {
-            read = await stores.tasks.get(taskId);
-          } catch (error) {
-            if (error instanceof UnreadableTaskError) {
-              return text(
-                `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。`,
-              );
-            }
-            throw error;
-          }
-          if (read !== null && read.closedAt !== undefined) {
-            await appendJournalOrThrow(
-              'task_set_status',
-              stores.journal,
-              taskStatusChangeEntry(taskId, read, status, reason),
-              'act-not-performed',
-            );
-            journaledFirst = read;
-          }
-        }
-        let result;
-        try {
-          result = await stores.tasks.setStatus(taskId, status, {
-            ...(reason === undefined ? {} : { reason }),
-            by: 'clone',
-            at: new Date().toISOString(),
-          });
-        } catch (error) {
-          if (error instanceof UnreadableTaskError) {
-            if (journaledFirst !== undefined) {
-              await retractTaskReopenEntry(
-                stores.journal,
-                taskId,
-                '開き直す直前に行が読めない形になった',
-              );
-            }
-            return text(
-              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、状態を変えていない。`,
-            );
-          }
-          throw error;
-        }
-        if (journaledFirst !== undefined) {
-          if (result.kind !== 'changed') {
-            // 先に書いた行を打ち消す: 日誌に「開き直した」だけが残ると事実と食い違う
-            await retractTaskReopenEntry(
-              stores.journal,
-              taskId,
-              result.kind === 'not-found'
-                ? '開き直す直前に task が消えていた'
-                : '開き直す直前に別の手で状態が変わっていた',
-            );
-          } else if (result.before.closedAt !== journaledFirst.closedAt) {
-            // 行から実際に外れた記録が日誌に無い状態を作らない
-            await appendJournalOrDrop('task_set_status', stores.journal, {
-              type: 'decision',
-              target: { kind: 'task', id: taskId },
-              decision: `開き直し（${taskId}）の間に閉じ直されていた。実際に行から外した記録: ${describeTaskClosedRecord(result.before)}`,
-              grounds: `先の行の記録: ${describeTaskClosedRecord(journaledFirst)}`,
-            });
-          }
-        }
-        if (result.kind === 'not-found') {
-          return text(
-            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
-          );
-        }
-        if (result.kind === 'unchanged') {
-          return text(`task ${taskId} は既に ${status}。何もしていない。`);
-        }
-        if (result.kind === 'rejected') {
-          return text(
-            `${result.from} から ${result.to} へは移せない（閉じた件から戻せるのは queued だけ）。何もしていない。`,
-          );
-        }
+        const violation = describeTaskSetStatusViolation(status, reason);
+        if (violation !== null) return text(violation);
+        const moved = await moveTaskStatus(stores, taskId, status, reason);
+        if (moved.kind === 'unreadable') return text(renderTaskSetStatusUnreadable(taskId));
+        const { result, journaledFirst } = moved;
+        if (result.kind === 'not-found') return text(renderTaskSetStatusMissing(taskId));
+        if (result.kind === 'unchanged') return text(renderTaskSetStatusUnchanged(taskId, status));
+        if (result.kind === 'rejected')
+          return text(renderTaskSetStatusRejected(result.from, result.to));
         const reopened = result.before.closedAt !== undefined;
-        // 開き直しの行は上で先に書いた。ここで書くのはそれ以外（閉じる・開いている状態どうし）だけ
-        if (journaledFirst === undefined) {
-          await appendJournalOrThrow(
-            'task_set_status',
-            stores.journal,
-            taskStatusChangeEntry(taskId, result.before, status, reason),
-            'act-completed',
-          );
-        }
-        return text(
-          `task ${taskId} を ${result.before.status} から ${status} へ移した${
-            reopened ? '（閉じた記録は日誌に残してある）' : ''
-          }。`,
+        await journalPlainStatusChange(
+          stores,
+          taskId,
+          result.before,
+          status,
+          reason,
+          journaledFirst,
         );
+        return text(renderTaskSetStatusMoved(taskId, result.before, status, reopened));
       },
     ),
 
