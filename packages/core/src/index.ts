@@ -808,6 +808,7 @@ export { verifySessionRegistryGraveQueueContract } from './session-registry-grav
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
+export { verifyScheduleRunContract } from './schedule-run-contract.js';
 export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
