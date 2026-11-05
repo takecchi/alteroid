@@ -184,6 +184,10 @@ export {
 export type { JournalTombstones } from './journal-query.js';
 /** `JournalStore.list()` を `limit` なしで呼ばない: pg 実装が `Number.MAX_SAFE_INTEGER` を渡し、窓の中身が多い日に全件をヒープへ載せて落ちる。ページ単位で読み、1ページぶんより多くを同時に持たない。 */
 export { listPageByOverfetch } from './journal-page.js';
+export {
+  listApprovalsSettledAroundFromApprovals,
+  listApprovalSettledAtsFromApprovals,
+} from './approval-settled.js';
 /** 日誌の器を包むときは口を並べて渡さずこれを通す: 並べると、器に足した任意の速い口を包みが黙って落とす（#5140）。 */
 export { wrapJournalStore } from './journal-wrap.js';
 export { verifyJournalStorePageContract } from './journal-page-contract.js';

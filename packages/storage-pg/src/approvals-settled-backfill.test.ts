@@ -68,7 +68,7 @@ describe('approvals の決着の列の埋め戻し（migrate）', () => {
     expect(new Date((await columnsOf('ap-legacy-answered')).answered_at ?? '').toISOString()).toBe(
       '2026-09-02T16:02:03.000Z',
     );
-    expect(await stores.jobs.listApprovalSettledAts?.()).toEqual(
+    expect(await stores.jobs.listApprovalSettledAts()).toEqual(
       expect.arrayContaining(['2026-09-10T04:05:06.789Z', '2026-09-02T16:02:03.000Z']),
     );
   }, 30_000);

@@ -106,19 +106,14 @@ async function seed(): Promise<void> {
 }
 
 async function settledAtsOf(): Promise<string[]> {
-  const settledAts = stores.jobs.listApprovalSettledAts;
-  if (settledAts === undefined) throw new Error('listApprovalSettledAts が無い');
-  return settledAts.call(stores.jobs);
+  return stores.jobs.listApprovalSettledAts();
 }
 
 async function aroundIds(conversationId?: string): Promise<{
   ids: string[];
   entries: PendingApproval[];
 }> {
-  const around = stores.jobs.listApprovalsSettledAround;
-  if (around === undefined) throw new Error('listApprovalsSettledAround が無い');
-  const list = await around.call(
-    stores.jobs,
+  const list = await stores.jobs.listApprovalsSettledAround(
     RANGE,
     conversationId === undefined ? {} : { conversationId },
   );

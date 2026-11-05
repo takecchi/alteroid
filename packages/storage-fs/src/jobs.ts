@@ -5,6 +5,8 @@ import {
   approvalStateOf,
   isApprovalFieldSet,
   jobSchema,
+  listApprovalsSettledAroundFromApprovals,
+  listApprovalSettledAtsFromApprovals,
   prepareApprovalForWrite,
   prepareJobForWrite,
   pendingApprovalSchema,
@@ -154,6 +156,18 @@ export class FsJobStore implements JobStore {
         return id === undefined ? { reason } : { id, reason };
       });
     return { entries, unreadable };
+  }
+
+  // 1枚のファイルなので全部読んで答える。型違いの行は数えない（pg との意図した差。`JobStore.listApprovalSettledAts` の doc）
+  listApprovalsSettledAround(
+    _range: { since: string; until: string },
+    options: { conversationId?: string } = {},
+  ): Promise<ApprovalList> {
+    return listApprovalsSettledAroundFromApprovals(this, options);
+  }
+
+  listApprovalSettledAts(): Promise<string[]> {
+    return listApprovalSettledAtsFromApprovals(this);
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {
