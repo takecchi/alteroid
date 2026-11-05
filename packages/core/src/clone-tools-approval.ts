@@ -449,6 +449,97 @@ function renderApprovalWithdrawn(id: string, existing: PendingApproval): string 
   return `${id} を取り下げた。${waiting}`;
 }
 
+type PermissionRequestInput = {
+  rule: string;
+  allows: string[];
+  denies: string[];
+  reason: string;
+};
+
+// 検算（規則と例の食い違い）→ reason の順に見て、最初に当たった断りの理由を返す。通れば null
+function describePermissionRequestViolation(request: PermissionRequestInput): string | null {
+  const { rule, allows, denies, reason } = request;
+  const validation = validatePermissionRequest({ rule, allows, denies });
+  if (!validation.ok) return validation.reason;
+  return (
+    describeStringLengthViolation('reason', reason, { min: 1 }) ??
+    describeBlankViolation('reason', reason)
+  );
+}
+
+function renderPermissionRequestRefusal(violation: string): string {
+  return `request_permission を拒否した（キューに積んでいない）: ${violation}`;
+}
+
+// 質問文は `context.recentDenials` を読む（呼んだ時点の拒否の添えが載る）
+function buildPermissionQuestion(
+  request: PermissionRequestInput,
+  recentDenials: ToolContext['recentDenials'],
+): string {
+  const { rule, allows, denies, reason } = request;
+  return (
+    `以降 ${rule} を聞かずに通してよいか。理由: ${reason}\n` +
+    `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
+    `${describePermissionEvidence(rule, recentDenials)}\n` +
+    `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える（句点や言い換えがあると記録しない）。`
+  );
+}
+
+// `randomUUID()` → `new Date()` → `approvalTaskIdsEntry(context)` の順で呼ぶ
+function buildPermissionApproval(params: {
+  request: PermissionRequestInput;
+  question: string;
+  conversationId: string | undefined;
+  context: ToolContext;
+}): PendingApproval {
+  const { request, question, conversationId, context } = params;
+  const { rule, allows, denies, reason } = request;
+  return {
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+    question,
+    context: reason,
+    permissionRequest: { rule, allows: [...allows], denies: [...denies] },
+    ...(conversationId === undefined ? {} : { conversationId }),
+    ...approvalTaskIdsEntry(context),
+  };
+}
+
+// 積む → 日誌 → 器への知らせ の順。日誌が書けないと知らせへ進まない
+async function enqueuePermissionApproval(params: {
+  stores: Stores;
+  context: ToolContext;
+  approval: PendingApproval;
+  conversationId: string | undefined;
+}): Promise<void> {
+  const { stores, context, approval, conversationId } = params;
+  try {
+    await stores.jobs.putApproval(approval);
+  } catch (error) {
+    noteDroppedRecord('承認待ち', approvalShape(approval), error);
+    throw new ApprovalNotRecordedError(approval, error);
+  }
+  await appendJournalOrThrow(
+    'request_permission',
+    stores.journal,
+    {
+      type: 'escalation',
+      question: approval.question,
+      approvalId: approval.id,
+    },
+    'act-completed',
+  );
+  context.noteQuestionAsked?.(conversationId);
+  context.emit({ type: 'ask_human', approvalId: approval.id, question: approval.question });
+}
+
+function renderPermissionQueued(id: string): string {
+  return (
+    `承認待ちキューに積んだ（${id}）。人間が「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答え、` +
+    'かつ許可されたアカウント経由の回答だった場合だけ、以降この規則に一致する Bash が自動で通る。'
+  );
+}
+
 export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId, getWorkConversationId } = shared;
   return [
@@ -570,58 +661,16 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async (args) => {
         // 検算は承認の行に残る値と同じもので行う: 入口で NUL が落ちるので、落とす前の値で検算すると通ったはずの要求が自己矛盾するため
-        const { rule, allows, denies, reason } = stripNulDeep(args);
-        const validation = validatePermissionRequest({ rule, allows, denies });
-        if (!validation.ok) {
-          return text(
-            `request_permission を拒否した（キューに積んでいない）: ${validation.reason}`,
-          );
-        }
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
-        if (reasonError !== null) {
-          return text(`request_permission を拒否した（キューに積んでいない）: ${reasonError}`);
-        }
+        const request = stripNulDeep(args);
+        const violation = describePermissionRequestViolation(request);
+        if (violation !== null) return text(renderPermissionRequestRefusal(violation));
 
         const conversationId = getWorkConversationId();
-        const question =
-          `以降 ${rule} を聞かずに通してよいか。理由: ${reason}\n` +
-          `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
-          `${describePermissionEvidence(rule, context.recentDenials)}\n` +
-          `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える（句点や言い換えがあると記録しない）。`;
+        const question = buildPermissionQuestion(request, context.recentDenials);
         await context.flushReply?.();
-        const approval: PendingApproval = {
-          id: randomUUID(),
-          createdAt: new Date().toISOString(),
-          question,
-          context: reason,
-          permissionRequest: { rule, allows: [...allows], denies: [...denies] },
-          ...(conversationId === undefined ? {} : { conversationId }),
-          ...approvalTaskIdsEntry(context),
-        };
-        try {
-          await stores.jobs.putApproval(approval);
-        } catch (error) {
-          noteDroppedRecord('承認待ち', approvalShape(approval), error);
-          throw new ApprovalNotRecordedError(approval, error);
-        }
-        await appendJournalOrThrow(
-          'request_permission',
-          stores.journal,
-          {
-            type: 'escalation',
-            question,
-            approvalId: approval.id,
-          },
-          'act-completed',
-        );
-        context.noteQuestionAsked?.(conversationId);
-        context.emit({ type: 'ask_human', approvalId: approval.id, question });
-        return text(
-          `承認待ちキューに積んだ（${approval.id}）。人間が「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答え、` +
-            'かつ許可されたアカウント経由の回答だった場合だけ、以降この規則に一致する Bash が自動で通る。',
-        );
+        const approval = buildPermissionApproval({ request, question, conversationId, context });
+        await enqueuePermissionApproval({ stores, context, approval, conversationId });
+        return text(renderPermissionQueued(approval.id));
       },
     ),
 
