@@ -253,6 +253,44 @@ function buildProfileWriteEntry(args: { summary: string; rowLabel: string }): Jo
   };
 }
 
+function renderProfileRemoveUnavailable(): string {
+  return (
+    'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
+    '次の会話で外すこと。'
+  );
+}
+
+function renderProfileRemoveBadName(): string {
+  return `行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`;
+}
+
+// 外す前に書く先の行
+function buildProfileRemoveEntry(args: { name: string; summary: string }): JournalEntryInput {
+  const { name, summary } = args;
+  return {
+    type: 'decision',
+    decision: `実行環境プロファイルの行 ${name} を外そうとしている: ${summary}`,
+    grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+  };
+}
+
+// 外そうとした名前の行が無かったとき（`removed: false`）に足す行
+function buildProfileRemoveMissingEntry(args: {
+  name: string;
+  summary: string;
+}): JournalEntryInput {
+  const { name, summary } = args;
+  return {
+    type: 'decision',
+    decision: `実行環境プロファイルの行 ${name} は無かったので何も変えなかった: ${summary}`,
+    grounds: '外そうとしたが、その名前の行は置かれていなかった',
+  };
+}
+
+function renderProfileRemoveMissing(name: string): string {
+  return `プロファイルに行 ${name} は無い。何も変えていない。`;
+}
+
 export function profileTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
 
@@ -666,22 +704,15 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ name, summary, base_version: baseVersion }) => {
         if (context.profile === undefined) {
-          return text(
-            'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
-              '次の会話で外すこと。',
-          );
+          return text(renderProfileRemoveUnavailable());
         }
         if (!PROFILE_ENTRY_NAME.test(name)) {
-          return text(`行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`);
+          return text(renderProfileRemoveBadName());
         }
         await appendJournalOrThrow(
           'profile_remove',
           stores.journal,
-          {
-            type: 'decision',
-            decision: `実行環境プロファイルの行 ${name} を外そうとしている: ${summary}`,
-            grounds: '人間から実行環境そのものを渡された（値は記録しない）',
-          },
+          buildProfileRemoveEntry({ name, summary }),
           'act-not-performed',
         );
         let result: Awaited<ReturnType<ProfileService['remove']>>;
@@ -694,12 +725,12 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
           return await profileToolFailed('profile_remove', name, summary, error);
         }
         if (!result.removed) {
-          await appendJournalOrDrop('profile_remove', stores.journal, {
-            type: 'decision',
-            decision: `実行環境プロファイルの行 ${name} は無かったので何も変えなかった: ${summary}`,
-            grounds: '外そうとしたが、その名前の行は置かれていなかった',
-          });
-          return text(`プロファイルに行 ${name} は無い。何も変えていない。`);
+          await appendJournalOrDrop(
+            'profile_remove',
+            stores.journal,
+            buildProfileRemoveMissingEntry({ name, summary }),
+          );
+          return text(renderProfileRemoveMissing(name));
         }
         return await profileToolReport('profile_remove', name, summary, result, {
           decision: `実行環境プロファイルの行 ${name} を外した`,
