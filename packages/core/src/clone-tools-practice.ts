@@ -142,6 +142,10 @@ async function writePracticeDocument(args: {
     );
   } catch (error) {
     if (error instanceof PracticeConflictError) {
+      // 読んだ時点でも書く時点でも無いやり方へ版を渡した: 「読んだ後に消された」ではない（一度も無かった）ので、別の文で断る（#6455。memory_write の #6449 と同じ形）
+      if (before === null && error.current === null) {
+        return { kind: 'refused', body: describePracticeWriteVersionForMissing(input.slug) };
+      }
       return {
         kind: 'refused',
         body: describePracticeConflict(input.slug, '書き直し', error.current),
@@ -150,6 +154,14 @@ async function writePracticeDocument(args: {
     throw error;
   }
   return { kind: 'written', written };
+}
+
+function describePracticeWriteVersionForMissing(slug: string): string {
+  return (
+    `やり方 ${slug} は無い（読んだ時点でも無かった）のに base_version が渡されたので、書き直しを**書かなかった**。` +
+    '**何も書いていない。**新しく作るなら base_version を付けずに呼ぶこと。' +
+    '別のやり方のつもりだったなら、practice_list で slug を確かめること。'
+  );
 }
 
 // 日誌の decision・grounds（読めない行の書き直し・新規・書き直しの3通り）
@@ -228,9 +240,12 @@ function renderPracticeWriteHeadline(args: {
   );
 }
 
-// トークンの差（出さないときは空文字列）。`compared` は差を取る後ろ側の本文
-function renderPracticeWriteTokenDiff(before: Practice | null, compared: string): string {
-  const note = describeTokenDiff(before === null ? null : before.content, compared);
+// トークンの差（出さないときは空文字列）。書かれた本文で比べる: 渡した本文で比べると、ストアの正規化（末尾の改行の補い・NUL の除去）が差に混ざるため（#6455。memory_write と同じ）
+function renderPracticeWriteTokenDiff(
+  before: Practice | null,
+  written: PracticeWriteWritten,
+): string {
+  const note = describeTokenDiff(before === null ? null : before.content, written.content);
   return note === null ? '' : `\n${note}`;
 }
 
@@ -239,13 +254,12 @@ function renderPracticeWriteResult(args: {
   slug: string;
   before: Practice | null;
   beforeWasUnreadable: boolean;
-  content: string;
   written: PracticeWriteWritten;
 }): string {
-  const { slug, before, beforeWasUnreadable, content, written } = args;
+  const { slug, before, beforeWasUnreadable, written } = args;
   return (
     renderPracticeWriteHeadline({ slug, before, beforeWasUnreadable, written }) +
-    renderPracticeWriteTokenDiff(before, content) +
+    renderPracticeWriteTokenDiff(before, written) +
     `\n\n${practiceVersionLine(written)}`
   );
 }
@@ -476,9 +490,7 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
           before,
           beforeWasUnreadable,
         });
-        return text(
-          renderPracticeWriteResult({ slug, before, beforeWasUnreadable, content, written }),
-        );
+        return text(renderPracticeWriteResult({ slug, before, beforeWasUnreadable, written }));
       },
     ),
 
