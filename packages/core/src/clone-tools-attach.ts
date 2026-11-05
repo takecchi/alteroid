@@ -525,7 +525,7 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
         });
         if (!attached.ok) return { ...text(attached.message), isError: true };
         if (attached.refs.length === 0) {
-          return text('指された添付はすでにこの返信に添えてある。');
+          return text('指された添付はすでにこの返信に添えてある');
         }
         slot.add(attached.refs);
         return text(
