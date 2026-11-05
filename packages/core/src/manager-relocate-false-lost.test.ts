@@ -1,17 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerEvent,
   RunnerLiveness,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerResumeCommand,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
@@ -90,16 +88,10 @@ function fakeRunner(runnerId: string): Fake {
   const sends: string[] = [];
   const sessions = new Map<string, RunnerManagerState>();
   let emitter: ((event: RunnerEvent) => void) | undefined;
-  const client: RunnerClient = {
+  const client = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
-    workspacePath: '/work/project',
     async connect(onEvent) {
       emitter = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
@@ -132,23 +124,7 @@ function fakeRunner(runnerId: string): Fake {
     async list() {
       return [...sessions.values()];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
-    async setProfile(): Promise<RunnerProfileResult> {
-      return { ok: true };
-    },
-    async close() {},
-  };
+  });
   return { client, resumes, answers, sends, sessions, emit: (event) => emitter?.(event) };
 }
 

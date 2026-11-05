@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   runnerEventSchema,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
@@ -25,25 +25,10 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
     },
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
@@ -52,25 +37,10 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async list() {
       return [...alive];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
 
   return {
     runner,

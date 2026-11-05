@@ -547,7 +547,7 @@ const SCENARIOS: Scenario[] = [
     name: 'journal-fails',
     group: '書き込みが落ちる',
     covers:
-      '日誌が書けない（act-completed）: 承認の行を書いた後なので行は残ったまま、「完了済み・未記録・やり直し禁止」の例外（JournalNotRecordedError）。いまは noteQuestionAsked も emit も呼ばない（Issue #6490 で扱う予定。いまの振る舞いのまま固定）。stderr に跡が残る。やり直すと行がもう1つ積まれる',
+      '日誌が書けない（act-completed）: 承認の行を書いた後なので行は残ったまま、「完了済み・未記録・やり直し禁止」の例外（JournalNotRecordedError）。人間には確認が届いているので、日誌より先に noteQuestionAsked と emit を呼ぶ（#6490。request_permission と同じ）。stderr に跡が残る。やり直すと行がもう1つ積まれる',
     ctx: { conv: 'conv-1' },
     steps: [
       { args: ah(), writes: 'approval-only', hooks: { journalFails: true } },
@@ -881,15 +881,15 @@ describe('ask_human の出力と呼んだあとの状態の固定（場面ごと
         expect((got?.journal.length ?? -1) > 0, `${key}: 日誌の行の有無が宣言と違う`).toBe(
           step.writes === 'both',
         );
-        // 知らせ（emit）は日誌まで書けた呼びだけ。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
+        // 知らせ（emit）は承認の行を積めた呼びすべて（日誌が書けなくても知らせる。#6490）。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
         expect(ops.includes('context.emit'), `${key}: emit の有無が宣言と違う`).toBe(
-          step.writes === 'both',
+          step.writes !== 'none',
         );
         const hasNote = scenario.ctx?.noNote !== true;
         expect(
           ops.includes('context.noteQuestionAsked'),
           `${key}: noteQuestionAsked の有無が宣言と違う`,
-        ).toBe(step.writes === 'both' && hasNote);
+        ).toBe(step.writes !== 'none' && hasNote);
       }
     }
   });
@@ -991,9 +991,9 @@ describe('ask_human の出力と呼んだあとの状態の固定（場面ごと
     const TAIL = [
       'context.flushReply',
       'jobs.putApproval',
-      'journal.append',
       'context.noteQuestionAsked',
       'context.emit',
+      'journal.append',
     ];
     // 引数の断り（context は1つも読まない・書かない）
     expect(text('question-invalid-length#1')).toBe(
@@ -1120,9 +1120,9 @@ describe('ask_human の出力と呼んだあとの状態の固定（場面ごと
       'context.flushReply',
       'context.currentTaskIds',
       'jobs.putApproval',
-      'journal.append',
       'context.noteQuestionAsked',
       'context.emit',
+      'journal.append',
     ]);
     // 口が無い
     expect(ops('no-flush')).toEqual([CONV, CONV, ...TAIL.slice(1)]);
@@ -1132,8 +1132,8 @@ describe('ask_human の出力と呼んだあとの状態の固定（場面ごと
       CONV,
       CONV,
       'jobs.putApproval',
-      'journal.append',
       'context.emit',
+      'journal.append',
     ]);
     // 書き込みが落ちる
     expect(actual['flush-fails']?.output.thrown).toBe(true);
@@ -1158,9 +1158,13 @@ describe('ask_human の出力と呼んだあとの状態の固定（場面ごと
     expect(text('journal-fails#1')).toContain('ask_human は完了した');
     expect(actual['journal-fails#1']?.journal).toEqual([]);
     expect(actual['journal-fails#1']?.approvals.map((entry) => entry.id)).toEqual([u(1)]);
-    expect(ops('journal-fails#1').slice(-2)).toEqual(['jobs.putApproval', 'journal.append']);
-    expect(ops('journal-fails#1')).not.toContain('context.noteQuestionAsked');
-    expect(ops('journal-fails#1')).not.toContain('context.emit');
+    // 日誌が書けなくても、積んだ確認は先に知らせる（#6490）
+    expect(ops('journal-fails#1').slice(-4)).toEqual([
+      'jobs.putApproval',
+      'context.noteQuestionAsked',
+      'context.emit',
+      'journal.append',
+    ]);
     expect(actual['journal-fails#1']?.stderr.join('')).toContain('日誌を記録できませんでした');
     expect(actual['journal-fails#2']?.approvals.map((entry) => entry.id)).toEqual([u(1), u(2)]);
   });

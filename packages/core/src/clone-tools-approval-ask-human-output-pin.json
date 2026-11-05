@@ -357,15 +357,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -376,6 +367,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -521,15 +521,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -540,6 +531,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -590,15 +590,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -609,6 +600,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -702,15 +702,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -721,6 +712,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -773,15 +773,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -792,6 +783,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -850,15 +850,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -869,6 +860,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -933,15 +933,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000003"
-          },
-          "outcome": "ok id-3"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -952,6 +943,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000003",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000003"
+          },
+          "outcome": "ok id-3"
         }
       ],
       "stderr": []
@@ -1002,15 +1002,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "  前後に空白  ",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1021,6 +1012,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "  前後に空白  "
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "  前後に空白  ",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1076,15 +1076,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "一行目\n二行目\n\n四行目",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1095,6 +1086,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "一行目\n二行目\n\n四行目"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "一行目\n二行目\n\n四行目",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -1155,15 +1155,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
-            "approvalId": "00000000-0000-4000-8000-000000000003"
-          },
-          "outcome": "ok id-3"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1174,6 +1165,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000003",
             "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+            "approvalId": "00000000-0000-4000-8000-000000000003"
+          },
+          "outcome": "ok id-3"
         }
       ],
       "stderr": []
@@ -1239,15 +1239,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "前\u0000後",
-            "approvalId": "00000000-0000-4000-8000-000000000004"
-          },
-          "outcome": "ok id-4"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1258,6 +1249,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000004",
             "question": "前\u0000後"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "前\u0000後",
+            "approvalId": "00000000-0000-4000-8000-000000000004"
+          },
+          "outcome": "ok id-4"
         }
       ],
       "stderr": []
@@ -1308,15 +1308,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1327,6 +1318,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1382,15 +1382,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1401,6 +1392,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -1457,15 +1457,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1476,6 +1467,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1528,15 +1528,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1547,6 +1538,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1605,15 +1605,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -1624,6 +1615,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1752,15 +1752,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-human"
         },
@@ -1771,6 +1762,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1822,15 +1822,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-human"
         },
@@ -1841,6 +1832,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1890,15 +1890,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-human"
         },
@@ -1909,6 +1900,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -1964,15 +1964,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-job"
         },
@@ -1983,6 +1974,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2038,15 +2038,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-job"
         },
@@ -2057,6 +2048,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2115,15 +2115,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-work"
         },
@@ -2134,6 +2125,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2192,15 +2192,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-work"
         },
@@ -2211,6 +2202,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2269,15 +2269,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-work"
         },
@@ -2288,6 +2279,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2350,15 +2350,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-2"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-job"
         },
@@ -2369,6 +2360,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-2"
         }
       ],
       "stderr": []
@@ -2421,15 +2421,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-work"
         },
@@ -2440,6 +2431,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2496,15 +2496,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2515,6 +2506,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2571,15 +2571,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2590,6 +2581,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2640,15 +2640,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2659,6 +2650,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2709,15 +2709,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2728,6 +2719,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2781,15 +2781,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2800,6 +2791,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2854,15 +2854,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -2873,6 +2864,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2919,15 +2919,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "(undefined)"
         },
@@ -2938,6 +2929,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000001",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000001"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -2988,6 +2988,14 @@
           "outcome": "ok"
         },
         {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        },
+        {
           "op": "journal.append",
           "args": {
             "type": "escalation",
@@ -2995,14 +3003,6 @@
             "approvalId": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "ok id-1"
-        },
-        {
-          "op": "context.emit",
-          "args": {
-            "type": "ask_human",
-            "approvalId": "00000000-0000-4000-8000-000000000001",
-            "question": "デプロイ先を決めたい"
-          }
         }
       ],
       "stderr": []
@@ -3049,6 +3049,14 @@
           "outcome": "ok"
         },
         {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
+        },
+        {
           "op": "journal.append",
           "args": {
             "type": "escalation",
@@ -3056,14 +3064,6 @@
             "approvalId": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "ok id-1"
-        },
-        {
-          "op": "context.emit",
-          "args": {
-            "type": "ask_human",
-            "approvalId": "00000000-0000-4000-8000-000000000001",
-            "question": "デプロイ先を決めたい"
-          }
         }
       ],
       "stderr": []
@@ -3199,15 +3199,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -3218,6 +3209,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []
@@ -3257,6 +3257,18 @@
             "conversationId": "conv-1"
           },
           "outcome": "ok"
+        },
+        {
+          "op": "context.noteQuestionAsked",
+          "args": "conv-1"
+        },
+        {
+          "op": "context.emit",
+          "args": {
+            "type": "ask_human",
+            "approvalId": "00000000-0000-4000-8000-000000000001",
+            "question": "デプロイ先を決めたい"
+          }
         },
         {
           "op": "journal.append",
@@ -3323,15 +3335,6 @@
           "outcome": "ok"
         },
         {
-          "op": "journal.append",
-          "args": {
-            "type": "escalation",
-            "question": "デプロイ先を決めたい",
-            "approvalId": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "ok id-1"
-        },
-        {
           "op": "context.noteQuestionAsked",
           "args": "conv-1"
         },
@@ -3342,6 +3345,15 @@
             "approvalId": "00000000-0000-4000-8000-000000000002",
             "question": "デプロイ先を決めたい"
           }
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "デプロイ先を決めたい",
+            "approvalId": "00000000-0000-4000-8000-000000000002"
+          },
+          "outcome": "ok id-1"
         }
       ],
       "stderr": []

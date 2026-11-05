@@ -3,15 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { LEASE_DRAIN_MS, LEASE_MARGIN_MS } from './lease.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   RunnerHttpError,
-  type RunnerAnswerOutcome,
   type RunnerClient,
-  type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerResumeCommand,
@@ -23,11 +21,8 @@ import { createMemoryStores } from './testing.js';
 // ハートビートを待って `instanceId` を変える形にはしない: 台帳の貸し出しが古いプロセスを指していて、
 // いま応えているのが別のプロセスという状態そのものが判定の入力なので、そこを直に作る
 // （`identity()` が最初から `boot-2` を名乗り、台帳の貸し出しは `boot-1` を持つ）。
-class LeasedRunner implements RunnerClient {
+class LeasedRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly sessions = new Map<string, RunnerManagerState>();
   readonly resumes: RunnerResumeCommand[] = [];
   readonly stops: string[] = [];
@@ -39,6 +34,7 @@ class LeasedRunner implements RunnerClient {
   identityCalled = 0;
 
   constructor(runnerId = 'runner-primary') {
+    super();
     this.runnerId = runnerId;
   }
 
@@ -67,9 +63,6 @@ class LeasedRunner implements RunnerClient {
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     this.emit = onEvent;
   }
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
   async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
     if (this.resumeFailure !== undefined) throw this.resumeFailure;
     this.resumes.push(command);
@@ -80,9 +73,6 @@ class LeasedRunner implements RunnerClient {
     if (this.sendFailure !== undefined) throw this.sendFailure;
     return true;
   }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
   async stop(managerId: string): Promise<void> {
     this.stops.push(managerId);
     this.sessions.delete(managerId);
@@ -91,23 +81,10 @@ class LeasedRunner implements RunnerClient {
     this.listCalled += 1;
     return [...this.sessions.values()];
   }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
   async setProfile(): Promise<RunnerProfileResult> {
     this.setProfileCalled += 1;
     return { ok: true };
   }
-  async close(): Promise<void> {}
 }
 
 interface Harness {

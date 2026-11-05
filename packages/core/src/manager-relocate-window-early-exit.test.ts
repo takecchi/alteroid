@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerEvent,
   RunnerLiveness,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
@@ -33,47 +30,15 @@ describe('移送の窓は、resume が受理されなかった早い抜け方で
   } {
     const holder: { emit?: (event: RunnerEvent) => void } = {};
     const sessions = new Map<string, RunnerManagerState>();
-    const client: RunnerClient = {
+    const client = fakeRunnerClient({
       runnerId,
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async resume(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async send() {
-        return true;
-      },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
-      },
-      async stop() {},
       async list() {
         return [...sessions.values()];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async profile(): Promise<RunnerProfileFingerprint | undefined> {
-        return undefined;
-      },
-      async setProfile(): Promise<RunnerProfileResult> {
-        return { ok: true };
-      },
-      async close() {},
-    };
+    });
     return {
       client,
       get emit() {
