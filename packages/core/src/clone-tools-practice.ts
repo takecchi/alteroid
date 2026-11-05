@@ -78,21 +78,25 @@ type PracticeWriteWritten = Awaited<ReturnType<Stores['practices']['write']>>;
 
 type PracticeWriteInput = Pick<Practice, 'slug' | 'kind' | 'title' | 'content'>;
 
-type PracticeWriteBefore = {
+type PracticeBeforeChange = {
   before: Practice | null;
   beforeWasUnreadable: boolean;
 };
 
-// `practice_write` のスラッグの断り（無ければ null）
-function describePracticeWriteSlugViolation(slug: string): string | null {
+// `practice_write`・`practice_remove` のスラッグの断り（無ければ null）
+function describePracticeSlugViolation(slug: string): string | null {
   if (!practiceSlugSchema.safeParse(slug).success) {
     return `やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`;
   }
   return null;
 }
 
-// `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `write()` まで届かず、壊れた行を書き直す唯一の回復手段が塞がるため
-async function readPracticeBeforeWrite(stores: Stores, slug: string): Promise<PracticeWriteBefore> {
+// 書き直す・消す前に読む（`practice_write`・`practice_remove`）。
+// `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `write()`・`remove()` まで届かず、壊れた行を書き直す・消す唯一の回復手段が塞がるため
+async function readPracticeBeforeChange(
+  stores: Stores,
+  slug: string,
+): Promise<PracticeBeforeChange> {
   let before: Practice | null;
   let beforeWasUnreadable = false;
   try {
@@ -557,12 +561,12 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ slug, kind, title, content, base_version: baseVersion }) => {
-        const slugViolation = describePracticeWriteSlugViolation(slug);
+        const slugViolation = describePracticeSlugViolation(slug);
         if (slugViolation !== null) return text(slugViolation);
         // `kind` も書く前に見る: 見ないと保存層の `parse` が生の ZodError を投げ、そのままクローンへ返るため
         const kindError = describePracticeKindViolation(kind);
         if (kindError !== null) return text(kindError);
-        const { before, beforeWasUnreadable } = await readPracticeBeforeWrite(stores, slug);
+        const { before, beforeWasUnreadable } = await readPracticeBeforeChange(stores, slug);
         const versionViolation = describePracticeWriteMissingVersion(slug, before, baseVersion);
         if (versionViolation !== null) return text(versionViolation);
         const outcome = await writePracticeDocument({
@@ -601,9 +605,9 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ slug, base_version: baseVersion }) => {
-        const slugViolation = describePracticeWriteSlugViolation(slug);
+        const slugViolation = describePracticeSlugViolation(slug);
         if (slugViolation !== null) return text(slugViolation);
-        const { before, beforeWasUnreadable } = await readPracticeBeforeWrite(stores, slug);
+        const { before, beforeWasUnreadable } = await readPracticeBeforeChange(stores, slug);
         // 無かったときは日誌を書かない: 何も起きていないのに「消した」という判断の跡を残すと日誌が実際の変化と食い違うため。「読めなかった」は「無かった」ではない
         if (before === null && !beforeWasUnreadable) {
           return text(renderPracticeRemoveAbsent(slug));
