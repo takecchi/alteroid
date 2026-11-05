@@ -801,6 +801,18 @@ export class UnreadableScheduleError extends Error {
     this.name = 'UnreadableScheduleError';
     this.kind = params.kind;
   }
+
+  /**
+   * 文を組むのはここ1か所: fs と pg が同じ文を別々に書くと、片方だけ言い回しが変わっても気づけない。
+   * `reason` は呼び出し側が渡す（zod の `error.message` など。器ごとに取り方が違う）。
+   * コンストラクタを置き換えずに足す: 文を持たない試験用の組み立て（`new UnreadableScheduleError('…', { kind })`）が多数在る。
+   */
+  static forRow(params: { kind: string; reason: string }): UnreadableScheduleError {
+    return new UnreadableScheduleError(
+      `継続中の依頼 ${params.kind} が読めない形で入っている（消されたのではない）: ${params.reason}`,
+      { kind: params.kind },
+    );
+  }
 }
 
 /**
@@ -964,6 +976,11 @@ export class UnreadableTaskError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UnreadableTaskError';
+  }
+
+  /** 文の組み立ては `UnreadableScheduleError.forRow` と同じ理由でここに置く。 */
+  static forRow(params: { id: string; reason: string }): UnreadableTaskError {
+    return new UnreadableTaskError(`task ${params.id} が読めない形で入っている: ${params.reason}`);
   }
 }
 
@@ -1538,6 +1555,13 @@ export class UnreadableTokenSettingsError extends Error {
     super(message);
     this.name = 'UnreadableTokenSettingsError';
   }
+
+  /** 文の組み立ては `UnreadableScheduleError.forRow` と同じ理由でここに置く。 */
+  static forReason(reason: string): UnreadableTokenSettingsError {
+    return new UnreadableTokenSettingsError(
+      `認証トークンの回転設定（settings）が読めない形で入っている（消されたのではない）: ${reason}`,
+    );
+  }
 }
 
 /** `TokenPoolStore.readActive()` が、置かれている現役の指名を `activeAgentTokenSchema` として読めなかったときに投げる（`UnreadableTokenSettingsError` と同じ形・同じ理由）。 */
@@ -1545,6 +1569,13 @@ export class UnreadableActiveTokenError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UnreadableActiveTokenError';
+  }
+
+  /** 文の組み立ては `UnreadableScheduleError.forRow` と同じ理由でここに置く。 */
+  static forReason(reason: string): UnreadableActiveTokenError {
+    return new UnreadableActiveTokenError(
+      `現役の認証トークンの指名（active）が読めない形で入っている（消されたのではない）: ${reason}`,
+    );
   }
 }
 
@@ -1786,6 +1817,26 @@ export class UnreadablePracticeError extends Error {
     this.name = 'UnreadablePracticeError';
     this.slug = params.slug;
     this.version = params.version;
+  }
+
+  /** 行（`read`）の文。組み立てをここに置く理由は `UnreadableScheduleError.forRow` と同じ。 */
+  static forRow(params: { slug: string; reason: string }): UnreadablePracticeError {
+    return new UnreadablePracticeError(
+      `やり方 ${params.slug} が読めない形で入っている（消されたのではない）: ${params.reason}`,
+      { slug: params.slug },
+    );
+  }
+
+  /** 版（`readVersion`）の文。 */
+  static forVersion(params: {
+    slug: string;
+    version: number;
+    reason: string;
+  }): UnreadablePracticeError {
+    return new UnreadablePracticeError(
+      `やり方 ${params.slug} の版 ${params.version} が読めない形で入っている（消されたのではない）: ${params.reason}`,
+      { slug: params.slug, version: params.version },
+    );
   }
 }
 

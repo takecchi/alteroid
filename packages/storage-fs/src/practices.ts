@@ -147,10 +147,7 @@ export class FsPracticeStore implements PracticeStore {
     const result = practiceRecordSchema.safeParse(invalidRaw);
     // 読めない行は `null` にせず `UnreadablePracticeError` を投げる: 呼び手が `instanceof` で見分けて「在ったが読めない」として書き直し・削除まで進むため
     if (result.success) return toPractice(result.data);
-    throw new UnreadablePracticeError(
-      `やり方 ${slug} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
-      { slug },
-    );
+    throw UnreadablePracticeError.forRow({ slug, reason: result.error.message });
   }
 
   async write(
@@ -280,10 +277,7 @@ export class FsPracticeStore implements PracticeStore {
     if (invalidRaw === undefined) return null;
     const result = practiceVersionRecordSchema.safeParse(invalidRaw);
     if (result.success) return toVersion(result.data);
-    throw new UnreadablePracticeError(
-      `やり方 ${slug} の版 ${version} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
-      { slug, version },
-    );
+    throw UnreadablePracticeError.forVersion({ slug, version, reason: result.error.message });
   }
 
   async #read(): Promise<PracticeFile> {

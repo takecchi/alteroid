@@ -120,9 +120,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
     const rotateOn = tokenRotationPolicySchema.safeParse(row.rotateOn);
     if (!rotateOn.success) {
       // `summarizeInvalidFields` を通さない: `row.rotateOn` 単体の safeParse では `path` が空になり、欄名が `(root)` に潰れるため。
-      throw new UnreadableTokenSettingsError(
-        '認証トークンの回転設定（settings）が読めない形で入っている（消されたのではない）: 不正な欄: rotateOn',
-      );
+      throw UnreadableTokenSettingsError.forReason('不正な欄: rotateOn');
     }
     return {
       rotateOn: rotateOn.data,
@@ -146,10 +144,7 @@ export class PgTokenPoolStore implements TokenPoolStore {
       rotatedAt: row.rotatedAt.toISOString(),
     });
     if (!parsed.success) {
-      throw new UnreadableActiveTokenError(
-        `現役の認証トークンの指名（active）が読めない形で入っている（消されたのではない）: ` +
-          summarizeInvalidFields(parsed.error.issues),
-      );
+      throw UnreadableActiveTokenError.forReason(summarizeInvalidFields(parsed.error.issues));
     }
     return parsed.data;
   }

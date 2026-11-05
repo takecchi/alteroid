@@ -59,10 +59,7 @@ const EMPTY: ScheduleFile = {
 const extractKind = (raw: unknown): string | undefined => extractRowField(raw, 'kind');
 
 function unreadableError(kind: string, reason: string): UnreadableScheduleError {
-  return new UnreadableScheduleError(
-    `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${reason}`,
-    { kind },
-  );
+  return UnreadableScheduleError.forRow({ kind, reason });
 }
 
 function throwIfUnreadable(file: ScheduleFile, kind: string): void {

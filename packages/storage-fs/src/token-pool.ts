@@ -130,9 +130,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
     const reason = summarizeInvalidFields(
       tokenRotationSettingsSchema.safeParse(file.invalidSettingsRaw).error?.issues ?? [],
     );
-    throw new UnreadableTokenSettingsError(
-      `認証トークンの回転設定（settings）が読めない形で入っている（消されたのではない）: ${reason}`,
-    );
+    throw UnreadableTokenSettingsError.forReason(reason);
   }
 
   async writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings> {
@@ -149,9 +147,7 @@ export class FsTokenPoolStore implements TokenPoolStore {
     const reason = summarizeInvalidFields(
       activeAgentTokenSchema.safeParse(file.invalidActiveRaw).error?.issues ?? [],
     );
-    throw new UnreadableActiveTokenError(
-      `現役の認証トークンの指名（active）が読めない形で入っている（消されたのではない）: ${reason}`,
-    );
+    throw UnreadableActiveTokenError.forReason(reason);
   }
 
   async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {
