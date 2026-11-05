@@ -75,16 +75,17 @@
     "origin-conversation#6": 140,
     "origin-conversation#7": 176,
     "origin-conversation#8": 151,
-    "existed-natural#1": 171,
-    "existed-natural#2": 171,
-    "existed-after-write#1": 171,
-    "existed-after-write#2": 171,
+    "existed-natural#1": 129,
+    "existed-natural#2": 129,
+    "existed-after-write#1": 129,
+    "existed-after-write#2": 129,
     "existed-after-write#3": 151,
-    "existed-get-fails#1": 171,
-    "existed-get-fails#2": 12,
+    "existed-get-fails#1": 129,
+    "existed-get-fails#2": 129,
     "confirm-null#1": 171,
     "confirm-null#2": 171,
     "confirm-null#3": 171,
+    "confirm-null#4": 171,
     "confirm-unreadable#1": 171,
     "confirm-unreadable#2": 171,
     "confirm-throws": 12,
@@ -5908,8 +5909,8 @@
     },
     "existed-natural#1": {
       "output": {
-        "length": 171,
-        "text": "task を書き込んだが、直後に読み直しても 00000000-0000-4000-8000-000000000001 を確認できなかった。**「足した」とは言えない。** task_list id=00000000-0000-4000-8000-000000000001 で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。",
+        "length": 129,
+        "text": "task の id 00000000-0000-4000-8000-000000000001 が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** もう一度 task_add を呼べば、新しい id で足せる。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -5953,20 +5954,13 @@
             }
           },
           "outcome": "existed"
-        },
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "found queued"
         }
       ]
     },
     "existed-natural#2": {
       "output": {
-        "length": 171,
-        "text": "task を書き込んだが、直後に読み直しても 00000000-0000-4000-8000-000000000003 を確認できなかった。**「足した」とは言えない。** task_list id=00000000-0000-4000-8000-000000000003 で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。",
+        "length": 129,
+        "text": "task の id 00000000-0000-4000-8000-000000000003 が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** もう一度 task_add を呼べば、新しい id で足せる。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -6010,20 +6004,13 @@
             }
           },
           "outcome": "existed"
-        },
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "00000000-0000-4000-8000-000000000003"
-          },
-          "outcome": "found queued"
         }
       ]
     },
     "existed-after-write#1": {
       "output": {
-        "length": 171,
-        "text": "task を書き込んだが、直後に読み直しても 00000000-0000-4000-8000-000000000001 を確認できなかった。**「足した」とは言えない。** task_list id=00000000-0000-4000-8000-000000000001 で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。",
+        "length": 129,
+        "text": "task の id 00000000-0000-4000-8000-000000000001 が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** もう一度 task_add を呼べば、新しい id で足せる。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -6068,20 +6055,13 @@
             }
           },
           "outcome": "existed"
-        },
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "found queued"
         }
       ]
     },
     "existed-after-write#2": {
       "output": {
-        "length": 171,
-        "text": "task を書き込んだが、直後に読み直しても 00000000-0000-4000-8000-000000000002 を確認できなかった。**「足した」とは言えない。** task_list id=00000000-0000-4000-8000-000000000002 で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。",
+        "length": 129,
+        "text": "task の id 00000000-0000-4000-8000-000000000002 が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** もう一度 task_add を呼べば、新しい id で足せる。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -6140,13 +6120,6 @@
             }
           },
           "outcome": "existed"
-        },
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "found queued"
         }
       ]
     },
@@ -6255,8 +6228,8 @@
     },
     "existed-get-fails#1": {
       "output": {
-        "length": 171,
-        "text": "task を書き込んだが、直後に読み直しても 00000000-0000-4000-8000-000000000001 を確認できなかった。**「足した」とは言えない。** task_list id=00000000-0000-4000-8000-000000000001 で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。",
+        "length": 129,
+        "text": "task の id 00000000-0000-4000-8000-000000000001 が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** もう一度 task_add を呼べば、新しい id で足せる。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -6300,23 +6273,16 @@
             }
           },
           "outcome": "existed"
-        },
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "00000000-0000-4000-8000-000000000001"
-          },
-          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
         }
       ]
     },
     "existed-get-fails#2": {
       "output": {
-        "length": 12,
-        "text": "ストアが落ちた（get）",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 129,
+        "text": "task の id 00000000-0000-4000-8000-000000000002 が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** もう一度 task_add を呼べば、新しい id で足せる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": false,
       "uuidsDrawn": 1,
@@ -6357,13 +6323,6 @@
             }
           },
           "outcome": "existed"
-        },
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "00000000-0000-4000-8000-000000000002"
-          },
-          "outcome": "threw Error: ストアが落ちた（get）"
         }
       ]
     },
@@ -6398,7 +6357,19 @@
           "body": "本文 1"
         }
       ],
-      "journal": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task を足した（00000000-0000-4000-8000-000000000001）が、直後の読み直しで確かめられなかった: 読み直しが null",
+          "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 1。読み直し: 見つからなかった",
+          "target": {
+            "kind": "task",
+            "id": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
       "calls": [
         {
           "op": "tasks.add",
@@ -6422,6 +6393,19 @@
             "id": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "null"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000001"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000001）が、直後の読み直しで確かめられなかった: 読み直しが null",
+            "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 1。読み直し: 見つからなかった"
+          },
+          "outcome": "ok id-1"
         }
       ]
     },
@@ -6466,7 +6450,19 @@
           "body": "本文 2"
         }
       ],
-      "journal": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task を足した（00000000-0000-4000-8000-000000000003）が、直後の読み直しで確かめられなかった: 起点を補って null",
+          "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: 00000000-0000-4000-8000-000000000002。本文: 本文 2。読み直し: 見つからなかった",
+          "target": {
+            "kind": "task",
+            "id": "00000000-0000-4000-8000-000000000003"
+          }
+        }
+      ],
       "calls": [
         {
           "op": "tasks.add",
@@ -6490,6 +6486,19 @@
             "id": "00000000-0000-4000-8000-000000000003"
           },
           "outcome": "null"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000003"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000003）が、直後の読み直しで確かめられなかった: 起点を補って null",
+            "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: 00000000-0000-4000-8000-000000000002。本文: 本文 2。読み直し: 見つからなかった"
+          },
+          "outcome": "ok id-2"
         }
       ]
     },
@@ -6544,7 +6553,19 @@
           "body": "本文 2"
         }
       ],
-      "journal": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task を足した（00000000-0000-4000-8000-000000000004）が、直後の読み直しで確かめられなかった: after 付き",
+          "grounds": "自分で task_add した。置き場所: q-1 の直後。起点の会話: conv-work-1。本文: 本文 3。読み直し: 見つからなかった",
+          "target": {
+            "kind": "task",
+            "id": "00000000-0000-4000-8000-000000000004"
+          }
+        }
+      ],
       "calls": [
         {
           "op": "tasks.add",
@@ -6572,6 +6593,120 @@
             "id": "00000000-0000-4000-8000-000000000004"
           },
           "outcome": "null"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000004"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000004）が、直後の読み直しで確かめられなかった: after 付き",
+            "grounds": "自分で task_add した。置き場所: q-1 の直後。起点の会話: conv-work-1。本文: 本文 3。読み直し: 見つからなかった"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "confirm-null#4": {
+      "output": {
+        "length": 171,
+        "text": "task を書き込んだが、直後に読み直しても 00000000-0000-4000-8000-000000000005 を確認できなかった。**「足した」とは言えない。** task_list id=00000000-0000-4000-8000-000000000005 で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "uuidsDrawn": 1,
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-01T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "queued",
+          "origin": "self",
+          "originConversationId": "conv-work-1",
+          "title": "after 付き",
+          "body": "本文 3"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "self",
+          "originConversationId": "conv-work-1",
+          "title": "読み直しが null",
+          "body": "本文 1"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "queued",
+          "origin": "self",
+          "originConversationId": "00000000-0000-4000-8000-000000000002",
+          "title": "起点を補って null",
+          "body": "本文 2"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "createdAt": "2026-10-29T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "queued",
+          "origin": "self",
+          "originConversationId": "conv-work-1",
+          "title": "日誌も書けない",
+          "body": "本文 4"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "tasks.add",
+          "args": {
+            "entry": {
+              "id": "00000000-0000-4000-8000-000000000005",
+              "createdAt": "2026-10-29T00:04:00.000Z",
+              "updatedAt": "2026-10-29T00:04:00.000Z",
+              "status": "queued",
+              "origin": "self",
+              "originConversationId": "conv-work-1",
+              "title": "日誌も書けない",
+              "body": "本文 4"
+            }
+          },
+          "outcome": "added"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "00000000-0000-4000-8000-000000000005"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000005"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000005）が、直後の読み直しで確かめられなかった: 日誌も書けない",
+            "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 4。読み直し: 見つからなかった"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
         }
       ]
     },
@@ -6606,7 +6741,19 @@
           "body": "本文 1"
         }
       ],
-      "journal": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task を足した（00000000-0000-4000-8000-000000000001）が、直後の読み直しで確かめられなかった: 読み直しが読めない",
+          "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 1。読み直し: 読めない形で入っていた",
+          "target": {
+            "kind": "task",
+            "id": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
       "calls": [
         {
           "op": "tasks.add",
@@ -6630,6 +6777,19 @@
             "id": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000001"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000001）が、直後の読み直しで確かめられなかった: 読み直しが読めない",
+            "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 1。読み直し: 読めない形で入っていた"
+          },
+          "outcome": "ok id-1"
         }
       ]
     },
@@ -6674,7 +6834,19 @@
           "body": "本文 1"
         }
       ],
-      "journal": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task を足した（00000000-0000-4000-8000-000000000003）が、直後の読み直しで確かめられなかった: front 付き",
+          "grounds": "自分で task_add した。置き場所: 先頭。起点の会話: 00000000-0000-4000-8000-000000000002。本文: 本文 2。読み直し: 読めない形で入っていた",
+          "target": {
+            "kind": "task",
+            "id": "00000000-0000-4000-8000-000000000003"
+          }
+        }
+      ],
       "calls": [
         {
           "op": "tasks.add",
@@ -6701,6 +6873,19 @@
             "id": "00000000-0000-4000-8000-000000000003"
           },
           "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000003"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000003）が、直後の読み直しで確かめられなかった: front 付き",
+            "grounds": "自分で task_add した。置き場所: 先頭。起点の会話: 00000000-0000-4000-8000-000000000002。本文: 本文 2。読み直し: 読めない形で入っていた"
+          },
+          "outcome": "ok id-2"
         }
       ]
     },
@@ -6735,7 +6920,19 @@
           "body": "本文 1"
         }
       ],
-      "journal": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task を足した（00000000-0000-4000-8000-000000000001）が、直後の読み直しで確かめられなかった: 読み直しが落ちる",
+          "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 1。読み直し: 例外で終わった（Error: ストアが落ちた（get））",
+          "target": {
+            "kind": "task",
+            "id": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
       "calls": [
         {
           "op": "tasks.add",
@@ -6759,6 +6956,19 @@
             "id": "00000000-0000-4000-8000-000000000001"
           },
           "outcome": "threw Error: ストアが落ちた（get）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "00000000-0000-4000-8000-000000000001"
+            },
+            "decision": "task を足した（00000000-0000-4000-8000-000000000001）が、直後の読み直しで確かめられなかった: 読み直しが落ちる",
+            "grounds": "自分で task_add した。置き場所: 既定の位置。起点の会話: conv-work-1。本文: 本文 1。読み直し: 例外で終わった（Error: ストアが落ちた（get））"
+          },
+          "outcome": "ok id-1"
         }
       ]
     },

@@ -344,7 +344,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'existed-natural',
     covers:
-      '足した task の id が既に在る（added が existed）: 同じ id の行を先に置く。work あり（task の id は1番目）・なし（起点が1つ引かれ task の id は 2 番目→ここでは 3 番目の行）。行は書かれない（既存の行のまま）。tasks.get は呼ぶが日誌は呼ばない。断りの文は「task を書き込んだが…確認できなかった」',
+      '足した task の id が既に在る（added が existed）: 同じ id の行を先に置く。work あり（task の id は1番目）・なし（起点が1つ引かれ task の id は 2 番目→ここでは 3 番目の行）。行は書かれない（既存の行のまま）。何も書いていないので読み直さず（tasks.get を呼ばない）、日誌も呼ばない。断りの文は「id が既に在ったので、何も書かなかった」（#6471）',
     seed: [t(u(1), 1), t(u(3), 2)],
     steps: [
       { args: add('既に在る id', '本文 1'), writes: false, ctx: WORK },
@@ -354,7 +354,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'existed-after-write',
     covers:
-      'add が行を書いたうえで existed を返す: 行は書けているのに日誌が無く、断りの文。置き場所付き（before）でも同じ。日誌は呼ばない。次の呼びは普通に足せる',
+      'add が行を書いたうえで existed を返す（器の食い違いを口で作る）: 道具は器の existed を信じて読み直さず、「id が既に在った」の断り。日誌は呼ばない。置き場所付き（before）でも同じ。次の呼びは普通に足せる',
     seed: [t('q-1', 1)],
     steps: [
       {
@@ -373,7 +373,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'existed-get-fails',
     covers:
-      'existed のとき読み直し（tasks.get）が落ちる: 読めない形（null 扱いになり、同じ断りの文）・ほかの例外（そのまま投げる）。existed の判定より読み直しが先に走る',
+      'existed のとき読み直し（tasks.get）が落ちる口を付けても、existed では読み直さないので口は効かず、どちらも「id が既に在った」の断り（#6471）',
     seed: [t(u(1), 1), t(u(2), 2)],
     steps: [
       { args: add('既に在る id', '本文 1'), writes: false, hooks: { getResult: 'unreadable' } },
@@ -383,7 +383,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'confirm-null',
     covers:
-      '書いたあとの読み直しが null: 行は書けているのに日誌が無く、断りの文（task_list id=… の案内）。work あり・なし・置き場所付き。日誌は呼ばない',
+      '書いたあとの読み直しが null: 断りの文（task_list id=… の案内）。行は書けているので、日誌に「読み直しで確かめられなかった（見つからなかった）」の行を残す（#6471）。work あり・なし・置き場所付き。最後の段は日誌も書けない（落とすだけで、断りの文は返す）',
     seed: [t('q-1', 1)],
     steps: [
       {
@@ -404,12 +404,18 @@ const SCENARIOS: Scenario[] = [
         ctx: WORK,
         hooks: { getResult: 'null' },
       },
+      {
+        args: add('日誌も書けない', '本文 4'),
+        writes: true,
+        ctx: WORK,
+        hooks: { getResult: 'null', journalFailsAt: [1] },
+      },
     ],
   },
   {
     name: 'confirm-unreadable',
     covers:
-      '書いたあとの読み直しが読めない形（UnreadableTaskError）: null 扱いになり、null の場面と同じ断りの文。行は書けているのに日誌が無い。日誌は呼ばない',
+      '書いたあとの読み直しが読めない形（UnreadableTaskError）: null の場面と同じ断りの文。日誌に「読み直しで確かめられなかった（読めない形で入っていた）」の行を残す（#6471）',
     seed: [t('q-1', 1)],
     steps: [
       {
@@ -429,7 +435,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'confirm-throws',
     covers:
-      '書いたあとの読み直しがほかの例外で落ちる: そのまま投げる（thrown）。行は書けているのに日誌が無い。日誌は呼ばない',
+      '書いたあとの読み直しがほかの例外で落ちる: 日誌に「読み直しで確かめられなかった（例外で終わった）」の行を残してから、そのまま投げる（thrown。#6471）',
     seed: [t('q-1', 1)],
     steps: [
       {
@@ -988,38 +994,54 @@ describe('task_add の出力と呼んだあとの状態の固定（場面ごと�
     expect(text('origin-conversation#5')).toBe(SAID(u(7), u(6)));
     expect(text('origin-conversation#6')).toBe(SAID(u(8), ''));
     // existed / confirm
-    expect(ops('existed-natural#1')).toEqual(['tasks.add', 'tasks.get']);
-    expect(outcomes('existed-natural#1')).toEqual(['existed', 'found queued']);
-    expect(text('existed-natural#1')).toContain(REFUSED);
-    expect(text('existed-natural#2')).toContain(REFUSED);
-    expect(outcomes('existed-natural#2')).toEqual(['existed', 'found queued']);
-    expect(ops('existed-after-write#1')).toEqual(['tasks.add', 'tasks.get']);
-    expect(outcomes('existed-after-write#1')).toEqual(['existed', 'found queued']);
-    expect(journal('existed-after-write#1')).toEqual([]);
+    // existed: 何も書いていないので読み直さず、「id が既に在った」と断る（#6471）
+    const EXISTED = 'が既に在ったので、何も書かなかった';
+    for (const key of [
+      'existed-natural#1',
+      'existed-natural#2',
+      'existed-after-write#1',
+      'existed-get-fails#1',
+      'existed-get-fails#2',
+    ]) {
+      expect(ops(key), key).toEqual(['tasks.add']);
+      expect(text(key), key).toContain(EXISTED);
+      expect(text(key), key).not.toContain(REFUSED);
+      expect(out(key)?.thrown, key).toBe(false);
+      expect(journal(key), key).toEqual([]);
+    }
+    expect(outcomes('existed-natural#1')).toEqual(['existed']);
     expect(ids('existed-after-write#1')).toContain(u(1));
-    expect(text('existed-after-write#1')).toContain(REFUSED);
-    expect(ops('existed-get-fails#1')).toEqual(['tasks.add', 'tasks.get']);
-    expect(text('existed-get-fails#1')).toContain(REFUSED);
-    expect(text('existed-get-fails#2')).toBe('ストアが落ちた（get）');
-    expect(out('existed-get-fails#2')?.thrown).toBe(true);
+    // 器は書いたと返したが確かめられない: 断りの文は同じで、日誌に確かめられなかった行を残す（#6471）
+    const UNCONFIRMED = '直後の読み直しで確かめられなかった';
     for (const key of ['confirm-null#1', 'confirm-null#2', 'confirm-null#3']) {
-      expect(ops(key)).toEqual(['tasks.add', 'tasks.get']);
-      expect(outcomes(key)).toEqual(['added', 'null']);
+      expect(ops(key)).toEqual(['tasks.add', 'tasks.get', 'journal.append']);
+      expect(outcomes(key).slice(0, 2)).toEqual(['added', 'null']);
       expect(text(key)).toContain(REFUSED);
-      expect(journal(key)).toEqual([]);
+      expect(journal(key)).toHaveLength(1);
+      expect(journal(key)[0]).toMatchObject({ type: 'decision' });
+      expect(JSON.stringify(journal(key)[0])).toContain(UNCONFIRMED);
+      expect(JSON.stringify(journal(key)[0])).toContain('読み直し: 見つからなかった');
       expect(actual[key]?.wrote).toBe(true);
     }
+    // 日誌も書けない: 落とすだけで、断りの文は返す
+    expect(ops('confirm-null#4')).toEqual(['tasks.add', 'tasks.get', 'journal.append']);
+    expect(text('confirm-null#4')).toContain(REFUSED);
+    expect(out('confirm-null#4')?.thrown).toBe(false);
+    expect(journal('confirm-null#4')).toEqual([]);
     for (const key of ['confirm-unreadable#1', 'confirm-unreadable#2']) {
-      expect(ops(key)).toEqual(['tasks.add', 'tasks.get']);
+      expect(ops(key)).toEqual(['tasks.add', 'tasks.get', 'journal.append']);
       expect(outcomes(key)[1]).toContain('threw UnreadableTaskError');
       expect(text(key)).toContain(REFUSED);
       expect(out(key)?.thrown).toBe(false);
-      expect(journal(key)).toEqual([]);
+      expect(journal(key)).toHaveLength(1);
+      expect(JSON.stringify(journal(key)[0])).toContain('読み直し: 読めない形で入っていた');
       expect(actual[key]?.wrote).toBe(true);
     }
     expect(text('confirm-throws')).toBe('ストアが落ちた（get）');
     expect(out('confirm-throws')?.thrown).toBe(true);
-    expect(journal('confirm-throws')).toEqual([]);
+    expect(ops('confirm-throws')).toEqual(['tasks.add', 'tasks.get', 'journal.append']);
+    expect(journal('confirm-throws')).toHaveLength(1);
+    expect(JSON.stringify(journal('confirm-throws')[0])).toContain('読み直し: 例外で終わった');
     expect(actual['confirm-throws']?.wrote).toBe(true);
     expect(ops('add-throws#1')).toEqual(['tasks.add']);
     expect(text('add-throws#1')).toBe('ストアが落ちた（add）');
