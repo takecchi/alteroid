@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveTurnAttachments } from './attachment-turn.js';
+import { resolveTurnAttachments } from './attachment-turn.test-support.js';
 import { DEFAULT_ATTACHMENT_LIMITS } from './attachment.js';
 import { createMemoryStores } from './testing.js';
 

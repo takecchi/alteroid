@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { resolveTurnAttachments, resolveTurnAttachmentGroups } from './attachment-turn.js';
+import { resolveTurnAttachmentGroups } from './attachment-turn.js';
+import { resolveTurnAttachments } from './attachment-turn.test-support.js';
 import {
   ATTACHMENT_MAX_IMAGE_BYTES_BASE64_ROUTE,
   DEFAULT_ATTACHMENT_LIMITS,
