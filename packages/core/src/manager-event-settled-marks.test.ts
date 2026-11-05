@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 
 // 印そのものだけを差し替える: 見張りの本体は使わない
 const phases = vi.hoisted(() => [] as string[]);
@@ -12,32 +13,14 @@ vi.mock('./loop-stall.js', async (importOriginal) => ({
 const { createManagerPool } = await import('./manager.js');
 const { createRunnerRegistry } = await import('./runner-protocol.js');
 const { createMemoryStores } = await import('./testing.js');
-import type { RunnerAnswerOutcome, RunnerClient, RunnerEvent } from './runner-protocol.js';
+import type { RunnerEvent } from './runner-protocol.js';
 
 function fakeRunner() {
   let onEvent: ((event: RunnerEvent) => void) | undefined;
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(listener) {
       onEvent = listener;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
-    async stop() {
-      /* 使わない */
     },
     async list() {
       return [
@@ -52,25 +35,10 @@ function fakeRunner() {
         },
       ];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {
-      /* 使わない */
-    },
-  };
+  });
   return {
     runner,
     emit: (event: RunnerEvent) => {

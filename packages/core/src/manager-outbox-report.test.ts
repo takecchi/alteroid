@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { sha256Hex } from './auth.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -50,11 +51,8 @@ function fakeRunner(options: {
     if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
     return parsed.data;
   };
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
       onEvent(
@@ -70,24 +68,12 @@ function fakeRunner(options: {
         ? { cwd: command.cwd }
         : { cwd: command.cwd, sessionGeneration: options.startGeneration };
     },
-    async resume(command: Parameters<RunnerClient['resume']>[0]) {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer() {
-      return { delivered: false };
-    },
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
     },
     async list() {
       return [...alive];
-    },
-    async transcript() {
-      return null;
     },
     async openPickupFile(_kind, _managerId, fileId) {
       opened.push(fileId);
@@ -96,22 +82,10 @@ function fakeRunner(options: {
     async deletePickupFile(_kind, _managerId, fileId) {
       deleted.push(fileId);
     },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return {
     runner,
     alive,

@@ -30,6 +30,7 @@ import {
   type ManagerPool,
   type RunnerFleetOverview,
 } from './manager.js';
+import { fakeRunnerClient, FakeRunnerClientBase } from './runner-client.test-support.js';
 import {
   MANAGER_MODEL_ENV_KEY,
   WORKER_MODEL_ENV_KEY,
@@ -46,7 +47,6 @@ import {
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   RunnerHttpError,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerCredentialFingerprint,
   type RunnerEvent,
@@ -55,7 +55,6 @@ import {
   type RunnerMcpServersFingerprint,
   type RunnerPlacementResources,
   type RunnerProfileFingerprint,
-  type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerResumeCommand,
   type UnpushedWorkResult,
@@ -1064,53 +1063,17 @@ describe('マネージャー', () => {
   it('runner が decision を報告しない回（版skewの窓）は、allow/deny へ倒さず journal に残す（#322）', async () => {
     // 可変箱に包む: 素の `let emit` を複数メソッドから触ると、呼び出し側の参照が `never` に narrowing されるため。
     const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
-    const legacyRunner: RunnerClient = {
+    const legacyRunner = fakeRunnerClient({
       runnerId: 'runner-legacy',
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
       async connect(onEvent) {
         wired.emit = onEvent;
-      },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async resume(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async send() {
-        return true;
       },
       async answer(_managerId, answer) {
         // `settled` も流す: 流さないと `waiting` が残ったままで「解けた」を主張できない。
         wired.emit?.({ type: 'settled', managerId: _managerId, requestId: answer.requestId });
         return { delivered: true };
       },
-      async stop() {
-        /* この検証では使わない */
-      },
-      async list() {
-        return [];
-      },
-      async transcript() {
-        return null;
-      },
-      async credentials() {
-        return [];
-      },
-      async setCredentials() {
-        return [];
-      },
-      async profile() {
-        return undefined;
-      },
-      async setProfile() {
-        return { ok: true };
-      },
-      async close() {
-        /* この検証では使わない */
-      },
-    };
+    });
     const s = setup(undefined, { runner: legacyRunner });
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
 
@@ -1141,52 +1104,12 @@ describe('マネージャー', () => {
   it('⭐ runner が持っていない確認への答えは、台帳の待ちからも外し、取り下げとして日誌に残す（#4775）', async () => {
     // 可変箱に包む: 素の `let emit` を複数メソッドから触ると、呼び出し側の参照が `never` に narrowing されるため。
     const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
-    const legacyRunner: RunnerClient = {
+    const legacyRunner = fakeRunnerClient({
       runnerId: 'runner-legacy',
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
       async connect(onEvent) {
         wired.emit = onEvent;
       },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async resume(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async send() {
-        return true;
-      },
-      async answer() {
-        // runner はもうこの確認を持っていない（中断で解けた・器が入れ替わった）
-        return { delivered: false };
-      },
-      async stop() {
-        /* この検証では使わない */
-      },
-      async list() {
-        return [];
-      },
-      async transcript() {
-        return null;
-      },
-      async credentials() {
-        return [];
-      },
-      async setCredentials() {
-        return [];
-      },
-      async profile() {
-        return undefined;
-      },
-      async setProfile() {
-        return { ok: true };
-      },
-      async close() {
-        /* この検証では使わない */
-      },
-    };
+    });
     const s = setup(undefined, { runner: legacyRunner });
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
 
@@ -1226,49 +1149,13 @@ describe('マネージャー', () => {
   describe('beforeAnswer: 確認に答える直前の口（クローンの判断を答えより先に日誌へ残すため）', () => {
     async function setupAsking(answer: (managerId: string) => Promise<{ delivered: boolean }>) {
       const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
-      const runner: RunnerClient = {
+      const runner = fakeRunnerClient({
         runnerId: 'runner-legacy',
-        runnerIdKnown: true,
-        workspacePathKnown: true,
-        workspacePath: '/work/project',
         async connect(onEvent) {
           wired.emit = onEvent;
         },
-        async start(command): Promise<{ cwd: string }> {
-          return { cwd: command.cwd };
-        },
-        async resume(command): Promise<{ cwd: string }> {
-          return { cwd: command.cwd };
-        },
-        async send() {
-          return true;
-        },
         answer,
-        async stop() {
-          /* この検証では使わない */
-        },
-        async list() {
-          return [];
-        },
-        async transcript() {
-          return null;
-        },
-        async credentials() {
-          return [];
-        },
-        async setCredentials() {
-          return [];
-        },
-        async profile() {
-          return undefined;
-        },
-        async setProfile() {
-          return { ok: true };
-        },
-        async close() {
-          /* この検証では使わない */
-        },
-      };
+      });
       const s = setup(undefined, { runner });
       const { managerId } = await s.pool.start({ request: 'デプロイして' });
       wired.emit?.({
@@ -2235,18 +2122,12 @@ function swappableRunner(runnerId = 'runner-primary') {
     unpushedWorkResult: undefined as UnpushedWorkResult | undefined,
     transcript: null as string | null,
   };
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
-    workspacePath: '/work/project',
     async connect(onEvent) {
       // ここで名乗らせない: 本物の `connect` は即 return し名乗りは後から SSE に乗るので、
       // 同期的に名乗らせると引き取りとの順序が現実と変わり、器のずれを作れなくなる。
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       state.resumes.push(command);
@@ -2279,9 +2160,6 @@ function swappableRunner(runnerId = 'runner-primary') {
         s.waiting.some((w) => w.requestId === answer.requestId),
       );
       return { delivered };
-    },
-    async stop() {
-      /* この検証では使わない */
     },
     async list() {
       state.listCalls += 1;
@@ -2317,17 +2195,11 @@ function swappableRunner(runnerId = 'runner-primary') {
         updatedAt: '2026-01-01T00:00:00.000Z',
       }));
     },
-    async profile() {
-      return undefined;
-    },
     async setProfile(script: string) {
       state.profiles.push(script);
       return { ok: true };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return {
     runner,
     state,
@@ -5219,7 +5091,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
   it('report でターンが終わると、unpushedWork が呼ばれ、枝名を含む観測が台帳に残る', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: { managerId: string; hasSignal: boolean }[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId, options) {
         calls.push({ managerId, hasSignal: options?.signal !== undefined });
@@ -5228,7 +5100,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
           worktrees: [{ relativePath: '.', branch: 'feat/1266-turn-end-unpushed-observation' }],
         };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5258,7 +5130,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
 
   it('report でターンが終わると、確かめきれなかったことの4欄が台帳に残り、unreadableDirSample だけは残らない（Issue #1885）', async () => {
     const fake = swappableRunner('runner-primary');
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork() {
         return {
@@ -5271,7 +5143,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
           unreadableDirSample: '/workspace/mgr-1/locked: EACCES',
         };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5301,7 +5173,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
   // `Object.keys` で数える: `undefined` を書き込んでも `toMatchObject` は気づかないため。
   it('確かめきれなかった申告が無い観測は、台帳にもこの4欄が1つも増えない（Issue #1885）', async () => {
     const fake = swappableRunner('runner-primary');
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork() {
         return {
@@ -5309,7 +5181,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
           worktrees: [{ relativePath: '.', branch: 'feat/1885-complete' }],
         };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5340,13 +5212,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork() {
         await gate;
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5447,14 +5319,14 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         await gate;
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5486,13 +5358,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     try {
       const fake = swappableRunner('runner-primary');
       const calls: string[] = [];
-      const runner: RunnerClient = {
+      const runner = fakeRunnerClient({
         ...fake.runner,
         async unpushedWork(managerId) {
           calls.push(managerId);
           return { cwd: '/work/project', worktrees: [] };
         },
-      };
+      });
       const stores = createMemoryStores();
       const s = setup(undefined, { stores, runner });
       await s.pool.start({ request: '確認' });
@@ -5533,7 +5405,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       sessionId: job.sessionId,
     });
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async stop(managerId: string) {
         fake.state.alive = fake.state.alive.filter((session) => session.managerId !== managerId);
@@ -5542,7 +5414,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const s = setup(undefined, { stores, runner });
     const aborted = await s.pool.abort(job.id, 'テストで止めた');
     expect(aborted.outcome).toBe('stopped');
@@ -5597,7 +5469,7 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
   it('Bash の git push tool_use で unpushedWork が呼ばれ、枝名を含む観測が台帳に残る', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: { managerId: string; hasSignal: boolean }[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId, options) {
         calls.push({ managerId, hasSignal: options?.signal !== undefined });
@@ -5606,7 +5478,7 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
           worktrees: [{ relativePath: '.', branch: 'feat/1376-push-observation' }],
         };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5636,13 +5508,13 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
   it('作業者の Bash の git push でも、同じ委譲について unpushedWork が呼ばれる', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5660,13 +5532,13 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
   it('Bash 以外の道具では git push らしき input があっても呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5685,13 +5557,13 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
   it('Bash でも git push を含まないコマンドでは呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5708,13 +5580,13 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
   it('echo など誤検出でも、観測を1回余分に取るだけで報告の処理は乱れない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5738,14 +5610,14 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         await gate;
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5777,14 +5649,14 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         await gate;
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5843,13 +5715,13 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
   ])('%s で unpushedWork が呼ばれ、観測が台帳に残る（%s）', async (command) => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [{ relativePath: '.', branch: 'feat/x' }] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5871,13 +5743,13 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
   it('git worktree add で unpushedWork が呼ばれる', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5895,13 +5767,13 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
   it('git branch の一覧・削除では呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5921,13 +5793,13 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
   it('無関係な Bash では呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -5948,14 +5820,14 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async unpushedWork(managerId) {
         calls.push(managerId);
         await gate;
         return { cwd: '/work/project', worktrees: [] };
       },
-    };
+    });
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
@@ -6633,11 +6505,8 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
   });
 });
 
-class FakePoolRunner implements RunnerClient {
+class FakePoolRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   started: string[] = [];
   resourcesCalls = 0;
@@ -6662,6 +6531,7 @@ class FakePoolRunner implements RunnerClient {
     report?: RunnerPlacementResources,
     options?: { supportsMcpServers?: boolean },
   ) {
+    super();
     this.runnerId = runnerId;
     this.report = report;
     if (options?.supportsMcpServers === true) {
@@ -6693,16 +6563,6 @@ class FakePoolRunner implements RunnerClient {
     this.started.push(command.managerId);
     return { cwd: command.cwd };
   }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {
     this.listCalls += 1;
     return [];
@@ -6710,26 +6570,16 @@ class FakePoolRunner implements RunnerClient {
   async unpushedWork(): Promise<UnpushedWorkResult | undefined> {
     return this.unpushedWorkResult;
   }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
   async credentials(): Promise<RunnerCredentialFingerprint[]> {
     this.credentialsCalls += 1;
     if (this.credentialsError !== undefined) throw new Error(this.credentialsError);
     return this.fakeCredentials;
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
   }
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
     this.profileCalls += 1;
     if (this.profileError !== undefined) throw new Error(this.profileError);
     return this.fakeProfile;
   }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 describe('note.escalate（#570 の起こし直しが上限に達した回）', () => {
@@ -7625,7 +7475,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     // 既定の `stop()` は no-op: `abort()` の `sessionGone` 判定（`runner.list()` が空か）で畳まれたことを
     // 確かめるため、`state.alive` を落とす `stop` を上乗せする。
     const resourceCalls = { count: 0 };
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       ...fake.runner,
       async stop(managerId: string) {
         fake.state.alive = fake.state.alive.filter((s) => s.managerId !== managerId);
@@ -7634,7 +7484,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         resourceCalls.count += 1;
         return fake.runner.resources?.(...args);
       },
-    };
+    });
     const registry = createRunnerRegistry([...(options.extraRunners ?? []), runner]);
     const pool = createManagerPool({
       stores,
@@ -8647,16 +8497,14 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
   });
 });
 
-class FakeBacklogMergeRunner implements RunnerClient {
+class FakeBacklogMergeRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   identityPendingEvents: number | undefined;
   identityOldestPendingAt: string | undefined;
 
   constructor(runnerId: string) {
+    super();
     this.runnerId = runnerId;
   }
 
@@ -8677,39 +8525,6 @@ class FakeBacklogMergeRunner implements RunnerClient {
         : { oldestPendingAt: this.identityOldestPendingAt }),
     };
   }
-  async connect(): Promise<void> {}
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 // 時計は手で進める: heartbeat の10秒周期を実時間で待たないため。`now` を渡さず、

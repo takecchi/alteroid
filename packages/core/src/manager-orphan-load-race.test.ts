@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   type RunnerAnswerOutcome,
@@ -88,26 +89,13 @@ function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void
   const stopCalls: string[] = [];
   const resumeCalls: RunnerResumeCommand[] = [];
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
-    async connect() {},
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
     async resume(command): Promise<{ cwd: string }> {
       resumeCalls.push(command);
       if (options?.resumeGate) await options.resumeGate;
       sessions.add(command.managerId);
       return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
     },
     async stop(managerId) {
       stopCalls.push(managerId);
@@ -123,23 +111,10 @@ function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void
         liveBackgroundTasks: 0,
       }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {},
-  };
+  });
 
   return { runner, stopCalls, resumeCalls, sessions };
 }
@@ -318,27 +293,8 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
     const stores = createMemoryStores();
     await stores.jobs.putJob(orphanJob(managerId));
 
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       runnerId: 'runner-primary',
-      runnerIdKnown: true,
-      workspacePath: '/work/project',
-      workspacePathKnown: true,
-      async connect() {},
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async resume(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async send() {
-        return true;
-      },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
-      },
-      async stop() {
-        // 何もしない（止まらない、を模す）。
-      },
       async list(): Promise<RunnerManagerState[]> {
         return [
           {
@@ -351,23 +307,10 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
           },
         ];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials() {
-        return [];
-      },
-      async setCredentials() {
-        return [];
-      },
-      async profile() {
-        return undefined;
-      },
       async setProfile() {
         return { ok: true as const };
       },
-      async close() {},
-    };
+    });
 
     const pool = createManagerPool({
       stores,
@@ -416,26 +359,13 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
     // `let` ではなく箱に入れる: 束縛は再代入せず、中身だけを後で埋める。
     const abortSettled: { promise?: Promise<unknown> } = {};
 
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       runnerId: 'runner-primary',
-      runnerIdKnown: true,
-      workspacePath: '/work/project',
-      workspacePathKnown: true,
-      async connect() {},
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
       async resume(command): Promise<{ cwd: string }> {
         resumeCalls.push(command);
         await abortSettled.promise;
         sessions.add(command.managerId);
         return { cwd: command.cwd };
-      },
-      async send() {
-        return true;
-      },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
       },
       async stop(id) {
         stopCalls.push(id);
@@ -451,23 +381,10 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
           liveBackgroundTasks: 0,
         }));
       },
-      async transcript() {
-        return null;
-      },
-      async credentials() {
-        return [];
-      },
-      async setCredentials() {
-        return [];
-      },
-      async profile() {
-        return undefined;
-      },
       async setProfile() {
         return { ok: true as const };
       },
-      async close() {},
-    };
+    });
 
     const registry = createRunnerRegistry([runner]);
     const pool = createManagerPool({

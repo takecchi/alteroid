@@ -1,12 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
-import {
-  createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
-  type RunnerEvent,
-} from './runner-protocol.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
+import { createRunnerRegistry, type RunnerEvent } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
@@ -14,28 +10,10 @@ const WAIT = { timeout: 10_000 };
 
 function fakeRunner() {
   let onEvent: ((event: RunnerEvent) => void) | undefined;
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(listener) {
       onEvent = listener;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
-    async stop() {
-      /* 使わない */
     },
     async list() {
       return [
@@ -50,25 +28,10 @@ function fakeRunner() {
         },
       ];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {
-      /* 使わない */
-    },
-  };
+  });
   return {
     runner,
     emit: (event: RunnerEvent) => {

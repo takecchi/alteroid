@@ -1,17 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import { RunnerHttpError } from './runner-protocol.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerEvent,
   RunnerLiveness,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -86,16 +83,11 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
     const resumes: RunnerResumeCommand[] = [];
     const sessions = new Map<string, RunnerManagerState>();
     const holder: { emit?: (event: RunnerEvent) => void } = {};
-    const client: RunnerClient = {
+    const client = fakeRunnerClient({
       runnerId,
-      runnerIdKnown: true,
-      workspacePathKnown: true,
       workspacePath,
       async connect(onEvent) {
         holder.emit = onEvent;
-      },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
       },
       async resume(command): Promise<{ cwd: string; sessionGeneration?: string }> {
         resumes.push(command);
@@ -112,37 +104,13 @@ describe('同じ runner への復帰の最中に新しいセッションの repo
           ? { cwd: command.cwd }
           : { cwd: command.cwd, sessionGeneration };
       },
-      async send() {
-        return true;
-      },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
-      },
       async stop(managerId) {
         sessions.delete(managerId);
       },
       async list() {
         return [...sessions.values()];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async profile(): Promise<RunnerProfileFingerprint | undefined> {
-        return undefined;
-      },
-      async setProfile(): Promise<RunnerProfileResult> {
-        return { ok: true };
-      },
-      async close() {
-        /* この試験群では使わない。 */
-      },
-    };
+    });
     return {
       client,
       resumes,
