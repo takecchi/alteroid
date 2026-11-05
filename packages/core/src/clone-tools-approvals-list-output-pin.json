@@ -44,7 +44,7 @@
     "id-question-kinds#3": 592,
     "id-question-kinds#4": 239,
     "id-text-shape#1": 78,
-    "id-text-shape#2": 90,
+    "id-text-shape#2": 96,
     "id-text-shape#3": 552,
     "id-offset-small#1": 62,
     "id-offset-small#2": 70,
@@ -606,8 +606,8 @@
     },
     "id-text-shape#2": {
       "output": {
-        "length": 90,
-        "text": "t-empty（2026-10-01T00:02:00.000Z）2026-10-01T00:05:00.000Z に回答済み（全 16 文字）\n\n質問: \n\n背景: \n\n回答: ",
+        "length": 96,
+        "text": "t-empty（2026-10-01T00:02:00.000Z）2026-10-01T00:05:00.000Z に回答済み（全 22 文字）\n\n質問: \n\n背景: \n\n回答: （本文なし）",
         "isError": false,
         "thrown": false
       },

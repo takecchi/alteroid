@@ -14,8 +14,9 @@
     "get-fails#2": 20,
     "already-answered#1": 63,
     "already-answered#2": 63,
-    "already-answered#3": 57,
+    "already-answered#3": 63,
     "already-answered#4": 61,
+    "already-answered-blank": 63,
     "already-withdrawn#1": 55,
     "already-withdrawn#2": 48,
     "withdraw-note-none#1": 12,
@@ -518,8 +519,8 @@
     },
     "already-answered#3": {
       "output": {
-        "length": 57,
-        "text": "ap-3 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: ）。",
+        "length": 63,
+        "text": "ap-3 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: （本文なし））。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -613,6 +614,35 @@
           "op": "jobs.getApproval",
           "args": {
             "id": "ap-4"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "already-answered-blank": {
+      "output": {
+        "length": 63,
+        "text": "ap-1 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: （本文なし））。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": " \n　"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
           },
           "outcome": "found"
         }

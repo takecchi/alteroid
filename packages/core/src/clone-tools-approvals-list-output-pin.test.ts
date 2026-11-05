@@ -414,7 +414,7 @@ const SCENARIOS: Scenario[] = [
     name: 'id-text-shape',
     group: 'id の全文読み',
     covers:
-      '全文は本文をそのまま出す（改行・連続した空白をたたまない）。空の問い・空の背景・空の回答（空でも欄の行は出る）。一覧の抜粋とは違い切らない',
+      '全文は本文をそのまま出す（改行・連続した空白をたたまない）。空の問い・空の背景（空でも欄の行は出る）・空の回答（欄の行は出て、本文は「（本文なし）」。approval_withdraw と同じ規則）。一覧の抜粋とは違い切らない',
     seed: [
       ap('t-multi', 1, { question: '一行目\n\n  二行目\t三行目\n', context: '背景\n二行' }),
       ap('t-empty', 2, { question: '', context: '', answer: '', answeredAt: minuteIso(5) }),
@@ -1212,7 +1212,7 @@ describe('approvals_list の出力の固定（場面ごとの全文と字数・�
     expect(text('id-text-shape#1')).toContain(
       '質問: 一行目\n\n  二行目\t三行目\n\n\n背景: 背景\n二行',
     );
-    expect(text('id-text-shape#2')).toContain('質問: \n\n背景: \n\n回答: ');
+    expect(text('id-text-shape#2')).toContain('質問: \n\n背景: \n\n回答: （本文なし）');
     expect(text('id-text-shape#3')).not.toContain('省略');
     // id: 頁
     expect(text('id-offset-small#1')).toContain('（全 14 文字）');
