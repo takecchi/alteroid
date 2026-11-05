@@ -226,7 +226,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'create-with-base-version',
     covers:
-      '無い slug の新規作成に base_version を渡す: ifMatch は `baseVersion ?? null` で渡り、ストアが断る（いまそのやり方は無い・何も書かない）。そのあと版なしで作ると通る',
+      '無い slug の新規作成に base_version を渡す: ifMatch は `baseVersion ?? null` で渡り、ストアが断る（読んだ時点でも無かったと言い、「読んだ後に消された」とは言わない・何も書かない。#6455）。そのあと版なしで作ると通る',
     seed: [],
     steps: [
       { ...SEED, base: { raw: practiceVersion(SEED) }, writes: 'none' },
@@ -265,7 +265,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'update',
     covers:
-      '書き直し（既存・正しい版）: 応答は「書き直した」・日誌は「書き直した」と履歴の grounds。中身が同じ（token 差なし・版は同じ・履歴は積む）/ 数字と識別子が変わる（token 差）/ 文章だけ / kind と title を変える / 末尾の改行が無い本文（token 差は渡した本文で比べる）/ NUL を含む本文 / token が 11 件以上（ほか N 件）',
+      '書き直し（既存・正しい版）: 応答は「書き直した」・日誌は「書き直した」と履歴の grounds。中身が同じ（token 差なし・版は同じ・履歴は積む）/ 数字と識別子が変わる（token 差）/ 文章だけ / kind と title を変える / 末尾の改行が無い本文 / NUL を含む本文 / token が 11 件以上（ほか N 件）。token 差は書かれた本文で比べる（#6455）',
     seed: [SEED],
     steps: [
       { ...SEED, base: 'current', writes: 'some' },
@@ -286,6 +286,13 @@ const SCENARIOS: Scenario[] = [
       { ...SEED, content: BODY.replace('読む', '読\u0000む'), base: 'current', writes: 'some' },
       { ...SEED, content: `${BODY}${NUM_RUN}\n`, base: 'current', writes: 'some' },
     ],
+  },
+  {
+    name: 'update-nul-in-token',
+    covers:
+      '書き直し（既存・正しい版）で、数字の途中に NUL を含む本文: ストアが NUL を除くと元と同じ本文になる。token 差は書かれた本文で比べるので出ない（渡した本文で比べると「4」「2」と「42」の差が出ていた。#6455）',
+    seed: [SEED],
+    steps: [{ ...SEED, content: BODY.replace('42', '4\u00002'), base: 'current', writes: 'some' }],
   },
   // ---- 版の食い違い ----
   {
@@ -981,10 +988,12 @@ describe('practice_write の出力と呼んだあとの状態の固定（場面�
     expect(text('create-slug-forms')).toContain('やり方 a.b_c-1 を新しく作った');
 
     // 版の前提
-    expect(text('create-with-base-version#1')).toContain(
-      'いまそのやり方は無い（読んだ後に消された）',
-    );
-    expect(text('create-with-base-version#1')).toContain('**何も書いていない**');
+    // 読んだ時点でも無かったやり方へ版を渡した: 「読んだ後に消された」とは言わない（#6455）
+    expect(text('create-with-base-version#1')).toContain('は無い（読んだ時点でも無かった）');
+    expect(text('create-with-base-version#1')).not.toContain('読んだ後に消された');
+    expect(text('create-with-base-version#1')).toContain('**何も書いていない。**');
+    // 数字の途中の NUL は書かれた本文では消えるので、token 差は出ない（#6455）
+    expect(text('update-nul-in-token')).not.toContain('本文の数字・識別子の増減');
     expect(ops('create-with-base-version#1')).toEqual(['practices.read', 'practices.write']);
     expect(ifMatch('create-with-base-version#1')).toBe(practiceVersion(SEED));
     expect(actual['create-with-base-version#1']?.calls.at(-1)?.outcome).toMatch(
