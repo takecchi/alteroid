@@ -28,6 +28,7 @@ import {
   readAttachmentLimits,
   withAttachmentKept,
   type AttachmentBindResult,
+  type AttachmentBlobSweepResult,
   type AttachmentBindTarget,
   type AttachmentListPage,
   type AttachmentListQuery,
@@ -379,6 +380,11 @@ export class FsAttachmentStore implements AttachmentStore {
       );
     }
     return count;
+  }
+
+  /** blob の置き場を持たない（中身はディレクトリの中）ので、掃除するものが無い。 */
+  async sweepOrphanBlobs(): Promise<AttachmentBlobSweepResult | undefined> {
+    return undefined;
   }
 
   async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {

@@ -26,6 +26,7 @@ import {
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from './attachment.js';
+import type { AttachmentBlobSweepResult } from './attachment-blob.js';
 import { assertNoNul, hasNul } from './nul-guard.js';
 
 export class MemoryAttachmentStore implements AttachmentStore {
@@ -142,6 +143,11 @@ export class MemoryAttachmentStore implements AttachmentStore {
       }
     }
     return count;
+  }
+
+  /** blob の置き場を持たない（中身はメモリの中）ので、掃除するものが無い。 */
+  async sweepOrphanBlobs(): Promise<AttachmentBlobSweepResult | undefined> {
+    return undefined;
   }
 
   async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {

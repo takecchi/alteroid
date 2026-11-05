@@ -99,12 +99,12 @@ export interface AttachmentStore {
    */
   prune(now: Date): Promise<number>;
   /**
-   * 外部ストレージに残った、控えの無い blob を消す（任意。pg だけが実装する）。消してよいのは
+   * 外部ストレージに残った、控えの無い blob を消す。外部ストレージの置き場を持たない器（メモリ・fs・置き場の設定が無い pg）は何もせず `undefined` を返す。消してよいのは
    * 「`attachmentBlobKey` の形に完全に合う」「置いてから猶予（`ATTACHMENT_ORPHAN_BLOB_GRACE_MS`）を過ぎた」
    * 「`attachments` に同じ `blob_key` の行が無い」のすべてを満たすものだけ（読めない行を消さない）。
    * 削除に落ちても投げずに結果へ数える（列挙が落ちたら投げる）。
    */
-  sweepOrphanBlobs?(now: Date): Promise<AttachmentBlobSweepResult | undefined>;
+  sweepOrphanBlobs(now: Date): Promise<AttachmentBlobSweepResult | undefined>;
   /**
    * 外す＝`expiresAt = now + 保持日数`: 外した瞬間に作成からの期限で消えないようにするため。
    * 保存中でないものを外しても何も変えない（期限を延ばさない）。

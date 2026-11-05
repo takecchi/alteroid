@@ -57,12 +57,15 @@ describe('控えの無い blob の掃除の周期（#4314）', () => {
     expect(f.calls).toHaveLength(0);
   });
 
-  it('sweepOrphanBlobs が無い store（memory・fs）では何もせず落ちない', async () => {
+  it('memory・fs の store では何もせず、何も出さない', async () => {
     const stores = createMemoryStores();
-    expect(stores.attachments.sweepOrphanBlobs).toBeUndefined();
+    await expect(stores.attachments.sweepOrphanBlobs(new Date())).resolves.toBeUndefined();
     const pruner = startAttachmentPruning({ stores, everyMinutes: 60 });
     try {
-      await expect(pruner.refresh()).resolves.toBe(0);
+      const lines = await captureStderr(async () => {
+        await expect(pruner.refresh()).resolves.toBe(0);
+      });
+      expect(lines).toEqual([]);
     } finally {
       pruner.stop();
     }

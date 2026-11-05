@@ -70,8 +70,6 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
   // バケットの列挙は事業者によって有料なので、1日に1回までにする。失敗しても時刻は戻さない: 毎周列挙し直さないため。
   let lastBlobSweepAt: number | undefined;
   const sweepOrphanBlobs = async (): Promise<void> => {
-    const sweep = options.stores.attachments.sweepOrphanBlobs;
-    if (sweep === undefined) return;
     const now = options.now?.() ?? new Date();
     if (
       lastBlobSweepAt !== undefined &&
@@ -81,7 +79,7 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     }
     lastBlobSweepAt = now.getTime();
     try {
-      const result = await sweep.call(options.stores.attachments, now);
+      const result = await options.stores.attachments.sweepOrphanBlobs(now);
       if (result === undefined) return;
       const aborted = result.abortedUploads ?? 0;
       const abortFailed = result.abortFailedUploads ?? 0;
