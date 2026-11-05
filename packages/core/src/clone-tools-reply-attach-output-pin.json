@@ -1,0 +1,2446 @@
+{
+  "lengths": {
+    "no-conversation": 81,
+    "no-conversation-no-slot": 81,
+    "no-slot": 28,
+    "missing#1": 77,
+    "missing#2": 89,
+    "missing#3": 77,
+    "missing#4": 77,
+    "missing#5": 54,
+    "limits#1": 182,
+    "limits#2": 179,
+    "limits-small#1": 130,
+    "limits-small#2": 59,
+    "limits-total": 139,
+    "already-limits#1": 159,
+    "already-limits#2": 142,
+    "already-only#1": 21,
+    "already-only#2": 21,
+    "already-only#3": 21,
+    "already-partial#1": 63,
+    "already-partial#2": 21,
+    "already-partial#3": 65,
+    "mixed": 119,
+    "mixed-dup": 63,
+    "turn-accumulates#1": 59,
+    "turn-accumulates#2": 80,
+    "turn-accumulates#3": 129,
+    "turn-accumulates#4": 21,
+    "default-limits": 63,
+    "bind-fails": 44,
+    "bind-race#1": 39,
+    "bind-race#2": 33,
+    "bind-race#3": 33,
+    "bind-race-unbind-fails": 15,
+    "bind-race-conflict-unbind-fails": 15
+  },
+  "scenarios": {
+    "no-conversation": {
+      "output": {
+        "length": 81,
+        "text": "いまのターンには返信先の会話が無いので、返信には添えられない（何も添えていない）。人間へ渡すなら task_say の attachments に id を渡す。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": []
+    },
+    "no-conversation-no-slot": {
+      "output": {
+        "length": 81,
+        "text": "いまのターンには返信先の会話が無いので、返信には添えられない（何も添えていない）。人間へ渡すなら task_say の attachments に id を渡す。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": []
+    },
+    "no-slot": {
+      "output": {
+        "length": 28,
+        "text": "この器では返信に添付を添えられない（何も添えていない）。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": []
+    },
+    "missing#1": {
+      "output": {
+        "length": 77,
+        "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り。file_put の応答の id を確かめる）: att-ghost。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "missing#2": {
+      "output": {
+        "length": 89,
+        "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り。file_put の応答の id を確かめる）: att-ghost, att-ghost2。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost2"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "missing#3": {
+      "output": {
+        "length": 77,
+        "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り。file_put の応答の id を確かめる）: att-ghost。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-mine"
+          },
+          "outcome": "found bound conv-now"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "missing#4": {
+      "output": {
+        "length": 77,
+        "text": "添付が見つからない（保持期限が過ぎて消えた、または id の誤り。file_put の応答の id を確かめる）: att-ghost。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "missing#5": {
+      "output": {
+        "length": 54,
+        "text": "添付 att-1 の控えを読めなかった: Error: 置き場が落ちた（getMeta）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "threw Error: 置き場が落ちた（getMeta）"
+        }
+      ]
+    },
+    "limits#1": {
+      "output": {
+        "length": 182,
+        "text": "AttachmentRejectedError: 1 発言に添えられるのは 3 個まで（4 個） code=too_many。今回の対象: att-1（att-1.txt, 10 バイト）, att-2（att-2.txt, 10 バイト）, att-3（att-3.txt, 10 バイト）, att-4（att-4.txt, 10 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-big1",
+          "name": "att-big1.txt",
+          "mediaType": "text/plain",
+          "size": 50,
+          "sha256": "sha-att-big1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-big2",
+          "name": "att-big2.txt",
+          "mediaType": "text/plain",
+          "size": 50,
+          "sha256": "sha-att-big2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-3"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-4"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "limits#2": {
+      "output": {
+        "length": 179,
+        "text": "AttachmentRejectedError: 1 発言の合計は 100 B まで（110 B ある） code=total_too_large。今回の対象: att-big1（att-big1.txt, 50 バイト）, att-big2（att-big2.txt, 50 バイト）, att-1（att-1.txt, 10 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-big1",
+          "name": "att-big1.txt",
+          "mediaType": "text/plain",
+          "size": 50,
+          "sha256": "sha-att-big1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-big2",
+          "name": "att-big2.txt",
+          "mediaType": "text/plain",
+          "size": 50,
+          "sha256": "sha-att-big2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-big1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-big2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "limits-small#1": {
+      "output": {
+        "length": 130,
+        "text": "AttachmentRejectedError: 1 発言に添えられるのは 1 個まで（2 個） code=too_many。今回の対象: att-1（att-1.txt, 10 バイト）, att-2（att-2.txt, 12 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 12,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 8,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "limits-small#2": {
+      "output": {
+        "length": 59,
+        "text": "この返信に添付 1 件を添えた: att-2.txt（id=att-2）。このターンの返信には合計 1 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 12,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 8,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 12,
+          "sha256": "sha-att-2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-2"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-2\"],\"newlyBound\":[\"att-2\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-2",
+              "name": "att-2.txt",
+              "mediaType": "text/plain",
+              "size": 12,
+              "sha256": "sha-att-2"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-2\"]"
+        }
+      ]
+    },
+    "limits-total": {
+      "output": {
+        "length": 139,
+        "text": "AttachmentRejectedError: 1 発言の合計は 20 B まで（22 B ある） code=total_too_large。今回の対象: att-1（att-1.txt, 10 バイト）, att-2（att-2.txt, 12 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 12,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "already-limits#1": {
+      "output": {
+        "length": 159,
+        "text": "AttachmentRejectedError: 1 発言に添えられるのは 3 個まで（4 個） code=too_many。このターンですでに添えた 2 個と合わせて数える。今回の対象: att-n1（att-n1.txt, 10 バイト）, att-n2（att-n2.txt, 10 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-n1",
+          "name": "att-n1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-n1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-n2",
+          "name": "att-n2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-n2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-n3",
+          "name": "att-n3.txt",
+          "mediaType": "text/plain",
+          "size": 30,
+          "sha256": "sha-att-n3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-s2\"]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-n1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-n2"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "already-limits#2": {
+      "output": {
+        "length": 142,
+        "text": "AttachmentRejectedError: 1 発言の合計は 100 B まで（110 B ある） code=total_too_large。このターンですでに添えた 2 個と合わせて数える。今回の対象: att-n3（att-n3.txt, 30 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-n1",
+          "name": "att-n1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-n1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-n2",
+          "name": "att-n2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-n2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-n3",
+          "name": "att-n3.txt",
+          "mediaType": "text/plain",
+          "size": 30,
+          "sha256": "sha-att-n3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 40,
+          "sha256": "sha-att-s2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-s2\"]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-n3"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "already-only#1": {
+      "output": {
+        "length": 21,
+        "text": "指された添付はすでにこの返信に添えてある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-s2\"]"
+        }
+      ]
+    },
+    "already-only#2": {
+      "output": {
+        "length": 21,
+        "text": "指された添付はすでにこの返信に添えてある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-s2\"]"
+        }
+      ]
+    },
+    "already-only#3": {
+      "output": {
+        "length": 21,
+        "text": "指された添付はすでにこの返信に添えてある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-s2",
+          "name": "att-s2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-s2\"]"
+        }
+      ]
+    },
+    "already-partial#1": {
+      "output": {
+        "length": 63,
+        "text": "この返信に添付 1 件を添えた: att-new.txt（id=att-new）。このターンの返信には合計 2 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-new2",
+          "name": "att-new2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\"]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-new"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-new"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-new\"],\"newlyBound\":[\"att-new\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-new",
+              "name": "att-new.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-new"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-new\"]"
+        }
+      ]
+    },
+    "already-partial#2": {
+      "output": {
+        "length": 21,
+        "text": "指された添付はすでにこの返信に添えてある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-new2",
+          "name": "att-new2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-new\"]"
+        }
+      ]
+    },
+    "already-partial#3": {
+      "output": {
+        "length": 65,
+        "text": "この返信に添付 1 件を添えた: att-new2.txt（id=att-new2）。このターンの返信には合計 3 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-new2",
+          "name": "att-new2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-s1",
+          "name": "att-s1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-s1"
+        },
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new"
+        },
+        {
+          "id": "att-new2",
+          "name": "att-new2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new2"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-new\"]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-new2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-new2"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-new2\"],\"newlyBound\":[\"att-new2\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-new2",
+              "name": "att-new2.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-new2"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-s1\",\"att-new\",\"att-new2\"]"
+        }
+      ]
+    },
+    "mixed": {
+      "output": {
+        "length": 119,
+        "text": "この返信に添付 3 件を添えた: att-new.txt（id=att-new）, att-mine.txt（id=att-mine）, att-other.txt（id=att-other）。このターンの返信には合計 3 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-other",
+          "name": "att-other.txt",
+          "mediaType": "image/png",
+          "size": 5,
+          "sha256": "sha-att-other",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new"
+        },
+        {
+          "id": "att-mine",
+          "name": "att-mine.txt",
+          "mediaType": "text/plain",
+          "size": 15,
+          "sha256": "sha-att-mine"
+        },
+        {
+          "id": "att-other",
+          "name": "att-other.txt",
+          "mediaType": "image/png",
+          "size": 5,
+          "sha256": "sha-att-other"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-new"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-mine"
+          },
+          "outcome": "found bound conv-now"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-other"
+          },
+          "outcome": "found bound conv-z"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-new"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-new\"],\"newlyBound\":[\"att-new\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-new",
+              "name": "att-new.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-new"
+            },
+            {
+              "id": "att-mine",
+              "name": "att-mine.txt",
+              "mediaType": "text/plain",
+              "size": 15,
+              "sha256": "sha-att-mine"
+            },
+            {
+              "id": "att-other",
+              "name": "att-other.txt",
+              "mediaType": "image/png",
+              "size": 5,
+              "sha256": "sha-att-other"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-new\",\"att-mine\",\"att-other\"]"
+        }
+      ]
+    },
+    "mixed-dup": {
+      "output": {
+        "length": 63,
+        "text": "この返信に添付 1 件を添えた: att-new.txt（id=att-new）。このターンの返信には合計 1 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-new"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-new"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-new"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-new\"],\"newlyBound\":[\"att-new\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-new",
+              "name": "att-new.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-new"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-new\"]"
+        }
+      ]
+    },
+    "turn-accumulates#1": {
+      "output": {
+        "length": 59,
+        "text": "この返信に添付 1 件を添えた: att-1.txt（id=att-1）。このターンの返信には合計 1 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-1"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-1\"],\"newlyBound\":[\"att-1\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-1",
+              "name": "att-1.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-1"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-1\"]"
+        }
+      ]
+    },
+    "turn-accumulates#2": {
+      "output": {
+        "length": 80,
+        "text": "この返信に添付 2 件を添えた: att-2.txt（id=att-2）, att-3.txt（id=att-3）。このターンの返信には合計 3 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-1\"]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-3"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-2", "att-3"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-2\",\"att-3\"],\"newlyBound\":[\"att-2\",\"att-3\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-2",
+              "name": "att-2.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-2"
+            },
+            {
+              "id": "att-3",
+              "name": "att-3.txt",
+              "mediaType": "text/plain",
+              "size": 10,
+              "sha256": "sha-att-3"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-1\",\"att-2\",\"att-3\"]"
+        }
+      ]
+    },
+    "turn-accumulates#3": {
+      "output": {
+        "length": 129,
+        "text": "AttachmentRejectedError: 1 発言に添えられるのは 3 個まで（4 個） code=too_many。このターンですでに添えた 3 個と合わせて数える。今回の対象: att-4（att-4.txt, 10 バイト）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-1\",\"att-2\",\"att-3\"]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-4"
+          },
+          "outcome": "found unbound"
+        }
+      ]
+    },
+    "turn-accumulates#4": {
+      "output": {
+        "length": 21,
+        "text": "指された添付はすでにこの返信に添えてある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1"
+        },
+        {
+          "id": "att-2",
+          "name": "att-2.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-2"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-1\",\"att-2\",\"att-3\"]"
+        }
+      ]
+    },
+    "default-limits": {
+      "output": {
+        "length": 63,
+        "text": "この返信に添付 1 件を添えた: att-new.txt（id=att-new）。このターンの返信には合計 1 件ついている。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-att-new",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [
+        {
+          "id": "att-new",
+          "name": "att-new.txt",
+          "mediaType": "text/plain",
+          "size": 1,
+          "sha256": "sha-att-new"
+        }
+      ],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-new"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-new"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-new\"],\"newlyBound\":[\"att-new\"],\"missing\":[],\"conflicts\":[]}"
+        },
+        {
+          "op": "replyAttachments.add",
+          "args": [
+            {
+              "id": "att-new",
+              "name": "att-new.txt",
+              "mediaType": "text/plain",
+              "size": 1,
+              "sha256": "sha-att-new"
+            }
+          ],
+          "outcome": "called"
+        },
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[\"att-new\"]"
+        }
+      ]
+    },
+    "bind-fails": {
+      "output": {
+        "length": 44,
+        "text": "添付を会話へ結べなかった: Error: 置き場が落ちた（bind）。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-1"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "threw Error: 置き場が落ちた（bind）"
+        }
+      ]
+    },
+    "bind-race#1": {
+      "output": {
+        "length": 39,
+        "text": "添付が結ぶ間に見つからなくなった（保持期限）: att-2。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-1", "att-2"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-1\"],\"newlyBound\":[\"att-1\"],\"missing\":[\"att-2\"],\"conflicts\":[]}"
+        },
+        {
+          "op": "attachments.unbind",
+          "args": {
+            "ids": ["att-1"],
+            "target": {
+              "conversationId": "conv-now"
+            }
+          },
+          "outcome": "[\"att-1\"]"
+        }
+      ]
+    },
+    "bind-race#2": {
+      "output": {
+        "length": 33,
+        "text": "添付が結ぶ間に別の宛先へ結ばれた: att-4。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-race"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-3"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-4"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-3", "att-4"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-3\"],\"newlyBound\":[\"att-3\"],\"missing\":[],\"conflicts\":[\"att-4\"]}"
+        },
+        {
+          "op": "attachments.unbind",
+          "args": {
+            "ids": ["att-3"],
+            "target": {
+              "conversationId": "conv-now"
+            }
+          },
+          "outcome": "[\"att-3\"]"
+        }
+      ]
+    },
+    "bind-race#3": {
+      "output": {
+        "length": 33,
+        "text": "添付が結ぶ間に別の宛先へ結ばれた: att-1。何も添えていない。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-race"
+        },
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-race"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-1"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[],\"newlyBound\":[],\"missing\":[],\"conflicts\":[\"att-1\"]}"
+        }
+      ]
+    },
+    "bind-race-unbind-fails": {
+      "output": {
+        "length": 15,
+        "text": "置き場が落ちた（unbind）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-1",
+          "name": "att-1.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-1",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-1"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-2"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-1", "att-2"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-1\"],\"newlyBound\":[\"att-1\"],\"missing\":[\"att-2\"],\"conflicts\":[]}"
+        },
+        {
+          "op": "attachments.unbind",
+          "args": {
+            "ids": ["att-1"],
+            "target": {
+              "conversationId": "conv-now"
+            }
+          },
+          "outcome": "threw Error: 置き場が落ちた（unbind）"
+        }
+      ]
+    },
+    "bind-race-conflict-unbind-fails": {
+      "output": {
+        "length": 15,
+        "text": "置き場が落ちた（unbind）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": true,
+      "attachments": [
+        {
+          "id": "att-3",
+          "name": "att-3.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-3",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-now"
+        },
+        {
+          "id": "att-4",
+          "name": "att-4.txt",
+          "mediaType": "text/plain",
+          "size": 10,
+          "sha256": "sha-att-4",
+          "uploadedBy": "clone",
+          "createdAt": "2026-10-28T00:00:00.000Z",
+          "conversationId": "conv-race"
+        }
+      ],
+      "slot": [],
+      "calls": [
+        {
+          "op": "replyAttachments.current",
+          "args": [],
+          "outcome": "[]"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-3"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.getMeta",
+          "args": {
+            "id": "att-4"
+          },
+          "outcome": "found unbound"
+        },
+        {
+          "op": "attachments.bind",
+          "args": {
+            "ids": ["att-3", "att-4"],
+            "conversationId": "conv-now"
+          },
+          "outcome": "{\"bound\":[\"att-3\"],\"newlyBound\":[\"att-3\"],\"missing\":[],\"conflicts\":[\"att-4\"]}"
+        },
+        {
+          "op": "attachments.unbind",
+          "args": {
+            "ids": ["att-3"],
+            "target": {
+              "conversationId": "conv-now"
+            }
+          },
+          "outcome": "threw Error: 置き場が落ちた（unbind）"
+        }
+      ]
+    }
+  }
+}
