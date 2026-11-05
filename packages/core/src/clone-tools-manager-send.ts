@@ -54,7 +54,14 @@ function finishManagerSendNotDone(
 // 先に書いた回答の行を書けたかを持つ箱（書けた確認の requestId）。`beforeAnswer` の中で代入する
 type ManagerSendAnswerJournaled = { requestId?: string };
 
-function buildManagerSendAnswerJournalEntry(args: {
+function buildManagerSendAnswerJournalEntry(
+  args: Parameters<typeof buildManagerSendAnswerJournalEntryOrig>[0],
+): JournalEntryInput {
+  const e = buildManagerSendAnswerJournalEntryOrig(args);
+  console.log('MSLEN answer-journal', (e as { decision: string }).decision.length);
+  return e;
+}
+function buildManagerSendAnswerJournalEntryOrig(args: {
   managerId: string;
   pending: { requestId: string; summary: string };
   decision: ManagerSendOptions['decision'];
@@ -73,7 +80,14 @@ function buildManagerSendAnswerJournalEntry(args: {
   };
 }
 
-function buildManagerSendRetractJournalEntry(args: {
+function buildManagerSendRetractJournalEntry(
+  args: Parameters<typeof buildManagerSendRetractJournalEntryOrig>[0],
+): JournalEntryInput {
+  const e = buildManagerSendRetractJournalEntryOrig(args);
+  console.log('MSLEN retract-journal', (e as { decision: string }).decision.length);
+  return e;
+}
+function buildManagerSendRetractJournalEntryOrig(args: {
   managerId: string;
   answeredRequestId: string;
   detail: string;
@@ -147,6 +161,11 @@ async function sendManagerMessage(args: {
 }
 
 function renderManagerSendSessionMissing(managerId: string, detail: string): string {
+  const r = renderManagerSendSessionMissingOrig(managerId, detail);
+  console.log('MSLEN session_missing', r.length);
+  return r;
+}
+function renderManagerSendSessionMissingOrig(managerId: string, detail: string): string {
   return (
     `[${managerId}] ${detail}\n` +
     '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
@@ -158,7 +177,9 @@ function renderManagerSendSessionMissing(managerId: string, detail: string): str
 }
 
 function renderManagerSendHeld(detail: string, unusedNote: string): string {
-  return `${detail}${unusedNote}`;
+  const r = `${detail}${unusedNote}`;
+  console.log('MSLEN held', r.length);
+  return r;
 }
 
 // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
@@ -180,7 +201,9 @@ function renderManagerSendDelivered(
   unusedNote: string,
   deliveredNote: string,
 ): string {
-  return `[${managerId}] ${detail}${unusedNote}\n${deliveredNote}`;
+  const r = `[${managerId}] ${detail}${unusedNote}\n${deliveredNote}`;
+  console.log('MSLEN delivered', r.length, 'note', deliveredNote.length);
+  return r;
 }
 
 export function managerSendTool(context: ToolContext, stores: Stores) {
@@ -241,7 +264,10 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
     async ({ managerId, message, decision, requestId, attachments, closes }, extra: unknown) => {
       // 閉じる指定の誤りは、送る前に丸ごと断る（送ってから閉じる側だけ断ると、半分だけ済んだ呼びになるため）
       const closesError = describeClosesViolation(closes);
-      if (closesError !== null) return text(closesError);
+      if (closesError !== null) {
+        console.log('MSLEN closes-violation', closesError.length);
+        return text(closesError);
+      }
       if (!context.managers) return finishManagerSendNotDone(stores, NO_POOL, closes);
       // 空白だけは断らない: HTTP も通すため
       const messageError = describeStringLengthViolation('message', message, { min: 1 });
@@ -253,6 +279,7 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
         attachments ?? [],
         context.attachmentLimits ?? readAttachmentLimits().limits,
       );
+      if (!handover.ok) console.log('MSLEN attach-refusal', handover.message.length);
       if (!handover.ok) return finishManagerSendNotDone(stores, text(handover.message), closes);
       // 答える前に判断の行を書く: 答えが届いたのに跡が無い窓を作らないため。
       // この道具は自己記録なので PostToolUse の行が無く、この行が「クローンが人間に聞かず答えた」唯一の跡になる。
@@ -304,6 +331,7 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
           'manager_send',
         );
       }
+      console.log('MSLEN default', result.outcome, result.detail.length);
       return finishWithCloses(stores, text(result.detail), closes, sent, 'manager_send');
     },
   );
