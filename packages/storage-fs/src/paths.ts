@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { placedEnvValue } from '@alteroid/core';
 
 export interface AlteroidPaths {
   root: string;
@@ -30,9 +31,7 @@ export interface AlteroidPaths {
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
 
 export function defaultRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const fromEnv = env[ALTEROID_HOME_ENV];
-  if (fromEnv && fromEnv.length > 0) return fromEnv;
-  return join(homedir(), '.alteroid');
+  return placedEnvValue(env, ALTEROID_HOME_ENV) ?? join(homedir(), '.alteroid');
 }
 
 export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {

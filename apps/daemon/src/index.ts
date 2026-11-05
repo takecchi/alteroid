@@ -97,7 +97,8 @@ import {
   startAttachmentPruning,
 } from './attachment-prune.js';
 import { startCloneMcpConfigSweeping } from './clone-mcp-config-sweep.js';
-import { AUTH_WITHHELD_ENV_KEYS, planAuth } from './auth.js';
+import { bindHostnameOf, workspaceOf } from './boot-env.js';
+import { AUTH_WITHHELD_ENV_KEYS, planAuth, unknownAuthModeNote } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import { createWorkerToolBus } from './topology-activity.js';
 import {
@@ -416,7 +417,7 @@ export async function main(): Promise<void> {
   await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);
   await pruneExtractedPluginsOnBoot({ root: paths.root, store: stores.plugins });
 
-  const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
+  const workspace = workspaceOf(process.env, process.cwd());
   const runnerEventJournalFold = new RunnerEventJournalFold();
 
   // 器の生死や設定の押し込みの不明は日誌へ載せない: 黙って死んだ器へ挑み直すたびに1行増え、`journal_read` の窓が同じ行で埋まって本物の記録が押し出されるため。
@@ -676,10 +677,13 @@ export async function main(): Promise<void> {
     }
   }
 
-  const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
+  const hostname = bindHostnameOf(process.env, DEFAULT_BIND);
 
   const authPlan = planAuth(process.env, { port });
   process.stdout.write(`alteroidd: ${authPlan.description}\n`);
+  // 起動時の1度だけ（planAuth はここでしか呼ばない）ので、同じ値の注意が重ねて出ることはない
+  const unknownAuthMode = unknownAuthModeNote(process.env);
+  if (unknownAuthMode !== null) writeStderrLine(`alteroidd: ${unknownAuthMode}\n`);
 
   // 鍵は入れない: そのままシステムプロンプトへ載るため。
   const self: SelfFacts = {

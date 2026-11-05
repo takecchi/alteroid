@@ -4806,7 +4806,8 @@ class RunnerSession {
         ? auth.codexHome
         : undefined;
     }
-    if (env.CODEX_HOME !== undefined && env.CODEX_HOME !== '') return env.CODEX_HOME;
+    const codexHome = placedEnvValue(env, 'CODEX_HOME');
+    if (codexHome !== null) return codexHome;
     return joinPath(this.#childUser?.home ?? env.HOME ?? homedir(), '.codex');
   }
 
