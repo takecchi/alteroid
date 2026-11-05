@@ -48,7 +48,7 @@ async function captureSchema(): Promise<SchemaPin> {
     tables: await lines(
       `select table_name, table_type from information_schema.tables
         where table_schema = current_schema()
-        order by table_name`,
+        order by table_name collate "C"`,
     ),
     columns: await lines(
       `select table_name, column_name, data_type, udt_name, is_nullable, column_default,
@@ -56,20 +56,21 @@ async function captureSchema(): Promise<SchemaPin> {
               is_identity, is_generated, generation_expression
          from information_schema.columns
         where table_schema = current_schema()
-        order by table_name, column_name`,
+        order by table_name collate "C", column_name collate "C"`,
     ),
     indexes: await lines(
       `select tablename, indexname, indexdef from pg_indexes
         where schemaname = current_schema()
-        order by tablename, indexname`,
+        order by tablename collate "C", indexname collate "C"`,
     ),
+    // 並びは `collate "C"` で決める: DB の照合順序（en_US.UTF-8 など）で `_` の扱いが変わり、行の順が入れ替わるため。
     // NOT NULL の制約（`contype = 'n'`）は除く: PGlite（PostgreSQL 18 系）は `pg_constraint` に出すが、CI の本物の PostgreSQL は出さない。
     // NULL の可否は `columns` の `is_nullable` が縛る。
     constraints: await lines(
       `select conrelid::regclass::text as table_name, conname, contype, pg_get_constraintdef(oid)
          from pg_constraint
         where connamespace = current_schema()::regnamespace and contype <> 'n'
-        order by 1, conname`,
+        order by conrelid::regclass::text collate "C", conname collate "C"`,
     ),
     // 表と、その TOAST 表（`toast.autovacuum_*`）の reloptions
     storageParameters: await lines(
@@ -77,7 +78,7 @@ async function captureSchema(): Promise<SchemaPin> {
               coalesce(t.reloptions::text, '-') as toast_options
          from pg_class c left join pg_class t on t.oid = c.reltoastrelid
         where c.relnamespace = current_schema()::regnamespace and c.relkind = 'r'
-        order by c.relname`,
+        order by c.relname collate "C"`,
     ),
   };
 }
