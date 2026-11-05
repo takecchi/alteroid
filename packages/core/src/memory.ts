@@ -657,6 +657,11 @@ export function assertNeverMemoryCreatedAt(createdAt: never): never {
   return assertNever('未知の記憶作成時刻の状態', createdAt);
 }
 
+// 索引に作成時刻が無い記憶は `unknown` にする: 更新時刻などで補うと、作成された時刻を知っているように見えるため
+export function toMemoryCreatedAt(at: string | undefined): MemoryCreatedAt {
+  return at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
+}
+
 // 根拠が無ければ「不明」と明言する: 値を持たないことを空文字で隠さないため
 export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
   switch (createdAt.kind) {

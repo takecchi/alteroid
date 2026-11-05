@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { compareCodeUnits } from './code-unit-order.js';
 import type { UnreadableAccount } from './schema.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
@@ -192,4 +193,27 @@ export function isAccessTokenUsable(token: AccessTokenRecord, now: Date): boolea
 
 export function isLoginRequestOpen(request: LoginRequest, now: Date): boolean {
   return Date.parse(request.expiresAt) > now.getTime();
+}
+
+// 文字列比較せず実時刻で比べる: オフセット表記の違う行で順が崩れ、pg（`timestamptz` の `asc()`）と食い違うため
+// 単独では使わない: `createdAt` が同着の行どうしの相対順を決めないため
+function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): number {
+  return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+}
+
+// 2次キーに `id` を使う: `Map` の反復順や `putAccount` の「既存行を消して末尾へ足す」は偶然の順で、pg も2次キーの無い `ORDER BY` の同着順を保証しないため
+export function compareAccountOrder(a: AuthAccount, b: AuthAccount): number {
+  return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
+}
+
+export function compareIdentityOrder(a: AuthIdentity, b: AuthIdentity): number {
+  return (
+    compareCreatedAt(a, b) ||
+    compareCodeUnits(a.provider, b.provider) ||
+    compareCodeUnits(a.subject, b.subject)
+  );
+}
+
+export function compareAccessTokenOrder(a: AccessTokenRecord, b: AccessTokenRecord): number {
+  return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 }

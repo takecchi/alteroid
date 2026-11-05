@@ -9,7 +9,8 @@ import { compareCodeUnits } from './code-unit-order.js';
 import { assertArchivableSessionId } from './archive-session-id.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
-import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
+import { approvalStateOf } from './approval-state.js';
+import { deriveMemoryFrontmatter, nextDescribedState, toMemoryCreatedAt } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
 import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
 import { matchesJournalSearch } from './journal-search.js';
@@ -21,7 +22,6 @@ import type {
   Job,
   JournalEntry,
   JournalEntryInput,
-  MemoryCreatedAt,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -66,6 +66,9 @@ import {
   accessTokenRecordSchema,
   authAccountSchema,
   authIdentitySchema,
+  compareAccessTokenOrder,
+  compareAccountOrder,
+  compareIdentityOrder,
   loginRequestSchema,
   sha256Hex,
   type AccessTokenRecord,
@@ -288,9 +291,6 @@ export function createMemoryStores(): Stores {
   let storedMcpServers: StoredMcpServers | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
-
-  const toMemoryCreatedAt = (at: string | undefined): MemoryCreatedAt =>
-    at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 
   /** 本物と同じ slug 検査を全メソッドに掛ける（文言も同じ）: 外すと本物で例外になる入力を「書けた」として通す。 */
   const checkMemorySlug = (slug: string): void => {
@@ -634,7 +634,7 @@ export function createMemoryStores(): Stores {
       const all = [...approvals.values()].map(isolate);
       // `unreadable` は絞らない。
       const pending = options.pendingOnly
-        ? all.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
+        ? all.filter((a) => approvalStateOf(a) === 'unanswered')
         : all;
       return {
         entries:
@@ -1040,22 +1040,6 @@ export function createMemoryStores(): Stores {
   const accessTokens = new Map<string, AccessTokenRecord>();
   const loginRequests = new Map<string, LoginRequest>();
   const identityKey = (provider: string, subject: string) => `${provider} ${subject}`;
-
-  // 実時刻で比べる（文字列比較にしない）: `isoDateTime` はオフセット表記が一意でなく、pg の `asc()` と順が食い違う。同着の順は決めないので単独では使わず、下の `compare*Order` を使う。
-  const compareCreatedAt = (a: { createdAt: string }, b: { createdAt: string }): number =>
-    Date.parse(a.createdAt) - Date.parse(b.createdAt);
-
-  // 挿入順を約束にしない: `Map` の反復順は偶然で、pg は2次キーの無い `ORDER BY` の同着順を保証しない。`id` の2次キーで決める。
-  const compareAccountOrder = (a: AuthAccount, b: AuthAccount): number =>
-    compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
-
-  const compareIdentityOrder = (a: AuthIdentity, b: AuthIdentity): number =>
-    compareCreatedAt(a, b) ||
-    compareCodeUnits(a.provider, b.provider) ||
-    compareCodeUnits(a.subject, b.subject);
-
-  const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
-    compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
   // 鍵は JSON の配列にする: 区切り文字を挟む形だと、区切り文字を含む値どうしが同じ鍵になりうるため
   const eventReceiptRows = new Map<string, EventReceipt>();
