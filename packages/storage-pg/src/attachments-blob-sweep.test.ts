@@ -54,7 +54,14 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
         const id = randomUUID();
         await putOrphan(blobs, keyOf(id), OLD);
         const result = await store.sweepOrphanBlobs(NOW);
-        expect(result).toEqual({ listed: 1, candidates: 1, removed: 1, failed: 0 });
+        expect(result).toEqual({
+          listed: 1,
+          candidates: 1,
+          removed: 1,
+          failed: 0,
+          abortedUploads: 0,
+          abortFailedUploads: 0,
+        });
         expect(blobs.keys()).toEqual([]);
       });
 
@@ -89,7 +96,14 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
         expect(rows.rows[0]?.n).toBe(1);
         for (const meta of [forever, expired]) blobs.setModified(keyOf(meta.id), OLD);
         const result = await store.sweepOrphanBlobs(NOW);
-        expect(result).toEqual({ listed: 2, candidates: 0, removed: 0, failed: 0 });
+        expect(result).toEqual({
+          listed: 2,
+          candidates: 0,
+          removed: 0,
+          failed: 0,
+          abortedUploads: 0,
+          abortFailedUploads: 0,
+        });
         expect(blobs.keys().sort()).toEqual([keyOf(forever.id), keyOf(expired.id)].sort());
       });
 
@@ -170,7 +184,14 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
         }
         await addReferenced();
         const result = await store.sweepOrphanBlobs(NOW);
-        expect(result).toEqual({ listed: 1105, candidates: 1100, removed: 1100, failed: 0 });
+        expect(result).toEqual({
+          listed: 1105,
+          candidates: 1100,
+          removed: 1100,
+          failed: 0,
+          abortedUploads: 0,
+          abortFailedUploads: 0,
+        });
         expect(blobs.keys().sort()).toEqual([...referenced].sort());
       }, 60_000);
     });
@@ -224,11 +245,18 @@ describe('PgAttachmentStore.sweepOrphanBlobs（#4314）', () => {
       expect(result?.reason).toContain('一覧を持たない');
     });
 
-    it('口を持たない置き場では、結果に取り消しの欄が無い（従来のまま）', async () => {
+    it('未完了の分割アップロードを持たないメモリの置き場は 0 件を返し、結果に 0 が載る', async () => {
       const blobs = new MemoryAttachmentBlobStore();
-      expect(blobs).not.toHaveProperty('abortStaleUploads');
+      expect(await blobs.abortStaleUploads()).toEqual({ aborted: 0, failed: 0 });
       const result = await new PgAttachmentStore(quiet(), { blobs }).sweepOrphanBlobs(NOW);
-      expect(result).toEqual({ listed: 0, candidates: 0, removed: 0, failed: 0 });
+      expect(result).toEqual({
+        listed: 0,
+        candidates: 0,
+        removed: 0,
+        failed: 0,
+        abortedUploads: 0,
+        abortFailedUploads: 0,
+      });
     });
   });
 });
