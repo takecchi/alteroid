@@ -69,6 +69,8 @@ interface Hooks {
   raceBeforeBind?: { id: string; action: 'remove' | 'conflict' };
   /** attachments.unbind が落ちる */
   unbindFails?: boolean;
+  /** journal.append が落ちる */
+  journalFails?: boolean;
 }
 
 interface Step {
@@ -309,7 +311,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'bind-race-unbind-fails',
     covers:
-      '結ぶ間に別の手が変え、戻し（unbind）も落ちる: いまは握りつぶさず、道具が素の例外で終わる（応答の文ではなく例外・先に結べた分は結ばれたまま残る・slot へは足さない）。#6430 の2点目で直す前のいまの振る舞い',
+      '結ぶ間に別の手が変え、戻し（unbind）も落ちる: 握りつぶさず、isError の断りの文に「戻せなかったので添付の結び付けが会話 … に残った」を書き添える（例外ではない・先に結べた分は結ばれたまま残る・slot へは足さない）。日誌へ「結び付けが残った」の decision を1行足す（#6430 の2点目）',
     attachments: [a('att-1', 10), a('att-2', 10)],
     steps: [
       {
@@ -322,13 +324,30 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'bind-race-conflict-unbind-fails',
     covers:
-      '別の会話へ結ばれた（conflicts）あとの戻しが落ちる: missing と同じく素の例外で終わる。先に結べた分は結ばれたまま残る',
+      '別の会話へ結ばれた（conflicts）あとの戻しが落ちる: missing と同じ形の断りの文（conflicts の側の文）と日誌の1行。先に結べた分は結ばれたまま残る',
     attachments: [a('att-3', 10), a('att-4', 10)],
     steps: [
       {
         args: reply('att-3', 'att-4'),
         writes: 'some',
         hooks: { raceBeforeBind: { id: 'att-4', action: 'conflict' }, unbindFails: true },
+      },
+    ],
+  },
+  {
+    name: 'bind-race-unbind-fails-journal-fails',
+    covers:
+      '結ぶ間の競合のあと戻しも落ち、日誌も書けない: 断りの文は同じように返る（isError・例外ではない）。日誌の行は足されない（journal.append は呼ばれて落ちる）。先に結べた分は結ばれたまま残る',
+    attachments: [a('att-1', 10), a('att-2', 10)],
+    steps: [
+      {
+        args: reply('att-1', 'att-2'),
+        writes: 'some',
+        hooks: {
+          raceBeforeBind: { id: 'att-2', action: 'remove' },
+          unbindFails: true,
+          journalFails: true,
+        },
       },
     ],
   },
@@ -359,6 +378,7 @@ interface PinnedCall {
     | 'attachments.getMeta'
     | 'attachments.bind'
     | 'attachments.unbind'
+    | 'journal.append'
     | 'replyAttachments.current'
     | 'replyAttachments.add';
   args: unknown;
@@ -372,6 +392,8 @@ interface PinnedStep {
   attachments: AttachmentMeta[];
   /** 呼んだあとの `replyAttachments.current()` の中身 */
   slot: AttachmentRef[];
+  /** 呼んだあとに日誌へ足された行 */
+  journal: Record<string, unknown>[];
   /** 呼びの並び */
   calls: PinnedCall[];
 }
@@ -521,7 +543,23 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   const hooks: Hooks = {};
   const calls: PinnedCall[] = [];
   const attachments = createStubAttachments(scenario.attachments, hooks, calls);
-  const stores: Stores = { ...base, attachments: attachments.store };
+  const stores: Stores = {
+    ...base,
+    attachments: attachments.store,
+    journal: {
+      ...base.journal,
+      append: async (entry) => {
+        const args = plain(entry);
+        if (hooks.journalFails === true) {
+          calls.push({ op: 'journal.append', args, outcome: 'threw Error: 日誌が落ちた' });
+          throw new Error('日誌が落ちた');
+        }
+        const written = await base.journal.append(entry);
+        calls.push({ op: 'journal.append', args, outcome: `ok ${written.id}` });
+        return written;
+      },
+    },
+  };
   const slotRefs: AttachmentRef[] = (scenario.slotSeed ?? []).map((id) =>
     refOf(attachments.metaOf(id)),
   );
@@ -550,14 +588,19 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   const found = tools.find((entry) => entry.name === 'reply_attach');
   if (!found) throw new Error('reply_attach が無い');
 
-  const snapshot = (): { attachments: AttachmentMeta[]; slot: AttachmentRef[] } => ({
+  const snapshot = async (): Promise<{
+    attachments: AttachmentMeta[];
+    slot: AttachmentRef[];
+    journal: unknown[];
+  }> => ({
     attachments: attachments.list(),
     slot: plain(slotRefs),
+    journal: plain(await base.journal.list({ order: 'asc' })) as unknown[],
   });
 
   const results: PinnedStep[] = [];
   for (const [index, step] of scenario.steps.entries()) {
-    const rawBefore = snapshot();
+    const rawBefore = await snapshot();
     // 結ぶ間の別の手の書き換え（口）は道具の書き込みではないので、比べる基準に先に織り込む
     const race = step.hooks?.raceBeforeBind;
     const before = {
@@ -597,15 +640,17 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
       };
     }
     for (const key of Object.keys(hooks)) delete hooks[key as keyof Hooks];
-    const after = snapshot();
+    const after = await snapshot();
     const wrote =
       JSON.stringify(before.attachments) !== JSON.stringify(after.attachments) ||
-      JSON.stringify(before.slot) !== JSON.stringify(after.slot);
+      JSON.stringify(before.slot) !== JSON.stringify(after.slot) ||
+      before.journal.length !== after.journal.length;
     results.push({
       output,
       wrote,
       attachments: after.attachments,
       slot: after.slot,
+      journal: after.journal.slice(before.journal.length) as Record<string, unknown>[],
       calls: plain(calls),
     });
     const key = stepKey(scenario, index);
@@ -618,6 +663,10 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
         after.slot,
         `場面 ${key} は書き込みが起きないはずだが、返信の添付 slot が呼ぶ前から変わった`,
       ).toEqual(before.slot);
+      expect(
+        after.journal.length,
+        `場面 ${key} は書き込みが起きないはずだが、日誌に行が足された`,
+      ).toBe(before.journal.length);
     }
   }
   return results;
@@ -748,6 +797,20 @@ describe('reply_attach の出力と呼んだあとの状態の固定（場面ご
           `場面 ${key} の slot: current() の id の並びが固定値からずれた`,
         ).toEqual(want?.slot.map((ref) => ref.id));
         expect(got?.slot, `場面 ${key} の slot の中身が固定値からずれた`).toEqual(want?.slot);
+      });
+
+      it(`${key} の呼んだあとに日誌へ足された行が固定値と同じ`, () => {
+        const want = pinned.scenarios[key];
+        const got = actual[key];
+        expect(want, `${key} が固定値に無い`).toBeDefined();
+        expect(
+          got?.journal.length,
+          `場面 ${key} の日誌: 足された行の数が変わった: 固定値 ${String(want?.journal.length)} 行 → いま ${String(got?.journal.length)} 行`,
+        ).toBe(want?.journal.length);
+        expect(
+          got?.journal,
+          `場面 ${key} の日誌: 足された行（種類・本文・id・at）が固定値からずれた`,
+        ).toEqual(want?.journal);
       });
 
       it(`${key} の呼びの並びが固定値と同じ`, () => {
@@ -891,16 +954,48 @@ describe('reply_attach の出力と呼んだあとの状態の固定（場面ご
       expect(actual[key]?.output.thrown, key).toBe(false);
       expect(ops(key), key).not.toContain('replyAttachments.add');
     }
-    // 戻しも落ちる: いまは素の例外で終わり、結んだ分が残る
-    for (const key of ['bind-race-unbind-fails', 'bind-race-conflict-unbind-fails']) {
-      expect(actual[key]?.output.thrown, key).toBe(true);
-      expect(actual[key]?.output.errorName, key).toBe('Error');
-      expect(text(key), key).toBe('置き場が落ちた（unbind）');
+    // 戻しも落ちる: 例外ではなく isError の断りの文。結んだ分が残ったことを書き添え、日誌へ1行足す
+    const RESIDUE = (conflict: string, id: string): string =>
+      `${conflict}。何も添えていないが、戻せなかったので添付の結び付けが会話 ${NOW_CONV} に残った: ${id}（Error: 置き場が落ちた（unbind））。`;
+    const MISSING = '添付が結ぶ間に見つからなくなった（保持期限）: att-2';
+    const CONFLICT = '添付が結ぶ間に別の宛先へ結ばれた: att-4';
+    expect(text('bind-race-unbind-fails')).toBe(RESIDUE(MISSING, 'att-1'));
+    expect(text('bind-race-conflict-unbind-fails')).toBe(RESIDUE(CONFLICT, 'att-3'));
+    expect(text('bind-race-unbind-fails-journal-fails')).toBe(RESIDUE(MISSING, 'att-1'));
+    for (const key of [
+      'bind-race-unbind-fails',
+      'bind-race-conflict-unbind-fails',
+      'bind-race-unbind-fails-journal-fails',
+    ]) {
+      expect(actual[key]?.output.thrown, key).toBe(false);
+      expect(actual[key]?.output.isError, key).toBe(true);
       expect(ops(key), key).toContain('attachments.unbind');
       expect(ops(key), key).not.toContain('replyAttachments.add');
       expect(slotIds(key), key).toEqual([]);
     }
     expect(bound('bind-race-unbind-fails', 'att-1')).toBe(NOW_CONV);
     expect(bound('bind-race-conflict-unbind-fails', 'att-3')).toBe(NOW_CONV);
+    expect(bound('bind-race-unbind-fails-journal-fails', 'att-1')).toBe(NOW_CONV);
+    // 日誌の行（decision）は、書けたときだけ。書けなくても断りの文は返る
+    expect(actual['bind-race-unbind-fails']?.journal).toMatchObject([
+      {
+        type: 'decision',
+        decision: `添付の結び付けが会話 ${NOW_CONV} に残った（結ぶ間の競合のあと、戻せなかった）: att-1`,
+        grounds: `理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（${MISSING}）。`,
+      },
+    ]);
+    expect(actual['bind-race-conflict-unbind-fails']?.journal).toMatchObject([
+      {
+        type: 'decision',
+        decision: `添付の結び付けが会話 ${NOW_CONV} に残った（結ぶ間の競合のあと、戻せなかった）: att-3`,
+        grounds: `理由: Error: 置き場が落ちた（unbind）。reply_attach は何も添えずに断った（${CONFLICT}）。`,
+      },
+    ]);
+    expect(ops('bind-race-unbind-fails-journal-fails')).toContain('journal.append');
+    expect(actual['bind-race-unbind-fails-journal-fails']?.journal).toEqual([]);
+    // 残りの場面（戻せた・競合なし）は日誌に何も足さない
+    for (const key of ['bind-race#1', 'bind-race#2', 'bind-race#3', 'bind-fails', 'mixed']) {
+      expect(ops(key), key).not.toContain('journal.append');
+    }
   });
 });

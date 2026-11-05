@@ -312,7 +312,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'attach-rejected',
     covers:
-      '添付の検査（存在・個数・合計の上限・控えの読み出し）で断る: 「会話へは書かなかった。…何も添えていない。」の文（isError は付かない）。日誌も添付も呼ぶ前と同じ・bind を呼ばない・noteTaskSaid / postToConversation を呼ばない。見つからない id は全部並べる。すでに結んであるものだけでも、見つからなければ断る',
+      '添付の検査（存在・個数・合計の上限・控えの読み出し）で断る: 「会話へは書かなかった。…何も添えていない。」の文（isError が付く。#6430 の1点目）。日誌も添付も呼ぶ前と同じ・bind を呼ばない・noteTaskSaid / postToConversation を呼ばない。見つからない id は全部並べる。すでに結んであるものだけでも、見つからなければ断る',
     tasks: [t('q-1', 'conv-a'), t('d-1', 'conv-b', 'done')],
     attachments: [
       a('att-1', 10),
@@ -395,7 +395,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'attach-bind-race-unbind-fails',
     covers:
-      '結ぶ間に別の手が変え、戻し（unbind）も落ちる: ここは握りつぶさず、道具が例外で終わる（日誌は書かない。先に結べた分は結ばれたまま残る）',
+      '結ぶ間に別の手が変え（missing）、戻し（unbind）も落ちる: 握りつぶさず、isError の断りの文に「戻せなかったので添付の結び付けが会話 … に残った」を書き添える（例外ではない）。日誌へは「結び付けが残った」の decision を1行だけ足す（会話への発言は書かない）。先に結べた分は結ばれたまま残る（#6430 の2点目）',
     tasks: [t('q-1', 'conv-a')],
     attachments: [a('att-1', 10), a('att-2', 10)],
     steps: [
@@ -403,6 +403,38 @@ const SCENARIOS: Scenario[] = [
         args: say('q-1', 'こんにちは', ['att-1', 'att-2']),
         writes: 'some',
         hooks: { raceBeforeBind: { id: 'att-2', action: 'remove' }, unbindFails: true },
+      },
+    ],
+  },
+  {
+    name: 'attach-bind-race-conflict-unbind-fails',
+    covers:
+      '別の会話へ結ばれた（conflicts）あとの戻しが落ちる: missing と同じ形の断りの文（conflicts の側の文）と日誌の1行。先に結べた分は結ばれたまま残る',
+    tasks: [t('q-1', 'conv-a')],
+    attachments: [a('att-3', 10), a('att-4', 10)],
+    steps: [
+      {
+        args: say('q-1', 'こんにちは', ['att-3', 'att-4']),
+        writes: 'some',
+        hooks: { raceBeforeBind: { id: 'att-4', action: 'conflict' }, unbindFails: true },
+      },
+    ],
+  },
+  {
+    name: 'attach-bind-race-unbind-fails-journal-fails',
+    covers:
+      '結ぶ間の競合のあと戻しも落ち、日誌も書けない: 断りの文は同じように返る（isError・例外ではない）。日誌の行は足されない（journal.append は呼ばれて落ちる）。先に結べた分は結ばれたまま残る',
+    tasks: [t('q-1', 'conv-a')],
+    attachments: [a('att-1', 10), a('att-2', 10)],
+    steps: [
+      {
+        args: say('q-1', 'こんにちは', ['att-1', 'att-2']),
+        writes: 'some',
+        hooks: {
+          raceBeforeBind: { id: 'att-2', action: 'remove' },
+          unbindFails: true,
+          journalFails: true,
+        },
       },
     ],
   },
@@ -1113,7 +1145,8 @@ describe('task_say の出力と呼んだあとの状態の固定（場面ごと�
     expect(text('attach-rejected#6')).toContain('添付 att-1 の控えを読めなかった');
     for (let n = 1; n <= 6; n += 1) {
       const key = `attach-rejected#${String(n)}`;
-      expect(actual[key]?.output.isError, key).toBe(false);
+      expect(actual[key]?.output.isError, key).toBe(true);
+      expect(actual[key]?.output.thrown, key).toBe(false);
       expect(ops(key)).not.toContain('attachments.bind');
       expect(ops(key)).not.toContain('journal.append');
       expect(ops(key)).not.toContain('context.postToConversation');
@@ -1146,10 +1179,49 @@ describe('task_say の出力と呼んだあとの状態の固定（場面ごと�
     // 結べたものが無い（conflict だけ）なら unbind を呼ばない
     expect(text('attach-bind-race#3')).toContain('別の宛先へ結ばれた: att-1');
     expect(ops('attach-bind-race#3')).not.toContain('attachments.unbind');
-    expect(actual['attach-bind-race-unbind-fails']?.output.thrown).toBe(true);
-    expect(text('attach-bind-race-unbind-fails')).toBe('置き場が落ちた（unbind）');
-    expect(ops('attach-bind-race-unbind-fails')).not.toContain('journal.append');
+    for (const key of ['attach-bind-race#1', 'attach-bind-race#2', 'attach-bind-race#3']) {
+      expect(actual[key]?.output.isError, key).toBe(true);
+      expect(ops(key), key).not.toContain('journal.append');
+    }
+    // 戻しも落ちる: 例外ではなく isError の断りの文。結んだ分が残ったことを書き添え、日誌へ decision を1行足す
+    const RESIDUE = (conflict: string, id: string): string =>
+      `会話へは書かなかった。${conflict}。何も添えていないが、戻せなかったので添付の結び付けが会話 conv-a に残った: ${id}（Error: 置き場が落ちた（unbind））。`;
+    const MISSING = '添付が結ぶ間に見つからなくなった（保持期限）: att-2';
+    const CONFLICT = '添付が結ぶ間に別の宛先へ結ばれた: att-4';
+    expect(text('attach-bind-race-unbind-fails')).toBe(RESIDUE(MISSING, 'att-1'));
+    expect(text('attach-bind-race-conflict-unbind-fails')).toBe(RESIDUE(CONFLICT, 'att-3'));
+    expect(text('attach-bind-race-unbind-fails-journal-fails')).toBe(RESIDUE(MISSING, 'att-1'));
+    for (const key of [
+      'attach-bind-race-unbind-fails',
+      'attach-bind-race-conflict-unbind-fails',
+      'attach-bind-race-unbind-fails-journal-fails',
+    ]) {
+      expect(actual[key]?.output.thrown, key).toBe(false);
+      expect(actual[key]?.output.isError, key).toBe(true);
+      expect(ops(key), key).toContain('attachments.unbind');
+      expect(ops(key), key).not.toContain('context.postToConversation');
+      expect(ops(key), key).not.toContain('context.noteTaskSaid');
+    }
     expect(bound('attach-bind-race-unbind-fails', 'att-1')).toBe('conv-a');
+    expect(bound('attach-bind-race-conflict-unbind-fails', 'att-3')).toBe('conv-a');
+    expect(bound('attach-bind-race-unbind-fails-journal-fails', 'att-1')).toBe('conv-a');
+    expect(journal('attach-bind-race-unbind-fails')).toMatchObject([
+      {
+        type: 'decision',
+        decision: '添付の結び付けが会話 conv-a に残った（結ぶ間の競合のあと、戻せなかった）: att-1',
+        grounds: `理由: Error: 置き場が落ちた（unbind）。task_say は何も添えずに断った（${MISSING}）。`,
+      },
+    ]);
+    expect(journal('attach-bind-race-conflict-unbind-fails')).toMatchObject([
+      {
+        type: 'decision',
+        decision: '添付の結び付けが会話 conv-a に残った（結ぶ間の競合のあと、戻せなかった）: att-3',
+        grounds: `理由: Error: 置き場が落ちた（unbind）。task_say は何も添えずに断った（${CONFLICT}）。`,
+      },
+    ]);
+    // 日誌が書けなくても断りの文は返り、行は足されない
+    expect(ops('attach-bind-race-unbind-fails-journal-fails')).toContain('journal.append');
+    expect(journal('attach-bind-race-unbind-fails-journal-fails')).toEqual([]);
     // 日誌が書けない
     expect(actual['journal-fails#1']?.output.thrown).toBe(true);
     expect(actual['journal-fails#1']?.output.errorName).toBe('JournalNotRecordedError');
