@@ -133,8 +133,6 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "else if (mergedSignals !== null) await this.#runMixedSignalBatch(mergedSignals);",
   "else await this.#handle(event);} catch (error) {await this.#reportFailure(this.#conversationOf(event), {error});",
   "this.#finishTurn();} finally {this.#notices.clearTurn();",
-  "this.#situationExplainedStaged = null;",
-  "this.#taskQueueHeadStaged = null;",
   "this.#digestDelta.discardStaged();",
   "if (this.#pumpTurnFailed) {this.#returnToFullText({situation: true, digest: {label: 'turn_failed'}});} const defer = this.#usageBlocked !== null;",
   "const failedOutsideUsage = !defer && this.#pumpTurnFailed;",

@@ -1006,21 +1006,10 @@ class Clone implements CloneHost {
   /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
   #lastPluginLoadDigest: string | null = null;
   /**
-   * 「いまの全体」の説明文のうち、この会話で全文を出したもの（`SituationExplained`）。
-   * 空にするのは、会話が変わったとき（init の session_id が変わった）・文脈が要約されたとき・`SITUATION_FULL_EVERY_TURNS` ターンごと:
-   * 会話の中に全文が1つも残っていない状態で要点だけを出さないため。
+   * 畳みの控えの situation 側（`SituationExplained`）。situation の畳みは撤去済みなので、書き込むのは預けた控えの読み戻しだけで、
+   * 説明文の組み立ては読まない。控えの保存（`#captureFold`）を次の撤去まで変えないために残してある。
    */
   readonly #situationExplained: SituationExplained = new Map();
-  /**
-   * 今回の「いまの全体」で全文を出した分（控えに書き足す予定のもの）。`#situationNoticeFor` が組み、`#runTurn` が入力を SDK へ押し込めた後に控えへ移す。
-   * 組んだ時点では控えへ書かない: 入力が SDK へ入らない回（二重配達の `human_answer`・計画の無い定期の起点・`#ensureQuery` の失敗）の全文は捨てられ、控えだけが「出した」と言い張って、会話に一度も載っていない全文を畳んでしまうため。
-   */
-  #situationExplainedStaged: SituationExplained | null = null;
-  /**
-   * 今回の断り書きで全文を出した待ち行列の先頭の材料（`TASK_QUEUE_HEAD_KEY` の控えに書き足す予定のもの）。`#situationExplainedStaged` と同じ流れ:
-   * `#taskQueueNotice` が組み、`#commitSituationExplained` が入力を SDK へ入れた後に確定する。別の持ち物にする理由: `#situationNoticeFor` が毎回の頭で `#situationExplainedStaged` を捨てるため
-   */
-  #taskQueueHeadStaged: string | null = null;
   #situationExplainedSessionId: string | undefined;
   #situationTurnsSinceFull = 0;
   /**
@@ -2459,9 +2448,6 @@ class Clone implements CloneHost {
    */
   async #settleTurn(batch: InboxEvent[], timer: TurnTimer): Promise<void> {
     this.#notices.clearTurn();
-    // 入力が入らなかった回の全文は控えへ移さず捨てる
-    this.#situationExplainedStaged = null;
-    this.#taskQueueHeadStaged = null;
     this.#digestDelta.discardStaged();
     // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする。
     // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
@@ -3391,8 +3377,6 @@ class Clone implements CloneHost {
   // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
   // 見出しは「いつ数えた値か」を名乗る: この節は会話履歴へ連結されてターンの数だけ並び、時刻が無いと古い節と新しい節が見分けられないため
   async #taskQueueNoticeFor(events: InboxEvent[]): Promise<string> {
-    // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
-    this.#taskQueueHeadStaged = null;
     const event = events[0];
     if (event === undefined) return '';
 
@@ -3515,48 +3499,12 @@ class Clone implements CloneHost {
       };
     }
     if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
+    const rows = describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT });
     return {
-      head: this.#foldedTaskQueueHead(
-        describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
-        placed.map((pending) => pending.id),
-      ),
+      head: [`[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`, ...rows],
       placed: placedLines,
       failed: failedLines,
     };
-  }
-
-  // 前のターンに全文を出した先頭の行と1文字も違わなければ、見出しを含む全体を1行にする（`describeSituation` の「前のターンと変化なし」と同じ型）。
-  // 比べるのは先頭の行だけ: 見出しの時刻は毎回変わるので材料に入れない（時刻は、会話に並んだ古い節と新しい節を見分けるために見出しへ入れてある）。
-  // 全文へ戻す条件は `#applyFoldPeriod` が持つ（会話が変わった・要約が走りうる・周期）。確定は入力を SDK へ入れた後（`#commitSituationExplained`）
-  // いま積んだ発言の task の行は材料から除く: 人間の task は先頭に載るので、入れると毎回別の id になり、人間の発言のターンでは1度も一致しないため（その task は「いま積んだ」の行が名乗る）
-  #foldedTaskQueueHead(rows: readonly string[], placedIds: readonly string[]): string[] {
-    const at = Date.now();
-    const full = [`[system] 待ち行列（${readAtLabel(at)} に数えた材料）`, ...rows];
-    if (!this.#tokenSaving.foldFixedText) return full;
-    const kept = rows.filter((row) => !placedIds.some((id) => row.startsWith(`- ${id}（`)));
-    const materials = kept.join('\n');
-    // 全文へ戻す条件（会話が変わった・要約が走りうる・周期）は、断り書きを組む前に `#applyFoldPeriod` が控えを消している
-    if (this.#situationExplained.get(TASK_QUEUE_HEAD_KEY) === materials) {
-      // 先頭から除いた行があるときは、それを言う: 新しい task が先頭に加わっているのに「変化なし」とだけ書くと嘘になるため
-      const excluded = kept.length < rows.length ? 'いま積んだ task を除くと、' : '';
-      return [
-        `[system] 待ち行列: ${excluded}前のターンと変化なし（${readAtLabel(at)} に数え直した）。`,
-      ];
-    }
-    this.#taskQueueHeadStaged = materials;
-    return full;
-  }
-
-  // 入力を SDK へ押し込めた直後にだけ呼ぶ: 全文が会話に載ったと言えるのはそのときだけのため
-  #commitSituationExplained(): void {
-    const headStaged = this.#taskQueueHeadStaged;
-    this.#taskQueueHeadStaged = null;
-    const staged = this.#situationExplainedStaged;
-    this.#situationExplainedStaged = null;
-    if (staged !== null) {
-      for (const [key, text] of staged) this.#situationExplained.set(key, text);
-    }
-    if (headStaged !== null) this.#situationExplained.set(TASK_QUEUE_HEAD_KEY, headStaged);
   }
 
   // 1本のメソッドにする: 式 `this.#delivery.inbox.size + this.#delivery.deferredCount` を毎ターンの状況の節と `manager_list` の2箇所に書き写すと、どちらかだけ直して2つの数字が食い違いうるため
@@ -3862,8 +3810,6 @@ class Clone implements CloneHost {
   }
 
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
-    // 前の回の持ち越しを捨てる: 入力が入らなかった回の全文を、次の回の入力へ引き継がないため
-    this.#situationExplainedStaged = null;
     const event = events[0];
     if (event === undefined) return '';
     if (event.type === 'distill') return '';
@@ -3915,9 +3861,7 @@ class Clone implements CloneHost {
           (): 'unreadable' => 'unreadable',
         ),
       ]);
-      // 控えの写しへ書かせる: 本物の控えへ移すのは入力を SDK へ入れた後（`#commitSituationExplained`）
-      const staged: SituationExplained = new Map(this.#situationExplained);
-      const notice = describeSituation({
+      return describeSituation({
         managers,
         runners: fleet.runners,
         tokens: pool[0],
@@ -3927,14 +3871,7 @@ class Clone implements CloneHost {
         // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
         // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#queuedInMemoryCount(),
-        // 渡さなければ毎回全文・毎回材料の全体（`describeSituation` の `explained`）。節約が無効の既定はこちら
-        ...(this.#tokenSaving.foldFixedText ? { explained: staged } : {}),
       });
-      // 今回書き足した分だけを持つ: 写しの元からある分まで後で控えへ戻すと、その間に控えが空になっていた（要約・会話の切り替え）とき、要点に畳んで全文を出していない分まで「出した」に戻すため
-      this.#situationExplainedStaged = new Map(
-        [...staged].filter(([key, text]) => this.#situationExplained.get(key) !== text),
-      );
-      return notice;
     } catch (error) {
       return describeSituationUnavailable(error);
     }
@@ -5871,7 +5808,6 @@ class Clone implements CloneHost {
       timer?.add('composeInput', Date.now() - composeStartedAt);
       timer?.modelStarted();
       this.#pushInput(input, images);
-      this.#commitSituationExplained();
       this.#digestDelta.commit();
       // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
