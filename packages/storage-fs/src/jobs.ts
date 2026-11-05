@@ -2,6 +2,8 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  approvalStateOf,
+  isApprovalFieldSet,
   jobSchema,
   prepareApprovalForWrite,
   prepareJobForWrite,
@@ -45,7 +47,8 @@ const EMPTY: JobFile = { jobs: [], invalidJobsRaw: [], approvals: [], invalidApp
 function isSettledRaw(raw: unknown): boolean {
   if (typeof raw !== 'object' || raw === null) return false;
   const row = raw as Record<string, unknown>;
-  const set = (v: unknown): boolean => v !== undefined && v !== null;
+  // 生の行なので型は信用できない: 欄の有無（`undefined`・`null` 以外）だけを `isApprovalFieldSet` に見せる
+  const set = (v: unknown): boolean => isApprovalFieldSet(v as string | null | undefined);
   return set(row.answeredAt) || set(row.withdrawnAt);
 }
 
@@ -132,7 +135,7 @@ export class FsJobStore implements JobStore {
   ): Promise<ApprovalList> {
     const { approvals, invalidApprovalsRaw } = await this.#read();
     const pending = options.pendingOnly
-      ? approvals.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
+      ? approvals.filter((a) => approvalStateOf(a) === 'unanswered')
       : approvals;
     const entries =
       options.conversationId === undefined

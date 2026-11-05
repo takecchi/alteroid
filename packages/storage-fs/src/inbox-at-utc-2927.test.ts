@@ -24,24 +24,7 @@ describe('InboxStore.put() — 外側の at の表記（fs 実装）', () => {
     text: id,
   });
 
-  it('+09:00 を渡すと Z で返る（peekPending と pending().oldestAt）', async () => {
-    await stores.inbox.put(
-      event('evt-a', '2026-08-12T09:00:00+09:00'),
-      '2026-08-12T09:00:00+09:00',
-    );
-    const [entry] = (await stores.inbox.peekPending()).entries;
-    expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
-    expect(entry?.event.at).toBe('2026-08-12T09:00:00+09:00');
-    expect((await stores.inbox.pending()).oldestAt).toBe('2026-08-12T00:00:00.000Z');
-  });
-
-  it('不正な時刻は put が拒む（throw する。何も保存しない）', async () => {
-    await expect(
-      stores.inbox.put(event('evt-a', '2026-08-12T09:00:00+09:00'), 'not-a-date'),
-    ).rejects.toThrow();
-    expect((await stores.inbox.pending()).count).toBe(0);
-  });
-
+  // `+09:00` を渡すと Z で返る・不正な時刻は拒むの2つは `verifyInboxStoreContract`（inbox-store-contract.test.ts）。ここは fs の JSON ファイルにしかない期待だけを持つ。
   it('既にある +09:00 のままの行は書き換えず、新しい Z の行と実時刻で並ぶ', async () => {
     const legacy = {
       events: [

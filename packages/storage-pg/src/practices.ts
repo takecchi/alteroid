@@ -128,10 +128,7 @@ export class PgPracticeStore implements PracticeStore {
       chars: row.chars,
     });
     if (!parsed.success) {
-      throw new UnreadablePracticeError(
-        `やり方 ${slug} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
-        { slug },
-      );
+      throw UnreadablePracticeError.forRow({ slug, reason: parsed.error.message });
     }
     return parsed.data;
   }
@@ -352,10 +349,7 @@ export class PgPracticeStore implements PracticeStore {
       chars: row.chars,
     });
     if (!parsed.success) {
-      throw new UnreadablePracticeError(
-        `やり方 ${slug} の版 ${version} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
-        { slug, version },
-      );
+      throw UnreadablePracticeError.forVersion({ slug, version, reason: parsed.error.message });
     }
     return parsed.data;
   }
