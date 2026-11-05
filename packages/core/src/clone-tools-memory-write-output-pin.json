@@ -17,7 +17,7 @@
     "create-content-forms#3": 794,
     "create-content-forms#4": 828,
     "create-content-forms#5": 860,
-    "create-with-base-version#1": 225,
+    "create-with-base-version#1": 153,
     "create-with-base-version#2": 762,
     "update-needs-base#1": 171,
     "update-needs-base#2": 296,
@@ -381,13 +381,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -399,6 +392,13 @@
             "summary": "作った"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -518,13 +518,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "3 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -536,6 +529,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "3 docs"
         }
       ]
     },
@@ -633,13 +633,6 @@
           "outcome": "ok c57d3c6d21342b49e81f9ed3b27f7b84f8ee46d6213c0d8df3be3c02e4a85ab2"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -651,6 +644,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -748,13 +748,6 @@
           "outcome": "ok 2cc2d57533542ef209a60948b89b01cfbecd64ec42eb40e9613037d319e3e00c"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -766,6 +759,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -838,13 +838,6 @@
           "outcome": "ok b248c8691d336d2ad9218ec8dff84f569e4b3f780ae1975ad015356e767d784c"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -856,6 +849,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -928,13 +928,6 @@
           "outcome": "ok 2343919844c8aae7a31b6a875006234113fefc8ed8689edf92d26d916a328516"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -946,6 +939,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -1022,13 +1022,6 @@
           "outcome": "ok b28d4d61a293333ba8bbcad78ef0489e68af2c334cec08ec2efcf28bd8caf827"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1040,6 +1033,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -1134,13 +1134,6 @@
           "outcome": "ok 97337647dc6ab01e0034938d7ef1d48389820f0f9f4b12c6e87ab717a2d5c4a1"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1152,6 +1145,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -1264,13 +1264,6 @@
           "outcome": "ok 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "3 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1282,6 +1275,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "3 docs"
         }
       ]
     },
@@ -1412,13 +1412,6 @@
           "outcome": "ok 5653a71b715ee8e923d619a0d8dcbad37d85a296faf01007d00feae951e38c40"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "4 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1430,6 +1423,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-4"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "4 docs"
         }
       ]
     },
@@ -1578,13 +1578,6 @@
           "outcome": "ok fa3fcf8423584d3ab9ce493ba1e10238cd5c400f9fb7cf533397bed4f2dc6b3a"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "5 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1596,13 +1589,20 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-5"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "5 docs"
         }
       ]
     },
     "create-with-base-version#1": {
       "output": {
-        "length": 225,
-        "text": "記憶 about-me は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、全文置換を**書かなかった**。いまその文書は無い（読んだ後に消された）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。memory_read slug=about-me で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "length": 153,
+        "text": "記憶 about-me は無い（読んだ時点でも無かった）のに base_version が渡されたので、全文置換を**書かなかった**。**何も書いていない。**新しく作るなら base_version を付けずに呼ぶこと。別の文書のつもりだったなら、memory_list で slug を確かめること。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1711,13 +1711,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1729,6 +1722,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -1923,13 +1923,6 @@
           "outcome": "ok 638f17aef0a9bc31d8628a60b40e600d2c1d74a3e9601ceedebe25dafb288960"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -1941,6 +1934,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2023,13 +2023,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2041,6 +2034,13 @@
             "summary": "何も変えない"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2123,13 +2123,6 @@
           "outcome": "ok b3c0837d4fbfc77dffaa7925b728192dac96f7d3d1b2768dbf695e93c8cf89bb"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2141,6 +2134,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2223,13 +2223,6 @@
           "outcome": "ok 00576a5d239f8859200bec9e79789bac7840cb3cd3397e457494e28bb151f17a"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2241,6 +2234,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2323,13 +2323,6 @@
           "outcome": "ok 29e4ba739e23a09e1dbf96f07aec4c68d3bc40358f59dc5d979e536c1d04cfb1"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2341,6 +2334,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2423,13 +2423,6 @@
           "outcome": "ok 502f42f10b72db23e67631d9d2966cb7929f758cf94f358464ffccb4253f7854"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2441,6 +2434,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2523,13 +2523,6 @@
           "outcome": "ok 89f0db179fc9f396b03e101f7ca82bed0da40f51137556f87e03d13d2e12b345"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2541,6 +2534,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2623,13 +2623,6 @@
           "outcome": "ok c8c2a45847c9618738ecde91a4a5e9da0d91e0b5ea9f063bad855f2477f958a4"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2641,6 +2634,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-4"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2723,13 +2723,6 @@
           "outcome": "ok cc645179ae5854551c6ebf5fcb10c9d15642dd701710a13aebba493ba7d9272c"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2741,6 +2734,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-5"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2823,13 +2823,6 @@
           "outcome": "ok 92c734dfcff4ca0560595739aa253f988ca21ff267ef513c0364e3ab0214516f"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2841,6 +2834,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -2923,13 +2923,6 @@
           "outcome": "ok efc4ddd71b23f6574e5f766a78c7dd69f2126cb1a8ed266132beb490c7c50942"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -2941,6 +2934,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3023,13 +3023,6 @@
           "outcome": "ok d1e932b83b31ba850260c1bc90119370e89695919af35c6b894768fc3fc991c5"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3041,6 +3034,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3123,13 +3123,6 @@
           "outcome": "ok 3879e43a2035aeb87f45e5fd998f8deeb87156a81ab584cc591d5d575092e0af"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3141,6 +3134,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-4"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3223,13 +3223,6 @@
           "outcome": "ok 32d7851fd2f331a88f88f8927743b92ed7f45a4fca2b94b8943d6030bef8ee60"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3241,6 +3234,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-5"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3313,13 +3313,6 @@
           "outcome": "ok 7c5803efcc748dec35a8ae6b204a93bea35721b415609c30fb81a392459034b7"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3331,6 +3324,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3403,13 +3403,6 @@
           "outcome": "ok 1a2f56b64962b4e0bfc4b50dab2b0072e7a5cec5c9671f3d332184004fe6ec4d"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3421,6 +3414,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3503,13 +3503,6 @@
           "outcome": "ok d2604735702c7cb00b97b39e262321a591ee51df6bd1cdc295f33d01faccd41e"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3521,6 +3514,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -3625,13 +3625,6 @@
           "outcome": "ok 97953f39c415fce99530dd2cefb59697c8b69c0b424fc58917c61173f92560df"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3643,6 +3636,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -3747,13 +3747,6 @@
           "outcome": "ok 1ed0b49bbf146db9b21f91b611bdbe6d14e1ce7836b16134a19afa1868034973"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3765,6 +3758,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -3869,13 +3869,6 @@
           "outcome": "ok 5e7d5b38970ab9f66135a5f2c4471724a85c8346ef5e63bc028985bf1fbf79bf"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -3887,6 +3880,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -3991,13 +3991,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4009,6 +4002,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-4"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -4103,13 +4103,6 @@
           "outcome": "ok b248c8691d336d2ad9218ec8dff84f569e4b3f780ae1975ad015356e767d784c"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4121,6 +4114,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-5"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -4215,13 +4215,6 @@
           "outcome": "ok 2343919844c8aae7a31b6a875006234113fefc8ed8689edf92d26d916a328516"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4233,6 +4226,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-6"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -4315,13 +4315,6 @@
           "outcome": "ok 97953f39c415fce99530dd2cefb59697c8b69c0b424fc58917c61173f92560df"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4333,6 +4326,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -4415,13 +4415,6 @@
           "outcome": "ok 04e8802c891457215137526a24bfb9d62e89cc69b92b308f22e1ce40babfe41f"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4433,6 +4426,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -4515,13 +4515,6 @@
           "outcome": "ok 0b7685529c2ee8182002b0210e0d05eb45329fe2b24d945748d89b579e5647d3"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4533,6 +4526,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -4615,13 +4615,6 @@
           "outcome": "ok 2f0af390caf70407a76859b8bcc0accac3e0338730ca44688afcd3b05b65869b"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4633,6 +4626,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -4715,13 +4715,6 @@
           "outcome": "ok 8ac4bb143a5b4fb8fd73f0ccf648f83a85711d4c39d26f89b498b9d0dae2f7b3"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4733,6 +4726,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -4815,13 +4815,6 @@
           "outcome": "ok 139570c06e4e5cd2dab49d1ab3f4b50822afe3c1b4666c8aa8bb6c7e10967159"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4833,6 +4826,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-4"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -4915,13 +4915,6 @@
           "outcome": "ok 6f7dba65d53f9b60df3f0f70290c0a43fa3451787fcfb19b29afc6955433d73d"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "120 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -4933,6 +4926,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "120 docs"
         }
       ]
     },
@@ -5030,13 +5030,6 @@
           "outcome": "ok 7b36206771e99a24bb8f0aeb21fffafa72b33107524c1a062f7cb9c214c87b9d"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "11 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5048,6 +5041,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "11 docs"
         }
       ]
     },
@@ -5152,13 +5152,6 @@
           "outcome": "ok 14c58c11445a3df786b3efea5e93a4fee646eccaef009cc70295921fc1df6638"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "11 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5170,6 +5163,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "11 docs"
         }
       ]
     },
@@ -5252,13 +5252,6 @@
           "outcome": "ok 49db8c6b1b7a7452d155442ea7a837f6580c01f071e346815551f710385ce3f9"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5270,6 +5263,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -5352,13 +5352,6 @@
           "outcome": "ok c05bc964760562d66e51ab47c8690f270d0ce2e9f068e83d34a3399fc0d208e3"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5370,6 +5363,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -5452,13 +5452,6 @@
           "outcome": "ok 7a57adcc3119ee7be04ae34307ed5df9c5a7e523d1b37aad5d73a9828f3dcb47"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5470,6 +5463,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -5552,13 +5552,6 @@
           "outcome": "ok ab1451e7b61e0de3b9ed1a2ce028859472e2d68b9013478ca51882482c8819f2"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5570,6 +5563,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-4"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -5652,13 +5652,6 @@
           "outcome": "ok 13d342fa66ad2964c04dc1e6fbdf964b0e1bfb62c168d77685929d02780bca64"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5670,6 +5663,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-5"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -5767,13 +5767,6 @@
           "outcome": "ok e4f8e3965eda97fc12de7a635930fa3ed2d9acc263d1b9b3e553ff2e69a4e974"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5785,6 +5778,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -5868,13 +5868,6 @@
           "outcome": "ok 14c58c11445a3df786b3efea5e93a4fee646eccaef009cc70295921fc1df6638"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -5886,6 +5879,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -5990,13 +5990,6 @@
           "outcome": "ok c57d3c6d21342b49e81f9ed3b27f7b84f8ee46d6213c0d8df3be3c02e4a85ab2"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -6008,6 +6001,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -6090,13 +6090,6 @@
           "outcome": "ok 14c58c11445a3df786b3efea5e93a4fee646eccaef009cc70295921fc1df6638"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -6108,6 +6101,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -6190,13 +6190,6 @@
           "outcome": "ok 14c58c11445a3df786b3efea5e93a4fee646eccaef009cc70295921fc1df6638"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -6208,6 +6201,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -6290,13 +6290,6 @@
           "outcome": "ok 14c58c11445a3df786b3efea5e93a4fee646eccaef009cc70295921fc1df6638"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -6308,6 +6301,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -7082,13 +7082,6 @@
           "outcome": "ok 638f17aef0a9bc31d8628a60b40e600d2c1d74a3e9601ceedebe25dafb288960"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "10 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -7100,6 +7093,13 @@
             "summary": "蒸留が書いた"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "10 docs"
         }
       ]
     },
@@ -8152,13 +8152,6 @@
           "outcome": "ok 638f17aef0a9bc31d8628a60b40e600d2c1d74a3e9601ceedebe25dafb288960"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "10 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -8170,6 +8163,13 @@
             "summary": "会話の中で書いた"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "10 docs"
         }
       ]
     },
@@ -8465,13 +8465,6 @@
           "outcome": "ok 638f17aef0a9bc31d8628a60b40e600d2c1d74a3e9601ceedebe25dafb288960"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "10 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -8483,6 +8476,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "10 docs"
         }
       ]
     },
@@ -10513,7 +10513,19 @@
           "version": "cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         }
       },
-      "journal": [],
+      "journal": [
+        {
+          "type": "memory_update",
+          "id": "id-1",
+          "at": "2026-10-29T00:05:00.000Z",
+          "slug": "f4",
+          "cause": "clone",
+          "action": "write",
+          "bytesBefore": 187,
+          "bytesAfter": 193,
+          "summary": "テストの書き込み"
+        }
+      ],
       "calls": [
         {
           "op": "persona.read",
@@ -10538,6 +10550,19 @@
             "ifMatch": "cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
           },
           "outcome": "ok 638f17aef0a9bc31d8628a60b40e600d2c1d74a3e9601ceedebe25dafb288960"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "memory_update",
+            "slug": "f4",
+            "cause": "clone",
+            "action": "write",
+            "bytesBefore": 187,
+            "bytesAfter": 193,
+            "summary": "テストの書き込み"
+          },
+          "outcome": "ok id-1"
         },
         {
           "op": "persona.documents",
@@ -10710,13 +10735,6 @@
             "ifMatch": "cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
           },
           "outcome": "ok 638f17aef0a9bc31d8628a60b40e600d2c1d74a3e9601ceedebe25dafb288960"
-        },
-        {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "5 docs"
         },
         {
           "op": "journal.append",
@@ -10918,13 +10936,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "6 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -11009,13 +11020,6 @@
           "outcome": "ok 5d22ab30d5c1108e29393694311bbf2ab365e77fa4f998caed979a800c2837d1"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -11027,6 +11031,13 @@
             "summary": "多バイトから ascii へ"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -11100,13 +11111,6 @@
           "outcome": "ok b80b75aa05372219a6d719808acb6d56b7d8bd7242d74a1c52661bead186bdc3"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -11118,6 +11122,13 @@
             "summary": "1行目\n2行目 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -11209,13 +11220,6 @@
           "outcome": "ok 8e0a25d4e14509ff2dedc3db560e5bf3a829ee4d9afeba067ac0d97ec73f5e43"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "2 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -11227,6 +11231,13 @@
             "summary": "新規"
           },
           "outcome": "ok id-3"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "2 docs"
         }
       ]
     },
@@ -11309,13 +11320,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -11327,6 +11331,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-1"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     },
@@ -11409,13 +11420,6 @@
           "outcome": "ok cea4c0c3933afeed221f27551e7a40e4587131d98866b0c318bb91b62e37d639"
         },
         {
-          "op": "persona.documents",
-          "args": {
-            "nth": 2
-          },
-          "outcome": "1 docs"
-        },
-        {
           "op": "journal.append",
           "args": {
             "type": "memory_update",
@@ -11427,6 +11431,13 @@
             "summary": "テストの書き込み"
           },
           "outcome": "ok id-2"
+        },
+        {
+          "op": "persona.documents",
+          "args": {
+            "nth": 2
+          },
+          "outcome": "1 docs"
         }
       ]
     }
