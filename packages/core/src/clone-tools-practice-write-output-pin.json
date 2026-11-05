@@ -1,0 +1,3743 @@
+{
+  "lengths": {
+    "slug-invalid#1": 40,
+    "slug-invalid#2": 32,
+    "slug-invalid#3": 39,
+    "slug-invalid#4": 35,
+    "slug-invalid#5": 161,
+    "slug-invalid#6": 40,
+    "kind-invalid#1": 27,
+    "kind-invalid#2": 27,
+    "kind-invalid#3": 48,
+    "kind-invalid#4": 48,
+    "kind-valid-edges#1": 245,
+    "kind-valid-edges#2": 245,
+    "kind-valid-edges#3": 245,
+    "create": 247,
+    "create-content-forms#1": 255,
+    "create-content-forms#2": 250,
+    "create-content-forms#3": 244,
+    "create-content-forms#4": 253,
+    "create-content-forms#5": 257,
+    "create-content-forms#6": 253,
+    "create-content-forms#7": 257,
+    "create-with-base-version#1": 225,
+    "create-with-base-version#2": 247,
+    "create-slug-forms": 249,
+    "update-needs-base#1": 170,
+    "update-needs-base#2": 294,
+    "update-needs-base#3": 246,
+    "update#1": 246,
+    "update#2": 355,
+    "update#3": 246,
+    "update#4": 355,
+    "update#5": 337,
+    "update#6": 337,
+    "update#7": 402,
+    "conflict#1": 285,
+    "conflict#2": 286,
+    "conflict#3": 286,
+    "conflict#4": 217,
+    "unreadable#1": 255,
+    "unreadable#2": 255,
+    "unreadable#3": 162,
+    "unreadable#4": 238,
+    "unreadable#5": 263,
+    "failures#1": 13,
+    "failures#2": 12,
+    "failures#3": 14,
+    "failures#4": 14,
+    "failures#5": 14,
+    "failures#6": 190,
+    "failures#7": 190,
+    "failures#8": 190
+  },
+  "scenarios": {
+    "slug-invalid#1": {
+      "output": {
+        "length": 40,
+        "text": "やり方のスラッグが不正: Bad Slug（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "slug-invalid#2": {
+      "output": {
+        "length": 32,
+        "text": "やり方のスラッグが不正: （英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "slug-invalid#3": {
+      "output": {
+        "length": 39,
+        "text": "やり方のスラッグが不正: .hidden（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "slug-invalid#4": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: a/b（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "slug-invalid#5": {
+      "output": {
+        "length": 161,
+        "text": "やり方のスラッグが不正: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "slug-invalid#6": {
+      "output": {
+        "length": 40,
+        "text": "やり方のスラッグが不正: Bad Slug（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "kind-invalid#1": {
+      "output": {
+        "length": 27,
+        "text": "kind は使えない（1文字以上128文字以下のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "kind-invalid#2": {
+      "output": {
+        "length": 27,
+        "text": "kind は使えない（1文字以上128文字以下のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "kind-invalid#3": {
+      "output": {
+        "length": 48,
+        "text": "kind は使えない（NUL（\\u0000）だけの値は空と同じ。1文字以上128文字以下のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "kind-invalid#4": {
+      "output": {
+        "length": 48,
+        "text": "kind は使えない（NUL（\\u0000）だけの値は空と同じ。1文字以上128文字以下のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": []
+    },
+    "kind-valid-edges#1": {
+      "output": {
+        "length": 245,
+        "text": "やり方 k-one を新しく作った（34 文字。前の版は practice_history slug=k-one で読める）。practice_list で一覧に出る。\n\n（版 base_version=6c442bd22b767f4f01fbded03bb26a2cde7f04ee2e760f08734bd1f658692e16 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "k-max": null,
+        "k-nul": null,
+        "k-one": {
+          "slug": "k-one",
+          "kind": "x",
+          "title": "1字",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "6c442bd22b767f4f01fbded03bb26a2cde7f04ee2e760f08734bd1f658692e16",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "やり方 k-one（x）を作った: 1字",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "k-one"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "k-one"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "k-one",
+              "kind": "x",
+              "title": "1字",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 6c442bd22b767f4f01fbded03bb26a2cde7f04ee2e760f08734bd1f658692e16 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 k-one（x）を作った: 1字",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "k-one"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "kind-valid-edges#2": {
+      "output": {
+        "length": 245,
+        "text": "やり方 k-max を新しく作った（34 文字。前の版は practice_history slug=k-max で読める）。practice_list で一覧に出る。\n\n（版 base_version=937697de6cb6710bffae16d4301c11cdfb6d7e59edf1a729e8b99395f0e557b8 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "k-max": {
+          "slug": "k-max",
+          "kind": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+          "title": "上限",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "937697de6cb6710bffae16d4301c11cdfb6d7e59edf1a729e8b99395f0e557b8",
+          "versions": 1
+        },
+        "k-nul": null,
+        "k-one": {
+          "slug": "k-one",
+          "kind": "x",
+          "title": "1字",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "6c442bd22b767f4f01fbded03bb26a2cde7f04ee2e760f08734bd1f658692e16",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "やり方 k-max（ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ）を作った: 上限",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "k-max"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "k-max"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "k-max",
+              "kind": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+              "title": "上限",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 937697de6cb6710bffae16d4301c11cdfb6d7e59edf1a729e8b99395f0e557b8 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 k-max（ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ）を作った: 上限",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "k-max"
+            }
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "kind-valid-edges#3": {
+      "output": {
+        "length": 245,
+        "text": "やり方 k-nul を新しく作った（34 文字。前の版は practice_history slug=k-nul で読める）。practice_list で一覧に出る。\n\n（版 base_version=f29557d1e76bcc0d5337366791c61c87b63128e72f18014c228318d30b7c90d9 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "k-max": {
+          "slug": "k-max",
+          "kind": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+          "title": "上限",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "937697de6cb6710bffae16d4301c11cdfb6d7e59edf1a729e8b99395f0e557b8",
+          "versions": 1
+        },
+        "k-nul": {
+          "slug": "k-nul",
+          "kind": "ab",
+          "title": "NUL 混じり",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "f29557d1e76bcc0d5337366791c61c87b63128e72f18014c228318d30b7c90d9",
+          "versions": 1
+        },
+        "k-one": {
+          "slug": "k-one",
+          "kind": "x",
+          "title": "1字",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "6c442bd22b767f4f01fbded03bb26a2cde7f04ee2e760f08734bd1f658692e16",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "やり方 k-nul（ab）を作った: NUL 混じり",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "k-nul"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "k-nul"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "k-nul",
+              "kind": "a\u0000b",
+              "title": "NUL 混じり",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok f29557d1e76bcc0d5337366791c61c87b63128e72f18014c228318d30b7c90d9 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 k-nul（a\u0000b）を作った: NUL 混じり",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "k-nul"
+            }
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "create": {
+      "output": {
+        "length": 247,
+        "text": "やり方 review を新しく作った（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "やり方 review（レビュー）を作った: 題",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を作った: 題",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "create-content-forms#1": {
+      "output": {
+        "length": 255,
+        "text": "やり方 no-newline を新しく作った（10 文字。前の版は practice_history slug=no-newline で読める）。practice_list で一覧に出る。\n\n（版 base_version=5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": null,
+        "long-ascii": null,
+        "multibyte": null,
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": null,
+        "title-nul": null,
+        "with-nul": null
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "やり方 no-newline（調査）を作った: 改行なし",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "no-newline"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "no-newline"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "no-newline",
+              "kind": "調査",
+              "title": "改行なし",
+              "content": "# 改行なし\n本文"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a 10字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 no-newline（調査）を作った: 改行なし",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "no-newline"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "create-content-forms#2": {
+      "output": {
+        "length": 250,
+        "text": "やり方 with-nul を新しく作った（9 文字。前の版は practice_history slug=with-nul で読める）。practice_list で一覧に出る。\n\n（版 base_version=b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": null,
+        "long-ascii": null,
+        "multibyte": null,
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": null,
+        "title-nul": null,
+        "with-nul": {
+          "slug": "with-nul",
+          "kind": "調査",
+          "title": "NUL",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 9,
+          "content": "# NUL\n本文\n",
+          "version": "b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "やり方 with-nul（調査）を作った: NUL",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "with-nul"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "with-nul"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "with-nul",
+              "kind": "調査",
+              "title": "NUL",
+              "content": "# NUL\n本\u0000文\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9 9字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 with-nul（調査）を作った: NUL",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "with-nul"
+            }
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "create-content-forms#3": {
+      "output": {
+        "length": 244,
+        "text": "やり方 empty を新しく作った（1 文字。前の版は practice_history slug=empty で読める）。practice_list で一覧に出る。\n\n（版 base_version=aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": {
+          "slug": "empty",
+          "kind": "調査",
+          "title": "空",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 1,
+          "content": "\n",
+          "version": "aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848",
+          "versions": 1
+        },
+        "long-ascii": null,
+        "multibyte": null,
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": null,
+        "title-nul": null,
+        "with-nul": {
+          "slug": "with-nul",
+          "kind": "調査",
+          "title": "NUL",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 9,
+          "content": "# NUL\n本文\n",
+          "version": "b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "やり方 empty（調査）を作った: 空",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "empty"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "empty"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "empty",
+              "kind": "調査",
+              "title": "空",
+              "content": ""
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848 1字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 empty（調査）を作った: 空",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "empty"
+            }
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "create-content-forms#4": {
+      "output": {
+        "length": 253,
+        "text": "やり方 multibyte を新しく作った（14 文字。前の版は practice_history slug=multibyte で読める）。practice_list で一覧に出る。\n\n（版 base_version=38138250a81bad8358a9ca3f8246169593bdf2b24adf85668a9a448353d94dda ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": {
+          "slug": "empty",
+          "kind": "調査",
+          "title": "空",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 1,
+          "content": "\n",
+          "version": "aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848",
+          "versions": 1
+        },
+        "long-ascii": null,
+        "multibyte": {
+          "slug": "multibyte",
+          "kind": "調査",
+          "title": "日本語",
+          "createdAt": "2026-10-29T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 14,
+          "content": "# 日本語\nあいうえお 😀\n",
+          "version": "38138250a81bad8358a9ca3f8246169593bdf2b24adf85668a9a448353d94dda",
+          "versions": 1
+        },
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": null,
+        "title-nul": null,
+        "with-nul": {
+          "slug": "with-nul",
+          "kind": "調査",
+          "title": "NUL",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 9,
+          "content": "# NUL\n本文\n",
+          "version": "b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "やり方 multibyte（調査）を作った: 日本語",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "multibyte"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "multibyte"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "multibyte",
+              "kind": "調査",
+              "title": "日本語",
+              "content": "# 日本語\nあいうえお 😀\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 38138250a81bad8358a9ca3f8246169593bdf2b24adf85668a9a448353d94dda 14字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 multibyte（調査）を作った: 日本語",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "multibyte"
+            }
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "create-content-forms#5": {
+      "output": {
+        "length": 257,
+        "text": "やり方 long-ascii を新しく作った（1506 文字。前の版は practice_history slug=long-ascii で読める）。practice_list で一覧に出る。\n\n（版 base_version=26b9f8d4c143ecf8a5d1173e935b945faeede3021d74a26d50cc4eced99f648e ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": {
+          "slug": "empty",
+          "kind": "調査",
+          "title": "空",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 1,
+          "content": "\n",
+          "version": "aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848",
+          "versions": 1
+        },
+        "long-ascii": {
+          "slug": "long-ascii",
+          "kind": "調査",
+          "title": "長い",
+          "createdAt": "2026-10-29T00:05:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "chars": 1506,
+          "content": "# 長い\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          "version": "26b9f8d4c143ecf8a5d1173e935b945faeede3021d74a26d50cc4eced99f648e",
+          "versions": 1
+        },
+        "multibyte": {
+          "slug": "multibyte",
+          "kind": "調査",
+          "title": "日本語",
+          "createdAt": "2026-10-29T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 14,
+          "content": "# 日本語\nあいうえお 😀\n",
+          "version": "38138250a81bad8358a9ca3f8246169593bdf2b24adf85668a9a448353d94dda",
+          "versions": 1
+        },
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": null,
+        "title-nul": null,
+        "with-nul": {
+          "slug": "with-nul",
+          "kind": "調査",
+          "title": "NUL",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 9,
+          "content": "# NUL\n本文\n",
+          "version": "b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "やり方 long-ascii（調査）を作った: 長い",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "long-ascii"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "long-ascii"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "long-ascii",
+              "kind": "調査",
+              "title": "長い",
+              "content": "# 長い\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 26b9f8d4c143ecf8a5d1173e935b945faeede3021d74a26d50cc4eced99f648e 1506字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 long-ascii（調査）を作った: 長い",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "long-ascii"
+            }
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "create-content-forms#6": {
+      "output": {
+        "length": 253,
+        "text": "やり方 title-nul を新しく作った（34 文字。前の版は practice_history slug=title-nul で読める）。practice_list で一覧に出る。\n\n（版 base_version=10d7da47843fcf1c0f696df5af1cca3e57f45d91dbfc5bf2724496bfeb3e3889 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": {
+          "slug": "empty",
+          "kind": "調査",
+          "title": "空",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 1,
+          "content": "\n",
+          "version": "aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848",
+          "versions": 1
+        },
+        "long-ascii": {
+          "slug": "long-ascii",
+          "kind": "調査",
+          "title": "長い",
+          "createdAt": "2026-10-29T00:05:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "chars": 1506,
+          "content": "# 長い\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          "version": "26b9f8d4c143ecf8a5d1173e935b945faeede3021d74a26d50cc4eced99f648e",
+          "versions": 1
+        },
+        "multibyte": {
+          "slug": "multibyte",
+          "kind": "調査",
+          "title": "日本語",
+          "createdAt": "2026-10-29T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 14,
+          "content": "# 日本語\nあいうえお 😀\n",
+          "version": "38138250a81bad8358a9ca3f8246169593bdf2b24adf85668a9a448353d94dda",
+          "versions": 1
+        },
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": null,
+        "title-nul": {
+          "slug": "title-nul",
+          "kind": "調査",
+          "title": "題あ",
+          "createdAt": "2026-10-29T00:06:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "10d7da47843fcf1c0f696df5af1cca3e57f45d91dbfc5bf2724496bfeb3e3889",
+          "versions": 1
+        },
+        "with-nul": {
+          "slug": "with-nul",
+          "kind": "調査",
+          "title": "NUL",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 9,
+          "content": "# NUL\n本文\n",
+          "version": "b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "やり方 title-nul（調査）を作った: 題あ",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "title-nul"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "title-nul"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "title-nul",
+              "kind": "調査",
+              "title": "題\u0000あ",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 10d7da47843fcf1c0f696df5af1cca3e57f45d91dbfc5bf2724496bfeb3e3889 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 title-nul（調査）を作った: 題\u0000あ",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "title-nul"
+            }
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "create-content-forms#7": {
+      "output": {
+        "length": 257,
+        "text": "やり方 title-empty を新しく作った（34 文字。前の版は practice_history slug=title-empty で読める）。practice_list で一覧に出る。\n\n（版 base_version=414a8459697bedb7a154ebe0a7e5a0c8775eafe74555c844870dd6d59d6a9ba9 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "empty": {
+          "slug": "empty",
+          "kind": "調査",
+          "title": "空",
+          "createdAt": "2026-10-29T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 1,
+          "content": "\n",
+          "version": "aacf1a8a5da569394e78575620bedf5a02e637412f20fa4b92cf5f3703967848",
+          "versions": 1
+        },
+        "long-ascii": {
+          "slug": "long-ascii",
+          "kind": "調査",
+          "title": "長い",
+          "createdAt": "2026-10-29T00:05:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "chars": 1506,
+          "content": "# 長い\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          "version": "26b9f8d4c143ecf8a5d1173e935b945faeede3021d74a26d50cc4eced99f648e",
+          "versions": 1
+        },
+        "multibyte": {
+          "slug": "multibyte",
+          "kind": "調査",
+          "title": "日本語",
+          "createdAt": "2026-10-29T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 14,
+          "content": "# 日本語\nあいうえお 😀\n",
+          "version": "38138250a81bad8358a9ca3f8246169593bdf2b24adf85668a9a448353d94dda",
+          "versions": 1
+        },
+        "no-newline": {
+          "slug": "no-newline",
+          "kind": "調査",
+          "title": "改行なし",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 10,
+          "content": "# 改行なし\n本文\n",
+          "version": "5e0371d2579a9fe34ffe4b2cea91ca615e1782561d5a738356d3339b61e1355a",
+          "versions": 1
+        },
+        "title-empty": {
+          "slug": "title-empty",
+          "kind": "調査",
+          "title": "",
+          "createdAt": "2026-10-29T00:07:00.000Z",
+          "updatedAt": "2026-10-29T00:07:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "414a8459697bedb7a154ebe0a7e5a0c8775eafe74555c844870dd6d59d6a9ba9",
+          "versions": 1
+        },
+        "title-nul": {
+          "slug": "title-nul",
+          "kind": "調査",
+          "title": "題あ",
+          "createdAt": "2026-10-29T00:06:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "10d7da47843fcf1c0f696df5af1cca3e57f45d91dbfc5bf2724496bfeb3e3889",
+          "versions": 1
+        },
+        "with-nul": {
+          "slug": "with-nul",
+          "kind": "調査",
+          "title": "NUL",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 9,
+          "content": "# NUL\n本文\n",
+          "version": "b561e4be22e6316cb3bc2aeb5fd0b6b07c3ff1c5e0e35a05c99f84dee522efa9",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-7",
+          "at": "2026-10-29T00:07:00.000Z",
+          "decision": "やり方 title-empty（調査）を作った: ",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "title-empty"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "title-empty"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "title-empty",
+              "kind": "調査",
+              "title": "",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 414a8459697bedb7a154ebe0a7e5a0c8775eafe74555c844870dd6d59d6a9ba9 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 title-empty（調査）を作った: ",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "title-empty"
+            }
+          },
+          "outcome": "ok id-7"
+        }
+      ]
+    },
+    "create-with-base-version#1": {
+      "output": {
+        "length": 225,
+        "text": "やり方 review は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、書き直しを**書かなかった**。いまそのやり方は無い（読んだ後に消された）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。practice_read slug=review で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": null
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "threw PracticeConflictError: やり方が読んだ後に変わっています: review"
+        }
+      ]
+    },
+    "create-with-base-version#2": {
+      "output": {
+        "length": 247,
+        "text": "やり方 review を新しく作った（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "やり方 review（レビュー）を作った: 題",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を作った: 題",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "create-slug-forms": {
+      "output": {
+        "length": 249,
+        "text": "やり方 a.b_c-1 を新しく作った（34 文字。前の版は practice_history slug=a.b_c-1 で読める）。practice_list で一覧に出る。\n\n（版 base_version=489444f736aa0d6d9a984dc59b1acd8c9962ea8b882149f04afd369d7b29ea68 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "a.b_c-1": {
+          "slug": "a.b_c-1",
+          "kind": "日報",
+          "title": "要約に改行と長い文字列\n2行目 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長",
+          "createdAt": "2026-10-29T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "489444f736aa0d6d9a984dc59b1acd8c9962ea8b882149f04afd369d7b29ea68",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "やり方 a.b_c-1（日報）を作った: 要約に改行と長い文字列\n2行目 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長",
+          "grounds": "新しいやり方を器に置いた",
+          "target": {
+            "kind": "practice",
+            "slug": "a.b_c-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "a.b_c-1"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "a.b_c-1",
+              "kind": "日報",
+              "title": "要約に改行と長い文字列\n2行目 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 489444f736aa0d6d9a984dc59b1acd8c9962ea8b882149f04afd369d7b29ea68 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 a.b_c-1（日報）を作った: 要約に改行と長い文字列\n2行目 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "a.b_c-1"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "update-needs-base#1": {
+      "output": {
+        "length": 170,
+        "text": "やり方 review は既に在る。全文を書き直すには、先に practice_read slug=review で読み、応答に出る base_version をこの呼び出しの base_version に渡すこと（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "update-needs-base#2": {
+      "output": {
+        "length": 294,
+        "text": "やり方 review は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、書き直しを**書かなかった**。いまの版は base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441（34 文字）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。practice_read slug=review で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": ""
+          },
+          "outcome": "threw PracticeConflictError: やり方が読んだ後に変わっています: review"
+        }
+      ]
+    },
+    "update-needs-base#3": {
+      "output": {
+        "length": 246,
+        "text": "やり方 review を書き直した（37 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n\n（版 base_version=02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "ok 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "update#1": {
+      "output": {
+        "length": 246,
+        "text": "やり方 review を書き直した（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 2
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "ok 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "update#2": {
+      "output": {
+        "length": 355,
+        "text": "やり方 review を書き直した（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n本文の数字・識別子の増減（#1306）: 消えた: 42 / `id-7`。増えた: 43 / `id-8`。意図した書き換えか確かめること —— 読んでから書き戻すと、書き換えていない箇所の値が入れ替わることがある\n\n（版 base_version=d43d3eb9782c8a74240a3d267f1b29c16cb7544cdecb5bfd7539a451599cf83d ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 43 と `id-8` を確かめる\n",
+          "version": "d43d3eb9782c8a74240a3d267f1b29c16cb7544cdecb5bfd7539a451599cf83d",
+          "versions": 3
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 43 と `id-8` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "ok d43d3eb9782c8a74240a3d267f1b29c16cb7544cdecb5bfd7539a451599cf83d 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "update#3": {
+      "output": {
+        "length": 246,
+        "text": "やり方 review を書き直した（37 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n\n（版 base_version=2ddd8a9766e4e04073b84799f542cc948d64b7826b023e94d310a357d4700954 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 43 と `id-8` を確かめる\n",
+          "version": "2ddd8a9766e4e04073b84799f542cc948d64b7826b023e94d310a357d4700954",
+          "versions": 4
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice d43d3eb9782c8a74240a3d267f1b29c16cb7544cdecb5bfd7539a451599cf83d"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 43 と `id-8` を確かめる\n"
+            },
+            "ifMatch": "d43d3eb9782c8a74240a3d267f1b29c16cb7544cdecb5bfd7539a451599cf83d"
+          },
+          "outcome": "ok 2ddd8a9766e4e04073b84799f542cc948d64b7826b023e94d310a357d4700954 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "update#4": {
+      "output": {
+        "length": 355,
+        "text": "やり方 review を書き直した（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n本文の数字・識別子の増減（#1306）: 消えた: 43 / `id-8`。増えた: 42 / `id-7`。意図した書き換えか確かめること —— 読んでから書き戻すと、書き換えていない箇所の値が入れ替わることがある\n\n（版 base_version=81fcad232cb75385def46c444c93b9f6a33d6cf25b5f16c6642f59d67ace34f7 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "実装",
+          "title": "新しい題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "81fcad232cb75385def46c444c93b9f6a33d6cf25b5f16c6642f59d67ace34f7",
+          "versions": 5
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "やり方 review（実装）を書き直した: 新しい題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 2ddd8a9766e4e04073b84799f542cc948d64b7826b023e94d310a357d4700954"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "実装",
+              "title": "新しい題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "2ddd8a9766e4e04073b84799f542cc948d64b7826b023e94d310a357d4700954"
+          },
+          "outcome": "ok 81fcad232cb75385def46c444c93b9f6a33d6cf25b5f16c6642f59d67ace34f7 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（実装）を書き直した: 新しい題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "update#5": {
+      "output": {
+        "length": 337,
+        "text": "やり方 review を書き直した（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n本文の数字・識別子の増減（#1306）: 消えた: 42。増えた: 44。意図した書き換えか確かめること —— 読んでから書き戻すと、書き換えていない箇所の値が入れ替わることがある\n\n（版 base_version=0579cca35e458e4cc3307550e6220a2e0adbaea95f8a2ce7e689d8fafccb7d15 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 44 と `id-7` を確かめる\n",
+          "version": "0579cca35e458e4cc3307550e6220a2e0adbaea95f8a2ce7e689d8fafccb7d15",
+          "versions": 6
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 81fcad232cb75385def46c444c93b9f6a33d6cf25b5f16c6642f59d67ace34f7"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 44 と `id-7` を確かめる"
+            },
+            "ifMatch": "81fcad232cb75385def46c444c93b9f6a33d6cf25b5f16c6642f59d67ace34f7"
+          },
+          "outcome": "ok 0579cca35e458e4cc3307550e6220a2e0adbaea95f8a2ce7e689d8fafccb7d15 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "update#6": {
+      "output": {
+        "length": 337,
+        "text": "やり方 review を書き直した（34 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n本文の数字・識別子の増減（#1306）: 消えた: 44。増えた: 42。意図した書き換えか確かめること —— 読んでから書き戻すと、書き換えていない箇所の値が入れ替わることがある\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 7
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 0579cca35e458e4cc3307550e6220a2e0adbaea95f8a2ce7e689d8fafccb7d15"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読\u0000む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "0579cca35e458e4cc3307550e6220a2e0adbaea95f8a2ce7e689d8fafccb7d15"
+          },
+          "outcome": "ok 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "update#7": {
+      "output": {
+        "length": 402,
+        "text": "やり方 review を書き直した（94 文字。前の版は practice_history slug=review で読める）。practice_list で一覧に出る。\n本文の数字・識別子の増減（#1306）: 増えた: 1001 / 1002 / 1003 / 1004 / 1005 / 1006 / 1007 / 1008 / 1009 / 1010（ほか 2 件）。意図した書き換えか確かめること —— 読んでから書き戻すと、書き換えていない箇所の値が入れ替わることがある\n\n（版 base_version=542c53d9e6064426f490071ff50b78c0eb9e42404f3efc3f9651882cd08a9904 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "review": {
+          "slug": "review",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:07:00.000Z",
+          "chars": 94,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n1001 1002 1003 1004 1005 1006 1007 1008 1009 1010 1011 1012\n",
+          "version": "542c53d9e6064426f490071ff50b78c0eb9e42404f3efc3f9651882cd08a9904",
+          "versions": 8
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-7",
+          "at": "2026-10-29T00:07:00.000Z",
+          "decision": "やり方 review（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "review"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "review",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n1001 1002 1003 1004 1005 1006 1007 1008 1009 1010 1011 1012\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "ok 542c53d9e6064426f490071ff50b78c0eb9e42404f3efc3f9651882cd08a9904 94字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 review（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "review"
+            }
+          },
+          "outcome": "ok id-7"
+        }
+      ]
+    },
+    "conflict#1": {
+      "output": {
+        "length": 285,
+        "text": "やり方 a1 は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、書き直しを**書かなかった**。いまの版は base_version=0415ffba028b9d80ad48e798b709d39322b7ca696b913eaa7e657f23b8b75b16（7 文字）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。practice_read slug=a1 で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "a1": {
+          "slug": "a1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 7,
+          "content": "人間が直した\n",
+          "version": "0415ffba028b9d80ad48e798b709d39322b7ca696b913eaa7e657f23b8b75b16",
+          "versions": 2
+        },
+        "a2": {
+          "slug": "a2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "a3": {
+          "slug": "a3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "a4": {
+          "slug": "a4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "a1"
+          },
+          "outcome": "practice 0415ffba028b9d80ad48e798b709d39322b7ca696b913eaa7e657f23b8b75b16"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "a1",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "threw PracticeConflictError: やり方が読んだ後に変わっています: a1"
+        }
+      ]
+    },
+    "conflict#2": {
+      "output": {
+        "length": 286,
+        "text": "やり方 a2 は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、書き直しを**書かなかった**。いまの版は base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441（34 文字）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。practice_read slug=a2 で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "a1": {
+          "slug": "a1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 7,
+          "content": "人間が直した\n",
+          "version": "0415ffba028b9d80ad48e798b709d39322b7ca696b913eaa7e657f23b8b75b16",
+          "versions": 2
+        },
+        "a2": {
+          "slug": "a2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "a3": {
+          "slug": "a3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "a4": {
+          "slug": "a4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "a2"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "a2",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "deadbeef"
+          },
+          "outcome": "threw PracticeConflictError: やり方が読んだ後に変わっています: a2"
+        }
+      ]
+    },
+    "conflict#3": {
+      "output": {
+        "length": 286,
+        "text": "やり方 a3 は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、書き直しを**書かなかった**。いまの版は base_version=ca08e3c9f151a4e739729811ba8b6d793210081b56a2b2bb0b7604156411dace（10 文字）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。practice_read slug=a3 で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "a1": {
+          "slug": "a1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 7,
+          "content": "人間が直した\n",
+          "version": "0415ffba028b9d80ad48e798b709d39322b7ca696b913eaa7e657f23b8b75b16",
+          "versions": 2
+        },
+        "a2": {
+          "slug": "a2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "a3": {
+          "slug": "a3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 10,
+          "content": "別のターンが書いた\n",
+          "version": "ca08e3c9f151a4e739729811ba8b6d793210081b56a2b2bb0b7604156411dace",
+          "versions": 2
+        },
+        "a4": {
+          "slug": "a4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "a3"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "a3",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "threw PracticeConflictError: やり方が読んだ後に変わっています: a3"
+        }
+      ]
+    },
+    "conflict#4": {
+      "output": {
+        "length": 217,
+        "text": "やり方 a4 は、読んだ後にその間に変わった（人間または別のターンが書いた）ので、書き直しを**書かなかった**。いまそのやり方は無い（読んだ後に消された）。**何も書いていない**（あなたの内容は書かれておらず、いまの内容は1文字も変わっていない）。practice_read slug=a4 で読み直し、いまの内容に対してやりたいことが変わらないか判断し直してから、読み直した版の base_version を付けて書き直すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "a1": {
+          "slug": "a1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 7,
+          "content": "人間が直した\n",
+          "version": "0415ffba028b9d80ad48e798b709d39322b7ca696b913eaa7e657f23b8b75b16",
+          "versions": 2
+        },
+        "a2": {
+          "slug": "a2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "a3": {
+          "slug": "a3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "chars": 10,
+          "content": "別のターンが書いた\n",
+          "version": "ca08e3c9f151a4e739729811ba8b6d793210081b56a2b2bb0b7604156411dace",
+          "versions": 2
+        },
+        "a4": null
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "a4"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "a4",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "threw PracticeConflictError: やり方が読んだ後に変わっています: a4"
+        }
+      ]
+    },
+    "unreadable#1": {
+      "output": {
+        "length": 255,
+        "text": "やり方 u1 を（読めない形で入っていたやり方を）書き直した（37 文字。前の版は practice_history slug=u1 で読める）。practice_list で一覧に出る。\n\n（版 base_version=02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "u-gone": null,
+        "u1": {
+          "slug": "u1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        },
+        "u2": {
+          "slug": "u2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "読めない形で入っていたやり方 u1（レビュー）を書き直した: 題",
+          "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+          "target": {
+            "kind": "practice",
+            "slug": "u1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "u1"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: u1"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "u1",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "(省略)"
+          },
+          "outcome": "ok 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "読めない形で入っていたやり方 u1（レビュー）を書き直した: 題",
+            "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+            "target": {
+              "kind": "practice",
+              "slug": "u1"
+            }
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "unreadable#2": {
+      "output": {
+        "length": 255,
+        "text": "やり方 u2 を（読めない形で入っていたやり方を）書き直した（37 文字。前の版は practice_history slug=u2 で読める）。practice_list で一覧に出る。\n\n（版 base_version=02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "u-gone": null,
+        "u1": {
+          "slug": "u1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        },
+        "u2": {
+          "slug": "u2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "読めない形で入っていたやり方 u2（レビュー）を書き直した: 題",
+          "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+          "target": {
+            "kind": "practice",
+            "slug": "u2"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "u2"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: u2"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "u2",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "(省略)"
+          },
+          "outcome": "ok 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "読めない形で入っていたやり方 u2（レビュー）を書き直した: 題",
+            "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+            "target": {
+              "kind": "practice",
+              "slug": "u2"
+            }
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "unreadable#3": {
+      "output": {
+        "length": 162,
+        "text": "やり方 u1 は既に在る。全文を書き直すには、先に practice_read slug=u1 で読み、応答に出る base_version をこの呼び出しの base_version に渡すこと（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "practices": {
+        "u-gone": null,
+        "u1": {
+          "slug": "u1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        },
+        "u2": {
+          "slug": "u2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "u1"
+          },
+          "outcome": "practice 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216"
+        }
+      ]
+    },
+    "unreadable#4": {
+      "output": {
+        "length": 238,
+        "text": "やり方 u1 を書き直した（34 文字。前の版は practice_history slug=u1 で読める）。practice_list で一覧に出る。\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "u-gone": null,
+        "u1": {
+          "slug": "u1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 3
+        },
+        "u2": {
+          "slug": "u2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "やり方 u1（レビュー）を書き直した: 題",
+          "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+          "target": {
+            "kind": "practice",
+            "slug": "u1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "u1"
+          },
+          "outcome": "practice 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "u1",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216"
+          },
+          "outcome": "ok 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 u1（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "u1"
+            }
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "unreadable#5": {
+      "output": {
+        "length": 263,
+        "text": "やり方 u-gone を（読めない形で入っていたやり方を）書き直した（37 文字。前の版は practice_history slug=u-gone で読める）。practice_list で一覧に出る。\n\n（版 base_version=02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "practices": {
+        "u-gone": {
+          "slug": "u-gone",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:05:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 1
+        },
+        "u1": {
+          "slug": "u1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 3
+        },
+        "u2": {
+          "slug": "u2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        }
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "読めない形で入っていたやり方 u-gone（レビュー）を書き直した: 題",
+          "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+          "target": {
+            "kind": "practice",
+            "slug": "u-gone"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "u-gone"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: u-gone"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "u-gone",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "(省略)"
+          },
+          "outcome": "ok 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "読めない形で入っていたやり方 u-gone（レビュー）を書き直した: 題",
+            "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+            "target": {
+              "kind": "practice",
+              "slug": "u-gone"
+            }
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "failures#1": {
+      "output": {
+        "length": 13,
+        "text": "ストアが落ちた（read）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "practices": {
+        "f-new": null,
+        "f-new-2": null,
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f1"
+          },
+          "outcome": "threw Error: ストアが落ちた（read）"
+        }
+      ]
+    },
+    "failures#2": {
+      "output": {
+        "length": 12,
+        "text": "読めない行に似た別の例外",
+        "isError": true,
+        "thrown": true,
+        "errorName": "UnreadablePracticeError"
+      },
+      "wrote": false,
+      "practices": {
+        "f-new": null,
+        "f-new-2": null,
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f2"
+          },
+          "outcome": "threw UnreadablePracticeError: 読めない行に似た別の例外"
+        }
+      ]
+    },
+    "failures#3": {
+      "output": {
+        "length": 14,
+        "text": "ストアが落ちた（write）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "practices": {
+        "f-new": null,
+        "f-new-2": null,
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f3"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "f3",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "threw Error: ストアが落ちた（write）"
+        }
+      ]
+    },
+    "failures#4": {
+      "output": {
+        "length": 14,
+        "text": "ストアが落ちた（write）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "practices": {
+        "f-new": null,
+        "f-new-2": null,
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f-new"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "f-new",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "threw Error: ストアが落ちた（write）"
+        }
+      ]
+    },
+    "failures#5": {
+      "output": {
+        "length": 14,
+        "text": "ストアが落ちた（write）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "practices": {
+        "f-new": null,
+        "f-new-2": null,
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "unreadable": true
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f4"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: f4"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "f4",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "(省略)"
+          },
+          "outcome": "threw Error: ストアが落ちた（write）"
+        }
+      ]
+    },
+    "failures#6": {
+      "output": {
+        "length": 190,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\npractice_write は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=21 grounds.chars=64\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": true,
+      "practices": {
+        "f-new": null,
+        "f-new-2": null,
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f5"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "f5",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+          },
+          "outcome": "ok 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 f5（レビュー）を書き直した: 題",
+            "grounds": "やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、前の本文は版の履歴（practice_history）に残る）",
+            "target": {
+              "kind": "practice",
+              "slug": "f5"
+            }
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "failures#7": {
+      "output": {
+        "length": 190,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\npractice_write は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=24 grounds.chars=12\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": true,
+      "practices": {
+        "f-new": null,
+        "f-new-2": {
+          "slug": "f-new-2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:07:00.000Z",
+          "updatedAt": "2026-10-29T00:07:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f-new-2"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "f-new-2",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": null
+          },
+          "outcome": "ok 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 34字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "やり方 f-new-2（レビュー）を作った: 題",
+            "grounds": "新しいやり方を器に置いた",
+            "target": {
+              "kind": "practice",
+              "slug": "f-new-2"
+            }
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "failures#8": {
+      "output": {
+        "length": 190,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\npractice_write は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=32 grounds.chars=71\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": true,
+      "practices": {
+        "f-new": null,
+        "f-new-2": {
+          "slug": "f-new-2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:07:00.000Z",
+          "updatedAt": "2026-10-29T00:07:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f1": {
+          "slug": "f1",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f2": {
+          "slug": "f2",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f3": {
+          "slug": "f3",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f4": {
+          "slug": "f4",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:00:00.000Z",
+          "chars": 34,
+          "content": "# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441",
+          "versions": 1
+        },
+        "f5": {
+          "slug": "f5",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:06:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        },
+        "f6": {
+          "slug": "f6",
+          "kind": "レビュー",
+          "title": "題",
+          "createdAt": "2026-10-29T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:08:00.000Z",
+          "chars": 37,
+          "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+          "version": "02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216",
+          "versions": 2
+        }
+      },
+      "journal": [],
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "f6"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: f6"
+        },
+        {
+          "op": "practices.write",
+          "args": {
+            "input": {
+              "slug": "f6",
+              "kind": "レビュー",
+              "title": "題",
+              "content": "# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n"
+            },
+            "ifMatch": "(省略)"
+          },
+          "outcome": "ok 02b604fe397d266b3094e6d67eee453bc17be5aed2f2d7adfed1455f25eb1216 37字"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "読めない形で入っていたやり方 f6（レビュー）を書き直した: 題",
+            "grounds": "読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかったため分からない。版の履歴には今回の内容だけが新しい版として積まれる）",
+            "target": {
+              "kind": "practice",
+              "slug": "f6"
+            }
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    }
+  }
+}
