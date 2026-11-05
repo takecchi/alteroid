@@ -83,7 +83,92 @@ type PracticeBeforeChange = {
   beforeWasUnreadable: boolean;
 };
 
-// `practice_write`・`practice_remove` のスラッグの断り（無ければ null）
+type PracticeReadFound = NonNullable<Awaited<ReturnType<Stores['practices']['read']>>>;
+
+type PracticeVersionReadFound = NonNullable<
+  Awaited<ReturnType<Stores['practices']['readVersion']>>
+>;
+
+// 読めない行は理由の分かる文に変える: `isError` と生の Zod issue より読み手に親切なため
+function renderPracticeVersionUnreadable(slug: string, version: number): string {
+  return (
+    `やり方 ${slug} の版 ${String(version)} は読めない形で入っている` +
+    '（消されたのではない）。本文はここでは取れない。'
+  );
+}
+
+function renderPracticeVersionMissing(slug: string, version: number): string {
+  return (
+    `やり方 ${slug} の版 ${String(version)} は無い。` +
+    'practice_history slug=<slug> で在る版を確かめること。'
+  );
+}
+
+function renderPracticeVersionFound(found: PracticeVersionReadFound): string {
+  return [
+    `${found.slug} 版${String(found.version)}（${found.kind}） ${found.title}`,
+    `この版が書かれた時刻: ${found.at} / ${String(found.chars)} 文字`,
+    '',
+    found.content,
+  ].join('\n');
+}
+
+function renderPracticeUnreadable(slug: string): string {
+  return (
+    `やり方 ${slug} は読めない形で入っている（消されたのではない）。` +
+    '本文はここでは取れない。書き直すなら practice_write、外すなら practice_remove。'
+  );
+}
+
+function renderPracticeMissing(slug: string): string {
+  return (
+    `やり方 ${slug} は無い。practice_list で在るものを確かめるか、` +
+    'practice_write で新しく書けること。'
+  );
+}
+
+function renderPracticeFound(found: PracticeReadFound): string {
+  return [
+    `${found.slug}（${found.kind}） ${found.title}`,
+    `作成: ${found.createdAt} / 更新: ${found.updatedAt} / ${String(found.chars)} 文字`,
+    '',
+    found.content,
+    '',
+    practiceVersionLine(found),
+  ].join('\n');
+}
+
+// 版を指定して読む（`practice_read` の version あり）。`UnreadablePracticeError` だけを断りにし、ほかは投げ直す
+async function readPracticeVersionBody(
+  stores: Stores,
+  slug: string,
+  version: number,
+): Promise<string> {
+  let found: Awaited<ReturnType<Stores['practices']['readVersion']>>;
+  try {
+    found = await stores.practices.readVersion(slug, version);
+  } catch (error) {
+    if (!(error instanceof UnreadablePracticeError)) throw error;
+    return renderPracticeVersionUnreadable(slug, version);
+  }
+  if (found === null) return renderPracticeVersionMissing(slug, version);
+  return renderPracticeVersionFound(found);
+}
+
+// いまの版を読む（`practice_read` の version なし）。`UnreadablePracticeError` だけを断りにし、ほかは投げ直す
+async function readPracticeCurrentBody(stores: Stores, slug: string): Promise<string> {
+  let found: Awaited<ReturnType<Stores['practices']['read']>>;
+  try {
+    found = await stores.practices.read(slug);
+  } catch (error) {
+    if (!(error instanceof UnreadablePracticeError)) throw error;
+    return renderPracticeUnreadable(slug);
+  }
+  if (found === null) return renderPracticeMissing(slug);
+  return renderPracticeFound(found);
+}
+
+// `practice_read`・`practice_write`・`practice_remove` のスラッグの断り（無ければ null）
 function describePracticeSlugViolation(slug: string): string | null {
   if (!practiceSlugSchema.safeParse(slug).success) {
     return `やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`;
@@ -430,63 +515,14 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ slug, version }) => {
         // 不正なスラッグはここで断る: 無いと pg は生の例外を投げ、fs / インメモリは「無い」として扱い、器によって結果が違ってしまうため
-        if (!practiceSlugSchema.safeParse(slug).success) {
-          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
-        }
+        const slugViolation = describePracticeSlugViolation(slug);
+        if (slugViolation !== null) return text(slugViolation);
         const versionError = describeIntRangeViolation('version', version, { min: 1 });
         if (versionError !== null) return text(versionError);
-        if (version !== undefined) {
-          // 読めない行は理由の分かる文に変える: `isError` と生の Zod issue より読み手に親切なため
-          let found: Awaited<ReturnType<typeof stores.practices.readVersion>>;
-          try {
-            found = await stores.practices.readVersion(slug, version);
-          } catch (error) {
-            if (!(error instanceof UnreadablePracticeError)) throw error;
-            return text(
-              `やり方 ${slug} の版 ${String(version)} は読めない形で入っている` +
-                '（消されたのではない）。本文はここでは取れない。',
-            );
-          }
-          if (found === null) {
-            return text(
-              `やり方 ${slug} の版 ${String(version)} は無い。` +
-                'practice_history slug=<slug> で在る版を確かめること。',
-            );
-          }
-          return text(
-            [
-              `${found.slug} 版${String(found.version)}（${found.kind}） ${found.title}`,
-              `この版が書かれた時刻: ${found.at} / ${String(found.chars)} 文字`,
-              '',
-              found.content,
-            ].join('\n'),
-          );
-        }
-        let found: Awaited<ReturnType<typeof stores.practices.read>>;
-        try {
-          found = await stores.practices.read(slug);
-        } catch (error) {
-          if (!(error instanceof UnreadablePracticeError)) throw error;
-          return text(
-            `やり方 ${slug} は読めない形で入っている（消されたのではない）。` +
-              '本文はここでは取れない。書き直すなら practice_write、外すなら practice_remove。',
-          );
-        }
-        if (found === null) {
-          return text(
-            `やり方 ${slug} は無い。practice_list で在るものを確かめるか、` +
-              'practice_write で新しく書けること。',
-          );
-        }
         return text(
-          [
-            `${found.slug}（${found.kind}） ${found.title}`,
-            `作成: ${found.createdAt} / 更新: ${found.updatedAt} / ${String(found.chars)} 文字`,
-            '',
-            found.content,
-            '',
-            practiceVersionLine(found),
-          ].join('\n'),
+          version !== undefined
+            ? await readPracticeVersionBody(stores, slug, version)
+            : await readPracticeCurrentBody(stores, slug),
         );
       },
     ),
