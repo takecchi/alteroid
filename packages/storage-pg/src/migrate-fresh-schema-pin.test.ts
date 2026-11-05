@@ -63,10 +63,12 @@ async function captureSchema(): Promise<SchemaPin> {
         where schemaname = current_schema()
         order by tablename, indexname`,
     ),
+    // NOT NULL の制約（`contype = 'n'`）は除く: PGlite（PostgreSQL 18 系）は `pg_constraint` に出すが、CI の本物の PostgreSQL は出さない。
+    // NULL の可否は `columns` の `is_nullable` が縛る。
     constraints: await lines(
       `select conrelid::regclass::text as table_name, conname, contype, pg_get_constraintdef(oid)
          from pg_constraint
-        where connamespace = current_schema()::regnamespace
+        where connamespace = current_schema()::regnamespace and contype <> 'n'
         order by 1, conname`,
     ),
     // 表と、その TOAST 表（`toast.autovacuum_*`）の reloptions
