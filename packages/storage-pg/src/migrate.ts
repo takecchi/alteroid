@@ -370,6 +370,14 @@ export const STATEMENTS = [
 
   // 専用の列にする: jsonb の `->>'withdrawnAt'` より `answered_at` と揃った形で `isNull` で絞れる（`jobs.ts` の `where` 節）。
   `alter table approvals add column if not exists withdrawn_at timestamptz`,
+  // 列が空で本体にだけ決着の時刻がある行（`withdrawn_at` を足す前の行）を、本体の時刻で埋め戻す: 読む側が本体を見に行かず、列だけで絞れるようにするため。
+  // 書き込みは毎回、列を本体と同じ値で書くので、埋め終えた後は当たる行が無い。日時の形をした値だけを写す: 型が合わない値で移行ごと落ちないため。
+  `update approvals set answered_at = (approval->>'answeredAt')::timestamptz
+     where answered_at is null
+       and approval->>'answeredAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'`,
+  `update approvals set withdrawn_at = (approval->>'withdrawnAt')::timestamptz
+     where withdrawn_at is null
+       and approval->>'withdrawnAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'`,
 
   // 持ち主の宣言は #2948 で畳んだ: 列 `owner_declared_at` は読む所も書く所も無いので、在れば落とす。
   `alter table auth_accounts drop column if exists owner_declared_at`,
