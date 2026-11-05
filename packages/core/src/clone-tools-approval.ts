@@ -335,6 +335,120 @@ function renderApprovalListIndexed(args: {
   ].join('\n');
 }
 
+type ApprovalWithdrawRead =
+  { kind: 'unreadable' } | { kind: 'missing' } | { kind: 'found'; approval: PendingApproval };
+
+type ApprovalWithdrawWrite =
+  | { kind: 'unreadable' }
+  | { kind: 'written' }
+  | { kind: 'lost'; settledNow: PendingApproval | undefined };
+
+// 引数の検査。断る文を返す（通れば null）
+function describeApprovalWithdrawViolation(reason: string): string | null {
+  return (
+    describeStringLengthViolation('reason', reason, { min: 1 }) ??
+    describeBlankViolation('reason', reason)
+  );
+}
+
+// `UnreadableApprovalError` だけを「読めない」にし、ほかは投げ直す
+async function readApprovalForWithdraw(
+  jobs: Stores['jobs'],
+  id: string,
+): Promise<ApprovalWithdrawRead> {
+  let existing: PendingApproval | null;
+  try {
+    existing = await jobs.getApproval(id);
+  } catch (error) {
+    if (error instanceof UnreadableApprovalError) return { kind: 'unreadable' };
+    throw error;
+  }
+  if (!existing) return { kind: 'missing' };
+  return { kind: 'found', approval: existing };
+}
+
+function renderApprovalWithdrawMissing(id: string): string {
+  return `承認待ち ${id} は無い（id が違う）。`;
+}
+
+// 回答の本文の出し方はここだけに置く
+function renderApprovalWithdrawAnswer(row: PendingApproval): string {
+  return row.answer ?? '（本文なし）';
+}
+
+// 回答済み・取り下げ済みの断り（どちらでもなければ null）。回答済みを先に見る。読んだ直後と書き込みの後の両方で使う
+function renderApprovalWithdrawSettled(id: string, row: PendingApproval): string | null {
+  if (row.answeredAt !== undefined) {
+    return (
+      `${id} は既に ${row.answeredAt} に回答済みなので取り下げられない` +
+      `（回答: ${renderApprovalWithdrawAnswer(row)}）。`
+    );
+  }
+  if (row.withdrawnAt !== undefined) {
+    return `${id} は既に ${row.withdrawnAt} に取り下げ済み（理由: ${row.withdrawnReason ?? ''}）。`;
+  }
+  return null;
+}
+
+// 読み直す1操作で書く: 写しを丸ごと書き戻すと、読んでから書くまでの間に入った人間の回答を消してしまうため
+// `UnreadableApprovalError` だけを「読めない」にし、ほかは投げ直す
+async function writeApprovalWithdrawn(
+  jobs: Stores['jobs'],
+  id: string,
+  withdrawnAt: string,
+  reason: string,
+): Promise<ApprovalWithdrawWrite> {
+  let settledNow: PendingApproval | undefined;
+  let written: PendingApproval | null;
+  try {
+    written = await jobs.updateApproval(id, (current) => {
+      if (current.answeredAt !== undefined || current.withdrawnAt !== undefined) {
+        settledNow = current;
+        return null;
+      }
+      return { ...current, withdrawnAt, withdrawnReason: reason };
+    });
+  } catch (error) {
+    if (error instanceof UnreadableApprovalError) return { kind: 'unreadable' };
+    throw error;
+  }
+  return written === null ? { kind: 'lost', settledNow } : { kind: 'written' };
+}
+
+// 自分で閉じたことは日誌に残す: 人間が後から否定するための材料は台帳だけでなく日誌にも要るため
+async function journalApprovalWithdrawn(
+  journal: Stores['journal'],
+  existing: PendingApproval,
+  id: string,
+  withdrawnAt: string,
+  reason: string,
+): Promise<void> {
+  await appendJournalOrThrow(
+    'approval_withdraw',
+    journal,
+    {
+      type: 'escalation',
+      question: existing.question,
+      approvalId: id,
+      ...(existing.jobId === undefined ? {} : { managerId: existing.jobId }),
+      withdrawnAt,
+      withdrawnReason: reason,
+    },
+    'act-completed',
+  );
+}
+
+function renderApprovalWithdrawn(id: string, existing: PendingApproval): string {
+  const waiting =
+    existing.jobId === undefined
+      ? ''
+      : ` ⚠️ この確認はマネージャー ${existing.jobId} のものである` +
+        (existing.requestId === undefined ? '' : `（requestId: "${existing.requestId}"）`) +
+        '。取り下げてもそのマネージャーは自動では解放されない——待ったままなら、' +
+        '自分から manager_send（decision 付き）で答えて始末をつけること。';
+  return `${id} を取り下げた。${waiting}`;
+}
+
 export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId, getWorkConversationId } = shared;
   return [
@@ -606,81 +720,26 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ id, reason }) => {
-        const reasonError =
-          describeStringLengthViolation('reason', reason, { min: 1 }) ??
-          describeBlankViolation('reason', reason);
+        const reasonError = describeApprovalWithdrawViolation(reason);
         if (reasonError !== null) return text(reasonError);
-        let existing: PendingApproval | null;
-        try {
-          existing = await stores.jobs.getApproval(id);
-        } catch (error) {
-          if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
-          throw error;
-        }
-        if (!existing) return text(`承認待ち ${id} は無い（id が違う）。`);
-        if (existing.answeredAt !== undefined) {
-          return text(
-            `${id} は既に ${existing.answeredAt} に回答済みなので取り下げられない` +
-              `（回答: ${existing.answer ?? '（本文なし）'}）。`,
-          );
-        }
-        if (existing.withdrawnAt !== undefined) {
-          return text(
-            `${id} は既に ${existing.withdrawnAt} に取り下げ済み（理由: ${existing.withdrawnReason ?? ''}）。`,
-          );
-        }
+        const read = await readApprovalForWithdraw(stores.jobs, id);
+        if (read.kind === 'unreadable') return text(describeUnreadableApproval(id));
+        if (read.kind === 'missing') return text(renderApprovalWithdrawMissing(id));
+        const existing = read.approval;
+        const settledRefusal = renderApprovalWithdrawSettled(id, existing);
+        if (settledRefusal !== null) return text(settledRefusal);
         const withdrawnAt = new Date().toISOString();
-        // 読み直す1操作で書く: 写しを丸ごと書き戻すと、読んでから書くまでの間に入った人間の回答を消してしまうため
-        let settledNow: PendingApproval | undefined;
-        let written: PendingApproval | null;
-        try {
-          written = await stores.jobs.updateApproval(id, (current) => {
-            if (current.answeredAt !== undefined || current.withdrawnAt !== undefined) {
-              settledNow = current;
-              return null;
-            }
-            return { ...current, withdrawnAt, withdrawnReason: reason };
-          });
-        } catch (error) {
-          if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
-          throw error;
+        const write = await writeApprovalWithdrawn(stores.jobs, id, withdrawnAt, reason);
+        if (write.kind === 'unreadable') return text(describeUnreadableApproval(id));
+        if (write.kind === 'lost') {
+          const lostRefusal =
+            write.settledNow === undefined
+              ? null
+              : renderApprovalWithdrawSettled(id, write.settledNow);
+          return text(lostRefusal ?? renderApprovalWithdrawMissing(id));
         }
-        if (written === null) {
-          if (settledNow?.answeredAt !== undefined) {
-            return text(
-              `${id} は既に ${settledNow.answeredAt} に回答済みなので取り下げられない` +
-                `（回答: ${settledNow.answer ?? '（本文なし）'}）。`,
-            );
-          }
-          if (settledNow?.withdrawnAt !== undefined) {
-            return text(
-              `${id} は既に ${settledNow.withdrawnAt} に取り下げ済み（理由: ${settledNow.withdrawnReason ?? ''}）。`,
-            );
-          }
-          return text(`承認待ち ${id} は無い（id が違う）。`);
-        }
-        // 自分で閉じたことは日誌に残す: 人間が後から否定するための材料は台帳だけでなく日誌にも要るため
-        await appendJournalOrThrow(
-          'approval_withdraw',
-          stores.journal,
-          {
-            type: 'escalation',
-            question: existing.question,
-            approvalId: id,
-            ...(existing.jobId === undefined ? {} : { managerId: existing.jobId }),
-            withdrawnAt,
-            withdrawnReason: reason,
-          },
-          'act-completed',
-        );
-        const waiting =
-          existing.jobId === undefined
-            ? ''
-            : ` ⚠️ この確認はマネージャー ${existing.jobId} のものである` +
-              (existing.requestId === undefined ? '' : `（requestId: "${existing.requestId}"）`) +
-              '。取り下げてもそのマネージャーは自動では解放されない——待ったままなら、' +
-              '自分から manager_send（decision 付き）で答えて始末をつけること。';
-        return text(`${id} を取り下げた。${waiting}`);
+        await journalApprovalWithdrawn(stores.journal, existing, id, withdrawnAt, reason);
+        return text(renderApprovalWithdrawn(id, existing));
       },
     ),
   ];
