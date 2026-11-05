@@ -1,0 +1,1213 @@
+{
+  "lengths": {
+    "runtime-absent#1": 48,
+    "runtime-absent#2": 48,
+    "runtime-unobserved#1": 1605,
+    "runtime-unobserved#2": 1605,
+    "runtime-model-mcp-empty": 1592,
+    "runtime-full": 1601,
+    "runtime-mcp-long": 1998,
+    "runtime-context-error": 1618,
+    "runtime-context-no-categories": 1634,
+    "runtime-route-empty": 1707,
+    "runtime-route-lines": 1700,
+    "runner-models": 1697,
+    "runner-routes": 1704,
+    "runner-both-with-route-lines": 1904,
+    "runner-empty-lines": 1592,
+    "runner-models-throws": 25,
+    "runner-routes-throws": 34,
+    "ledger-other-model": 1613,
+    "ledger-few": 1876,
+    "ledger-exact-14": 2547,
+    "ledger-15-truncated": 2855,
+    "ledger-paging#1": 2838,
+    "ledger-paging#2": 7068,
+    "ledger-paging#3": 481,
+    "ledger-paging#4": 112,
+    "ledger-cursor-risen#1": 2836,
+    "ledger-cursor-risen#2": 548,
+    "ledger-cursor-risen-overflow#1": 2856,
+    "ledger-cursor-risen-overflow#2": 1527,
+    "ledger-cursor-errors#1": 138,
+    "ledger-cursor-errors#2": 138,
+    "ledger-cursor-errors#3": 131,
+    "ledger-cursor-errors#4": 279,
+    "ledger-cursor-sdk-null": 89,
+    "ledger-cursor-empty-ledger": 84,
+    "ledger-cursor-other-model": 105,
+    "ledger-cursor-aggregate-fails": 21,
+    "memory-mixed": 2572,
+    "memory-many": 5201,
+    "memory-demoted": 3490,
+    "memory-persona-list-fails": 18,
+    "memory-persona-documents-fails": 23,
+    "ledger-aggregate-fails": 21,
+    "codex-none": 1592,
+    "codex-valid": 1828,
+    "codex-valid-bare": 1826,
+    "codex-failed": 1964,
+    "codex-unreadable": 1652,
+    "timing-turn-some": 2531,
+    "timing-turn-many": 2576,
+    "timing-turn-unreadable": 1594,
+    "timing-http-some": 2416,
+    "timing-http-many": 2589,
+    "timing-http-unreadable": 1589,
+    "timing-both-unreadable": 1591,
+    "managers-peers": 1931,
+    "managers-no-rows": 1592,
+    "managers-only-silent-rows": 1592,
+    "managers-runners-throws": 1592,
+    "managers-many": 3085,
+    "everything#1": 6357,
+    "everything#2": 145
+  },
+  "scenarios": {
+    "runtime-absent#1": {
+      "output": {
+        "length": 48,
+        "text": "いまは自分の実行時の事実を読めない場面である（記憶へ移すための内部ターン）。次の会話で呼ぶこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": ["context.runtime() -> undefined"],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-absent#2": {
+      "output": {
+        "length": 48,
+        "text": "いまは自分の実行時の事実を読めない場面である（記憶へ移すための内部ターン）。次の会話で呼ぶこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": ["context.runtime() -> undefined"],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-unobserved#1": {
+      "output": {
+        "length": 1605,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: fable（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: まだ分からない（init 未観測）\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: まだ分からない（init 未観測）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nまだ init を観測していないので、SDK のモデル id が分からず突き合わせられない。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-unobserved#2": {
+      "output": {
+        "length": 1605,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: fable（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: まだ分からない（init 未観測）\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: まだ分からない（init 未観測）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nまだ init を観測していないので、SDK のモデル id が分からず突き合わせられない。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-model-mcp-empty": {
+      "output": {
+        "length": 1592,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-full": {
+      "output": {
+        "length": 1601,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 0123456（イメージに焼き込み済み、フル 0123456789abcdef0123456789abcdef01234567）\n- このイメージが焼かれた時刻とそこからの経過: 2026-10-26T00:00:00.000Z（約36時間前）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（人間が `ALTEROID_CLONE_MODEL` に置いた値）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: high\n- effort（alteroid が明示的に渡したもの）: high\n- Claude Code の版: 2.1.0\n- 認証の出所（値ではなく名前）: ANTHROPIC_API_KEY\n- 許可モード（SDK が報告した実効値）: auto\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: alteroid(connected), search(failed)\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: sess-0001\n- resume 元のセッション id: sess-0000\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 12,345 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 67,890 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: 23,000 トークン（2 軸）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: free 150,000 トークン（1 軸） / buffer 30,000 トークン（1 軸） / deferred 5,000 トークン（1 軸） / 分類できず 7 トークン（1 軸）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-mcp-long": {
+      "output": {
+        "length": 1998,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: server-000(connected), server-001(connected), server-002(connected), server-003(connected), server-004(connected), server-005(connected), server-006(connected), server-007(connected), server-008(connected), server-009(connected), server-010(connected), server-011(connected), server-012(connected), server-013(connected), server-014(connected), server-015(connected), server-016(connected), server-01…（518 文字省略。全 918 文字）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-context-error": {
+      "output": {
+        "length": 1618,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: 観測を試みて失敗した（理由: getContextUsage が応答しなかった）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: 観測を試みて失敗した（理由: getContextUsage が応答しなかった）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-context-no-categories": {
+      "output": {
+        "length": 1634,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: SDK がカテゴリ別の内訳を返さなかった（この回の観測は categories を持っていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: SDK がカテゴリ別の内訳を返さなかった（この回の観測は categories を持っていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-route-empty": {
+      "output": {
+        "length": 1707,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## SDK の接続先とモデルの別名（環境変数。クローン自身の層）\n\n  ANTHROPIC_BASE_URL / ANTHROPIC_DEFAULT_*_MODEL / ANTHROPIC_MODEL はどれも置かれていない\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runtime-route-lines": {
+      "output": {
+        "length": 1700,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## SDK の接続先とモデルの別名（環境変数。クローン自身の層）\n\n  ANTHROPIC_BASE_URL: https://gateway.example/v1\n  opus → claude-opus-5\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runner-models": {
+      "output": {
+        "length": 1697,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 接続中の runner が名乗ったモデル（マネージャー・作業者）\n\n  runner-1: manager=opus / worker=sonnet\n  runner-2: manager=fable\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "context.runnerModels() -> 2 lines",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runner-routes": {
+      "output": {
+        "length": 1704,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 接続中の runner の SDK の接続先とモデルの別名（環境変数。マネージャー・作業者の層）\n\n  runner-1: ANTHROPIC_BASE_URL=https://gateway.example/v1\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "context.runnerAnthropicRoutes() -> 1 lines",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runner-both-with-route-lines": {
+      "output": {
+        "length": 1904,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 接続中の runner が名乗ったモデル（マネージャー・作業者）\n\n  runner-1: manager=opus\n\n## SDK の接続先とモデルの別名（環境変数。クローン自身の層）\n\n  ANTHROPIC_BASE_URL / ANTHROPIC_DEFAULT_*_MODEL / ANTHROPIC_MODEL はどれも置かれていない\n\n## 接続中の runner の SDK の接続先とモデルの別名（環境変数。マネージャー・作業者の層）\n\n  runner-1: ANTHROPIC_BASE_URL=https://gateway.example/v1\n  runner-2: （置かれていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "context.runnerModels() -> 1 lines",
+        "context.runnerAnthropicRoutes() -> 2 lines",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runner-empty-lines": {
+      "output": {
+        "length": 1592,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "context.runnerModels() -> 0 lines",
+        "context.runnerAnthropicRoutes() -> 0 lines",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runner-models-throws": {
+      "output": {
+        "length": 25,
+        "text": "context.runnerModels が落ちた",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "calls": ["context.runtime() -> facts", "context.runnerModels() -> threw Error"],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "runner-routes-throws": {
+      "output": {
+        "length": 34,
+        "text": "context.runnerAnthropicRoutes が落ちた",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "context.runnerModels() -> 1 lines",
+        "context.runnerAnthropicRoutes() -> threw Error"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-other-model": {
+      "output": {
+        "length": 1613,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 と同じ行は無い（台帳の始点: 2026-10-27T00:06:00.000Z）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=1 since=2026-10-27T00:06:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-few": {
+      "output": {
+        "length": 1876,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"clone\" / layer: clone / site: session / 合計 $2.00\n  - managerId: \"mgr-000\" / layer: manager / site: peer / 合計 $2.00\n  - managerId: \"mgr-001\" / layer: manager / site: session / 合計 $2.00\n  - managerId: \"clone\" / layer: clone / site: distill / 合計 $0.5000\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=5 since=2026-10-27T00:01:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-exact-14": {
+      "output": {
+        "length": 2547,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"m-013\" / layer: manager / site: session / 合計 $1.13\n  - managerId: \"m-012\" / layer: manager / site: session / 合計 $1.12\n  - managerId: \"m-011\" / layer: manager / site: session / 合計 $1.11\n  - managerId: \"m-010\" / layer: manager / site: session / 合計 $1.10\n  - managerId: \"m-009\" / layer: manager / site: session / 合計 $1.09\n  - managerId: \"m-008\" / layer: manager / site: session / 合計 $1.08\n  - managerId: \"m-007\" / layer: manager / site: session / 合計 $1.07\n  - managerId: \"m-006\" / layer: manager / site: session / 合計 $1.06\n  - managerId: \"m-005\" / layer: manager / site: session / 合計 $1.05\n  - managerId: \"m-004\" / layer: manager / site: session / 合計 $1.04\n  - managerId: \"m-003\" / layer: manager / site: session / 合計 $1.03\n  - managerId: \"m-002\" / layer: manager / site: session / 合計 $1.02\n  - managerId: \"m-001\" / layer: manager / site: session / 合計 $1.01\n  - managerId: \"m-000\" / layer: manager / site: session / 合計 $1.00\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=14 since=2026-10-27T00:00:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-15-truncated": {
+      "output": {
+        "length": 2855,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"m-014\" / layer: manager / site: session / 合計 $1.14\n  - managerId: \"m-013\" / layer: manager / site: session / 合計 $1.13\n  - managerId: \"m-012\" / layer: manager / site: session / 合計 $1.12\n  - managerId: \"m-011\" / layer: manager / site: session / 合計 $1.11\n  - managerId: \"m-010\" / layer: manager / site: session / 合計 $1.10\n  - managerId: \"m-009\" / layer: manager / site: session / 合計 $1.09\n  - managerId: \"m-008\" / layer: manager / site: session / 合計 $1.08\n  - managerId: \"m-007\" / layer: manager / site: session / 合計 $1.07\n  - managerId: \"m-006\" / layer: manager / site: session / 合計 $1.06\n  - managerId: \"m-005\" / layer: manager / site: session / 合計 $1.05\n  - managerId: \"m-004\" / layer: manager / site: session / 合計 $1.04\n  - managerId: \"m-003\" / layer: manager / site: session / 合計 $1.03\n  - managerId: \"m-002\" / layer: manager / site: session / 合計 $1.02\n  - managerId: \"m-001\" / layer: manager / site: session / 合計 $1.01\n  …（残り 1 件は出していない。self_status の ledgerCursor=eyJheGlzIjoibGVkZ2VyIiwibGFiZWwiOiJtLTAwMVx1MDAwMG1hbmFnZXJcdTAwMDBzZXNzaW9uIiwiY29zdCI6MS4wMSwiYXNPZiI6IjIwMjYtMTAtMjdUMDA6MTQ6MDAuMDAwWiIsInRpZWRBdEFzT2YiOlt7ImxhYmVsIjoibS0wMTRcdTAwMDBtYW5hZ2VyXHUwMDAwc2Vzc2lvbiIsImNvc3QiOjEuMTQwMDAwMDAwMDAwMDAwMX1dfQ で続きが出る）\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=15 since=2026-10-27T00:00:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-paging#1": {
+      "output": {
+        "length": 2838,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"m-119\" / layer: manager / site: session / 合計 $2.19\n  - managerId: \"m-118\" / layer: manager / site: session / 合計 $2.18\n  - managerId: \"m-117\" / layer: manager / site: session / 合計 $2.17\n  - managerId: \"m-116\" / layer: manager / site: session / 合計 $2.16\n  - managerId: \"m-115\" / layer: manager / site: session / 合計 $2.15\n  - managerId: \"m-114\" / layer: manager / site: session / 合計 $2.14\n  - managerId: \"m-113\" / layer: manager / site: session / 合計 $2.13\n  - managerId: \"m-112\" / layer: manager / site: session / 合計 $2.12\n  - managerId: \"m-111\" / layer: manager / site: session / 合計 $2.11\n  - managerId: \"m-110\" / layer: manager / site: session / 合計 $2.10\n  - managerId: \"m-109\" / layer: manager / site: session / 合計 $2.09\n  - managerId: \"m-108\" / layer: manager / site: session / 合計 $2.08\n  - managerId: \"m-107\" / layer: manager / site: session / 合計 $2.07\n  - managerId: \"m-106\" / layer: manager / site: session / 合計 $2.06\n  …（残り 106 件は出していない。self_status の ledgerCursor=eyJheGlzIjoibGVkZ2VyIiwibGFiZWwiOiJtLTEwNlx1MDAwMG1hbmFnZXJcdTAwMDBzZXNzaW9uIiwiY29zdCI6Mi4wNiwiYXNPZiI6IjIwMjYtMTAtMjdUMDE6NTk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOlt7ImxhYmVsIjoibS0xMTlcdTAwMDBtYW5hZ2VyXHUwMDAwc2Vzc2lvbiIsImNvc3QiOjIuMTl9XX0 で続きが出る）\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=120 since=2026-10-27T00:00:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-paging#2": {
+      "output": {
+        "length": 7068,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 120 件）:\n  - managerId: \"m-105\" / layer: manager / site: session / 合計 $2.05\n  - managerId: \"m-104\" / layer: manager / site: session / 合計 $2.04\n  - managerId: \"m-103\" / layer: manager / site: session / 合計 $2.03\n  - managerId: \"m-102\" / layer: manager / site: session / 合計 $2.02\n  - managerId: \"m-101\" / layer: manager / site: session / 合計 $2.01\n  - managerId: \"m-100\" / layer: manager / site: session / 合計 $2.00\n  - managerId: \"m-099\" / layer: manager / site: session / 合計 $1.99\n  - managerId: \"m-098\" / layer: manager / site: session / 合計 $1.98\n  - managerId: \"m-097\" / layer: manager / site: session / 合計 $1.97\n  - managerId: \"m-096\" / layer: manager / site: session / 合計 $1.96\n  - managerId: \"m-095\" / layer: manager / site: session / 合計 $1.95\n  - managerId: \"m-094\" / layer: manager / site: session / 合計 $1.94\n  - managerId: \"m-093\" / layer: manager / site: session / 合計 $1.93\n  - managerId: \"m-092\" / layer: manager / site: session / 合計 $1.92\n  - managerId: \"m-091\" / layer: manager / site: session / 合計 $1.91\n  - managerId: \"m-090\" / layer: manager / site: session / 合計 $1.90\n  - managerId: \"m-089\" / layer: manager / site: session / 合計 $1.89\n  - managerId: \"m-088\" / layer: manager / site: session / 合計 $1.88\n  - managerId: \"m-087\" / layer: manager / site: session / 合計 $1.87\n  - managerId: \"m-086\" / layer: manager / site: session / 合計 $1.86\n  - managerId: \"m-085\" / layer: manager / site: session / 合計 $1.85\n  - managerId: \"m-084\" / layer: manager / site: session / 合計 $1.84\n  - managerId: \"m-083\" / layer: manager / site: session / 合計 $1.83\n  - managerId: \"m-082\" / layer: manager / site: session / 合計 $1.82\n  - managerId: \"m-081\" / layer: manager / site: session / 合計 $1.81\n  - managerId: \"m-080\" / layer: manager / site: session / 合計 $1.80\n  - managerId: \"m-079\" / layer: manager / site: session / 合計 $1.79\n  - managerId: \"m-078\" / layer: manager / site: session / 合計 $1.78\n  - managerId: \"m-077\" / layer: manager / site: session / 合計 $1.77\n  - managerId: \"m-076\" / layer: manager / site: session / 合計 $1.76\n  - managerId: \"m-075\" / layer: manager / site: session / 合計 $1.75\n  - managerId: \"m-074\" / layer: manager / site: session / 合計 $1.74\n  - managerId: \"m-073\" / layer: manager / site: session / 合計 $1.73\n  - managerId: \"m-072\" / layer: manager / site: session / 合計 $1.72\n  - managerId: \"m-071\" / layer: manager / site: session / 合計 $1.71\n  - managerId: \"m-070\" / layer: manager / site: session / 合計 $1.70\n  - managerId: \"m-069\" / layer: manager / site: session / 合計 $1.69\n  - managerId: \"m-068\" / layer: manager / site: session / 合計 $1.68\n  - managerId: \"m-067\" / layer: manager / site: session / 合計 $1.67\n  - managerId: \"m-066\" / layer: manager / site: session / 合計 $1.66\n  - managerId: \"m-065\" / layer: manager / site: session / 合計 $1.65\n  - managerId: \"m-064\" / layer: manager / site: session / 合計 $1.64\n  - managerId: \"m-063\" / layer: manager / site: session / 合計 $1.63\n  - managerId: \"m-062\" / layer: manager / site: session / 合計 $1.62\n  - managerId: \"m-061\" / layer: manager / site: session / 合計 $1.61\n  - managerId: \"m-060\" / layer: manager / site: session / 合計 $1.60\n  - managerId: \"m-059\" / layer: manager / site: session / 合計 $1.59\n  - managerId: \"m-058\" / layer: manager / site: session / 合計 $1.58\n  - managerId: \"m-057\" / layer: manager / site: session / 合計 $1.57\n  - managerId: \"m-056\" / layer: manager / site: session / 合計 $1.56\n  - managerId: \"m-055\" / layer: manager / site: session / 合計 $1.55\n  - managerId: \"m-054\" / layer: manager / site: session / 合計 $1.54\n  - managerId: \"m-053\" / layer: manager / site: session / 合計 $1.53\n  - managerId: \"m-052\" / layer: manager / site: session / 合計 $1.52\n  - managerId: \"m-051\" / layer: manager / site: session / 合計 $1.51\n  - managerId: \"m-050\" / layer: manager / site: session / 合計 $1.50\n  - managerId: \"m-049\" / layer: manager / site: session / 合計 $1.49\n  - managerId: \"m-048\" / layer: manager / site: session / 合計 $1.48\n  - managerId: \"m-047\" / layer: manager / site: session / 合計 $1.47\n  - managerId: \"m-046\" / layer: manager / site: session / 合計 $1.46\n  - managerId: \"m-045\" / layer: manager / site: session / 合計 $1.45\n  - managerId: \"m-044\" / layer: manager / site: session / 合計 $1.44\n  - managerId: \"m-043\" / layer: manager / site: session / 合計 $1.43\n  - managerId: \"m-042\" / layer: manager / site: session / 合計 $1.42\n  - managerId: \"m-041\" / layer: manager / site: session / 合計 $1.41\n  - managerId: \"m-040\" / layer: manager / site: session / 合計 $1.40\n  - managerId: \"m-039\" / layer: manager / site: session / 合計 $1.39\n  - managerId: \"m-038\" / layer: manager / site: session / 合計 $1.38\n  - managerId: \"m-037\" / layer: manager / site: session / 合計 $1.37\n  - managerId: \"m-036\" / layer: manager / site: session / 合計 $1.36\n  - managerId: \"m-035\" / layer: manager / site: session / 合計 $1.35\n  - managerId: \"m-034\" / layer: manager / site: session / 合計 $1.34\n  - managerId: \"m-033\" / layer: manager / site: session / 合計 $1.33\n  - managerId: \"m-032\" / layer: manager / site: session / 合計 $1.32\n  - managerId: \"m-031\" / layer: manager / site: session / 合計 $1.31\n  - managerId: \"m-030\" / layer: manager / site: session / 合計 $1.30\n  - managerId: \"m-029\" / layer: manager / site: session / 合計 $1.29\n  - managerId: \"m-028\" / layer: manager / site: session / 合計 $1.28\n  - managerId: \"m-027\" / layer: manager / site: session / 合計 $1.27\n  - managerId: \"m-026\" / layer: manager / site: session / 合計 $1.26\n  - managerId: \"m-025\" / layer: manager / site: session / 合計 $1.25\n  - managerId: \"m-024\" / layer: manager / site: session / 合計 $1.24\n  - managerId: \"m-023\" / layer: manager / site: session / 合計 $1.23\n  - managerId: \"m-022\" / layer: manager / site: session / 合計 $1.22\n  - managerId: \"m-021\" / layer: manager / site: session / 合計 $1.21\n  - managerId: \"m-020\" / layer: manager / site: session / 合計 $1.20\n  - managerId: \"m-019\" / layer: manager / site: session / 合計 $1.19\n  - managerId: \"m-018\" / layer: manager / site: session / 合計 $1.18\n  - managerId: \"m-017\" / layer: manager / site: session / 合計 $1.17\n  - managerId: \"m-016\" / layer: manager / site: session / 合計 $1.16\n  - managerId: \"m-015\" / layer: manager / site: session / 合計 $1.15\n  - managerId: \"m-014\" / layer: manager / site: session / 合計 $1.14\n  - managerId: \"m-013\" / layer: manager / site: session / 合計 $1.13\n  - managerId: \"m-012\" / layer: manager / site: session / 合計 $1.12\n  - managerId: \"m-011\" / layer: manager / site: session / 合計 $1.11\n  - managerId: \"m-010\" / layer: manager / site: session / 合計 $1.10\n  - managerId: \"m-009\" / layer: manager / site: session / 合計 $1.09\n  - managerId: \"m-008\" / layer: manager / site: session / 合計 $1.08\n  - managerId: \"m-007\" / layer: manager / site: session / 合計 $1.07\n  - managerId: \"m-006\" / layer: manager / site: session / 合計 $1.06\n  …（残り 6 件は出していない。self_status の ledgerCursor=eyJheGlzIjoibGVkZ2VyIiwibGFiZWwiOiJtLTAwNlx1MDAwMG1hbmFnZXJcdTAwMDBzZXNzaW9uIiwiY29zdCI6MS4wNiwiYXNPZiI6IjIwMjYtMTAtMjdUMDE6NTk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOlt7ImxhYmVsIjoibS0xMTlcdTAwMDBtYW5hZ2VyXHUwMDAwc2Vzc2lvbiIsImNvc3QiOjIuMTl9XX0 で続きが出る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=120 since=2026-10-27T00:00:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-paging#3": {
+      "output": {
+        "length": 481,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 120 件）:\n  - managerId: \"m-005\" / layer: manager / site: session / 合計 $1.05\n  - managerId: \"m-004\" / layer: manager / site: session / 合計 $1.04\n  - managerId: \"m-003\" / layer: manager / site: session / 合計 $1.03\n  - managerId: \"m-002\" / layer: manager / site: session / 合計 $1.02\n  - managerId: \"m-001\" / layer: manager / site: session / 合計 $1.01\n  - managerId: \"m-000\" / layer: manager / site: session / 合計 $1.00",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=120 since=2026-10-27T00:00:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-paging#4": {
+      "output": {
+        "length": 112,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 120 件）:\n  （ledgerCursor より後ろは無い。これが最後の頁）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=120 since=2026-10-27T00:00:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-risen#1": {
+      "output": {
+        "length": 2836,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"m-019\" / layer: manager / site: session / 合計 $1.19\n  - managerId: \"m-018\" / layer: manager / site: session / 合計 $1.18\n  - managerId: \"m-017\" / layer: manager / site: session / 合計 $1.17\n  - managerId: \"m-016\" / layer: manager / site: session / 合計 $1.16\n  - managerId: \"m-015\" / layer: manager / site: session / 合計 $1.15\n  - managerId: \"m-014\" / layer: manager / site: session / 合計 $1.14\n  - managerId: \"m-013\" / layer: manager / site: session / 合計 $1.13\n  - managerId: \"m-012\" / layer: manager / site: session / 合計 $1.12\n  - managerId: \"m-011\" / layer: manager / site: session / 合計 $1.11\n  - managerId: \"m-010\" / layer: manager / site: session / 合計 $1.10\n  - managerId: \"m-009\" / layer: manager / site: session / 合計 $1.09\n  - managerId: \"m-008\" / layer: manager / site: session / 合計 $1.08\n  - managerId: \"m-007\" / layer: manager / site: session / 合計 $1.07\n  - managerId: \"m-006\" / layer: manager / site: session / 合計 $1.06\n  …（残り 6 件は出していない。self_status の ledgerCursor=eyJheGlzIjoibGVkZ2VyIiwibGFiZWwiOiJtLTAwNlx1MDAwMG1hbmFnZXJcdTAwMDBzZXNzaW9uIiwiY29zdCI6MS4wNiwiYXNPZiI6IjIwMjYtMTAtMjdUMDA6MTk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOlt7ImxhYmVsIjoibS0wMTlcdTAwMDBtYW5hZ2VyXHUwMDAwc2Vzc2lvbiIsImNvc3QiOjEuMTl9XX0 で続きが出る）\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=20 since=2026-10-27T00:00:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-risen#2": {
+      "output": {
+        "length": 548,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 20 件）:\n  - managerId: \"m-005\" / layer: manager / site: session / 合計 $1.05\n  - managerId: \"m-004\" / layer: manager / site: session / 合計 $1.04\n  - managerId: \"m-003\" / layer: manager / site: session / 合計 $1.03\n  - managerId: \"m-002\" / layer: manager / site: session / 合計 $1.02\n  - managerId: \"m-001\" / layer: manager / site: session / 合計 $1.01\n\n⚠ 順位が上がった、または既に見せた行が伸びた可能性がある行（前回の呼び出し以降に記録が増えたため。この頁の本体とは重複しない）:\n  - managerId: \"m-000\" / layer: manager / site: session / 合計 $11.00",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=20 since=2026-10-27T00:00:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-risen-overflow#1": {
+      "output": {
+        "length": 2856,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"m-039\" / layer: manager / site: session / 合計 $1.39\n  - managerId: \"m-038\" / layer: manager / site: session / 合計 $1.38\n  - managerId: \"m-037\" / layer: manager / site: session / 合計 $1.37\n  - managerId: \"m-036\" / layer: manager / site: session / 合計 $1.36\n  - managerId: \"m-035\" / layer: manager / site: session / 合計 $1.35\n  - managerId: \"m-034\" / layer: manager / site: session / 合計 $1.34\n  - managerId: \"m-033\" / layer: manager / site: session / 合計 $1.33\n  - managerId: \"m-032\" / layer: manager / site: session / 合計 $1.32\n  - managerId: \"m-031\" / layer: manager / site: session / 合計 $1.31\n  - managerId: \"m-030\" / layer: manager / site: session / 合計 $1.30\n  - managerId: \"m-029\" / layer: manager / site: session / 合計 $1.29\n  - managerId: \"m-028\" / layer: manager / site: session / 合計 $1.28\n  - managerId: \"m-027\" / layer: manager / site: session / 合計 $1.27\n  - managerId: \"m-026\" / layer: manager / site: session / 合計 $1.26\n  …（残り 26 件は出していない。self_status の ledgerCursor=eyJheGlzIjoibGVkZ2VyIiwibGFiZWwiOiJtLTAyNlx1MDAwMG1hbmFnZXJcdTAwMDBzZXNzaW9uIiwiY29zdCI6MS4yNiwiYXNPZiI6IjIwMjYtMTAtMjdUMDA6Mzk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOlt7ImxhYmVsIjoibS0wMzlcdTAwMDBtYW5hZ2VyXHUwMDAwc2Vzc2lvbiIsImNvc3QiOjEuMzkwMDAwMDAwMDAwMDAwMX1dfQ で続きが出る）\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=40 since=2026-10-27T00:00:00.000Z",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-risen-overflow#2": {
+      "output": {
+        "length": 1527,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 40 件）:\n  - managerId: \"m-025\" / layer: manager / site: session / 合計 $1.25\n  - managerId: \"m-024\" / layer: manager / site: session / 合計 $1.24\n  - managerId: \"m-023\" / layer: manager / site: session / 合計 $1.23\n  - managerId: \"m-022\" / layer: manager / site: session / 合計 $1.22\n  - managerId: \"m-021\" / layer: manager / site: session / 合計 $1.21\n  - managerId: \"m-020\" / layer: manager / site: session / 合計 $1.20\n\n⚠ 順位が上がった、または既に見せた行が伸びた可能性がある行（前回の呼び出し以降に記録が増えたため。この頁の本体とは重複しない）:\n  - managerId: \"m-019\" / layer: manager / site: session / 合計 $120.19\n  - managerId: \"m-018\" / layer: manager / site: session / 合計 $119.18\n  - managerId: \"m-017\" / layer: manager / site: session / 合計 $118.17\n  - managerId: \"m-016\" / layer: manager / site: session / 合計 $117.16\n  - managerId: \"m-015\" / layer: manager / site: session / 合計 $116.15\n  - managerId: \"m-014\" / layer: manager / site: session / 合計 $115.14\n  - managerId: \"m-013\" / layer: manager / site: session / 合計 $114.13\n  - managerId: \"m-012\" / layer: manager / site: session / 合計 $113.12\n  - managerId: \"m-011\" / layer: manager / site: session / 合計 $112.11\n  - managerId: \"m-010\" / layer: manager / site: session / 合計 $111.10\n  - managerId: \"m-009\" / layer: manager / site: session / 合計 $110.09\n  - managerId: \"m-008\" / layer: manager / site: session / 合計 $109.08\n  - managerId: \"m-007\" / layer: manager / site: session / 合計 $108.07\n  - managerId: \"m-006\" / layer: manager / site: session / 合計 $107.06\n  …ほか 6 件は省略。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=40 since=2026-10-27T00:00:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-errors#1": {
+      "output": {
+        "length": 138,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nledgerCursor が壊れている（この道具が返したものではないか、書き換えられている）。ledgerCursor を付けずに self_status を呼び直すと先頭の内訳から読める。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=5 since=2026-10-27T00:01:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-errors#2": {
+      "output": {
+        "length": 138,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nledgerCursor が壊れている（この道具が返したものではないか、書き換えられている）。ledgerCursor を付けずに self_status を呼び直すと先頭の内訳から読める。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=5 since=2026-10-27T00:01:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-errors#3": {
+      "output": {
+        "length": 131,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nledgerCursor が別の文脈（usage_read の axis 用など）のものである。self_status が返した ledgerCursor をそのまま渡すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=5 since=2026-10-27T00:01:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-errors#4": {
+      "output": {
+        "length": 279,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 4 件）:\n  - managerId: \"mgr-000\" / layer: manager / site: peer / 合計 $2.00\n  - managerId: \"mgr-001\" / layer: manager / site: session / 合計 $2.00\n  - managerId: \"clone\" / layer: clone / site: distill / 合計 $0.5000",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=5 since=2026-10-27T00:01:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-sdk-null": {
+      "output": {
+        "length": 89,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nまだ init を観測していないので、SDK のモデル id が分からず突き合わせられない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": ["context.runtime() -> facts"],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-empty-ledger": {
+      "output": {
+        "length": 84,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": ["context.runtime() -> facts", "usage.aggregate({}) -> rows=0 since=null"],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-other-model": {
+      "output": {
+        "length": 105,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 と同じ行は無い（台帳の始点: 2026-10-27T00:06:00.000Z）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=1 since=2026-10-27T00:06:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-cursor-aggregate-fails": {
+      "output": {
+        "length": 21,
+        "text": "usage.aggregate が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "calls": ["context.runtime() -> facts", "usage.aggregate({}) -> threw Error"],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "memory-mixed": {
+      "output": {
+        "length": 2572,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 1,284 文字（6 文書）\n  - [fact] long-description: 長い説明の文書 (作成: 2026-10-25T14:44:00.000Z / 更新: 2026-10-25T14:44:00.000Z) 976 bytes / 336 文字 — 長い説明ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（184 文字省略。全 304 文字）\n  - [premise] malformed: 見出し (作成: 2026-10-25T14:45:00.000Z / 更新: 2026-10-25T14:45:00.000Z) 52 bytes / 313 文字\n  - [premise] no-frontmatter: 前書きなし (作成: 2026-10-25T14:43:00.000Z / 更新: 2026-10-25T14:43:00.000Z) 40 bytes / 254 文字\n  - [premise] values: 価値観 (作成: 2026-10-25T14:40:00.000Z / 更新: 2026-10-25T14:40:00.000Z) 561 bytes / 194 文字 — 価値観の芯\n  - [indexed] project-notes: 作業メモ (作成: 2026-10-25T14:41:00.000Z / 更新: 2026-10-25T14:41:00.000Z) 256 bytes / 140 文字 — 特定の作業の記憶\n  - [fact] about-me: 事実 (作成: 2026-10-25T14:42:00.000Z / 更新: 2026-10-25T14:42:00.000Z) 76 bytes / 108 文字 — 事実の蓄積\n- premise 合計: 765 文字（3 文書。毎ターン「要旨＋節の目次」が焼かれる）\n- indexed 合計: 140 文字（1 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）\n- fact 目次合計: 375 文字（2 文書。目次の1行だけが焼かれる）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 6 items",
+        "persona.documents() -> 6 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "memory-many": {
+      "output": {
+        "length": 5201,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 5,749 文字（60 文書）\n  - [fact] fact-010: 事実 10 (作成: 2026-10-25T14:50:00.000Z / 更新: 2026-10-25T14:50:00.000Z) 218 bytes / 164 文字 — 事実 10 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-011: 事実 11 (作成: 2026-10-25T14:51:00.000Z / 更新: 2026-10-25T14:51:00.000Z) 218 bytes / 164 文字 — 事実 11 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-012: 事実 12 (作成: 2026-10-25T14:52:00.000Z / 更新: 2026-10-25T14:52:00.000Z) 218 bytes / 164 文字 — 事実 12 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-013: 事実 13 (作成: 2026-10-25T14:53:00.000Z / 更新: 2026-10-25T14:53:00.000Z) 218 bytes / 164 文字 — 事実 13 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-014: 事実 14 (作成: 2026-10-25T14:54:00.000Z / 更新: 2026-10-25T14:54:00.000Z) 218 bytes / 164 文字 — 事実 14 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-015: 事実 15 (作成: 2026-10-25T14:55:00.000Z / 更新: 2026-10-25T14:55:00.000Z) 218 bytes / 164 文字 — 事実 15 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-016: 事実 16 (作成: 2026-10-25T14:56:00.000Z / 更新: 2026-10-25T14:56:00.000Z) 218 bytes / 164 文字 — 事実 16 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-017: 事実 17 (作成: 2026-10-25T14:57:00.000Z / 更新: 2026-10-25T14:57:00.000Z) 218 bytes / 164 文字 — 事実 17 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-018: 事実 18 (作成: 2026-10-25T14:58:00.000Z / 更新: 2026-10-25T14:58:00.000Z) 218 bytes / 164 文字 — 事実 18 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-019: 事実 19 (作成: 2026-10-25T14:59:00.000Z / 更新: 2026-10-25T14:59:00.000Z) 218 bytes / 164 文字 — 事実 19 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-020: 事実 20 (作成: 2026-10-25T15:00:00.000Z / 更新: 2026-10-25T15:00:00.000Z) 218 bytes / 164 文字 — 事実 20 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-021: 事実 21 (作成: 2026-10-25T15:01:00.000Z / 更新: 2026-10-25T15:01:00.000Z) 218 bytes / 164 文字 — 事実 21 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-022: 事実 22 (作成: 2026-10-25T15:02:00.000Z / 更新: 2026-10-25T15:02:00.000Z) 218 bytes / 164 文字 — 事実 22 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-023: 事実 23 (作成: 2026-10-25T15:03:00.000Z / 更新: 2026-10-25T15:03:00.000Z) 218 bytes / 164 文字 — 事実 23 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-024: 事実 24 (作成: 2026-10-25T15:04:00.000Z / 更新: 2026-10-25T15:04:00.000Z) 218 bytes / 164 文字 — 事実 24 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-025: 事実 25 (作成: 2026-10-25T15:05:00.000Z / 更新: 2026-10-25T15:05:00.000Z) 218 bytes / 164 文字 — 事実 25 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-026: 事実 26 (作成: 2026-10-25T15:06:00.000Z / 更新: 2026-10-25T15:06:00.000Z) 218 bytes / 164 文字 — 事実 26 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-027: 事実 27 (作成: 2026-10-25T15:07:00.000Z / 更新: 2026-10-25T15:07:00.000Z) 218 bytes / 164 文字 — 事実 27 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-028: 事実 28 (作成: 2026-10-25T15:08:00.000Z / 更新: 2026-10-25T15:08:00.000Z) 218 bytes / 164 文字 — 事実 28 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  - [fact] fact-029: 事実 29 (作成: 2026-10-25T15:09:00.000Z / 更新: 2026-10-25T15:09:00.000Z) 218 bytes / 164 文字 — 事実 29 の説明。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。説明が続く。\n  …ほか 40 文書は省略（全 60 文書のうち 20 文書だけ出した）。全件は memory_list、本文は memory_read slug=<slug> で取れる。\n- premise 合計: 0 文字（0 文書。毎ターン「要旨＋節の目次」が焼かれる）\n- indexed 合計: 0 文字（0 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）\n- fact 目次合計: 5,749 文字（60 文書。目次の1行だけが焼かれる）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 60 items",
+        "persona.documents() -> 60 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "memory-demoted": {
+      "output": {
+        "length": 3490,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 54,837 文字（9 文書）\n  - [premise] big-0: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:40:00.000Z / 更新: 2026-10-25T14:40:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 0\n  - [premise] big-1: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:41:00.000Z / 更新: 2026-10-25T14:41:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 1\n  - [premise] big-2: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:42:00.000Z / 更新: 2026-10-25T14:42:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 2\n  - [premise] big-3: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:43:00.000Z / 更新: 2026-10-25T14:43:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 3\n  - [premise] big-4: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:44:00.000Z / 更新: 2026-10-25T14:44:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 4\n  - [premise] big-5: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:45:00.000Z / 更新: 2026-10-25T14:45:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 5\n  - [premise] big-6: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:46:00.000Z / 更新: 2026-10-25T14:46:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 6\n  - [premise] big-7: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:47:00.000Z / 更新: 2026-10-25T14:47:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 7\n  - [premise] big-8: 節000: みみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみみ (作成: 2026-10-25T14:48:00.000Z / 更新: 2026-10-25T14:48:00.000Z) 29,552 bytes / 6,755 文字 — 大きい前提 8\n- premise 合計: 54,837 文字（9 文書。毎ターン「要旨＋節の目次」が焼かれる。⚠️ うち 1 文書は束ねた予算に当たってカードを落とし、1行になっている（節の目次は焼かれていない。落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける））\n- indexed 合計: 0 文字（0 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）\n- fact 目次合計: 0 文字（0 文書。目次の1行だけが焼かれる）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 9 items",
+        "persona.documents() -> 9 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "memory-persona-list-fails": {
+      "output": {
+        "length": 18,
+        "text": "persona.list が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> threw Error",
+        "persona.documents()",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "memory-persona-documents-fails": {
+      "output": {
+        "length": 23,
+        "text": "persona.documents が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 6 items",
+        "persona.documents() -> threw Error",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "ledger-aggregate-fails": {
+      "output": {
+        "length": 21,
+        "text": "usage.aggregate が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> threw Error",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "codex-none": {
+      "output": {
+        "length": 1592,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "codex-valid": {
+      "output": {
+        "length": 1828,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\nCodex の ChatGPT ログイン: あり（me@example.com・plus。最終更新 2026-10-07T00:00:00.000Z）\n  Codex を頼む口は runner のマネージャーの peer だけで、このログインが runner に届くと開く（器ごとに開いているか・閉じている理由は runner_list の peer の行）。クローンはマネージャーへの依頼として頼む。この器で `codex` を直接叩くと未ログインと出るのは設計どおり\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> record",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "codex-valid-bare": {
+      "output": {
+        "length": 1826,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\nCodex の ChatGPT ログイン: あり（(アカウント不明)・(プラン不明)。最終更新 2026-10-07T00:00:00.000Z）\n  Codex を頼む口は runner のマネージャーの peer だけで、このログインが runner に届くと開く（器ごとに開いているか・閉じている理由は runner_list の peer の行）。クローンはマネージャーへの依頼として頼む。この器で `codex` を直接叩くと未ログインと出るのは設計どおり\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> record",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "codex-failed": {
+      "output": {
+        "length": 1964,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\nCodex の ChatGPT ログイン: あり（me@example.com・plus。最終更新 2026-10-07T00:00:00.000Z）\n  Codex を頼む口は runner のマネージャーの peer だけで、このログインが runner に届くと開く（器ごとに開いているか・閉じている理由は runner_list の peer の行）。クローンはマネージャーへの依頼として頼む。この器で `codex` を直接叩くと未ログインと出るのは設計どおり\n⚠ 切れている・失効した・更新に失敗した（2026-10-07T01:00:00.000Z）: refresh token was revoked\n  → 人間に再ログインを頼むこと（`alteroid codex login` か Web の「設定 — Codex」）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> record",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "codex-unreadable": {
+      "output": {
+        "length": 1652,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\nCodex の ChatGPT ログイン: 正本を読めなかった（Error: codexAuth.get が読めない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> threw Error",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-turn-some": {
+      "output": {
+        "length": 2531,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間（5 件。turn_timing から。詳細は journal_read types=[\"turn_timing\"]）:\n- 応答が全部終わるまで: 中央値 9.0秒・90% 点 61秒\n- 最初の文字まで: 中央値 45秒・90% 点 45秒\n- 時間を食っている段（合計の多い順）: モデル（SDK に投げてから result まで） 77秒（74%） / ターンの前の組み立て 22秒（21%） / 順番待ち（前のターンの処理待ち） 3.6秒（3%） / 書き戻し（result の後の後始末） 1.9秒（2%）\n- 1ターンあたりの入力（素の入力＋キャッシュの読み・書き）: 中央値 539,010・90% 点 539,010・3 ターンの合計 1,178,025 トークン\n- 合図別の入力（素＋キャッシュ読み書き。複数種の合図が束ねられたターンは「束」）: timer 1 ターン 539,010（46%） / human_message 1 ターン 539,010（46%） / self_initiative 1 ターン 100,005（8%） / ? 1 ターン 0（0%） / 束 1 ターン 0（0%）\n- 道具を1回も呼ばなかったターン: self_initiative 1/1（100%）・timer 0/1（0%）\n- 最も長かったターン:\n  - 2026-10-25T23:00:00.000Z 合計 61秒・最も長い段 モデル（SDK に投げてから result まで） 58秒（最初の応答まで 40秒・道具 3 回で 12秒（最も長いのは Bash 2 回 10秒、1回の最長 9.0秒）・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 539,010 トークン）\n  - 2026-10-25T23:02:00.000Z 合計 31秒・最も長い段 ターンの前の組み立て 20秒（memory 15秒・digest 4.0秒）\n  - 2026-10-25T23:01:00.000Z 合計 9.0秒・最も長い段 モデル（SDK に投げてから result まで） 8.0秒（最初の応答まで 40秒・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 100,005 トークン）\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 5 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-turn-many": {
+      "output": {
+        "length": 2576,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間（30 件。turn_timing から。詳細は journal_read types=[\"turn_timing\"]）:\n- 応答が全部終わるまで: 中央値 20秒・90% 点 32秒\n- 最初の文字まで: 中央値 45秒・90% 点 45秒\n- 時間を食っている段（合計の多い順）: モデル（SDK に投げてから result まで） 615秒（100%） / 順番待ち（前のターンの処理待ち） 3.0秒（0%）\n- 1ターンあたりの入力（素の入力＋キャッシュの読み・書き）: 中央値 539,010・90% 点 539,010・30 ターンの合計 16,170,300 トークン\n- 合図別の入力（素＋キャッシュ読み書き。複数種の合図が束ねられたターンは「束」）: peer_reply 5 ターン 2,695,050（17%） / inbox 5 ターン 2,695,050（17%） / schedule 4 ターン 2,156,040（13%） / manager_message 4 ターン 2,156,040（13%） / timer 4 ターン 2,156,040（13%） / 他 2 種\n- 道具を1回も呼ばなかったターン: self_initiative 2/4（50%）・timer 2/4（50%）\n- 最も長かったターン:\n  - 2026-10-25T23:34:00.000Z 合計 35秒・最も長い段 モデル（SDK に投げてから result まで） 35秒（最初の応答まで 40秒・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 539,010 トークン）\n  - 2026-10-25T23:33:00.000Z 合計 34秒・最も長い段 モデル（SDK に投げてから result まで） 34秒（最初の応答まで 40秒・道具 3 回で 12秒（最も長いのは Bash 2 回 10秒、1回の最長 9.0秒）・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 539,010 トークン）\n  - 2026-10-25T23:32:00.000Z 合計 33秒・最も長い段 モデル（SDK に投げてから result まで） 33秒（最初の応答まで 40秒・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 539,010 トークン）\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 30 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-turn-unreadable": {
+      "output": {
+        "length": 1594,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: 日誌を読めなかった（Error: journal.turn_timing が読めない）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> threw Error",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-http-some": {
+      "output": {
+        "length": 2416,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間（3 窓・要求 6 回・2026-10-26T14:00:00.000Z から。詳細は journal_read types=[\"http_timing\"]）:\n- 時間を食っている経路（合計の多い順）:\n  - POST /messages: 4 回・平均 2.0秒・窓の 90% 点の最大 2.5秒・最大 3.0秒・合計 8.0秒（うち DB 75%・1回あたり DB 10.0 本・本文 平均 97.7KB・最大 146.5KB）\n  - GET /route-2: 3 回・平均 1.0秒・窓の 90% 点の最大 502ms・最大 902ms・合計 3.0秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n  - GET /route-0: 1 回・平均 1.0秒・窓の 90% 点の最大 500ms・最大 900ms・合計 1.0秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n  - GET /empty: 0 回・平均 0ms・窓の 90% 点の最大 0ms・最大 0ms・合計 0ms（うち DB 0%・1回あたり DB 0.0 本・本文 平均 0B・最大 0B）\n- 最も遅かった要求:\n  - 2026-10-26T14:20:00.000Z POST /messages 500 3.0秒（DB 7本 2.8秒・整形 20ms・それ以外 180ms）\n  - 2026-10-26T14:25:00.000Z GET /route-2 200 702ms（DB 1本 300ms・整形 5ms・それ以外 397ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n  - 2026-10-26T14:05:00.000Z GET /route-0 200 700ms（DB 1本 300ms・整形 5ms・それ以外 395ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 3 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-http-many": {
+      "output": {
+        "length": 2589,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間（12 窓・要求 102 回・2026-10-26T14:20:00.000Z から。詳細は journal_read types=[\"http_timing\"]）:\n- 時間を食っている経路（合計の多い順）:\n  - GET /route-1: 38 回・平均 1.0秒・窓の 90% 点の最大 513ms・最大 913ms・合計 38秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n  - GET /route-0: 34 回・平均 1.0秒・窓の 90% 点の最大 512ms・最大 912ms・合計 34秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n  - GET /route-2: 30 回・平均 1.0秒・窓の 90% 点の最大 511ms・最大 911ms・合計 30秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n- 最も遅かった要求:\n  - 2026-10-26T16:15:00.000Z GET /route-1 200 713ms（DB 1本 300ms・整形 5ms・それ以外 408ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n  - 2026-10-26T16:05:00.000Z GET /route-0 200 712ms（DB 1本 300ms・整形 5ms・それ以外 407ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n  - 2026-10-26T15:55:00.000Z GET /route-2 200 711ms（DB 1本 300ms・整形 5ms・それ以外 406ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n  - 2026-10-26T15:45:00.000Z GET /route-1 200 710ms（DB 1本 300ms・整形 5ms・それ以外 405ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n  - 2026-10-26T15:35:00.000Z GET /route-0 200 709ms（DB 1本 300ms・整形 5ms・それ以外 404ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 12 items"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-http-unreadable": {
+      "output": {
+        "length": 1589,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: 日誌を読めなかった（Error: journal.http_timing が読めない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> threw Error"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "timing-both-unreadable": {
+      "output": {
+        "length": 1591,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: 日誌を読めなかった（Error: journal.turn_timing が読めない）。\n\nHTTP API の時間: 日誌を読めなかった（Error: journal.http_timing が読めない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> threw Error",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> threw Error"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "managers-peers": {
+      "output": {
+        "length": 1931,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。\n\nマネージャーが peer（Codex など）に作業を頼めるか（器ごと。頼める器は manager_start の runnerId で名指しできる。詳細は runner_list）:\n- local: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5, gpt-5-mini） / Claude に作業を頼める（peer: claude。モデルは Claude の既定）\n- runner-1: Codex は閉じている（ログイン済みだが CODEX_HOME が runner に届いていない） / gemini は閉じている（未対応）\n- runner-2: 不明（この runner は名乗らない旧い版か、名乗りをまだ受けていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items",
+        "managers.runners() -> 5 runners"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "managers-no-rows": {
+      "output": {
+        "length": 1592,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items",
+        "managers.runners() -> 0 runners"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "managers-only-silent-rows": {
+      "output": {
+        "length": 1592,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items",
+        "managers.runners() -> 2 runners"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "managers-runners-throws": {
+      "output": {
+        "length": 1592,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items",
+        "managers.runners() -> threw Error"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "managers-many": {
+      "output": {
+        "length": 3085,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）\n- このイメージが焼かれた時刻とそこからの経過: 不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（既定。`ALTEROID_CLONE_MODEL` は置かれていない）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: まだ分からない（このセッションで最初の道具呼び出しか、モデルが effort に対応していない）\n- effort（alteroid が明示的に渡したもの）: 渡していない（SDK の既定に任せている）\n- Claude Code の版: まだ分からない（init 未観測）\n- 認証の出所（値ではなく名前）: まだ分からない（init 未観測）\n- 許可モード（SDK が報告した実効値）: まだ分からない（init 未観測）\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: 0本（init は観測済み）\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: まだ分からない（init 未観測）\n- resume 元のセッション id: （新規に開いた。前のセッションを引き継いでいない）\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 0 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 0 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: まだ分からない（ターンの境界をまだ1度も越えていない）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: まだ分からない（ターンの境界をまだ1度も越えていない）\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 0 文字（0 文書）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\n台帳にはまだ1件も記録が無い（いまのモデル id: claude-opus-5）。\n\n直近のターンの時間: まだ記録が無い（turn_timing は、この版でターンが1回終わると書かれる）。\n\nHTTP API の時間: まだ記録が無い（http_timing は、この版で要求を受けると 10 分ごとに書かれる）。\n\nマネージャーが peer（Codex など）に作業を頼めるか（器ごと。頼める器は manager_start の runnerId で名指しできる。詳細は runner_list）:\n- runner-000: Codex は閉じている（閉じている理由 長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。）\n- runner-001: Codex は閉じている（閉じている理由 長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。）\n- runner-002: Codex は閉じている（閉じている理由 長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。）\n- runner-003: Codex は閉じている（閉じている理由 長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。長い理由。）\n…ほか 26 台は省略（全 30 台のうち 4 台だけ出した。runner_list で全部見える）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "persona.list() -> 0 items",
+        "persona.documents() -> 0 items",
+        "usage.aggregate({}) -> rows=0 since=null",
+        "codexAuth.get() -> null",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 0 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 0 items",
+        "managers.runners() -> 30 runners"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "everything#1": {
+      "output": {
+        "length": 6357,
+        "text": "## いまどう走っているか\n\n- 自分がいま走っているコードのリビジョン: 0123456（イメージに焼き込み済み、フル 0123456789abcdef0123456789abcdef01234567）\n- このイメージが焼かれた時刻とそこからの経過: 2026-10-26T00:00:00.000Z（約36時間前）\n  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いていない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの隙間があるため）。\n  差を数えるには `gh api repos/takecchi/alteroid/compare/<上の「フル」の sha>...main --jq .ahead_by`（リポジトリを見るのはマネージャーの領域——デーモン自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list --workflow=release-prod.yml` で測り直すこと）。\n- 宣言されたモデル帯: opus（人間が `ALTEROID_CLONE_MODEL` に置いた値）\n- SDK が実際に報告したモデル id: claude-opus-5\n- effort（実効値）: high\n- effort（alteroid が明示的に渡したもの）: high\n- Claude Code の版: 2.1.0\n- 認証の出所（値ではなく名前）: ANTHROPIC_API_KEY\n- 許可モード（SDK が報告した実効値）: auto\n- 許可モード（alteroid が渡したもの）: auto\n- MCP サーバ: alteroid(connected), search(failed)\n- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: sess-0001\n- resume 元のセッション id: sess-0000\n- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 12,345 文字（トークンの近似。実トークンは下の2行）\n- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: 67,890 文字（トークンの近似）\n- 直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）: 23,000 トークン（2 軸）\n- 同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）: free 150,000 トークン（1 軸） / buffer 30,000 トークン（1 軸） / deferred 5,000 トークン（1 軸） / 分類できず 7 トークン（1 軸）\n\n## 接続中の runner が名乗ったモデル（マネージャー・作業者）\n\n  runner-1: manager=opus\n\n## 接続中の runner の SDK の接続先とモデルの別名（環境変数。マネージャー・作業者の層）\n\n  runner-1: ANTHROPIC_BASE_URL=https://gateway.example/v1\nCodex の ChatGPT ログイン: あり（me@example.com・plus。最終更新 2026-10-07T00:00:00.000Z）\n  Codex を頼む口は runner のマネージャーの peer だけで、このログインが runner に届くと開く（器ごとに開いているか・閉じている理由は runner_list の peer の行）。クローンはマネージャーへの依頼として頼む。この器で `codex` を直接叩くと未ログインと出るのは設計どおり\n\n## 記憶の大きさ（いま stores.persona を読み直した値）\n\n- 総文字数: 1,284 文字（6 文書）\n  - [fact] long-description: 長い説明の文書 (作成: 2026-10-25T14:44:00.000Z / 更新: 2026-10-25T14:44:00.000Z) 976 bytes / 336 文字 — 長い説明ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（184 文字省略。全 304 文字）\n  - [premise] malformed: 見出し (作成: 2026-10-25T14:45:00.000Z / 更新: 2026-10-25T14:45:00.000Z) 52 bytes / 313 文字\n  - [premise] no-frontmatter: 前書きなし (作成: 2026-10-25T14:43:00.000Z / 更新: 2026-10-25T14:43:00.000Z) 40 bytes / 254 文字\n  - [premise] values: 価値観 (作成: 2026-10-25T14:40:00.000Z / 更新: 2026-10-25T14:40:00.000Z) 561 bytes / 194 文字 — 価値観の芯\n  - [indexed] project-notes: 作業メモ (作成: 2026-10-25T14:41:00.000Z / 更新: 2026-10-25T14:41:00.000Z) 256 bytes / 140 文字 — 特定の作業の記憶\n  - [fact] about-me: 事実 (作成: 2026-10-25T14:42:00.000Z / 更新: 2026-10-25T14:42:00.000Z) 76 bytes / 108 文字 — 事実の蓄積\n- premise 合計: 765 文字（3 文書。毎ターン「要旨＋節の目次」が焼かれる）\n- indexed 合計: 140 文字（1 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）\n- fact 目次合計: 375 文字（2 文書。目次の1行だけが焼かれる）\n\n## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:\n  - managerId: \"m-014\" / layer: manager / site: session / 合計 $1.14\n  - managerId: \"m-013\" / layer: manager / site: session / 合計 $1.13\n  - managerId: \"m-012\" / layer: manager / site: session / 合計 $1.12\n  - managerId: \"m-011\" / layer: manager / site: session / 合計 $1.11\n  - managerId: \"m-010\" / layer: manager / site: session / 合計 $1.10\n  - managerId: \"m-009\" / layer: manager / site: session / 合計 $1.09\n  - managerId: \"m-008\" / layer: manager / site: session / 合計 $1.08\n  - managerId: \"m-007\" / layer: manager / site: session / 合計 $1.07\n  - managerId: \"m-006\" / layer: manager / site: session / 合計 $1.06\n  - managerId: \"m-005\" / layer: manager / site: session / 合計 $1.05\n  - managerId: \"m-004\" / layer: manager / site: session / 合計 $1.04\n  - managerId: \"m-003\" / layer: manager / site: session / 合計 $1.03\n  - managerId: \"m-002\" / layer: manager / site: session / 合計 $1.02\n  - managerId: \"m-001\" / layer: manager / site: session / 合計 $1.01\n  …（残り 1 件は出していない。self_status の ledgerCursor=eyJheGlzIjoibGVkZ2VyIiwibGFiZWwiOiJtLTAwMVx1MDAwMG1hbmFnZXJcdTAwMDBzZXNzaW9uIiwiY29zdCI6MS4wMSwiYXNPZiI6IjIwMjYtMTAtMjdUMDA6MTQ6MDAuMDAwWiIsInRpZWRBdEFzT2YiOlt7ImxhYmVsIjoibS0wMTRcdTAwMDBtYW5hZ2VyXHUwMDAwc2Vzc2lvbiIsImNvc3QiOjEuMTQwMDAwMDAwMDAwMDAwMX1dfQ で続きが出る）\n\n直近のターンの時間（5 件。turn_timing から。詳細は journal_read types=[\"turn_timing\"]）:\n- 応答が全部終わるまで: 中央値 9.0秒・90% 点 61秒\n- 最初の文字まで: 中央値 45秒・90% 点 45秒\n- 時間を食っている段（合計の多い順）: モデル（SDK に投げてから result まで） 77秒（74%） / ターンの前の組み立て 22秒（21%） / 順番待ち（前のターンの処理待ち） 3.6秒（3%） / 書き戻し（result の後の後始末） 1.9秒（2%）\n- 1ターンあたりの入力（素の入力＋キャッシュの読み・書き）: 中央値 539,010・90% 点 539,010・3 ターンの合計 1,178,025 トークン\n- 合図別の入力（素＋キャッシュ読み書き。複数種の合図が束ねられたターンは「束」）: timer 1 ターン 539,010（46%） / human_message 1 ターン 539,010（46%） / self_initiative 1 ターン 100,005（8%） / ? 1 ターン 0（0%） / 束 1 ターン 0（0%）\n- 道具を1回も呼ばなかったターン: self_initiative 1/1（100%）・timer 0/1（0%）\n- 最も長かったターン:\n  - 2026-10-25T23:00:00.000Z 合計 61秒・最も長い段 モデル（SDK に投げてから result まで） 58秒（最初の応答まで 40秒・道具 3 回で 12秒（最も長いのは Bash 2 回 10秒、1回の最長 9.0秒）・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 539,010 トークン）\n  - 2026-10-25T23:02:00.000Z 合計 31秒・最も長い段 ターンの前の組み立て 20秒（memory 15秒・digest 4.0秒）\n  - 2026-10-25T23:01:00.000Z 合計 9.0秒・最も長い段 モデル（SDK に投げてから result まで） 8.0秒（最初の応答まで 40秒・要求 4 本・API の時間 45秒・文脈 540,000 トークン・入力 100,005 トークン）\n\nHTTP API の時間（3 窓・要求 6 回・2026-10-26T14:00:00.000Z から。詳細は journal_read types=[\"http_timing\"]）:\n- 時間を食っている経路（合計の多い順）:\n  - POST /messages: 4 回・平均 2.0秒・窓の 90% 点の最大 2.5秒・最大 3.0秒・合計 8.0秒（うち DB 75%・1回あたり DB 10.0 本・本文 平均 97.7KB・最大 146.5KB）\n  - GET /route-2: 3 回・平均 1.0秒・窓の 90% 点の最大 502ms・最大 902ms・合計 3.0秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n  - GET /route-0: 1 回・平均 1.0秒・窓の 90% 点の最大 500ms・最大 900ms・合計 1.0秒（うち DB 40%・1回あたり DB 2.0 本・本文 平均 9.8KB・最大 19.5KB）\n  - GET /empty: 0 回・平均 0ms・窓の 90% 点の最大 0ms・最大 0ms・合計 0ms（うち DB 0%・1回あたり DB 0.0 本・本文 平均 0B・最大 0B）\n- 最も遅かった要求:\n  - 2026-10-26T14:20:00.000Z POST /messages 500 3.0秒（DB 7本 2.8秒・整形 20ms・それ以外 180ms）\n  - 2026-10-26T14:25:00.000Z GET /route-2 200 702ms（DB 1本 300ms・整形 5ms・それ以外 397ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n  - 2026-10-26T14:05:00.000Z GET /route-0 200 700ms（DB 1本 300ms・整形 5ms・それ以外 395ms・本文 4.0KB）。最も長い問い合わせ 250ms: select 1\n\nマネージャーが peer（Codex など）に作業を頼めるか（器ごと。頼める器は manager_start の runnerId で名指しできる。詳細は runner_list）:\n- local: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5, gpt-5-mini） / Claude に作業を頼める（peer: claude。モデルは Claude の既定）\n- runner-1: Codex は閉じている（ログイン済みだが CODEX_HOME が runner に届いていない） / gemini は閉じている（未対応）\n- runner-2: 不明（この runner は名乗らない旧い版か、名乗りをまだ受けていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "context.runnerModels() -> 1 lines",
+        "context.runnerAnthropicRoutes() -> 1 lines",
+        "persona.list() -> 6 items",
+        "persona.documents() -> 6 items",
+        "usage.aggregate({}) -> rows=15 since=2026-10-27T00:00:00.000Z",
+        "codexAuth.get() -> record",
+        "journal.list({\"types\":[\"turn_timing\"],\"limit\":30}) -> 5 items",
+        "journal.list({\"types\":[\"http_timing\"],\"limit\":12}) -> 3 items",
+        "managers.runners() -> 5 runners"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    },
+    "everything#2": {
+      "output": {
+        "length": 145,
+        "text": "## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）\n\nモデル id claude-opus-5 の行の内訳（全 15 件）:\n  - managerId: \"m-000\" / layer: manager / site: session / 合計 $1.00",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "calls": [
+        "context.runtime() -> facts",
+        "usage.aggregate({}) -> rows=15 since=2026-10-27T00:00:00.000Z"
+      ],
+      "wrote": false,
+      "writeCalls": []
+    }
+  }
+}
