@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
   RunnerEntry,
   RunnerEvent,
@@ -85,16 +85,10 @@ function fakeRunner(runnerId: string): Fake {
       if (holder.emit === undefined) throw new Error('まだ接続されていない');
       holder.emit(event);
     },
-    client: {
+    client: fakeRunnerClient({
       runnerId,
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
       async connect(onEvent) {
         holder.emit = onEvent;
-      },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
       },
       async resume(command): Promise<{ cwd: string }> {
         resumes.push(command.managerId);
@@ -118,9 +112,6 @@ function fakeRunner(runnerId: string): Fake {
         sends.push(text);
         return true;
       },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
-      },
       async stop(managerId) {
         sessions.delete(managerId);
       },
@@ -134,25 +125,7 @@ function fakeRunner(runnerId: string): Fake {
         }
         return [...sessions.values()];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials() {
-        return [];
-      },
-      async setCredentials() {
-        return [];
-      },
-      async profile() {
-        return undefined;
-      },
-      async setProfile() {
-        return { ok: true as const };
-      },
-      async close() {
-        /* この検証では使わない。 */
-      },
-    },
+    }),
   };
   return fake;
 }

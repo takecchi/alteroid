@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerEvent,
   RunnerLiveness,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
@@ -81,66 +78,39 @@ describe('移送の resume が応答なしで失敗したが移送先では起�
     const sessionsOnB = new Map<string, RunnerManagerState>();
     let listBroken = false;
     let emitFromB: ((event: RunnerEvent) => void) | undefined;
-    const makeClient = (runnerId: string): RunnerClient => ({
-      runnerId,
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
-      async connect(onEvent) {
-        if (runnerId === 'runner-b') emitFromB = onEvent;
-      },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
-      async resume(command): Promise<{ cwd: string }> {
-        if (runnerId !== 'runner-b') return { cwd: command.cwd };
-        // 受理してセッションを起こしたが、応答は返せず、直後の一覧の確認も落ちる。
-        sessionsOnB.set(command.managerId, {
-          liveBackgroundTasks: 0,
-          managerId: command.managerId,
-          status: 'running',
-          cwd: command.cwd,
-          request: command.request,
-          waiting: [],
-          sessionId: command.sessionId,
-        });
-        listBroken = true;
-        throw new Error('fetch failed');
-      },
-      async send() {
-        return true;
-      },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
-      },
-      async stop(managerId) {
-        sessionsOnB.delete(managerId);
-      },
-      async list() {
-        if (runnerId !== 'runner-b') return [];
-        if (listBroken) {
-          listBroken = false;
+    const makeClient = (runnerId: string): RunnerClient =>
+      fakeRunnerClient({
+        runnerId,
+        async connect(onEvent) {
+          if (runnerId === 'runner-b') emitFromB = onEvent;
+        },
+        async resume(command): Promise<{ cwd: string }> {
+          if (runnerId !== 'runner-b') return { cwd: command.cwd };
+          // 受理してセッションを起こしたが、応答は返せず、直後の一覧の確認も落ちる。
+          sessionsOnB.set(command.managerId, {
+            liveBackgroundTasks: 0,
+            managerId: command.managerId,
+            status: 'running',
+            cwd: command.cwd,
+            request: command.request,
+            waiting: [],
+            sessionId: command.sessionId,
+          });
+          listBroken = true;
           throw new Error('fetch failed');
-        }
-        return [...sessionsOnB.values()];
-      },
-      async transcript() {
-        return null;
-      },
-      async credentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async profile(): Promise<RunnerProfileFingerprint | undefined> {
-        return undefined;
-      },
-      async setProfile(): Promise<RunnerProfileResult> {
-        return { ok: true };
-      },
-      async close() {},
-    });
+        },
+        async stop(managerId) {
+          sessionsOnB.delete(managerId);
+        },
+        async list() {
+          if (runnerId !== 'runner-b') return [];
+          if (listBroken) {
+            listBroken = false;
+            throw new Error('fetch failed');
+          }
+          return [...sessionsOnB.values()];
+        },
+      });
     const runnerA = makeClient('runner-a');
     const runnerB = makeClient('runner-b');
     const registry = createFakeRegistry(

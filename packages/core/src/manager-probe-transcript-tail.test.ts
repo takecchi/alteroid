@@ -87,6 +87,10 @@ class EventfulRunner implements RunnerClient {
   async setProfile() {
     return { ok: true as const };
   }
+  async openPickupFile(): Promise<undefined> {
+    return undefined;
+  }
+  async deletePickupFile(): Promise<void> {}
   async close(): Promise<void> {}
 }
 
