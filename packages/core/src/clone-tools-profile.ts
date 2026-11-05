@@ -32,6 +32,7 @@ import {
 } from './store.js';
 import { describeIntRangeViolation, formatIntRangeJa } from './tool-arg-checks.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
+import type { JournalEntryInput } from './schema.js';
 import { tool, appendJournalOrDrop, text, appendJournalOrThrow } from './clone-tools-common.js';
 
 const PROFILE_DISTRIBUTION_EXCERPT = 400;
@@ -218,6 +219,38 @@ function renderTokenListBody(args: {
     }),
     ...renderTokenListFootnotes(),
   ].join('\n');
+}
+
+function renderProfileWriteUnavailable(): string {
+  return (
+    'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
+    '次の会話で置くこと。'
+  );
+}
+
+function renderProfileWriteBadName(): string {
+  return `行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`;
+}
+
+function renderProfileWriteEmptyScript(): string {
+  return '本文が空では行を置けない。外すなら profile_remove を使う。何も変えていない。';
+}
+
+// 名前と本文の検査。断る文を返す（通れば null）
+function describeProfileWriteViolation(name: string, script: string): string | null {
+  if (!PROFILE_ENTRY_NAME.test(name)) return renderProfileWriteBadName();
+  if (script.trim().length === 0) return renderProfileWriteEmptyScript();
+  return null;
+}
+
+// 置く前に書く先の行（`rowLabel` は `profileRowLabel(name)` の戻り）
+function buildProfileWriteEntry(args: { summary: string; rowLabel: string }): JournalEntryInput {
+  const { summary, rowLabel } = args;
+  return {
+    type: 'decision',
+    decision: `実行環境プロファイルを差し替えようとしている${rowLabel}: ${summary}`,
+    grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+  };
 }
 
 export function profileTools(context: ToolContext, shared: CloneToolsShared) {
@@ -555,30 +588,17 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ name = 'default', script, summary, scope, base_version: baseVersion }) => {
         if (context.profile === undefined) {
-          return text(
-            'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
-              '次の会話で置くこと。',
-          );
+          return text(renderProfileWriteUnavailable());
         }
         // 日誌を書く前に形を検査する: 置けない入力で「差し替えようとしている」を残さないため
-        if (!PROFILE_ENTRY_NAME.test(name)) {
-          return text(`行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`);
-        }
-        if (script.trim().length === 0) {
-          return text(
-            '本文が空では行を置けない。外すなら profile_remove を使う。何も変えていない。',
-          );
-        }
+        const violation = describeProfileWriteViolation(name, script);
+        if (violation !== null) return text(violation);
 
         // 日誌を先に書く: 書けなければ差し替えずに道具のエラーで返すため
         await appendJournalOrThrow(
           'profile_write',
           stores.journal,
-          {
-            type: 'decision',
-            decision: `実行環境プロファイルを差し替えようとしている${profileRowLabel(name)}: ${summary}`,
-            grounds: '人間から実行環境そのものを渡された（値は記録しない）',
-          },
+          buildProfileWriteEntry({ summary, rowLabel: profileRowLabel(name) }),
           'act-not-performed',
         );
 
