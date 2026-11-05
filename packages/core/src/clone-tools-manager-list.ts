@@ -83,9 +83,6 @@ const LIST_WAITING_EXCERPT = 200;
 
 const LIST_BUDGET = 8_000;
 
-// 道具の説明文が名乗る語（`manager_list` の説明・`refetch` の説明）。行を畳む処理は外したが、説明文の字面は変えない
-const MANAGER_ROW_SAME_MARK = '前回と同じ';
-
 // 行ごとに同じ長い固定文を繰り返さず、行には印だけを置いて意味は一覧の末尾に1回だけ書く（#5347）。
 // 429 の波で runner が一斉に黙る・lost が並ぶときに、同じ文が行の数だけ積まれて LIST_BUDGET が尽き、後続の行が省略されるため
 type ManagerListNoteMark = 'runner-lost' | 'session-missing' | 'lost';
@@ -1086,7 +1083,6 @@ export function managerListTool(context: ToolContext) {
         'いまの時刻と見比べて自分で出すこと。時刻が付かないのは「そう名乗られていない」' +
         '場合であって「待ち始めていない」ではない（この印が立つ条件は直前の断りと同じ）。',
       '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
-      `同じ会話で前回に全文で出した行と1字も変わらない行は「- <managerId> ${MANAGER_ROW_SAME_MARK}」の1行に畳む（⚠・lost・失敗の行は畳まない）。畳んだ件数は一覧に出る。全部を全文で引き直すなら refetch: true。`,
       '「runner にセッションが無い」は、10秒ごとの生存確認が runner に一覧を' +
         '聞いて観測する（走行中・返事待ちのものだけを見る）。誰かが manager_send を' +
         '打つのを待たない。ただし観測できた回にだけ立つので、**行が出ないことを' +
@@ -1172,12 +1168,6 @@ export function managerListTool(context: ToolContext) {
           '一覧の続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
             '（自分で組み立てない）。省略すると先頭から。' +
             'status と q はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
-        ),
-      refetch: z
-        .boolean()
-        .optional()
-        .describe(
-          `真なら、前回と変わらず「${MANAGER_ROW_SAME_MARK}」に畳まれる行・受信箱の内訳も全文で出し直す（会話の上の全文を見失ったとき）`,
         ),
     },
     async ({ status, q, cursor }, extra: unknown) => {
