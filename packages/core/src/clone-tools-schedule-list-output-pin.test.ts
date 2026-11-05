@@ -12,20 +12,15 @@ import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
 // `schedule_list` の出力（全文と字数）と、呼びの並び（`schedules.get`・`schedules.list`・次に動く時刻を読む `context.scheduler`・
-// `context.keepStandingRowIfSame`・定期の依頼の書き込み口）を、場面ごとにコミットした固定値
+// 定期の依頼の書き込み口）を、場面ごとにコミットした固定値
 // （clone-tools-schedule-list-output-pin.json）と丸ごと比べる。
 // `clone-tools-schedule.ts` の `tool('schedule_list', …)`（約 85 行・入れ子 7 段の式）を小さな関数へ分けるとき、
 // 振る舞いが1文字も変わらないことを機械で確かめる歯。固定値の側で値を伏せず、入力（時計・本文・時刻）を固定して毎回同じにする。
 // この道具は読むだけ: 出力と呼びの並びに加えて、呼ぶ前と後で定期の依頼の行・日誌が変わらないこと、書き込み口を呼ばないことも固定する。
 //   - output: 道具の出力の全文と字数（isError・例外で返ったか・例外の名前）
 //   - calls: 呼びの並び（呼んだ順）。`schedules.get("kind") -> 結果`・`schedules.list() -> 行数と読めない行数`・
-//     `context.scheduler() -> 件数`（次に動く時刻を読む呼び。投げたら threw）・`context.keepStandingRowIfSame(引数の JSON)` は下の注意を見る
+//     `context.scheduler() -> 件数`（次に動く時刻を読む呼び。投げたら threw）
 //   - wrote / writeCalls: 定期の依頼か日誌が呼ぶ前から変わったか・書き込み口（get / list 以外の `schedules.*`）の呼び。どの場面も false / 空
-//
-// 注意（`keepStandingRowIfSame`）: この固定値を作った時点の origin/main（3d53e4b1）には `context.keepStandingRowIfSame` が
-// どこにも無く、`schedule_list` はそれを呼ばない。そこで ToolContext の口として `keepStandingRowIfSame` の呼びを記録する差し込み
-// （引数は JSON で全文）を context に足し（`keep: false` の場面は口が無い器）、いまは「どの場面でも呼ばれない」ことを固定している。
-// 今後その呼びが入ったら、その場面の `calls` が変わって落ちる（意図した変更なら固定値を作り直す）。
 //
 // 固定値の作り直し（意図して出力・呼びを変えたときだけ。PR 本文に理由を書く）:
 //   UPDATE_SCHEDULE_LIST_PIN=1 pnpm -C <作業ツリー> --filter @alteroid/core exec vitest run src/clone-tools-schedule-list-output-pin.test.ts --maxWorkers=2
@@ -62,8 +57,6 @@ interface Scenario {
   getFails?: Record<string, 'unreadable' | 'plain'>;
   /** list を投げさせる */
   listFails?: boolean;
-  /** false: context が `keepStandingRowIfSame` を持たない器 */
-  keep?: boolean;
 }
 
 const BASE_ISO = '2026-10-29T00:00:00.000Z';
@@ -303,14 +296,6 @@ const SCENARIOS: Scenario[] = [
     steps: [full('present')],
     scheduler: 'throws',
   },
-  {
-    name: 'full-keep-absent',
-    covers:
-      '全文モード: context が keepStandingRowIfSame を持たない器でも同じ出力（口が有る場面 full-heads と出力の形は同じ）',
-    seed: [row('f-daily', '毎朝の確認', { type: 'daily', at: '09:00' }, ran(5))],
-    steps: [full('f-daily')],
-    keep: false,
-  },
   // ---- 一覧モード: 空・読めない行 ----
   {
     name: 'list-empty',
@@ -463,22 +448,6 @@ const SCENARIOS: Scenario[] = [
     seed: [small('k-01'), small('k-02')],
     steps: [list({ cursor: 'garbage' }), list({ cursor: cursorAfter('k-02') })],
     scheduler: 'throws',
-  },
-  {
-    name: 'list-keep-absent',
-    covers:
-      '一覧モード: context が keepStandingRowIfSame を持たない器でも、出力は口が有る器（list-scheduler-entries）と同じ形',
-    seed: [small('k-01'), small('k-02'), small('k-03')],
-    steps: [list()],
-    keep: false,
-  },
-  {
-    name: 'list-keep-present',
-    covers:
-      '一覧モード: keepStandingRowIfSame の口が有る器で、見せた行ごとの呼びが（いまは）無い。呼びが入ったら calls が変わって落ちる',
-    seed: [small('k-01'), small('k-02'), small('k-03')],
-    steps: [list(), list({ cursor: cursorAfter('k-01') })],
-    keep: true,
   },
   // ---- 一覧モード: cursor ----
   {
@@ -689,17 +658,12 @@ async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
     calls.push(`context.scheduler() -> ${String(statuses.length)} statuses`);
     return statuses;
   };
-  const keepStandingRowIfSame = (...args: unknown[]): undefined => {
-    calls.push(`context.keepStandingRowIfSame(${JSON.stringify(args)})`);
-    return undefined;
-  };
   const context = {
     stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
     ...(mode === 'absent' ? {} : { scheduler }),
-    ...(scenario.keep === false ? {} : { keepStandingRowIfSame }),
   } as ToolContext;
   const found = createCloneTools(context).find((entry) => entry.name === 'schedule_list');
   if (!found) throw new Error('schedule_list が無い');
@@ -762,7 +726,7 @@ async function runAll(): Promise<Record<string, PinnedStep>> {
   return out;
 }
 
-describe('schedule_list の出力と呼びの並びの固定（場面ごとの出力の全文・get / list / scheduler / keepStandingRowIfSame の呼び）', () => {
+describe('schedule_list の出力と呼びの並びの固定（場面ごとの出力の全文・get / list / scheduler の呼び）', () => {
   let actual: Record<string, PinnedStep> = {};
   let pinned: PinFile = { lengths: {}, scenarios: {} };
 
@@ -849,7 +813,7 @@ describe('schedule_list の出力と呼びの並びの固定（場面ごとの�
         });
       });
 
-      it(`${key} の呼びの並び（get・list・scheduler・keepStandingRowIfSame）が固定値と同じ`, () => {
+      it(`${key} の呼びの並び（get・list・scheduler）が固定値と同じ`, () => {
         const want = pinned.scenarios[key];
         const got = actual[key];
         expect(want, `${key} が固定値に無い`).toBeDefined();
@@ -953,7 +917,6 @@ describe('schedule_list の出力と呼びの並びの固定（場面ごとの�
       errorName: 'Error',
       text: 'scheduler が落ちた',
     });
-    expect(text('full-keep-absent')).toContain('次に動く時刻: 2026-10-30T');
     // 一覧モード: 空・読めない行
     expect(text('list-empty#1')).toBe('（継続中の依頼は無い）');
     expect(text('list-empty#2')).toBe('（継続中の依頼は無い）');
@@ -1021,14 +984,6 @@ describe('schedule_list の出力と呼びの並びの固定（場面ごとの�
           `list-scheduler-not-read-when-empty-or-malformed#${String(n)}`,
           'context.scheduler(',
         ),
-      ).toBe(0);
-    }
-    expect(text('list-keep-absent')).toBe(text('list-scheduler-entries'));
-    // keepStandingRowIfSame（いまは呼ばれない）
-    for (const key of ALL_KEYS) {
-      expect(
-        callsOf(key, 'context.keepStandingRowIfSame('),
-        `${key}: keepStandingRowIfSame が呼ばれた`,
       ).toBe(0);
     }
     // cursor

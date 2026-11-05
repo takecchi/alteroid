@@ -43,7 +43,6 @@
     "full-scheduler-empty": 99,
     "full-scheduler-decoy": 99,
     "full-scheduler-throws": 14,
-    "full-keep-absent": 113,
     "list-empty#1": 11,
     "list-empty#2": 11,
     "list-empty#3": 11,
@@ -69,9 +68,6 @@
     "list-scheduler-throws": 14,
     "list-scheduler-not-read-when-empty-or-malformed#1": 88,
     "list-scheduler-not-read-when-empty-or-malformed#2": 31,
-    "list-keep-absent": 497,
-    "list-keep-present#1": 497,
-    "list-keep-present#2": 346,
     "cursor-forms#1": 799,
     "cursor-forms#2": 497,
     "cursor-forms#3": 195,
@@ -617,18 +613,6 @@
       "wrote": false,
       "writeCalls": []
     },
-    "full-keep-absent": {
-      "output": {
-        "length": 113,
-        "text": "f-daily（毎日 09:00（ローカル時刻）） 前回動いた時刻: 2026-10-20T00:05:00.000Z 次に動く時刻: 2026-10-30T09:18:00.000Z（依頼本文: 全 5 文字）\n\n毎朝の確認",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "calls": ["schedules.get(\"f-daily\") -> row", "context.scheduler() -> 2 statuses"],
-      "wrote": false,
-      "writeCalls": []
-    },
     "list-empty#1": {
       "output": {
         "length": 11,
@@ -960,56 +944,6 @@
         "errorName": null
       },
       "calls": ["schedules.list() -> entries=2 unreadable=0"],
-      "wrote": false,
-      "writeCalls": []
-    },
-    "list-keep-absent": {
-      "output": {
-        "length": 497,
-        "text": "- k-01 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-01 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:09:00.000Z\n- k-02 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-02 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:10:00.000Z\n- k-03 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-03 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:11:00.000Z\n（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "calls": [
-        "schedules.list() -> entries=3 unreadable=0",
-        "context.scheduler() -> 4 statuses",
-        "context.scheduler() -> 4 statuses",
-        "context.scheduler() -> 4 statuses"
-      ],
-      "wrote": false,
-      "writeCalls": []
-    },
-    "list-keep-present#1": {
-      "output": {
-        "length": 497,
-        "text": "- k-01 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-01 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:09:00.000Z\n- k-02 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-02 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:10:00.000Z\n- k-03 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-03 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:11:00.000Z\n（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "calls": [
-        "schedules.list() -> entries=3 unreadable=0",
-        "context.scheduler() -> 4 statuses",
-        "context.scheduler() -> 4 statuses",
-        "context.scheduler() -> 4 statuses"
-      ],
-      "wrote": false,
-      "writeCalls": []
-    },
-    "list-keep-present#2": {
-      "output": {
-        "length": 346,
-        "text": "- k-02 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-02 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:10:00.000Z\n- k-03 60 分ごと\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-02T03:04:05.000Z\n  依頼: k-03 の本文\n  前回動いた時刻: （まだ一度も動いていない）\n  次に動く時刻: 2026-10-30T09:11:00.000Z\n（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）",
-        "isError": false,
-        "thrown": false,
-        "errorName": null
-      },
-      "calls": [
-        "schedules.list() -> entries=3 unreadable=0",
-        "context.scheduler() -> 4 statuses",
-        "context.scheduler() -> 4 statuses"
-      ],
       "wrote": false,
       "writeCalls": []
     },
