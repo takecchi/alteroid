@@ -3,14 +3,17 @@ import { appendFile, mkdir, open, readFile, readdir, rm } from 'node:fs/promises
 import { join } from 'node:path';
 
 import {
+  addJournalTombstone,
   conversationIdsAfterFromPages,
   countToolUsesByActorFromPages,
+  emptyJournalTombstones,
+  isHiddenJournalEntry,
   journalEntrySchema,
   JournalAnchorNotFoundError,
   journalRowType,
   listPageByOverfetch,
+  matchesJournalQuery,
   stripNulDeep,
-  matchesJournalSearch,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   UnreadableJournalEntryError,
@@ -22,6 +25,7 @@ import type {
   JournalPage,
   JournalQuery,
   JournalStore,
+  JournalTombstones,
 } from '@alteroid/core';
 
 import { readTextIfExists } from './atomic.js';
@@ -32,7 +36,7 @@ export class FsJournalStore implements JournalStore {
   #chain: Promise<unknown> = Promise.resolve();
   // 墓標（`conversation_deleted`）の集合。初回の読み出しで全ファイルから集め、追記したらその場で足す。
   // Promise で持つ: 集めている最中の追記も、集め終わった集合へ足せるため。
-  #tombstones: Promise<Tombstones> | null = null;
+  #tombstones: Promise<JournalTombstones> | null = null;
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -59,7 +63,7 @@ export class FsJournalStore implements JournalStore {
     // 書いたあとに足す: 集めている最中だったとき、読み落とした可能性があるため
     if (entry.type === 'conversation_deleted' && this.#tombstones !== null) {
       try {
-        addTombstone(await this.#tombstones, entry);
+        addJournalTombstone(await this.#tombstones, entry);
       } catch {
         // 集めるのが失敗していたら、次の読み出しがファイルから集め直す（書いた行は残っている）
       }
@@ -130,19 +134,9 @@ export class FsJournalStore implements JournalStore {
       for (let i = startIndex; order === 'desc' ? i >= 0 : i < lines.length; i += step) {
         const entry = parseLine(lines[i], dropped);
         if (!entry) continue;
-        if (query.types && !query.types.includes(entry.type)) continue;
         // `limit` を数える前に外す:後で外すと窓が短くなり、`reachedStart` が誤るため
-        if (isHiddenExchange(entry, tombstoned)) continue;
-        if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
-        if (
-          query.conversationId !== undefined &&
-          !('conversationId' in entry && entry.conversationId === query.conversationId)
-        )
-          continue;
-        // 欄の選び方をここへ書き写さない: 照合は `journal-search.ts` が持ち、3実装が同じ答えを出すため
-        if (query.q !== undefined && !matchesJournalSearch(entry, query.q)) continue;
-        if (query.since && entry.at < query.since) continue;
-        if (query.until && entry.at > query.until) continue;
+        if (isHiddenJournalEntry(entry, tombstoned)) continue;
+        if (!matchesJournalQuery(entry, query)) continue;
         found.push(entry);
         if (found.length >= limit) {
           noteDroppedJournalRowsSummary(dropped);
@@ -179,7 +173,7 @@ export class FsJournalStore implements JournalStore {
         const entry = parseLine(lines[i], dropped);
         if (entry?.id === id) {
           noteDroppedJournalRowsSummary(dropped);
-          return isHiddenExchange(entry, tombstoned) ? null : entry;
+          return isHiddenJournalEntry(entry, tombstoned) ? null : entry;
         }
         if (entry === null && rawRowId(lines[i]) === id) {
           noteDroppedJournalRowsSummary(dropped);
@@ -201,7 +195,7 @@ export class FsJournalStore implements JournalStore {
       const lines = raw.split('\n').filter((line) => line.length > 0);
       for (const line of lines) {
         const entry = parseLine(line, dropped);
-        if (entry && !isHiddenExchange(entry, tombstoned)) {
+        if (entry && !isHiddenJournalEntry(entry, tombstoned)) {
           noteDroppedJournalRowsSummary(dropped);
           return entry.at;
         }
@@ -230,7 +224,7 @@ export class FsJournalStore implements JournalStore {
     return removed;
   }
 
-  #tombstoneSet(): Promise<Tombstones> {
+  #tombstoneSet(): Promise<JournalTombstones> {
     if (this.#tombstones === null) {
       const collecting = this.#collectTombstones();
       this.#tombstones = collecting;
@@ -242,8 +236,8 @@ export class FsJournalStore implements JournalStore {
     return this.#tombstones;
   }
 
-  async #collectTombstones(): Promise<Tombstones> {
-    const found: Tombstones = { conversations: new Set(), entries: new Set() };
+  async #collectTombstones(): Promise<JournalTombstones> {
+    const found = emptyJournalTombstones();
     for (const file of await this.#files('asc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       for (const line of raw.split('\n')) {
@@ -256,7 +250,7 @@ export class FsJournalStore implements JournalStore {
           continue;
         }
         if (parsed.success && parsed.data.type === 'conversation_deleted') {
-          addTombstone(found, parsed.data);
+          addJournalTombstone(found, parsed.data);
         }
       }
     }
@@ -298,28 +292,6 @@ export class FsJournalStore implements JournalStore {
       throw error;
     }
   }
-}
-
-interface Tombstones {
-  conversations: Set<string>;
-  entries: Set<string>;
-}
-
-function addTombstone(
-  tombstones: Tombstones,
-  entry: Extract<JournalEntry, { type: 'conversation_deleted' }>,
-): void {
-  tombstones.conversations.add(entry.deletedConversationId);
-  for (const id of entry.hiddenEntryIds ?? []) tombstones.entries.add(id);
-}
-
-function isHiddenExchange(entry: JournalEntry, tombstoned: Tombstones): boolean {
-  if (tombstoned.entries.has(entry.id)) return true;
-  return (
-    entry.type === 'exchange' &&
-    entry.conversationId !== undefined &&
-    tombstoned.conversations.has(entry.conversationId)
-  );
 }
 
 function rawRowId(line: string | undefined): string | undefined {

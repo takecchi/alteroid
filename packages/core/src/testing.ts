@@ -12,7 +12,12 @@ import { tailByCodePoints } from './excerpt.js';
 import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { listPageByOverfetch } from './journal-page.js';
 import { conversationIdsAfterFromPages, countToolUsesByActorFromPages } from './journal-scan.js';
-import { matchesJournalSearch } from './journal-search.js';
+import {
+  isHiddenJournalEntry,
+  journalTombstonesOf,
+  matchesJournalQuery,
+  type JournalTombstones,
+} from './journal-query.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type { ConversationReadPosition } from './conversation-read.js';
 import type { CodexChatgptAuthRecord, CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
@@ -516,18 +521,7 @@ export function createMemoryStores(): Stores {
   };
 
   // 墓標の集合は積んだ行から導く: 別に持つと `clear()` と食い違う。
-  const deletedConversationIds = (): Set<string> =>
-    new Set(
-      entries.flatMap((entry) =>
-        entry.type === 'conversation_deleted' ? [entry.deletedConversationId] : [],
-      ),
-    );
-  const hiddenEntryIds = (): Set<string> =>
-    new Set(
-      entries.flatMap((entry) =>
-        entry.type === 'conversation_deleted' ? (entry.hiddenEntryIds ?? []) : [],
-      ),
-    );
+  const tombstones = (): JournalTombstones => journalTombstonesOf(entries);
 
   const journal: JournalStore = {
     async append(input: JournalEntryInput) {
@@ -545,8 +539,7 @@ export function createMemoryStores(): Stores {
       // 件数で切る（下の slice）より後だと反対側の端を切る。
       const order = query.order ?? 'desc';
       let found = (order === 'desc' ? [...entries].reverse() : [...entries]).map(isolate);
-      const tombstoned = deletedConversationIds();
-      const hiddenIds = hiddenEntryIds();
+      const tombstoned = tombstones();
 
       // `after` は絞り込みより前に効かせる: 錨の位置は絞り込み前の全順序で決める。見つからなければ黙って先頭から返さず投げる。
       if (query.after !== undefined) {
@@ -562,42 +555,10 @@ export function createMemoryStores(): Stores {
         found = found.slice(anchorIndex + 1);
       }
 
-      if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
-      // 墓標のある会話の `exchange` は `limit` より前で外す: 後ろで外すと窓が短くなり `reachedStart` が誤る。
+      // 隠す行は `limit` より前で外す: 後ろで外すと窓が短くなり `reachedStart` が誤る。絞り込みも同じく `limit` より前。
       found = found.filter(
-        (entry) =>
-          !(
-            entry.type === 'exchange' &&
-            entry.conversationId !== undefined &&
-            tombstoned.has(entry.conversationId)
-          ) && !hiddenIds.has(entry.id),
+        (entry) => !isHiddenJournalEntry(entry, tombstoned) && matchesJournalQuery(entry, query),
       );
-      // `with` は `limit` より前で効かせる。
-      if (query.with !== undefined) {
-        const withValues = query.with;
-        found = found.filter(
-          (entry) => entry.type === 'exchange' && withValues.includes(entry.with),
-        );
-      }
-      if (query.conversationId !== undefined) {
-        const conversationId = query.conversationId;
-        found = found.filter(
-          (entry) => 'conversationId' in entry && entry.conversationId === conversationId,
-        );
-      }
-      // 照合は `journal-search.ts` に任せる: 欄の選び方をここへ書き写すと3実装の答えがずれる。
-      if (query.q !== undefined) {
-        const q = query.q;
-        found = found.filter((entry) => matchesJournalSearch(entry, q));
-      }
-      if (query.since !== undefined) {
-        const since = query.since;
-        found = found.filter((entry) => entry.at >= since);
-      }
-      if (query.until !== undefined) {
-        const until = query.until;
-        found = found.filter((entry) => entry.at <= until);
-      }
       return query.limit === undefined ? found : found.slice(0, query.limit);
     },
     async listPage(query: JournalQuery = {}) {
@@ -611,28 +572,13 @@ export function createMemoryStores(): Stores {
     },
     async get(id: string) {
       const found = entries.find((entry) => entry.id === id) ?? null;
-      if (
-        found?.type === 'exchange' &&
-        found.conversationId !== undefined &&
-        deletedConversationIds().has(found.conversationId)
-      ) {
-        return null;
-      }
-      if (found !== null && hiddenEntryIds().has(found.id)) return null;
+      if (found !== null && isHiddenJournalEntry(found, tombstones())) return null;
       return found;
     },
     async oldestAt() {
       // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない: list / get と同じ絞りを通す
-      const tombstoned = deletedConversationIds();
-      const hiddenIds = hiddenEntryIds();
-      const oldest = entries.find(
-        (entry) =>
-          !(
-            entry.type === 'exchange' &&
-            entry.conversationId !== undefined &&
-            tombstoned.has(entry.conversationId)
-          ) && !hiddenIds.has(entry.id),
-      );
+      const tombstoned = tombstones();
+      const oldest = entries.find((entry) => !isHiddenJournalEntry(entry, tombstoned));
       return oldest?.at ?? null;
     },
     async clear() {
