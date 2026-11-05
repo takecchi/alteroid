@@ -6,7 +6,13 @@ import { readAttachmentLimits } from './attachment.js';
 import { loadManagerAttachments } from './manager-attachments.js';
 import { reasonOf } from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
-import { decisionUnusedNote, type ManagerPool, type ManagerSendResult } from './manager.js';
+import {
+  decisionUnusedNote,
+  type ManagerPool,
+  type ManagerSendOptions,
+  type ManagerSendResult,
+} from './manager.js';
+import { type JournalEntryInput } from './schema.js';
 import { type Stores } from './store.js';
 import { RESTART_BEFORE_CHECK_ADVICE } from './usage-limits.js';
 import { describeStringLengthViolation } from './tool-arg-checks.js';
@@ -34,6 +40,147 @@ async function jobTaskIdOf(stores: Stores, managerId: string): Promise<string | 
   } catch {
     return undefined;
   }
+}
+
+// 送れなかった（早い断り・保留・失敗）呼びは1行も閉じず、そう書く
+function finishManagerSendNotDone(
+  stores: Stores,
+  res: ToolText,
+  closes: readonly { id: string; reason: string }[] | undefined,
+) {
+  return finishWithCloses(stores, res, closes, false, 'manager_send');
+}
+
+// 先に書いた回答の行を書けたかを持つ箱（書けた確認の requestId）。`beforeAnswer` の中で代入する
+type ManagerSendAnswerJournaled = { requestId?: string };
+
+function buildManagerSendAnswerJournalEntry(args: {
+  managerId: string;
+  pending: { requestId: string; summary: string };
+  decision: ManagerSendOptions['decision'];
+  message: string;
+}): JournalEntryInput {
+  const { managerId, pending, decision, message } = args;
+  return {
+    type: 'decision',
+    decision:
+      `クローンが担当 ${managerId} の確認（${pending.requestId}: ` +
+      `${excerptLine(pending.summary, JOURNAL_TEXT_EXCERPT)}）に自分で答える` +
+      `（decision=${decision ?? '指定なし（runner が本文から読む）'}。` +
+      `抜粋: ${excerptLine(message, MANAGER_ANSWER_MESSAGE_EXCERPT)}）`,
+    grounds:
+      'クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）',
+  };
+}
+
+function buildManagerSendRetractJournalEntry(args: {
+  managerId: string;
+  answeredRequestId: string;
+  detail: string;
+}): JournalEntryInput {
+  const { managerId, answeredRequestId, detail } = args;
+  return {
+    type: 'decision',
+    decision:
+      `クローンが担当 ${managerId} の確認（${answeredRequestId}）へ答えるとした直前の回答の行は` +
+      `効いていない（答えは届いていない）。理由: ${excerptLine(detail, MANAGER_ANSWER_MESSAGE_EXCERPT)}`,
+    grounds: '先に書いた回答の行の後で、答えが届かなかったため打ち消す',
+  };
+}
+
+// 先に書いた行が効かなかったとき（答えが届かなかった）の打ち消し。書けなければ跡だけ残す
+async function retractManagerSendAnswerJournal(
+  stores: Stores,
+  managerId: string,
+  answerJournaled: ManagerSendAnswerJournaled,
+  detail: string,
+): Promise<void> {
+  if (answerJournaled.requestId === undefined) return;
+  await appendJournalOrDrop(
+    'manager_send',
+    stores.journal,
+    buildManagerSendRetractJournalEntry({
+      managerId,
+      answeredRequestId: answerJournaled.requestId,
+      detail,
+    }),
+  );
+}
+
+// 例外で終わったときも打ち消してから投げ直す（`try` の範囲は `pool.send` の呼びだけ）
+async function sendManagerMessage(args: {
+  pool: ManagerPool;
+  stores: Stores;
+  managerId: string;
+  message: string;
+  decision: ManagerSendOptions['decision'];
+  requestId: string | undefined;
+  attachments: NonNullable<ManagerSendOptions['attachments']>;
+  answerJournaled: ManagerSendAnswerJournaled;
+}): Promise<ManagerSendResult> {
+  const { pool, stores, managerId, message, decision, requestId, attachments, answerJournaled } =
+    args;
+  try {
+    return await pool.send(managerId, message, {
+      ...(decision === undefined ? {} : { decision }),
+      ...(requestId === undefined ? {} : { requestId }),
+      ...(attachments.length === 0 ? {} : { attachments }),
+      beforeAnswer: async (pending) => {
+        await appendJournalOrThrow(
+          'manager_send',
+          stores.journal,
+          buildManagerSendAnswerJournalEntry({ managerId, pending, decision, message }),
+          'act-not-performed',
+        );
+        answerJournaled.requestId = pending.requestId;
+      },
+    });
+  } catch (error) {
+    await retractManagerSendAnswerJournal(
+      stores,
+      managerId,
+      answerJournaled,
+      `送信が例外で終わった: ${reasonOf(error)}`,
+    );
+    throw error;
+  }
+}
+
+function renderManagerSendSessionMissing(managerId: string, detail: string): string {
+  return (
+    `[${managerId}] ${detail}\n` +
+    '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
+    'runner に生きたセッションが無く、resume でも入り直せなかっただけである。' +
+    'manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）' +
+    'なら少し置いてから送り直すこと。' +
+    RESTART_BEFORE_CHECK_ADVICE
+  );
+}
+
+function renderManagerSendHeld(detail: string, unusedNote: string): string {
+  return `${detail}${unusedNote}`;
+}
+
+// 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
+// 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
+// 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
+// 札にする側（2回目から）の結論の「同じ本文で新しい委譲を立てない」も残す。畳みの口を呼ぶので、返す直前に1回だけ呼ぶこと
+function foldManagerSendDeliveredNote(context: ToolContext, extra: unknown): string {
+  return foldFixedFor(context, extra)(
+    'manager-send:delivered-note',
+    '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
+      '同じ本文で新しい委譲を立てないこと）',
+    '（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）',
+  );
+}
+
+function renderManagerSendDelivered(
+  managerId: string,
+  detail: string,
+  unusedNote: string,
+  deliveredNote: string,
+): string {
+  return `[${managerId}] ${detail}${unusedNote}\n${deliveredNote}`;
 }
 
 export function managerSendTool(context: ToolContext, stores: Stores) {
@@ -95,101 +242,63 @@ export function managerSendTool(context: ToolContext, stores: Stores) {
       // 閉じる指定の誤りは、送る前に丸ごと断る（送ってから閉じる側だけ断ると、半分だけ済んだ呼びになるため）
       const closesError = describeClosesViolation(closes);
       if (closesError !== null) return text(closesError);
-      // 送れなかった（早い断り・保留・失敗）呼びは1行も閉じず、そう書く
-      const notDone = (res: ToolText) =>
-        finishWithCloses(stores, res, closes, false, 'manager_send');
-      if (!context.managers) return notDone(NO_POOL);
+      if (!context.managers) return finishManagerSendNotDone(stores, NO_POOL, closes);
       // 空白だけは断らない: HTTP も通すため
       const messageError = describeStringLengthViolation('message', message, { min: 1 });
-      if (messageError !== null) return notDone(text(messageError));
+      if (messageError !== null) {
+        return finishManagerSendNotDone(stores, text(messageError), closes);
+      }
       const handover = await loadManagerAttachments(
         stores,
         attachments ?? [],
         context.attachmentLimits ?? readAttachmentLimits().limits,
       );
-      if (!handover.ok) return notDone(text(handover.message));
+      if (!handover.ok) return finishManagerSendNotDone(stores, text(handover.message), closes);
       // 答える前に判断の行を書く: 答えが届いたのに跡が無い窓を作らないため。
       // この道具は自己記録なので PostToolUse の行が無く、この行が「クローンが人間に聞かず答えた」唯一の跡になる。
       // 行を書いたかを旗で持つ: 確認に当たらなかった送信では呼ばれず、書いていない行は打ち消さない
-      // 閉包から代入するので、`let` ではなく箱にする（`let` だと代入後も `undefined` へ絞られる）
-      const answerJournaled: { requestId?: string } = {};
-      // 先に書いた行が効かなかったとき（答えが届かなかった）の打ち消し。書けなければ跡だけ残す
-      const retractAnswerJournal = async (detail: string): Promise<void> => {
-        if (answerJournaled.requestId === undefined) return;
-        await appendJournalOrDrop('manager_send', stores.journal, {
-          type: 'decision',
-          decision:
-            `クローンが担当 ${managerId} の確認（${answerJournaled.requestId}）へ答えるとした直前の回答の行は` +
-            `効いていない（答えは届いていない）。理由: ${excerptLine(detail, MANAGER_ANSWER_MESSAGE_EXCERPT)}`,
-          grounds: '先に書いた回答の行の後で、答えが届かなかったため打ち消す',
-        });
-      };
-      const send = async (pool: ManagerPool): Promise<ManagerSendResult> => {
-        try {
-          return await pool.send(managerId, message, {
-            ...(decision === undefined ? {} : { decision }),
-            ...(requestId === undefined ? {} : { requestId }),
-            ...(handover.attachments.length === 0 ? {} : { attachments: handover.attachments }),
-            beforeAnswer: async (pending) => {
-              await appendJournalOrThrow(
-                'manager_send',
-                stores.journal,
-                {
-                  type: 'decision',
-                  decision:
-                    `クローンが担当 ${managerId} の確認（${pending.requestId}: ` +
-                    `${excerptLine(pending.summary, JOURNAL_TEXT_EXCERPT)}）に自分で答える` +
-                    `（decision=${decision ?? '指定なし（runner が本文から読む）'}。` +
-                    `抜粋: ${excerptLine(message, MANAGER_ANSWER_MESSAGE_EXCERPT)}）`,
-                  grounds:
-                    'クローン自身が manager_send で、人間に聞かずに答えた（根拠は記憶。人間はこれを読んで後から否定する）',
-                },
-                'act-not-performed',
-              );
-              answerJournaled.requestId = pending.requestId;
-            },
-          });
-        } catch (error) {
-          await retractAnswerJournal(`送信が例外で終わった: ${reasonOf(error)}`);
-          throw error;
-        }
-      };
-      const result = await send(context.managers);
-      if (result.outcome !== 'answered') await retractAnswerJournal(result.detail);
+      // 関数へ渡して代入させるので、`let` ではなく箱にする
+      const answerJournaled: ManagerSendAnswerJournaled = {};
+      const result = await sendManagerMessage({
+        pool: context.managers,
+        stores,
+        managerId,
+        message,
+        decision,
+        requestId,
+        attachments: handover.attachments,
+        answerJournaled,
+      });
+      if (result.outcome !== 'answered') {
+        await retractManagerSendAnswerJournal(stores, managerId, answerJournaled, result.detail);
+      }
       // 届いた（delivered）か答えた（answered）ときだけ閉じる。それ以外は本来の作業が通っていない
       const sent = result.outcome === 'delivered' || result.outcome === 'answered';
       // 既存の委譲へ頼んだターンも、委譲に数える（その委譲に結び付いた task〔Job.taskId〕を、このターンの返答で自動 done にしない。#5469 P5）
       if (sent) context.noteDelegationStarted?.(await jobTaskIdOf(stores, managerId));
       // `session_missing` は必ず言い足す: そのものは居る側なので、`manager_start` で起こし直すと同じ仕事が2本になりうるため
       if (result.outcome === 'session_missing') {
-        return notDone(
-          text(
-            `[${managerId}] ${result.detail}\n` +
-              '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
-              'runner に生きたセッションが無く、resume でも入り直せなかっただけである。' +
-              'manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）' +
-              'なら少し置いてから送り直すこと。' +
-              RESTART_BEFORE_CHECK_ADVICE,
-          ),
+        return finishManagerSendNotDone(
+          stores,
+          text(renderManagerSendSessionMissing(managerId, result.detail)),
+          closes,
         );
       }
       // 警告の文は HTTP（POST /managers/:id/messages）と共有する（`decisionUnusedNote`）
       const unusedNote = decisionUnusedNote(decision, requestId, result.outcome);
-      if (result.outcome === 'held') return notDone(text(`${result.detail}${unusedNote}`));
-      // 「届けた」が保証する範囲を名乗る: 観測したのは resume の口が成功を返したところまでで、相手がこの本文を読んだかは見ていないため
-      // 「同じ本文で立て直さないこと」は落とさない: 送った直後の `manager_list` が `lost` のままで、クローンが指示を失ったと判断し出し直した実害があるため
-      if (result.outcome === 'delivered') {
-        // 毎回返る文なので短く保つ（理由の詳しい説明は道具の説明文の側に1回だけ置く）: 送るたびにクローンの文脈へ積まれ、読み直しの費用になるため
-        // 脚注は同じ会話の2回目から札にする（結論の「同じ本文で新しい委譲を立てない」は札にも残す）。返す直前のここで呼ぶ
-        const deliveredNote = foldFixedFor(context, extra)(
-          'manager-send:delivered-note',
-          '（「届けた」は resume の口が成功を返したところまで。読んだかは manager_report で見る。' +
-            '同じ本文で新しい委譲を立てないこと）',
-          '（届けたのは resume の口まで。同じ本文で新しい委譲を立てないこと）',
+      if (result.outcome === 'held') {
+        return finishManagerSendNotDone(
+          stores,
+          text(renderManagerSendHeld(result.detail, unusedNote)),
+          closes,
         );
+      }
+      if (result.outcome === 'delivered') {
+        // 脚注は同じ会話の2回目から札にする。返す直前のここで呼ぶ
+        const deliveredNote = foldManagerSendDeliveredNote(context, extra);
         return finishWithCloses(
           stores,
-          text(`[${managerId}] ${result.detail}${unusedNote}\n${deliveredNote}`),
+          text(renderManagerSendDelivered(managerId, result.detail, unusedNote, deliveredNote)),
           closes,
           sent,
           'manager_send',
