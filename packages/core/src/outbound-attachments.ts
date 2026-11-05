@@ -18,7 +18,18 @@ export type OutboundAttachmentResult =
       readonly refs: AttachmentRef[];
       readonly newlyBound: string[];
     }
-  | { readonly ok: false; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly message: string;
+      /** 結ぶ間の競合のあと、戻し（unbind）が失敗して結び付けが残ったとき */
+      readonly leftBound?: {
+        readonly ids: readonly string[];
+        readonly conversationId: string;
+        readonly reason: string;
+        /** 断りの先頭の競合の文（「添付が結ぶ間に…: x」） */
+        readonly conflict: string;
+      };
+    };
 
 interface OutboundAttachmentOptions {
   readonly conversationId: string;
@@ -135,16 +146,31 @@ async function checkAndBind(
     }
     if (bound.missing.length > 0 || bound.conflicts.length > 0) {
       // 戻すのは `bind` が「この呼びで新しく結んだ」と返した id だけ: すでに同じ宛先へ結んであった id まで戻すと、通った発言の添付が外れるため
-      if (bound.newlyBound.length > 0) {
-        await stores.attachments.unbind(bound.newlyBound, {
-          conversationId: options.conversationId,
-        });
-      }
-      return refuse(
+      const conflict =
         bound.missing.length > 0
           ? `添付が結ぶ間に見つからなくなった（保持期限）: ${bound.missing.join(', ')}`
-          : `添付が結ぶ間に別の宛先へ結ばれた: ${bound.conflicts.join(', ')}`,
-      );
+          : `添付が結ぶ間に別の宛先へ結ばれた: ${bound.conflicts.join(', ')}`;
+      if (bound.newlyBound.length > 0) {
+        try {
+          await stores.attachments.unbind(bound.newlyBound, {
+            conversationId: options.conversationId,
+          });
+        } catch (error) {
+          // 戻せなかった結び付けは握りつぶさず、断りの文と `leftBound` で呼んだ側へ知らせる
+          const reason = reasonOf(error);
+          return {
+            ok: false,
+            message: `${conflict}。何も添えていないが、戻せなかったので添付の結び付けが会話 ${options.conversationId} に残った: ${bound.newlyBound.join(', ')}（${reason}）。`,
+            leftBound: {
+              ids: [...bound.newlyBound],
+              conversationId: options.conversationId,
+              reason,
+              conflict,
+            },
+          };
+        }
+      }
+      return refuse(conflict);
     }
     newlyBound = bound.newlyBound;
   }
