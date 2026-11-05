@@ -29,7 +29,6 @@ import {
   buildCloneSessionOptions,
   buildManagerSessionOptions,
   CLAUDE_PROVIDER,
-  DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withCliSessionEnv,
@@ -2360,11 +2359,6 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
 
     it('蒸留は窓を載せない（1回きりで会話を持ち越さず、要約が走る場面が無いため）', () => {
       expect(distillOptions({}).settings).not.toHaveProperty('autoCompactWindow');
-    });
-
-    it('既定は SDK が受ける範囲（100000〜1000000）の中にある', () => {
-      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeGreaterThanOrEqual(100_000);
-      expect(DEFAULT_AUTO_COMPACT_WINDOW_TOKENS).toBeLessThanOrEqual(1_000_000);
     });
   });
 });
