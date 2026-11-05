@@ -6,8 +6,16 @@ import {
   stripNulFromUnmeteredRecord,
   stripNulFromUsageQuery,
   stripNulFromUsageRecord,
-  addUnreadableCounts,
+  addUsageTotals,
+  compareUsageRows,
+  compareUsageTurnRows,
+  compareUsageUnmeteredRows,
   foldRecordForStore,
+  matchesUsageQuery,
+  usageBaselineKey,
+  usageRowKey,
+  usageTurnKey,
+  usageUnmeteredKey,
   isRealUsageDate,
   resetRowsOfBaselines,
   usageAggregateSchema,
@@ -18,7 +26,6 @@ import {
   usageSiteSchema,
   usageTurnRowSchema,
   usageUnmeteredRowSchema,
-  compareCodeUnits,
   writeStderrLine,
 } from '@alteroid/core';
 import type {
@@ -32,7 +39,6 @@ import type {
   UsageSite,
   UsageSnapshot,
   UsageStore,
-  UsageTotals,
   UsageUnmeteredRow,
 } from '@alteroid/core';
 import { z } from 'zod';
@@ -129,29 +135,6 @@ interface UnreadableUsageEntries {
 
 const NO_UNREADABLE: UnreadableUsageEntries = { rows: [], turns: [] };
 
-/**
- * 読めた行が集計の絞り込み（期間・担当・層・場所・鍵）に当たるか。日ごと・ターン・測れなかった行の3つの表が同じ条件で絞る:
- * 表ごとに条件を写すと、1つの表だけ条件が抜けて、同じ問いで表によって答えが割れるため。
- */
-function matchesUsageQuery(
-  row: {
-    readonly date: string;
-    readonly managerId: string;
-    readonly layer: string;
-    readonly site: string;
-    readonly tokenId?: string | undefined;
-  },
-  query: UsageQuery,
-): boolean {
-  if (query.from !== undefined && row.date < query.from) return false;
-  if (query.to !== undefined && row.date > query.to) return false;
-  if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
-  if (query.layer !== undefined && row.layer !== query.layer) return false;
-  if (query.site !== undefined && row.site !== query.site) return false;
-  if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
-  return true;
-}
-
 // 欄が読めない・無いときは残す: 範囲外と言い切れないため
 function toUnreadableRows(
   table: 'usage_daily' | 'usage_turns',
@@ -210,81 +193,21 @@ const EMPTY: UsageFile = {
   unmetered: {},
 };
 
-function rowKey(
-  date: string,
-  managerId: string,
-  model: string,
-  layer: UsageLayer,
-  site: UsageSite,
-  tokenId: string | undefined,
-): string {
-  // 生の NUL ではなくエスケープで書く: 生のバイトをソースへ置くと git がこのファイルを binary と判定し、PR の差分が読めなくなるため
-  // トークンは省略されうるので、空の区画として鍵へ入れる: 鍵から外すと、回した前後の増分が同じ行へ足し込まれて誤帰属になるため
-  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
-}
-
-function turnKey(
-  date: string,
-  managerId: string,
-  layer: UsageLayer,
-  site: UsageSite,
-  tokenId: string | undefined,
-): string {
-  return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
-}
-
-function unmeteredKey(
-  date: string,
-  managerId: string,
-  layer: UsageLayer,
-  site: UsageSite,
-  provider: string,
-  tokenId: string | undefined,
-): string {
-  return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${provider}\u0000${tokenId ?? ''}`;
-}
-
-function baselineKey(layer: UsageLayer, managerId: string): string {
-  return `${layer}\u0000${managerId}`;
-}
-
 // 読むたびに鍵を値から引き直す: 古い鍵のままだと同じ行が2つに割れ、基準が引けず次の1回で全量が増分として二重計上されるため
 function normalizeKeys(file: UsageFile): UsageFile {
   const rows: UsageFile['rows'] = {};
   for (const row of Object.values(file.rows)) {
-    rows[rowKey(row.date, row.managerId, row.model, row.layer, row.site, row.tokenId)] = row;
+    rows[usageRowKey(row.date, row.managerId, row.model, row.layer, row.site, row.tokenId)] = row;
   }
   const baselines: UsageFile['baselines'] = {};
   for (const baseline of Object.values(file.baselines)) {
-    baselines[baselineKey(baseline.layer, baseline.managerId)] = baseline;
+    baselines[usageBaselineKey(baseline.layer, baseline.managerId)] = baseline;
   }
   const turns: UsageFile['turns'] = {};
   for (const turn of Object.values(file.turns)) {
-    turns[turnKey(turn.date, turn.managerId, turn.layer, turn.site, turn.tokenId)] = turn;
+    turns[usageTurnKey(turn.date, turn.managerId, turn.layer, turn.site, turn.tokenId)] = turn;
   }
   return { ...file, rows, baselines, turns };
-}
-
-// 番兵の文字で代用しない: U+FFFF のような最大文字へ倒すと、その文字が id に現れたときだけ静かに順序が壊れるため
-// pg 側と向きを揃える: 器が違うだけで行の並びが変わると、同じ照会が口によって違う順で出るため
-function compareTokenId(a: string | undefined, b: string | undefined): number {
-  if (a === b) return 0;
-  if (a === undefined) return 1;
-  if (b === undefined) return -1;
-  return compareCodeUnits(a, b);
-}
-
-function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
-  const unreadable = addUnreadableCounts(a.unreadable, b.unreadable);
-  return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    cacheReadInputTokens: a.cacheReadInputTokens + b.cacheReadInputTokens,
-    cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
-    webSearchRequests: a.webSearchRequests + b.webSearchRequests,
-    costUsd: a.costUsd + b.costUsd,
-    ...(unreadable === undefined ? {} : { unreadable }),
-  };
 }
 
 export class FsUsageStore implements UsageStore {
@@ -311,7 +234,7 @@ export class FsUsageStore implements UsageStore {
     const input = stripNulFromUsageRecord(rawInput);
     return this.#mutate((file) => {
       // `oneshot` には基準を持たせない: 1回で閉じる呼び出しに基準を持たせると、前回より高くついた回だけが差に縮んで黙って目減りするため
-      const baseKey = baselineKey(input.layer, input.managerId);
+      const baseKey = usageBaselineKey(input.layer, input.managerId);
       const baseline = input.accumulation === 'oneshot' ? null : (file.baselines[baseKey] ?? null);
       const { fold, nextBaseline } = foldRecordForStore(baseline, {
         layer: input.layer,
@@ -324,7 +247,7 @@ export class FsUsageStore implements UsageStore {
 
       const rows = { ...file.rows };
       for (const [model, delta] of Object.entries(fold.delta)) {
-        const key = rowKey(
+        const key = usageRowKey(
           input.date,
           input.managerId,
           model,
@@ -341,7 +264,7 @@ export class FsUsageStore implements UsageStore {
           site: input.site,
           // 無いときはキーそのものを置かない: `tokenId: undefined` だと、`storedRowSchema` を通した後のオブジェクトの形が呼び出しごとに揺れるため
           ...(input.tokenId === undefined ? {} : { tokenId: input.tokenId }),
-          totals: existing === undefined ? delta : addTotals(existing.totals, delta),
+          totals: existing === undefined ? delta : addUsageTotals(existing.totals, delta),
           updatedAt: input.at,
         };
       }
@@ -349,7 +272,13 @@ export class FsUsageStore implements UsageStore {
       const turned = Object.keys(fold.delta).length > 0;
       const turns = { ...file.turns };
       if (turned) {
-        const key = turnKey(input.date, input.managerId, input.layer, input.site, input.tokenId);
+        const key = usageTurnKey(
+          input.date,
+          input.managerId,
+          input.layer,
+          input.site,
+          input.tokenId,
+        );
         const existing = turns[key];
         turns[key] = {
           date: input.date,
@@ -399,7 +328,7 @@ export class FsUsageStore implements UsageStore {
   }): Promise<void> {
     const input = stripNulFromUnmeteredRecord(rawInput);
     await this.#mutate((file) => {
-      const key = unmeteredKey(
+      const key = usageUnmeteredKey(
         input.date,
         input.managerId,
         input.layer,
@@ -436,38 +365,15 @@ export class FsUsageStore implements UsageStore {
     const { file, unreadable } = await this.#readAll();
     const rows = Object.values(file.rows)
       .filter((row) => matchesUsageQuery(row, query))
-      .sort(
-        (a, b) =>
-          compareCodeUnits(a.date, b.date) ||
-          compareCodeUnits(a.managerId, b.managerId) ||
-          compareCodeUnits(a.model, b.model) ||
-          compareCodeUnits(a.layer, b.layer) ||
-          compareCodeUnits(a.site, b.site) ||
-          compareTokenId(a.tokenId, b.tokenId),
-      );
+      .sort(compareUsageRows);
 
     const turnRows = Object.values(file.turns)
       .filter((row) => matchesUsageQuery(row, query))
-      .sort(
-        (a, b) =>
-          compareCodeUnits(a.date, b.date) ||
-          compareCodeUnits(a.managerId, b.managerId) ||
-          compareCodeUnits(a.layer, b.layer) ||
-          compareCodeUnits(a.site, b.site) ||
-          compareTokenId(a.tokenId, b.tokenId),
-      );
+      .sort(compareUsageTurnRows);
 
     const unmeteredRows: UsageUnmeteredRow[] = Object.values(file.unmetered)
       .filter((row) => matchesUsageQuery(row, query))
-      .sort(
-        (a, b) =>
-          compareCodeUnits(a.date, b.date) ||
-          compareCodeUnits(a.managerId, b.managerId) ||
-          compareCodeUnits(a.layer, b.layer) ||
-          compareCodeUnits(a.site, b.site) ||
-          compareCodeUnits(a.provider, b.provider) ||
-          compareTokenId(a.tokenId, b.tokenId),
-      );
+      .sort(compareUsageUnmeteredRows);
 
     const unreadableRows = [
       ...toUnreadableRows('usage_daily', unreadable.rows, query),
