@@ -209,6 +209,8 @@ export interface ApplyProfileResult {
   composed?: { clone: ComposedFingerprint; runner: ComposedFingerprint };
   clone: ProfileApplyResult;
   runners: (RunnerProfileResult & { runnerId: string })[];
+  /** runner の一覧を読めず、配布を確かめられなかったときの（伏せた）理由。無ければ配布は確かめられている */
+  runnersUnconfirmed?: string;
 }
 
 export function createProfileService(options: ProfileServiceOptions): ProfileService {
@@ -294,10 +296,25 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
       );
     }
 
-    const results = await pushAll(runnerScript);
-    notify(results);
+    // ここから先は正本もクローンの器も新しい版になっている。落ちても戻さず、書けた側を正として、起きたことを返す
+    // （投げると、書けているのに「差し替えられなかった」と報告してしまう）。
+    let results: (RunnerProfileResult & { runnerId: string })[] = [];
+    let runnersUnconfirmed: string | undefined;
+    try {
+      results = await pushAll(runnerScript);
+      notify(results);
+    } catch (error) {
+      // runner ごとの失敗は結果に入る。ここへ来るのは一覧の読みの失敗。配った結果が無いので notify しない。
+      runnersUnconfirmed = redactErrorText(String(error), process.env);
+    }
 
-    const entries = await stores.profile.list();
+    let entries: EnvProfileEntry[];
+    try {
+      entries = await stores.profile.list();
+    } catch {
+      // 読み直せなくても、書いた行は分かっている
+      entries = rows;
+    }
     return {
       stored: true,
       updatedAt: at,
@@ -306,6 +323,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
       composed: composedFingerprints(entries),
       clone,
       runners: results,
+      ...(runnersUnconfirmed === undefined ? {} : { runnersUnconfirmed }),
     };
   }
 
