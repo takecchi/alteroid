@@ -1291,8 +1291,10 @@ type TaskAddStores = CloneToolsShared['stores'];
 type TaskAddPlacement = Parameters<typeof describeTaskPlacement>[0];
 type TaskAddOutcome =
   | { kind: 'anchor-not-found' }
-  // 足したと言えない回。区別: existed（器が既にあると返した）/ missing（読み直しが null）/ unreadable（読み直しが読めない形）
-  | { kind: 'unconfirmed'; reason: 'existed' | 'missing' | 'unreadable' }
+  // 同じ id の行が既に在り、何も書かなかった（id がぶつかった）
+  | { kind: 'existed' }
+  // 器は書いたと返したが、読み直しで確かめられなかった。missing（読み直しが null）/ unreadable（読み直しが読めない形）
+  | { kind: 'unconfirmed'; reason: 'missing' | 'unreadable' }
   | { kind: 'added' };
 
 // 題・本文・出所の検査。断る文を返す（通れば null）。順: 題の長さと空白 → 題の改行 → 本文 → 出所
@@ -1358,7 +1360,15 @@ function renderTaskAddAnchorMissing(anchorId: string | undefined): string {
   return `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も足していない。task_list で確かめること。`;
 }
 
-// 確かめられなかった回（existed / 読み直しが null / 読めない）の断り。いまは種類によらず同じ文
+// 同じ id の行が既に在った回の断り。何も書いていない（#6471）
+function renderTaskAddExisted(taskId: string): string {
+  return (
+    `task の id ${taskId} が既に在ったので、何も書かなかった（新しく採番した id がぶつかった）。**何も足していない。** ` +
+    'もう一度 task_add を呼べば、新しい id で足せる。'
+  );
+}
+
+// 器は書いたと返したが、読み直しで確かめられなかった回（読み直しが null / 読めない）の断り
 function renderTaskAddUnconfirmed(taskId: string): string {
   return (
     `task を書き込んだが、直後に読み直しても ${taskId} を確認できなかった。**「足した」とは言えない。** ` +
@@ -1375,11 +1385,23 @@ function buildTaskAddJournalEntry(entry: Task, placement: TaskAddPlacement) {
   };
 }
 
+// 器は書いたと返したが読み直しで確かめられなかった回の日誌。行は在るかもしれないので、日誌が無いまま残さない（#6471）
+function buildTaskAddUnconfirmedJournalEntry(entry: Task, placement: TaskAddPlacement, why: string) {
+  const base = buildTaskAddJournalEntry(entry, placement);
+  return {
+    ...base,
+    decision: `task を足した（${entry.id}）が、直後の読み直しで確かめられなかった: ${entry.title}`,
+    grounds: `${base.grounds}。読み直し: ${why}`,
+  };
+}
+
 function renderTaskAddDone(entry: Task): string {
   return `task を足した（${entry.id}）。起点の会話は ${entry.originConversationId}（task_say taskId=${entry.id} でここへ書ける）。位置は task_list で確かめられる。`;
 }
 
-// 足す → 読み直して確かめる → 日誌、の段。確かめられなかった回は日誌を書かず、種類を持たせて返す
+// 足す → 読み直して確かめる → 日誌、の段
+// 器が書いたと返したのに確かめられなかった回も、日誌に1行残す: 行は在るかもしれず、日誌が無いと足したことが辿れないため（#6471）。
+// 行の実在は分からないので「完了済み・やり直し禁止」の例外にはせず、書けなくても断りの文を返す（appendJournalOrDrop）
 async function addTaskVerifyingJournaling(
   stores: TaskAddStores,
   entry: Task,
@@ -1387,9 +1409,33 @@ async function addTaskVerifyingJournaling(
 ): Promise<TaskAddOutcome> {
   const added = await stores.tasks.add(entry, placement);
   if (added.kind === 'anchor-not-found') return { kind: 'anchor-not-found' };
-  const back = await readBackAddedTask(stores, entry.id);
-  if (added.kind === 'existed') return { kind: 'unconfirmed', reason: 'existed' };
+  // 同じ id が既に在れば器は何も書いていないので、読み直さずに断る
+  if (added.kind === 'existed') return { kind: 'existed' };
+  let back: { task: Task | null; unreadable: boolean };
+  try {
+    back = await readBackAddedTask(stores, entry.id);
+  } catch (error) {
+    await appendJournalOrDrop(
+      'task_add',
+      stores.journal,
+      buildTaskAddUnconfirmedJournalEntry(
+        entry,
+        placement,
+        `例外で終わった（${collapseErrorCause(error)}）`,
+      ),
+    );
+    throw error;
+  }
   if (back.task === null) {
+    await appendJournalOrDrop(
+      'task_add',
+      stores.journal,
+      buildTaskAddUnconfirmedJournalEntry(
+        entry,
+        placement,
+        back.unreadable ? '読めない形で入っていた' : '見つからなかった',
+      ),
+    );
     return { kind: 'unconfirmed', reason: back.unreadable ? 'unreadable' : 'missing' };
   }
   await appendJournalOrThrow(
@@ -1517,6 +1563,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
         const entry = buildTaskAddEntry(getWorkConversationId, title, body, source);
         const outcome = await addTaskVerifyingJournaling(stores, entry, resolved.placement);
         if (outcome.kind === 'anchor-not-found') return text(renderTaskAddAnchorMissing(anchorId));
+        if (outcome.kind === 'existed') return text(renderTaskAddExisted(entry.id));
         if (outcome.kind === 'unconfirmed') return text(renderTaskAddUnconfirmed(entry.id));
         return text(renderTaskAddDone(entry));
       },
