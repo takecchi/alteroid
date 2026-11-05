@@ -2,12 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import {
-  PracticeConflictError,
-  UnreadablePracticeError,
-  practiceVersion,
-  type Stores,
-} from './store.js';
+import { UnreadablePracticeError, practiceVersion, type Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
@@ -148,7 +143,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'kind-valid-edges',
     covers:
-      'kind が通る端: 1 字・128 字（上限）・NUL が混じる（ストアが NUL を除いて保存する。応答と日誌の kind は渡したまま）',
+      'kind が通る端: 1 字・128 字（上限）・NUL が混じる（ストアが NUL を除いて保存する。道具の入口が引数の NUL を先に除くので、日誌の kind も NUL なし）',
     seed: [],
     steps: [
       { slug: 'k-one', kind: 'x', title: '1字', content: BODY, base: 'none', writes: 'some' },
@@ -184,12 +179,47 @@ const SCENARIOS: Scenario[] = [
       '書いた本文の形: 末尾の改行が無い（ストアが足す・字数は足した後）・NUL を含む（ストアが除く）・空文字・多バイト文字と絵文字（字数はコードポイント）・1,000 字以上・title に NUL・title が空',
     seed: [],
     steps: [
-      { slug: 'no-newline', kind: '調査', title: '改行なし', content: '# 改行なし\n本文', base: 'none', writes: 'some' },
-      { slug: 'with-nul', kind: '調査', title: 'NUL', content: '# NUL\n本\u0000文\n', base: 'none', writes: 'some' },
+      {
+        slug: 'no-newline',
+        kind: '調査',
+        title: '改行なし',
+        content: '# 改行なし\n本文',
+        base: 'none',
+        writes: 'some',
+      },
+      {
+        slug: 'with-nul',
+        kind: '調査',
+        title: 'NUL',
+        content: '# NUL\n本\u0000文\n',
+        base: 'none',
+        writes: 'some',
+      },
       { slug: 'empty', kind: '調査', title: '空', content: '', base: 'none', writes: 'some' },
-      { slug: 'multibyte', kind: '調査', title: '日本語', content: '# 日本語\nあいうえお 😀\n', base: 'none', writes: 'some' },
-      { slug: 'long-ascii', kind: '調査', title: '長い', content: LONG, base: 'none', writes: 'some' },
-      { slug: 'title-nul', kind: '調査', title: '題\u0000あ', content: BODY, base: 'none', writes: 'some' },
+      {
+        slug: 'multibyte',
+        kind: '調査',
+        title: '日本語',
+        content: '# 日本語\nあいうえお 😀\n',
+        base: 'none',
+        writes: 'some',
+      },
+      {
+        slug: 'long-ascii',
+        kind: '調査',
+        title: '長い',
+        content: LONG,
+        base: 'none',
+        writes: 'some',
+      },
+      {
+        slug: 'title-nul',
+        kind: '調査',
+        title: '題\u0000あ',
+        content: BODY,
+        base: 'none',
+        writes: 'some',
+      },
       { slug: 'title-empty', kind: '調査', title: '', content: BODY, base: 'none', writes: 'some' },
     ],
   },
@@ -205,7 +235,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'create-slug-forms',
-    covers: 'スラッグの通る形（. _ - 数字を含む）。日誌の target と decision に slug がそのまま入る',
+    covers:
+      'スラッグの通る形（. _ - 数字を含む）。日誌の target と decision に slug がそのまま入る',
     seed: [],
     steps: [
       {
@@ -268,7 +299,7 @@ const SCENARIOS: Scenario[] = [
         slug: 'a1',
         content: NEW_BODY,
         base: 'stale',
-        writes: 'hook',
+        writes: 'none',
         externalEdit: { ...SEED, slug: 'a1', content: '人間が直した\n' },
       },
       { ...SEED, slug: 'a2', content: NEW_BODY, base: { raw: 'deadbeef' }, writes: 'none' },
@@ -558,7 +589,7 @@ function withHooks(
       const now = hooks();
       const args = {
         input: plain(input),
-        ifMatch: options === undefined ? '(options 省略)' : (options.ifMatch ?? '(省略)'),
+        ifMatch: options?.ifMatch === undefined ? '(省略)' : options.ifMatch,
       };
       try {
         if (now.writeThrows) throw new Error('ストアが落ちた（write）');
@@ -833,10 +864,9 @@ describe('practice_write の出力と呼んだあとの状態の固定（場面�
             wantRow === null,
           );
           if (wantRow === null || gotRow === null) continue;
-          expect(
-            gotRow.content,
-            `場面 ${key} のやり方 ${slug} の本文が固定値からずれた`,
-          ).toBe(wantRow.content);
+          expect(gotRow.content, `場面 ${key} のやり方 ${slug} の本文が固定値からずれた`).toBe(
+            wantRow.content,
+          );
           expect(
             gotRow,
             `場面 ${key} のやり方 ${slug} の本文以外（版・kind・title・時刻・履歴の件数など）が固定値からずれた`,
@@ -920,7 +950,7 @@ describe('practice_write の出力と呼んだあとの状態の固定（場面�
       expect(ops(key), key).toEqual(WRITE_ALL);
     }
     expect(row('kind-valid-edges#3', 'k-nul')?.kind).toBe('ab');
-    expect(journal('kind-valid-edges#3')[0]?.decision).toContain('（a\u0000b）');
+    expect(journal('kind-valid-edges#3')[0]?.decision).toContain('（ab）');
 
     // 新規作成
     expect(text('create')).toContain('やり方 review を新しく作った（');
@@ -942,11 +972,13 @@ describe('practice_write の出力と呼んだあとの状態の固定（場面�
     expect(row('create-content-forms#4', 'multibyte')?.chars).toBe(18);
     expect(text('create-content-forms#5')).toContain('1506 文字');
     expect(row('create-content-forms#6', 'title-nul')?.title).toBe('題あ');
-    expect(journal('create-content-forms#6')[0]?.decision).toContain('題\u0000あ');
+    expect(journal('create-content-forms#6')[0]?.decision).toContain('題あ');
     expect(text('create-slug-forms')).toContain('やり方 a.b_c-1 を新しく作った');
 
     // 版の前提
-    expect(text('create-with-base-version#1')).toContain('いまそのやり方は無い（読んだ後に消された）');
+    expect(text('create-with-base-version#1')).toContain(
+      'いまそのやり方は無い（読んだ後に消された）',
+    );
     expect(text('create-with-base-version#1')).toContain('**何も書いていない**');
     expect(ops('create-with-base-version#1')).toEqual(['practices.read', 'practices.write']);
     expect(ifMatch('create-with-base-version#1')).toBe(practiceVersion(SEED));
@@ -964,7 +996,15 @@ describe('practice_write の出力と呼んだあとの状態の固定（場面�
     expect(text('update-needs-base#3')).toContain('やり方 review を書き直した（');
 
     // 書き直し
-    for (const key of ['update#1', 'update#2', 'update#3', 'update#4', 'update#5', 'update#6', 'update#7']) {
+    for (const key of [
+      'update#1',
+      'update#2',
+      'update#3',
+      'update#4',
+      'update#5',
+      'update#6',
+      'update#7',
+    ]) {
       expect(ops(key), key).toEqual(WRITE_ALL);
       expect(journal(key)[0]?.decision, key).toContain('を書き直した: ');
       expect(journal(key)[0]?.grounds, key).toContain('やり方を書き直した（全文置換。');
@@ -1046,7 +1086,5 @@ describe('practice_write の出力と呼んだあとの状態の固定（場面�
     expect(row('failures#6', 'f5')?.content).toBe(NEW_BODY);
     expect(row('failures#7', 'f-new-2')?.content).toBe(BODY);
     expect(row('failures#8', 'f6')?.content).toBe(NEW_BODY);
-    // 型だけ参照して未使用の import を避ける
-    expect(PracticeConflictError.name).toBe('PracticeConflictError');
   });
 });
