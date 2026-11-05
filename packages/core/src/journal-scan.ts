@@ -78,6 +78,62 @@ export async function countToolUsesByActorFromPages(
   return [...counts].map(([actor, count]) => ({ actor, count }));
 }
 
+const WITHDRAWN_PAGE = 500;
+
+// 取り下げの印の行（`with: 'self'`）は人間との往復の窓（`with: ['human']`）に入らないので、`with: ['self']` を別に読む。
+// `since` 以降を古い順に頁で読み切る（途中で黙って打ち切らない）。
+// 終端は `next === null` だけで決める: 短い頁・空の頁は読めない行を捨てた結果でありうるため。
+// 本文を運ばずに印だけを引く口が要る器（pg）は、これを使わず SQL で引く
+export async function withdrawnClientMessageIdsFromPages(
+  journal: Pick<JournalStore, 'listPage'>,
+  query: { since: string; conversationId?: string },
+  pageSize: number = WITHDRAWN_PAGE,
+): Promise<string[]> {
+  const withdrawn = new Set<string>();
+  let after: JournalCursor | undefined;
+  for (;;) {
+    const page = await journal.listPage({
+      limit: pageSize,
+      order: 'asc',
+      types: ['exchange'],
+      with: ['self'],
+      since: query.since,
+      ...(after === undefined ? {} : { after }),
+    });
+    for (const entry of page.entries) {
+      if (
+        entry.type === 'exchange' &&
+        (query.conversationId === undefined || entry.conversationId === query.conversationId) &&
+        entry.withdrawnClientMessageId !== undefined
+      ) {
+        withdrawn.add(entry.withdrawnClientMessageId);
+      }
+    }
+    if (page.next === null) return [...withdrawn];
+    if (after?.id === page.next.id) {
+      throw new Error('取り下げの印を読む頁の継続点が進まない（ストアが `after` を守っていない）');
+    }
+    after = page.next;
+  }
+}
+
+// 新しい順に人間との往復を最後まで頁で読み、`prefix` で始まる会話 id を現れた順に重複なく集めて、最大 `limit` 件を返す。
+// 最後まで読む（`limit` 件で止めない）: 頁送りだった `lookupConversation` が、候補の上限を越えても読み続けていたのと同じ読み方にするため。
+// 本文を運ばずに引く口が要る器（pg）は、これを使わず SQL で引く
+export async function conversationIdsWithPrefixFromPages(
+  journal: Pick<JournalStore, 'listPage'>,
+  query: { prefix: string; limit: number },
+): Promise<string[]> {
+  const ids = new Set<string>();
+  await scanJournalPages(journal, { types: ['exchange'], with: ['human'] }, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'exchange' || entry.conversationId === undefined) continue;
+      if (entry.conversationId.startsWith(query.prefix)) ids.add(entry.conversationId);
+    }
+  });
+  return [...ids].slice(0, query.limit);
+}
+
 // `listPage` の絞り（墓標・名指し・錨）をそのまま通す: 3実装の「錨より新しい人間との往復」の答えを `listPage` の1本に揃えるため。
 // 錨が見つからない例外は `scanJournalPages` が握り潰さず伝える。本文を運ばずに引く口が要る器（pg）は、これを使わず SQL で引く
 export async function conversationIdsAfterFromPages(

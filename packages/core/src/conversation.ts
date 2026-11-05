@@ -188,55 +188,22 @@ export function bySpeaker(exchanges: Exchange[], speaker: 'human' | 'clone' | 'b
   return exchanges.filter((entry) => entry.role === role);
 }
 
-const WITHDRAWN_PAGE = 500;
-
 /**
- * 取り下げの印の行（`with: 'self'`）は人間との往復の窓（`with: ['human']`）に入らないので、
- * `with: ['self']` を別に読む。`since` 以降を古い順に頁で読み切る（途中で黙って打ち切らない）。
+ * 取り下げの印の行（`with: 'self'`）は人間との往復の窓（`with: ['human']`）に入らないので、印だけを引く口で別に読む（#5089）:
+ * 頁で読み切ると、内部ターンの往復を本文ごと読み、窓が古いほど本番で数秒〜十数秒かかったため。
  */
 export async function readWithdrawnClientMessageIds(
-  journal: Pick<JournalStore, 'listPage' | 'withdrawnClientMessageIds'>,
+  journal: Pick<JournalStore, 'withdrawnClientMessageIds'>,
   // `undefined` は会話を問わない（会話の一覧が、窓の中の全会話の取り下げを一度で読む）
   conversationId: string | undefined,
   since: string,
-  pageSize: number = WITHDRAWN_PAGE,
 ): Promise<Set<string>> {
-  // 印だけを引く口を持つ器ではそちらを使う（#5089）: 頁で読み切ると、内部ターンの往復を本文ごと読み、窓が古いほど本番で数秒〜十数秒かかったため
-  if (journal.withdrawnClientMessageIds !== undefined) {
-    return new Set(
-      await journal.withdrawnClientMessageIds({
-        since,
-        ...(conversationId === undefined ? {} : { conversationId }),
-      }),
-    );
-  }
-  const withdrawn = new Set<string>();
-  let after: JournalCursor | undefined;
-  for (;;) {
-    const page = await journal.listPage({
-      limit: pageSize,
-      order: 'asc',
-      types: ['exchange'],
-      with: ['self'],
+  return new Set(
+    await journal.withdrawnClientMessageIds({
       since,
-      ...(after === undefined ? {} : { after }),
-    });
-    for (const entry of page.entries) {
-      if (
-        entry.type === 'exchange' &&
-        (conversationId === undefined || entry.conversationId === conversationId) &&
-        entry.withdrawnClientMessageId !== undefined
-      ) {
-        withdrawn.add(entry.withdrawnClientMessageId);
-      }
-    }
-    // 終端は `next === null` だけで決める: 短い頁・空の頁は読めない行を捨てた結果でありうるため
-    if (page.next === null) return withdrawn;
-    if (after?.id === page.next.id) {
-      throw new Error('取り下げの印を読む頁の継続点が進まない（ストアが `after` を守っていない）');
-    }
-    after = page.next;
-  }
+      ...(conversationId === undefined ? {} : { conversationId }),
+    }),
+  );
 }
 
 /**
@@ -249,7 +216,7 @@ type WithdrawnLookup =
   { kind: 'ok'; ids: ReadonlySet<string> } | { kind: 'unknown'; reason: string };
 
 export async function lookupWithdrawnForMessages(
-  journal: Pick<JournalStore, 'listPage' | 'withdrawnClientMessageIds'>,
+  journal: Pick<JournalStore, 'withdrawnClientMessageIds'>,
   conversationId: string | undefined,
   messages: readonly Pick<ConversationMessage, 'role' | 'at' | 'clientMessageId'>[],
 ): Promise<WithdrawnLookup> {

@@ -151,6 +151,7 @@ export { verifyJournalStoreDeletedConversationContract } from './journal-deleted
 export { verifyJournalStoreWithdrawnContract } from './journal-withdrawn-contract.js';
 export { verifyJournalStoreToolUseCountContract } from './journal-tool-use-count-contract.js';
 export { verifyJournalStoreConversationIdsAfterContract } from './journal-conversation-ids-after-contract.js';
+export { verifyJournalStoreConversationPrefixContract } from './journal-conversation-prefix-contract.js';
 export { verifyJournalStoreOrderContract } from './journal-order-with-contract.js';
 export { verifyConversationPageContract } from './conversation-page-contract.js';
 export { verifyJournalStoreQueryEdgeContract } from './journal-query-edge-contract.js';
@@ -189,8 +190,10 @@ export { wrapJournalStore } from './journal-wrap.js';
 export { verifyJournalStorePageContract } from './journal-page-contract.js';
 export {
   conversationIdsAfterFromPages,
+  conversationIdsWithPrefixFromPages,
   countToolUsesByActorFromPages,
   scanJournalPages,
+  withdrawnClientMessageIdsFromPages,
 } from './journal-scan.js';
 export {
   describeSelectionsViolation,

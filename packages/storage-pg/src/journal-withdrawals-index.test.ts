@@ -71,7 +71,7 @@ describe('ensureJournalWithdrawalsIndex（#5089）', () => {
         },
       }),
     );
-    const ids = await logged.journal.withdrawnClientMessageIds?.({
+    const ids = await logged.journal.withdrawnClientMessageIds({
       since: new Date(BASE).toISOString(),
     });
     expect([...(ids ?? [])].sort()).toEqual(
@@ -142,7 +142,7 @@ describe('PgJournalStore.withdrawnClientMessageIds（#5089）', () => {
       hiddenCount: 1,
     });
 
-    const ids = await stores.journal.withdrawnClientMessageIds?.({
+    const ids = await stores.journal.withdrawnClientMessageIds({
       since: '1970-01-01T00:00:00.000Z',
     });
 
@@ -157,7 +157,7 @@ describe('PgJournalStore.withdrawnClientMessageIds（#5089）', () => {
     const before = (await client.query<{ jit: string }>(`select current_setting('jit') as jit`))
       .rows[0]?.jit;
 
-    await logged.journal.withdrawnClientMessageIds?.({ since: '1970-01-01T00:00:00.000Z' });
+    await logged.journal.withdrawnClientMessageIds({ since: '1970-01-01T00:00:00.000Z' });
 
     const setAt = queries.findIndex((text) => text.includes(`set_config('jit', 'off',`));
     const selectAt = queries.findIndex((text) => text.includes(`'withdrawnClientMessageId'`));
@@ -177,7 +177,7 @@ describe('PgJournalStore.withdrawnClientMessageIds（#5089）', () => {
     });
     const stores = createPgStoresFromDb(db);
 
-    const ids = await stores.journal.withdrawnClientMessageIds?.({
+    const ids = await stores.journal.withdrawnClientMessageIds({
       since: '1970-01-01T00:00:00.000Z',
     });
 

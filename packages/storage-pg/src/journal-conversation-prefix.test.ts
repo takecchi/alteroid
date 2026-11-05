@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { lookupConversation, type JournalStore } from '@alteroid/core';
+import {
+  conversationIdsWithPrefixFromPages,
+  lookupConversation,
+  type JournalStore,
+} from '@alteroid/core';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb } from './index.js';
 import { journal } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-// 会話 id の確かめ（lookupConversation）の見つからない経路が、DB で前方一致を集める口（conversationIdsWithPrefix）を使っても、
-// 人間との往復を本文ごと頁で読み切る今までの道と同じ答え（候補・その並び・それより多いか）を返すこと
+// DB で前方一致を集める口（conversationIdsWithPrefix）が、人間との往復を本文ごと頁で読み切る写し（conversationIdsWithPrefixFromPages）と
+// 同じ答え（会話 id・その並び）を返し、会話 id の確かめ（lookupConversation）の見つからない経路の候補になること。
+// 型の合わない行を含む DB 固有の揃い方を測る（口の共通の契約は verifyJournalStoreConversationPrefixContract）
 
 let client: TestDbHandle;
 let db: Db;
@@ -23,7 +28,7 @@ afterEach(async () => {
 
 type Store = ReturnType<typeof createPgStoresFromDb>;
 
-/** 頁で読み切る今までの道: 前方一致の口を持たない器として見せる */
+/** 頁で読み切る写しの材料: `listPage` だけを持つ器として見せる */
 function pagesOnly(store: Store['journal']): Pick<JournalStore, 'listPage'> {
   return { listPage: (query) => store.listPage(query) };
 }
@@ -70,7 +75,7 @@ async function seed(stores: Store): Promise<void> {
 }
 
 describe('lookupConversation の前方一致（conversationIdsWithPrefix）', () => {
-  it('⭐ 候補・その並び・上限を超えたか・在るかが、頁で読み切る道と同じ', async () => {
+  it('⭐ 前方一致の会話 id とその並び・上限が、頁で読み切る写しと同じ', async () => {
     const stores = createPgStoresFromDb(db);
     await seed(stores);
 
@@ -83,9 +88,10 @@ describe('lookupConversation の前方一致（conversationIdsWithPrefix）', ()
       'ffff',
       '',
     ]) {
-      const viaDb = await lookupConversation(stores.journal, given);
-      const viaPages = await lookupConversation(pagesOnly(stores.journal), given);
-      expect({ given, ...viaDb }).toEqual({ given, ...viaPages });
+      const query = { prefix: given, limit: 6 };
+      const viaDb = await stores.journal.conversationIdsWithPrefix(query);
+      const viaPages = await conversationIdsWithPrefixFromPages(pagesOnly(stores.journal), query);
+      expect({ given, ids: viaDb }).toEqual({ given, ids: viaPages });
     }
   });
 
@@ -113,7 +119,7 @@ describe('lookupConversation の前方一致（conversationIdsWithPrefix）', ()
     );
     await seed(createPgStoresFromDb(db));
 
-    const matched = await logged.journal.conversationIdsWithPrefix?.({
+    const matched = await logged.journal.conversationIdsWithPrefix({
       prefix: 'bf63fd3d',
       limit: 6,
     });

@@ -14,6 +14,7 @@ import {
   toMessage,
 } from './conversation.js';
 import type { Exchange } from './conversation.js';
+import { withdrawnClientMessageIdsFromPages } from './journal-scan.js';
 import type { JournalEntry } from './schema.js';
 import { createMemoryStores, dropLastRowPerPage } from './testing.js';
 
@@ -856,6 +857,7 @@ describe('継続点つきの一覧は、継続点より新しい往復を頁送�
       },
       get: journal.get.bind(journal),
       conversationIdsAfter: journal.conversationIdsAfter.bind(journal),
+      withdrawnClientMessageIds: journal.withdrawnClientMessageIds.bind(journal),
     };
     const ids: string[] = [];
     let cursor: { id: string; at: string } | undefined;
@@ -917,7 +919,7 @@ describe('読めない行を捨てて短くなった頁でも、終端を件数�
     expect(page.next).not.toBeNull();
   });
 
-  it('readWithdrawnClientMessageIds: 短い頁で止めず、次の頁の取り下げの印まで読む', async () => {
+  it('withdrawnClientMessageIdsFromPages: 短い頁で止めず、次の頁の取り下げの印まで読む', async () => {
     const stores = createMemoryStores();
     const mark = (conversationId: string, withdrawn?: string) =>
       stores.journal.append({
@@ -934,24 +936,18 @@ describe('読めない行を捨てて短くなった頁でも、終端を件数�
     await mark('c1');
     const { journal } = dropLastRowPerPage(stores);
 
-    const withdrawn = await readWithdrawnClientMessageIds(
+    const withdrawn = await withdrawnClientMessageIdsFromPages(
       journal,
-      'c1',
-      '1970-01-01T00:00:00.000Z',
+      { since: '1970-01-01T00:00:00.000Z', conversationId: 'c1' },
       2,
     );
 
-    expect([...withdrawn]).toEqual(['cm-late']);
+    expect(withdrawn).toEqual(['cm-late']);
   });
 
-  it('⭐ readWithdrawnClientMessageIds: 印だけを引く口を持つ器では、その口に since と会話を渡し、頁で読み切らない（#5089）', async () => {
+  it('⭐ readWithdrawnClientMessageIds: 印だけを引く口に since と会話を渡す（#5089）', async () => {
     const calls: { since: string; conversationId?: string }[] = [];
-    let pages = 0;
     const journal = {
-      listPage: () => {
-        pages += 1;
-        return Promise.resolve({ entries: [], next: null });
-      },
       withdrawnClientMessageIds: (query: { since: string; conversationId?: string }) => {
         calls.push(query);
         return Promise.resolve(['cm-1', 'cm-2', 'cm-1']);
@@ -967,6 +963,5 @@ describe('読めない行を捨てて短くなった頁でも、終端を件数�
       { since: '2026-10-01T00:00:00.000Z', conversationId: 'c1' },
       { since: '2026-10-02T00:00:00.000Z' },
     ]);
-    expect(pages).toBe(0);
   });
 });

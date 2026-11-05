@@ -30,7 +30,7 @@ describe('日誌の器の包み（wrapJournalStore, #5140）', () => {
     const inner = new PrivateFieldStore();
     const wrapped = wrapJournalStore(inner as unknown as JournalStore, {});
 
-    expect(await wrapped.conversationIdsWithPrefix?.({ prefix: 'conv-a', limit: 5 })).toEqual([
+    expect(await wrapped.conversationIdsWithPrefix({ prefix: 'conv-a', limit: 5 })).toEqual([
       'conv-a',
     ]);
     expect((wrapped as unknown as PrivateFieldStore).futurePort()).toBe('ids:2');
