@@ -1000,6 +1000,171 @@ function renderMemoryFrontmatterSetResult(args: {
   return `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${aftermath}`;
 }
 
+type MemoryWriteWritten = Awaited<ReturnType<Stores['persona']['write']>>;
+
+// `memory_write` のスラッグの断り（無ければ null）
+function describeMemoryWriteSlugViolation(slug: string): string | null {
+  if (!memorySlugSchema.safeParse(slug).success) {
+    return `記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`;
+  }
+  return null;
+}
+
+// 版なしで既存の文書は書けない: 全文置換は読んだ時点の版を前提にし、読んでから書くまでがターンをまたぐこともあるため
+function describeMemoryWriteMissingVersion(
+  slug: string,
+  before: MemoryMoveDocument | null,
+  baseVersion: string | undefined,
+): string | null {
+  if (before !== null && baseVersion === undefined) {
+    return (
+      `記憶 ${slug} は既に在る。全文を書き直すには、先に memory_read slug=${slug} で読み、` +
+      '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+      '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**'
+    );
+  }
+  return null;
+}
+
+// 版つきで書く。競合（MemoryConflictError）だけを断りにして返し、ほかの失敗はそのまま投げる
+async function writeMemoryDocument(args: {
+  stores: Stores;
+  slug: string;
+  content: string;
+  before: MemoryMoveDocument | null;
+  baseVersion: string | undefined;
+}): Promise<{ kind: 'written'; written: MemoryWriteWritten } | MemoryMoveRefusal> {
+  const { stores, slug, content, before, baseVersion } = args;
+  let written;
+  try {
+    written = await stores.persona.write(slug, content, {
+      ifMatch: before === null ? (baseVersion ?? null) : baseVersion!,
+    });
+  } catch (error) {
+    if (error instanceof MemoryConflictError) {
+      return { kind: 'refused', body: describeMemoryConflict(slug, '全文置換', error.current) };
+    }
+    throw error;
+  }
+  return { kind: 'written', written };
+}
+
+// 書いた後の日誌（全文置換）
+async function journalMemoryWrite(args: {
+  stores: Stores;
+  slug: string;
+  cause: 'distill' | 'clone';
+  before: MemoryMoveDocument | null;
+  written: MemoryWriteWritten;
+  summary: string;
+}): Promise<void> {
+  const { stores, slug, cause, before, written, summary } = args;
+  await appendJournalOrThrow(
+    'memory_write',
+    stores.journal,
+    {
+      type: 'memory_update',
+      slug,
+      cause,
+      action: 'write',
+      bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+      bytesAfter: Buffer.byteLength(written.content, 'utf8'),
+      summary,
+    },
+    'act-completed',
+  );
+}
+
+// 書く → 書いた後の記憶を読み直す → 日誌、の段。競合の断りは書く段だけから出る
+async function persistMemoryWrite(args: {
+  stores: Stores;
+  slug: string;
+  content: string;
+  summary: string;
+  cause: 'distill' | 'clone';
+  before: MemoryMoveDocument | null;
+  baseVersion: string | undefined;
+}): Promise<
+  | { kind: 'persisted'; written: MemoryWriteWritten; memoryAfter: readonly MemoryPart[] }
+  | MemoryMoveRefusal
+> {
+  const { stores, slug, content, summary, cause, before, baseVersion } = args;
+  const outcome = await writeMemoryDocument({ stores, slug, content, before, baseVersion });
+  if (outcome.kind === 'refused') return outcome;
+  const { written } = outcome;
+  const memoryAfter = await stores.persona.documents();
+  await journalMemoryWrite({ stores, slug, cause, before, written, summary });
+  return { kind: 'persisted', written, memoryAfter };
+}
+
+// 新規作成は「新規作成」を床の行の1回だけにする: 「更新した」と言わず、差分の要約にも同じ語を重ねない
+function renderMemoryWriteHeadline(
+  slug: string,
+  before: MemoryMoveDocument | null,
+  written: MemoryWriteWritten,
+): string {
+  if (before === null) {
+    return `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`;
+  }
+  return `記憶 ${slug} を更新した。\n\n${describeMemoryWriteDiff(before.content, written.content)}`;
+}
+
+// トークンの差（出さないときは空文字列）
+function renderMemoryWriteTokenDiff(
+  before: MemoryMoveDocument | null,
+  written: MemoryWriteWritten,
+): string {
+  const tokenDiff = describeTokenDiff(before === null ? null : before.content, written.content);
+  return tokenDiff === null ? '' : `\n${tokenDiff}`;
+}
+
+// 床・再注入の見込み・会話の伸び、を空行でつないだ後ろ半分
+function renderMemoryWriteAftermath(args: {
+  context: ToolContext;
+  slug: string;
+  before: MemoryMoveDocument | null;
+  memoryBefore: readonly MemoryPart[];
+  memoryAfter: readonly MemoryPart[];
+  written: MemoryWriteWritten;
+}): string {
+  const { context, slug, before, memoryBefore, memoryAfter, written } = args;
+  const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, before === null);
+  const reinjection = describeMemoryReinjectionEstimate(
+    [written],
+    memoryAfter,
+    seenBefore(slug, before),
+  );
+  const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
+    written.content,
+  ]);
+  return `${floor}\n\n${reinjection}\n\n${growth}`;
+}
+
+// 書けたときの応答の全体
+function renderMemoryWriteResult(args: {
+  context: ToolContext;
+  slug: string;
+  before: MemoryMoveDocument | null;
+  memoryBefore: readonly MemoryPart[];
+  memoryAfter: readonly MemoryPart[];
+  written: MemoryWriteWritten;
+}): string {
+  const { context, slug, before, memoryBefore, memoryAfter, written } = args;
+  const aftermath = renderMemoryWriteAftermath({
+    context,
+    slug,
+    before,
+    memoryBefore,
+    memoryAfter,
+    written,
+  });
+  return (
+    renderMemoryWriteHeadline(slug, before, written) +
+    renderMemoryWriteTokenDiff(before, written) +
+    `\n\n${aftermath}\n\n${versionLine(written.content)}`
+  );
+}
+
 export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, memoryCause } = shared;
   return [
@@ -1130,9 +1295,8 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ slug, content, summary, base_version: baseVersion }) => {
-        if (!memorySlugSchema.safeParse(slug).success) {
-          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
-        }
+        const slugViolation = describeMemoryWriteSlugViolation(slug);
+        if (slugViolation !== null) return text(slugViolation);
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '全文置換');
         if (denial !== null) return text(denial);
@@ -1140,70 +1304,27 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           stores.persona.read(slug),
           stores.persona.documents(),
         ]);
-        // 版なしで既存の文書は書けない: 全文置換は読んだ時点の版を前提にし、読んでから書くまでがターンをまたぐこともあるため
-        if (before !== null && baseVersion === undefined) {
-          return text(
-            `記憶 ${slug} は既に在る。全文を書き直すには、先に memory_read slug=${slug} で読み、` +
-              '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
-              '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは書けない）。**何も書いていない。**',
-          );
-        }
-        let written;
-        try {
-          written = await stores.persona.write(slug, content, {
-            ifMatch: before === null ? (baseVersion ?? null) : baseVersion!,
-          });
-        } catch (error) {
-          if (error instanceof MemoryConflictError) {
-            return text(describeMemoryConflict(slug, '全文置換', error.current));
-          }
-          throw error;
-        }
-        const memoryAfter = await stores.persona.documents();
-        await appendJournalOrThrow(
-          'memory_write',
-          stores.journal,
-          {
-            type: 'memory_update',
-            slug,
-            cause,
-            action: 'write',
-            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(written.content, 'utf8'),
-            summary,
-          },
-          'act-completed',
-        );
-        const diff = describeMemoryWriteDiff(
-          before === null ? null : before.content,
-          written.content,
-        );
-        const floor = memoryFloorNote(
-          memoryBefore,
-          memoryAfter,
+        const versionViolation = describeMemoryWriteMissingVersion(slug, before, baseVersion);
+        if (versionViolation !== null) return text(versionViolation);
+        const persisted = await persistMemoryWrite({
+          stores,
           slug,
-          written.content,
-          before === null,
-        );
-        const reinjection = describeMemoryReinjectionEstimate(
-          [written],
-          memoryAfter,
-          seenBefore(slug, before),
-        );
-        const growth = memorySessionGrowthNote(memoryBefore, memoryAfter, context.runtime?.(), [
-          written.content,
-        ]);
-        const tokenDiff = describeTokenDiff(
-          before === null ? null : before.content,
-          written.content,
-        );
-        // 新規作成は「新規作成」を床の行の1回だけにする: 「更新した」と言わず、差分の要約にも同じ語を重ねない
+          content,
+          summary,
+          cause,
+          before,
+          baseVersion,
+        });
+        if (persisted.kind === 'refused') return text(persisted.body);
         return text(
-          (before === null
-            ? `記憶 ${slug} を作った（${written.content.length.toLocaleString('en-US')} 文字）。`
-            : `記憶 ${slug} を更新した。\n\n${diff}`) +
-            (tokenDiff === null ? '' : `\n${tokenDiff}`) +
-            `\n\n${floor}\n\n${reinjection}\n\n${growth}\n\n${versionLine(written.content)}`,
+          renderMemoryWriteResult({
+            context,
+            slug,
+            before,
+            memoryBefore,
+            memoryAfter: persisted.memoryAfter,
+            written: persisted.written,
+          }),
         );
       },
     ),
