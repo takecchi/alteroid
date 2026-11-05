@@ -249,7 +249,10 @@ describe('添付の期限掃除の件数の報告（#5384）', () => {
     const { lines } = captureStderr();
     const counts = [2, 0];
     const stores = {
-      attachments: { prune: () => Promise.resolve(counts.shift() ?? 0) },
+      attachments: {
+        prune: () => Promise.resolve(counts.shift() ?? 0),
+        sweepOrphanBlobs: () => Promise.resolve(undefined),
+      },
     } as unknown as Parameters<typeof startAttachmentPruning>[0]['stores'];
     const pruner = startAttachmentPruning({
       stores,

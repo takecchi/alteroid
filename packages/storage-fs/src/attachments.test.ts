@@ -62,6 +62,10 @@ describe('FsAttachmentStore', () => {
     });
   });
 
+  it('blob の置き場が無いので、控えの無い中身の掃除は何もせず undefined を返す', async () => {
+    await expect(store.sweepOrphanBlobs()).resolves.toBeUndefined();
+  });
+
   it('<id>/meta.json と <id>/data の形で置く', async () => {
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
     expect((await readdir(join(dir, 'attachments', meta.id))).sort()).toEqual([
