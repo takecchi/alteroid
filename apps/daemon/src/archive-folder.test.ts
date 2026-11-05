@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   createMemoryStores,
+  fakeManagerPool,
   type ArchiveEntry,
   type ManagerPool,
   type Stores,
@@ -25,27 +26,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const FAR_FUTURE = () => new Date(Date.now() + ARCHIVE_FOLD_GRACE_MS + 60_000);
 
-const noRunningManagers: Pick<ManagerPool, 'runningManagerOwning'> = {
-  runningManagerOwning: () => undefined,
-};
+const noRunningManagers = fakeManagerPool();
 
-function fakeManagers(
-  runningOwners: Map<string, string>,
-): Pick<ManagerPool, 'runningManagerOwning'> {
-  return {
+function fakeManagers(runningOwners: Map<string, string>): ManagerPool {
+  return fakeManagerPool({
     runningManagerOwning: (archiveId) => runningOwners.get(archiveId),
-  };
+  });
 }
 
-function fakeManagersWithPinning(
-  ownedIds: readonly string[],
-  managerId: string,
-): Pick<ManagerPool, 'runningManagerOwning' | 'runningManagerPinning'> {
+function fakeManagersWithPinning(ownedIds: readonly string[], managerId: string): ManagerPool {
   const tail = ownedIds.at(-1);
-  return {
+  return fakeManagerPool({
     runningManagerOwning: (archiveId) => (ownedIds.includes(archiveId) ? managerId : undefined),
     runningManagerPinning: (archiveId) => (archiveId === tail ? managerId : undefined),
-  };
+  });
 }
 
 function assertInvariant(result: FoldArchiveOnceResult): void {

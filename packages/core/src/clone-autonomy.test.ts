@@ -8,6 +8,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, setup, waitFor, waitForExpect, waitForTerminal } from './clone-test-harness.js';
 import type { Setup } from './clone-test-harness.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 describe('クローン — 自律（人間以外の起点）', () => {
   const inputsOf = (s: Setup) => () => (s.calls[0]?.inputs ?? []).join('\n');
@@ -123,46 +124,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
       updatedAt: now,
       waiting: [],
     });
-    const pool: ManagerPool = {
-      start: () => {
-        throw new Error('not implemented');
-      },
-      send: () => {
-        throw new Error('not implemented');
-      },
-      abort: () => {
-        throw new Error('not implemented');
-      },
+    const pool: ManagerPool = fakeManagerPool({
       list: () => Promise.resolve([summaryOf('mgr-alive', true), summaryOf('mgr-dead', false)]),
-      denials: () => [],
-      pushHealthOf: () => undefined,
-      runnerBacklog: () => [],
-      runnerIdOf: () => Promise.resolve(undefined),
-      runners: () => {
-        throw new Error('not implemented');
-      },
-      transcript: () => {
-        throw new Error('not implemented');
-      },
-      unpushedWork: () => {
-        throw new Error('not implemented');
-      },
-      runningManagerOwning: () => undefined,
-      restore: () => Promise.resolve([]),
-      resumeStoppedByUsage: () => Promise.resolve([]),
-      reattachRunner: () => Promise.resolve(),
-      relocateFrom: () => {
-        throw new Error('not implemented');
-      },
-      vacate: () => {
-        throw new Error('not implemented');
-      },
-      probeTurnEnds: () => Promise.resolve(),
-      flushWithheldReports: () => Promise.resolve(),
-      settleStalledUsageWakes: () => Promise.resolve([]),
-      renotifyStalledDenials: () => Promise.resolve(),
-      stop: () => Promise.resolve(),
-    };
+    });
 
     const clone = createClone({
       stores,

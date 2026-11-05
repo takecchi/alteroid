@@ -45,6 +45,7 @@ import {
   createTokenPoolService,
   DEFAULT_SSE_HEARTBEAT_MS,
   droppedTraceLedgerSince,
+  fakeManagerPool,
   fingerprintOf,
   JOURNAL_ENTRY_TYPES,
   mcpServersFingerprintOf,
@@ -126,7 +127,7 @@ function fakeClone() {
   const pluginLoadByRunnerId = new Map<string, RunnerPluginLoadObservation>();
   let clonePluginLoad: ClonePluginLoadObservation | undefined;
 
-  const managers: ManagerPool = {
+  const managers: ManagerPool = fakeManagerPool({
     async start() {
       throw new Error('この偽クローンからはマネージャーを起こさない');
     },
@@ -218,7 +219,7 @@ function fakeClone() {
     },
     async renotifyStalledDenials() {},
     async stop() {},
-  };
+  });
 
   const clone: CloneHost = {
     // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）

@@ -8,6 +8,7 @@ import type { RunnerLiveness } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 // 「戻っていた担当の知らせを畳む」のクローン側の2組（枠の知らせ `#quotaFoldNoticeFor` / `#foldRecoveredQuotaNotice`、
 // 枠以外の知らせ `#recoveredNoticeFoldFor` / `#foldRecoveredNotice`）の、入力と出力のいまの違いを固定する。
@@ -39,18 +40,8 @@ function summary(overrides: Partial<ManagerSummary> = {}): ManagerSummary {
 }
 
 function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
-  const notImplemented = () => {
-    throw new Error('not implemented');
-  };
-  return {
-    start: notImplemented,
-    send: notImplemented,
-    abort: notImplemented,
+  return fakeManagerPool({
     list,
-    denials: () => [],
-    pushHealthOf: () => undefined,
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
     runners: (): Promise<RunnerFleetOverview> =>
       Promise.resolve({
         runners: [
@@ -65,20 +56,7 @@ function stubPool(list: () => Promise<ManagerSummary[]>): ManagerPool {
         unassigned: [],
         daemonRevision: { status: 'unknown' as const, reason: 'テスト' },
       }),
-    transcript: notImplemented,
-    unpushedWork: notImplemented,
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: notImplemented,
-    vacate: notImplemented,
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
-  };
+  });
 }
 
 interface Boot {

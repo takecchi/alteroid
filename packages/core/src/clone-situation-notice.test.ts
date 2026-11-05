@@ -11,6 +11,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneMcpServer } from './tools.js';
 import type { ToolContext } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 interface Fake {
   fn: typeof sdkQuery;
@@ -89,21 +90,11 @@ function stubPool(input: {
   managers: ManagerSummary[] | (() => never);
   runnerStates: RunnerLiveness[] | (() => never);
 }): ManagerPool {
-  const notImplemented = () => {
-    throw new Error('not implemented');
-  };
-  return {
-    start: notImplemented,
-    send: notImplemented,
-    abort: notImplemented,
+  return fakeManagerPool({
     list: () =>
       typeof input.managers === 'function'
         ? Promise.reject(new Error('list() が壊れている（実測を模す）'))
         : Promise.resolve(input.managers),
-    denials: () => [],
-    pushHealthOf: () => undefined,
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
     runners: (): Promise<RunnerFleetOverview> =>
       typeof input.runnerStates === 'function'
         ? Promise.reject(new Error('runners() が壊れている（実測を模す）'))
@@ -118,20 +109,7 @@ function stubPool(input: {
             unassigned: [],
             daemonRevision: { status: 'unknown' as const, reason: 'テスト' },
           }),
-    transcript: notImplemented,
-    unpushedWork: notImplemented,
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: notImplemented,
-    vacate: notImplemented,
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
-  };
+  });
 }
 
 function bootClone(

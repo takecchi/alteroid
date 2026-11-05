@@ -3,13 +3,14 @@ import { describe, expect, it } from 'vitest';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 function minimalManagerPool(): { pool: ManagerPool; managers: ManagerSummary[] } {
   const managers: ManagerSummary[] = [];
   const notUsedHere = (name: string) => () => {
     throw new Error(`この歯では ManagerPool.${name}() を使わない想定である`);
   };
-  const pool: ManagerPool = {
+  const pool: ManagerPool = fakeManagerPool({
     async start(input) {
       const summary: ManagerSummary = {
         managerId: `mgr-${managers.length + 1}`,
@@ -61,7 +62,7 @@ function minimalManagerPool(): { pool: ManagerPool; managers: ManagerSummary[] }
       'renotifyStalledDenials',
     ) as ManagerPool['renotifyStalledDenials'],
     stop: notUsedHere('stop') as ManagerPool['stop'],
-  };
+  });
   return { pool, managers };
 }
 

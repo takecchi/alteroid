@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 import { RUNNER_ROUTE_UNREPORTED_LABEL } from './manager-models.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -26,48 +27,7 @@ const FAKE_OAUTH = 'sk-fake-oauth-clone-0001';
 const FAKE_AUTH = 'sk-fake-auth-clone-0002';
 
 function poolWith(): ManagerPool {
-  const base: ManagerPool = {
-    start: () => {
-      throw new Error('not implemented');
-    },
-    send: () => {
-      throw new Error('not implemented');
-    },
-    abort: () => {
-      throw new Error('not implemented');
-    },
-    list: () => Promise.resolve([]),
-    denials: () => [],
-    pushHealthOf: () => undefined,
-    runnerBacklog: () => [],
-    runnerIdOf: () => Promise.resolve(undefined),
-    runners: () => {
-      throw new Error('not implemented');
-    },
-    transcript: () => {
-      throw new Error('not implemented');
-    },
-    unpushedWork: () => {
-      throw new Error('not implemented');
-    },
-    runningManagerOwning: () => undefined,
-    restore: () => Promise.resolve([]),
-    resumeStoppedByUsage: () => Promise.resolve([]),
-    reattachRunner: () => Promise.resolve(),
-    relocateFrom: () => {
-      throw new Error('not implemented');
-    },
-    vacate: () => {
-      throw new Error('not implemented');
-    },
-    probeTurnEnds: () => Promise.resolve(),
-    flushWithheldReports: () => Promise.resolve(),
-    settleStalledUsageWakes: () => Promise.resolve([]),
-    renotifyStalledDenials: () => Promise.resolve(),
-    stop: () => Promise.resolve(),
-  };
-  return {
-    ...base,
+  return fakeManagerPool({
     runners: () =>
       Promise.resolve({
         runners: [
@@ -86,7 +46,7 @@ function poolWith(): ManagerPool {
         : runnerId === 'r2'
           ? []
           : undefined,
-  };
+  });
 }
 
 function boot(childEnvBase: NodeJS.ProcessEnv, credentials?: () => Record<string, string>) {

@@ -6,6 +6,7 @@ import { createProfileService } from './profile-service.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
+import { fakeManagerPool } from './manager-pool.test-support.js';
 
 interface Harness {
   stores: Stores;
@@ -20,7 +21,7 @@ function harness(): Harness {
   const denied = new Map<string, ManagerDenial[]>();
   let started = 0;
 
-  const managers: ManagerPool = {
+  const managers: ManagerPool = fakeManagerPool({
     async start(input) {
       started += 1;
       const summary: ManagerSummary = {
@@ -92,7 +93,7 @@ function harness(): Harness {
     },
     async renotifyStalledDenials() {},
     async stop() {},
-  };
+  });
 
   const runners = {
     async list() {
