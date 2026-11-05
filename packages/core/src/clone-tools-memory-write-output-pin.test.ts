@@ -1452,6 +1452,215 @@ describe('memory_write の出力と呼んだあとの状態の固定（場面ご
   });
 
   it('場面が狙った分岐を通っている（固定値が別の分岐へ流れていないことの目印）', () => {
-    expect(Object.keys(actual)).toEqual(ALL_KEYS);
+    const text = (key: string): string => actual[key]?.output.text ?? '';
+    const journal = (key: string): Record<string, unknown>[] => actual[key]?.journal ?? [];
+    const ops = (key: string): string[] => (actual[key]?.calls ?? []).map((entry) => entry.op);
+    const writeCall = (key: string): PinnedCall | undefined =>
+      actual[key]?.calls.find((entry) => entry.op === 'persona.write');
+    const doc = (key: string, slug: string): string => actual[key]?.memory[slug]?.content ?? '';
+    const READ_ALL = ['persona.read', 'persona.documents'];
+    const WRITE_ALL = [
+      'persona.read',
+      'persona.documents',
+      'persona.write',
+      'persona.documents',
+      'journal.append',
+    ];
+
+    // スラッグの検査: ストアを1つも呼ばない
+    for (const key of ['slug-invalid#1', 'slug-invalid#2', 'slug-invalid#3', 'slug-invalid#4']) {
+      expect(text(key), key).toContain('記憶のスラッグが不正');
+      expect(ops(key), key).toEqual([]);
+    }
+    expect(text('slug-invalid#5')).toContain('記憶のスラッグが不正');
+    expect(ops('slug-invalid#6')).toEqual([]);
+
+    // 新規作成の文・床の注記
+    expect(text('create-premise-first')).toContain('記憶 about-me を作った（105 文字）。');
+    expect(text('create-premise-first')).toContain('⭐ 新規作成: about-me（区分: premise）');
+    expect(text('create-premise-first')).toContain('いま最も大きい premise: about-me');
+    expect(text('create-premise-first')).toContain('現在値である');
+    expect(text('create-premise-first')).not.toContain('消えた見出し');
+    expect(text('create-premise-first')).not.toContain('本文の数字・識別子の増減');
+    expect(ops('create-premise-first')).toEqual(WRITE_ALL);
+    expect(writeCall('create-premise-first')?.args.ifMatch).toBeNull();
+    expect(journal('create-premise-first')[0]).toMatchObject({
+      type: 'memory_update',
+      action: 'write',
+      cause: 'clone',
+      bytesBefore: 0,
+      summary: '作った',
+    });
+    expect(text('create-premise-with-others')).toContain('いま最も大きい premise: about-me');
+    expect(text('create-fact')).toContain('新規作成: facts（区分: fact）。');
+    expect(text('create-fact')).not.toContain('⭐');
+    expect(text('create-fact')).toContain('facts（fact・目次1行）');
+    expect(text('create-indexed')).toContain('新規作成: work（区分: indexed）。');
+    expect(text('create-plain')).toContain('⭐ 新規作成: memo（区分: premise）');
+    expect(text('create-malformed')).toContain('⭐ 新規作成: broken（区分: premise）');
+    expect(text('create-content-forms#1')).toContain('記憶 no-newline を作った（10 文字）。');
+    expect(doc('create-content-forms#2', 'with-nul')).not.toContain('\u0000');
+    expect(text('create-content-forms#2')).toContain('記憶 with-nul を作った（9 文字）。');
+    expect(journal('create-content-forms#4')[0]?.bytesAfter).toBe(
+      Buffer.byteLength('# 日本語\nあいうえお 😀\n', 'utf8'),
+    );
+    expect(text('create-content-forms#5')).toContain('（1,506 文字）');
+
+    // 版の前提
+    expect(text('create-with-base-version#1')).toContain(
+      'いまその文書は無い（読んだ後に消された）',
+    );
+    expect(ops('create-with-base-version#1')).toEqual([
+      'persona.read',
+      'persona.documents',
+      'persona.write',
+    ]);
+    expect(writeCall('create-with-base-version#1')?.args.ifMatch).toBe(memoryVersion(ABOUT));
+    expect(ops('create-with-base-version#2')).toEqual(WRITE_ALL);
+    expect(text('update-needs-base#1')).toContain('は既に在る。全文を書き直すには');
+    expect(text('update-needs-base#1')).toContain('**何も書いていない。**');
+    expect(ops('update-needs-base#1')).toEqual(READ_ALL);
+    expect(text('update-needs-base#2')).toContain('その間に変わった');
+    expect(writeCall('update-needs-base#2')?.args.ifMatch).toBe('');
+    expect(writeCall('update-needs-base#3')?.args.ifMatch).toBe(memoryVersion(ABOUT));
+    expect(text('update-needs-base#3')).toContain('記憶 about-me を更新した。');
+    expect(text('update-needs-base#3')).not.toContain('⭐');
+
+    // 更新の文・差分・トークンの差
+    expect(text('update-same-content')).toContain('105 → 105 文字（+0）');
+    expect(text('update-same-content')).toContain('消えた見出し: なし。');
+    expect(text('update-same-content')).not.toContain('本文の数字・識別子の増減');
+    expect(text('update-same-content')).toContain('about-me（premise・カード（要旨＋節の目次））');
+    expect(text('update-text-only#1')).toContain('+3');
+    expect(text('update-text-only#2')).toContain('-7');
+    expect(text('update-text-only#2')).not.toContain('本文の数字・識別子の増減');
+    expect(text('update-tokens#1')).toContain('消えた: 42 / `id-7`。増えた: 43 / `id-8`。');
+    expect(text('update-tokens#2')).toContain('増えた: 99。');
+    expect(text('update-tokens#2')).not.toContain('消えた:');
+    expect(text('update-tokens#3')).toContain('消えた: 43。');
+    expect(text('update-tokens#3')).not.toContain('増えた:');
+    expect(text('update-tokens#4')).toContain('（ほか 2 件）');
+    expect(text('update-tokens#5')).toContain('（ほか 4 件）');
+    expect(text('update-headings#1')).toContain('消えた見出し（1 件）:\n- ## 節C');
+    expect(text('update-headings#2')).toContain('消えた見出し（2 件）:');
+    expect(text('update-headings#3')).toContain('消えた見出し: なし。');
+    expect(text('update-headings#5')).toContain('- ## 改めた節');
+    expect(text('update-headings-dup-stays#1')).toContain('消えた見出し: なし。');
+    expect(text('update-headings-dup-stays#2')).toContain('消えた見出し（1 件）:\n- # A');
+    expect(text('update-headings-many')).toContain('…ほか 25 件は省略');
+    expect(text('update-headings-many')).toContain('**残りを見る手はここに無い**');
+    expect(journal('update-text-only#1')[0]).toMatchObject({ bytesBefore: 187, bytesAfter: 196 });
+
+    // 区分の変更・順位・再注入の見込み
+    expect(text('update-kind-changes#1')).toContain('about-me（fact・目次1行）');
+    expect(text('update-kind-changes#1')).toContain('1. other: 224 文字');
+    expect(text('update-kind-changes#2')).not.toContain('premise の大きさの順位');
+    expect(text('update-kind-changes#3')).toContain('（区分: indexed）');
+    expect(text('update-kind-changes#3')).not.toContain('premise の大きさの順位');
+    expect(text('update-kind-changes#4')).toContain('premise の大きさの順位（大きい順、全 2 件）');
+    expect(text('update-kind-changes#5')).toContain('消えた見出し（3 件）');
+    expect(text('update-kind-changes#6')).toContain('消えた見出し（1 件）:\n- # メモ');
+    expect(text('update-only-premise#1')).toContain(
+      'premise の大きさの順位: いま premise はまだ無い。',
+    );
+    expect(text('update-only-premise#2')).not.toContain('premise の大きさの順位');
+    expect(text('update-premise-delta#1')).toContain('med（premise・カードの変わった範囲だけ）');
+    expect(text('update-premise-delta#2')).toContain('med（premise・カードの変わった範囲だけ）');
+    expect(text('update-premise-delta#3')).toContain('med（premise・カードの変わった範囲だけ）');
+    expect(text('update-premise-delta#4')).toContain('med（premise・カード（要旨＋節の目次））');
+    expect(text('ranking-omitted')).toContain(
+      '…ほか 3 件は省略（大きい順に 117 件だけ出した。全 120 件。',
+    );
+    expect(ops('ranking-omitted')).toEqual(WRITE_ALL);
+
+    // 床の注記
+    expect(text('floor-demoted#1')).toContain('2 件が1行に落ちている');
+    expect(text('floor-demoted#1')).toContain('⭐ 新規作成: big-new');
+    expect(text('floor-demoted#2')).toContain('2 件が1行に落ちている');
+    expect(text('floor-demoted#2')).not.toContain('⭐');
+    expect(text('floor-outline#1')).not.toContain('張り付いている');
+    expect(text('floor-outline#1')).not.toContain('切られなくなった');
+    expect(text('floor-outline#2')).toContain('張り付いている');
+    expect(text('floor-outline#2')).toContain('全 90 節のうち 68 節だけ');
+    expect(text('floor-outline#3')).toContain('切られなくなった');
+    expect(text('floor-outline#4')).toContain('予算 6,000 文字を越えた');
+    expect(text('floor-outline#5')).toContain('切られなくなった');
+    expect(text('floor-outline#5')).toContain('big-toc（fact・目次1行）');
+    expect(text('floor-outline-create')).toContain('big-new の節の目次が1文書あたりの予算');
+    expect(text('floor-outline-create')).not.toContain('big-toc の節の目次');
+
+    // runtime
+    expect(text('create-premise-first')).not.toContain('セッション構築時点との差）');
+    expect(text('runtime-grows#1')).toContain('増える見込み');
+    expect(text('runtime-grows#1')).toContain('+125%');
+    expect(text('runtime-grows#2')).toContain('セッション構築時点 100 文字 → いま 332 文字');
+    expect(text('runtime-zero')).toContain('割合は出せない');
+    expect(text('runtime-shrinks')).toContain('減る見込み');
+    expect(text('runtime-equal')).toContain('変わっていない。');
+
+    // 誰の走行か・保護
+    for (const key of ['guard#1', 'guard#2', 'guard#10']) {
+      expect(text(key), key).toContain('保護状態: human');
+      expect(ops(key), key).toEqual(['persona.protectionStatus']);
+    }
+    expect(journal('guard#3')[0]?.cause).toBe('distill');
+    expect(ops('guard#3')).toEqual(['persona.protectionStatus', ...WRITE_ALL]);
+    expect(ops('guard#4')).toEqual(['persona.protectionStatus', ...READ_ALL]);
+    expect(text('guard#4')).toContain('は既に在る。全文を書き直すには');
+    expect(text('guard#5')).toContain('保護状態: unknown');
+    expect(text('guard#6')).toContain('保護状態: unknown');
+    expect(ops('guard#7')).toEqual(WRITE_ALL);
+    expect(journal('guard#7')[0]?.cause).toBe('clone');
+    expect(ops('guard#8')).toEqual(WRITE_ALL);
+    expect(journal('guard#8')[0]?.cause).toBe('distill');
+    expect(actual['guard#9']?.output).toMatchObject({
+      thrown: true,
+      errorName: 'Error',
+      text: 'ALTEROID_MEMORY_GUARD の値が不正: bogus（使えるのは on / off。既定は on）',
+    });
+    expect(ops('guard#9')).toEqual([]);
+    expect(actual['guard#11']?.output.text).toBe('保護状態の読みが落ちた');
+
+    // 版の食い違い
+    expect(text('conflict#1')).toContain('（109 文字）');
+    expect(text('conflict#2')).toContain('（105 文字）');
+    expect(text('conflict#3')).toContain('（112 文字）');
+    expect(text('conflict#4')).toContain('いまその文書は無い（読んだ後に消された）');
+    for (const key of ['conflict#1', 'conflict#2', 'conflict#3', 'conflict#4']) {
+      expect(text(key), key).toContain('**何も書いていない**');
+      expect(actual[key]?.calls.at(-1)?.outcome, key).toMatch(/^threw MemoryConflictError/);
+      expect(journal(key), key).toEqual([]);
+    }
+    expect(writeCall('conflict#2')?.args.ifMatch).toBe('deadbeef');
+    expect(doc('conflict#3', 'a3')).toContain('別のターンが書いた');
+    expect(doc('conflict#4', 'a4')).toBe('');
+
+    // 例外
+    expect(actual['failures#1']?.output).toMatchObject({
+      thrown: true,
+      text: 'ストアが落ちた（write）',
+    });
+    expect(ops('failures#1')).toEqual(['persona.read', 'persona.documents', 'persona.write']);
+    expect(actual['failures#2']?.output.thrown).toBe(true);
+    expect(actual['failures#3']?.output.text).toBe('ストアが落ちた（read）');
+    expect(actual['failures#4']?.output.text).toBe('ストアが落ちた（documents）');
+    expect(doc('failures#4', 'f3')).toBe(ABOUT);
+    expect(actual['failures#5']?.output.text).toBe('ストアが落ちた（documents）');
+    expect(doc('failures#5', 'f4')).toBe(ABOUT.replace('残る', '残らない'));
+    expect(journal('failures#5')).toEqual([]);
+    for (const key of ['failures#6', 'failures#7']) {
+      expect(actual[key]?.output.errorName, key).toBe('JournalNotRecordedError');
+      expect(text(key).split('\n')[0], key).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
+      expect(journal(key), key).toEqual([]);
+      expect(ops(key), key).toEqual(WRITE_ALL);
+    }
+    expect(doc('failures#6', 'f5')).toBe(ABOUT.replace('残る', '残らない'));
+
+    // 日誌の行
+    expect(journal('journal-fields#1')[0]).toMatchObject({ bytesBefore: 33, bytesAfter: 12 });
+    expect(journal('journal-fields#2')[0]?.summary).toContain('\n2行目 ');
+    expect(journal('journal-fields#3')[0]).toMatchObject({ bytesBefore: 0, summary: '新規' });
+    expect(text('update-normalized#2')).toContain('105 → 105 文字（+0）');
+    expect(writeCall('update-normalized#2')?.args.contentChars).toBe(106);
   });
 });
