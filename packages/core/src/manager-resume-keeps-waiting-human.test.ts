@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerEvent,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
@@ -63,16 +60,10 @@ describe('resume の応答より先に届いた確認待ちを、resume 受理�
   function askingRunner(runnerId: string): RunnerClient {
     const sessions = new Map<string, RunnerManagerState>();
     let emit: ((event: RunnerEvent) => void) | undefined;
-    return {
+    return fakeRunnerClient({
       runnerId,
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
       async connect(onEvent) {
         emit = onEvent;
-      },
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
       },
       async resume(command): Promise<{ cwd: string }> {
         sessions.set(command.managerId, {
@@ -99,34 +90,13 @@ describe('resume の応答より先に届いた確認待ちを、resume 受理�
         // セッションが無ければ届かない（`#send` が resume へ入る）。
         return sessions.has(managerId);
       },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
-      },
       async stop(managerId) {
         sessions.delete(managerId);
       },
       async list() {
         return [...sessions.values()];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async profile(): Promise<RunnerProfileFingerprint | undefined> {
-        return undefined;
-      },
-      async setProfile(): Promise<RunnerProfileResult> {
-        return { ok: true };
-      },
-      async close() {
-        /* この試験群では使わない。 */
-      },
-    };
+    });
   }
 
   function runningJob(): Job {

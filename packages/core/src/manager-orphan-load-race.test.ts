@@ -4,7 +4,6 @@ import { createManagerPool } from './manager.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerManagerState,
   type RunnerResumeCommand,
@@ -37,45 +36,7 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => voi
 
 /** `list()` が常に `[]` を返すので、resume で立ったセッションの畳み直しは測れない（`trackingRunner` で測る）。 */
 function neverAliveRunner(runnerId = 'runner-primary'): RunnerClient {
-  return {
-    runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
-    async connect() {},
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
-    async stop() {},
-    async list() {
-      return [];
-    },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
-    async setProfile() {
-      return { ok: true as const };
-    },
-    async close() {},
-  };
+  return fakeRunnerClient({ runnerId });
 }
 
 function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void> }): {

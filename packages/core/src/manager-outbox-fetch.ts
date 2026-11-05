@@ -98,11 +98,11 @@ export async function fetchManagerOutbox(
   if (input.files.length === 0) return { attachments, rejected };
 
   const { runner } = input;
-  const open = runner.openPickupFile?.bind(runner);
+  const open = runner.openPickupFile.bind(runner);
   // 取りに行かないと決めたものも、退避先を消させる（#4925）: 消さないと runner の畳みが、取られない出し箱を上限まで待つ。失敗は握る
-  const remove = runner.deletePickupFile?.bind(runner);
+  const remove = runner.deletePickupFile.bind(runner);
   const removeAll = async (files: readonly RunnerOutboxFile[]): Promise<void> => {
-    if (remove === undefined || files.length === 0) return;
+    if (files.length === 0) return;
     await Promise.allSettled(
       files.map((file) =>
         remove('outbox', input.managerId, file.fileId, {
@@ -111,7 +111,7 @@ export async function fetchManagerOutbox(
       ),
     );
   };
-  if (!input.runnerNamesOutbox || open === undefined) {
+  if (!input.runnerNamesOutbox) {
     await removeAll(input.files);
     for (const file of input.files) {
       rejected.push({
@@ -201,7 +201,7 @@ type FetchOneOutcome =
   { ok: true; ref: AttachmentRef } | { ok: false; reason: string; neverFetch?: true };
 
 async function fetchOne(input: {
-  open: NonNullable<RunnerClient['openPickupFile']>;
+  open: RunnerClient['openPickupFile'];
   kind: RunnerPickupFileKind;
   managerId: string;
   file: RunnerOutboxFile;
@@ -528,8 +528,7 @@ const RESCUE_FETCH_FALLBACK_MEDIA_TYPE = 'application/octet-stream';
 export async function fetchRescueFile(
   input: FetchRescueFileInput,
 ): Promise<FetchRescueFileOutcome> {
-  const open = input.runner.openPickupFile?.bind(input.runner);
-  if (open === undefined) return { ok: false, reason: 'runner が取り出しの口を持っていない' };
+  const open = input.runner.openPickupFile.bind(input.runner);
   const timeoutMs = input.timeoutMs ?? outboxFetchDeadlineMs(input.file.size);
   const outcome = await fetchOne({
     open,

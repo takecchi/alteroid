@@ -5891,7 +5891,7 @@ class Pool implements ManagerPool {
     if (runner === null) return;
     await Promise.allSettled(
       targets.map(async ({ fileId, kind }) => {
-        await runner.deletePickupFile?.(kind, managerId, fileId, {
+        await runner.deletePickupFile(kind, managerId, fileId, {
           signal: AbortSignal.timeout(5000),
         });
       }),
@@ -6148,7 +6148,7 @@ class Pool implements ManagerPool {
         // #4924: 移った後の古い器からは取り込まない。退避先は、捨てる回も消させる（器の退避先と待ちの集合に積み残さない）
         if (this.#movedAwayFrom(record, fromRunnerId)) {
           const runner = await this.#runnerOrNull(fromRunnerId);
-          if (runner !== null && runner.deletePickupFile !== undefined) {
+          if (runner !== null) {
             for (const file of event.files) {
               await runner
                 .deletePickupFile('rescue', event.managerId, file.fileId, {

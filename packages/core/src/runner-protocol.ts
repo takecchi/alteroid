@@ -1563,9 +1563,10 @@ export interface RunnerClient {
   transcriptTail?(managerId: string, maxChars: number): Promise<string | null>;
   /**
    * 無ければ `undefined`（404・退避先が消えた）。取れなかった（接続断・期限切れ・非2xx）ときは投げる。
-   * 読む側が大きさを数えて途中で打ち切る。口を持たない実装は、呼び出し側が「取り出しの口を名乗っていない」として扱い、取れたことにしない。
+   * 読む側が大きさを数えて途中で打ち切る。取り出しの口を名乗らない器（`capabilities` に無い）へは、呼び出し側が取りに行かず、取れたことにしない。
+   * 試験の偽の既定（`fakeRunnerClient`）は、何も開けない（`undefined`）。
    */
-  openPickupFile?(
+  openPickupFile(
     kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,
@@ -1575,7 +1576,7 @@ export interface RunnerClient {
    * 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。
    * `rescue` は `rescue_files` の退避先（出し箱とは別の dir・別の掃除。#4863）。`rescue-files` を名乗らない器には `rescue` を呼ばない。
    */
-  deletePickupFile?(
+  deletePickupFile(
     kind: RunnerPickupFileKind,
     managerId: string,
     fileId: string,

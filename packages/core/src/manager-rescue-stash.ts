@@ -340,7 +340,7 @@ export class ManagerRescueStash {
       runner !== null &&
       this.#deps.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_RESCUE_FILES);
     const removeStaged = async (fileId: string): Promise<void> => {
-      if (runner === null || runner.deletePickupFile === undefined) return;
+      if (runner === null) return;
       await runner
         .deletePickupFile('rescue', managerId, fileId, { signal: AbortSignal.timeout(5000) })
         .catch(() => undefined);
