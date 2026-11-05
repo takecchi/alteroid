@@ -645,7 +645,13 @@ describe('クローン — ターンの失敗の跡', () => {
     const stores = failingJournalAppend(createMemoryStores(), '器が閉じている');
 
     const lines = await captureStderr(async () => {
-      const s = setup(undefined, stores, { failWith: `クエリが失敗した params=["${secret}"]` });
+      // 固定文を全文へ戻した理由の観測の行（turn_failed）は S1 が有効なときだけ書かれる
+      const s = setup(
+        undefined,
+        stores,
+        { failWith: `クエリが失敗した params=["${secret}"]` },
+        { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
+      );
       const { events: seen } = wireEvents(s.clone, 'conv-9');
       s.clone.post(humanMessage('やあ', 'conv-9'));
       await waitFor(() => seen.some((event) => event.type === 'error'), 'error イベントが届く');

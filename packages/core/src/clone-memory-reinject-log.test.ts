@@ -17,6 +17,9 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, wireEvents, waitForDone } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
+// 焼いた時点との差の載せ直し（S2）は本番の既定では無効。この試験は有効な動きを測るので明示する
+const COMPACTION_ENV = { ALTEROID_TOKEN_SAVING_COMPACTION: '1' };
+
 const SECRET_BODY = 'SECRET-BODY-MARKER';
 const SECRET_DESCRIPTION = 'SECRET-DESCRIPTION-MARKER';
 
@@ -63,7 +66,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
 
   it('⭐ 載せ直した回: 載せ直したこと・違った文書の slug と種類・文字数・全文書数が1行で残る', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -100,7 +103,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
 
   it('⭐ 載せ直さなかった回: 載せ直さなかったこと・文字数 0・全文書数が1行で残る', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -124,7 +127,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
 
   it('⭐ どちらの行にも記憶の本文・要旨は出ない', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -157,7 +160,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
     const stores = await twoPremises();
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      const s = setup(undefined, stores);
+      const s = setup(undefined, stores, {}, COMPACTION_ENV);
       s.clone.post(humanMessage('1回目'));
       await waitForDone(s.events);
       vi.spyOn(stores.journal, 'append').mockRejectedValue(new Error('journal down'));
@@ -188,7 +191,7 @@ describe('クローン — 要約後の記憶の索引の載せ直しを日誌�
 
   it('⭐ 要約に潰されていない回（refreshIndex が立たない回）は行が書かれない', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 

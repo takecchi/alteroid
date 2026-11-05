@@ -10,6 +10,9 @@ import type { FakeCall } from './clone-test-harness.js';
 // 蒸留の指示の固定の本体を、同じ会話の2回目以降は参照にする。全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。
 // 枕（理由）・棚卸しの的は毎回出る。pre_compact は別の短命セッションなので畳まない。
 
+// 畳み（S1）は本番の既定では無効。畳む動きを測るこの試験は明示して有効にする
+const FOLD_ENV = { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' };
+
 const INTRO_FULL = '承認・確認への人間の答え';
 const CONSOLIDATION_FULL = '相対的な日付表現（「昨日」「先週」）を見つけたら';
 const REF_MARK = '先の蒸留の指示と同じ';
@@ -38,21 +41,26 @@ function scheduledEvent(n: number): InboxEvent {
 function boot(compactAtTurn?: number) {
   let turn = 0;
   const stores = createMemoryStores();
-  const s = setup(undefined, stores, {
-    getContextUsage: () => ({
-      categories: [],
-      totalTokens: 10_000,
-      maxTokens: 1_000_000,
-      rawMaxTokens: 1_000_000,
-      percentage: 1,
-      autoCompactThreshold: 200_000,
-      isAutoCompactEnabled: true,
-    }),
-    beforeAssistant: () => {
-      turn += 1;
-      return turn === compactAtTurn ? [compactBoundary] : [];
+  const s = setup(
+    undefined,
+    stores,
+    {
+      getContextUsage: () => ({
+        categories: [],
+        totalTokens: 10_000,
+        maxTokens: 1_000_000,
+        rawMaxTokens: 1_000_000,
+        percentage: 1,
+        autoCompactThreshold: 200_000,
+        isAutoCompactEnabled: true,
+      }),
+      beforeAssistant: () => {
+        turn += 1;
+        return turn === compactAtTurn ? [compactBoundary] : [];
+      },
     },
-  });
+    FOLD_ENV,
+  );
   const inputs = (): string[] => (s.calls[0] as FakeCall | undefined)?.inputs ?? [];
   const human = async (text: string): Promise<void> => {
     const n = inputs().length;
@@ -100,17 +108,22 @@ describe('蒸留の指示の固定の本体は、同じ会話の2回目から参
   it('⭐ 棚卸しの的（可変部）は、参照になった回にも毎回出る', async () => {
     const stores = createMemoryStores();
     await stores.persona.write('alteroid-work', FAT);
-    const s = setup(undefined, stores, {
-      getContextUsage: () => ({
-        categories: [],
-        totalTokens: 10_000,
-        maxTokens: 1_000_000,
-        rawMaxTokens: 1_000_000,
-        percentage: 1,
-        autoCompactThreshold: 200_000,
-        isAutoCompactEnabled: true,
-      }),
-    });
+    const s = setup(
+      undefined,
+      stores,
+      {
+        getContextUsage: () => ({
+          categories: [],
+          totalTokens: 10_000,
+          maxTokens: 1_000_000,
+          rawMaxTokens: 1_000_000,
+          percentage: 1,
+          autoCompactThreshold: 200_000,
+          isAutoCompactEnabled: true,
+        }),
+      },
+      FOLD_ENV,
+    );
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
     s.clone.post(humanMessage('1回目'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '人間の入力');
@@ -152,21 +165,26 @@ describe('蒸留の指示の固定の本体は、同じ会話の2回目から参
 
   it('⭐ 失敗した蒸留のあとは全文へ戻る（全文が会話に載ったか分からないため）', async () => {
     let turn = 0;
-    const s = setup(undefined, createMemoryStores(), {
-      getContextUsage: () => ({
-        categories: [],
-        totalTokens: 10_000,
-        maxTokens: 1_000_000,
-        rawMaxTokens: 1_000_000,
-        percentage: 1,
-        autoCompactThreshold: 200_000,
-        isAutoCompactEnabled: true,
-      }),
-      resultFor: () => {
-        turn += 1;
-        return turn === 2 ? { subtype: 'error_during_execution', isError: true } : undefined;
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      {
+        getContextUsage: () => ({
+          categories: [],
+          totalTokens: 10_000,
+          maxTokens: 1_000_000,
+          rawMaxTokens: 1_000_000,
+          percentage: 1,
+          autoCompactThreshold: 200_000,
+          isAutoCompactEnabled: true,
+        }),
+        resultFor: () => {
+          turn += 1;
+          return turn === 2 ? { subtype: 'error_during_execution', isError: true } : undefined;
+        },
       },
-    });
+      FOLD_ENV,
+    );
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
     s.clone.post(humanMessage('1回目'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '人間の入力');

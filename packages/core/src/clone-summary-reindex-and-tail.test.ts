@@ -26,6 +26,9 @@ import {
 } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
+// 焼いた時点との差の載せ直し（S2）は本番の既定では無効。この describe は有効な動きを測るので明示する
+const COMPACTION_ENV = { ALTEROID_TOKEN_SAVING_COMPACTION: '1' };
+
 describe('クローン — 要約に潰された後の索引の載せ直し（#696）', () => {
   async function twoPremises(): Promise<Stores> {
     const stores = createMemoryStores();
@@ -59,7 +62,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 潰された次のターンでは、焼いた時点から変わった文書だけが載り、変わっていない文書は載らない（#5426）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -85,7 +88,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 焼いた時点に無かった文書（増えた）も載り、他は載らない', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -109,7 +112,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 削除だけのときは索引を載せず、名前だけが載る（本文も他の文書も載らない）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -143,7 +146,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
         `---\ntype: premise\ndescription: ${slug} の要旨\n---\n## ${slug}\n本文\n`,
       );
     }
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -164,7 +167,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 要約の前に消えた文書も、焼いた時点との差として名前で載る（載らないことが消えた合図でなくなったため）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -186,7 +189,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 載せ直すのはその回だけ。次のターンには載らない（毎ターン2万トークンを払わない）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -210,7 +213,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
   });
 
   it('⭐ 焼いた時点から記憶が変わっていなければ、索引の全文は載らず短い1行になる（#5305）', async () => {
-    const s = setup(undefined, await twoPremises());
+    const s = setup(undefined, await twoPremises(), {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -232,7 +235,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   // ALTEROID_TOKEN_SAVING_COMPACTION が切り（本番の既定）なら、#5305 / #5426 の前の形: 要約の後は記憶の索引を全文で載せ直す
   it.each([
-    // setup の既定は節約を有効にした env なので、未設定は `undefined` で明示して上書きする
+    // setup の既定は節約が無効なので、未設定はそのまま既定の動き
     ['未設定', { ALTEROID_TOKEN_SAVING_COMPACTION: undefined }],
     ['0', { ALTEROID_TOKEN_SAVING_COMPACTION: '0' }],
     ['off', { ALTEROID_TOKEN_SAVING_COMPACTION: 'off' }],
@@ -284,7 +287,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 要約の前に差分を載せ済みで、要約後も焼いた時点との差が残るなら、その差が載り直る（差分は要約に畳まれたため）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -311,7 +314,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 短い1行のときも印は下りる（次のターンに何も載らず、その後の更新は差分で載る）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
@@ -338,7 +341,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   it('⭐ 潰されていないときは差分のまま（空振りしていないことの対照）', async () => {
     const stores = await twoPremises();
-    const s = setup(undefined, stores);
+    const s = setup(undefined, stores, {}, COMPACTION_ENV);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 

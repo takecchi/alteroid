@@ -3,6 +3,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { createClone } from './clone.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { CloneHost } from './host.js';
+import type { ManagerPool } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -249,8 +250,7 @@ export function waitForEventsOf(events: ChatStreamEvent[], label: string): Setup
   return waitForEvents;
 }
 
-// 畳み・compaction まわりの節約は本番の既定では無効（`token-saving-switches.ts`）。既存の試験は節約が有効な挙動を測っているので、harness は env で明示して有効にする。
-// 既定の無効を測る試験は、`setup` の `env` に '0' を置いて上書きする。
+// 畳み・compaction まわりの節約は本番の既定では無効（`token-saving-switches.ts`）。harness も既定は無効で、有効な挙動を測る試験だけが `setup` の `env` にこれ（または片方だけ）を明示して渡す。
 export const TOKEN_SAVING_ENABLED_ENV: NodeJS.ProcessEnv = {
   [TOKEN_SAVING_FOLD_FIXED_TEXT_ENV]: '1',
   [TOKEN_SAVING_COMPACTION_ENV]: '1',
@@ -260,12 +260,13 @@ export function setup(
   reply?: (input: string) => string,
   stores: Stores = createMemoryStores(),
   sdkOptions: Parameters<typeof fakeSdk>[1] = {},
-  // 既定は節約の有効だけ: 手元の ALTEROID_CLONE_MODEL の有無でテストの結果を変えないため
+  // 既定は空（節約は無効）: 手元の ALTEROID_CLONE_MODEL の有無でテストの結果を変えないため
   env: NodeJS.ProcessEnv = {},
   cloneOptions: {
     contextUsageTimeoutMs?: number;
     onFirstTurnToolSearch?: (line: string) => Promise<void>;
     permissionRuleService?: DelegatedPermissionRuleService;
+    managers?: ManagerPool;
     inboxSettleMs?: number;
     reportSettleMs?: number;
   } = {},
@@ -280,7 +281,7 @@ export function setup(
     ...cloneOptions,
     stores,
     queryFn: fn,
-    env: { ...TOKEN_SAVING_ENABLED_ENV, ...env },
+    env,
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),

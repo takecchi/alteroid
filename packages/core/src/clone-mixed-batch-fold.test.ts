@@ -35,7 +35,8 @@ function report(index: number, managerId: string): InboxEvent {
 async function mergedInput(
   jobs: readonly Job[],
   events: readonly InboxEvent[],
-  env: NodeJS.ProcessEnv = {},
+  // 畳み（S1）は本番の既定では無効。この試験は畳む動きを測るので既定で有効にし、切りの試験が上書きする
+  env: NodeJS.ProcessEnv = { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
 ): Promise<{ merged: string; stop: () => Promise<void> }> {
   const stores = createMemoryStores();
   for (const entry of jobs) await stores.jobs.putJob(entry);
@@ -76,7 +77,7 @@ describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠�
   }, 15_000);
 
   it.each([
-    // setup の既定は畳みを有効にした env なので、未設定は `undefined` で明示して上書きする
+    // mergedInput の既定は畳みを有効にした env なので、未設定は `undefined` で明示して上書きする
     ['未設定', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: undefined }],
     ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
     ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
