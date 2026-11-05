@@ -6,8 +6,8 @@ import type {
   RunnerClient,
   RunnerEntry,
   RunnerEvent,
-  RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -102,7 +102,7 @@ async function build(job: Job, runnerIds: string[]): Promise<Env> {
   const stores = createMemoryStores();
   await stores.jobs.putJob(job);
   const runners = new Map(runnerIds.map((id) => [id, fakeRunner(id)]));
-  const registry: RunnerRegistry = {
+  const registry = fakeRunnerRegistry({
     async list() {
       return [...runners.values()].map((fake) => fake.client);
     },
@@ -131,7 +131,7 @@ async function build(job: Job, runnerIds: string[]): Promise<Env> {
       return () => {};
     },
     async stop() {},
-  };
+  });
   const inbox: InboxEvent[] = [];
   const pool = createManagerPool({
     stores,

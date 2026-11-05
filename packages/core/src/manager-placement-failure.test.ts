@@ -5,6 +5,7 @@ import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { RunnerRegistry } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -62,7 +63,7 @@ function watchNoteManagerFailed(real: RunnerRegistry): {
   noted: string[];
 } {
   const noted: string[] = [];
-  const registry: RunnerRegistry = {
+  const registry = fakeRunnerRegistry({
     list: () => real.list(),
     get: (runnerId) => real.get(runnerId),
     select: (input) => real.select(input),
@@ -76,7 +77,7 @@ function watchNoteManagerFailed(real: RunnerRegistry): {
     entries: () => real.entries(),
     subscribe: (onOpen) => real.subscribe(onOpen),
     stop: () => real.stop(),
-  };
+  });
   return { registry, noted };
 }
 

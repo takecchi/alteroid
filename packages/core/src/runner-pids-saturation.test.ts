@@ -117,7 +117,7 @@ describe('飽和した器は自動配置から外れる', () => {
       new FakeRunner('runner-burned', { ...roomy, managers: 0 }),
       new FakeRunner('runner-healthy', { ...roomy, managers: 4 }),
     );
-    registry.notePidsSaturationSign?.('runner-burned', 'eagain');
+    registry.notePidsSaturationSign('runner-burned', 'eagain');
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
     vi.setSystemTime(1_000_000 + WINDOW_MS - 1);
@@ -133,7 +133,7 @@ describe('飽和した器は自動配置から外れる', () => {
       new FakeRunner('runner-burned', { ...roomy, managers: 0 }),
       new FakeRunner('runner-healthy', { ...roomy, managers: 4 }),
     );
-    registry.notePidsSaturationSign?.('runner-burned', 'fork-denied');
+    registry.notePidsSaturationSign('runner-burned', 'fork-denied');
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
     await registry.stop();
   });
@@ -142,7 +142,7 @@ describe('飽和した器は自動配置から外れる', () => {
     const dead = new FakeRunner('runner-silent');
     dead.fails = true;
     const registry = await fleet(dead, new FakeRunner('runner-healthy', { ...roomy, managers: 4 }));
-    registry.notePidsSaturationSign?.('runner-silent', 'eagain');
+    registry.notePidsSaturationSign('runner-silent', 'eagain');
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
     await registry.stop();
   });
@@ -163,7 +163,7 @@ describe('飽和した器は自動配置から外れる', () => {
       new FakeRunner('runner-a', { ...roomy, pids: { current: 1000, max: 1000 }, managers: 0 }),
       new FakeRunner('runner-b', { ...roomy, managers: 4 }),
     );
-    registry.notePidsSaturationSign?.('runner-b', 'eagain');
+    registry.notePidsSaturationSign('runner-b', 'eagain');
     for (let i = 0; i < 3; i += 1) {
       expect((await registry.select({})).runnerId).toBe('runner-b');
     }
@@ -183,24 +183,24 @@ describe('飽和した器は自動配置から外れる', () => {
 describe('pidsSaturationOf（名簿が覚えている材料）', () => {
   it('何も無ければ undefined。印を知らせると材料つきで返り、窓で忘れる', async () => {
     const registry = await fleet(new FakeRunner('runner-a', {}));
-    expect(registry.pidsSaturationOf?.('runner-a')).toBeUndefined();
+    expect(registry.pidsSaturationOf('runner-a')).toBeUndefined();
 
-    registry.notePidsSaturationSign?.('runner-a', 'eagain');
-    registry.notePidsSaturationSign?.('runner-a', 'eagain');
-    expect(registry.pidsSaturationOf?.('runner-a')?.basis).toEqual([{ kind: 'eagain', count: 2 }]);
-    expect(registry.pidsSaturationOf?.('runner-other')).toBeUndefined();
+    registry.notePidsSaturationSign('runner-a', 'eagain');
+    registry.notePidsSaturationSign('runner-a', 'eagain');
+    expect(registry.pidsSaturationOf('runner-a')?.basis).toEqual([{ kind: 'eagain', count: 2 }]);
+    expect(registry.pidsSaturationOf('runner-other')).toBeUndefined();
 
     vi.setSystemTime(1_000_000 + WINDOW_MS);
-    expect(registry.pidsSaturationOf?.('runner-a')).toBeUndefined();
+    expect(registry.pidsSaturationOf('runner-a')).toBeUndefined();
     await registry.stop();
   });
 
   it('渡した現在値が上限に達していれば at-limit を足す', async () => {
     const registry = await fleet(new FakeRunner('runner-a', {}));
-    expect(registry.pidsSaturationOf?.('runner-a', { current: 1000, max: 1000 })?.basis).toEqual([
+    expect(registry.pidsSaturationOf('runner-a', { current: 1000, max: 1000 })?.basis).toEqual([
       { kind: 'at-limit', current: 1000, max: 1000 },
     ]);
-    expect(registry.pidsSaturationOf?.('runner-a', { current: 15, max: 1000 })).toBeUndefined();
+    expect(registry.pidsSaturationOf('runner-a', { current: 15, max: 1000 })).toBeUndefined();
     await registry.stop();
   });
 
@@ -219,14 +219,14 @@ describe('pidsSaturationOf（名簿が覚えている材料）', () => {
     });
     const registry = await fleet(a, b);
     await registry.select({});
-    expect(registry.pidsSaturationOf?.('runner-a')?.basis).toEqual([
+    expect(registry.pidsSaturationOf('runner-a')?.basis).toEqual([
       { kind: 'at-limit', current: 1000, max: 1000 },
     ]);
-    expect(registry.pidsSaturationOf?.('runner-b')).toBeUndefined();
+    expect(registry.pidsSaturationOf('runner-b')).toBeUndefined();
 
     a.report = { ...a.report, pids: { current: 15, max: 1000 } };
     await registry.select({});
-    expect(registry.pidsSaturationOf?.('runner-a')).toBeUndefined();
+    expect(registry.pidsSaturationOf('runner-a')).toBeUndefined();
     await registry.stop();
   });
 });

@@ -12,9 +12,9 @@ import type {
   RunnerManagerState,
   RunnerProfileFingerprint,
   RunnerProfileResult,
-  RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent, Job, JobLease } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -35,7 +35,7 @@ function entryOf(label: string, state: RunnerLiveness, runnerId: string): Runner
 function createFakeRegistry() {
   const clients = new Map<string, RunnerClient>();
   const entries: RunnerEntry[] = [];
-  const registry: RunnerRegistry = {
+  const registry = fakeRunnerRegistry({
     async list() {
       return [...clients.values()];
     },
@@ -56,7 +56,7 @@ function createFakeRegistry() {
       return () => {};
     },
     async stop() {},
-  };
+  });
   return {
     registry,
     setState(runnerId: string, state: RunnerLiveness) {

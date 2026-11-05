@@ -15,6 +15,7 @@ import type {
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -36,7 +37,7 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
   } {
     const clients = new Map<string, RunnerClient>();
     const entries: RunnerEntry[] = [];
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()];
       },
@@ -65,7 +66,7 @@ describe('起動時の引き取り（restore）と、同じ runner への resume
         return () => {};
       },
       async stop() {},
-    };
+    });
     return {
       registry,
       entries,
