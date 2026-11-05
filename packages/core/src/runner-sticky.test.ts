@@ -1,16 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   type RunnerAnswerCommand,
   type RunnerAnswerOutcome,
   type RunnerClient,
-  type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
-  type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -19,11 +17,8 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 // `list()` は数えない: 宛先の解決ではなく生死の確認で、Pool は全台に聞く。
-class StickyRunner implements RunnerClient {
+class StickyRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly sessions = new Map<string, RunnerManagerState>();
   readonly sends: { managerId: string; text: string }[] = [];
   readonly resumes: RunnerResumeCommand[] = [];
@@ -33,6 +28,7 @@ class StickyRunner implements RunnerClient {
   #onEvent: ((event: RunnerEvent) => void) | null = null;
 
   constructor(runnerId: string) {
+    super();
     this.runnerId = runnerId;
   }
 
@@ -108,19 +104,6 @@ class StickyRunner implements RunnerClient {
     this.transcripts.push(managerId);
     return `[生ログ] ${this.runnerId} / ${managerId}\n`;
   }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 interface Fleet {

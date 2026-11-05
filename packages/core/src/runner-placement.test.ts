@@ -1,27 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { createRunnerRegistry, describePlacementDecision } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 import type {
   PlacementDecision,
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
-  RunnerManagerState,
   RunnerPlacementResources,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
 } from './runner-protocol.js';
 
 // `select` は常に置き先を返す: 資源は「どこに置くか」の材料であって、「置けるか」を決める定員にしない（north_star 禁止2）。
 // cgroup とホストの値の違いは `runner-resources.test.ts` が押さえている。ここは受け取った報告の使い方だけを見る。
 
-class FakeRunner implements RunnerClient {
+class FakeRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   fails = false;
   hangs = false;
@@ -29,6 +22,7 @@ class FakeRunner implements RunnerClient {
   started: string[] = [];
 
   constructor(runnerId: string, report?: RunnerPlacementResources) {
+    super();
     this.runnerId = runnerId;
     this.report = report;
   }
@@ -41,40 +35,10 @@ class FakeRunner implements RunnerClient {
   }
 
   async ping(): Promise<void> {}
-  async connect(): Promise<void> {}
   async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
     this.started.push(command.managerId);
     return { cwd: command.cwd };
   }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 async function registryOf(

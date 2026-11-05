@@ -2,17 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createMemoryStores } from './testing.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type {
-  RunnerAnswerOutcome,
-  RunnerClient,
-  RunnerCredentialFingerprint,
-  RunnerLegState,
-  RunnerManagerState,
-  RunnerPlacementResources,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
-} from './runner-protocol.js';
+import type { RunnerLegState, RunnerPlacementResources } from './runner-protocol.js';
 
 const ALL_RUNNER_LEG_STATUSES: Record<RunnerLegState['status'], true> = {
   connected: true,
@@ -31,17 +23,15 @@ describe('RunnerLegState の網羅性', () => {
   });
 });
 
-class LegStateRunner implements RunnerClient {
+class LegStateRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   instanceId: string | undefined;
   pendingEvents: number | undefined;
   oldestPendingAt: string | undefined;
   legState: RunnerLegState | undefined;
 
   constructor(runnerId: string, instanceId: string | undefined) {
+    super();
     this.runnerId = runnerId;
     this.instanceId = instanceId;
   }
@@ -66,40 +56,6 @@ class LegStateRunner implements RunnerClient {
       ...(this.oldestPendingAt === undefined ? {} : { oldestPendingAt: this.oldestPendingAt }),
     };
   }
-
-  async connect(): Promise<void> {}
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 describe('RunnerRegistry#entries() は client.legState をその場で読む', () => {

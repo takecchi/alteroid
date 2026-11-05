@@ -11,18 +11,16 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, MANAGER_MODEL, WORKER_AGENT_NAME, WORKER_MODEL } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
   type RunnerAnswerCommand,
   type RunnerAnswerOutcome,
   type RunnerClient,
-  type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
   type RunnerPlacementResources,
-  type RunnerProfileFingerprint,
-  type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -30,15 +28,13 @@ import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-class PlacementFakeRunner implements RunnerClient {
+class PlacementFakeRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   asked = 0;
 
   constructor(runnerId: string, report?: RunnerPlacementResources) {
+    super();
     this.runnerId = runnerId;
     this.report = report;
   }
@@ -49,39 +45,6 @@ class PlacementFakeRunner implements RunnerClient {
   }
 
   async ping(): Promise<void> {}
-  async connect(): Promise<void> {}
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 async function placementRegistryOf(...runners: PlacementFakeRunner[]): Promise<RunnerRegistry> {
@@ -147,11 +110,8 @@ describe('配置の規約は runner 台数で変わらない（M5 ゴール / PR
   });
 });
 
-class RoutingFakeRunner implements RunnerClient {
+class RoutingFakeRunner extends FakeRunnerClientBase {
   readonly runnerId: string;
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly sessions = new Map<string, RunnerManagerState>();
   readonly sends: { managerId: string; text: string }[] = [];
   readonly resumes: RunnerResumeCommand[] = [];
@@ -160,6 +120,7 @@ class RoutingFakeRunner implements RunnerClient {
   #onEvent: ((event: RunnerEvent) => void) | null = null;
 
   constructor(runnerId: string) {
+    super();
     this.runnerId = runnerId;
   }
 
@@ -221,22 +182,6 @@ class RoutingFakeRunner implements RunnerClient {
   async list(): Promise<RunnerManagerState[]> {
     return [...this.sessions.values()];
   }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-    return [];
-  }
-  async profile(): Promise<RunnerProfileFingerprint | undefined> {
-    return undefined;
-  }
-  async setProfile(): Promise<RunnerProfileResult> {
-    return { ok: true };
-  }
-  async close(): Promise<void> {}
 }
 
 interface RoutingFleet {
