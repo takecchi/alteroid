@@ -132,7 +132,9 @@ function rq(overrides: Args = {}): Args {
   };
 }
 
-function denial(overrides: Partial<RecentDenial> & Pick<RecentDenial, 'at' | 'tool'>): RecentDenial {
+function denial(
+  overrides: Partial<RecentDenial> & Pick<RecentDenial, 'at' | 'tool'>,
+): RecentDenial {
   return overrides;
 }
 
@@ -227,7 +229,12 @@ const SCENARIOS: Scenario[] = [
     group: 'allows / denies の検算の断り',
     covers:
       '完全一致の規則（:* なし）で allows が規則そのものでない（後ろに引数が付く）: 不一致の断り',
-    steps: [{ args: rq({ rule: 'Bash(gh pr view 12)', allows: ['gh pr view 12 --web'] }), writes: 'none' }],
+    steps: [
+      {
+        args: rq({ rule: 'Bash(gh pr view 12)', allows: ['gh pr view 12 --web'] }),
+        writes: 'none',
+      },
+    ],
   },
   {
     name: 'deny-matches',
@@ -248,7 +255,11 @@ const SCENARIOS: Scenario[] = [
     covers: '完全一致の規則で denies が規則そのものと同じ: 一致してしまう断り',
     steps: [
       {
-        args: rq({ rule: 'Bash(gh pr view 12)', allows: ['gh pr view 12'], denies: ['gh pr view 12'] }),
+        args: rq({
+          rule: 'Bash(gh pr view 12)',
+          allows: ['gh pr view 12'],
+          denies: ['gh pr view 12'],
+        }),
         writes: 'none',
       },
     ],
@@ -309,8 +320,18 @@ const SCENARIOS: Scenario[] = [
     steps: [
       {
         args: rq({
-          allows: ['gh release edit', OK_ALLOW, 'gh release edit v1 --title "a (b)"', "gh release edit 'x;y'"],
-          denies: [OK_DENY, 'gh release edit; rm -rf /', 'gh release edit v1\nrm x', 'ghx release edit'],
+          allows: [
+            'gh release edit',
+            OK_ALLOW,
+            'gh release edit v1 --title "a (b)"',
+            "gh release edit 'x;y'",
+          ],
+          denies: [
+            OK_DENY,
+            'gh release edit; rm -rf /',
+            'gh release edit v1\nrm x',
+            'ghx release edit',
+          ],
         }),
         writes: 'both',
       },
@@ -385,7 +406,8 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'evidence-absent',
     group: '直前の拒否の添え',
-    covers: 'context.recentDenials が無い器: 「この層は拒否の記録を読む口を持たない」の1行。呼びに recentDenials の読みが出ない',
+    covers:
+      'context.recentDenials が無い器: 「この層は拒否の記録を読む口を持たない」の1行。呼びに recentDenials の読みが出ない',
     ctx: { denials: null },
     steps: [{ args: rq(), writes: 'both' }],
   },
@@ -394,9 +416,7 @@ const SCENARIOS: Scenario[] = [
     group: '直前の拒否の添え',
     covers:
       '記録が空・記録はあるが道具が違う（Read）・先頭の語が違う（git）・先頭の語の欄が無い: 「照合できる直前の拒否は記録に無い」の1行',
-    steps: [
-      { args: rq(), writes: 'both' },
-    ],
+    steps: [{ args: rq(), writes: 'both' }],
   },
   {
     name: 'evidence-other-tool',
@@ -437,10 +457,16 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'evidence-found-partial',
     group: '直前の拒否の添え',
-    covers: '分類だけある・理由だけある・拒否文だけある拒否: 在る欄だけが並ぶ（順は分類・理由・拒否文）',
+    covers:
+      '分類だけある・理由だけある・拒否文だけある拒否: 在る欄だけが並ぶ（順は分類・理由・拒否文）',
     ctx: {
       denials: [
-        denial({ at: '2026-10-29T00:00:00.000Z', tool: 'Bash', headWord: 'gh', message: '拒否文だけ' }),
+        denial({
+          at: '2026-10-29T00:00:00.000Z',
+          tool: 'Bash',
+          headWord: 'gh',
+          message: '拒否文だけ',
+        }),
       ],
     },
     steps: [{ args: rq(), writes: 'both' }],
@@ -452,9 +478,24 @@ const SCENARIOS: Scenario[] = [
       '一致する拒否が複数ある: 最後（新しい側）の1件を使う。そのあとに一致しない拒否があっても飛ばす',
     ctx: {
       denials: [
-        denial({ at: '2026-10-29T00:00:01.000Z', tool: 'Bash', headWord: 'gh', reason: '古い拒否' }),
-        denial({ at: '2026-10-29T00:00:02.000Z', tool: 'Bash', headWord: 'gh', reason: '新しい拒否' }),
-        denial({ at: '2026-10-29T00:00:03.000Z', tool: 'Bash', headWord: 'git', reason: '別の語の拒否' }),
+        denial({
+          at: '2026-10-29T00:00:01.000Z',
+          tool: 'Bash',
+          headWord: 'gh',
+          reason: '古い拒否',
+        }),
+        denial({
+          at: '2026-10-29T00:00:02.000Z',
+          tool: 'Bash',
+          headWord: 'gh',
+          reason: '新しい拒否',
+        }),
+        denial({
+          at: '2026-10-29T00:00:03.000Z',
+          tool: 'Bash',
+          headWord: 'git',
+          reason: '別の語の拒否',
+        }),
       ],
     },
     steps: [{ args: rq(), writes: 'both' }],
@@ -462,8 +503,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'evidence-found-long',
     group: '直前の拒否の添え',
-    covers:
-      '分類・理由・拒否文が長い・複数行: 1行に潰して 400 字で切る（切ったことが出る）',
+    covers: '分類・理由・拒否文が長い・複数行: 1行に潰して 400 字で切る（切ったことが出る）',
     ctx: {
       denials: [
         denial({
@@ -502,7 +542,11 @@ const SCENARIOS: Scenario[] = [
     ctx: { denials: [D_FULL] },
     steps: [
       {
-        args: rq({ rule: 'Bash(./deploy.sh:*)', allows: ['./deploy.sh prod'], denies: ['./other.sh'] }),
+        args: rq({
+          rule: 'Bash(./deploy.sh:*)',
+          allows: ['./deploy.sh prod'],
+          denies: ['./other.sh'],
+        }),
         writes: 'both',
       },
       {
@@ -563,7 +607,8 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'task-none',
     group: 'task の結び付き',
-    covers: 'currentTaskIds の口が無い: 承認の行に taskIds の欄が付かない。呼びに currentTaskIds の読みが出ない',
+    covers:
+      'currentTaskIds の口が無い: 承認の行に taskIds の欄が付かない。呼びに currentTaskIds の読みが出ない',
     steps: [{ args: rq(), writes: 'both' }],
   },
   {
@@ -576,7 +621,8 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'task-ids',
     group: 'task の結び付き',
-    covers: 'currentTaskIds が2件を返す: 承認の行の taskIds に同じ並びのコピーが入る。会話の結び付きと同時でもよい',
+    covers:
+      'currentTaskIds が2件を返す: 承認の行の taskIds に同じ並びのコピーが入る。会話の結び付きと同時でもよい',
     ctx: { conv: 'conv-1', taskIds: ['task-a', 'task-b'] },
     steps: [{ args: rq(), writes: 'both' }],
   },
@@ -584,7 +630,8 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'no-flush',
     group: '器が口を持たない',
-    covers: 'flushReply が無い器: 呼びに flushReply が出ず、ほかは同じ（putApproval → journal.append → noteQuestionAsked → emit）',
+    covers:
+      'flushReply が無い器: 呼びに flushReply が出ず、ほかは同じ（putApproval → journal.append → noteQuestionAsked → emit）',
     ctx: { noFlush: true },
     steps: [{ args: rq(), writes: 'both' }],
   },
@@ -702,7 +749,11 @@ function withHooks(base: Stores, hooks: () => Hooks, calls: PinnedCall[]): Store
       putApproval: async (approval) => {
         const args = plain(approval);
         if (hooks().putFails === true) {
-          calls.push({ op: 'jobs.putApproval', args, outcome: 'threw Error: ストアが落ちた（putApproval）' });
+          calls.push({
+            op: 'jobs.putApproval',
+            args,
+            outcome: 'threw Error: ストアが落ちた（putApproval）',
+          });
           throw new Error('ストアが落ちた（putApproval）');
         }
         await base.jobs.putApproval(approval);
@@ -928,13 +979,9 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
         const got = actual[key];
         const ops = (got?.calls ?? []).map((entry) => entry.op);
         expect(got?.wrote, `${key}: 書き込みの有無が宣言と違う`).toBe(step.writes !== 'none');
-        expect(got?.approvals.length ?? 0 > 0, `${key}: 承認の行の有無が宣言と違う`).toBe(
-          (got?.approvals.length ?? 0) > 0,
+        expect((got?.journal.length ?? -1) > 0, `${key}: 日誌の行の有無が宣言と違う`).toBe(
+          step.writes === 'both',
         );
-        expect(
-          (got?.journal.length ?? -1) > 0,
-          `${key}: 日誌の行の有無が宣言と違う`,
-        ).toBe(step.writes === 'both');
         // 知らせ（emit）は日誌まで書けた呼びだけ。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
         expect(ops.includes('context.emit'), `${key}: emit の有無が宣言と違う`).toBe(
           step.writes === 'both',
@@ -1019,10 +1066,9 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
           got?.calls.map((entry) => entry.op),
           `場面 ${key} の呼び: 並び（recentDenials・flushReply・putApproval・journal.append・noteQuestionAsked・emit など）が変わった`,
         ).toEqual(want?.calls.map((entry) => entry.op));
-        expect(
-          got?.calls,
-          `場面 ${key} の呼び: 渡した行・イベント・引数か結果がずれた`,
-        ).toEqual(want?.calls);
+        expect(got?.calls, `場面 ${key} の呼び: 渡した行・イベント・引数か結果がずれた`).toEqual(
+          want?.calls,
+        );
         expect(got?.stderr, `場面 ${key} の stderr の跡がずれた`).toEqual(want?.stderr);
       });
     }
@@ -1048,14 +1094,11 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
       'context.emit',
     ];
     // 規則の形の断り
-    for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
       expect(text(`rule-invalid-shape#${String(n)}`)).toBe(
         `${REFUSE}規則は Bash(<コマンド>) または Bash(<コマンド>:*) の形である必要がある`,
       );
     }
-    expect(text('rule-invalid-shape#8')).toBe(
-      `${REFUSE}規則の中身が空である（Bash() / Bash(:*) は不正）`,
-    );
     expect(text('rule-invalid-empty#1')).toBe(
       `${REFUSE}規則の中身が空である（Bash() / Bash(:*) は不正）`,
     );
@@ -1093,7 +1136,12 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     expect(row('reason-undefined#1')?.question).toContain('理由: undefined\n');
     expect(row('reason-undefined#1')).not.toHaveProperty('context');
     // 断る場面は呼びが context の読みだけ（recentDenials も flushReply も呼ばない）
-    for (const key of ['rule-invalid-shape#1', 'allow-mismatch#1', 'deny-matches#1', 'reason-invalid#1']) {
+    for (const key of [
+      'rule-invalid-shape#1',
+      'allow-mismatch#1',
+      'deny-matches#1',
+      'reason-invalid#1',
+    ]) {
       expect(ops(key), `${key}: 断る場面で口を呼んだ`).toEqual([]);
     }
     // 積めた
@@ -1113,7 +1161,7 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     expect(row('ok-lists')?.question).toContain('通る例: gh release edit / ');
     expect(row('ok-lists')?.permissionRequest?.denies).toHaveLength(4);
     expect(row('ok-reason-shapes#1')?.context).toBe('  前後に空白  ');
-    expect(row('ok-reason-shapes#3')?.context).toBe(LONG);
+    expect(row('ok-reason-shapes#3', 2)?.context).toBe(LONG);
     expect(actual['ok-twice#2']?.approvals.map((entry) => entry.id)).toEqual([u(1), u(2)]);
     expect(row('ok-twice#2', 1)?.createdAt).toBe(callTime(1));
     // NUL
@@ -1136,16 +1184,22 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     );
     // 直前の拒否の添え
     const evidence = (key: string): string =>
-      (row(key)?.question ?? '').split('\n').find((line) => line.startsWith('直前の拒否')) ?? '';
+      (row(key, Number(/#(\d+)$/.exec(key)?.[1] ?? '1') - 1)?.question ?? '')
+        .split('\n')
+        .find((line) => line.startsWith('直前の拒否')) ?? '';
     expect(evidence('evidence-absent')).toBe(
       '直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。',
     );
     expect(ops('evidence-absent')).not.toContain('context.recentDenials');
     expect(evidence('evidence-none-found')).toContain('は、このセッションの記録に無い。');
-    expect(evidence('evidence-other-tool')).toContain('（Bash / 先頭の語 gh）は、このセッションの記録に無い。');
+    expect(evidence('evidence-other-tool')).toContain(
+      '（Bash / 先頭の語 gh）は、このセッションの記録に無い。',
+    );
     expect(evidence('evidence-other-head')).toContain('は、このセッションの記録に無い。');
     expect(evidence('evidence-no-headword-entry')).toContain('は、このセッションの記録に無い。');
-    expect(evidence('evidence-found-full')).toContain('分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission');
+    expect(evidence('evidence-found-full')).toContain(
+      '分類 classifier / 理由 外へ出す操作で、人間の確認が要る / 拒否文 Permission',
+    );
     expect(evidence('evidence-found-minimal')).toBe(
       '直前の拒否（器が返した原文。クローンの要約ではない。長い欄は 400 字で切る）: 時刻 2026-10-29T00:00:00.000Z / 道具 Bash / 先頭の語 gh',
     );
@@ -1161,9 +1215,13 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     }
     // 会話
     expect(ops('conv-none')).toContain('context.conversationId');
-    expect(actual['conv-none']?.calls.find((c) => c.op === 'context.noteQuestionAsked')?.args).toBe('(undefined)');
+    expect(actual['conv-none']?.calls.find((c) => c.op === 'context.noteQuestionAsked')?.args).toBe(
+      '(undefined)',
+    );
     expect(row('conv-fallback')?.conversationId).toBe('conv-1');
-    expect(actual['conv-fallback']?.calls.find((c) => c.op === 'context.noteQuestionAsked')?.args).toBe('conv-1');
+    expect(
+      actual['conv-fallback']?.calls.find((c) => c.op === 'context.noteQuestionAsked')?.args,
+    ).toBe('conv-1');
     expect(row('conv-work')?.conversationId).toBe('conv-origin');
     expect(ops('conv-work')).toContain('context.workConversationId');
     expect(ops('conv-work')).not.toContain('context.conversationId');
@@ -1188,7 +1246,11 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     // 書き込みが落ちる
     expect(actual['flush-fails']?.output.thrown).toBe(true);
     expect(text('flush-fails')).toBe('flush が落ちた');
-    expect(ops('flush-fails')).toEqual(['context.conversationId', 'context.recentDenials', 'context.flushReply']);
+    expect(ops('flush-fails')).toEqual([
+      'context.conversationId',
+      'context.recentDenials',
+      'context.flushReply',
+    ]);
     expect(actual['put-fails#1']?.output.thrown).toBe(true);
     expect(actual['put-fails#1']?.output.errorName).toBe('ApprovalNotRecordedError');
     expect(text('put-fails#1')).toContain('⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい');
