@@ -1287,6 +1287,121 @@ async function journalPlainStatusChange(
   );
 }
 
+type TaskAddStores = CloneToolsShared['stores'];
+type TaskAddPlacement = Parameters<typeof describeTaskPlacement>[0];
+type TaskAddOutcome =
+  | { kind: 'anchor-not-found' }
+  // 足したと言えない回。区別: existed（器が既にあると返した）/ missing（読み直しが null）/ unreadable（読み直しが読めない形）
+  | { kind: 'unconfirmed'; reason: 'existed' | 'missing' | 'unreadable' }
+  | { kind: 'added' };
+
+// 題・本文・出所の検査。断る文を返す（通れば null）。順: 題の長さと空白 → 題の改行 → 本文 → 出所
+function describeTaskAddViolation(
+  title: string,
+  body: string,
+  source: string | undefined,
+): string | null {
+  const titleError =
+    describeStringLengthViolation('title', title, { min: 1, max: TASK_TITLE_MAX }) ??
+    describeBlankViolation('title', title);
+  if (titleError !== null) return titleError;
+  if (/[\r\n]/.test(title)) return 'title は使えない（改行を含まない一行のみ）。';
+  const bodyError =
+    describeStringLengthViolation('body', body, { min: 1 }) ??
+    describeBlankViolation('body', body);
+  if (bodyError !== null) return bodyError;
+  for (const [field, value] of [['source', source]] as const) {
+    if (value !== undefined && stripNul(value).trim().length === 0) {
+      return `${field} が空です。分かるときだけ実のある文字列で渡し、無いなら省略してください。`;
+    }
+  }
+  return null;
+}
+
+// 新しい task の行。新しい task は必ず起点の会話 id を持つ（task_say の宛先）。機構が決める: いまのターンの会話か、報告を読んでいる委譲の起点。どちらも無いときだけ新しい id
+// 呼びの順: new Date() → getWorkConversationId() →（無いときだけ randomUUID()）→ task の id の randomUUID()
+function buildTaskAddEntry(
+  getWorkConversationId: CloneToolsShared['getWorkConversationId'],
+  title: string,
+  body: string,
+  source: string | undefined,
+): Task {
+  const now = new Date().toISOString();
+  const originId = getWorkConversationId() ?? randomUUID();
+  return {
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    status: 'queued',
+    origin: 'self',
+    ...(source === undefined ? {} : { source }),
+    originConversationId: originId,
+    title,
+    body,
+  };
+}
+
+// 「足した」と名乗る前に読み直して確かめる: 書き込みが静かに失敗しても呼び出し側からは例外が見えないため。
+// `tasks.get` だけを包み、`UnreadableTaskError` は null（読めない）にして、ほかは投げ直す
+async function readBackAddedTask(
+  stores: TaskAddStores,
+  taskId: string,
+): Promise<{ task: Task | null; unreadable: boolean }> {
+  try {
+    return { task: await stores.tasks.get(taskId), unreadable: false };
+  } catch (error) {
+    if (!(error instanceof UnreadableTaskError)) throw error;
+    return { task: null, unreadable: true };
+  }
+}
+
+function renderTaskAddAnchorMissing(anchorId: string | undefined): string {
+  return `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も足していない。task_list で確かめること。`;
+}
+
+// 確かめられなかった回（existed / 読み直しが null / 読めない）の断り。いまは種類によらず同じ文
+function renderTaskAddUnconfirmed(taskId: string): string {
+  return (
+    `task を書き込んだが、直後に読み直しても ${taskId} を確認できなかった。**「足した」とは言えない。** ` +
+    `task_list id=${taskId} で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。`
+  );
+}
+
+function buildTaskAddJournalEntry(entry: Task, placement: TaskAddPlacement) {
+  return {
+    type: 'decision' as const,
+    target: { kind: 'task' as const, id: entry.id },
+    decision: `task を足した（${entry.id}）: ${entry.title}`,
+    grounds: `自分で task_add した。置き場所: ${describeTaskPlacement(placement)}。起点の会話: ${entry.originConversationId}。本文: ${entry.body}`,
+  };
+}
+
+function renderTaskAddDone(entry: Task): string {
+  return `task を足した（${entry.id}）。起点の会話は ${entry.originConversationId}（task_say taskId=${entry.id} でここへ書ける）。位置は task_list で確かめられる。`;
+}
+
+// 足す → 読み直して確かめる → 日誌、の段。確かめられなかった回は日誌を書かず、種類を持たせて返す
+async function addTaskVerifyingJournaling(
+  stores: TaskAddStores,
+  entry: Task,
+  placement: TaskAddPlacement,
+): Promise<TaskAddOutcome> {
+  const added = await stores.tasks.add(entry, placement);
+  if (added.kind === 'anchor-not-found') return { kind: 'anchor-not-found' };
+  const back = await readBackAddedTask(stores, entry.id);
+  if (added.kind === 'existed') return { kind: 'unconfirmed', reason: 'existed' };
+  if (back.task === null) {
+    return { kind: 'unconfirmed', reason: back.unreadable ? 'unreadable' : 'missing' };
+  }
+  await appendJournalOrThrow(
+    'task_add',
+    stores.journal,
+    buildTaskAddJournalEntry(entry, placement),
+    'act-completed',
+  );
+  return { kind: 'added' };
+}
+
 export function taskTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getWorkConversationId } = shared;
   return [
@@ -1396,72 +1511,15 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           .describe('関係する相手や出所（マネージャー id など。分かるときだけ）'),
       },
       async ({ title, body, to, anchorId, source }) => {
-        const titleError =
-          describeStringLengthViolation('title', title, { min: 1, max: TASK_TITLE_MAX }) ??
-          describeBlankViolation('title', title);
-        if (titleError !== null) return text(titleError);
-        if (/[\r\n]/.test(title)) return text('title は使えない（改行を含まない一行のみ）。');
-        const bodyError =
-          describeStringLengthViolation('body', body, { min: 1 }) ??
-          describeBlankViolation('body', body);
-        if (bodyError !== null) return text(bodyError);
-        for (const [field, value] of [['source', source]] as const) {
-          if (value !== undefined && stripNul(value).trim().length === 0) {
-            return text(
-              `${field} が空です。分かるときだけ実のある文字列で渡し、無いなら省略してください。`,
-            );
-          }
-        }
+        const violation = describeTaskAddViolation(title, body, source);
+        if (violation !== null) return text(violation);
         const resolved = resolveTaskPlacement(to, anchorId);
         if (resolved.kind === 'invalid') return text(resolved.message);
-        const now = new Date().toISOString();
-        // 新しい task は必ず起点の会話 id を持つ（task_say の宛先）。機構が決める: いまのターンの会話か、報告を読んでいる委譲の起点。どちらも無いときだけ新しい id
-        const originId = getWorkConversationId() ?? randomUUID();
-        const entry: Task = {
-          id: randomUUID(),
-          createdAt: now,
-          updatedAt: now,
-          status: 'queued',
-          origin: 'self',
-          ...(source === undefined ? {} : { source }),
-          originConversationId: originId,
-          title,
-          body,
-        };
-        const added = await stores.tasks.add(entry, resolved.placement);
-        if (added.kind === 'anchor-not-found') {
-          return text(
-            `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も足していない。task_list で確かめること。`,
-          );
-        }
-        // 「足した」と名乗る前に読み直して確かめる: 書き込みが静かに失敗しても呼び出し側からは例外が見えないため
-        let confirmed: Task | null;
-        try {
-          confirmed = await stores.tasks.get(entry.id);
-        } catch (error) {
-          if (!(error instanceof UnreadableTaskError)) throw error;
-          confirmed = null;
-        }
-        if (added.kind === 'existed' || confirmed === null) {
-          return text(
-            `task を書き込んだが、直後に読み直しても ${entry.id} を確認できなかった。**「足した」とは言えない。** ` +
-              `task_list id=${entry.id} で確かめ、無ければ同じ内容でもう一度 task_add を試すこと。`,
-          );
-        }
-        await appendJournalOrThrow(
-          'task_add',
-          stores.journal,
-          {
-            type: 'decision',
-            target: { kind: 'task', id: entry.id },
-            decision: `task を足した（${entry.id}）: ${title}`,
-            grounds: `自分で task_add した。置き場所: ${describeTaskPlacement(resolved.placement)}。起点の会話: ${originId}。本文: ${body}`,
-          },
-          'act-completed',
-        );
-        return text(
-          `task を足した（${entry.id}）。起点の会話は ${originId}（task_say taskId=${entry.id} でここへ書ける）。位置は task_list で確かめられる。`,
-        );
+        const entry = buildTaskAddEntry(getWorkConversationId, title, body, source);
+        const outcome = await addTaskVerifyingJournaling(stores, entry, resolved.placement);
+        if (outcome.kind === 'anchor-not-found') return text(renderTaskAddAnchorMissing(anchorId));
+        if (outcome.kind === 'unconfirmed') return text(renderTaskAddUnconfirmed(entry.id));
+        return text(renderTaskAddDone(entry));
       },
     ),
 
