@@ -15,6 +15,7 @@ import type {
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -38,7 +39,7 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
   } {
     const clients = new Map<string, RunnerClient>();
     const entries: RunnerEntry[] = [];
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()];
       },
@@ -77,7 +78,7 @@ describe('#onEvent: closed が pids 飽和の印を名簿へ知らせる', () =>
         return () => {};
       },
       async stop() {},
-    };
+    });
     return {
       registry,
       entries,

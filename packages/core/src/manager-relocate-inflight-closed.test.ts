@@ -15,6 +15,7 @@ import type {
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -36,7 +37,7 @@ describe('移送の最中に届く元の runner の closed', () => {
   } {
     const clients = new Map<string, RunnerClient>();
     const entries: RunnerEntry[] = [];
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()];
       },
@@ -65,7 +66,7 @@ describe('移送の最中に届く元の runner の closed', () => {
         return () => {};
       },
       async stop() {},
-    };
+    });
     return {
       registry,
       entries,

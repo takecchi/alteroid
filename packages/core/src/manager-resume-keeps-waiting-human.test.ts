@@ -12,6 +12,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -26,7 +27,7 @@ describe('resume の応答より先に届いた確認待ちを、resume 受理�
         revision: { status: 'unheard' },
       },
     ];
-    return {
+    return fakeRunnerRegistry({
       async list() {
         return [client];
       },
@@ -55,7 +56,7 @@ describe('resume の応答より先に届いた確認待ちを、resume 受理�
         return () => {};
       },
       async stop() {},
-    };
+    });
   }
 
   /** `resume` が、応答を返す前に `ask` を流す runner（新しいセッションの最初の確認が応答より先に届く並び）。 */

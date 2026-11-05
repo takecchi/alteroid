@@ -13,6 +13,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -29,7 +30,7 @@ describe('移送の resume が応答なしで失敗したが移送先では起�
 
   function createFakeRegistry(entries: RunnerEntry[], clients: RunnerClient[]): RunnerRegistry {
     const byId = new Map(clients.map((client) => [client.runnerId, client]));
-    return {
+    return fakeRunnerRegistry({
       async list() {
         return [...byId.values()];
       },
@@ -50,7 +51,7 @@ describe('移送の resume が応答なしで失敗したが移送先では起�
         return () => {};
       },
       async stop() {},
-    };
+    });
   }
 
   it('移送先が resume を受理して応答だけ返せなかった後の取り直しで、台帳の宛先を移送先へ付け替え、移送先からの報告を受け取る', async () => {

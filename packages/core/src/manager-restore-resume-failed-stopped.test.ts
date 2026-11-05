@@ -12,6 +12,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -82,7 +83,7 @@ describe('resume 中に abort で止めた委譲を、resume の失敗が lost �
         revision: { status: 'unheard' },
       },
     ];
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [client];
       },
@@ -103,7 +104,7 @@ describe('resume 中に abort で止めた委譲を、resume の失敗が lost �
         return () => {};
       },
       async stop() {},
-    };
+    });
     return { registry, client, gate: { release, entered: enteredP } };
   }
 

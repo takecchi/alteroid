@@ -60,6 +60,7 @@ import {
   type RunnerResumeCommand,
   type UnpushedWorkResult,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent, Job, JobStatus, JournalEntry } from './schema.js';
 import { workspaceLocatorSchema } from './schema.js';
 import type { Stores } from './store.js';
@@ -9721,7 +9722,7 @@ describe('宛先の器が黙ったことを live が見る', () => {
     runnerId: string,
     patch: Partial<RunnerEntry>,
   ): RunnerRegistry {
-    return {
+    return fakeRunnerRegistry({
       list: () => registry.list(),
       get: (id) => registry.get(id),
       select: (input) => registry.select(input),
@@ -9735,7 +9736,7 @@ describe('宛先の器が黙ったことを live が見る', () => {
         registry
           .entries()
           .map((entry) => (entry.runnerId === runnerId ? { ...entry, ...patch } : entry)),
-    };
+    });
   }
 
   async function seed(stores: Stores, job: Partial<Job> & { id: string }): Promise<void> {
@@ -10283,7 +10284,7 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     registry: RunnerRegistry,
     patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
   ): RunnerRegistry {
-    return {
+    return fakeRunnerRegistry({
       list: () => registry.list(),
       get: (id) => registry.get(id),
       select: (input) => registry.select(input),
@@ -10298,7 +10299,7 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
           const patch = patches().get(entry.label);
           return patch === undefined ? entry : { ...entry, ...patch };
         }),
-    };
+    });
   }
 
   it('走行中の委譲を runner が一覧に載せなくなると、誰も send() を打たず hello も来ないのに pool.list() の sessionMissingSince が立つ（#579 本題）', async () => {
@@ -10588,7 +10589,7 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     registry: RunnerRegistry,
     patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
   ): RunnerRegistry {
-    return {
+    return fakeRunnerRegistry({
       list: () => registry.list(),
       get: (id) => registry.get(id),
       select: (input) => registry.select(input),
@@ -10603,7 +10604,7 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
           const patch = patches().get(entry.label);
           return patch === undefined ? entry : { ...entry, ...patch };
         }),
-    };
+    });
   }
 
   it('runnerSessionSince より後に取れた source:shutdown の観測は「届いた」と判定する', async () => {
@@ -10805,7 +10806,7 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     registry: RunnerRegistry,
     patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
   ): RunnerRegistry {
-    return {
+    return fakeRunnerRegistry({
       list: () => registry.list(),
       get: (id) => registry.get(id),
       select: (input) => registry.select(input),
@@ -10820,7 +10821,7 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
           const patch = patches().get(entry.label);
           return patch === undefined ? entry : { ...entry, ...patch };
         }),
-    };
+    });
   }
 
   // `sessionId` を持たせない: 戻る先が無く、404 のあとの resume が必ず `no-session` で失敗して `'resume-failed'` を確実に作れるため。
