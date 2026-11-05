@@ -1560,8 +1560,9 @@ describe('profile_write の出力と呼んだあとの状態の固定（場面�
     expect(text('applier-fail-redaction#3')).not.toContain('本文の断片');
     expect(text('applier-fail-redaction#4')).toContain('Error: 器が落ちた [REDACTED]');
     expect(text('applier-fail-redaction#5')).toContain('…（前略）\n');
-    // 伏せたあとで末尾 4,000 字へ切るので、切り口が伏せ字の印の途中に当たることがある（値の断片は残らない）
-    expect(text('applier-fail-redaction#6')).toContain('…（前略）\nREDACTED] back');
+    // 伏せたあとで末尾 4,000 字へ切る。切り口が伏せ字の印の途中に当たったら、印の後ろから残す（欠けた印を出さない。#6506）
+    expect(text('applier-fail-redaction#6')).toContain('…（前略）\n back');
+    expect(text('applier-fail-redaction#6')).not.toContain('REDACTED]');
     expect(text('applier-fail-redaction#7')).toContain('[REDACTED]');
     expect(text('runners-redaction')).toContain('runner-1（評価が失敗した [REDACTED]）');
     expect(text('runners-redaction')).toContain('runner-2（Error: 接続できない [REDACTED]）');

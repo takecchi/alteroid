@@ -526,7 +526,7 @@ const SCENARIOS: Scenario[] = [
     name: 'applier-fail',
     group: '結果の報告',
     covers:
-      'クローンの器が評価で断った（stored=false。外したあとの本文を器が受け付けない）: 日誌は先の行と「差し替えられなかった（読めなかった）」（grounds は値は記録しない旨）。応答は「実行環境プロファイルを置けなかった（保存も配布もしていない）: 理由」＋ output があれば改行して続ける。理由・output が無ければ「理由不明」。行は変わらず runner へも配られない。isError ではない。日誌の文言は profile_write と共通で「差し替えられなかった（読めなかった）（行 名前）」（外す道具なのに差し替えの文言）',
+      'クローンの器が評価で断った（stored=false。外したあとの本文を器が受け付けない）: 日誌は先の行と「行 名前 を外せなかった（読めなかった）」（grounds は値は記録しない旨）。応答は「実行環境プロファイルの行 名前 を外せなかった（保存も配布もしていない）: 理由」＋ output があれば改行して続ける。理由・output が無ければ「理由不明」。行は変わらず runner へも配られない。isError ではない。外す道具なので「差し替え」「置けなかった」とは書かない（#6506）',
     seed: [RUST_SEED],
     steps: [
       w(rm('rust'), 'journal', { applier: { kind: 'fail', error: '構文が壊れている' } }),
@@ -1222,7 +1222,9 @@ describe('profile_remove の出力と呼んだあとの状態の固定（場面�
     const PRE_GROUNDS = '人間から実行環境そのものを渡された（値は記録しない）';
     const TAIL_LINE =
       'これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。';
-    const CANT_PUT = '実行環境プロファイルを置けなかった（保存も配布もしていない）';
+    // 外す道具なので「置けなかった」ではなく「外せなかった」（#6506）
+    const cantRemove = (name: string): string =>
+      `実行環境プロファイルの行 ${name} を外せなかった（保存も配布もしていない）`;
 
     // 断り
     for (const key of ['no-profile#1', 'no-profile#2', 'no-profile#3']) {
@@ -1459,7 +1461,7 @@ describe('profile_remove の出力と呼んだあとの状態の固定（場面�
     expect(text('runners-many#3')).toMatch(/配れなかった先: .*…（\d+ 文字省略。全 \d+ 文字）/);
     expect(step('journal-after-fails#1').output.thrown).toBe(false);
     expect(text('journal-after-fails#1')).toContain('行 rust を外した');
-    expect(text('journal-after-fails#2')).toContain(CANT_PUT);
+    expect(text('journal-after-fails#2')).toContain(cantRemove('other'));
     expect(step('journal-after-fails#3').output.thrown).toBe(true);
     expect(step('journal-after-fails#4').output.thrown).toBe(false);
     expect(step('journal-after-fails#5').output.errorName).toBe('ProfileRollbackFailedError');
@@ -1468,15 +1470,16 @@ describe('profile_remove の出力と呼んだあとの状態の固定（場面�
       expect(step(key).journal, key).toHaveLength(1);
       expect(step(key).dropped, key).toHaveLength(1);
     }
-    expect(text('applier-fail#1')).toBe(`${CANT_PUT}: 構文が壊れている`);
+    expect(text('applier-fail#1')).toBe(`${cantRemove('rust')}: 構文が壊れている`);
     expect(text('applier-fail#2')).toBe(
-      `${CANT_PUT}: プロファイルの評価が失敗した（終了コード 2）\nline 3: 構文エラー`,
+      `${cantRemove('rust')}: プロファイルの評価が失敗した（終了コード 2）\nline 3: 構文エラー`,
     );
-    expect(text('applier-fail#3')).toBe(`${CANT_PUT}: 理由不明`);
-    expect(text('applier-fail#4')).toBe(`${CANT_PUT}: 理由不明\n理由は無く出力だけ`);
+    expect(text('applier-fail#3')).toBe(`${cantRemove('rust')}: 理由不明`);
+    expect(text('applier-fail#4')).toBe(`${cantRemove('rust')}: 理由不明\n理由は無く出力だけ`);
+    // 外す道具なので「差し替え」と書かない（#6506）
     expect(decisions('applier-fail#1')).toEqual([
       pre('rust'),
-      '実行環境プロファイルを差し替えられなかった（読めなかった）（行 rust）: FOO を外した',
+      '実行環境プロファイルの行 rust を外せなかった（読めなかった）: FOO を外した',
     ]);
     expect(groundsOf('applier-fail#1')[1]).toBe(
       '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
@@ -1488,7 +1491,7 @@ describe('profile_remove の出力と呼んだあとの状態の固定（場面�
 
     // 伏せ字
     for (let i = 1; i <= 5; i += 1) {
-      expect(text(`applier-fail-redaction#${String(i)}`)).toContain(CANT_PUT);
+      expect(text(`applier-fail-redaction#${String(i)}`)).toContain(cantRemove('rust'));
     }
     expect(text('applier-fail-redaction#1')).toContain('[REDACTED]');
     expect(text('applier-fail-redaction#2')).toContain('PIN_FAKE_API_TOKEN=[REDACTED]');
