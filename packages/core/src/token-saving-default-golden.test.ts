@@ -296,11 +296,11 @@ describe('既定（S1・S2 無効）の入力の全文と日誌の行', () => {
     await firePreCompact(s);
     await humanTurn(s, '2ターン目（要約が走る）');
     await humanTurn(s, '3ターン目（要約の後）');
-    // gauge 行は待たれずに書かれる。出るまで待つが、出なくても落とさず（上限 1 秒）、スナップショットの差として赤くする
-    for (let i = 0; i < 50; i += 1) {
-      if ((await journalLines(stores)).includes('[計器] 記憶の索引を')) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    // gauge 行は待たれずに書かれる。実時間で刻まずに、土台の waitFor で出るまで待つ
+    await waitFor(
+      async () => (await journalLines(stores)).includes('[計器] 記憶の索引を'),
+      '記憶の索引の載せ直しの gauge 行',
+    );
     expect(renderInputs(inputsOf(s))).toMatchSnapshot('入力');
     expect(await journalLines(stores)).toMatchSnapshot('日誌');
     await stopAll(s.clone);

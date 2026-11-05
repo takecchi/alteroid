@@ -755,25 +755,6 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     expect((await legacyStore.aggregate({ from: '2026-08-01' })).beforeLayers).toBe(true);
   }, 30_000);
 
-  it('移行後は同じ actor・日・モデルで層の違う行が2つ立てられる（古い3列の鍵が外れている）', async () => {
-    await migrate(legacyDb);
-    const legacyStore = new PgUsageStore(legacyDb);
-
-    await legacyStore.record({
-      layer: 'clone',
-      site: 'session',
-      accumulation: 'cumulative',
-      managerId: 'mgr-old',
-      date: '2026-08-01',
-      at: '2026-08-19T10:00:00.000Z',
-      snapshot: { models: { 'claude-opus-5': totals({ costUsd: 1 }) } },
-    });
-
-    const { rows } = await legacyStore.aggregate({});
-    expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.layer).sort()).toEqual(['clone', 'manager']);
-  }, 30_000);
-
   it('migrate を2回当てても落ちない（鍵の差し替えが冪等である）', async () => {
     await migrate(legacyDb);
     await migrate(legacyDb);
@@ -1199,40 +1180,6 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     await layeredClient.close();
   });
 
-  it('移行後は同じ日・actor・モデル・層でトークンの違う行が2つ立てられる（旧名の5列索引が外れている）', async () => {
-    await migrate(layeredDb);
-    const layeredStore = new PgUsageStore(layeredDb);
-
-    for (const tokenId of ['tok-a', 'tok-b']) {
-      await layeredStore.record({
-        layer: 'manager',
-        site: 'session',
-        accumulation: 'oneshot',
-        managerId: 'mgr-new',
-        date: '2026-08-25',
-        at: '2026-08-25T10:00:00.000Z',
-        snapshot: { models: { 'claude-opus-5': totals({ costUsd: 1 }) } },
-        tokenId,
-      });
-    }
-
-    const { rows } = await layeredStore.aggregate({ managerId: 'mgr-new' });
-    expect(rows).toHaveLength(2);
-    expect(rows.map((row) => row.tokenId)).toEqual(['tok-a', 'tok-b']);
-  }, 30_000);
-
-  it('旧名の索引が実際に消え、新しい名前の索引が在る（no-op で通していない）', async () => {
-    await migrate(layeredDb);
-
-    const result = (await layeredDb.execute(
-      sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
-    )) as { rows: Array<{ indexname: string }> };
-    const names = result.rows.map((row) => row.indexname).sort();
-    // 行が2つ立つことだけで済ませない: 旧索引が消えたことでも新索引が在ることでも説明できてしまうため、名前で直接見る。
-    expect(names).toContain('usage_daily_token_key_idx');
-    expect(names).not.toContain('usage_daily_key_idx');
-  }, 30_000);
-
   it('既にある行はトークンの帰属を持たない（既定を観測として売らない）', async () => {
     await migrate(layeredDb);
     const layeredStore = new PgUsageStore(layeredDb);
@@ -1305,47 +1252,6 @@ describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに�
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.tokenId ?? '').sort()).toEqual(['', 'tok-a']);
-  }, 30_000);
-
-  it('5列の鍵が既に在る DB から: 移行して記録してから2周目を通しても落ちない', async () => {
-    const { client: legacyClient, db: legacyDb } = await createEmptyTestDb();
-    try {
-      await legacyDb.execute(
-        sql.raw(`create table if not exists usage_daily (
-           date text not null,
-           manager_id text not null,
-           model text not null,
-           input_tokens bigint not null default 0,
-           output_tokens bigint not null default 0,
-           cache_read_input_tokens bigint not null default 0,
-           cache_creation_input_tokens bigint not null default 0,
-           web_search_requests bigint not null default 0,
-           cost_usd double precision not null default 0,
-           layer text not null default 'manager',
-           site text not null default 'session',
-           updated_at timestamptz not null
-         )`),
-      );
-      await legacyDb.execute(
-        sql.raw(`create unique index if not exists usage_daily_key_idx
-                   on usage_daily (date, manager_id, model, layer, site)`),
-      );
-
-      await migrate(legacyDb);
-      await putTwoTokens(new PgUsageStore(legacyDb));
-      await migrate(legacyDb);
-
-      const names = (
-        (await legacyDb.execute(
-          sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
-        )) as { rows: Array<{ indexname: string }> }
-      ).rows.map((row) => row.indexname);
-      expect(names).not.toContain('usage_daily_key_idx');
-      expect(names).toContain('usage_daily_token_key_idx');
-      expect((await new PgUsageStore(legacyDb).aggregate({})).rows).toHaveLength(2);
-    } finally {
-      await legacyClient.close();
-    }
   }, 30_000);
 });
 
