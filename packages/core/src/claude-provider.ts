@@ -476,14 +476,6 @@ export function withCliSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 // Older Claude Code versions reject true or false here, so use the object form in settings files shared across versions.
 export const NO_ATTRIBUTION_SETTINGS = { attribution: { commit: '', pr: '' } } as const;
 
-/**
- * 自動の要約を走らせる文脈の大きさ（トークン）の基準。alteroid はこの窓を SDK へ設定しない（SDK の既定のまま。人間が
- * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を置けばそちらが効く）。`context-size-history.ts` が「窓を下げたら何が変わるか」を測る量の基準にだけ使う。
- */
-// [sdk-verbatim Settings.modelOverrides.autoCompactWindow]
-// Auto-compact window for this model, in tokens (100000 to 1000000), or "auto" for the window tuned for the model.
-export const DEFAULT_AUTO_COMPACT_WINDOW_TOKENS = 300_000;
-
 // 本セッション（`buildCloneSessionOptions`）と蒸留（`buildCloneDistillOptions`）が共に取る欄
 interface CloneOptionsRequestBase {
   model: string;
