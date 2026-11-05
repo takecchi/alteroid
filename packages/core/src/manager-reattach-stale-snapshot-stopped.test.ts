@@ -14,6 +14,7 @@ import type {
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -35,7 +36,7 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
   } {
     const clients = new Map<string, RunnerClient>();
     const entries: RunnerEntry[] = [];
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()];
       },
@@ -64,7 +65,7 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
         return () => {};
       },
       async stop() {},
-    };
+    });
     return {
       registry,
       entries,

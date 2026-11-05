@@ -7,8 +7,8 @@ import {
   type RunnerClient,
   type RunnerEntry,
   type RunnerEvent,
-  type RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -105,7 +105,7 @@ async function build(): Promise<Env> {
   const stores = createMemoryStores();
   const fake = fakeRunner('runner-a');
   const getCalls: string[] = [];
-  const registry: RunnerRegistry = {
+  const registry = fakeRunnerRegistry({
     async list() {
       return [fake.client];
     },
@@ -135,7 +135,7 @@ async function build(): Promise<Env> {
       return () => {};
     },
     async stop() {},
-  };
+  });
   const inbox: InboxEvent[] = [];
   const pool = createManagerPool({
     stores,

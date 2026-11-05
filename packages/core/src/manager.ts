@@ -3462,7 +3462,7 @@ class Pool implements ManagerPool {
         const pidsSaturation =
           entry.runnerId === undefined
             ? undefined
-            : this.#runners.pidsSaturationOf?.(entry.runnerId, resources?.pids);
+            : this.#runners.pidsSaturationOf(entry.runnerId, resources?.pids);
 
         const overview: RunnerOverview = {
           label: entry.label,
@@ -3640,7 +3640,7 @@ class Pool implements ManagerPool {
   }
 
   runnerPidsSaturation(runnerId: string): PidsSaturation | undefined {
-    return this.#runners.pidsSaturationOf?.(runnerId);
+    return this.#runners.pidsSaturationOf(runnerId);
   }
 
   async runnerIdOf(managerId: string): Promise<string | undefined> {
@@ -7249,10 +7249,10 @@ class Pool implements ManagerPool {
       record.job.runnerId !== undefined
     ) {
       if (event.systemError?.code === 'EAGAIN') {
-        this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'eagain');
+        this.#runners.notePidsSaturationSign(record.job.runnerId, 'eagain');
       }
       if ((event.cgroupEvents?.pidsMaxDelta ?? 0) > 0) {
-        this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'fork-denied');
+        this.#runners.notePidsSaturationSign(record.job.runnerId, 'fork-denied');
       }
     }
   }

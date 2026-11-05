@@ -12,6 +12,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -32,7 +33,7 @@ function createFakeRegistry(): {
 } {
   const clients = new Map<string, RunnerClient>();
   const entries: RunnerEntry[] = [];
-  const registry: RunnerRegistry = {
+  const registry = fakeRunnerRegistry({
     async list() {
       return [...clients.values()];
     },
@@ -70,7 +71,7 @@ function createFakeRegistry(): {
       return () => {};
     },
     async stop() {},
-  };
+  });
   return {
     registry,
     entries,

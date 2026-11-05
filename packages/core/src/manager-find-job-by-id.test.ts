@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
-import type { RunnerRegistry } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { UnreadableJobError } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 // 1件のために台帳を全部読まない（#5140）: `listJobs()` は全行の版を読むので、1件を探す経路は主キーで1行を読む `getJob` を通る
 
-const registry: RunnerRegistry = {
+const registry = fakeRunnerRegistry({
   async list() {
     return [];
   },
@@ -29,7 +29,7 @@ const registry: RunnerRegistry = {
     return () => {};
   },
   async stop() {},
-};
+});
 
 function jobOf(id: string, runnerId: string): Job {
   return {

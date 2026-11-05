@@ -8,8 +8,8 @@ import type {
   RunnerEvent,
   RunnerLiveness,
   RunnerManagerState,
-  RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -179,7 +179,7 @@ function build(options: {
     const stores = options.wrapStores === undefined ? base : options.wrapStores(base);
     const clients = new Map(options.runners.map((fake) => [fake.client.runnerId, fake]));
     const gets = new Map<string, number>();
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()].map((fake) => fake.client);
       },
@@ -209,7 +209,7 @@ function build(options: {
         return () => {};
       },
       async stop() {},
-    };
+    });
     const pool = createManagerPool({
       stores,
       post: () => {},

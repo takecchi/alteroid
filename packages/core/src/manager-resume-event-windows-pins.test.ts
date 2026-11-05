@@ -16,6 +16,7 @@ import type {
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -52,7 +53,7 @@ describe('resume の最中に届く出来事を預ける窓', () => {
     const clients = new Map<string, RunnerClient>();
     const entries: RunnerEntry[] = [];
     const hooks: { onGet?: (runnerId: string) => Promise<void> | undefined } = {};
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()];
       },
@@ -82,7 +83,7 @@ describe('resume の最中に届く出来事を預ける窓', () => {
         return () => {};
       },
       async stop() {},
-    };
+    });
     return {
       registry,
       entries,

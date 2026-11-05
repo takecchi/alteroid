@@ -1813,14 +1813,15 @@ export interface RunnerRegistry {
   noteManagerFailed(runnerId: string): void;
   /**
    * 「いま新しいプロセスを起こせない」印（`closed` の `systemError.code === 'EAGAIN'`・`cgroupEvents.pidsMaxDelta > 0`）を知らせる。文言は読まない。
-   * `noteManagerFailed` と違い `failed` に限らず `lost` の回も数える。制限ではない（全台が飽和なら最良を返す）。省略可能（偽の名簿が持たなくても型が通る）。
+   * `noteManagerFailed` と違い `failed` に限らず `lost` の回も数える。制限ではない（全台が飽和なら最良を返す）。
+   * 口を省略可能にしない: 省略が静かに効き、呼ばれない配線は赤くならない。同期で完結する。
    */
-  notePidsSaturationSign?(runnerId: string, sign: PidsSaturationSign): void;
+  notePidsSaturationSign(runnerId: string, sign: PidsSaturationSign): void;
   /**
    * 材料が無ければ `undefined`（「飽和ではない」とは言わない）。`pids` を渡さなければ直近の配置で取った現在値を使い、
    * 印は窓（`PLACEMENT_FAILURE_MEMORY_MS`）の内側だけを数える。
    */
-  pidsSaturationOf?(
+  pidsSaturationOf(
     runnerId: string,
     pids?: { readonly current: number; readonly max: number },
   ): PidsSaturation | undefined;

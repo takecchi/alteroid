@@ -11,6 +11,7 @@ import {
   type RunnerProfileResult,
   type RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -108,7 +109,7 @@ function fakeRunner(hooks: {
 
 // 名簿の観測（runner の一覧に載っている委譲 id と観測時刻）を `entries()` へ直接差し込む。
 function withListedSessions(registry: RunnerRegistry, listed: () => readonly string[]) {
-  const wrapped: RunnerRegistry = {
+  const wrapped = fakeRunnerRegistry({
     list: () => registry.list(),
     get: (id) => registry.get(id),
     select: (input) => registry.select(input),
@@ -124,7 +125,7 @@ function withListedSessions(registry: RunnerRegistry, listed: () => readonly str
         sessions: listed(),
         sessionsObservedAt: OBSERVED_AT,
       })),
-  };
+  });
   return wrapped;
 }
 

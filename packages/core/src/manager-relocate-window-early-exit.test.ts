@@ -11,8 +11,8 @@ import type {
   RunnerManagerState,
   RunnerProfileFingerprint,
   RunnerProfileResult,
-  RunnerRegistry,
 } from './runner-protocol.js';
+import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -98,7 +98,7 @@ describe('移送の窓は、resume が受理されなかった早い抜け方で
     await stores.jobs.putJob(job);
     const clients = new Map<string, RunnerClient>();
     const entries = [entryOf('runner-a', 'lost'), entryOf('runner-b', 'connected')];
-    const registry: RunnerRegistry = {
+    const registry = fakeRunnerRegistry({
       async list() {
         return [...clients.values()];
       },
@@ -119,7 +119,7 @@ describe('移送の窓は、resume が受理されなかった早い抜け方で
         return () => {};
       },
       async stop() {},
-    };
+    });
     const runnerA = fakeRunner('runner-a');
     const runnerB = fakeRunner('runner-b');
     clients.set('runner-a', runnerA.client);
