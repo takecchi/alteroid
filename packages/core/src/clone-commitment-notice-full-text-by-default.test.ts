@@ -8,10 +8,9 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-// #5297: 断り書きの骨組みの文を、同じ会話の2回目から参照にする。
-// 全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。ここで新しい条件は足していない。
+// #5297: 断り書きの骨組みの文は、同じ会話の2回目以降も毎回全文で出す。
 // #5469 P6c: 骨組みは「待ち行列の先頭・task として積んだ・全文と並べ替え」に替わった（旧: 台帳の件数・commitment_close・commitment_list）。
-// #5923: クローンは台帳へ書かなくなったので、台帳の閉じ方（commitment_close）の骨組みと、その畳みの歯（回答のターン）は外した。
+// #5923: クローンは台帳へ書かなくなったので、台帳の閉じ方（commitment_close）の骨組みと、その歯（回答のターン）は外した。
 
 const SKELETON = '返事をしたターンの終わりに自動で done になる';
 const TAIL_FULL = '全文は `task_list`。並べ替えは `task_move`。';
@@ -24,7 +23,7 @@ interface SdkScript {
   /** n 番目（1始まり）の入力の結果を、この Promise が解けるまで返さない（次の入力を束ねさせるため）。 */
   holdResultAt?: Readonly<Record<number, Promise<void>>>;
   after?: (inputCount: number) => SDKMessage[];
-  // クローンの env。既定は空（畳みの節約は外した）
+  // クローンの env。既定は空
   env?: NodeJS.ProcessEnv;
 }
 
@@ -123,8 +122,8 @@ function ledgerLines(input: string): string {
   return lines.slice(start, end < 0 ? undefined : end).join('\n');
 }
 
-describe('台帳の2行は、同じ会話の2回目から骨組みが参照になる（#5297）', () => {
-  it('⭐ 畳みが切り（既定）なら、台帳の2行も末尾の固定文も2回目以降も全文のまま', async () => {
+describe('台帳の2行は、同じ会話の2回目以降も骨組みが毎回全文で出る（#5297）', () => {
+  it('⭐ 既定では、台帳の2行も末尾の固定文も2回目以降も全文のまま', async () => {
     const s = boot({ env: {} });
     const first = await humanTurn(s);
     const second = await humanTurn(s);
@@ -140,7 +139,7 @@ describe('台帳の2行は、同じ会話の2回目から骨組みが参照に�
     await s.clone.stop();
   });
 
-  it('⭐ 畳みが切り（既定）なら、人間操作の節の末尾段落も毎回全文', async () => {
+  it('⭐ 既定では、人間操作の節の末尾段落も毎回全文', async () => {
     const stores = createMemoryStores();
     const s = boot({ env: {} }, stores);
     const act = (target: string) =>

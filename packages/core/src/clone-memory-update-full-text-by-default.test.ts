@@ -9,14 +9,13 @@ import { createLocalRunner } from './runner-local.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-// #5301: 記憶更新の頭（「記憶が更新された…」の説明）を、同じ会話の2回目から参照にする。
-// 全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。ここで新しい条件は足していない。
-// 載せる文書の本文（差分）・誰が書いたかの行・削除の行は畳まず毎回出る。
+// #5301: 記憶更新の頭（「記憶が更新された…」の説明）は、同じ会話の2回目以降も毎回全文で出す。
+// 載せる文書の本文（差分）・誰が書いたかの行・削除の行も毎回出る。
 
-/** 全文にだけ在る説明の文（畳まれる側）。 */
+/** 頭の全文にある説明の文。 */
 const FULL_ONLY = '大きく変わっていなければ';
 const FULL_ONLY_2 = 'このセッションを組んだ時点の索引';
-/** 短い形にだけ在る印。 */
+/** 頭の短い形（2回目以降の省略形）にだけあった印。出てはならない。 */
 const REF_MARK = '読み方は前の更新と同じ';
 
 interface SdkScript {
@@ -24,7 +23,7 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
-  // クローンの env。既定は空（畳みの節約は外した）
+  // クローンの env。既定は空
   env?: NodeJS.ProcessEnv;
 }
 
@@ -136,8 +135,8 @@ function headOf(input: string): string {
   return rest.slice(0, end < 0 ? undefined : end);
 }
 
-describe('記憶更新の頭は、同じ会話の2回目から短い形になる（#5301）', () => {
-  it('⭐ 畳みが切り（既定）なら、2回目以降も記憶更新の頭が全文のまま', async () => {
+describe('記憶更新の頭は、同じ会話の2回目以降も毎回全文で出る（#5301）', () => {
+  it('⭐ 既定では、2回目以降も記憶更新の頭が全文のまま', async () => {
     const s = await bootWithBaseline({ env: {} });
     const inputs = [await s.update(2), await s.update(3), await s.update(4)];
     const first = headOf(inputs[0] ?? '');
