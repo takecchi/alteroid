@@ -62,7 +62,7 @@ export async function credentialListCommand(): Promise<void> {
     stdout.write(
       '**この状態では、マネージャーへ配られる環境変数はありません。**\n' +
         '（デーモンの器の環境変数も、runner の環境変数も配られません。正本が唯一の出所です。\n' +
-        '　既存の器の GH_TOKEN などは、起動時に1度だけ正本へ移されています）\n',
+        '　器の環境変数の GH_TOKEN などは、正本へは移されません。マネージャーへ渡すには正本へ置いてください）\n',
     );
     stdout.write('置くには: alteroid credential set <名前> --file <path>\n');
     return;
