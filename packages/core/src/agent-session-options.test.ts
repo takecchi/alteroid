@@ -13,8 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { cloneMcpServers, DEFAULT_AUTO_COMPACT_WINDOW_TOKENS } from './claude-provider.js';
-import { TOKEN_SAVING_COMPACTION_ENV } from './token-saving-switches.js';
+import { cloneMcpServers } from './claude-provider.js';
 import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -129,7 +128,7 @@ describe('クローン本セッションへ渡す Options', () => {
     const clone = createClone({
       stores,
       queryFn: fn,
-      env: { [TOKEN_SAVING_COMPACTION_ENV]: '1' },
+      env: {},
     });
 
     clone.post(humanMessage('やあ'));
@@ -156,7 +155,6 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(options.resume).toBeUndefined();
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
-      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
     });
 
     await clone.stop();
@@ -273,7 +271,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
       workspacePath: dir,
       emit: () => undefined,
       queryFn: fn,
-      env: { [TOKEN_SAVING_COMPACTION_ENV]: '1' },
+      env: {},
     });
 
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
@@ -306,7 +304,6 @@ describe('マネージャー（runner）へ渡す Options', () => {
 
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
-      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
       autoMemoryEnabled: false,
     });
   });
@@ -318,7 +315,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
       workspacePath: dir,
       emit: () => undefined,
       queryFn: fn,
-      env: { [MANAGER_AUTO_MEMORY_ENV_KEY]: 'true', [TOKEN_SAVING_COMPACTION_ENV]: '1' },
+      env: { [MANAGER_AUTO_MEMORY_ENV_KEY]: 'true' },
     });
 
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
@@ -326,7 +323,6 @@ describe('マネージャー（runner）へ渡す Options', () => {
 
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
-      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
     });
   });
 

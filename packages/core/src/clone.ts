@@ -732,12 +732,6 @@ const MEMORY_UPDATE_HEAD_REF =
   '**ここに出ていない文書は変わっていない。**' +
   '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**';
 
-// 要約の後に索引を載せ直さない短い形（#5305）。要約に潰されたことと、読み直さなくてよい理由（システムプロンプトが現在の全体）を1行で言う
-export const MEMORY_UNCHANGED_SINCE_BAKED_NOTICE =
-  '[system] この会話の文脈は要約に潰されたが、記憶は焼いた時点から変わっていない。' +
-  'システムプロンプトの「現在の記憶」が現在の全体である（索引は載せ直さない）。' +
-  '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**';
-
 // 記憶の全文を載せ直さない: 二重載せになり、履歴の写しが resume のたびに増えるため
 const RESUMED_MEMORY_NOTICE =
   '[system] このセッションは前のセッションを引き継いで（resume して）開いたものである。' +
@@ -2475,7 +2469,7 @@ class Clone implements CloneHost {
     if (this.#pumpTurnFailed) {
       this.#returnToFullText({
         situation: true,
-        digest: { reason: 'full', label: 'turn_failed' },
+        digest: { label: 'turn_failed' },
       });
     }
     // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
@@ -3583,30 +3577,29 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 全文へ戻す理由（案 A）。`'compaction'` は「要約が走るという見込みが材料から立つ」ときだけ: 会話の上には前の全文の元が残る（要約された姿で）ので、判断の節だけの軽い全文でよい。
-   * それ以外は `'full'`（完全な全文）: 会話が変わった・作り直しの窓（会話の上に何も残らない）、使用量の観測が無い・閾値や量が不明（要約の有無が確かめられない。安全側）。
+   * 全文へ戻す理由: 会話が変わった・作り直しの窓（会話の上に何も残らない）、使用量の観測が無い・閾値や量が不明（要約の有無が確かめられない。安全側）、要約が走るという見込み。
    */
-  #fullReasonThisTurn(): { reason: 'full' | 'compaction'; label: DigestResetLabel } | null {
+  #fullReasonThisTurn(): { label: DigestResetLabel } | null {
     // 読み戻した控えがあるあいだ（起動後の最初のターンで、`#ensureQuery` が resume を開くまで）は、`query === null` を会話が変わった理由にしない:
     // resume が同じ id で戻ると確かめた上で読み戻しており、会話の上には控えの全文が残っている。使用量は再起動で消えているので、預けた時点の観測で判定する
     const restored = this.#sdkSession.query === null ? this.#restoredFold : null;
     if (this.#sdkSession.query === null && restored === null) {
-      return { reason: 'full', label: 'query_null' };
+      return { label: 'query_null' };
     }
-    if (this.#sdkSession.inputEndedForRecycle) return { reason: 'full', label: 'recycle_window' };
+    if (this.#sdkSession.inputEndedForRecycle) return { label: 'recycle_window' };
     const label = digestUsageResetReason(
       restored === null ? this.#lastContextUsage : restored.usage,
       restored === null ? this.#lastContextGrowthTokens : restored.growthTokens,
     );
     if (label === null) return null;
-    return { reason: label === 'compaction_likely' ? 'compaction' : 'full', label };
+    return { label };
   }
 
   /**
    * 畳みの控えを全文へ戻す経路の、唯一の入口。どの控えを何のために捨てるかを呼び出し元ごとに引数で名乗る（以前は `clear()`・`#resetDigestDelta`・`forgetFixed()` などが5〜6か所に対で書かれていた）。
    * 順序は固定: situation 側の控え → 周期の数え → セッション id → digest 側（`reset` か `forgetFixed`）。呼び出し元ごとの組み合わせは変えていない:
    * - 失敗したターン・会話の切り替え・要約: situation と digest の両方（`reset`）
-   * - 周期: situation・周期の数え・digest の固定の文言だけ（`forgetFixed`。要約の軽い全文への切り替えには触れない）
+   * - 周期: situation・周期の数え・digest の固定の文言だけ（`forgetFixed`）
    * - 作り直しで読み戻した控えを捨てる回: 上に加えて周期の数えとセッション id
    * - `#resetDigestDeltaIfNewConversation`（断り書きの先頭より前）・PreCompact: digest 側だけ（situation 側は直後の `#applyFoldPeriod` / `compaction` の合図が消す）
    * 預けた控えは `#resetDigestDelta` が捨てる（周期の `forgetFixed` は預けた控えに触れない。従来どおり）。
@@ -3615,13 +3608,13 @@ class Clone implements CloneHost {
     situation?: true;
     turnsSinceFull?: true;
     sessionId?: true;
-    digest: { reason: 'full' | 'compaction'; label: DigestResetLabel } | 'fixed';
+    digest: { label: DigestResetLabel } | 'fixed';
   }): void {
     if (target.situation === true) this.#situationExplained.clear();
     if (target.turnsSinceFull === true) this.#situationTurnsSinceFull = 0;
     if (target.sessionId === true) this.#situationExplainedSessionId = undefined;
     if (target.digest === 'fixed') this.#digestDelta.forgetFixed();
-    else this.#resetDigestDelta(target.digest.reason, target.digest.label);
+    else this.#resetDigestDelta(target.digest.label);
   }
 
   /**
@@ -3630,11 +3623,10 @@ class Clone implements CloneHost {
    * 待たない・握る: 同期の呼び出し元から呼ぶため。`#journal` は投げないので、書き込みの失敗はターンを落とさない。
    * 呼ぶのは `#returnToFullText` だけ。
    */
-  #resetDigestDelta(reason: 'full' | 'compaction', label: DigestResetLabel): void {
+  #resetDigestDelta(label: DigestResetLabel): void {
     // 預けた控えも同じ条件で捨てる: 畳んだ記録を捨てたのに預け先だけが「畳んである」と言い続けると、次の起動が会話に無い全文を畳むため
     this.#forgetFoldState();
-    // 要約直後の軽い全文（`isLean`）は系統4のスイッチだけで決まる（畳みの系統2が無効でも効く）。系統4が無効なら、要約が走りうる／走った回も完全な全文へ倒す
-    if (!this.#digestDelta.reset(this.#tokenSaving.compaction ? reason : 'full')) return;
+    if (!this.#digestDelta.reset()) return;
     // 1ターン1行: 入力を押し込んだ後（commit 済み）に失敗などで戻す回は、同じターンの先頭で書いた行の理由に含める
     if (this.#digestResetLoggedThisTurn) return;
     this.#digestResetLoggedThisTurn = true;
@@ -6368,59 +6360,17 @@ class Clone implements CloneHost {
     const since = this.#memoryCarriedAt;
     this.#memoryCarriedAt = readAt;
 
-    // 要約の後でも、記憶がシステムプロンプトに焼いた時点から変わっていなければ全文は載せない: システムプロンプトは要約で消えず、同じ索引を会話へもう一度積むと次の要約まで全要求に二重で乗るため（#5305）。
-    // 比べる相手は焼いた時点だけにする（最後に載せた時点ではない）: 要約の前に載せた差分は要約に畳まれて消えており、焼いた時点との差はまだ文脈のどこにも載っていないため。
-    if (refreshIndex && this.#distillMemory.matchesBakedMemory(documents)) {
-      await this.#journalSelf(
-        'outbound',
-        EXCHANGE_KIND_GAUGE_PREFIX +
-          redactErrorText(
-            describeMemoryIndexRefresh({
-              reinjected: false,
-              diff: { changed: [], added: [], removed: [] },
-              renderedChars: 0,
-              totalDocuments: documents.length,
-            }),
-            this.#env,
-          ),
-      );
-      return [
-        ...(resumeNotice === null ? [] : [resumeNotice, '']),
-        MEMORY_UNCHANGED_SINCE_BAKED_NOTICE,
-        '',
-        '---',
-        '',
-        text,
-      ].join('\n');
-    }
-
     // 載せる文字列を先に作って長さを日誌へ残す: 数える対象が実際に会話へ載る文字列そのものになるため。
-    // 載せるのは焼いた時点と違う文書（変わった・増えた）だけにする: 焼き込みは要約でも消えず、全文書の索引をもう一度積むと同じ内容が二重に載るため（実測: 要約44回のうち22回が全文で、平均約3.5万字。#5426）。
-    // 焼いた控えが無いときは従来どおり全文: 「出ていない文書はシステムプロンプトのまま」と言える根拠が無いため。
-    // 削除は焼いた時点との差からも名前で伝える: 全文を載せなくなると、載っていないことが「消えた」の合図でなくなり、システムプロンプトに残る記載が生きていると読まれるため。
-    const bakedDiff = refreshIndex ? this.#distillMemory.diffAgainstBaked(documents) : null;
-    const diffOnly = bakedDiff !== null && this.#distillMemory.hasBakedMemory();
-    const changedVsBaked = diffOnly
-      ? documents.filter(
-          (doc) => bakedDiff.changed.includes(doc.slug) || bakedDiff.added.includes(doc.slug),
-        )
-      : [];
-    const reinjectedIndex = !refreshIndex
-      ? null
-      : diffOnly
-        ? changedVsBaked.length === 0
-          ? ''
-          : renderMemoryDocuments(changedVsBaked, { presentInMemory: documents })
-        : renderMemoryDocuments(documents);
-    const removedNames = diffOnly ? [...new Set([...removed, ...bakedDiff.removed])] : removed;
+    // 要約の後は全文書の索引を丸ごと載せ直す: 「出ていない文書はシステムプロンプトのまま」と言える根拠（焼いた控え）を持たないため。
+    // 日誌の diff は全文書を `added`（焼いた時点に無かった）に数える: 焼いた控えを持たないので、どの文書も焼いた時点に在ったとは言えない。
+    const reinjectedIndex = refreshIndex ? renderMemoryDocuments(documents) : null;
     if (reinjectedIndex !== null) {
       await this.#journalSelf(
         'outbound',
         EXCHANGE_KIND_GAUGE_PREFIX +
           redactErrorText(
             describeMemoryIndexRefresh({
-              reinjected: true,
-              diff: bakedDiff ?? { changed: [], added: [], removed: [] },
+              diff: { changed: [], added: documents.map((doc) => doc.slug), removed: [] },
               renderedChars: reinjectedIndex.length,
               totalDocuments: documents.length,
             }),
@@ -6434,19 +6384,11 @@ class Clone implements CloneHost {
       : await this.#memoryEditAttribution([...changed.map((doc) => doc.slug), ...removed], since);
 
     const head = refreshIndex
-      ? diffOnly
-        ? '[system] この会話の文脈が要約に潰された。**システムプロンプトの記憶は要約で消えていない。**' +
-          '下に在るのは、**システムプロンプトに焼いた時点から変わった文書（変わったもの・増えたもの）だけ**であり、' +
-          '**消えた文書は本文ではなく名前で載る**（「削除された記憶」の行。そこに名前が在る文書は、システムプロンプトに記載が残っていても、もう無い）。' +
-          '**ここに出ていない文書は、システムプロンプトの記載のままである**（焼いた時点から変わっていない）。' +
-          'それまでに載せた記憶の差分は要約の中へ畳まれているが、焼いた時点との差はこの下にすべて載っている。' +
-          '食い違ったら下を採ること。' +
-          '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**'
-        : '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
-          '畳まれている**（残っているとは限らない）。だから**いまの索引を丸ごと載せ直す** —— ' +
-          '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
-          '「現在の記憶」より新しい。食い違ったら下を採ること。' +
-          '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
+      ? '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
+        '畳まれている**（残っているとは限らない）。だから**いまの索引を丸ごと載せ直す** —— ' +
+        '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
+        '「現在の記憶」より新しい。食い違ったら下を採ること。' +
+        '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
       : // 同じ会話の2回目から参照にする（#5301）。「ここに出ていない文書は変わっていない」（誤読防止）と `memory_section_read` の案内は短い形にも残す。
         this.#fixedTextFold()('memory-update-head', MEMORY_UPDATE_HEAD, MEMORY_UPDATE_HEAD_REF);
 
@@ -6462,13 +6404,13 @@ class Clone implements CloneHost {
         : changed.length === 0
           ? []
           : ['', renderMemoryDocuments(changed, { presentInMemory: documents, seenContent })]),
-      ...(removedNames.length === 0
+      ...(removed.length === 0
         ? []
         : [
             '',
             // 名前は切らない（抜粋にしない）: 省略に落ちた名前の文書は、システムプロンプトに記載が残るので「まだ在る」と読まれるため。
             // 長さの上限も置かない: 件数は消えた文書の数で有限（slug は 128 文字まで）で、上限を置くと省略の語が要り、同じ誤読を作るため
-            `削除された記憶: ${removedNames.map((slug) => `${slug}.md`).join(' / ')}`,
+            `削除された記憶: ${removed.map((slug) => `${slug}.md`).join(' / ')}`,
           ]),
       ...(documents.length === 0 ? ['', '（記憶は空になった）'] : []),
       '',
@@ -6717,7 +6659,7 @@ class Clone implements CloneHost {
         situation: true,
         turnsSinceFull: true,
         sessionId: true,
-        digest: { reason: 'full', label: 'session_changed' },
+        digest: { label: 'session_changed' },
       });
     }
     this.#sdkSession.beginSession(resume);
@@ -6815,8 +6757,6 @@ class Clone implements CloneHost {
 
     // 読み直さず、載せた値そのものを控える: 読み直すと、この間に人間が直した差分を見失う
     this.#distillMemory.commitMemory(documents);
-    // 焼いた控えを持たなければ、要約後は記憶を従来どおり全文で載せ直す（`#withFreshMemory`）。系統4のスイッチが無効の既定
-    if (this.#tokenSaving.compaction) this.#distillMemory.recordBakedMemory(documents);
     this.#memoryCarriedAt = readAt;
     this.#humanActionCarriedAt = readAt;
     this.#distillMemory.setResumedHistoryHasMemory(resume !== null);
@@ -7548,8 +7488,8 @@ class Clone implements CloneHost {
 
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
     this.#distillMemory.armMemoryIndexRefresh();
-    // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）。理由は要約なので、次の要約は軽い全文でよい（案 A）
-    this.#returnToFullText({ digest: { reason: 'compaction', label: 'compact_boundary' } });
+    // 要約の直前: この後の会話は潰れるので、tick の要約の差分の記録を捨てる（#4937）。
+    this.#returnToFullText({ digest: { label: 'compact_boundary' } });
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -8086,7 +8026,7 @@ class Clone implements CloneHost {
     // 要約で前の全文は会話から消えうるので、次のターンの「いまの全体」は説明文を全文で出す
     this.#returnToFullText({
       situation: true,
-      digest: { reason: 'compaction', label: 'compact_boundary' },
+      digest: { label: 'compact_boundary' },
     });
     // ターンの外で届いた分は捨てる: 対応する `turn_usage` の行が無く、持ち帰る先が無いため。
     this.#sdkSession.turn?.compactions.push({
@@ -8154,7 +8094,7 @@ class Clone implements CloneHost {
     ) {
       this.#returnToFullText({
         situation: true,
-        digest: { reason: 'full', label: 'session_changed' },
+        digest: { label: 'session_changed' },
       });
     }
     this.#situationExplainedSessionId = event.sessionId;

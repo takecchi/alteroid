@@ -206,17 +206,15 @@ describe('manager_list は固定の説明を、同じ会話の2回目から短�
   });
 
   it('⭐ reset（会話が変わった・要約が走りうる・失敗したターンの後）の後は全文へ戻る', async () => {
-    for (const reason of ['full', 'compaction'] as const) {
-      const delta = new DigestSessionDelta();
-      const call = harness(abnormal, delta);
-      const first = await call();
-      await call();
+    const delta = new DigestSessionDelta();
+    const call = harness(abnormal, delta);
+    const first = await call();
+    await call();
 
-      delta.reset(reason);
-      const afterReset = await call();
+    delta.reset();
+    const afterReset = await call();
 
-      expect(afterReset).toBe(first);
-    }
+    expect(afterReset).toBe(first);
   });
 
   it('⭐ 受信箱の滞留: 同じ内訳の2回目は内訳が1行になり、見出し・件数・人間起点の滞留は毎回出る。札にも結論が残る', async () => {

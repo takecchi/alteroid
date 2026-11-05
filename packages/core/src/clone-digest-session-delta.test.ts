@@ -10,8 +10,7 @@ import {
 import { TOKEN_SAVING_ENABLED_ENV, waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
-import { SOURCE_TALLY_HEADING } from './digest.js';
-import { DigestSessionDelta, LEAN_EXTERNAL_TALLY_REF } from './digest-session-delta.js';
+import { DigestSessionDelta } from './digest-session-delta.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import type { Stores } from './store.js';
@@ -222,7 +221,7 @@ const compactBoundary = {
   uuid: 'uuid-compact',
 } as unknown as SDKMessage;
 
-// 「この期間に片付けた仕事」の節は #5469 P6b で無くなったので、記憶の更新だけを仕込む（軽い全文で省く節の歯）
+// 「この期間に片付けた仕事」の節は #5469 P6b で無くなったので、記憶の更新だけを仕込む（省いた節の参照が出ないことの歯）
 async function seedMemory(stores: Stores): Promise<void> {
   for (let i = 0; i < 3; i += 1) {
     await stores.journal.append({
@@ -239,36 +238,6 @@ function expectCompleteFull(text: string): void {
   expect(text).not.toContain('この節は省いた');
   expect(text).toContain('## 使った分');
   expect(text).toContain('発行元（source）別の件数');
-}
-
-/** 軽い全文（案 A）の形: 判断の節は全文、省く節は引き口を名指しした1行の参照。 */
-function expectLeanFull(text: string, options: { withMemory?: boolean } = {}): void {
-  // 残す
-  expect(text).toContain('## 待ち行列の先頭');
-  expect(text).toContain('待ち行列の仕事 0');
-  expect(text).toContain('## 人間の回答待ち');
-  expect(text).toContain('人間への問い 0');
-  expect(text).toContain('## 聞かずに決めたこと');
-  expect(text).toContain('聞かずに決めたこと 0');
-  expect(text).toContain('担当 7 の途中経過');
-  expect(text).toContain('## 届いた外部イベント');
-  expect(text).toContain('届いた出来事 19');
-  // 先頭の件数行は節の外で、省いた節の件数も残る
-  expect(text).toContain('外部イベント（日誌の行数）20');
-  // 省く
-  expect(text).toContain('## 使った分\n（この節は省いた。`usage_read` で引ける）');
-  expect(text).toContain(
-    '（発行元別の件数と本文の形は省いた。`journal_read` に types=["external_event"]',
-  );
-  expect(text).not.toContain('発行元（source）別の件数');
-  expect(text).not.toContain('本文の形（保持した');
-  expect(text).not.toContain('## この期間に片付けた仕事');
-  if (options.withMemory === true) {
-    expect(text).toContain(
-      '## 記憶の更新\n（この節は省いた。`journal_read` に types=["memory_update"]',
-    );
-    expect(text).not.toContain('記憶の更新の要旨 0');
-  }
 }
 
 describe('tick の要約は、同じ会話の中では前回からの差分になる（#4937）', () => {
@@ -391,66 +360,10 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
     expect(third).not.toContain(UNCHANGED_SECTION);
-    // 要約が走った理由の全文は判断の節だけの軽い全文: 判断の節は全文、省く節は1行の参照（案 A）
-    expectLeanFull(third);
-    // 要約の部分（「期間:」以降）は、完全な全文より短い
+    // 要約が走った回は完全な全文（省いた節の参照が無い）
+    expectCompleteFull(third);
     const digestOf = (text: string): string => text.slice(text.indexOf('期間:'));
-    process.stderr.write(
-      `[案A 測定] 要約の部分 完全な全文 ${digestOf(first).length} 字 → 軽い全文 ${digestOf(third).length} 字\n`,
-    );
-    expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
-    await s.clone.stop();
-  });
-
-  it('⭐ 軽い全文の次の回は、省いた節を「前と同じ」と畳まず全文で出す（差分の整合）', async () => {
-    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
-    await seed(s.stores);
-    await seedMemory(s.stores);
-
-    const full = await selfTick(s);
-    await selfTick(s);
-    const lean = await selfTick(s);
-    const next = await selfTick(s);
-
-    expectLeanFull(lean, { withMemory: true });
-    const digestOf = (text: string): string => text.slice(text.indexOf('期間:'));
-    process.stderr.write(
-      `[案A 測定2] 要約の部分 完全な全文 ${digestOf(full).length} 字 → 軽い全文 ${digestOf(lean).length} 字\n`,
-    );
-    // 参照先の無い畳みを出さない: 省いた節は全文で出る
-    expect(next).toContain('記憶の更新の要旨 0');
-    expect(next).toContain('## 使った分');
-    expect(next).not.toContain('この節は省いた');
-    expect(next).toContain('発行元（source）別の件数');
-    expect(next).toContain('本文の形');
-    // 軽い全文で全文を出した節は、通常どおり畳まれる
-    expect(next).not.toContain('担当 7 の途中経過');
-    expect(next).not.toContain('聞かずに決めたこと 0');
-    // 台帳の節（単独で「変わっていない」の参照になっていた）が無くなったので、畳んだ節は「変わらない節」の1行に並ぶ
-    expect(next).toMatch(/前回（\d\d:\d\dZ）の要約から変わらない節: .*聞かずに決めたこと/u);
-    // 待ち行列の先頭は畳まず、この回も全文で出る
-    expect(next).toContain('- task-0（');
-    expect(next).not.toContain(SELF_INSTRUCTION_HEAD);
-    await s.clone.stop();
-  });
-
-  it('⭐ 軽い全文を挟んでも、その次の回までに起きた変化は漏れない（省いた節の新しい行も出る）', async () => {
-    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
-    await seed(s.stores);
-    await seedMemory(s.stores);
-
-    await selfTick(s);
-    await selfTick(s);
-    await selfTick(s);
-    await s.stores.journal.append({
-      type: 'memory_update',
-      slug: 'values',
-      cause: 'clone',
-      summary: '軽い全文のあとに増えた更新',
-    });
-    const next = await selfTick(s);
-    expect(next).toContain('軽い全文のあとに増えた更新');
-    expect(next).toContain('記憶の更新の要旨 0');
+    expect(digestOf(third).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
     await s.clone.stop();
   });
 
@@ -481,7 +394,7 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     expect(second).not.toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain(SELF_INSTRUCTION_HEAD);
     expect(third).toContain('担当 7 の途中経過');
-    expectLeanFull(third);
+    expectCompleteFull(third);
     await s.clone.stop();
   });
 
@@ -534,7 +447,7 @@ describe('tick の要約は、同じ会話の中では前回からの差分に�
     const afterPreCompact = await selfTick(hooked);
     expect(afterPreCompact).toContain(SELF_INSTRUCTION_HEAD);
     expect(afterPreCompact).toContain('担当 7 の途中経過');
-    expectLeanFull(afterPreCompact);
+    expectCompleteFull(afterPreCompact);
     await hooked.clone.stop();
   });
 
@@ -1274,11 +1187,10 @@ describe('DigestSessionDelta.foldStandingRows（単体）', () => {
     expect(folded).toContain('継続中の依頼 1 件は、');
   });
 
-  it('reset（full・compaction とも）と forgetFixed の後は全文', () => {
+  it('reset と forgetFixed の後は全文', () => {
     const digest = digestOf([row('a')]);
     for (const clear of [
-      (d: DigestSessionDelta) => d.reset('full'),
-      (d: DigestSessionDelta) => d.reset('compaction'),
+      (d: DigestSessionDelta) => d.reset(),
       (d: DigestSessionDelta) => d.forgetFixed(),
     ]) {
       const delta = new DigestSessionDelta();
@@ -1629,135 +1541,6 @@ describe('DigestSessionDelta（単体）', () => {
   });
 });
 
-describe('DigestSessionDelta（軽い全文。要約が走りうる／走った理由に限る）', () => {
-  const at = new Date('2026-10-16T12:34:00.000Z');
-  const digest = [
-    '期間: x',
-    '',
-    '## 待ち行列の先頭',
-    '- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）',
-    '- t1（状態: queued（待ち行列） / origin: human）仕事T',
-    '',
-    '## マネージャー（走行中・返事待ちから先に出す）',
-    '- a [running] 仕事A',
-    '',
-    '## 聞かずに決めたこと',
-    '- 決めたことY',
-    '',
-    '## 記憶の更新',
-    '- 更新Z',
-    '',
-    '## 使った分',
-    '- 合計: $1',
-  ].join('\n');
-
-  // 確定した全文が1回ある状態から、要約が走った理由の reset を受ける
-  function afterFirstFull(): DigestSessionDelta {
-    const delta = new DigestSessionDelta();
-    delta.renderDigest(digest, at);
-    delta.commit();
-    return delta;
-  }
-
-  it('⭐ 要約が走った理由の reset の次は、判断の節は全文・省く節は引き口つきの1行になる', () => {
-    const delta = afterFirstFull();
-    delta.reset('compaction');
-    expect(delta.isLean()).toBe(true);
-    const out = delta.renderDigest(digest, at).text;
-    // 待ち行列の先頭は判断の節: 軽い全文でも省かない
-    expect(out).toContain('## 待ち行列の先頭\n- 待ち行列: 開いている 1 件');
-    expect(out).toContain('仕事T');
-    expect(out).toContain('- a [running] 仕事A');
-    expect(out).toContain('- 決めたことY');
-    expect(out).not.toContain('更新Z');
-    expect(out).not.toContain('合計: $1');
-    expect(out).toContain(
-      '## 記憶の更新\n（この節は省いた。`journal_read` に types=["memory_update"]',
-    );
-    expect(out).toContain('## 使った分\n（この節は省いた。`usage_read` で引ける）');
-  });
-
-  it('⭐ 軽い全文の次の回は、省いた節を畳まず全文で出し、出した節だけを畳む', () => {
-    const delta = afterFirstFull();
-    delta.reset('compaction');
-    delta.renderDigest(digest, at);
-    delta.commit();
-    expect(delta.isLean()).toBe(false);
-    const next = delta.renderDigest(digest, at).text;
-    expect(next).toContain('仕事T');
-    expect(next).toContain('更新Z');
-    expect(next).toContain('合計: $1');
-    expect(next).not.toContain('この節は省いた');
-    // 軽い全文で全文を出した節は畳まれる
-    expect(next).not.toContain('決めたことY');
-    expect(next).toContain(
-      '（前回（12:34Z）の要約から変わらない節: マネージャー・聞かずに決めたこと。各節の全文は会話の上にある）',
-    );
-  });
-
-  it('⭐ 完全な全文へ倒す理由の reset（既定）は、軽い全文にしない。先に full があれば、後の compaction でも倒れたまま', () => {
-    const plain = afterFirstFull();
-    plain.reset();
-    expect(plain.isLean()).toBe(false);
-    expect(plain.renderDigest(digest, at).text).toBe(digest);
-
-    const mixed = afterFirstFull();
-    mixed.reset('full');
-    mixed.reset('compaction');
-    expect(mixed.isLean()).toBe(false);
-    expect(mixed.renderDigest(digest, at).text).toBe(digest);
-
-    const reversed = afterFirstFull();
-    reversed.reset('compaction');
-    reversed.reset('full');
-    expect(reversed.isLean()).toBe(false);
-    expect(reversed.renderDigest(digest, at).text).toBe(digest);
-  });
-
-  it('⭐ 起動直後（確定した全文が無い）は、要約の理由の reset があっても完全な全文', () => {
-    const delta = new DigestSessionDelta();
-    delta.reset('compaction');
-    expect(delta.isLean()).toBe(false);
-    expect(delta.renderDigest(digest, at).text).toBe(digest);
-  });
-
-  it('入力が入らなかった回（commit しない）では、軽い全文のままで、完全な全文へも進まない', () => {
-    const delta = afterFirstFull();
-    delta.reset('compaction');
-    delta.renderDigest(digest, at);
-    delta.discardStaged();
-    expect(delta.isLean()).toBe(true);
-    expect(delta.renderDigest(digest, at).text).toContain('この節は省いた');
-  });
-
-  it('外部イベントの節は、件名の一覧と固定の注記を残し、発行元別の件数・本文の形だけを省く（節ごと控えへ入れない）', () => {
-    const external = [
-      '期間: x',
-      '',
-      '## 届いた外部イベント',
-      '- ci: ビルドが落ちた',
-      '',
-      SOURCE_TALLY_HEADING,
-      '- ci: 1 件',
-      '',
-      '**本文の形（保持した 1 件の標本。上の件数とは母数が違う）** —— 注記',
-      '- ci: 同じ本文は 1 種。最も多い1種が 1 件',
-    ].join('\n');
-    const delta = afterFirstFull();
-    delta.reset('compaction');
-    const out = delta.renderDigest(external, at).text;
-    expect(out).toContain('- ci: ビルドが落ちた');
-    expect(out).toContain(LEAN_EXTERNAL_TALLY_REF);
-    expect(out).not.toContain('- ci: 1 件');
-    expect(out).not.toContain('本文の形（保持した');
-    delta.commit();
-    const next = delta.renderDigest(external, at).text;
-    expect(next).toContain('- ci: 1 件');
-    expect(next).toContain('本文の形（保持した');
-    expect(next).not.toContain(LEAN_EXTERNAL_TALLY_REF);
-  });
-});
-
 // 報告の包みの固定の文言（応じ方の案内）も、同じ会話の2回目から参照にする。本文は畳まない
 describe('担当の報告の包みの固定の文言は、同じ会話の中では2回目から参照になる', () => {
   async function report(s: Boot, managerId: string, text: string): Promise<string> {
@@ -1936,11 +1719,10 @@ describe('抜粋の系統（ALTEROID_TOKEN_SAVING_EXCERPT）は、自発の tick
   });
 });
 
-// ALTEROID_TOKEN_SAVING_COMPACTION は畳み（FOLD_FIXED_TEXT）とは別の系統: 畳みを入れて畳み後の再表示だけ切ると、要約が走った後の要約は完全な全文になる
-describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）が切りなら、要約のあとは軽い全文にしない', () => {
+describe('畳みを入れても、要約のあとは軽い全文にしない', () => {
   const digestOf = (text: string): string => text.slice(text.indexOf('期間:'));
 
-  it('⭐ 既定（切り）: 要約が走った（compact_boundary）あとの自発の tick は完全な全文。軽い全文（省いた節の参照）にならない', async () => {
+  it('⭐ 要約が走った（compact_boundary）あとの自発の tick は完全な全文。軽い全文（省いた節の参照）にならない', async () => {
     const s = boot({
       after: (n) => (n === 2 ? [compactBoundary] : []),
       env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
@@ -1957,64 +1739,6 @@ describe('畳み後の再表示の系統（ALTEROID_TOKEN_SAVING_COMPACTION）�
     expect(third).toContain('記憶の更新の要旨 0');
     expect(third).not.toContain('この節は省いた');
     expect(digestOf(third).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
-    await s.clone.stop();
-  });
-
-  it('⭐ 入り: 同じ場面で軽い全文になる（切りとの差）。要約の部分が短くなる', async () => {
-    const s = boot({
-      after: (n) => (n === 2 ? [compactBoundary] : []),
-      env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1', ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
-    });
-    await seed(s.stores);
-    await seedMemory(s.stores);
-
-    const first = await selfTick(s);
-    await selfTick(s);
-    const third = await selfTick(s);
-
-    expectLeanFull(third, { withMemory: true });
-    expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
-    await s.clone.stop();
-  });
-
-  // 系統4の軽い再掲は、系統2（畳み）が無効でも COMPACTION だけで入り切りする
-  it.each([undefined, '0', 'off'])(
-    '⭐ 畳みが切り（%j）でも、COMPACTION=1 なら要約のあとは軽い全文になる',
-    async (fold) => {
-      const s = boot({
-        after: (n) => (n === 2 ? [compactBoundary] : []),
-        env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: fold, ALTEROID_TOKEN_SAVING_COMPACTION: '1' },
-      });
-      await seed(s.stores);
-      await seedMemory(s.stores);
-
-      const first = await selfTick(s);
-      const second = await selfTick(s);
-      const third = await selfTick(s);
-
-      // 畳みは効かない: 2回目は1回目と同じ完全な全文
-      expect(second).not.toContain('全文は会話の上にある');
-      expect(digestOf(second).length).toBeGreaterThanOrEqual(digestOf(first).length - 50);
-      expectLeanFull(third, { withMemory: true });
-      expect(digestOf(third).length).toBeLessThan(digestOf(first).length);
-      await s.clone.stop();
-    },
-  );
-
-  it('⭐ 畳みが切りで COMPACTION も切りなら、要約のあとも完全な全文（軽い全文にならない）', async () => {
-    const s = boot({
-      after: (n) => (n === 2 ? [compactBoundary] : []),
-      env: { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0', ALTEROID_TOKEN_SAVING_COMPACTION: '0' },
-    });
-    await seed(s.stores);
-    await seedMemory(s.stores);
-
-    await selfTick(s);
-    await selfTick(s);
-    const third = await selfTick(s);
-
-    expectCompleteFull(third);
-    expect(third).not.toContain('この節は省いた');
     await s.clone.stop();
   });
 });

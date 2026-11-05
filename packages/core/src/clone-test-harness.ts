@@ -10,10 +10,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
-import {
-  TOKEN_SAVING_COMPACTION_ENV,
-  TOKEN_SAVING_FOLD_FIXED_TEXT_ENV,
-} from './token-saving-switches.js';
+import { TOKEN_SAVING_FOLD_FIXED_TEXT_ENV } from './token-saving-switches.js';
 
 function contentText(content: unknown): string {
   if (!Array.isArray(content)) return String(content);
@@ -250,10 +247,9 @@ export function waitForEventsOf(events: ChatStreamEvent[], label: string): Setup
   return waitForEvents;
 }
 
-// 畳み・compaction まわりの節約は本番の既定では無効（`token-saving-switches.ts`）。harness も既定は無効で、有効な挙動を測る試験だけが `setup` の `env` にこれ（または片方だけ）を明示して渡す。
+// 畳みの節約は本番の既定では無効（`token-saving-switches.ts`）。harness も既定は無効で、有効な挙動を測る試験だけが `setup` の `env` にこれを明示して渡す。
 export const TOKEN_SAVING_ENABLED_ENV: NodeJS.ProcessEnv = {
   [TOKEN_SAVING_FOLD_FIXED_TEXT_ENV]: '1',
-  [TOKEN_SAVING_COMPACTION_ENV]: '1',
 };
 
 export function setup(

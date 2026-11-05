@@ -53,7 +53,6 @@ import type { PermissionModeName } from './permission-mode.js';
 import type { ReportLanguageMode } from './report-language.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
-import { resolveTokenSavingCompaction } from './token-saving-switches.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
 import { toAccountApiKeySource } from './usage-snapshot.js';
@@ -477,31 +476,13 @@ export function withCliSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 // Older Claude Code versions reject true or false here, so use the object form in settings files shared across versions.
 export const NO_ATTRIBUTION_SETTINGS = { attribution: { commit: '', pr: '' } } as const;
 
-/** 人間が自動の要約の窓を置く env の名前（CLI が読む名前そのもの）。 */
-export const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
-
 /**
- * クローンの本セッションとマネージャーが、自動の要約を走らせる文脈の大きさ（トークン）の既定。
- *
- * 既定のままだと 1M の窓を持つモデルは約 967K まで要約せずに育ち、ターンの中の道具の呼び出しのたびにその全部をキャッシュから読み直す。
- * 本番の実測（2026-10-25、turn_usage の全文）ではマネージャーの1ターンが文脈 713K・キャッシュ読み 23.9M トークン・$10.84 で、
- * 文脈の 97% は会話の履歴（Messages）だった。費用はほぼ「文脈の長さ × 呼び出し回数」で決まるので、窓を下げるのがいちばん効く。
- * 要約の前の全文は PreCompact でアーカイブへ落ちる（クローンは蒸留も走る）ので、細部は捨てずに引ける口が残る。
+ * 自動の要約を走らせる文脈の大きさ（トークン）の基準。alteroid はこの窓を SDK へ設定しない（SDK の既定のまま。人間が
+ * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を置けばそちらが効く）。`context-size-history.ts` が「窓を下げたら何が変わるか」を測る量の基準にだけ使う。
  */
 // [sdk-verbatim Settings.modelOverrides.autoCompactWindow]
 // Auto-compact window for this model, in tokens (100000 to 1000000), or "auto" for the window tuned for the model.
 export const DEFAULT_AUTO_COMPACT_WINDOW_TOKENS = 300_000;
-
-/**
- * 自動の要約の窓を `Options.settings` へ載せる分。人間が env に窓を置いていれば何も載せない。
- * `Options.settings` は利用者の設定の中で最も優先されるので、載せると人間の指定より勝ってしまうため（north_star 禁止2: 方針は設定で開けられること）。
- */
-export function autoCompactWindowSettings(env: NodeJS.ProcessEnv): { autoCompactWindow?: number } {
-  // 系統4の節約スイッチ（`ALTEROID_TOKEN_SAVING_COMPACTION`）が無効の既定では窓を設定しない＝SDK の既定のまま
-  if (!resolveTokenSavingCompaction(env)) return {};
-  if (isEnvSet(env, AUTO_COMPACT_WINDOW_ENV_KEY)) return {};
-  return { autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS };
-}
 
 // 本セッション（`buildCloneSessionOptions`）と蒸留（`buildCloneDistillOptions`）が共に取る欄
 interface CloneOptionsRequestBase {
@@ -578,10 +559,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
   } = request;
 
   return {
-    ...cloneBaseOptions(request, {
-      ...NO_ATTRIBUTION_SETTINGS,
-      ...autoCompactWindowSettings(request.env),
-    }),
+    ...cloneBaseOptions(request, { ...NO_ATTRIBUTION_SETTINGS }),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
@@ -784,7 +762,6 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // Preferred language for Claude responses and voice dictation (e.g., "japanese", "spanish")
     settings: {
       ...NO_ATTRIBUTION_SETTINGS,
-      ...autoCompactWindowSettings(env),
       ...(managerAutoMemoryEnabled ? {} : { autoMemoryEnabled: false }),
       ...(sdkLanguage === undefined ? {} : { language: sdkLanguage }),
     },

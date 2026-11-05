@@ -84,13 +84,11 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "attribution": {
       "commit": "",
       "pr": ""
-    },
-    "autoCompactWindow": 300000
+    }
   },
   "skills": "all",
   "env": {
     "ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT": "1",
-    "ALTEROID_TOKEN_SAVING_COMPACTION": "1",
     "ALTEROID_CLONE_MODEL": "opus",
     "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
     "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
@@ -221,13 +219,11 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "attribution": {
       "commit": "",
       "pr": ""
-    },
-    "autoCompactWindow": 300000
+    }
   },
   "skills": "all",
   "env": {
     "ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT": "1",
-    "ALTEROID_TOKEN_SAVING_COMPACTION": "1",
     "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
     "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
   },
@@ -362,7 +358,6 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
   "skills": "all",
   "env": {
     "ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT": "1",
-    "ALTEROID_TOKEN_SAVING_COMPACTION": "1",
     "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
     "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
   },

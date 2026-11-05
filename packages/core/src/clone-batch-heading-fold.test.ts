@@ -156,7 +156,7 @@ describe.each(kinds)('$name の固定の注意は、同じ会話の2回目から
     delta.commit();
     expect(kind.build(fold, 'two')).not.toContain(kind.guide);
     delta.commit();
-    delta.reset('compaction');
+    delta.reset();
     expect(kind.build(fold, 'three')).toContain(kind.guide);
   });
 

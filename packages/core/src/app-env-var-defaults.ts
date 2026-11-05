@@ -12,7 +12,6 @@ export const APP_ENV_VAR_DEFAULTS: readonly { name: string; value: string }[] = 
   { name: 'ALTEROID_REPORT_LOOKBACK_DAYS', value: '3' },
   // トークン節約の入り切り（`token-saving-switches.ts`）。値はコードの既定と同じ（挙動は変わらない）: 画面の環境変数の一覧に出し、再起動が要ると名乗らせるため
   { name: 'ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT', value: '0' },
-  { name: 'ALTEROID_TOKEN_SAVING_COMPACTION', value: '0' },
   { name: 'ALTEROID_TOKEN_SAVING_EXCERPT', value: '1' },
 ];
 

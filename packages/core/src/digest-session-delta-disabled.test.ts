@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { DigestSessionDelta, LEAN_DROPPED_SECTIONS } from './digest-session-delta.js';
+import { DigestSessionDelta } from './digest-session-delta.js';
 
 // DigestSessionDelta({ disabled: true }) = ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT が無効（既定）のときの形。
 // どの口も、2回目以降も全文を返し、畳みの控え（固定文・段落・節・依頼・報告）を持たない。
-// 要約直後の軽い全文（系統4）だけは別の系統で、reset('compaction') のあとに限って省く節の参照が出る（節の控えは持たない）。
 
 const PARAGRAPH = `${'同じ段落の本文。'.repeat(40)}`;
 const REF = '（参照）';
@@ -91,56 +90,12 @@ describe('DigestSessionDelta: 畳みを切った形', () => {
     expect(second.fullChars).toBe(digest.length);
   });
 
-  // 系統4（要約直後の軽い全文）は系統2（畳み）の disabled に縛られない
-  it('⭐ 畳みが切りでも、要約が走った reset のあとは軽い全文（省く節の参照）になり、畳みの参照は出ない', () => {
-    const dropped = LEAN_DROPPED_SECTIONS[0];
-    if (dropped === undefined) throw new Error('LEAN_DROPPED_SECTIONS が空');
-    const digest = [
-      '## 状況',
-      '- a',
-      '',
-      `## ${dropped.name}`,
-      '- 省かれる行',
-      '',
-      '## マネージャー',
-      '- b',
-      '',
-    ].join('\n');
-    const now = new Date();
-    const off = build(true);
-
-    // 起動直後は完全な全文。確定すると、全文へ倒す理由が消える
-    expect(off.isLean()).toBe(false);
-    expect(off.renderDigest(digest, now).text).toBe(digest);
-    off.commit();
-
-    off.reset('compaction');
-    expect(off.isLean()).toBe(true);
-    const lean = off.renderDigest(digest, now);
-    expect(lean.text).not.toContain('省かれる行');
-    expect(lean.text).toContain(dropped.ref);
-    expect(lean.text).toContain('- a');
-    expect(lean.text).toContain('- b');
-    // 畳み（前回と同じ・節ごとの参照）は出ない
-    expect(lean.text).not.toContain('全文は会話の上にある');
-    expect(lean.fullChars).toBe(digest.length);
-
-    // 軽い全文が会話に載ったら、次は通常の全文
-    off.commit();
-    expect(off.isLean()).toBe(false);
-    expect(off.renderDigest(digest, now).text).toBe(digest);
-  });
-
-  it('⭐ reset("full") のあとは、畳みが切りでも軽い全文にならない', () => {
-    const dropped = LEAN_DROPPED_SECTIONS[0];
-    if (dropped === undefined) throw new Error('LEAN_DROPPED_SECTIONS が空');
-    const digest = `## 状況\n- a\n\n## ${dropped.name}\n- 省かれる行\n`;
+  it('⭐ reset のあとも、畳みが切りなら全文のまま', () => {
+    const digest = '## 状況\n- a\n\n## 使った分\n- 行\n';
     const off = build(true);
     off.renderDigest(digest, new Date());
     off.commit();
-    off.reset('compaction');
-    off.reset('full');
-    expect(off.isLean()).toBe(false);
+    off.reset();
     expect(off.renderDigest(digest, new Date()).text).toBe(digest);
   });
 
@@ -149,15 +104,12 @@ describe('DigestSessionDelta: 畳みを切った形', () => {
     expect(build(true).foldStandingRows(digest)).toBe(digest);
   });
 
-  it('⭐ 軽い全文を出した回を確定しても、節の控えは保存されない。FOLD を有効にした器へ読み戻しても「前回から変わっていない」と言わない', () => {
-    const dropped = LEAN_DROPPED_SECTIONS[0];
-    if (dropped === undefined) throw new Error('LEAN_DROPPED_SECTIONS が空');
-    const digest = `## 状況\n- a\n\n## マネージャー\n- b\n\n## ${dropped.name}\n- x\n`;
+  it('⭐ 全文を出した回を確定しても、節の控えは保存されない。FOLD を有効にした器へ読み戻しても「前回から変わっていない」と言わない', () => {
+    const digest = `## 状況\n- a\n\n## マネージャー\n- b\n\n## 使った分\n- x\n`;
     const now = new Date();
     const off = build(true);
     off.renderDigest(digest, now);
     off.commit();
-    off.reset('compaction');
     off.renderDigest(digest, now);
     off.commit();
 
@@ -171,9 +123,8 @@ describe('DigestSessionDelta: 畳みを切った形', () => {
     expect(rendered).not.toContain('変わっていない');
   });
 
-  it('isLean は要約が走った reset のあとだけ真、exportState は節の控えを持たず、importState は何も起こさない', () => {
+  it('exportState は節の控えを持たず、importState は何も起こさない', () => {
     const off = build(true);
-    expect(off.isLean()).toBe(false);
     off.fixed('a', 'FULL', REF);
     off.commit();
     const state = off.exportState();

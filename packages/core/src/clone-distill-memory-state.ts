@@ -1,7 +1,4 @@
-import {
-  MEMORY_INDEX_NOT_REINJECTED_PHRASE,
-  MEMORY_INDEX_REINJECTED_PHRASE,
-} from './exchange-kind.js';
+import { MEMORY_INDEX_REINJECTED_PHRASE } from './exchange-kind.js';
 import type { MemoryDocument } from './schema.js';
 
 /**
@@ -38,7 +35,7 @@ interface BakedMemoryDiff {
 }
 
 // 語の持ち主は exchange-kind.ts（承認の追跡が行頭の定数で除外するため）。ここからも引けるように再 export する。
-export { MEMORY_INDEX_NOT_REINJECTED_PHRASE, MEMORY_INDEX_REINJECTED_PHRASE };
+export { MEMORY_INDEX_REINJECTED_PHRASE };
 
 // 並べる slug の上限: 文書が多い記憶で1行が長くならないため。超えた分は「ほか M 件」にする。
 const REFRESH_DIFF_SLUG_LIMIT = 10;
@@ -48,17 +45,10 @@ const REFRESH_DIFF_SLUG_LIMIT = 10;
  * slug・違いの種類・文字数・件数だけを書く: 記憶の本文・要旨は日誌に写さないため。
  */
 export function describeMemoryIndexRefresh(input: {
-  readonly reinjected: boolean;
   readonly diff: BakedMemoryDiff;
   readonly renderedChars: number;
   readonly totalDocuments: number;
 }): string {
-  if (!input.reinjected) {
-    return (
-      `${MEMORY_INDEX_NOT_REINJECTED_PHRASE}（要約後。焼いた時点から変わっていない）。` +
-      `載せ直した文字数 0。全文書数 ${input.totalDocuments}`
-    );
-  }
   const entries = [
     ...input.diff.changed.map((slug) => `${slug}（内容が変わった）`),
     ...input.diff.added.map((slug) => `${slug}（焼いた時点に無かった）`),
@@ -222,41 +212,6 @@ export class CloneDistillMemoryState {
 
   forgetMemory(): void {
     this.#memoryOnRecord.clear();
-  }
-
-  // `#memoryOnRecord`（最後に載せた時点）とは別に持つ: あちらは差分を載せるたびに進むが、その差分は次の要約に畳まれて消える。要約を越えて残るのはシステムプロンプトに焼いた記憶だけで、要約後の索引の載せ直しが比べる相手はこちらのため。
-  // `null` は「焼いた控えが無い」: 無ければ一致とは言えず、載せ直す側（全文）へ倒す。
-  #bakedMemory: ReadonlyMap<string, string> | null = null;
-
-  recordBakedMemory(documents: readonly MemoryDocument[]): void {
-    this.#bakedMemory = new Map(documents.map((doc) => [doc.slug, doc.content]));
-  }
-
-  // 焼いた控えが無いときは全文書を `added`（焼いた時点に無かった）に数える: 一致とは言えず、載せ直す側へ倒す `matchesBakedMemory` と同じ向きのため。
-  diffAgainstBaked(documents: readonly MemoryDocument[]): BakedMemoryDiff {
-    const baked = this.#bakedMemory ?? new Map<string, string>();
-    const changed: string[] = [];
-    const added: string[] = [];
-    for (const doc of documents) {
-      const was = baked.get(doc.slug);
-      if (was === undefined) added.push(doc.slug);
-      else if (was !== doc.content) changed.push(doc.slug);
-    }
-    const present = new Set(documents.map((doc) => doc.slug));
-    const removed = [...baked.keys()].filter((slug) => !present.has(slug));
-    return { changed, added, removed };
-  }
-
-  // 差分だけを載せてよいのは焼いた控えが在るときだけ: 無いと `diffAgainstBaked` は全文書を `added` に数えるが、「ここに出ていない文書はシステムプロンプトのまま」とは言えない（焼いた覚えが無い）ため。
-  hasBakedMemory(): boolean {
-    return this.#bakedMemory !== null;
-  }
-
-  // 差が空でも、焼いた控えが無ければ一致としない（`null` は全文を載せる側）
-  matchesBakedMemory(documents: readonly MemoryDocument[]): boolean {
-    if (this.#bakedMemory === null) return false;
-    const diff = this.diffAgainstBaked(documents);
-    return diff.changed.length === 0 && diff.added.length === 0 && diff.removed.length === 0;
   }
 
   #resumedHistoryHasMemory = false;

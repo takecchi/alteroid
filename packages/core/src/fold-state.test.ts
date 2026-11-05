@@ -39,8 +39,6 @@ describe('畳みの控えの形（fold-state）', () => {
     restored.importState(sample().digest);
 
     expect(restored.fixed('digest:phrase', '長い全文', '参照')).toBe('参照');
-    // 要約を1度出した記録があるので、最初の要約から完全な全文へ倒す理由は無い
-    expect(restored.isLean()).toBe(false);
     expect(
       restored.renderDigest('まえがき\n## 節A\n- 行1\n', new Date('2026-09-05T02:00:00.000Z')).text,
     ).toContain('前回（01:00Z）の要約から変わっていない');

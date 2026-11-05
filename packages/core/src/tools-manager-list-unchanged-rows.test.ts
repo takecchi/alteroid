@@ -178,16 +178,14 @@ describe('manager_list は前回と変わらない行を畳む', () => {
   });
 
   it('⭐ reset（会話が変わった・compaction）の後は全文へ戻る', async () => {
-    for (const reason of ['full', 'compaction'] as const) {
-      const delta = new DigestSessionDelta();
-      const first = await call(small(), delta);
-      await call(small(), delta);
+    const delta = new DigestSessionDelta();
+    const first = await call(small(), delta);
+    await call(small(), delta);
 
-      delta.reset(reason);
-      const afterReset = await call(small(), delta);
+    delta.reset();
+    const afterReset = await call(small(), delta);
 
-      expect(afterReset).toBe(first);
-    }
+    expect(afterReset).toBe(first);
   });
 
   it('⭐ 20 ターン保険（forgetFixed）の後も全文へ戻る', async () => {

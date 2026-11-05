@@ -37,7 +37,7 @@ async function firePreCompact(main: FakeCall): Promise<void> {
   } as never);
 }
 
-// snapshot は節約（S1・S2）を有効にした env の Options（`autoCompactWindow` と env の2行）を固定している。既定（無効）の SDK 設定は agent-session-options.test.ts が固定する
+// snapshot は節約（S1）を有効にした env の Options（env の1行）を固定している。既定（無効）の SDK 設定は agent-session-options.test.ts が固定する
 describe('クローン — query() へ渡る Options は駆動役の切り出しの前後で同じ（#486）', () => {
   it('本セッションの Options（既定）', async () => {
     const s = setup(undefined, undefined, {}, TOKEN_SAVING_ENABLED_ENV);

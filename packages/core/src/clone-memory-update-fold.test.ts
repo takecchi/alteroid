@@ -29,7 +29,7 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
-  // クローンの env。既定は節約を有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT` / `ALTEROID_TOKEN_SAVING_COMPACTION`）
+  // クローンの env。既定は節約を有効にした env（本番の既定は無効: `ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT`）
   env?: NodeJS.ProcessEnv;
 }
 

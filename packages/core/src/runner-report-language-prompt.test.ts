@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { BASH_GUARD_ENV } from './bash-guard-mode.js';
-import { DEFAULT_AUTO_COMPACT_WINDOW_TOKENS } from './claude-provider.js';
 import { createProfileVessel } from './profile.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import { REPORT_LANGUAGE_ENV, REPORT_LANGUAGE_PROMPT_PARAGRAPH } from './report-language.js';
@@ -17,7 +16,6 @@ import {
   type RunnerHost,
 } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import { TOKEN_SAVING_COMPACTION_ENV } from './token-saving-switches.js';
 
 // ALTEROID_REPORT_LANGUAGE=ja のとき、担当・作業者のプロンプトに言語の段落を足し、SDK の settings.language を渡す（#4977）
 
@@ -72,11 +70,9 @@ async function open(
     emit: (event) => events.push(event),
     queryFn: fn,
     // 待ちの歯は既定で ask（プロンプトに待ちの形の節が載る）。この節の試験は言語の段落だけを見るので、歯を閉じて載せない
-    // 自動の要約の窓は畳みの系統（既定は切り）の下にある。この節は窓を載せた形の settings を見るので、系統を入れて開く
     env: {
       PATH: '/usr/bin',
       [BASH_GUARD_ENV]: 'off',
-      [TOKEN_SAVING_COMPACTION_ENV]: '1',
       ...env,
     },
     ...(profileScript === undefined
@@ -128,7 +124,6 @@ describe('言語の指示を担当・作業者のプロンプトと SDK の sett
     );
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
-      autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
       autoMemoryEnabled: false,
       language: 'japanese',
     });
@@ -141,7 +136,6 @@ describe('言語の指示を担当・作業者のプロンプトと SDK の sett
       expect(workerPromptOf(options)).toBe(buildWorkerPrompt());
       expect(options.settings).toEqual({
         attribution: { commit: '', pr: '' },
-        autoCompactWindow: DEFAULT_AUTO_COMPACT_WINDOW_TOKENS,
         autoMemoryEnabled: false,
       });
     }
