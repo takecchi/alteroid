@@ -472,7 +472,7 @@ const SCENARIOS: Scenario[] = [
     name: 'set-after-write-failures',
     group: 'set が投げる',
     covers:
-      '正本と器へ反映したあとで、runner の一覧・配布後の一覧が落ちる: サービスは投げ、道具は「差し替えられなかった」と日誌に書いて例外を投げるが、行は新しくなっている（writes は profile。日誌と実際の食い違い）',
+      '正本と器へ反映したあとで、runner の一覧・配布後の一覧が落ちる: サービスは握って stored=true で返す（一覧の失敗は runnersUnconfirmed、読み直しの失敗は書いた行を entries にする）。道具は投げず「更新した」と報告し、一覧の失敗のときだけ日誌と応答に配布を確かめられなかった旨を足す（Issue #6506）。戻しはしない',
     steps: [
       w(put({ name: 'late-a' }), 'profile', { runners: 'list-throws' }),
       w(put({ name: 'late-b' }), 'profile', { listFailsAt: [2] }),
@@ -1473,10 +1473,30 @@ describe('profile_write の出力と呼んだあとの状態の固定（場面�
     );
     expect(count(text('set-throws-raw#2'), '\n')).toBe(0);
     expect(step('set-after-write-failures#1').wrote).toBe('profile');
-    expect(step('set-after-write-failures#1').output.thrown).toBe(true);
-    expect(decisions('set-after-write-failures#1')[1]).toBe(`${FAILED}（行 late-a）: FOO を置いた`);
     expect(step('set-after-write-failures#2').wrote).toBe('profile');
-    expect(step('set-after-write-failures#2').output.thrown).toBe(true);
+    // 書けた側を正にして報告する（Issue #6506）: 投げず、置けたと返す。戻しもしない
+    for (const key of ['set-after-write-failures#1', 'set-after-write-failures#2']) {
+      expect(step(key).output.thrown, key).toBe(false);
+      expect(step(key).output.isError, key).toBe(false);
+      expect(ops(key), key).not.toContain('applier.discard');
+      expect(ops(key), key).not.toContain('stores.profile.replaceAll');
+      expect(decisions(key)[1], key).not.toContain('差し替えられなかった');
+    }
+    expect(decisions('set-after-write-failures#1')[1]).toBe(
+      `${UPDATED}（行 late-a）（runner への配布は確かめられなかった）: FOO を置いた`,
+    );
+    expect(groundsOf('set-after-write-failures#1')[1]).toBe(
+      `${PRE_GROUNDS}。runner の一覧を読めず、配布を確かめられなかった: Error: runner の一覧が取れない（test）`,
+    );
+    expect(text('set-after-write-failures#1')).toContain(
+      'runner への配布を確かめられなかった（runner の一覧を読めない）: Error: runner の一覧が取れない（test）',
+    );
+    expect(text('set-after-write-failures#1')).not.toContain('配った先');
+    expect(decisions('set-after-write-failures#2')[1]).toBe(
+      `${UPDATED}（行 late-b）: FOO を置いた`,
+    );
+    expect(text('set-after-write-failures#2')).toContain('撒く先 all');
+    expect(text('set-after-write-failures#2')).not.toContain('確かめられなかった');
 
     // set が返す
     expect(text('return-clone-only#1')).toContain(

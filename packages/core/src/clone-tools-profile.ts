@@ -319,10 +319,22 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
       );
     }
 
+    // 一覧を読めず配布を確かめられなかったときだけ、その旨を日誌と応答に足す（無いときの文言は変えない）
+    const unconfirmed =
+      result.runnersUnconfirmed === undefined
+        ? undefined
+        : excerptLine(result.runnersUnconfirmed, PROFILE_DISTRIBUTION_EXCERPT);
     await appendJournalOrDrop(tool, stores.journal, {
       type: 'decision',
-      decision: `${done.decision}: ${summary}`,
-      grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+      decision:
+        unconfirmed === undefined
+          ? `${done.decision}: ${summary}`
+          : `${done.decision}（runner への配布は確かめられなかった）: ${summary}`,
+      grounds:
+        '人間から実行環境そのものを渡された（値は記録しない）' +
+        (unconfirmed === undefined
+          ? ''
+          : `。runner の一覧を読めず、配布を確かめられなかった: ${unconfirmed}`),
     });
 
     const failed = result.runners.filter((runner) => !runner.ok);
@@ -335,6 +347,9 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         composed === undefined
           ? null
           : `合成後の指紋: クローン用 ${composed.clone.sha256 ?? '（掛かる行なし）'} / runner 用 ${composed.runner.sha256 ?? '（掛かる行なし）'}`,
+        unconfirmed === undefined
+          ? null
+          : `runner への配布を確かめられなかった（runner の一覧を読めない）: ${unconfirmed}`,
         delivered.length === 0
           ? null
           : `配った先: ${excerptLine(delivered.join(', '), PROFILE_DISTRIBUTION_EXCERPT)}`,

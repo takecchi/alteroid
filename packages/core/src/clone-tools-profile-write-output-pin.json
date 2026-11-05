@@ -82,8 +82,8 @@
     "set-rollback-failed#2": 110,
     "set-throws-raw#1": 18,
     "set-throws-raw#2": 53,
-    "set-after-write-failures#1": 21,
-    "set-after-write-failures#2": 16,
+    "set-after-write-failures#1": 208,
+    "set-after-write-failures#2": 139,
     "return-clone-only#1": 137,
     "return-clone-only#2": 137,
     "return-clone-only#3": 137,
@@ -6214,11 +6214,11 @@
     },
     "set-after-write-failures#1": {
       "output": {
-        "length": 21,
-        "text": "runner の一覧が取れない（test）",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 208,
+        "text": "実行環境プロファイルを更新した（行 late-a を置いた。撒く先 all）。\n合成後の指紋: クローン用 33fb77eefb6d / runner 用 33fb77eefb6d\nrunner への配布を確かめられなかった（runner の一覧を読めない）: Error: runner の一覧が取れない（test）\nこれから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": "profile",
       "profileRows": [
@@ -6241,8 +6241,8 @@
           "type": "decision",
           "id": "id-2",
           "at": "2026-10-29T00:00:00.000Z",
-          "decision": "実行環境プロファイルを差し替えられなかった（行 late-a）: FOO を置いた",
-          "grounds": "差し替えようとしたが、状態の変更が失敗した: Error"
+          "decision": "実行環境プロファイルを更新した（行 late-a）（runner への配布は確かめられなかった）: FOO を置いた",
+          "grounds": "人間から実行環境そのものを渡された（値は記録しない）。runner の一覧を読めず、配布を確かめられなかった: Error: runner の一覧が取れない（test）"
         }
       ],
       "dropped": [],
@@ -6264,7 +6264,7 @@
             "scope": null,
             "options": null
           },
-          "outcome": "threw Error"
+          "outcome": "stored=true clone.ok=true runners=[] entries=1"
         },
         {
           "op": "stores.profile.list",
@@ -6298,11 +6298,16 @@
           "outcome": "threw Error"
         },
         {
+          "op": "stores.profile.list",
+          "args": {},
+          "outcome": "1 rows"
+        },
+        {
           "op": "journal.append",
           "args": {
             "type": "decision",
-            "decision": "実行環境プロファイルを差し替えられなかった（行 late-a）: FOO を置いた",
-            "grounds": "差し替えようとしたが、状態の変更が失敗した: Error"
+            "decision": "実行環境プロファイルを更新した（行 late-a）（runner への配布は確かめられなかった）: FOO を置いた",
+            "grounds": "人間から実行環境そのものを渡された（値は記録しない）。runner の一覧を読めず、配布を確かめられなかった: Error: runner の一覧が取れない（test）"
           },
           "outcome": "ok id-2"
         }
@@ -6310,11 +6315,11 @@
     },
     "set-after-write-failures#2": {
       "output": {
-        "length": 16,
-        "text": "正本の一覧が読めない（test）",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 139,
+        "text": "実行環境プロファイルを更新した（行 late-b を置いた。撒く先 all）。\n合成後の指紋: クローン用 f03c4f33d2e2 / runner 用 f03c4f33d2e2\nこれから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": "profile",
       "profileRows": [
@@ -6343,8 +6348,8 @@
           "type": "decision",
           "id": "id-4",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "実行環境プロファイルを差し替えられなかった（行 late-b）: FOO を置いた",
-          "grounds": "差し替えようとしたが、状態の変更が失敗した: Error"
+          "decision": "実行環境プロファイルを更新した（行 late-b）: FOO を置いた",
+          "grounds": "人間から実行環境そのものを渡された（値は記録しない）"
         }
       ],
       "dropped": [],
@@ -6366,7 +6371,7 @@
             "scope": null,
             "options": null
           },
-          "outcome": "threw Error"
+          "outcome": "stored=true clone.ok=true runners=[] entries=2"
         },
         {
           "op": "stores.profile.list",
@@ -6408,8 +6413,8 @@
           "op": "journal.append",
           "args": {
             "type": "decision",
-            "decision": "実行環境プロファイルを差し替えられなかった（行 late-b）: FOO を置いた",
-            "grounds": "差し替えようとしたが、状態の変更が失敗した: Error"
+            "decision": "実行環境プロファイルを更新した（行 late-b）: FOO を置いた",
+            "grounds": "人間から実行環境そのものを渡された（値は記録しない）"
           },
           "outcome": "ok id-4"
         }

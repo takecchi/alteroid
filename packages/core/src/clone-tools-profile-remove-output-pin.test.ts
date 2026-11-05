@@ -429,7 +429,7 @@ const SCENARIOS: Scenario[] = [
     name: 'remove-after-write-failures',
     group: '正本に書いた後の失敗（#6506）',
     covers:
-      '正本と器へ反映したあとで、runner の一覧・配布後の一覧が落ちる（Issue #6506）: サービスは投げ、道具は「外せなかった」と日誌に書いて例外を投げるが、行はもう外れている（writes は profile。日誌と実際の食い違い）。いまの振る舞いのまま固定する',
+      '正本と器へ反映したあとで、runner の一覧・配布後の一覧が落ちる（Issue #6506）: サービスは握って stored=true で返す（一覧の失敗は runnersUnconfirmed、読み直しの失敗は書いた行を entries にする）。道具は投げず「外した」と報告し、日誌と応答に配布を確かめられなかった旨を足す（一覧の失敗のときだけ）。戻しはしない',
     seed: [RUST_SEED, OTHER_SEED, { name: 'third', script: 'export T=1\n' }],
     steps: [
       w(rm('rust'), 'profile', { runners: 'list-throws' }),
@@ -1408,25 +1408,36 @@ describe('profile_remove の出力と呼んだあとの状態の固定（場面�
       'プロファイルの行を置けなかった（何も変えていない）: ProfileInputError: 名前の形が不正',
     );
 
-    // 正本に書いた後の失敗（#6506）: 行は外れているのに、日誌は「外せなかった」と書く
+    // 正本に書いた後の失敗（#6506 の修正後）: 書けた側を正にして、投げずに置けたと報告する。戻しもしない
     for (const key of [
       'remove-after-write-failures#1',
       'remove-after-write-failures#2',
       'remove-after-write-failures#3',
     ]) {
       expect(step(key).wrote, key).toBe('profile');
-      expect(step(key).output.thrown, key).toBe(true);
-      expect(step(key).output.errorName, key).toBe('Error');
-      expect(groundsOf(key)[1], key).toBe('外そうとしたが、状態の変更が失敗した: Error');
+      expect(step(key).output.thrown, key).toBe(false);
+      expect(step(key).output.isError, key).toBe(false);
+      expect(decisions(key)[1], key).not.toContain('外せなかった');
       expect(ops(key), key).toContain('stores.profile.remove');
       expect(ops(key), key).toContain('applier.commit');
       expect(ops(key), key).not.toContain('applier.discard');
       expect(ops(key), key).not.toContain('stores.profile.replaceAll');
     }
-    expect(decisions('remove-after-write-failures#1')).toEqual([pre('rust'), FAILED('rust')]);
-    expect(text('remove-after-write-failures#1')).toBe('runner の一覧が取れない（test）');
-    expect(decisions('remove-after-write-failures#2')).toEqual([pre('other'), FAILED('other')]);
-    expect(text('remove-after-write-failures#2')).toBe('正本の一覧が読めない（test）');
+    expect(decisions('remove-after-write-failures#1')).toEqual([
+      pre('rust'),
+      '実行環境プロファイルの行 rust を外した（runner への配布は確かめられなかった）: FOO を外した',
+    ]);
+    expect(groundsOf('remove-after-write-failures#1')[1]).toBe(
+      `${PRE_GROUNDS}。runner の一覧を読めず、配布を確かめられなかった: Error: runner の一覧が取れない（test）`,
+    );
+    expect(text('remove-after-write-failures#1')).toContain(
+      'runner への配布を確かめられなかった（runner の一覧を読めない）: Error: runner の一覧が取れない（test）',
+    );
+    expect(decisions('remove-after-write-failures#2')).toEqual([pre('other'), done('other')]);
+    expect(text('remove-after-write-failures#2')).toContain('合成後の指紋');
+    expect(text('remove-after-write-failures#2')).not.toContain('確かめられなかった');
+    expect(decisions('remove-after-write-failures#3')).toEqual([pre('third'), done('third')]);
+    expect(text('remove-after-write-failures#3')).toContain('配った先: runner-a');
     expect(step('remove-after-write-failures#1').profileRows.map((r) => r.name)).toEqual([
       'other',
       'third',

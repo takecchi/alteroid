@@ -30514,6 +30514,9 @@
                         "required": ["runnerId", "ok"],
                         "additionalProperties": false
                       }
+                    },
+                    "runnersUnconfirmed": {
+                      "type": "string"
                     }
                   },
                   "required": ["updatedAt", "entries", "composed", "clone", "runners"],
@@ -30797,6 +30800,9 @@
                         "required": ["runnerId", "ok"],
                         "additionalProperties": false
                       }
+                    },
+                    "runnersUnconfirmed": {
+                      "type": "string"
                     }
                   },
                   "required": ["updatedAt", "entries", "composed", "clone", "runners"],

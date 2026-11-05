@@ -1056,6 +1056,8 @@ export const profileUpdateResponseSchema = z.object({
       profile: runnerProfileFingerprintSchema.optional(),
     }),
   ),
+  // runner の一覧を読めず、配布を確かめられなかったときだけ載る（伏せた理由）。差し替え自体は効いている
+  runnersUnconfirmed: z.string().optional(),
 });
 
 // 値を返す: 人間が自分で書いたものを読み直せないと typo ひとつ直せないため。`env` / `headers` に鍵が入りうるので、口は持ち主だけに絞ってある。

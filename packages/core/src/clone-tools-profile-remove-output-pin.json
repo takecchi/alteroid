@@ -58,9 +58,9 @@
     "remove-rollback-failed#2": 110,
     "remove-throws-raw#1": 18,
     "remove-throws-raw#2": 53,
-    "remove-after-write-failures#1": 21,
-    "remove-after-write-failures#2": 16,
-    "remove-after-write-failures#3": 16,
+    "remove-after-write-failures#1": 198,
+    "remove-after-write-failures#2": 130,
+    "remove-after-write-failures#3": 137,
     "runners-partial-fail": 245,
     "runners-all-fail": 173,
     "runners-many#1": 552,
@@ -4391,11 +4391,11 @@
     },
     "remove-after-write-failures#1": {
       "output": {
-        "length": 21,
-        "text": "runner の一覧が取れない（test）",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 198,
+        "text": "実行環境プロファイルを更新した（行 rust を外した）。\n合成後の指紋: クローン用 7fd2152438a5 / runner 用 7fd2152438a5\nrunner への配布を確かめられなかった（runner の一覧を読めない）: Error: runner の一覧が取れない（test）\nこれから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": "profile",
       "profileRows": [
@@ -4424,8 +4424,8 @@
           "type": "decision",
           "id": "id-2",
           "at": "2026-10-29T00:00:00.000Z",
-          "decision": "実行環境プロファイルの行 rust を外せなかった: FOO を外した",
-          "grounds": "外そうとしたが、状態の変更が失敗した: Error"
+          "decision": "実行環境プロファイルの行 rust を外した（runner への配布は確かめられなかった）: FOO を外した",
+          "grounds": "人間から実行環境そのものを渡された（値は記録しない）。runner の一覧を読めず、配布を確かめられなかった: Error: runner の一覧が取れない（test）"
         }
       ],
       "dropped": [],
@@ -4446,7 +4446,7 @@
             "ifMatch": null,
             "options": null
           },
-          "outcome": "threw Error"
+          "outcome": "removed=true stored=true clone.ok=true runners=[] entries=2"
         },
         {
           "op": "stores.profile.list",
@@ -4478,11 +4478,16 @@
           "outcome": "threw Error"
         },
         {
+          "op": "stores.profile.list",
+          "args": {},
+          "outcome": "2 rows"
+        },
+        {
           "op": "journal.append",
           "args": {
             "type": "decision",
-            "decision": "実行環境プロファイルの行 rust を外せなかった: FOO を外した",
-            "grounds": "外そうとしたが、状態の変更が失敗した: Error"
+            "decision": "実行環境プロファイルの行 rust を外した（runner への配布は確かめられなかった）: FOO を外した",
+            "grounds": "人間から実行環境そのものを渡された（値は記録しない）。runner の一覧を読めず、配布を確かめられなかった: Error: runner の一覧が取れない（test）"
           },
           "outcome": "ok id-2"
         }
@@ -4490,11 +4495,11 @@
     },
     "remove-after-write-failures#2": {
       "output": {
-        "length": 16,
-        "text": "正本の一覧が読めない（test）",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 130,
+        "text": "実行環境プロファイルを更新した（行 other を外した）。\n合成後の指紋: クローン用 fc191e54045b / runner 用 fc191e54045b\nこれから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": "profile",
       "profileRows": [
@@ -4517,8 +4522,8 @@
           "type": "decision",
           "id": "id-4",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "実行環境プロファイルの行 other を外せなかった: FOO を外した",
-          "grounds": "外そうとしたが、状態の変更が失敗した: Error"
+          "decision": "実行環境プロファイルの行 other を外した: FOO を外した",
+          "grounds": "人間から実行環境そのものを渡された（値は記録しない）"
         }
       ],
       "dropped": [],
@@ -4539,7 +4544,7 @@
             "ifMatch": null,
             "options": null
           },
-          "outcome": "threw Error"
+          "outcome": "removed=true stored=true clone.ok=true runners=[] entries=1"
         },
         {
           "op": "stores.profile.list",
@@ -4579,8 +4584,8 @@
           "op": "journal.append",
           "args": {
             "type": "decision",
-            "decision": "実行環境プロファイルの行 other を外せなかった: FOO を外した",
-            "grounds": "外そうとしたが、状態の変更が失敗した: Error"
+            "decision": "実行環境プロファイルの行 other を外した: FOO を外した",
+            "grounds": "人間から実行環境そのものを渡された（値は記録しない）"
           },
           "outcome": "ok id-4"
         }
@@ -4588,11 +4593,11 @@
     },
     "remove-after-write-failures#3": {
       "output": {
-        "length": 16,
-        "text": "正本の一覧が読めない（test）",
-        "isError": true,
-        "thrown": true,
-        "errorName": "Error"
+        "length": 137,
+        "text": "実行環境プロファイルを更新した（行 third を外した）。\n合成後の指紋: クローン用 （掛かる行なし） / runner 用 （掛かる行なし）\n配った先: runner-a\nこれから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
       },
       "wrote": "profile",
       "profileRows": [],
@@ -4608,8 +4613,8 @@
           "type": "decision",
           "id": "id-6",
           "at": "2026-10-29T00:02:00.000Z",
-          "decision": "実行環境プロファイルの行 third を外せなかった: FOO を外した",
-          "grounds": "外そうとしたが、状態の変更が失敗した: Error"
+          "decision": "実行環境プロファイルの行 third を外した: FOO を外した",
+          "grounds": "人間から実行環境そのものを渡された（値は記録しない）"
         }
       ],
       "dropped": [],
@@ -4630,7 +4635,7 @@
             "ifMatch": null,
             "options": null
           },
-          "outcome": "threw Error"
+          "outcome": "removed=true stored=true clone.ok=true runners=[runner-a:ok] entries=0"
         },
         {
           "op": "stores.profile.list",
@@ -4678,8 +4683,8 @@
           "op": "journal.append",
           "args": {
             "type": "decision",
-            "decision": "実行環境プロファイルの行 third を外せなかった: FOO を外した",
-            "grounds": "外そうとしたが、状態の変更が失敗した: Error"
+            "decision": "実行環境プロファイルの行 third を外した: FOO を外した",
+            "grounds": "人間から実行環境そのものを渡された（値は記録しない）"
           },
           "outcome": "ok id-6"
         }

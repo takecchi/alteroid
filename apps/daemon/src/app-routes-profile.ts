@@ -194,21 +194,29 @@ async function mutateProfile(
     allScript.length === 0
       ? {}
       : { sha256: fingerprintOf(allScript), bytes: Buffer.byteLength(allScript) };
+  const doneDecision =
+    spec.subject === undefined
+      ? // 旧来の全部差し替えは1本の時代と同じ文言: 日誌を読む側と歯がこの文言で見ている。
+        allFingerprint.sha256 === undefined
+        ? '実行環境プロファイルを外した'
+        : `実行環境プロファイルを更新した（sha256 ${allFingerprint.sha256}・${String(allFingerprint.bytes)} bytes）`
+      : `実行環境プロファイル（${spec.subject}）を更新した（クローン用 sha256 ${composed.clone.sha256 ?? 'なし'}・runner 用 sha256 ${composed.runner.sha256 ?? 'なし'}）`;
   await appendJournalOrDrop(
     deps.stores,
     {
       type: 'decision',
       decision:
-        spec.subject === undefined
-          ? // 旧来の全部差し替えは1本の時代と同じ文言: 日誌を読む側と歯がこの文言で見ている。
-            allFingerprint.sha256 === undefined
-            ? '実行環境プロファイルを外した'
-            : `実行環境プロファイルを更新した（sha256 ${allFingerprint.sha256}・${String(allFingerprint.bytes)} bytes）`
-          : `実行環境プロファイル（${spec.subject}）を更新した（クローン用 sha256 ${composed.clone.sha256 ?? 'なし'}・runner 用 sha256 ${composed.runner.sha256 ?? 'なし'}）`,
+        result.runnersUnconfirmed === undefined
+          ? doneDecision
+          : `${doneDecision}（runner への配布は確かめられなかった）`,
       grounds:
         `${spec.actor}（${spec.route}）。` +
         '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
-        `runner への配布: ${describePluginDelivery(result.runners)}` +
+        `runner への配布: ${
+          result.runnersUnconfirmed === undefined
+            ? describePluginDelivery(result.runners)
+            : `確かめられなかった（runner の一覧を読めない: ${result.runnersUnconfirmed}）`
+        }` +
         '（マネージャー・作業者には次に開くセッションから効く）。',
     },
     '実行環境プロファイルの日誌',
@@ -230,6 +238,9 @@ async function mutateProfile(
               output: redactProfileFailure({ output: result.clone.output }, process.env).output,
             },
       runners: result.runners,
+      ...(result.runnersUnconfirmed === undefined
+        ? {}
+        : { runnersUnconfirmed: result.runnersUnconfirmed }),
     }),
   };
 }
