@@ -264,6 +264,96 @@ function renderPracticeWriteResult(args: {
   );
 }
 
+// 読めない形の行には版が無いので前提なしで消せる: 回復手段を塞がないため
+function describePracticeRemoveMissingVersion(
+  slug: string,
+  before: Practice | null,
+  baseVersion: string | undefined,
+): string | null {
+  if (before !== null && baseVersion === undefined) {
+    return (
+      `やり方 ${slug} を消すには、先に practice_read slug=${slug} で読み、` +
+      '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
+      '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは消せない）。**何も消していない。**'
+    );
+  }
+  return null;
+}
+
+// 版つきで消す。競合（PracticeConflictError）だけを断りにして返し、ほかの失敗はそのまま投げる
+async function removePracticeDocument(args: {
+  stores: Stores;
+  slug: string;
+  before: Practice | null;
+  baseVersion: string | undefined;
+}): Promise<{ kind: 'removed' } | { kind: 'refused'; body: string }> {
+  const { stores, slug, before, baseVersion } = args;
+  try {
+    await stores.practices.remove(slug, before === null ? undefined : { ifMatch: baseVersion });
+  } catch (error) {
+    if (error instanceof PracticeConflictError) {
+      return {
+        kind: 'refused',
+        body: describePracticeConflict(slug, '削除', error.current, 'remove'),
+      };
+    }
+    throw error;
+  }
+  return { kind: 'removed' };
+}
+
+// 日誌の decision・grounds（在った行・読めない行の2通り。読めない行は `before` が null）
+function describePracticeRemoveJournalEntry(args: { slug: string; before: Practice | null }): {
+  decision: string;
+  grounds: string;
+} {
+  const { slug, before } = args;
+  if (before !== null) {
+    return {
+      decision: `やり方 ${slug}（${before.kind}）を消した: ${before.title}`,
+      grounds: '不要になったと判断した',
+    };
+  }
+  return {
+    decision: `読めない形で入っていたやり方 ${slug} を消した`,
+    grounds: '読めない形で入っていたやり方を外した',
+  };
+}
+
+// 消した後の日誌
+async function journalPracticeRemove(args: {
+  stores: Stores;
+  slug: string;
+  before: Practice | null;
+}): Promise<void> {
+  const { stores, slug, before } = args;
+  const { decision, grounds } = describePracticeRemoveJournalEntry({ slug, before });
+  await appendJournalOrThrow(
+    'practice_remove',
+    stores.journal,
+    {
+      type: 'decision',
+      decision,
+      grounds,
+      target: { kind: 'practice', slug },
+    },
+    'act-completed',
+  );
+}
+
+// 応答（もともと無かった・消した・読めない行を消した の3通り）
+function renderPracticeRemoveAbsent(slug: string): string {
+  return `やり方 ${slug} はもともと無かった（何もしていない）。`;
+}
+
+function renderPracticeRemoveDeleted(slug: string): string {
+  return `やり方 ${slug} を消した。`;
+}
+
+function renderPracticeRemoveUnreadableDeleted(slug: string): string {
+  return `読めない形で入っていたやり方 ${slug} を消した。`;
+}
+
 export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -511,70 +601,23 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
           ),
       },
       async ({ slug, base_version: baseVersion }) => {
-        if (!practiceSlugSchema.safeParse(slug).success) {
-          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
-        }
-        // `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `remove()` まで届かず、壊れた行を消す唯一の回復手段が塞がるため
-        let before: Practice | null;
-        let wasUnreadable = false;
-        try {
-          before = await stores.practices.read(slug);
-        } catch (error) {
-          if (!(error instanceof UnreadablePracticeError)) throw error;
-          before = null;
-          wasUnreadable = true;
-        }
+        const slugViolation = describePracticeWriteSlugViolation(slug);
+        if (slugViolation !== null) return text(slugViolation);
+        const { before, beforeWasUnreadable } = await readPracticeBeforeWrite(stores, slug);
         // 無かったときは日誌を書かない: 何も起きていないのに「消した」という判断の跡を残すと日誌が実際の変化と食い違うため。「読めなかった」は「無かった」ではない
-        if (before === null && !wasUnreadable) {
-          return text(`やり方 ${slug} はもともと無かった（何もしていない）。`);
+        if (before === null && !beforeWasUnreadable) {
+          return text(renderPracticeRemoveAbsent(slug));
         }
-        // 読めない形の行には版が無いので前提なしで消せる: 回復手段を塞がないため
-        if (before !== null) {
-          if (baseVersion === undefined) {
-            return text(
-              `やり方 ${slug} を消すには、先に practice_read slug=${slug} で読み、` +
-                '応答に出る base_version をこの呼び出しの base_version に渡すこと' +
-                '（読んだ後に人間や別のターンが書いた内容を、気づかずに消さないため。焼き込みの索引だけでは消せない）。**何も消していない。**',
-            );
-          }
-        }
-        try {
-          await stores.practices.remove(
-            slug,
-            before === null ? undefined : { ifMatch: baseVersion },
-          );
-        } catch (error) {
-          if (error instanceof PracticeConflictError) {
-            return text(describePracticeConflict(slug, '削除', error.current, 'remove'));
-          }
-          throw error;
-        }
-        if (before !== null) {
-          await appendJournalOrThrow(
-            'practice_remove',
-            stores.journal,
-            {
-              type: 'decision',
-              decision: `やり方 ${slug}（${before.kind}）を消した: ${before.title}`,
-              grounds: '不要になったと判断した',
-              target: { kind: 'practice', slug },
-            },
-            'act-completed',
-          );
-          return text(`やり方 ${slug} を消した。`);
-        }
-        await appendJournalOrThrow(
-          'practice_remove',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: `読めない形で入っていたやり方 ${slug} を消した`,
-            grounds: '読めない形で入っていたやり方を外した',
-            target: { kind: 'practice', slug },
-          },
-          'act-completed',
+        const versionViolation = describePracticeRemoveMissingVersion(slug, before, baseVersion);
+        if (versionViolation !== null) return text(versionViolation);
+        const outcome = await removePracticeDocument({ stores, slug, before, baseVersion });
+        if (outcome.kind === 'refused') return text(outcome.body);
+        await journalPracticeRemove({ stores, slug, before });
+        return text(
+          before !== null
+            ? renderPracticeRemoveDeleted(slug)
+            : renderPracticeRemoveUnreadableDeleted(slug),
         );
-        return text(`読めない形で入っていたやり方 ${slug} を消した。`);
       },
     ),
   ];
