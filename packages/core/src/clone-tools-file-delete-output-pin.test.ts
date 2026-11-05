@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import {
   AttachmentContentRemoveError,
@@ -597,11 +599,9 @@ async function snapshot(
   };
 }
 
-const TMP_ROOTS: string[] = [];
-
 async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
-  const root = mkdtempSync(join(tmpdir(), 'alteroid-file-delete-pin-'));
-  TMP_ROOTS.push(root);
+  // 掃除は vitest.setup.ts の afterAll が行う（直接 mkdtemp を呼ばない規則）
+  const root = await makeTempDir('alteroid-file-delete-pin-');
   const copiesDir = join(root, 'copies');
   mkdirSync(copiesDir, { recursive: true });
   const base = createMemoryStores();
@@ -738,7 +738,6 @@ describe('file_delete の出力と呼んだあとの状態の固定（場面ご�
 
   afterAll(() => {
     vi.useRealTimers();
-    for (const root of TMP_ROOTS) rmSync(root, { recursive: true, force: true });
   });
 
   it('空振りでない（場面が在り、固定値と実際の場面の名前の並びが同じ）', () => {
