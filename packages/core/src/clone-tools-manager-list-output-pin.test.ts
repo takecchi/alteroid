@@ -621,12 +621,12 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'inbox-and-runner-backlog',
     covers:
-      '受信箱の積み上がり（人間起点つき）・メモリの待ち行列・runner の積み上がり。2回目は内訳が札、refetch で全文',
+      '受信箱の積み上がり（人間起点つき）・メモリの待ち行列・runner の積み上がり。3回続けて引いても毎回全文',
     managers: () => [mgr(1), mgr(2)],
     inbox: stuckInbox(),
     queued: 3,
     backlog: backlogSnapshots(),
-    steps: [{}, {}, { args: { refetch: true } }],
+    steps: [{}, {}, {}],
   },
   {
     name: 'inbox-unreadable',

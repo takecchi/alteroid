@@ -1,0 +1,2097 @@
+{
+  "lengths": {
+    "reason-invalid#1": 22,
+    "reason-invalid#2": 22,
+    "reason-invalid#3": 34,
+    "reason-invalid#4": 34,
+    "reason-invalid#5": 34,
+    "reason-invalid#6": 22,
+    "reason-undefined#1": 12,
+    "reason-undefined#2": 12,
+    "id-missing#1": 23,
+    "id-missing#2": 18,
+    "get-fails#1": 56,
+    "get-fails#2": 20,
+    "already-answered#1": 63,
+    "already-answered#2": 63,
+    "already-answered#3": 57,
+    "already-answered#4": 61,
+    "already-withdrawn#1": 55,
+    "already-withdrawn#2": 48,
+    "withdraw-note-none#1": 12,
+    "withdraw-note-none#2": 12,
+    "withdraw-note-job": 119,
+    "withdraw-note-job-request": 139,
+    "withdraw-shapes#1": 12,
+    "withdraw-shapes#2": 12,
+    "withdraw-shapes#3": 12,
+    "withdraw-shapes#4": 12,
+    "withdraw-twice#1": 119,
+    "withdraw-twice#2": 51,
+    "race-answered#1": 62,
+    "race-answered#2": 63,
+    "race-withdrawn#1": 54,
+    "race-withdrawn#2": 48,
+    "race-both": 62,
+    "race-removed": 22,
+    "update-fails#1": 56,
+    "update-fails#2": 23,
+    "journal-fails#1": 217,
+    "journal-fails#2": 233,
+    "journal-fails#3": 54
+  },
+  "scenarios": {
+    "reason-invalid#1": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#2": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#3": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#4": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#5": {
+      "output": {
+        "length": 34,
+        "text": "reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-invalid#6": {
+      "output": {
+        "length": 22,
+        "text": "reason は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": []
+    },
+    "reason-undefined#1": {
+      "output": {
+        "length": 12,
+        "text": "ap-1 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "approvalId": "ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "reason-undefined#2": {
+      "output": {
+        "length": 12,
+        "text": "ap-2 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "approvalId": "ap-2",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "saw": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2"
+          },
+          "mutateReturned": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-2",
+            "approvalId": "ap-2",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "id-missing#1": {
+      "output": {
+        "length": 23,
+        "text": "承認待ち ghost は無い（id が違う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ghost"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "id-missing#2": {
+      "output": {
+        "length": 18,
+        "text": "承認待ち  は無い（id が違う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": ""
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "get-fails#1": {
+      "output": {
+        "length": 56,
+        "text": "承認待ち ap-1 は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "threw UnreadableApprovalError: 承認待ち ap-1 は在るが読めない（壊れた行。消されたのではない）: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "get-fails#2": {
+      "output": {
+        "length": 20,
+        "text": "ストアが落ちた（getApproval）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "threw Error: ストアが落ちた（getApproval）"
+        }
+      ]
+    },
+    "already-answered#1": {
+      "output": {
+        "length": 63,
+        "text": "ap-1 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: はい、進めて）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "はい、進めて"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "answeredAt": "2026-10-28T12:00:00.000Z"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "質問 ap-3",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": ""
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "質問 ap-4",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "回答が先",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "先に取り下げられていた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "already-answered#2": {
+      "output": {
+        "length": 63,
+        "text": "ap-2 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: （本文なし））。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "はい、進めて"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "answeredAt": "2026-10-28T12:00:00.000Z"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "質問 ap-3",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": ""
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "質問 ap-4",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "回答が先",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "先に取り下げられていた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "already-answered#3": {
+      "output": {
+        "length": 57,
+        "text": "ap-3 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "はい、進めて"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "answeredAt": "2026-10-28T12:00:00.000Z"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "質問 ap-3",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": ""
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "質問 ap-4",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "回答が先",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "先に取り下げられていた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-3"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "already-answered#4": {
+      "output": {
+        "length": 61,
+        "text": "ap-4 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: 回答が先）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "はい、進めて"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "answeredAt": "2026-10-28T12:00:00.000Z"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "質問 ap-3",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": ""
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "質問 ap-4",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "回答が先",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "先に取り下げられていた"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-4"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "already-withdrawn#1": {
+      "output": {
+        "length": 55,
+        "text": "ap-1 は既に 2026-10-28T13:00:00.000Z に取り下げ済み（理由: 先に取り下げた）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "先に取り下げた"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "already-withdrawn#2": {
+      "output": {
+        "length": 48,
+        "text": "ap-2 は既に 2026-10-28T13:00:00.000Z に取り下げ済み（理由: ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "先に取り下げた"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "withdraw-note-none#1": {
+      "output": {
+        "length": 12,
+        "text": "ap-1 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "自分で答えを見つけた"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "質問 ap-3",
+          "requestId": "req-orphan"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "approvalId": "ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "自分で答えを見つけた"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "自分で答えを見つけた"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "自分で答えを見つけた"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "withdraw-note-none#2": {
+      "output": {
+        "length": 12,
+        "text": "ap-3 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "自分で答えを見つけた"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "質問 ap-3",
+          "requestId": "req-orphan",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "requestId だけの行"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "質問 ap-3",
+          "approvalId": "ap-3",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "requestId だけの行"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-3"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-3"
+          },
+          "saw": {
+            "id": "ap-3",
+            "createdAt": "2026-10-01T00:03:00.000Z",
+            "question": "質問 ap-3",
+            "requestId": "req-orphan"
+          },
+          "mutateReturned": {
+            "id": "ap-3",
+            "createdAt": "2026-10-01T00:03:00.000Z",
+            "question": "質問 ap-3",
+            "requestId": "req-orphan",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z",
+            "withdrawnReason": "requestId だけの行"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-3",
+            "approvalId": "ap-3",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z",
+            "withdrawnReason": "requestId だけの行"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "withdraw-note-job": {
+      "output": {
+        "length": 119,
+        "text": "ap-1 を取り下げた。 ⚠️ この確認はマネージャー mgr-7 のものである。取り下げてもそのマネージャーは自動では解放されない——待ったままなら、自分から manager_send（decision 付き）で答えて始末をつけること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "jobId": "mgr-7",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "マネージャー側で解決した"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "approvalId": "ap-1",
+          "managerId": "mgr-7",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "マネージャー側で解決した"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "マネージャー側で解決した"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "managerId": "mgr-7",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "マネージャー側で解決した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "withdraw-note-job-request": {
+      "output": {
+        "length": 139,
+        "text": "ap-1 を取り下げた。 ⚠️ この確認はマネージャー mgr-7 のものである（requestId: \"req-5\"）。取り下げてもそのマネージャーは自動では解放されない——待ったままなら、自分から manager_send（decision 付き）で答えて始末をつけること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "jobId": "mgr-7",
+          "requestId": "req-5",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "許可は要らなくなった"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "approvalId": "ap-1",
+          "managerId": "mgr-7",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "許可は要らなくなった"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7",
+            "requestId": "req-5"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7",
+            "requestId": "req-5",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "許可は要らなくなった"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "managerId": "mgr-7",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "許可は要らなくなった"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "withdraw-shapes#1": {
+      "output": {
+        "length": 12,
+        "text": "ap-1 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "  前後に空白  "
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "一行目\n二行目",
+          "context": "背景の説明"
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "進め方を選んでください",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "対象はどれか",
+              "options": [
+                {
+                  "id": "a",
+                  "label": "a"
+                },
+                {
+                  "id": "b",
+                  "label": "b"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "approvalId": "ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "  前後に空白  "
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "  前後に空白  "
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "  前後に空白  "
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "withdraw-shapes#2": {
+      "output": {
+        "length": 12,
+        "text": "ap-2 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "  前後に空白  "
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "一行目\n二行目"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "一行目\n二行目",
+          "context": "背景の説明"
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "進め方を選んでください",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "対象はどれか",
+              "options": [
+                {
+                  "id": "a",
+                  "label": "a"
+                },
+                {
+                  "id": "b",
+                  "label": "b"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "approvalId": "ap-2",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "一行目\n二行目"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "saw": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2"
+          },
+          "mutateReturned": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z",
+            "withdrawnReason": "一行目\n二行目"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-2",
+            "approvalId": "ap-2",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z",
+            "withdrawnReason": "一行目\n二行目"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "withdraw-shapes#3": {
+      "output": {
+        "length": 12,
+        "text": "ap-3 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "  前後に空白  "
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "一行目\n二行目"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "一行目\n二行目",
+          "context": "背景の説明",
+          "withdrawnAt": "2026-10-29T00:03:00.000Z",
+          "withdrawnReason": "ab"
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "進め方を選んでください",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "対象はどれか",
+              "options": [
+                {
+                  "id": "a",
+                  "label": "a"
+                },
+                {
+                  "id": "b",
+                  "label": "b"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "question": "一行目\n二行目",
+          "approvalId": "ap-3",
+          "withdrawnAt": "2026-10-29T00:03:00.000Z",
+          "withdrawnReason": "ab"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-3"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-3"
+          },
+          "saw": {
+            "id": "ap-3",
+            "createdAt": "2026-10-01T00:03:00.000Z",
+            "question": "一行目\n二行目",
+            "context": "背景の説明"
+          },
+          "mutateReturned": {
+            "id": "ap-3",
+            "createdAt": "2026-10-01T00:03:00.000Z",
+            "question": "一行目\n二行目",
+            "context": "背景の説明",
+            "withdrawnAt": "2026-10-29T00:03:00.000Z",
+            "withdrawnReason": "a\u0000b"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "一行目\n二行目",
+            "approvalId": "ap-3",
+            "withdrawnAt": "2026-10-29T00:03:00.000Z",
+            "withdrawnReason": "a\u0000b"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "withdraw-shapes#4": {
+      "output": {
+        "length": 12,
+        "text": "ap-4 を取り下げた。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "  前後に空白  "
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "一行目\n二行目"
+        },
+        {
+          "id": "ap-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "question": "一行目\n二行目",
+          "context": "背景の説明",
+          "withdrawnAt": "2026-10-29T00:03:00.000Z",
+          "withdrawnReason": "ab"
+        },
+        {
+          "id": "ap-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "question": "進め方を選んでください",
+          "questions": [
+            {
+              "id": "target",
+              "prompt": "対象はどれか",
+              "options": [
+                {
+                  "id": "a",
+                  "label": "a"
+                },
+                {
+                  "id": "b",
+                  "label": "b"
+                }
+              ]
+            }
+          ],
+          "withdrawnAt": "2026-10-29T00:04:00.000Z",
+          "withdrawnReason": "設問付きの行"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "question": "進め方を選んでください",
+          "approvalId": "ap-4",
+          "withdrawnAt": "2026-10-29T00:04:00.000Z",
+          "withdrawnReason": "設問付きの行"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-4"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-4"
+          },
+          "saw": {
+            "id": "ap-4",
+            "createdAt": "2026-10-01T00:04:00.000Z",
+            "question": "進め方を選んでください",
+            "questions": [
+              {
+                "id": "target",
+                "prompt": "対象はどれか",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "a"
+                  },
+                  {
+                    "id": "b",
+                    "label": "b"
+                  }
+                ]
+              }
+            ]
+          },
+          "mutateReturned": {
+            "id": "ap-4",
+            "createdAt": "2026-10-01T00:04:00.000Z",
+            "question": "進め方を選んでください",
+            "questions": [
+              {
+                "id": "target",
+                "prompt": "対象はどれか",
+                "options": [
+                  {
+                    "id": "a",
+                    "label": "a"
+                  },
+                  {
+                    "id": "b",
+                    "label": "b"
+                  }
+                ]
+              }
+            ],
+            "withdrawnAt": "2026-10-29T00:04:00.000Z",
+            "withdrawnReason": "設問付きの行"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "進め方を選んでください",
+            "approvalId": "ap-4",
+            "withdrawnAt": "2026-10-29T00:04:00.000Z",
+            "withdrawnReason": "設問付きの行"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "withdraw-twice#1": {
+      "output": {
+        "length": 119,
+        "text": "ap-1 を取り下げた。 ⚠️ この確認はマネージャー mgr-7 のものである。取り下げてもそのマネージャーは自動では解放されない——待ったままなら、自分から manager_send（decision 付き）で答えて始末をつけること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "jobId": "mgr-7",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "1回目"
+        }
+      ],
+      "journal": [
+        {
+          "type": "escalation",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "approvalId": "ap-1",
+          "managerId": "mgr-7",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "1回目"
+        }
+      ],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "1回目"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "managerId": "mgr-7",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "1回目"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "withdraw-twice#2": {
+      "output": {
+        "length": 51,
+        "text": "ap-1 は既に 2026-10-29T00:01:00.000Z に取り下げ済み（理由: 1回目）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "jobId": "mgr-7",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "1回目"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "race-answered#1": {
+      "output": {
+        "length": 62,
+        "text": "ap-1 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: 人間の回答）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "jobId": "mgr-7",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "人間の回答"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "jobId": "mgr-7",
+            "answeredAt": "2026-10-28T12:00:00.000Z",
+            "answer": "人間の回答"
+          },
+          "mutateReturned": null,
+          "outcome": "null"
+        }
+      ]
+    },
+    "race-answered#2": {
+      "output": {
+        "length": 63,
+        "text": "ap-2 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: （本文なし））。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "jobId": "mgr-7",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "人間の回答"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "answeredAt": "2026-10-28T12:00:00.000Z"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "saw": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2",
+            "answeredAt": "2026-10-28T12:00:00.000Z"
+          },
+          "mutateReturned": null,
+          "outcome": "null"
+        }
+      ]
+    },
+    "race-withdrawn#1": {
+      "output": {
+        "length": 54,
+        "text": "ap-1 は既に 2026-10-28T13:00:00.000Z に取り下げ済み（理由: 別の手の理由）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "別の手の理由"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "withdrawnAt": "2026-10-28T13:00:00.000Z",
+            "withdrawnReason": "別の手の理由"
+          },
+          "mutateReturned": null,
+          "outcome": "null"
+        }
+      ]
+    },
+    "race-withdrawn#2": {
+      "output": {
+        "length": 48,
+        "text": "ap-2 は既に 2026-10-28T13:00:00.000Z に取り下げ済み（理由: ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "別の手の理由"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "saw": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2",
+            "withdrawnAt": "2026-10-28T13:00:00.000Z"
+          },
+          "mutateReturned": null,
+          "outcome": "null"
+        }
+      ]
+    },
+    "race-both": {
+      "output": {
+        "length": 62,
+        "text": "ap-1 は既に 2026-10-28T12:00:00.000Z に回答済みなので取り下げられない（回答: 人間の回答）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "answeredAt": "2026-10-28T12:00:00.000Z",
+          "answer": "人間の回答",
+          "withdrawnAt": "2026-10-28T13:00:00.000Z",
+          "withdrawnReason": "別の手の理由"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "answeredAt": "2026-10-28T12:00:00.000Z",
+            "answer": "人間の回答",
+            "withdrawnAt": "2026-10-28T13:00:00.000Z",
+            "withdrawnReason": "別の手の理由"
+          },
+          "mutateReturned": null,
+          "outcome": "null"
+        }
+      ]
+    },
+    "race-removed": {
+      "output": {
+        "length": 22,
+        "text": "承認待ち ap-1 は無い（id が違う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": true,
+      "approvals": [],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": null,
+          "mutateReturned": "not-called",
+          "outcome": "null"
+        }
+      ]
+    },
+    "update-fails#1": {
+      "output": {
+        "length": 56,
+        "text": "承認待ち ap-1 は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": null,
+          "mutateReturned": "not-called",
+          "outcome": "threw UnreadableApprovalError: 承認待ち ap-1 は在るが読めない（壊れた行。消されたのではない）: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "update-fails#2": {
+      "output": {
+        "length": 23,
+        "text": "ストアが落ちた（updateApproval）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "saw": null,
+          "mutateReturned": "not-called",
+          "outcome": "threw Error: ストアが落ちた（updateApproval）"
+        }
+      ]
+    },
+    "journal-fails#1": {
+      "output": {
+        "length": 217,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\napproval_withdraw は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: escalation approvalId=ap-1 question.chars=7 withdrawnReason.chars=6\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "日誌が落ちる"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "jobId": "mgr-7",
+          "requestId": "req-5"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "saw": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1"
+          },
+          "mutateReturned": {
+            "id": "ap-1",
+            "createdAt": "2026-10-01T00:01:00.000Z",
+            "question": "質問 ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "日誌が落ちる"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-1",
+            "approvalId": "ap-1",
+            "withdrawnAt": "2026-10-29T00:01:00.000Z",
+            "withdrawnReason": "日誌が落ちる"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#2": {
+      "output": {
+        "length": 233,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\napproval_withdraw は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: escalation approvalId=ap-2 managerId=mgr-7 question.chars=7 withdrawnReason.chars=6\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": true,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "日誌が落ちる"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "jobId": "mgr-7",
+          "requestId": "req-5",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "日誌が落ちる"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "jobs.updateApproval",
+          "args": {
+            "id": "ap-2"
+          },
+          "saw": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2",
+            "jobId": "mgr-7",
+            "requestId": "req-5"
+          },
+          "mutateReturned": {
+            "id": "ap-2",
+            "createdAt": "2026-10-01T00:02:00.000Z",
+            "question": "質問 ap-2",
+            "jobId": "mgr-7",
+            "requestId": "req-5",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z",
+            "withdrawnReason": "日誌が落ちる"
+          },
+          "outcome": "row"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "escalation",
+            "question": "質問 ap-2",
+            "approvalId": "ap-2",
+            "managerId": "mgr-7",
+            "withdrawnAt": "2026-10-29T00:02:00.000Z",
+            "withdrawnReason": "日誌が落ちる"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#3": {
+      "output": {
+        "length": 54,
+        "text": "ap-1 は既に 2026-10-29T00:01:00.000Z に取り下げ済み（理由: 日誌が落ちる）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "approvals": [
+        {
+          "id": "ap-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "question": "質問 ap-1",
+          "withdrawnAt": "2026-10-29T00:01:00.000Z",
+          "withdrawnReason": "日誌が落ちる"
+        },
+        {
+          "id": "ap-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "question": "質問 ap-2",
+          "jobId": "mgr-7",
+          "requestId": "req-5",
+          "withdrawnAt": "2026-10-29T00:02:00.000Z",
+          "withdrawnReason": "日誌が落ちる"
+        }
+      ],
+      "journal": [],
+      "calls": [
+        {
+          "op": "jobs.getApproval",
+          "args": {
+            "id": "ap-1"
+          },
+          "outcome": "found"
+        }
+      ]
+    }
+  }
+}
