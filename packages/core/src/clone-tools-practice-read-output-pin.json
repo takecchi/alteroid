@@ -1,0 +1,1698 @@
+{
+  "lengths": {
+    "slug-invalid#1": 40,
+    "slug-invalid#2": 32,
+    "slug-invalid#3": 39,
+    "slug-invalid#4": 35,
+    "slug-invalid#5": 161,
+    "slug-invalid#6": 35,
+    "slug-invalid#7": 40,
+    "slug-invalid#8": 32,
+    "slug-invalid#9": 40,
+    "version-invalid#1": 26,
+    "version-invalid#2": 27,
+    "version-invalid#3": 28,
+    "version-invalid#4": 28,
+    "version-invalid#5": 33,
+    "version-invalid#6": 34,
+    "version-invalid#7": 29,
+    "version-invalid#8": 26,
+    "version-invalid#9": 26,
+    "version-invalid#10": 26,
+    "version-invalid#11": 28,
+    "version-invalid#12": 26,
+    "version-bounds#1": 98,
+    "version-bounds#2": 61,
+    "version-bounds#3": 65,
+    "version-bounds#4": 76,
+    "version-bounds#5": 83,
+    "current-missing#1": 67,
+    "current-missing#2": 67,
+    "current-missing#3": 61,
+    "current-missing#4": 188,
+    "current-read#1": 279,
+    "current-read#2": 277,
+    "current-read#3": 275,
+    "current-forms#1": 246,
+    "current-forms#2": 269,
+    "current-forms#3": 8244,
+    "current-forms#4": 249,
+    "current-forms#5": 250,
+    "current-forms#6": 248,
+    "current-forms#7": 280,
+    "current-forms#8": 579,
+    "current-forms#9": 289,
+    "current-forms#10": 289,
+    "current-forms#11": 245,
+    "current-forms#12": 246,
+    "current-failures#1": 90,
+    "current-failures#2": 18,
+    "current-failures#3": 13,
+    "current-failures#4": 90,
+    "current-failures#5": 279,
+    "version-read#1": 93,
+    "version-read#2": 96,
+    "version-read#3": 96,
+    "version-read#4": 277,
+    "version-read#5": 94,
+    "version-read#6": 94,
+    "version-read#7": 275,
+    "version-read#8": 98,
+    "version-missing#1": 62,
+    "version-missing#2": 61,
+    "version-missing#3": 62,
+    "version-forms#1": 65,
+    "version-forms#2": 88,
+    "version-forms#3": 8063,
+    "version-forms#4": 68,
+    "version-forms#5": 69,
+    "version-forms#6": 67,
+    "version-forms#7": 99,
+    "version-forms#8": 398,
+    "version-forms#9": 108,
+    "version-forms#10": 108,
+    "version-forms#11": 64,
+    "version-forms#12": 65,
+    "version-failures#1": 52,
+    "version-failures#2": 25,
+    "version-failures#3": 20,
+    "version-failures#4": 52,
+    "version-failures#5": 98,
+    "mode-split#1": 279,
+    "mode-split#2": 98,
+    "mode-split#3": 279,
+    "mode-split#4": 98,
+    "after-remove#1": 64,
+    "after-remove#2": 96,
+    "after-remove#3": 99,
+    "after-remove#4": 59,
+    "after-remove#5": 242,
+    "after-remove#6": 61,
+    "after-remove#7": 61,
+    "after-remove#8": 61,
+    "after-remove#9": 60
+  },
+  "scenarios": {
+    "slug-invalid#1": {
+      "output": {
+        "length": 40,
+        "text": "やり方のスラッグが不正: Bad Slug（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#2": {
+      "output": {
+        "length": 32,
+        "text": "やり方のスラッグが不正: （英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#3": {
+      "output": {
+        "length": 39,
+        "text": "やり方のスラッグが不正: .hidden（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#4": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: a/b（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#5": {
+      "output": {
+        "length": 161,
+        "text": "やり方のスラッグが不正: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#6": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: a\u0000b（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#7": {
+      "output": {
+        "length": 40,
+        "text": "やり方のスラッグが不正: Bad Slug（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#8": {
+      "output": {
+        "length": 32,
+        "text": "やり方のスラッグが不正: （英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-invalid#9": {
+      "output": {
+        "length": 40,
+        "text": "やり方のスラッグが不正: Bad Slug（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#1": {
+      "output": {
+        "length": 26,
+        "text": "version 0 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#2": {
+      "output": {
+        "length": 27,
+        "text": "version -1 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#3": {
+      "output": {
+        "length": 28,
+        "text": "version 1.5 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#4": {
+      "output": {
+        "length": 28,
+        "text": "version NaN は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#5": {
+      "output": {
+        "length": 33,
+        "text": "version Infinity は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#6": {
+      "output": {
+        "length": 34,
+        "text": "version -Infinity は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#7": {
+      "output": {
+        "length": 29,
+        "text": "version null は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#8": {
+      "output": {
+        "length": 26,
+        "text": "version 2 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#9": {
+      "output": {
+        "length": 26,
+        "text": "version 0 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#10": {
+      "output": {
+        "length": 26,
+        "text": "version 0 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#11": {
+      "output": {
+        "length": 28,
+        "text": "version 0.5 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-invalid#12": {
+      "output": {
+        "length": 26,
+        "text": "version 0 は使えない（1以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "version-bounds#1": {
+      "output": {
+        "length": 98,
+        "text": "review 版1（レビュー） 題\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "version 1 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "version-bounds#2": {
+      "output": {
+        "length": 61,
+        "text": "やり方 review の版 2 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 2
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "version-bounds#3": {
+      "output": {
+        "length": 65,
+        "text": "やり方 review の版 1e+21 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1e21
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "version-bounds#4": {
+      "output": {
+        "length": 76,
+        "text": "やり方 review の版 9007199254740992 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 9007199254740992
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "version-bounds#5": {
+      "output": {
+        "length": 83,
+        "text": "やり方 review の版 1.7976931348623157e+308 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1.7976931348623157e308
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "current-missing#1": {
+      "output": {
+        "length": 67,
+        "text": "やり方 nothing は無い。practice_list で在るものを確かめるか、practice_write で新しく書けること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "nothing"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "current-missing#2": {
+      "output": {
+        "length": 67,
+        "text": "やり方 a.b_c-1 は無い。practice_list で在るものを確かめるか、practice_write で新しく書けること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "a.b_c-1"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "current-missing#3": {
+      "output": {
+        "length": 61,
+        "text": "やり方 0 は無い。practice_list で在るものを確かめるか、practice_write で新しく書けること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "0"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "current-missing#4": {
+      "output": {
+        "length": 188,
+        "text": "やり方 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx は無い。practice_list で在るものを確かめるか、practice_write で新しく書けること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "current-read#1": {
+      "output": {
+        "length": 279,
+        "text": "review（レビュー） 題\n作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "current-read#2": {
+      "output": {
+        "length": 277,
+        "text": "h（実装） 三版目\n作成: 2026-10-01T01:00:00.000Z / 更新: 2026-10-01T03:00:00.000Z / 37 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n追記\n\n\n（版 base_version=3965e82c14f88398e63a1a3e013ee47a0316c54705461a42bbdd022d474114b8 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "h"
+          },
+          "outcome": "practice 3965e82c14f88398e63a1a3e013ee47a0316c54705461a42bbdd022d474114b8"
+        }
+      ]
+    },
+    "current-read#3": {
+      "output": {
+        "length": 275,
+        "text": "same（x） 同じ\n作成: 2026-10-01T04:00:00.000Z / 更新: 2026-10-01T05:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=a5ca3fec18b74da7a2d623bf4d0ff1bb1f441418db960768a8aa0f8bdee42f51 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "same"
+          },
+          "outcome": "practice a5ca3fec18b74da7a2d623bf4d0ff1bb1f441418db960768a8aa0f8bdee42f51"
+        }
+      ]
+    },
+    "current-forms#1": {
+      "output": {
+        "length": 246,
+        "text": "empty-body（x） 空\n作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z / 1 文字\n\n\n\n\n（版 base_version=3e7c5fcf02566218b549acb73016586b0eff7fd9352361eabf91d8cf29e7cd42 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "empty-body"
+          },
+          "outcome": "practice 3e7c5fcf02566218b549acb73016586b0eff7fd9352361eabf91d8cf29e7cd42"
+        }
+      ]
+    },
+    "current-forms#2": {
+      "output": {
+        "length": 269,
+        "text": "multibyte（日報） 日本語 😀 の題\n作成: 2026-10-01T01:00:00.000Z / 更新: 2026-10-01T01:00:00.000Z / 14 文字\n\n日本語😀の本文\n二行目 é\n\n\n（版 base_version=77bd27b20d506bd56c17fe62aaefcf41417e129ad84c1008b470d351029e91c7 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "multibyte"
+          },
+          "outcome": "practice 77bd27b20d506bd56c17fe62aaefcf41417e129ad84c1008b470d351029e91c7"
+        }
+      ]
+    },
+    "current-forms#3": {
+      "output": {
+        "length": 8244,
+        "text": "long（x） 長い\n作成: 2026-10-01T02:00:00.000Z / 更新: 2026-10-01T02:00:00.000Z / 8001 文字\n\n長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。\n\n\n（版 base_version=58d826aed0adaf9c1c06b933881f6c232ffc67ced603d6227979ba4e02ed9e03 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "long"
+          },
+          "outcome": "practice 58d826aed0adaf9c1c06b933881f6c232ffc67ced603d6227979ba4e02ed9e03"
+        }
+      ]
+    },
+    "current-forms#4": {
+      "output": {
+        "length": 249,
+        "text": "nul-store（x） NUL\n作成: 2026-10-01T03:00:00.000Z / 更新: 2026-10-01T03:00:00.000Z / 3 文字\n\nab\n\n\n（版 base_version=b08c39667c74f6b9450e5472277e435d15830584ced7242942afd361c30927ac ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "nul-store"
+          },
+          "outcome": "practice b08c39667c74f6b9450e5472277e435d15830584ced7242942afd361c30927ac"
+        }
+      ]
+    },
+    "current-forms#5": {
+      "output": {
+        "length": 250,
+        "text": "blank-lines（x） 空行\n作成: 2026-10-01T04:00:00.000Z / 更新: 2026-10-01T04:00:00.000Z / 3 文字\n\n\n\n\n\n\n（版 base_version=8ebc3dc9beda4ef2715725267aea0113fd143cf5fd9f6e827e5b99b542b7e94b ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "blank-lines"
+          },
+          "outcome": "practice 8ebc3dc9beda4ef2715725267aea0113fd143cf5fd9f6e827e5b99b542b7e94b"
+        }
+      ]
+    },
+    "current-forms#6": {
+      "output": {
+        "length": 248,
+        "text": "crlf（x） CRLF\n作成: 2026-10-01T05:00:00.000Z / 更新: 2026-10-01T05:00:00.000Z / 6 文字\n\na\r\nb\r\n\n\n（版 base_version=f18da265b0769c5509d1cdd58c9a3295d8477d00cf5aac7bcc082c2e01764725 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "crlf"
+          },
+          "outcome": "practice f18da265b0769c5509d1cdd58c9a3295d8477d00cf5aac7bcc082c2e01764725"
+        }
+      ]
+    },
+    "current-forms#7": {
+      "output": {
+        "length": 280,
+        "text": "empty-title（x） \n作成: 2026-10-01T06:00:00.000Z / 更新: 2026-10-01T06:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=bdabe760c17fcd1d076f5ccaf81c13cbe6f10338cc9184d97b843eeca0b2c7c7 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "empty-title"
+          },
+          "outcome": "practice bdabe760c17fcd1d076f5ccaf81c13cbe6f10338cc9184d97b843eeca0b2c7c7"
+        }
+      ]
+    },
+    "current-forms#8": {
+      "output": {
+        "length": 579,
+        "text": "long-title（x） 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長\n作成: 2026-10-01T07:00:00.000Z / 更新: 2026-10-01T07:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=fc185984231ddd6d0e6a0105ac5a4d602bd5ecd0f71fc14438b558881012dc15 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "long-title"
+          },
+          "outcome": "practice fc185984231ddd6d0e6a0105ac5a4d602bd5ecd0f71fc14438b558881012dc15"
+        }
+      ]
+    },
+    "current-forms#9": {
+      "output": {
+        "length": 289,
+        "text": "newline-title（x） 一行目\n二行目\n作成: 2026-10-01T08:00:00.000Z / 更新: 2026-10-01T08:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=f18aab804e6d6fdd2be386612c85108d3beefb0657ba55000a8c0efb1a2de612 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "newline-title"
+          },
+          "outcome": "practice f18aab804e6d6fdd2be386612c85108d3beefb0657ba55000a8c0efb1a2de612"
+        }
+      ]
+    },
+    "current-forms#10": {
+      "output": {
+        "length": 289,
+        "text": "kind-multibyte（レビュー😀） 題\n作成: 2026-10-01T09:00:00.000Z / 更新: 2026-10-01T09:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=1dd2f3360017fafae61fc479d7802f5fed700c48c9a9337ef4e350207f28378a ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "kind-multibyte"
+          },
+          "outcome": "practice 1dd2f3360017fafae61fc479d7802f5fed700c48c9a9337ef4e350207f28378a"
+        }
+      ]
+    },
+    "current-forms#11": {
+      "output": {
+        "length": 245,
+        "text": "raw-a（x） raw\n作成: 2026-10-01T10:00:00.000Z / 更新: 2026-10-01T10:00:00.000Z / 2 文字\n\nabc\n\n（版 base_version=09c615268626d92a4b6798f1a080c47defd7bb1769d0341acc5e48077046208f ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "raw-a"
+          },
+          "outcome": "practice 09c615268626d92a4b6798f1a080c47defd7bb1769d0341acc5e48077046208f"
+        }
+      ]
+    },
+    "current-forms#12": {
+      "output": {
+        "length": 246,
+        "text": "raw-b（x） raw\n作成: 2026-10-01T11:00:00.000Z / 更新: 2026-10-01T11:00:00.000Z / 2 文字\n\na\u0000b\n\n\n（版 base_version=4636e975cce6beaf148a32c4eff2c57de180884169832fdbf71b879611e0e536 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "raw-b"
+          },
+          "outcome": "practice 4636e975cce6beaf148a32c4eff2c57de180884169832fdbf71b879611e0e536"
+        }
+      ]
+    },
+    "current-failures#1": {
+      "output": {
+        "length": 90,
+        "text": "やり方 review は読めない形で入っている（消されたのではない）。本文はここでは取れない。書き直すなら practice_write、外すなら practice_remove。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: review"
+        }
+      ]
+    },
+    "current-failures#2": {
+      "output": {
+        "length": 18,
+        "text": "読めない行に似た別の例外（read）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "UnreadablePracticeError"
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "threw UnreadablePracticeError: 読めない行に似た別の例外（read）"
+        }
+      ]
+    },
+    "current-failures#3": {
+      "output": {
+        "length": 13,
+        "text": "ストアが落ちた（read）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "threw Error: ストアが落ちた（read）"
+        }
+      ]
+    },
+    "current-failures#4": {
+      "output": {
+        "length": 90,
+        "text": "やり方 u-gone は読めない形で入っている（消されたのではない）。本文はここでは取れない。書き直すなら practice_write、外すなら practice_remove。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "u-gone"
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: u-gone"
+        }
+      ]
+    },
+    "current-failures#5": {
+      "output": {
+        "length": 279,
+        "text": "review（レビュー） 題\n作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "version-read#1": {
+      "output": {
+        "length": 93,
+        "text": "h 版1（調査） 一版目\nこの版が書かれた時刻: 2026-10-01T01:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "h",
+            "version": 1
+          },
+          "outcome": "version 1 b5cceb8503e524728157da9c6b3629b74f15c4628898e2a331006f767880e977"
+        }
+      ]
+    },
+    "version-read#2": {
+      "output": {
+        "length": 96,
+        "text": "h 版2（調査） 二版目\nこの版が書かれた時刻: 2026-10-01T02:00:00.000Z / 37 文字\n\n# 手順\n1. 読んで直す\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "h",
+            "version": 2
+          },
+          "outcome": "version 2 851d16faf0d7963bd78287626cc3188b430ca2c763f8b9a1f0ff771e1595ce92"
+        }
+      ]
+    },
+    "version-read#3": {
+      "output": {
+        "length": 96,
+        "text": "h 版3（実装） 三版目\nこの版が書かれた時刻: 2026-10-01T03:00:00.000Z / 37 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n追記\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "h",
+            "version": 3
+          },
+          "outcome": "version 3 3965e82c14f88398e63a1a3e013ee47a0316c54705461a42bbdd022d474114b8"
+        }
+      ]
+    },
+    "version-read#4": {
+      "output": {
+        "length": 277,
+        "text": "h（実装） 三版目\n作成: 2026-10-01T01:00:00.000Z / 更新: 2026-10-01T03:00:00.000Z / 37 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n追記\n\n\n（版 base_version=3965e82c14f88398e63a1a3e013ee47a0316c54705461a42bbdd022d474114b8 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "h"
+          },
+          "outcome": "practice 3965e82c14f88398e63a1a3e013ee47a0316c54705461a42bbdd022d474114b8"
+        }
+      ]
+    },
+    "version-read#5": {
+      "output": {
+        "length": 94,
+        "text": "same 版1（x） 同じ\nこの版が書かれた時刻: 2026-10-01T04:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "same",
+            "version": 1
+          },
+          "outcome": "version 1 a5ca3fec18b74da7a2d623bf4d0ff1bb1f441418db960768a8aa0f8bdee42f51"
+        }
+      ]
+    },
+    "version-read#6": {
+      "output": {
+        "length": 94,
+        "text": "same 版2（x） 同じ\nこの版が書かれた時刻: 2026-10-01T05:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "same",
+            "version": 2
+          },
+          "outcome": "version 2 a5ca3fec18b74da7a2d623bf4d0ff1bb1f441418db960768a8aa0f8bdee42f51"
+        }
+      ]
+    },
+    "version-read#7": {
+      "output": {
+        "length": 275,
+        "text": "same（x） 同じ\n作成: 2026-10-01T04:00:00.000Z / 更新: 2026-10-01T05:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=a5ca3fec18b74da7a2d623bf4d0ff1bb1f441418db960768a8aa0f8bdee42f51 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "same"
+          },
+          "outcome": "practice a5ca3fec18b74da7a2d623bf4d0ff1bb1f441418db960768a8aa0f8bdee42f51"
+        }
+      ]
+    },
+    "version-read#8": {
+      "output": {
+        "length": 98,
+        "text": "review 版1（レビュー） 題\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "version 1 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "version-missing#1": {
+      "output": {
+        "length": 62,
+        "text": "やり方 nothing の版 1 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "nothing",
+            "version": 1
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "version-missing#2": {
+      "output": {
+        "length": 61,
+        "text": "やり方 review の版 2 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 2
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "version-missing#3": {
+      "output": {
+        "length": 62,
+        "text": "やり方 a.b_c-1 の版 3 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "a.b_c-1",
+            "version": 3
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "version-forms#1": {
+      "output": {
+        "length": 65,
+        "text": "empty-body 版1（x） 空\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 1 文字\n\n\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "empty-body",
+            "version": 1
+          },
+          "outcome": "version 1 3e7c5fcf02566218b549acb73016586b0eff7fd9352361eabf91d8cf29e7cd42"
+        }
+      ]
+    },
+    "version-forms#2": {
+      "output": {
+        "length": 88,
+        "text": "multibyte 版1（日報） 日本語 😀 の題\nこの版が書かれた時刻: 2026-10-01T01:00:00.000Z / 14 文字\n\n日本語😀の本文\n二行目 é\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "multibyte",
+            "version": 1
+          },
+          "outcome": "version 1 77bd27b20d506bd56c17fe62aaefcf41417e129ad84c1008b470d351029e91c7"
+        }
+      ]
+    },
+    "version-forms#3": {
+      "output": {
+        "length": 8063,
+        "text": "long 版1（x） 長い\nこの版が書かれた時刻: 2026-10-01T02:00:00.000Z / 8001 文字\n\n長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。長い行。\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "long",
+            "version": 1
+          },
+          "outcome": "version 1 58d826aed0adaf9c1c06b933881f6c232ffc67ced603d6227979ba4e02ed9e03"
+        }
+      ]
+    },
+    "version-forms#4": {
+      "output": {
+        "length": 68,
+        "text": "nul-store 版1（x） NUL\nこの版が書かれた時刻: 2026-10-01T03:00:00.000Z / 3 文字\n\nab\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "nul-store",
+            "version": 1
+          },
+          "outcome": "version 1 b08c39667c74f6b9450e5472277e435d15830584ced7242942afd361c30927ac"
+        }
+      ]
+    },
+    "version-forms#5": {
+      "output": {
+        "length": 69,
+        "text": "blank-lines 版1（x） 空行\nこの版が書かれた時刻: 2026-10-01T04:00:00.000Z / 3 文字\n\n\n\n\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "blank-lines",
+            "version": 1
+          },
+          "outcome": "version 1 8ebc3dc9beda4ef2715725267aea0113fd143cf5fd9f6e827e5b99b542b7e94b"
+        }
+      ]
+    },
+    "version-forms#6": {
+      "output": {
+        "length": 67,
+        "text": "crlf 版1（x） CRLF\nこの版が書かれた時刻: 2026-10-01T05:00:00.000Z / 6 文字\n\na\r\nb\r\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "crlf",
+            "version": 1
+          },
+          "outcome": "version 1 f18da265b0769c5509d1cdd58c9a3295d8477d00cf5aac7bcc082c2e01764725"
+        }
+      ]
+    },
+    "version-forms#7": {
+      "output": {
+        "length": 99,
+        "text": "empty-title 版1（x） \nこの版が書かれた時刻: 2026-10-01T06:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "empty-title",
+            "version": 1
+          },
+          "outcome": "version 1 bdabe760c17fcd1d076f5ccaf81c13cbe6f10338cc9184d97b843eeca0b2c7c7"
+        }
+      ]
+    },
+    "version-forms#8": {
+      "output": {
+        "length": 398,
+        "text": "long-title 版1（x） 長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長\nこの版が書かれた時刻: 2026-10-01T07:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "long-title",
+            "version": 1
+          },
+          "outcome": "version 1 fc185984231ddd6d0e6a0105ac5a4d602bd5ecd0f71fc14438b558881012dc15"
+        }
+      ]
+    },
+    "version-forms#9": {
+      "output": {
+        "length": 108,
+        "text": "newline-title 版1（x） 一行目\n二行目\nこの版が書かれた時刻: 2026-10-01T08:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "newline-title",
+            "version": 1
+          },
+          "outcome": "version 1 f18aab804e6d6fdd2be386612c85108d3beefb0657ba55000a8c0efb1a2de612"
+        }
+      ]
+    },
+    "version-forms#10": {
+      "output": {
+        "length": 108,
+        "text": "kind-multibyte 版1（レビュー😀） 題\nこの版が書かれた時刻: 2026-10-01T09:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "kind-multibyte",
+            "version": 1
+          },
+          "outcome": "version 1 1dd2f3360017fafae61fc479d7802f5fed700c48c9a9337ef4e350207f28378a"
+        }
+      ]
+    },
+    "version-forms#11": {
+      "output": {
+        "length": 64,
+        "text": "raw-a 版1（x） raw\nこの版が書かれた時刻: 2026-10-01T10:00:00.000Z / 2 文字\n\nabc",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "raw-a",
+            "version": 1
+          },
+          "outcome": "version 1 09c615268626d92a4b6798f1a080c47defd7bb1769d0341acc5e48077046208f"
+        }
+      ]
+    },
+    "version-forms#12": {
+      "output": {
+        "length": 65,
+        "text": "raw-b 版1（x） raw\nこの版が書かれた時刻: 2026-10-01T11:00:00.000Z / 2 文字\n\na\u0000b\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "raw-b",
+            "version": 1
+          },
+          "outcome": "version 1 4636e975cce6beaf148a32c4eff2c57de180884169832fdbf71b879611e0e536"
+        }
+      ]
+    },
+    "version-failures#1": {
+      "output": {
+        "length": 52,
+        "text": "やり方 review の版 1 は読めない形で入っている（消されたのではない）。本文はここでは取れない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: review"
+        }
+      ]
+    },
+    "version-failures#2": {
+      "output": {
+        "length": 25,
+        "text": "読めない行に似た別の例外（readVersion）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "UnreadablePracticeError"
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "threw UnreadablePracticeError: 読めない行に似た別の例外（readVersion）"
+        }
+      ]
+    },
+    "version-failures#3": {
+      "output": {
+        "length": 20,
+        "text": "ストアが落ちた（readVersion）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "threw Error: ストアが落ちた（readVersion）"
+        }
+      ]
+    },
+    "version-failures#4": {
+      "output": {
+        "length": 52,
+        "text": "やり方 v-gone の版 1 は読めない形で入っている（消されたのではない）。本文はここでは取れない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "v-gone",
+            "version": 1
+          },
+          "outcome": "threw UnreadablePracticeError: やり方の行が読めない: v-gone"
+        }
+      ]
+    },
+    "version-failures#5": {
+      "output": {
+        "length": 98,
+        "text": "review 版1（レビュー） 題\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "version 1 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "mode-split#1": {
+      "output": {
+        "length": 279,
+        "text": "review（レビュー） 題\n作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "mode-split#2": {
+      "output": {
+        "length": 98,
+        "text": "review 版1（レビュー） 題\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "version 1 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "mode-split#3": {
+      "output": {
+        "length": 279,
+        "text": "review（レビュー） 題\n作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n\n\n（版 base_version=8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441 ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "practice 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "mode-split#4": {
+      "output": {
+        "length": 98,
+        "text": "review 版1（レビュー） 題\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "review",
+            "version": 1
+          },
+          "outcome": "version 1 8a821cdadc799ecf9a2c011d8ff7603309a8057382a3ba15d78042b1a5f38441"
+        }
+      ]
+    },
+    "after-remove#1": {
+      "output": {
+        "length": 64,
+        "text": "やり方 gone は無い。practice_list で在るものを確かめるか、practice_write で新しく書けること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "gone"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "after-remove#2": {
+      "output": {
+        "length": 96,
+        "text": "gone 版1（調査） 一版目\nこの版が書かれた時刻: 2026-10-01T00:00:00.000Z / 34 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "gone",
+            "version": 1
+          },
+          "outcome": "version 1 b5cceb8503e524728157da9c6b3629b74f15c4628898e2a331006f767880e977"
+        }
+      ]
+    },
+    "after-remove#3": {
+      "output": {
+        "length": 99,
+        "text": "gone 版2（調査） 二版目\nこの版が書かれた時刻: 2026-10-01T01:00:00.000Z / 37 文字\n\n# 手順\n1. 読む\n2. 数 42 と `id-7` を確かめる\n追記\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "gone",
+            "version": 2
+          },
+          "outcome": "version 2 a01488f9939b8570a0f4a959c3dc176441e5f7c48bbbba08c283932616502524"
+        }
+      ]
+    },
+    "after-remove#4": {
+      "output": {
+        "length": 59,
+        "text": "やり方 gone の版 3 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "gone",
+            "version": 3
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "after-remove#5": {
+      "output": {
+        "length": 242,
+        "text": "again（c） C\n作成: 2026-10-01T07:00:00.000Z / 更新: 2026-10-01T07:00:00.000Z / 2 文字\n\nC\n\n\n（版 base_version=3f7a64d5cbf4bbfddf67b1a954e927b61ac2acc391653bcefafcf14bab9f71cc ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.read",
+          "args": {
+            "slug": "again"
+          },
+          "outcome": "practice 3f7a64d5cbf4bbfddf67b1a954e927b61ac2acc391653bcefafcf14bab9f71cc"
+        }
+      ]
+    },
+    "after-remove#6": {
+      "output": {
+        "length": 61,
+        "text": "again 版1（a） A\nこの版が書かれた時刻: 2026-10-01T03:00:00.000Z / 2 文字\n\nA\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "again",
+            "version": 1
+          },
+          "outcome": "version 1 edb128d5003b87979f3a7e4a4136d99102df44e6d558749d0582c8ff3da22ade"
+        }
+      ]
+    },
+    "after-remove#7": {
+      "output": {
+        "length": 61,
+        "text": "again 版2（b） B\nこの版が書かれた時刻: 2026-10-01T05:00:00.000Z / 2 文字\n\nB\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "again",
+            "version": 2
+          },
+          "outcome": "version 2 f760b26161462b1808dfae6618517bb545da56bb9aca31ddb9d73098ad3ce6b1"
+        }
+      ]
+    },
+    "after-remove#8": {
+      "output": {
+        "length": 61,
+        "text": "again 版3（c） C\nこの版が書かれた時刻: 2026-10-01T07:00:00.000Z / 2 文字\n\nC\n",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "again",
+            "version": 3
+          },
+          "outcome": "version 3 3f7a64d5cbf4bbfddf67b1a954e927b61ac2acc391653bcefafcf14bab9f71cc"
+        }
+      ]
+    },
+    "after-remove#9": {
+      "output": {
+        "length": 60,
+        "text": "やり方 again の版 4 は無い。practice_history slug=<slug> で在る版を確かめること。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.readVersion",
+          "args": {
+            "slug": "again",
+            "version": 4
+          },
+          "outcome": "null"
+        }
+      ]
+    }
+  }
+}
