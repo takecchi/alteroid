@@ -172,6 +172,16 @@ export function validatePermissionRequest(
       reason: 'denies が空である（この規則が拒むべき具体例を少なくとも1つ渡すこと）',
     };
   }
+  // 空文字・空白だけの例は断る: allows では断りの文の末尾が空になって何が悪いか読めず、denies ではどの規則にも一致しないので黙って通り、意味の無い例が承認の行に残るため（#6490）
+  for (const field of ['allows', 'denies'] as const) {
+    const index = request[field].findIndex((command) => command.trim() === '');
+    if (index !== -1) {
+      return {
+        ok: false,
+        reason: `${field} の ${String(index + 1)} 件目が空である（空文字・空白だけの例は渡さないこと）`,
+      };
+    }
+  }
   const failingAllow = request.allows.find(
     (command) => !matchPermissionRule(request.rule, command),
   );

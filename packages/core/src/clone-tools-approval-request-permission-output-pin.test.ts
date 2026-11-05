@@ -212,7 +212,7 @@ const SCENARIOS: Scenario[] = [
     name: 'allow-mismatch',
     group: 'allows / denies の検算の断り',
     covers:
-      'allows が規則に一致しない: 最初に一致しない1件だけを断りに載せる（2件目以降は見ない）。語境界（editfoo）・別のコマンド・空文字・コマンド側のメタ文字（; や改行）・閉じていない引用符は不一致。denies は見ない',
+      'allows が規則に一致しない: 最初に一致しない1件だけを断りに載せる（2件目以降は見ない）。語境界（editfoo）・別のコマンド・コマンド側のメタ文字（; や改行）・閉じていない引用符は不一致。空文字は照合より前に「空である」と断る（#6490）。denies は見ない',
     steps: [
       { args: rq({ allows: ['gh release view v1'] }), writes: 'none' },
       { args: rq({ allows: [OK_ALLOW, 'gh release editfoo'] }), writes: 'none' },
@@ -264,7 +264,29 @@ const SCENARIOS: Scenario[] = [
       },
     ],
   },
+  {
+    name: 'example-blank',
+    group: 'allows / denies の検算の断り',
+    covers:
+      '例が空文字・空白だけ: 規則との照合より前に「<欄> の N 件目が空である」と断る（#6490）。allows の空白だけ・2件目が空・denies の空文字・denies の空白だけ。これまで denies の空の例はどの規則にも一致しないので黙って通っていた',
+    steps: [
+      { args: rq({ allows: ['   '] }), writes: 'none' },
+      { args: rq({ allows: [OK_ALLOW, ''] }), writes: 'none' },
+      { args: rq({ denies: [''] }), writes: 'none' },
+      { args: rq({ denies: [OK_DENY, ' \t '] }), writes: 'none' },
+    ],
+  },
   // ---- reason の断り ----
+  {
+    name: 'reason-length',
+    group: 'reason の断り',
+    covers:
+      'reason の長さの上限（1,000 字。#6490）: ちょうど 1,000 字は積み、1,001 字は「1文字以上1000文字以下のみ」で断る',
+    steps: [
+      { args: rq({ reason: 'あ'.repeat(1000) }), writes: 'both' },
+      { args: rq({ reason: 'あ'.repeat(1001) }), writes: 'none' },
+    ],
+  },
   {
     name: 'reason-invalid',
     group: 'reason の断り',
@@ -1118,7 +1140,14 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     );
     expect(text('allow-mismatch#2')).toContain('一致しない例がある: gh release editfoo');
     expect(text('allow-mismatch#3')).toContain('一致しない例がある: gh release edit; rm -rf /');
-    expect(text('allow-mismatch#5')).toBe(`${REFUSE}allows のうち規則に一致しない例がある: `);
+    // 空の例は照合より前に断り、断りの文の末尾が空にならない（#6490）
+    expect(text('allow-mismatch#5')).toBe(
+      `${REFUSE}allows の 1 件目が空である（空文字・空白だけの例は渡さないこと）`,
+    );
+    expect(text('example-blank#1')).toContain('allows の 1 件目が空である');
+    expect(text('example-blank#2')).toContain('allows の 2 件目が空である');
+    expect(text('example-blank#3')).toContain('denies の 1 件目が空である');
+    expect(text('example-blank#4')).toContain('denies の 2 件目が空である');
     expect(text('allow-mismatch#8')).toContain('一致しない例がある: gh a');
     expect(text('allow-mismatch-exact')).toContain('一致しない例がある: gh pr view 12 --web');
     expect(text('deny-matches#1')).toBe(
@@ -1128,7 +1157,12 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
     expect(text('deny-matches#5')).toContain('allows のうち規則に一致しない例がある: gh nope');
     expect(text('deny-matches-exact')).toContain('一致してしまう例がある: gh pr view 12');
     // reason の断り
-    expect(text('reason-invalid#1')).toBe(`${REFUSE}reason は使えない（1文字以上のみ）。`);
+    // reason の上限（1,000 字。#6490）で、長さの断りの文も上限を言う
+    expect(text('reason-invalid#1')).toBe(
+      `${REFUSE}reason は使えない（1文字以上1000文字以下のみ）。`,
+    );
+    expect(text('reason-length#2')).toBe(text('reason-invalid#1'));
+    expect(actual['reason-length#1']?.approvals).toHaveLength(1);
     expect(text('reason-invalid#2')).toBe(text('reason-invalid#1'));
     expect(text('reason-invalid#3')).toContain('空白だけの値は空と同じ');
     expect(text('reason-invalid#5')).toContain('空白だけの値は空と同じ');

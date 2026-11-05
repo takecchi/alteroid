@@ -463,13 +463,16 @@ type PermissionRequestInput = {
   reason: string;
 };
 
+// reason の上限: reason はそのまま質問文と承認画面の背景に載るので、長文で承認画面が埋まらないよう抑える（#6490）
+const PERMISSION_REASON_MAX = 1000;
+
 // 検算（規則と例の食い違い）→ reason の順に見て、最初に当たった断りの理由を返す。通れば null
 function describePermissionRequestViolation(request: PermissionRequestInput): string | null {
   const { rule, allows, denies, reason } = request;
   const validation = validatePermissionRequest({ rule, allows, denies });
   if (!validation.ok) return validation.reason;
   return (
-    describeStringLengthViolation('reason', reason, { min: 1 }) ??
+    describeStringLengthViolation('reason', reason, { min: 1, max: PERMISSION_REASON_MAX }) ??
     describeBlankViolation('reason', reason)
   );
 }
