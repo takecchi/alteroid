@@ -204,12 +204,10 @@ export const STATEMENTS = [
   // 既にある DB では何も起きない（空の DB から作る試験は通る）。
   `create unique index if not exists usage_daily_token_key_idx
      on usage_daily (date, manager_id, model, layer, site, token_id)`,
-  `alter table usage_daily drop constraint if exists usage_daily_pkey`,
   // `create unique index if not exists usage_daily_key_idx on usage_daily (date, manager_id, model, layer, site)` を戻さない:
   // 次の起動で名前が一致せず本当に作りに行き、token_id だけが違う行が重複になって
   // `could not create unique index "usage_daily_key_idx" … is duplicated` でデーモンが起動不能になる（実測済み）。
   // 鍵を差し替えたら古い鍵の create は配列から消し、drop だけ残す。`usage_baseline` の主キー制約の drop は同じ形ではない。
-  `drop index if exists usage_daily_key_idx`,
   // (manager_id, date) は新しい鍵の並びに無く、date を先に決めずに「この actor が期間中いくら使ったか」を引くために足す。
   `create index if not exists usage_daily_manager_date_idx on usage_daily (manager_id, date)`,
 
@@ -226,7 +224,6 @@ export const STATEMENTS = [
   `alter table usage_baseline add column if not exists layer text not null default 'manager'`,
   `create unique index if not exists usage_baseline_key_idx
      on usage_baseline (layer, manager_id)`,
-  `alter table usage_baseline drop constraint if exists usage_baseline_pkey`,
   // null は「覚えていない」: 古い runner の累積は積まずに日誌に残す。
   `alter table usage_baseline add column if not exists by_runner jsonb`,
 
@@ -327,7 +324,6 @@ export const STATEMENTS = [
    )`,
 
   // 対になる create は上から消してある: 残すと2周目に作りに行って落ちる。
-  `drop index if exists auth_accounts_single_owner_idx`,
 
   // `body` の not null は外さず空文字を入れる。判定は `removed_at` だけで行う: 空の生ログは正当にありえる。
   `alter table archive add column if not exists removed_at timestamptz`,
