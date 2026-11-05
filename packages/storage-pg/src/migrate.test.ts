@@ -33,7 +33,10 @@ describe('migrate の配列（起動のたびに頭から通るもの）', () =>
   });
 
   it('歯が実際に文を拾えている（正規表現が空振りしていない）', () => {
-    expect(STATEMENTS.flatMap(droppedIndexNames)).toContain('usage_daily_key_idx');
+    // drop の文は、どの DB でも打たれ終えたら配列から消す。配列に drop が無いときも歯が働くことは、見本の文で見る
+    expect(droppedIndexNames('drop index if exists usage_daily_key_idx')).toEqual([
+      'usage_daily_key_idx',
+    ]);
     expect(STATEMENTS.flatMap(createdIndexNames)).toContain('usage_daily_token_key_idx');
   });
 });

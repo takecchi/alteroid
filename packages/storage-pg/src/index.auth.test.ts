@@ -572,17 +572,8 @@ describe('AuthStore', () => {
     expect(accounts[0]?.email).toBe('shared@example.test');
   });
 
-  // 「migrate を2回通す」だけにしない: 許可済みの行が1つだと古い索引でも一意で、2周目の create が通ってしまうため。2人目を挟む。
-  it('許可を2つ積んでから起動し直しても migrate が落ちない（古い索引を作りに戻らない）', async () => {
-    await db.execute(
-      sql.raw(
-        `create unique index if not exists auth_accounts_single_owner_idx
-           on auth_accounts ((granted_at is not null)) where granted_at is not null`,
-      ),
-    );
-
-    await migrate(db);
-
+  // 「migrate を2回通す」だけにしない: 許可済みの行が1つだと、持ち主を1人に縛る一意索引が戻っていても通ってしまうため。2人目を挟む。
+  it('許可を2つ積んでから起動し直しても migrate が落ちない（持ち主を1人に縛る索引が無い）', async () => {
     const other = { ...account, id: 'account-2', email: 'other@example.test' };
     await stores.auth.putAccount(account);
     await stores.auth.putAccount(other);
