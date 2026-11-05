@@ -169,7 +169,7 @@ interface DistillPromptOptions {
    */
   tidyTargets?: string;
   /**
-   * 固定の本体（理由によらず同じ2つの塊）を通す関数。`DigestSessionDelta.fixed` を渡すと、同じ会話の2回目以降は
+   * 固定の本体（理由によらず同じ2つの塊）を通す関数。畳む関数を渡すと、同じ会話の2回目以降は
    * `ref`（短い参照）になる。省略すると常に全文。pre_compact は別の短命セッションなので渡さない。
    */
   fold?: (id: string, full: string, ref: string) => string;

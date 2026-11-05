@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { DigestSessionDelta } from './digest-session-delta.js';
 import { UnreadableJournalEntryError } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, dropLastRowPerPage } from './testing.js';
@@ -57,8 +56,6 @@ interface Scenario {
   steps: Step[];
   /** 語の検索の口（now・clock・予算）。省くと本物の口（時計は performance.now、「いま」は固定の Date） */
   search?: SearchOptions;
-  /** 控え（同じ会話の2回目からの畳み）の口を渡すか。journal_read は使わないはず */
-  fold?: boolean;
   /** 真なら、この呼びをサブエージェントのものとして扱う */
   subagent?: boolean;
 }
@@ -1099,9 +1096,7 @@ const SCENARIOS: Scenario[] = [
   // ---- 畳み・サブエージェント ----
   {
     name: 'fold-ignored',
-    covers:
-      '畳みの口（foldFixed）を渡しても、2 回目も全文のまま（journal_read は固定文を畳まない）',
-    fold: true,
+    covers: '同じ呼びを2回目も全文のまま返す（journal_read は固定文を畳まない）',
     seed: seedMixed,
     steps: [
       { args: { limit: 3 } },
@@ -1114,8 +1109,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'subagent-ignored',
-    covers: 'サブエージェントの呼びも出力は変わらない（畳みの口があっても全文のまま）',
-    fold: true,
+    covers: 'サブエージェントの呼びも出力は変わらない（2回目も全文のまま）',
     subagent: true,
     seed: seedMixed,
     steps: [{ args: { limit: 3 } }, { args: { limit: 3 } }, { args: { id: 'id-1' } }],
@@ -1143,7 +1137,6 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
   const anchors = (await scenario.seed?.(seeder)) ?? {};
   vi.setSystemTime(new Date(FROZEN_NOW));
   const stores = scenario.wrap === undefined ? base : scenario.wrap(base);
-  const delta = scenario.fold === true ? new DigestSessionDelta() : null;
   const search = scenario.search;
   let ticks = 0;
   const tools = createCloneTools({
@@ -1163,12 +1156,6 @@ async function runScenario(scenario: Scenario): Promise<string[]> {
             ...(search.budgetMs === undefined ? {} : { budgetMs: search.budgetMs }),
             ...(search.sliceMs === undefined ? {} : { sliceMs: search.sliceMs }),
           },
-        }),
-    ...(delta === null
-      ? {}
-      : {
-          foldFixed: (id: string, full: string, ref: string, supersedes?: string) =>
-            delta.fixedInTurn(id, full, ref, supersedes),
         }),
     ...(scenario.subagent === true ? { isSubagentCall: () => true } : {}),
   });

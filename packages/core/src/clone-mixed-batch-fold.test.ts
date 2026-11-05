@@ -35,8 +35,7 @@ function report(index: number, managerId: string): InboxEvent {
 async function mergedInput(
   jobs: readonly Job[],
   events: readonly InboxEvent[],
-  // 畳み（S1）は本番の既定では無効。この試験は畳む動きを測るので既定で有効にし、切りの試験が上書きする
-  env: NodeJS.ProcessEnv = { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
+  env: NodeJS.ProcessEnv,
 ): Promise<{ merged: string; stop: () => Promise<void> }> {
   const stores = createMemoryStores();
   for (const entry of jobs) await stores.jobs.putJob(entry);
@@ -55,29 +54,8 @@ async function mergedInput(
 
 const count = (text: string, needle: string): number => text.split(needle).length - 1;
 
-describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠を畳む', () => {
-  it('起点が同じ3件: 枠と案内は1件目だけ全文。名前・時刻・経過・起点の id・本文は毎件出る', async () => {
-    const { merged, stop } = await mergedInput(
-      [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-1'), job('mgr-C', 'conv-1')],
-      [report(1, 'mgr-A'), report(2, 'mgr-B'), report(3, 'mgr-C')],
-    );
-
-    expect(count(merged, 'から届いた。')).toBe(1);
-    expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(1);
-    expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(1);
-    expect(count(merged, '受け取ってから')).toBe(1);
-    for (const managerId of ['mgr-A', 'mgr-B', 'mgr-C']) {
-      expect(merged).toContain(`[system] マネージャー ${managerId}`);
-      expect(merged).toContain(`${managerId} の報告の本文`);
-    }
-    expect(count(merged, '起点の会話: conv-1')).toBe(3);
-    expect(count(merged, '受け取り 20')).toBe(2);
-    expect(count(merged, '経過')).toBe(3);
-    await stop();
-  }, 15_000);
-
+describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎件全文で出す', () => {
   it.each([
-    // mergedInput の既定は畳みを有効にした env なので、未設定は `undefined` で明示して上書きする
     ['未設定', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: undefined }],
     ['0', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '0' }],
     ['off', { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: 'off' }],
@@ -99,46 +77,4 @@ describe('混合の束 — 同じ起点の会話の2件目以降は固定の枠�
     },
     15_000,
   );
-
-  it('起点が違う件は畳まない: 別の会話の件は枠も案内も全文のまま', async () => {
-    const { merged, stop } = await mergedInput(
-      [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-2'), job('mgr-C', 'conv-3')],
-      [report(1, 'mgr-A'), report(2, 'mgr-B'), report(3, 'mgr-C')],
-    );
-
-    expect(count(merged, 'から届いた。')).toBe(3);
-    expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(3);
-    expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(3);
-    expect(count(merged, '受け取ってから')).toBe(3);
-    expect(count(merged, '受け取り 20')).toBe(0);
-    await stop();
-  }, 15_000);
-
-  it('起点が混ざる: 1件目と同じ起点の件だけ畳み、違う起点の件は全文のまま', async () => {
-    const { merged, stop } = await mergedInput(
-      [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-2'), job('mgr-C', 'conv-1')],
-      [report(1, 'mgr-A'), report(2, 'mgr-B'), report(3, 'mgr-C')],
-    );
-
-    // 全文は A（1件目）と B（起点が違う）の2件。C は A と同じ起点なので畳む
-    expect(count(merged, 'から届いた。')).toBe(2);
-    expect(count(merged, '受け取ってから')).toBe(2);
-    expect(count(merged, '起点の会話: conv-1')).toBe(2);
-    expect(count(merged, '起点の会話: conv-2')).toBe(1);
-    const fromB = merged.slice(merged.indexOf('マネージャー mgr-B'));
-    expect(fromB).toContain('マネージャー mgr-B から届いた。');
-    expect(fromB).toContain('受け取ってから');
-    await stop();
-  }, 15_000);
-
-  it('起点が「無し」の件は同じでも畳まない（会話の外の件は取り違えの判定に使わない）', async () => {
-    const { merged, stop } = await mergedInput(
-      [job('mgr-A'), job('mgr-B')],
-      [report(1, 'mgr-A'), report(2, 'mgr-B')],
-    );
-
-    expect(count(merged, 'から届いた。')).toBe(2);
-    expect(count(merged, '受け取ってから')).toBe(2);
-    await stop();
-  }, 15_000);
 });

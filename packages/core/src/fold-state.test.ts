@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { DigestSessionDelta } from './digest-session-delta.js';
 import {
   FOLD_STATE_MAX_CHARS,
   parseFoldState,
@@ -8,19 +7,23 @@ import {
   type FoldState,
 } from './fold-state.js';
 
+// 控えの字面の検査が目的なので、中身のある写しを直接書く（畳みを外したので、`DigestSessionDelta` はもう中身のある控えを作れない）
 function sample(): FoldState {
-  const delta = new DigestSessionDelta();
-  delta.fixed('digest:phrase', '長い全文', '参照');
-  delta.reportShown('mgr-a', 'あ'.repeat(1_200), new Date('2026-09-05T00:00:00.000Z'));
-  delta.requestSeenAt('weekly', '依頼本文', new Date('2026-09-05T00:00:00.000Z'));
-  delta.renderDigest('まえがき\n## 節A\n- 行1\n', new Date('2026-09-05T01:00:00.000Z'));
-  delta.commit();
   return {
     v: 1,
     sessionId: 'sess-1',
     situation: [['readings', '全文']],
     turnsSinceFull: 3,
-    digest: delta.exportState(),
+    digest: {
+      sections: {
+        at: '2026-09-05T01:00:00.000Z',
+        sections: [['## 節A', '- 行1']],
+      },
+      fixed: ['digest:phrase'],
+      requests: [['weekly', { text: '依頼本文', at: '2026-09-05T00:00:00.000Z' }]],
+      paragraphs: ['p'],
+      reports: [['mgr-a', { key: 'k', chars: 1_200, at: '2026-09-05T00:00:00.000Z' }]],
+    },
     usage: { totalTokens: 10_000, autoCompactThreshold: 200_000, isAutoCompactEnabled: true },
     growthTokens: 500,
   };
@@ -32,16 +35,6 @@ describe('畳みの控えの形（fold-state）', () => {
 
     expect(raw).not.toBeNull();
     expect(parseFoldState(raw ?? '')).toEqual(sample());
-  });
-
-  it('DigestSessionDelta へ戻すと、畳んだ記録（固定文・要約の節）が続く', () => {
-    const restored = new DigestSessionDelta();
-    restored.importState(sample().digest);
-
-    expect(restored.fixed('digest:phrase', '長い全文', '参照')).toBe('参照');
-    expect(
-      restored.renderDigest('まえがき\n## 節A\n- 行1\n', new Date('2026-09-05T02:00:00.000Z')).text,
-    ).toContain('前回（01:00Z）の要約から変わっていない');
   });
 
   it('⭐ 壊れている・形が合わない控えは、投げずに null（全文へ倒れる）', () => {

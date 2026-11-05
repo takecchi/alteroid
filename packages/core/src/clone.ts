@@ -57,13 +57,12 @@ import {
 } from './denial-shape.js';
 import {
   buildActivityDigest,
-  DIGEST_COUNTS_FIXED_PHRASES,
   type DigestShape,
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
   TASK_QUEUE_SECTION_HEADING_HEAD,
 } from './digest.js';
-import { clockLabel, DigestSessionDelta } from './digest-session-delta.js';
+import { DigestSessionDelta } from './digest-session-delta.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingSwitches, type TokenSavingSwitches } from './token-saving-switches.js';
@@ -222,9 +221,6 @@ import {
   externalViaLine,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
-  SELF_INITIATIVE_INSTRUCTIONS,
-  TIMER_PLAIN_INSTRUCTION,
-  TIMER_REQUEST_INSTRUCTIONS,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, dailyReportEvent, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
@@ -284,10 +280,6 @@ import {
 } from './clone-refusal.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
-import {
-  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
-  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
-} from './classifier-denial-streak.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
 import type { TurnAttachmentLimits } from './attachment.js';
@@ -495,12 +487,6 @@ function foldReadbackSkipLabel(measure: RawLogMeasure): string | null {
  * 数えるのは日誌だけで、蒸留を試みること自体と印は止めない（勝手に区間を捨てないため）。
  */
 const GRAVE_DISTILL_FAILURE_JOURNAL_LIMIT = 3;
-
-/** 担当からの確認の文のうち、alteroid が組んだ固定の段落（#4943。`#foldConfirmationText`）。足すときは、変わる値を1つも含まない1段落だけを足す。 */
-const SYSTEM_CONFIRMATION_PARAGRAPHS: ReadonlySet<string> = new Set([
-  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
-  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
-]);
 
 // 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
@@ -715,10 +701,7 @@ const REMEMBER_RETRY_MS = 200;
 // 合わなければ諦めて次の発火に譲る: 古い本文で走らないことが最優先のため
 const SCHEDULE_CLAIM_ROUNDS = 3;
 
-// 記憶更新の頭（#5301）。同じ会話の2回目から参照にする。
-// 短い形にも残す: 「ここに出ていない文書は変わっていない」（無いと、載っていない文書を消えた・壊れたと読む）と、節の本文が載っていないので `memory_section_read` で開くこと。
-// 畳むのは「載っている文書も変わった範囲だけ」「システムプロンプトの記憶はセッションを組んだ時点の索引」という説明。
-// 索引の載せ直し（要約が走った直後）の頭は畳まない: 要約の直後は全文へ戻る条件に当たり、そもそも畳まれない上、文面が別のため。
+// 記憶更新の頭（#5301）。
 const MEMORY_UPDATE_HEAD =
   '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。' +
   '**変わった文書だけを載せる。ここに出ていない文書は変わっていない。**' +
@@ -727,10 +710,6 @@ const MEMORY_UPDATE_HEAD =
   'システムプロンプトの「現在の記憶」は**このセッションを組んだ時点の索引**（要旨と節の目次）であり、' +
   'それに続けてこれらの差分を当てたものが現在の索引である。' +
   '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**';
-const MEMORY_UPDATE_HEAD_REF =
-  '[system] 記憶が更新された（読み方は前の更新と同じ。会話の上にある）。' +
-  '**ここに出ていない文書は変わっていない。**' +
-  '**節の本文は載っていない——要るなら `memory_section_read` で開くこと。**';
 
 // 記憶の全文を載せ直さない: 二重載せになり、履歴の写しが resume のたびに増えるため
 const RESUMED_MEMORY_NOTICE =
@@ -1013,11 +992,7 @@ class Clone implements CloneHost {
   #situationExplainedSessionId: string | undefined;
   #situationTurnsSinceFull = 0;
   /**
-   * tick の要約・固定の文言・依頼の本文のうち、この会話で全文を出したものの控え（#4937）。`#situationExplained` と同じ作り:
-   * 組んだ時点では確定せず（staged）、入力を SDK へ押し込めた後（`#runTurn`）に確定する。
-   * 全文へ戻す（`reset()`）のは、会話が変わった・要約が走りうる／走った・PreCompact・記録が無いとき。
-   * 加えて、固定の文言の控え（`fixed`）だけは `SITUATION_FULL_EVERY_TURNS` ターンごとにも捨てる（`forgetFixed()`。`#applyFoldPeriod`）: 要約の合図を取りこぼしても、全文が会話から消えたまま札だけが続く長さに上限を置く保険（以前は「20ターンごとは入れない」だった）。
-   * 段落・報告の控えは周期の対象外（#5422 の対象外。周期が要るかは別に判断する）。
+   * tick の要約・固定の文言・依頼の本文の控え（#4937）の入れ物。畳みを外したので控えは常に空で、預けた控え（`fold-state.ts`）の書き出しと読み戻しの口・全文へ戻す口（`reset()` / `forgetFixed()`）だけが残っている。
    */
   readonly #digestDelta: DigestSessionDelta;
   // 節約スイッチ（`token-saving-switches.ts`）。構築時に1回だけ読み、以後 env を読み直さない（`#inboxSettleMs` と同じ形）
@@ -1386,7 +1361,7 @@ class Clone implements CloneHost {
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
     this.#tokenSaving = resolveTokenSavingSwitches(envSource);
-    this.#digestDelta = new DigestSessionDelta({ disabled: !this.#tokenSaving.foldFixedText });
+    this.#digestDelta = new DigestSessionDelta();
     this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
@@ -2395,8 +2370,7 @@ class Clone implements CloneHost {
     this.#turnTimer = timer;
     const prepareStartedAt = Date.now();
 
-    // 前の回の持ち越しを捨て、全文へ戻す条件に当たれば記録も消す（#4937）: 待ち行列の断りより先に行う（断りの固定の1文もこの記録を使うため）
-    this.#digestDelta.discardStaged();
+    // 全文へ戻す条件に当たれば記録を消す（#4937）: 待ち行列の断りより先に行う
     this.#digestResetLoggedThisTurn = false;
     // 預けた控えの読み戻し（起動後の最初の束だけ）: 次の全文へ戻す判定より前に行う
     await this.#restoreFoldStateOnce();
@@ -2448,7 +2422,6 @@ class Clone implements CloneHost {
    */
   async #settleTurn(batch: InboxEvent[], timer: TurnTimer): Promise<void> {
     this.#notices.clearTurn();
-    this.#digestDelta.discardStaged();
     // #4941: 失敗したターン（枠・API の失敗・中断・`turn.rejected`。すべて `#reportFailure` を通る）の入力が SDK の履歴に残るかは SDK の挙動に頼らない: 次の回は全文にする。
     // 両方の控えに効く: digest 側（`#digestDelta`）に加え、situation 側（`#situationExplained`。「いまの全体」の説明文と待ち行列の先頭 `taskQueueHead`）も消す（以前は digest 側だけで、片方だけ畳んだまま残っていた）。
     // 預けた控えは `#resetDigestDelta` が `#forgetFoldState` で捨てる（成功したターンの後だけ預ける `#persistFoldStateAfterTurn` と合わせて、片方だけ残らない）
@@ -2675,7 +2648,7 @@ class Clone implements CloneHost {
     this.#lastHumanConversationId = head.conversationId;
     await this.#runTurn(
       head.conversationId,
-      `${header}\n\n${humanTurnText(events, priorTexts, notices, this.#fixedTextFold())}`,
+      `${header}\n\n${humanTurnText(events, priorTexts, notices)}`,
       'normal',
       null,
       images,
@@ -2720,10 +2693,9 @@ class Clone implements CloneHost {
       origin,
       new Date(),
       attached?.linesOf,
-      this.#fixedTextFold(),
+      NO_FOLD,
       this.#reportBodyLimit(),
     );
-    this.#stageReportsShown(events, prompt, new Date());
     await this.#runInternal(prompt, 'normal', attached?.images, origin.conversationId);
   }
 
@@ -2736,7 +2708,7 @@ class Clone implements CloneHost {
 
     const attached = await this.#resolveExternalAttachments(events);
     await this.#runInternal(
-      externalBatchPrompt(events, attached.noticeLines, this.#fixedTextFold()),
+      externalBatchPrompt(events, attached.noticeLines),
       'normal',
       attached.images,
     );
@@ -2746,20 +2718,8 @@ class Clone implements CloneHost {
   // 添付を持つ合図は束に入っていない（`#mixable`）ので、ここでは添付を解かない
   async #runMixedSignalBatch(events: MixableSignal[]): Promise<void> {
     const now = new Date();
-    const fold = this.#fixedTextFold();
     const items: string[] = [];
     const origins = new Set<string | null>();
-    const shownInBatch = new Set<string>();
-    const foldEnabled = this.#tokenSaving.foldFixedText;
-    const batchFold: FixedTextFold = (id, full, ref) => {
-      // 固定文の畳みを切っているときは、束の中でも毎回全文を出す
-      if (!foldEnabled) return full;
-      if (shownInBatch.has(id)) return ref;
-      shownInBatch.add(id);
-      return fold(id, full, ref);
-    };
-    let referenceChosen = false;
-    let referenceOriginId: string | null = null;
     for (const event of events) {
       await this.#journalIncomingBody(event);
       if (event.type === 'external') {
@@ -2768,38 +2728,15 @@ class Clone implements CloneHost {
             source: event.source,
             body: renderPayload(event.payload, event.at, event.attachments),
             ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
-            fold,
           }),
         );
         continue;
       }
       const liveness = await this.#confirmationLivenessOf(event);
       const origin = await this.#managerOrigin(event.managerId);
-      const originId = origin.conversationId;
-      origins.add(originId);
-      const sent =
-        event.kind === 'permission'
-          ? { ...event, text: this.#foldConfirmationText(event.text) }
-          : event;
-      // 枠を畳むのは、束の最初のマネージャーの件と起点の会話が同じ2件目以降だけ: 起点が違う件は全文のまま（起点の取り違えを避ける）。
-      // 束の中の畳み: `fold` の控えは前のターンまでのものなので、同じ束の中の2件目は全文のままになる。束の中で出したものを自分で数える。
-      const isReference = !referenceChosen;
-      referenceChosen = true;
-      if (isReference) referenceOriginId = originId;
-      const compact =
-        foldEnabled && !isReference && originId !== null && originId === referenceOriginId;
-      items.push(
-        managerPrompt(
-          sent,
-          origin,
-          liveness,
-          now,
-          [],
-          isReference || compact ? batchFold : fold,
-          compact,
-          this.#reportBodyLimit(),
-        ),
-      );
+      origins.add(origin.conversationId);
+      this.#resetDigestDeltaBeforeConfirmation(event);
+      items.push(managerPrompt(event, origin, liveness, now, [], NO_FOLD, this.#reportBodyLimit()));
     }
     // 同じ担当の報告が隣り合って2件以上続く所は塊にする（見出しと「補足・訂正がある可能性」の注意を保つ）。質問・確認・external・別の担当を挟んだ報告は塊にしない: 順序を入れ替えないため
     const grouped: MixedBatchItem[] = [];
@@ -2826,8 +2763,7 @@ class Clone implements CloneHost {
     }
     // 起点の会話が1つに決まるときだけ結びつける: 別々の会話で頼まれた委譲を1つの会話へ結びつけると、知らせる先を取り違えるため（各件の本文が自分の起点を名乗る）
     const [onlyOrigin] = origins;
-    const prompt = mixedSignalBatchPrompt(grouped, fold);
-    this.#stageReportsShown(events, prompt, now);
+    const prompt = mixedSignalBatchPrompt(grouped);
     await this.#runInternal(prompt, 'normal', [], origins.size === 1 ? (onlyOrigin ?? null) : null);
   }
 
@@ -3405,18 +3341,12 @@ class Clone implements CloneHost {
       return rest.length === 0 ? '' : [...rest, '', '---', ''].join('\n');
     }
 
-    // 固定の1文は同じ会話で1回だけ全文（#4937）
-    const tailText = this.#digestDelta.fixed(
-      'task-queue-notice-tail',
-      '全文は `task_list`。並べ替えは `task_move`。',
-      '（`task_list`・`task_move` は会話の上と同じ）',
-    );
     return [
       ...taskQueue.head,
       ...taskQueue.placed,
       ...taskQueue.failed,
       ...(await this.#waitingReplyLinesFor(taskEvents)),
-      tailText,
+      '全文は `task_list`。並べ替えは `task_move`。',
       '',
       '---',
       '',
@@ -3438,11 +3368,7 @@ class Clone implements CloneHost {
       );
       return describeWaitingReplyLines(
         matched,
-        this.#digestDelta.fixed(
-          'task-queue-notice-waiting-reply',
-          '返事が来たなら `task_set_status` で閉じるか queued に戻すこと（器は状態を変えない）。',
-          '（返事待ちの扱いは会話の上と同じ）',
-        ),
+        '返事が来たなら `task_set_status` で閉じるか queued に戻すこと（器は状態を変えない）。',
       );
     } catch (error) {
       noteDroppedRecord('返事待ちの task の断り書き', 'waiting-reply', error);
@@ -3468,11 +3394,7 @@ class Clone implements CloneHost {
             (placed.length > 1
               ? `いま届いたこの ${placed.length} 件は task ${idsOf(placed)} として積んだ。`
               : `いま届いたこの一件は task ${idsOf(placed)} として積んだ。`) +
-              this.#digestDelta.fixed(
-                'task-queue-notice-task',
-                '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
-                '（自動 done・`task_keep`・`manager_start` は会話の上と同じ）',
-              ),
+              '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
           ];
     const failedLines =
       failed.length === 0
@@ -3730,61 +3652,17 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 断り書きのうち、システムが全文を組んだ3本（配り直し・前提の変化・束の打ち切り）の長い段落を、同じ会話の2回目から短い参照にする（#4943）。
-   * 掛けないもの: 待ち行列の断り（欄名は `commitment` のまま。理由は `TurnInputText.commitment` の注釈。固定の1文は #4937 の仕組みで既に参照にしている）・`situation`（#4489 の説明の控えが持つ）。どちらも二重に掛けない。
-   * 日誌・SDK からの文言（人間・担当・外部の言葉）はこの3本には入らない。
+   * 担当からの確認（`permission`）の文を組む前の、全文へ戻す判定し直し。確認の文の固定の段落を畳む仕組みは外したが、この判定の副作用（預けた控えの消し込み）は既定でも走っていたので、同じ位置・同じ条件（`permission` の件だけ）で残す。
    */
-  #foldNoticeParagraphs(
-    notices: ReturnType<CloneNotices['forTurn']>,
-  ): ReturnType<CloneNotices['forTurn']> {
-    // ここでは `#resetDigestDeltaIfNewConversation` を呼ばない: 同じ控えの `#handle` で畳んだ確認の文（staged）を消してしまうため。全文へ戻す判定は `#pump` の先頭（断り書きを組む前）と `#foldConfirmationText` が持つ
-    const fold = (text: string): string => this.#digestDelta.foldParagraphs(text);
-    return {
-      ...notices,
-      redelivery: fold(notices.redelivery),
-      validity: fold(notices.validity),
-      mergedBatchTruncation: fold(notices.mergedBatchTruncation),
-    };
-  }
-
-  /**
-   * 担当からの確認（`permission`）の文のうち、alteroid が組んだ固定の長い段落だけを、同じ会話の2回目から短い参照にする（#4943）。
-   * 線の引き方: 固定の段落そのもの（`SYSTEM_CONFIRMATION_PARAGRAPHS` の1字も違わない一致）だけが対象。
-   * 担当の言葉（道具の入力・`理由:`・入力の先頭・`question` の質問）・回数や理由を含む段落（連続の注記）は、長くても一致しても対象外。
-   */
-  #foldConfirmationText(text: string): string {
-    this.#resetDigestDeltaIfNewConversation();
-    return this.#digestDelta.foldParagraphs(text, (paragraph) =>
-      SYSTEM_CONFIRMATION_PARAGRAPHS.has(paragraph),
-    );
+  #resetDigestDeltaBeforeConfirmation(
+    event: Extract<InboxEvent, { type: 'manager_message' }>,
+  ): void {
+    if (event.kind === 'permission') this.#resetDigestDeltaIfNewConversation();
   }
 
   // 系統3のスイッチが無効なら報告の本文を切らない（#5466 の前の形）
   #reportBodyLimit(): number {
     return this.#tokenSaving.excerpt ? MANAGER_REPORT_BODY_LIMIT : Number.POSITIVE_INFINITY;
-  }
-
-  /**
-   * 報告・確認の包みの固定の文言（応じ方の案内・起点の会話の説明）を、同じ会話の2回目から短い参照にする口。
-   * 控えは `#digestDelta`（#4937）と同じもの: 全文へ戻す条件（会話が変わった・要約が走りうる／走った・観測が無い）も同じになるため。
-   * ここでは全文へ戻す判定をしない: `#pump` の先頭が済ませており、ここで呼ぶと同じターンで先に畳んだ断り書きの staged を消すため（`#foldNoticeParagraphs` と同じ理由）。
-   */
-  #fixedTextFold(): FixedTextFold {
-    return (id, full, ref) => this.#digestDelta.fixed(`manager-message:${id}`, full, ref);
-  }
-
-  /**
-   * 組んだ入力 `prompt` に報告の全文がそのまま載っているものを控える（`manager_report` の引き直しを畳むため）。
-   * 載ったかは入力の文字列で確かめる: 束の予算で本文を省いた報告・切り詰めた報告・断り書きが足された報告（担当の `lastReport` と本文が一致しない）は含まれないので、自然に控えから外れる。
-   * 控えは staged で、入力を押し込めた後の `commit` で確定する。`#pump` 先頭の reset と `discardStaged` が捨てる条件も同じ口に乗る。
-   * 入力を組んだ後に呼ぶこと（組む途中の `#foldConfirmationText` の reset が staged を消すため）。
-   */
-  #stageReportsShown(events: readonly InboxEvent[], prompt: string, at: Date): void {
-    for (const event of events) {
-      if (!isManagerReport(event)) continue;
-      if (prompt.includes(event.text))
-        this.#digestDelta.reportShown(event.managerId, event.text, at);
-    }
   }
 
   /**
@@ -5358,20 +5236,16 @@ class Clone implements CloneHost {
         tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
       }
     }
-    // 固定の本体は同じ会話の2回目以降は短い参照にする（#4937 と同じ仕組み）。枕と棚卸しの的は毎回出す。組む直前に判定し直す（上の `await` の間に作り直しの窓が開きうる）
+    // 組む直前に判定し直す（上の `await` の間に作り直しの窓が開きうる）
     this.#resetDigestDeltaIfNewConversation();
     const distillReason = event.reason === 'shutdown' ? 'conversation_end' : event.reason;
     const tidyOption = tidyTargets === undefined ? {} : { tidyTargets };
-    const distillPrompt = buildDistillPrompt(distillReason, {
-      ...tidyOption,
-      fold: (id, full, ref) => this.#digestDelta.fixed(id, full, ref),
-    });
-    // 日誌には畳む前の全文の長さを残す（差分にする前のまま）
+    const distillPrompt = buildDistillPrompt(distillReason, tidyOption);
     await this.#journal(
       turnInputEntry({
         type: 'distill',
         reason: event.reason,
-        prompt: buildDistillPrompt(distillReason, tidyOption),
+        prompt: distillPrompt,
       }),
     );
     const outcome = await this.#runInternal(distillPrompt, 'distill');
@@ -5440,11 +5314,7 @@ class Clone implements CloneHost {
       `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
       `${selectionsLine}${viaLine}${waiting}\n\n` +
       'この回答に沿って続きを進めよ。\n\n' +
-      this.#fixedTextFold()(
-        'human-answer-criteria',
-        HUMAN_ANSWER_CRITERIA_GUIDE,
-        HUMAN_ANSWER_CRITERIA_GUIDE_REF,
-      );
+      HUMAN_ANSWER_CRITERIA_GUIDE;
     // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
     const turnStart = turnInputEntry({
       type: 'human_answer',
@@ -5486,22 +5356,16 @@ class Clone implements CloneHost {
       event.kind === 'report' && hasReportFiles(event)
         ? await this.#resolveManagerReportAttachments([event])
         : null;
-    // #4943: 実行許可の確認の、alteroid が組んだ固定の長い段落は、同じ会話の2回目から短い参照にする（日誌の本文は上で全文を書き済み）。質問（担当の言葉）と報告の本文は畳まない
-    const sent =
-      event.kind === 'permission'
-        ? { ...event, text: this.#foldConfirmationText(event.text) }
-        : event;
+    this.#resetDigestDeltaBeforeConfirmation(event);
     const prompt = managerPrompt(
-      sent,
+      event,
       origin,
       liveness,
       new Date(),
       attached?.linesOf.get(event.id),
-      this.#fixedTextFold(),
-      false,
+      NO_FOLD,
       this.#reportBodyLimit(),
     );
-    this.#stageReportsShown([event], prompt, new Date());
     await this.#runInternal(prompt, 'normal', attached?.images ?? [], origin.conversationId);
     return;
   }
@@ -5546,36 +5410,9 @@ class Clone implements CloneHost {
     const journalCause = event.cause ?? 'schedule';
     const plan = claimed.status === 'ok' ? claimed.plan : null;
     // #4938 の案2: 要約の全体ではなく、担当の節・継続中の依頼の節と、他の節の件数の行だけを付ける。
-    // `renderDigest` に通さない: 短いので差分にしなくてよく、通すと節の控えがこの形で上書きされ、自発の tick の差分の基準が崩れるため
     const timerDigest = await this.#recentDigestCounts();
-    // 依頼の本文と固定の指示は、同じ会話の2回目以降は短い参照にする（#4937）
-    const firedAt = new Date();
     // 組む直前にも判定し直す（#4941）: `#pump` の判定の後の `await` の間に、作り直しの窓が開きうる
     this.#resetDigestDeltaIfNewConversation();
-    // 件数の形の固定の説明文も、同じ会話の2回目以降は短い参照にする（#5392）。`fixed()` だけを呼ぶ: `renderDigest` と違い節の控えには触れず、自発の tick の差分の基準は動かない。件数・行は毎回出す
-    // 継続中の依頼の行も、前回の入力と1字も違わない行は1行の参照にする。変わった行（前回動いた時刻が進んだ行など）・⚠ の行・前回に全文で出していない行は全文のまま
-    let foldedDigest = this.#digestDelta.foldStandingRows(timerDigest);
-    for (const phrase of DIGEST_COUNTS_FIXED_PHRASES) {
-      if (!foldedDigest.includes(phrase.text)) continue;
-      foldedDigest = foldedDigest
-        .split(phrase.text)
-        .join(this.#digestDelta.fixed(phrase.id, phrase.text, phrase.ref));
-    }
-    const instructionRef = '（固定の指示は会話の上と同じ）';
-    const timerInstruction =
-      plan === null
-        ? this.#digestDelta.fixed(
-            'timer-plain-instruction',
-            TIMER_PLAIN_INSTRUCTION,
-            instructionRef,
-          )
-        : this.#digestDelta.fixed(
-            'timer-request-instructions',
-            TIMER_REQUEST_INSTRUCTIONS,
-            instructionRef,
-          );
-    const seenRequestAt =
-      plan === null ? null : this.#digestDelta.requestSeenAt(event.kind, plan.request, firedAt);
     // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
     await this.#journal(
       turnInputEntry({
@@ -5594,16 +5431,8 @@ class Clone implements CloneHost {
       ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
       // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
       ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
-      digest: foldedDigest,
-      fixedInstruction: timerInstruction,
-      ...(seenRequestAt === null
-        ? {}
-        : {
-            requestRef: `依頼の本文は前回（${clockLabel(seenRequestAt)}）の発火と同じ。会話の上にある`,
-          }),
+      digest: timerDigest,
     });
-    // 長さの上限で末尾が切られたら、控えを進めない: 会話に載っていない文を「上にある」と言わないため
-    if (!timerPrompt.endsWith(foldedDigest)) this.#digestDelta.discardStaged();
     const outcome = await this.#runInternal(timerPrompt);
 
     await this.#settleTimerRun(event, plan, outcome, cause);
@@ -5679,7 +5508,6 @@ class Clone implements CloneHost {
         ...(attached.noticeLines.length === 0
           ? {}
           : { attachmentNoticeLines: attached.noticeLines }),
-        fold: this.#fixedTextFold(),
       }),
       'normal',
       attached.images,
@@ -5701,14 +5529,7 @@ class Clone implements CloneHost {
       return;
     }
     const digest = await this.#recentDigest();
-    // 同じ会話の2回目以降は前回からの差分にする（#4937）。日誌の1行は差分にする前の全文のまま
     this.#resetDigestDeltaIfNewConversation(); // #4941: 組む直前の判定し直し
-    const sentDigest = this.#digestDelta.renderDigest(digest, new Date());
-    const fixedInstruction = this.#digestDelta.fixed(
-      'self-initiative-instructions',
-      SELF_INITIATIVE_INSTRUCTIONS,
-      '（固定の指示は会話の上と同じ）',
-    );
     await this.#journal(
       turnInputEntry({
         type: 'self_initiative',
@@ -5719,10 +5540,8 @@ class Clone implements CloneHost {
     );
     const initiativePrompt = buildSelfInitiativePrompt({
       reason: event.reason,
-      digest: sentDigest.text,
-      fixedInstruction,
+      digest,
     });
-    if (!initiativePrompt.endsWith(sentDigest.text)) this.#digestDelta.discardStaged();
     await this.#runInternal(initiativePrompt);
     return;
   }
@@ -5785,8 +5604,7 @@ class Clone implements CloneHost {
     });
 
     try {
-      // #4943: 断り書き（システムが作った部品）の長い段落は、同じ会話の2回目から短い参照にする（全文へ戻す条件は `#pump` の先頭の `#resetDigestDeltaIfNewConversation` 以下、tick の要約と同じ）
-      const notices = this.#foldNoticeParagraphs(this.#notices.forTurn());
+      const notices = this.#notices.forTurn();
       const sessionStartedAt = Date.now();
       await this.#ensureQuery();
       timer?.add('sessionStart', Date.now() - sessionStartedAt);
@@ -5808,7 +5626,6 @@ class Clone implements CloneHost {
       timer?.add('composeInput', Date.now() - composeStartedAt);
       timer?.modelStarted();
       this.#pushInput(input, images);
-      this.#digestDelta.commit();
       // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
@@ -6325,8 +6142,7 @@ class Clone implements CloneHost {
         '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
         '「現在の記憶」より新しい。食い違ったら下を採ること。' +
         '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
-      : // 同じ会話の2回目から参照にする（#5301）。「ここに出ていない文書は変わっていない」（誤読防止）と `memory_section_read` の案内は短い形にも残す。
-        this.#fixedTextFold()('memory-update-head', MEMORY_UPDATE_HEAD, MEMORY_UPDATE_HEAD_REF);
+      : MEMORY_UPDATE_HEAD;
 
     return [
       ...(resumeNotice === null ? [] : [resumeNotice, '']),
@@ -6460,17 +6276,12 @@ class Clone implements CloneHost {
       ...(windowFull
         ? ['（日誌の直近の窓だけを見た。窓の外にもあるかもしれない。これで全部とは限らない）']
         : []),
-      // 操作の内容は毎回出し、判断基準の段落だけ同じ会話の2回目から参照にする（#4937 の `fixed()`）
-      this.#digestDelta.fixed(
-        'human-action-guidance',
-        '人間が自分の手で直したのは、あなたの判断か進め方のどこかが人間の考えとずれていたからである。' +
-          '何が変わったかを確かめ、そこから読み取れる基準があれば記憶に書くこと。' +
-          '人間が取り消したものを、同じ形でやり直さないこと。' +
-          'なぜそうしたのかが読み取れなければ、人間に聞いてよい。' +
-          '経路は監査の記録であって、人間がした証拠ではない' +
-          '（持ち主のトークンや認証を切った構成では、あなたの Bash からも同じ口を叩ける）。',
-        '（読み方は会話の上と同じ: ずれた理由を確かめて基準を記憶に書く・取り消されたものを同じ形でやり直さない・分からなければ人間に聞く・経路は監査の記録で人間がした証拠ではない）',
-      ),
+      '人間が自分の手で直したのは、あなたの判断か進め方のどこかが人間の考えとずれていたからである。' +
+        '何が変わったかを確かめ、そこから読み取れる基準があれば記憶に書くこと。' +
+        '人間が取り消したものを、同じ形でやり直さないこと。' +
+        'なぜそうしたのかが読み取れなければ、人間に聞いてよい。' +
+        '経路は監査の記録であって、人間がした証拠ではない' +
+        '（持ち主のトークンや認証を切った構成では、あなたの Bash からも同じ口を叩ける）。',
     ];
   }
 
@@ -8721,7 +8532,7 @@ export const REDELIVERY_COUNT_PREFIX_B = '【数える:B】';
  * 壊れた・未来の `at` には `NaN` や負の経過を出さず、測れない理由を書く。
  * `now` は引数で受ける: `managerPrompt` を純関数に保つ。
  */
-function describeReportAge(at: string, now: Date, compact = false): string {
+function describeReportAge(at: string, now: Date): string {
   const receivedMs = Date.parse(at);
   if (Number.isNaN(receivedMs)) {
     return `受け取った時刻（${at}）を解析できないため、経過は測れない。`;
@@ -8730,8 +8541,6 @@ function describeReportAge(at: string, now: Date, compact = false): string {
   if (elapsedMs < 0) {
     return `受け取った時刻（${at}）が現在時刻より未来のため、経過は測れない。`;
   }
-  // 短い形でも「受け取ってから」「経過」と丸めた値・`at` は残す（測れない場合の文は上のとおり全文）
-  if (compact) return `受け取り ${at}（${formatElapsed(elapsedMs)}経過）`;
   return `受け取ってから${formatElapsed(elapsedMs)}経過（受け取った時刻: ${at}）。`;
 }
 
@@ -8780,7 +8589,7 @@ async function confirmationLiveness(
  * `event.foldedTurn` の回は見出しを「直近のターンの中身」にする。判定は構造化された印だけで、本文の文言は見ない。
  */
 /**
- * 固定の文言を、同じ会話の2回目から短い参照にする口（`DigestSessionDelta.fixed` と同じ形）。
+ * 固定の文言を、同じ会話の2回目から短い参照にする口。
  * 既定は畳まない: 試験と、控えを持たない呼び出しでは今までどおり全文を出すため。
  */
 export type FixedTextFold = (id: string, full: string, ref: string) => string;
@@ -8805,14 +8614,9 @@ function managerPrompt(
   now: Date = new Date(),
   attachmentLines: readonly string[] = [],
   fold: FixedTextFold = NO_FOLD,
-  compact = false,
   bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
 ): string {
-  // `compact` は混合の束で、起点の会話が束の最初のマネージャーの件と同じ2件目以降だけ真になる。
-  // 固定の枠（「から届いた」・「受け取ってから…経過」の言い回し）だけを縮め、マネージャー名・時刻・経過・id・本文は毎回出す。
-  const head = compact
-    ? `[system] マネージャー ${event.managerId}`
-    : `[system] マネージャー ${event.managerId} から届いた。`;
+  const head = `[system] マネージャー ${event.managerId} から届いた。`;
 
   if (event.kind === 'report') {
     const reportLabel = event.foldedTurn === true ? '直近のターンの中身' : '報告';
@@ -8824,7 +8628,7 @@ function managerPrompt(
       ...boundedReportBody({ ...event, kind: 'report' }, bodyLimit),
       '',
       // 経過も印も本文の後ろに置く: 前に置くと「読まなくてよい」と読まれて本文を飛ばされる。
-      describeReportAge(event.at, now, compact),
+      describeReportAge(event.at, now),
       describeManagerOrigin(origin, fold),
       '',
       fold('report-follow-up', REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_GUIDE_REF),
@@ -8895,14 +8699,10 @@ type ManagerOrigin =
   | { kind: 'unreadable'; conversationId: null; reason: string };
 
 // 「必要なら」で写すかを任せない（#5125 c30-2）: 承認への答えは人間の判断の合図で最も濃いのに、基準として記憶へ写されず、同じ種類の確認を何度も人間へ上げていたため
-// 同じ会話の2回目から参照にする（#5301）。ただし「拒否・条件付き・理由付きの答えは基準として記憶へ書く」「読み取れなければ訊く」は、人間の答えを受けたターンの基本動作なので短い形にも残す。
-// 畳むのは「材料である」という説明と、書き方の言い換えの詳細だけ。
 const HUMAN_ANSWER_CRITERIA_GUIDE =
   'この回答は、同じ種類の確認が次に来たときにあなたが自分で決めるための材料である。' +
   '拒否・条件付き・理由付きの答えなら、結論だけでなく理由と条件を、どの種類の確認に効く基準かが分かる言葉に言い換えて記憶へ書くこと。' +
   '基準が読み取れないなら、推測で書かずに人間に訊くこと。';
-const HUMAN_ANSWER_CRITERIA_GUIDE_REF =
-  '（扱いは前の回答と同じ。会話の上にある）拒否・条件付き・理由付きの答えは、理由と条件を基準として記憶へ書くこと。読み取れなければ人間に訊くこと。';
 
 /**
  * 委譲が task に結び付いていないときの案内（起点の会話の有無によらず同じ。会話の id は畳まない。説明の括弧の中だけを、同じ会話の2回目から参照にする）。
@@ -9100,7 +8900,7 @@ export function externalBatchPrompt(
 
 /**
  * この束の本文が、要約（digest）に「待ち行列の先頭」の節を載せるか。載せる回は断り書きの側で同じ先頭を重ねて出さない。
- * 発意 tick（`renderDigest`）と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
+ * 発意 tick と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
  * 件数の1行しか載せず先頭の3件は無いので、断り書きの側に残す。tick は束ねられない（`#mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
  */
 function tickDigestCarriesTaskQueueHead(events: readonly InboxEvent[]): boolean {

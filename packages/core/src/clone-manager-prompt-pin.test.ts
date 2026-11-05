@@ -338,7 +338,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
   });
 
   describe('実行の許可確認', () => {
-    it('同じ会話の1回目は全文、2回目は応じ方が短い形になる', async () => {
+    it('同じ会話の1回目も2回目も応じ方は全文', async () => {
       const s = await booted();
       const first = await deliver(s, {
         kind: 'permission',
@@ -363,8 +363,10 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         "[system] マネージャー mgr-pin から届いた。（実行の許可確認）
         許可の本文
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
-        （応じ方は前の実行の許可確認と同じ。会話の上にある）返事は \`manager_send\`、根拠が無ければ \`ask_human\`。どちらにも宛先 managerId: "mgr-pin", requestId: "rq-live" を添える（\`ask_human\` で添え損ねると人間が答えても再開できない）。
-        許可確認なので \`decision\` に allow / deny を明示すること。"
+        返事をするまで mgr-pin のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。
+        記憶に根拠があるなら自分で決めて \`manager_send\`（managerId: "mgr-pin", requestId: "rq-live"）で返し、その判断を \`journal_write\` に残せ。
+        許可確認なので \`decision\` に allow / deny を明示すること。
+        根拠が無いなら \`ask_human\` に managerId: "mgr-pin", requestId: "rq-live" を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。（宛先を添えないと、人間が答えてもこの仕事を再開できない）"
       `);
       await s.clone.stop();
     }, 15_000);

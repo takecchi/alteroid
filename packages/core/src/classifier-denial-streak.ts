@@ -13,7 +13,7 @@ const CLI_CLASSIFIER_DENIAL_LIMITS = { consecutive: 3, total: 20 } as const;
 
 /**
  * 分類器の拒否の確認（runner の `#onPermissionDenied`）の、alteroid が組んだ固定の1段落（#4943）。変わる値を1つも含まない。
- * 前後は空行で区切る: クローンの入力の段落の単位（空行）で、同じ会話の2回目から短い参照にできるように（`DigestSessionDelta#foldParagraphs`）。
+ * 前後は空行で区切る: クローンの入力の段落の単位（空行）にそろえる。
  * こちらは一時規則を足せない呼び出し（Bash 以外・規則にできない command・口を持たない provider）の段落。足せるときは `DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE`。
  */
 export const DENIAL_ASK_AFTER_ANSWER_PARAGRAPH =

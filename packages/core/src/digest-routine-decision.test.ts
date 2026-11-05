@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildActivityDigest, DIGEST_RETAIN_LIMIT } from './digest.js';
-import { DigestSessionDelta } from './digest-session-delta.js';
 import { journalEntrySchema } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -88,19 +87,6 @@ describe('decision.routine の要約への効き方', () => {
       shape: 'counts',
     });
     expect(counts).toContain('聞かずに決めたこと 2 ');
-  });
-
-  it('同じ会話の2回目の差分でも注記の行は壊れず常に出る', async () => {
-    const stores = createMemoryStores();
-    await seed(stores, 1, 2);
-    const delta = new DigestSessionDelta();
-    const first = delta.renderDigest(await buildActivityDigest(stores, window()), new Date());
-    delta.commit();
-    expect(first.text).toContain(`${NOTE_HEAD}2 件`);
-    await stores.journal.append(routineRow(99));
-    const second = delta.renderDigest(await buildActivityDigest(stores, window()), new Date());
-    expect(second.text).toContain(`${NOTE_HEAD}3 件`);
-    expect(second.text).not.toContain('判断 0');
   });
 
   it('schema は routine の有る行も無い行も読む', () => {

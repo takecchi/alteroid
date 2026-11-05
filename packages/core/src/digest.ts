@@ -186,30 +186,12 @@ export const DIGEST_COUNTS_TOOLS_NOTE =
 const DIGEST_IDLE_MANAGERS_NOTE =
   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
 
-/**
- * 件数の形（`shape: 'counts'`）の固定の文言を、同じ会話の2回目以降は短い参照にする（#5392）。`text` は全文側の定数と1字も違わない。
- * `DIGEST_FIXED_PHRASES` とは別にする: あちらは `renderDigest`（自発の tick の差分）の対象で、件数の形は `renderDigest` を通らない（節の控えを上書きしないため）。
- */
-export const DIGEST_COUNTS_FIXED_PHRASES: readonly { id: string; text: string; ref: string }[] = [
-  {
-    id: 'timer-counts-tools-note',
-    text: DIGEST_COUNTS_TOOLS_NOTE,
-    ref: '（#4938: 件数だけの節の引き口は会話の上と同じ。`task_list`・`approvals_list`・`journal_read`・`usage_read`）',
-  },
-  {
-    id: 'timer-counts-idle-managers-note',
-    text: DIGEST_IDLE_MANAGERS_NOTE,
-    ref: '依頼と直近の報告は載せていない。引き口は `manager_list` / `manager_report`（会話の上と同じ）。',
-  },
-];
-
-/** 継続中の依頼の節の見出しの先頭と、1件の2行目（状態の行）の前置き。節の組み立て（`standingSection`）と、定期の tick の行の畳み（`foldStandingRows`）が同じ文字列を使い、ずれないようにする。 */
+/** 継続中の依頼の節の見出しの先頭と、1件の2行目（状態の行）の前置き。 */
 export const STANDING_SECTION_HEADING_HEAD = '## 継続中の依頼';
 export const STANDING_LAST_RUN_LABEL = '前回動いた時刻: ';
 
 /**
- * 継続中の依頼の節の1件（2行）。節の組み立て（`standingSection`）と、`schedule_list` が「一覧で見せた版は定期の tick の控えと同じか」を比べる行が同じ字面を使う
- * （別々に組むと、同じ版なのに字面がずれて、控えが毎回捨てられる）。
+ * 継続中の依頼の節の1件（2行）。
  */
 export function renderStandingRow(
   plan: Pick<ScheduledRequest, 'kind' | 'spec' | 'request' | 'lastRunAt'>,
@@ -223,7 +205,7 @@ export function renderStandingRow(
 /** 全文の要約の件数の行（先頭）。 */
 export const DIGEST_COUNTS_LINE_HEAD = '- 件数: ';
 
-// 件数の行の項目。行の組み立て（`countItem`）と、同じ会話の2回目以降の畳み（`foldDigestCountsLine`）が同じ表を使い、文言がずれないようにする
+// 件数の行の項目
 const COUNT_ITEMS: readonly { prefix: string; suffix: string }[] = [
   { prefix: '人間の発言 ', suffix: '' },
   { prefix: '回答待ち ', suffix: '' },
@@ -241,31 +223,6 @@ function countItem(index: number, value: number): string {
   const item = COUNT_ITEMS[index];
   if (item === undefined) throw new Error(`件数の項目が無い: ${String(index)}`);
   return `${item.prefix}${String(value)}${item.suffix}`;
-}
-
-/**
- * 件数の行（全文）を、2回目以降用の短い行にする。0 でない項目だけ名前つきで残し、0 の項目は「省いた = 0」と名乗る（位置だけの数字列にしない: 並びの読み違いを防ぐため）。
- * 行が想定の形でない・短くならないときは `null`（呼び出し側は全文のまま出す）。
- */
-export function foldDigestCountsLine(line: string): string | null {
-  if (!line.startsWith(DIGEST_COUNTS_LINE_HEAD)) return null;
-  const parts = line.slice(DIGEST_COUNTS_LINE_HEAD.length).split(' / ');
-  if (parts.length !== COUNT_ITEMS.length) return null;
-  const nonZero: string[] = [];
-  for (const [index, part] of parts.entries()) {
-    const item = COUNT_ITEMS[index];
-    if (item === undefined || !part.startsWith(item.prefix) || !part.endsWith(item.suffix)) {
-      return null;
-    }
-    const value = part.slice(item.prefix.length, part.length - item.suffix.length);
-    if (!/^\d+$/.test(value)) return null;
-    if (value !== '0') nonZero.push(part);
-  }
-  const folded =
-    nonZero.length === 0
-      ? '- 件数: すべて 0（項目は会話の上の件数の行と同じ）'
-      : `- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: ${nonZero.join(' / ')}`;
-  return folded.length < line.length ? folded : null;
 }
 
 export type UnobservedReportState = 'none' | 'failure-wrapped' | 'delivered';
@@ -558,13 +515,13 @@ const TOOL_USE_COUNTED_IN_FULL_NOTICE =
 const ESCALATION_RETAIN_CAPPED_NOTICE =
   '- ⚠ エスカレーションの件数は少なく出ている可能性がある（保持の上限に当たり、束ねた元の行を全部は読んでいない）';
 
-// 以下は要約の中の固定の注記（#4937）。文言を変えずに定数へ出しただけで、`digest-session-delta.ts` が同じ会話で2回目以降を短い参照に置き換える
+// 以下は要約の中の固定の注記（#4937）
 const EXTERNAL_EVENT_NOTE =
   'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
   '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
   '通さず直接書く行（source `runner` / `boot-storage-footprint` / `boot-tool-search`）も混ざる。';
 // 「使った分」の推定値の注記は、台帳の全文（`USAGE_ESTIMATE_NOTICE`）ではなく短い1行にする: 毎回同じ固定文で、全文は `usage_read` の説明と応答にある。
-// 短い行は差分の対象（`DIGEST_FIXED_PHRASES`）にしない: 参照に置き換えても、参照のほうが長くなるため。「請求明細ではない」は落とさない（確定した金額に読まれるため）
+// 「請求明細ではない」は落とさない（確定した金額に読まれるため）
 const USAGE_ESTIMATE_DIGEST_LINE = '- 推定値（請求明細ではない。詳しくは `usage_read`）';
 export const SOURCE_TALLY_HEADING =
   '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
@@ -573,43 +530,7 @@ const BODY_SHAPE_NOTE_TAIL =
   '「本文の種類」は `summary` の完全一致で数える（末尾に畳んだ件数などの可変値が' +
   '付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。';
 
-/**
- * 同じ会話の2回目以降の要約で、短い参照に置き換える固定の注記（#4937）。`text` は上の定数と1字も違わない。
- * 要約の中で変わる値（件数・時刻・金額）を含むものは入れない。
- */
-export const DIGEST_FIXED_PHRASES: readonly { id: string; text: string; ref: string }[] = [
-  {
-    id: 'external-event-note',
-    text: EXTERNAL_EVENT_NOTE,
-    ref: '（外部イベントの件数についての固定の注記は会話の上と同じ）',
-  },
-  {
-    id: 'source-tally-heading',
-    text: SOURCE_TALLY_HEADING,
-    ref: '**発行元（source）別の件数**（見出しの固定の注記は会話の上と同じ）',
-  },
-  {
-    id: 'body-shape-note',
-    text: BODY_SHAPE_NOTE_TAIL,
-    ref: '（本文の種類の数え方についての固定の注記は会話の上と同じ）',
-  },
-];
-
-/** 行が項目の節（見出しの先頭が一致するもの）。同じ会話の2回目以降は、前回と同じ行を省く（#4937）。見出しと固定の注記は行の差分の対象外。 */
-export const DIGEST_LIST_SECTION_NAMES: readonly string[] = [
-  '継続中の依頼',
-  'マネージャー',
-  '聞かずに決めたこと',
-  'エスカレーション',
-  '人間の回答待ち',
-  '記憶の更新',
-  '届いた外部イベント',
-];
-
-/**
- * 待ち行列の先頭の節の見出しの先頭（#5469 P6b）。`digest-session-delta.ts` が同じ文字列で「この節は差分にせず毎回全文」を判定する。
- * 一覧の節（`DIGEST_LIST_SECTION_NAMES`）に入れない: 先頭の3件は「前回と同じ」と畳まず、tick のたびに目の前に出すため。
- */
+/** 待ち行列の先頭の節の見出しの先頭（#5469 P6b）。 */
 export const TASK_QUEUE_SECTION_HEADING_HEAD = '## 待ち行列の先頭';
 
 // `liveness` を必須にしない: 省略時は全件 `/セッション不明` になり、黙って「繋がっている」と名乗らないため
