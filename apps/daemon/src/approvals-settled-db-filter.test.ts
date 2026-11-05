@@ -1,6 +1,6 @@
 import { createManagerPool, createRunnerRegistry } from '@alteroid/core';
 import type { CloneHost, JobStore, PendingApproval, Stores } from '@alteroid/core';
-import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
+import { createPgStoresFromDb, migrate, tables } from '@alteroid/storage-pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
@@ -111,6 +111,8 @@ describe('承認の日付絞りを DB の側で絞る（pg。#5089）', () => {
         withdrawnReason: '古い',
       }),
     });
+    // 起動のたびに回る移行が、本体の時刻で列を埋め戻す
+    await migrate(db);
 
     const plain = withoutSettledMethods(stores);
     for (const path of [

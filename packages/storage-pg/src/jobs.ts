@@ -254,8 +254,8 @@ export class PgJobStore implements JobStore {
     return this.#parseApprovalRows(rows, 'listApprovals');
   }
 
-  // 決着の時刻の列（`answered_at`・`withdrawn_at`）で DB の側で絞る（#5089）。列は書き込みのたびに本体（jsonb）と同じ値で書くが、
-  // `withdrawn_at` は後から足した列で埋め戻していないので、列が両方空なのに本体に決着の欄がある行も混ぜて返す。
+  // 決着の時刻の列（`answered_at`・`withdrawn_at`）で DB の側で絞る（#5089）。列は書き込みのたびに本体（jsonb）と同じ値で書き、
+  // 列を足す前の行は `migrate` が本体の時刻で埋め戻す。
   // 範囲は前後に1日ずつ広げる: 日の境目の扱いを呼び手（`approvalsSettledOn`）にだけ持たせ、ここは取りこぼさないことだけを受け持つため
   async listApprovalsSettledAround(
     range: { since: string; until: string },
@@ -269,7 +269,7 @@ export class PgJobStore implements JobStore {
     const since = new Date(Date.parse(range.since) - DAY_MS);
     const until = new Date(Date.parse(range.until) + DAY_MS);
     const settledAt = sql`coalesce(${approvals.answeredAt}, ${approvals.withdrawnAt})`;
-    const settledWhere = sql`((${settledAt} >= ${since} and ${settledAt} < ${until}) or (${approvals.answeredAt} is null and ${approvals.withdrawnAt} is null and (${approvals.approval} ? 'answeredAt' or ${approvals.approval} ? 'withdrawnAt')))`;
+    const settledWhere = sql`(${settledAt} >= ${since} and ${settledAt} < ${until})`;
     const rows = await this.#db
       .select({ id: approvals.id, approval: approvals.approval })
       .from(approvals)
@@ -283,32 +283,18 @@ export class PgJobStore implements JobStore {
   }
 
   // 本文を流さず、決着の時刻（`answeredAt`、無ければ `withdrawnAt`）だけを読む（#5089）。
-  // 決着の列（書き込みのたびに本体と同じ時刻で書く）を使い、列が両方空の行（決着していない行と、`withdrawn_at` を足す前の古い行）だけ本体を見る。
-  // 全行の本体を展開しないため。`listApprovals` は型に合わない行を落とすが、ここは数える（書き込み時に型を通すので、ふつうは差が出ない）
+  // 決着の列（書き込みのたびに本体と同じ時刻で書き、列を足す前の行は `migrate` が埋め戻す）だけを読む: 全行の本体を展開しないため。
+  // `listApprovals` は型に合わない行を落とすが、ここは数える（書き込み時に型を通すので、ふつうは差が出ない）
   async listApprovalSettledAts(): Promise<string[]> {
-    const columnsEmpty = sql`${approvals.answeredAt} is null and ${approvals.withdrawnAt} is null`;
     const rows = await this.#db
       .select({
-        column:
-          sql<Date | null>`coalesce(${approvals.answeredAt}, ${approvals.withdrawnAt})`.mapWith(
-            (value: Date | string | null) => (value === null ? null : new Date(value)),
-          ),
-        bodyAnswered: sql<
-          string | null
-        >`case when ${columnsEmpty} and jsonb_typeof(${approvals.approval}->'answeredAt') = 'string' then ${approvals.approval}->>'answeredAt' end`,
-        bodyWithdrawn: sql<
-          string | null
-        >`case when ${columnsEmpty} and jsonb_typeof(${approvals.approval}->'withdrawnAt') = 'string' then ${approvals.approval}->>'withdrawnAt' end`,
+        settledAt: sql<Date>`coalesce(${approvals.answeredAt}, ${approvals.withdrawnAt})`.mapWith(
+          (value: Date | string) => new Date(value),
+        ),
       })
       .from(approvals)
-      .where(
-        sql`not (${columnsEmpty}) or ${approvals.approval} ? 'answeredAt' or ${approvals.approval} ? 'withdrawnAt'`,
-      );
-    return rows.flatMap((row) => {
-      if (row.column !== null) return [row.column.toISOString()];
-      const body = row.bodyAnswered ?? row.bodyWithdrawn;
-      return body === null ? [] : [body];
-    });
+      .where(sql`${approvals.answeredAt} is not null or ${approvals.withdrawnAt} is not null`);
+    return rows.map((row) => row.settledAt.toISOString());
   }
 
   #parseApprovalRows(rows: { id: string; approval: unknown }[], op: string): ApprovalList {
