@@ -100,7 +100,7 @@ export class AutoFold {
    */
   #runnerUnderPidsPressure(runnerId: string, pids: PidsReading): boolean {
     if (isPidsUnderPressure(pids)) return true;
-    return this.#deps.runners.pidsSaturationOf?.(runnerId, pids) !== undefined;
+    return this.#deps.runners.pidsSaturationOf(runnerId, pids) !== undefined;
   }
 
   /**
@@ -364,7 +364,7 @@ export class AutoFold {
     for (const managerId of wakeIds) {
       // 像に無い（failed・lost で外れた）担当も台帳まで降りて器を引く: 起こし直す担当の多くはそれ
       const runnerId = await this.#deps.runnerIdOf(managerId).catch(() => undefined);
-      if (runnerId !== undefined && this.#deps.runners.pidsSaturationOf?.(runnerId) !== undefined) {
+      if (runnerId !== undefined && this.#deps.runners.pidsSaturationOf(runnerId) !== undefined) {
         runnerIds.add(runnerId);
       }
     }

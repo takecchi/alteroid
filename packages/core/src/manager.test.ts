@@ -7763,7 +7763,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       pids: { current: 443, max: 1000 },
       capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
     });
-    registry.notePidsSaturationSign?.('runner-a', 'fork-denied');
+    registry.notePidsSaturationSign('runner-a', 'fork-denied');
 
     const overview = await pool.runners({ resources: true });
 
@@ -7796,7 +7796,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         },
       )
       .toBe('failed');
-    registry.notePidsSaturationSign?.('runner-a', 'fork-denied');
+    registry.notePidsSaturationSign('runner-a', 'fork-denied');
 
     await pool.resumeStoppedByUsage();
 
