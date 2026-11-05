@@ -77,13 +77,13 @@ describe('HttpRunner の応答の検証', () => {
     await expect(runner.setPermissionRules?.([])).rejects.toThrow(
       'runner の応答を読めなかった（委譲先の許可規則）',
     );
-    await expect(runner.setCodexAuth?.(null)).rejects.toThrow(
+    await expect(runner.setCodexAuth(null)).rejects.toThrow(
       'runner の応答を読めなかった（Codex の ChatGPT ログイン）',
     );
     await expect(runner.retainPlugins([])).rejects.toThrow(
       'runner の応答を読めなかった（plugin の一覧）',
     );
-    await expect(runner.takeCodexAuthWriteBack?.('fp')).rejects.toThrow(
+    await expect(runner.takeCodexAuthWriteBack('fp')).rejects.toThrow(
       'runner の応答を読めなかった（Codex の書き戻し）',
     );
   });
@@ -97,7 +97,7 @@ describe('HttpRunner の応答の検証', () => {
     await expect(broken.retainPlugins([])).rejects.toThrow(
       'runner の応答を読めなかった（plugin の一覧の指紋）',
     );
-    await expect(broken.takeCodexAuthWriteBack?.('fp')).resolves.toBeNull();
+    await expect(broken.takeCodexAuthWriteBack('fp')).resolves.toBeNull();
 
     const absent = await clientWith(() => Response.json({ ok: true })).client;
     expect(await absent.setMcpServers({})).toBeUndefined();

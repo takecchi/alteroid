@@ -52,7 +52,7 @@ describe('HttpRunner: 口が 404 のとき、専用の例外に付け替えず R
 
   it('setCodexAuth / takeCodexAuthWriteBack', async () => {
     const client = await rig404();
-    expectHttp404(await caught(client.setCodexAuth?.(null)));
-    expectHttp404(await caught(client.takeCodexAuthWriteBack?.('fp')));
+    expectHttp404(await caught(client.setCodexAuth(null)));
+    expectHttp404(await caught(client.takeCodexAuthWriteBack('fp')));
   });
 });

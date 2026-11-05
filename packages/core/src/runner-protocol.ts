@@ -1662,10 +1662,10 @@ export interface RunnerClient {
   setPlugin(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
   /** 一覧に無いものを runner はメモリから外す。試験の偽の既定（`fakeRunnerClient`）は何も外さず指紋も返さない（`undefined`）。 */
   retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
-  /** `null` は外す。runner が繋ぎ直すたびに降ろし直す。 */
-  setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
-  /** 指紋が一致するものが無ければ `null`。 */
-  takeCodexAuthWriteBack?(
+  /** `null` は外す。runner が繋ぎ直すたびに降ろし直す。試験の偽の既定（`fakeRunnerClient`）は何もしない。 */
+  setCodexAuth(push: { value: string; revision: string } | null): Promise<void>;
+  /** 指紋が一致するものが無ければ `null`。試験の偽の既定（`fakeRunnerClient`）は `null`（書き戻しは無い）。 */
+  takeCodexAuthWriteBack(
     fingerprint: string,
   ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null>;
   /**

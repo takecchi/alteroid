@@ -116,6 +116,10 @@ class EventfulRunner implements RunnerClient {
   async retainPlugins(): Promise<undefined> {
     return undefined;
   }
+  async setCodexAuth(): Promise<void> {}
+  async takeCodexAuthWriteBack(): Promise<null> {
+    return null;
+  }
   async close(): Promise<void> {}
 }
 

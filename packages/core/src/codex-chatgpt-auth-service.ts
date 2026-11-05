@@ -89,7 +89,6 @@ export function createCodexChatgptAuthService(
     runner: RunnerClient,
     record: CodexChatgptAuthRecord | null,
   ): Promise<void> {
-    if (runner.setCodexAuth === undefined) return;
     try {
       await runner.setCodexAuth(pushOf(record));
     } catch (error) {
@@ -259,7 +258,7 @@ export function createCodexChatgptAuthService(
   ): Promise<void> {
     const fingerprint = event.fingerprint;
     if (fingerprint === undefined) return;
-    if (runner === null || runner.takeCodexAuthWriteBack === undefined) {
+    if (runner === null) {
       await note(
         `runner ${runnerId} の書き換え（指紋 ${fingerprint}）を取りに行けなかった`,
         'runner が繋がっていない、または取り出す口を持たない。正本は前の版のまま。',
