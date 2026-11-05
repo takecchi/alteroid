@@ -982,15 +982,15 @@ describe('request_permission の出力と呼んだあとの状態の固定（場
         expect((got?.journal.length ?? -1) > 0, `${key}: 日誌の行の有無が宣言と違う`).toBe(
           step.writes === 'both',
         );
-        // 知らせ（emit）は日誌まで書けた呼びだけ。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
+        // 知らせ（emit）は承認の行を積めた呼びすべて（日誌が書けなくても知らせる。#6490）。noteQuestionAsked は口が在るときだけ同じ条件で呼ばれる
         expect(ops.includes('context.emit'), `${key}: emit の有無が宣言と違う`).toBe(
-          step.writes === 'both',
+          step.writes !== 'none',
         );
         const hasNote = scenario.ctx?.noNote !== true;
         expect(
           ops.includes('context.noteQuestionAsked'),
           `${key}: noteQuestionAsked の有無が宣言と違う`,
-        ).toBe(step.writes === 'both' && hasNote);
+        ).toBe(step.writes !== 'none' && hasNote);
       }
     }
   });

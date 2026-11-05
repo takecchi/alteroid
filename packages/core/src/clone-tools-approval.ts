@@ -75,19 +75,26 @@ function approvalTitle(question: string): string {
   );
 }
 
+// 道具の名前を受け取る: 決め打ちにすると、request_permission から呼んでも ask_human と名乗るため（#6490）
+type ApprovalAskingTool = 'ask_human' | 'request_permission';
+
 class ApprovalNotRecordedError extends Error {
-  constructor(approval: PendingApproval, cause: unknown) {
-    super(formatApprovalNotRecordedMessage(approval, cause));
+  constructor(tool: ApprovalAskingTool, approval: PendingApproval, cause: unknown) {
+    super(formatApprovalNotRecordedMessage(tool, approval, cause));
     this.name = 'ApprovalNotRecordedError';
   }
 }
 
-function formatApprovalNotRecordedMessage(approval: PendingApproval, cause: unknown): string {
+function formatApprovalNotRecordedMessage(
+  tool: ApprovalAskingTool,
+  approval: PendingApproval,
+  cause: unknown,
+): string {
   const shape = approvalShape(approval);
   const reason = collapseErrorCause(cause);
   return [
     '⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい',
-    'ask_human は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。',
+    `${tool} は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。`,
     `記録できなかった確認: ${shape}`,
     `理由: ${reason}`,
     'やり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。',
@@ -505,7 +512,9 @@ function buildPermissionApproval(params: {
   };
 }
 
-// 積む → 日誌 → 器への知らせ の順。日誌が書けないと知らせへ進まない
+// 積む → 器への知らせ → 日誌 の順。
+// 知らせを日誌より先にする: 承認の行を積んだ時点で人間には確認が届いているので、日誌が書けなくても画面へ知らせ、問いを出した控えも残すため（#6490）。
+// 日誌が書けなければ、知らせた後で「完了済み・未記録」の例外で終わる
 async function enqueuePermissionApproval(params: {
   stores: Stores;
   context: ToolContext;
@@ -517,8 +526,10 @@ async function enqueuePermissionApproval(params: {
     await stores.jobs.putApproval(approval);
   } catch (error) {
     noteDroppedRecord('承認待ち', approvalShape(approval), error);
-    throw new ApprovalNotRecordedError(approval, error);
+    throw new ApprovalNotRecordedError('request_permission', approval, error);
   }
+  context.noteQuestionAsked?.(conversationId);
+  context.emit({ type: 'ask_human', approvalId: approval.id, question: approval.question });
   await appendJournalOrThrow(
     'request_permission',
     stores.journal,
@@ -529,8 +540,6 @@ async function enqueuePermissionApproval(params: {
     },
     'act-completed',
   );
-  context.noteQuestionAsked?.(conversationId);
-  context.emit({ type: 'ask_human', approvalId: approval.id, question: approval.question });
 }
 
 function renderPermissionQueued(id: string): string {
@@ -616,7 +625,7 @@ export function approvalTools(context: ToolContext, shared: CloneToolsShared) {
           await stores.jobs.putApproval(approval);
         } catch (error) {
           noteDroppedRecord('承認待ち', approvalShape(approval), error);
-          throw new ApprovalNotRecordedError(approval, error);
+          throw new ApprovalNotRecordedError('ask_human', approval, error);
         }
         await appendJournalOrThrow(
           'ask_human',
