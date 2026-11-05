@@ -55,16 +55,16 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
 
   const probe = (): Promise<void> => {
     // `sweepRescueRefs()` は連鎖に繋がない: 削除は runner へ1本ずつ待つ（最大約1分）ので、繋ぐと他の関心事の次の周期が止まるため。
-    void step('rescue-refs', () => options.managers.sweepRescueRefs?.());
+    void step('rescue-refs', () => options.managers.sweepRescueRefs());
     // `autoFoldUnderPressure()` も連鎖に繋がない: 各 runner へ資源を問い合わせる往復（最大 5 秒 × 台数）で遅れても、他の段の周期を止めないため。30 分の間引きは pool 側。
-    void step('auto-fold', () => options.managers.autoFoldUnderPressure?.());
+    void step('auto-fold', () => options.managers.autoFoldUnderPressure());
     return (
       step('turn-ends', () => options.managers.probeTurnEnds())
         // `settleStalledUsageWakes()` は `probeTurnEnds()` より後に置く: 読む `record.turnEndedAt` が同じ回に計算し直した値でないと古い助言で判定するため。
         .then(() => step('withheld-reports', () => options.managers.flushWithheldReports()))
         .then(() => step('usage-wakes', () => options.managers.settleStalledUsageWakes()))
         .then(() => step('denials', () => options.managers.renotifyStalledDenials()))
-        .then(() => step('held-messages', () => options.managers.deliverHeldMessages?.()))
+        .then(() => step('held-messages', () => options.managers.deliverHeldMessages()))
         .finally(() => {
           notePhase('poller:done');
         })

@@ -17861,7 +17861,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
         const oldId = (await stores.archive.archive('sess-case-18', 'AAA')).id;
         await stores.archive.archive('sess-case-18', 'AAABBB');
-        const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+        const managers = fakeManagerPool({ runningManagerOwning: () => undefined });
         const tools = createCloneTools({
           stores,
           emit: () => {},

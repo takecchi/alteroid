@@ -327,13 +327,10 @@ export function managersRoutes(ctx: AppContext, deps: AppDeps) {
         }),
         async (c) => {
           const id = c.req.param('id');
-          // 1件のために台帳を全部読まない（#5089）。`get` を持たない偽のプールだけ一覧から探す
+          // 1件のために台帳を全部読まない（#5089）
           let manager: ManagerSummary | undefined;
           try {
-            manager =
-              clone.managers.get === undefined
-                ? (await clone.managers.list()).find((entry) => entry.managerId === id)
-                : await clone.managers.get(id);
+            manager = await clone.managers.get(id);
           } catch (error) {
             if (!(error instanceof UnreadableJobError)) throw error;
             // 読めない行と分かった: 下の言い分け（409）へ落とす
@@ -671,15 +668,12 @@ export function managersRoutes(ctx: AppContext, deps: AppDeps) {
                           const pushHealth = clone.managers.pushHealthOf(entry.runnerId);
                           return pushHealth === undefined ? {} : { pushHealth };
                         })()),
-                    // 読み口を持たないプールでは「不明」に倒す: 「頼めない」と埋めない。
-                    managerPeers: clone.managers.managerPeersOf?.(entry.runnerId) ?? {
-                      status: 'unknown',
-                    },
-                    // 読み口を持たないプール・まだ session を受けていない runner では欄ごと省く: 「0件」と埋めない。
+                    managerPeers: clone.managers.managerPeersOf(entry.runnerId),
+                    // まだ session を受けていない runner では欄ごと省く: 「0件」と埋めない。
                     ...(entry.runnerId === undefined
                       ? {}
                       : (() => {
-                          const pluginLoad = clone.managers.pluginLoadOf?.(entry.runnerId);
+                          const pluginLoad = clone.managers.pluginLoadOf(entry.runnerId);
                           return pluginLoad === undefined ? {} : { pluginLoad };
                         })()),
                   };

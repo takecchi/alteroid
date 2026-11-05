@@ -1078,7 +1078,7 @@ export async function main(): Promise<void> {
     for (const report of reports) {
       // `pids` が取れなかった器は渡さない: 「聞けなかった」を「逼迫していない」に倒さないため。
       if (report.resources?.pids === undefined) continue;
-      clone.managers.autoFoldOnPlacementPressure?.(report.runnerId, report.resources.pids);
+      clone.managers.autoFoldOnPlacementPressure(report.runnerId, report.resources.pids);
     }
   };
 
