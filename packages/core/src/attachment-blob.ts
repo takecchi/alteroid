@@ -18,7 +18,7 @@ export interface AttachmentBlobStore {
    * `startedBefore` 以後に始まったものには触らない: 上げている最中のものを取り消さないため。
    * 置き場が分割アップロードの一覧を持たない・断られたときは投げず、`{ aborted: 0, failed: 0, reason }` を返す。
    */
-  abortStaleUploads?(prefix: string, startedBefore: Date): Promise<AttachmentBlobAbortResult>;
+  abortStaleUploads(prefix: string, startedBefore: Date): Promise<AttachmentBlobAbortResult>;
 }
 
 /** key・値・資格は載せない（`reason` も同じ）。 */
@@ -63,6 +63,14 @@ export class MemoryAttachmentBlobStore implements AttachmentBlobStore {
       this.#blobs.delete(key);
       this.#modified.delete(key);
     }
+  }
+
+  /** 未完了の分割アップロードを持たないので、取り消すものは無い。 */
+  async abortStaleUploads(
+    _prefix: string,
+    _startedBefore: Date,
+  ): Promise<AttachmentBlobAbortResult> {
+    return { aborted: 0, failed: 0 };
   }
 
   setModified(key: string, at: Date): void {
@@ -124,7 +132,7 @@ export interface AttachmentBlobSweepResult {
   readonly candidates: number;
   readonly removed: number;
   readonly failed: number;
-  /** 未完了の分割アップロードを取り消した数（#4763）。置き場がその口を持つときだけ載る。 */
+  /** 未完了の分割アップロードを取り消した数（#4763）。`sweepOrphanBlobs` は置き場の `abortStaleUploads` を必ず呼ぶので、置き場が付く掃除の結果には載る（型は読む側の都合で省略可能のまま）。 */
   readonly abortedUploads?: number;
   readonly abortFailedUploads?: number;
   /** key と値は載せない。最初の失敗の理由。 */
