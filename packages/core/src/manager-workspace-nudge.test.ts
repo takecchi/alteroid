@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   type RunnerClient,
@@ -30,16 +31,10 @@ function swappableRunner(runnerId = 'runner-primary') {
     alive: [] as RunnerManagerState[],
     resumes: [] as RunnerResumeCommand[],
   };
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
-    workspacePath: '/work/project',
     async connect(onEvent) {
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       state.resumes.push(command);
@@ -54,37 +49,10 @@ function swappableRunner(runnerId = 'runner-primary') {
       });
       return { cwd: command.cwd };
     },
-    async send() {
-      return true;
-    },
-    async answer() {
-      return { delivered: false };
-    },
-    async stop() {
-      /* この検証では使わない */
-    },
     async list() {
       return [...state.alive];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
-    async setProfile() {
-      return { ok: true };
-    },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return {
     runner,
     state,

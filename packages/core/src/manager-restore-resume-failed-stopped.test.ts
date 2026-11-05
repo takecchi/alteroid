@@ -1,15 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import { RunnerHttpError } from './runner-protocol.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
@@ -31,25 +28,12 @@ describe('resume 中に abort で止めた委譲を、resume の失敗が lost �
     const enteredP = new Promise<void>((r) => {
       entered = r;
     });
-    const client: RunnerClient = {
+    const client = fakeRunnerClient({
       runnerId: 'runner-a',
-      runnerIdKnown: true,
-      workspacePathKnown: true,
-      workspacePath: '/work/project',
-      async connect() {},
-      async start(command): Promise<{ cwd: string }> {
-        return { cwd: command.cwd };
-      },
       async resume(): Promise<{ cwd: string }> {
         entered();
         await g;
         throw new RunnerHttpError('bad session', 400);
-      },
-      async send() {
-        return true;
-      },
-      async answer(): Promise<RunnerAnswerOutcome> {
-        return { delivered: false };
       },
       async stop(managerId) {
         sessions.delete(managerId);
@@ -57,23 +41,7 @@ describe('resume 中に abort で止めた委譲を、resume の失敗が lost �
       async list() {
         return [...sessions.values()];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-        return [];
-      },
-      async profile(): Promise<RunnerProfileFingerprint | undefined> {
-        return undefined;
-      },
-      async setProfile(): Promise<RunnerProfileResult> {
-        return { ok: true };
-      },
-      async close() {},
-    };
+    });
     const entries: RunnerEntry[] = [
       {
         label: 'runner-a',

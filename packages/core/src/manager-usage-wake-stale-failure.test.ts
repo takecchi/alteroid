@@ -2,13 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -41,11 +39,8 @@ function fakeRunner() {
   // `resumeGate`: 起こし直し（resume）を、外から開けるまで返さない。1本目の起こし直しが走っている間に2本目の契機を流すため
   const behavior: { background: number; resumeGate?: Promise<void> } = { background: 0 };
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
     },
@@ -78,9 +73,6 @@ function fakeRunner() {
       sends.push({ managerId, text });
       return true;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       stops.push(managerId);
       const at = alive.findIndex((state) => state.managerId === managerId);
@@ -93,25 +85,10 @@ function fakeRunner() {
         liveBackgroundTasks: behavior.background,
       }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
     async setProfile(): Promise<RunnerProfileResult> {
       return { ok: false, error: 'この検証では使わない' };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
 
   return {
     runner,

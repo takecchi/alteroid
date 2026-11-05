@@ -2,6 +2,7 @@ import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-a
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { createRunnerRegistry, type RunnerClient, type RunnerEvent } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
@@ -109,11 +110,8 @@ function bridgeRunner(queryFn: typeof sdkQuery): { runnerClient: RunnerClient; h
     env: { PATH: '/usr/bin' },
   });
 
-  const runnerClient: RunnerClient = {
+  const runnerClient = fakeRunnerClient({
     runnerId: 'runner-bridge',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEventCb) {
       onEvent = onEventCb;
       while (buffered.length > 0) {
@@ -156,10 +154,7 @@ function bridgeRunner(queryFn: typeof sdkQuery): { runnerClient: RunnerClient; h
     async setProfile(script) {
       return host.setProfile(script);
     },
-    async close() {
-      // no-op: afterEach の `pool.stop()` 経由で二重の `shutdown()` を起こさないため。
-    },
-  };
+  });
 
   return { runnerClient, host };
 }

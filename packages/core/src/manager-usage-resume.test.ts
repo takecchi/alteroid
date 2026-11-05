@@ -2,14 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -39,17 +37,10 @@ function nudgeRunner() {
   const behavior: { sendMode: 'ok' | 'throw' } = { sendMode: 'ok' };
   const transcripts = new Map<string, string | null>();
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      /* この検証では使わない */
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
@@ -71,9 +62,6 @@ function nudgeRunner() {
       sends.push({ managerId, text });
       return true;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       // 一覧から消さない: `abort()` が「止まったと確かめられない」側へ落ち、台帳が `stopped` にならないから。
       const at = alive.findIndex((state) => state.managerId === managerId);
@@ -88,22 +76,10 @@ function nudgeRunner() {
     async transcriptTail(managerId: string) {
       return transcripts.get(managerId) ?? null;
     },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
     async setProfile(): Promise<RunnerProfileResult> {
       return { ok: false, error: 'この検証では使わない' };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
 
   return {
     runner,

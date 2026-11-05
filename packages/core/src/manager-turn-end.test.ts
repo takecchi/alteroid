@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { probeTurnEnd, type TurnEndProbe } from './turn-end-probe.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
 } from './runner-protocol.js';
@@ -181,11 +181,8 @@ describe('probeTurnEnd — 生ログの末尾からターン終了を計算す�
   });
 });
 
-class TranscriptRunner implements RunnerClient {
+class TranscriptRunner extends FakeRunnerClientBase {
   readonly runnerId = 'runner-primary';
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly starts: string[] = [];
   #transcripts = new Map<string, string | null>();
 
@@ -208,38 +205,15 @@ class TranscriptRunner implements RunnerClient {
     this.starts.push(command.managerId);
     return { cwd: command.cwd };
   }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list() {
-    return [];
-  }
   async transcript(managerId: string): Promise<string | null> {
     return this.#transcripts.get(managerId) ?? null;
   }
   async transcriptTail(managerId: string): Promise<string | null> {
     return this.#transcripts.get(managerId) ?? null;
   }
-  async credentials() {
-    return [];
-  }
-  async setCredentials() {
-    return [];
-  }
-  async profile() {
-    return undefined;
-  }
   async setProfile() {
     return { ok: true as const };
   }
-  async close(): Promise<void> {}
 }
 
 async function harnessOf(): Promise<{

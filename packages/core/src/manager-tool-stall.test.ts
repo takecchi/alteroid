@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import { probeToolUseStall, probeTurnEnd } from './turn-end-probe.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
 } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
@@ -235,11 +234,8 @@ describe('probeToolUseStall — 応答が返っていない tool_use を生ロ�
   });
 });
 
-class CountingTranscriptRunner implements RunnerClient {
+class CountingTranscriptRunner extends FakeRunnerClientBase {
   readonly runnerId = 'runner-primary';
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly transcriptCalls: string[] = [];
   #transcripts = new Map<string, string | null>();
 
@@ -258,22 +254,6 @@ class CountingTranscriptRunner implements RunnerClient {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
     });
   }
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list() {
-    return [];
-  }
   async transcript(managerId: string): Promise<string | null> {
     this.transcriptCalls.push(managerId);
     return this.#transcripts.get(managerId) ?? null;
@@ -283,19 +263,9 @@ class CountingTranscriptRunner implements RunnerClient {
     this.transcriptCalls.push(managerId);
     return this.#transcripts.get(managerId) ?? null;
   }
-  async credentials() {
-    return [];
-  }
-  async setCredentials() {
-    return [];
-  }
-  async profile() {
-    return undefined;
-  }
   async setProfile() {
     return { ok: true as const };
   }
-  async close(): Promise<void> {}
 }
 
 async function harnessOf(): Promise<{

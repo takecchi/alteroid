@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerManagerState,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -43,27 +42,14 @@ function trackingRunner(resumeGate: Promise<void>, onResumeEntered: () => void) 
   const sessions = new Set<string>();
   const stopCalls: string[] = [];
   const resumeCalls: RunnerResumeCommand[] = [];
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
-    async connect() {},
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
     async resume(command): Promise<{ cwd: string }> {
       resumeCalls.push(command);
       onResumeEntered();
       await resumeGate;
       sessions.add(command.managerId);
       return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
     },
     async stop(managerId) {
       stopCalls.push(managerId);
@@ -79,23 +65,10 @@ function trackingRunner(resumeGate: Promise<void>, onResumeEntered: () => void) 
         liveBackgroundTasks: 0,
       }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {},
-  };
+  });
   return { runner, sessions, stopCalls, resumeCalls };
 }
 

@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
 } from './runner-protocol.js';
@@ -27,11 +26,8 @@ function turnEndLine(text: string, timestamp: string, stopReason = 'end_turn'): 
   });
 }
 
-class LivingRunner implements RunnerClient {
+class LivingRunner extends FakeRunnerClientBase {
   readonly runnerId = 'runner-5';
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   alive: RunnerManagerState[] = [];
   liveTranscript: string | null = null;
 
@@ -46,19 +42,6 @@ class LivingRunner implements RunnerClient {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
     });
   }
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async resume(command: Parameters<RunnerClient['resume']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {
     return this.alive;
   }
@@ -68,19 +51,9 @@ class LivingRunner implements RunnerClient {
   async transcriptTail(): Promise<string | null> {
     return this.liveTranscript;
   }
-  async credentials() {
-    return [];
-  }
-  async setCredentials() {
-    return [];
-  }
-  async profile() {
-    return undefined;
-  }
   async setProfile() {
     return { ok: true as const };
   }
-  async close(): Promise<void> {}
 }
 
 // 13:33Z の失敗の報告が最後に届いた報告のまま、という Issue の形に合わせる

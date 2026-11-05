@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerLiveness,
   RunnerManagerListing,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
@@ -91,12 +88,8 @@ function skewableRunner(runnerId: string): {
   const resumed: string[] = [];
   const failStop = { value: false };
   const readable = () => [...sessions.values()].filter((s) => !skewed.has(s.managerId));
-  const client: RunnerClient = {
+  const client = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
-    workspacePath: '/work/project',
-    async connect() {},
     async start(command): Promise<{ cwd: string }> {
       sessions.set(command.managerId, {
         liveBackgroundTasks: 0,
@@ -112,12 +105,6 @@ function skewableRunner(runnerId: string): {
       resumed.push(command.managerId);
       return { cwd: command.cwd };
     },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       if (failStop.value) throw new Error('stop の RPC が失敗した（試験の偽物）');
       sessions.delete(managerId);
@@ -131,23 +118,7 @@ function skewableRunner(runnerId: string): {
         unreadableIds: [...sessions.keys()].filter((id) => skewed.has(id)),
       };
     },
-    async transcript() {
-      return null;
-    },
-    async credentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
-    async setProfile(): Promise<RunnerProfileResult> {
-      return { ok: true };
-    },
-    async close() {},
-  };
+  });
   return { client, skewed, resumed, failStop };
 }
 

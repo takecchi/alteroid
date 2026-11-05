@@ -2,13 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -48,16 +46,10 @@ function fakeRunner(log: string[]) {
     failDelivery: false,
     resumeGate: undefined as Promise<void> | undefined,
   };
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       log.push(`resume:${command.message ?? ''}`);
@@ -79,9 +71,6 @@ function fakeRunner(log: string[]) {
       log.push(`send:${text}`);
       return !control.failDelivery;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       const at = alive.findIndex((state) => state.managerId === managerId);
       if (at >= 0) alive.splice(at, 1);
@@ -90,25 +79,10 @@ function fakeRunner(log: string[]) {
       if (control.failDelivery) return [];
       return alive.map((state) => ({ ...state, waiting: [], liveBackgroundTasks: 0 }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
     async setProfile(): Promise<RunnerProfileResult> {
       return { ok: false, error: 'この検証では使わない' };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return {
     runner,
     resumes,
