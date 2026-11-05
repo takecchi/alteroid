@@ -69,12 +69,10 @@ interface Scenario {
 const BASE_ISO = '2026-10-29T00:00:00.000Z';
 const SEED_AT = '2026-10-01T00:00:00.000Z';
 const UPDATED_AT = '2026-10-02T03:04:05.000Z';
-const RAN_AT = '2026-10-20T00:00:00.000Z';
 const PIN_URL = new URL('./clone-tools-schedule-list-output-pin.json', import.meta.url);
 const UPDATE = process.env.UPDATE_SCHEDULE_LIST_PIN === '1';
 
 const BUDGET = 8_000;
-const PAGE = 8_000;
 const EXCERPT = 200;
 const FOOTER = '（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）';
 
