@@ -10,7 +10,7 @@ import type { InboxEvent, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-// 断り書きの待ち行列の先頭は、毎回見出しを含む全文で出す（畳まない）。
+// 断り書きの待ち行列の先頭は、毎回見出しを含む全文で出す（2回目以降も省略形にしない）。
 
 const AT = '2026-10-29T00:00:00.000Z';
 const HEAD = '[system] 待ち行列（';
@@ -118,7 +118,7 @@ async function settle(s: Boot, count: number): Promise<void> {
 }
 
 describe('断り書きの待ち行列の先頭は、同じ待ち行列でも毎回全文', () => {
-  it('節約が無効（既定）なら毎回全文', async () => {
+  it('既定では毎回全文', async () => {
     const stores = createMemoryStores();
     for (let i = 0; i < 12; i += 1) await stores.tasks.add(seededTask(`old-${String(i)}`));
     const s = boot({ stores });

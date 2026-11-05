@@ -34,7 +34,7 @@ const INVARIANT_HEAD = '**⚠️ 枠を理由に仕事を見送らないこと�
 const UNCHANGED_HEAD = '[system] いまの全体: 前のターンと変化なし';
 
 describe('「いまの全体」の説明文は毎回全文で出す', () => {
-  it('同じ材料で何度組んでも、説明文も不変条件も全文で、「変化なし」にも要点にも畳まない', () => {
+  it('同じ材料で何度組んでも、説明文も不変条件も全文で、「変化なし」にも要点にも省略しない', () => {
     const managers = [summary('mgr-1', 'done')];
     for (let i = 0; i < 3; i += 1) {
       const text = situation(managers);

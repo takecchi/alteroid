@@ -8,8 +8,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-// #5299: マネージャーからの質問・許可確認（いま待たれているもの）の応じ方の骨組みを、同じ会話の2回目から参照にする。
-// 全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。ここで新しい条件は足していない。
+// #5299: マネージャーからの質問・許可確認（いま待たれているもの）の応じ方の骨組みは、同じ会話の2回目以降も毎回全文で出す。
 
 const MANAGER_ID = 'mgr-aaaa1111';
 const SKELETON = 'のこの1件だけが止まっている';
@@ -21,7 +20,7 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
-  // クローンの env。既定は空（畳みの節約は外した）
+  // クローンの env。既定は空
   env?: NodeJS.ProcessEnv;
 }
 
@@ -173,8 +172,8 @@ function guideOf(input: string): string {
   return next.slice(0, end < 0 ? undefined : end).join('\n');
 }
 
-describe('マネージャーの質問・許可確認の応じ方は、同じ会話の2回目から骨組みが参照になる（#5299）', () => {
-  it('⭐ 畳みが切り（既定）なら、質問も許可確認も2回目以降も応じ方が全文のまま', async () => {
+describe('マネージャーの質問・許可確認の応じ方は、同じ会話の2回目以降も毎回全文で出る（#5299）', () => {
+  it('⭐ 既定では、質問も許可確認も2回目以降も応じ方が全文のまま', async () => {
     for (const kind of ['question', 'permission'] as const) {
       const s = boot({ env: {} });
       const first = guideOf(await deliver(s, confirmation(kind, 'rq1')));

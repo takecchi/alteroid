@@ -56,7 +56,7 @@ const count = (text: string, needle: string): number => text.split(needle).lengt
 
 describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎件全文で出す', () => {
   it.each([['未設定', {}]] as const)(
-    '⭐ 畳みを外したので（%s）、起点が同じ3件でも枠と案内と経過を毎件全文で出す',
+    '⭐ 既定では（%s）、起点が同じ3件でも枠と案内と経過を毎件全文で出す',
     async (_name, env) => {
       const { merged, stop } = await mergedInput(
         [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-1'), job('mgr-C', 'conv-1')],

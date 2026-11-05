@@ -9,11 +9,10 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores } from './testing.js';
 
-// #5301: 外部イベントの2行の指示を、同じ会話の2回目から参照にする。
-// 全文へ戻す条件は #4937 の控え（`DigestSessionDelta`）そのもの。ここで新しい条件は足していない。
-// `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）は畳まず、毎回出る。
+// #5301: 外部イベントの2行の指示は、同じ会話の2回目以降も毎回全文で出す。
+// `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）も毎回出る。
 
-/** 全文にだけ在る説明の文（畳まれる側）。 */
+/** 2行の指示の全文にある説明の文。 */
 const INSTRUCTION_HEAD = '記憶にある目的と価値観に照らして、何をするか決めよ';
 const INSTRUCTION_TAIL = '判断の根拠が記憶に無く、しかも放っておけないことなら';
 
@@ -22,7 +21,7 @@ interface SdkScript {
   noUsage?: boolean;
   failResultAt?: number;
   after?: (inputCount: number) => SDKMessage[];
-  // クローンの env。既定は空（畳みの節約は外した）
+  // クローンの env。既定は空
   env?: NodeJS.ProcessEnv;
 }
 
@@ -131,8 +130,8 @@ function instructionOf(input: string): string {
   return rest.slice(0, end < 0 ? undefined : end).trim();
 }
 
-describe('外部イベントの2行の指示は、同じ会話の2回目から短い形になる（#5301）', () => {
-  it('⭐ 畳みが切り（既定）なら、単発も束ねた入力も、2回目以降も2行の指示が全文のまま', async () => {
+describe('外部イベントの2行の指示は、同じ会話の2回目以降も毎回全文で出る（#5301）', () => {
+  it('⭐ 既定では、単発も束ねた入力も、2回目以降も2行の指示が全文のまま', async () => {
     const s = boot({ env: {} });
     const inputs = [
       await deliver(s, externalEvent(1)),
@@ -158,7 +157,7 @@ describe('外部イベントの2行の指示は、同じ会話の2回目から�
     await s.clone.stop();
   });
 
-  it('⭐ 同じ入力の中で畳みを渡さない呼び出し（既定）は、全文のまま1文字も変わらない', () => {
+  it('⭐ プロンプトの組み立てを直接呼んでも（既定）、2行の指示は全文のまま1文字も変わらない', () => {
     const plain = buildExternalEventPrompt({ source: 'ci', body: '本文' });
     expect(plain).toContain(INSTRUCTION_HEAD);
     expect(plain).toContain(INSTRUCTION_TAIL);
