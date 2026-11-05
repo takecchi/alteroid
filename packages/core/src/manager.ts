@@ -3727,14 +3727,6 @@ class Pool implements ManagerPool {
         outcome: { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' },
       };
     }
-    if (runner.unpushedWork === undefined) {
-      return {
-        outcome: {
-          kind: 'unavailable',
-          reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
-        },
-      };
-    }
     const observerInstanceId = this.#sighting(runner.runnerId).instanceId;
     const withObserver = (outcome: ManagerUnpushedWork) => ({
       outcome,

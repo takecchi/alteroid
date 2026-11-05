@@ -1513,8 +1513,9 @@ export interface RunnerClient {
    * `ping` に相乗りさせない: `ping` は本文を読み捨てる設計で、読む物を1つ足すと読んではいけない物も読む口になるため。
    * 採るのは資源だけで、`runnerId` / `workspacePath` は採らない。省略した実装は名簿が「報告しない器」として扱い、`select` で不利にしない。
    * `signal` は配置の期限で、返らない1台が配置全体を止めないために使う。
+   * 報告しない器は `undefined` を返す。試験の偽の既定（`fakeRunnerClient`）も `undefined`。
    */
-  resources?(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources | undefined>;
+  resources(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources | undefined>;
   /**
    * 問い合わせない: `HttpRunner` が `#pump` / `#stream` の中で更新しているフィールドを読むだけの同期的な値。
    * 持たない実装（`LocalRunner`・テストの偽物）に「常に `never-connected`」という嘘を書かせないため省略できる。
@@ -1557,10 +1558,10 @@ export interface RunnerClient {
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
   /**
-   * 生ログの末尾だけ（`transcript-tail` を名乗る器だけが持つ）。無ければ null。
-   * 省略できるのは `transcript-tail` を名乗らない旧い runner と偽物のため。呼び手は名乗りを確かめてから呼ぶ。
+   * 生ログの末尾だけ。無ければ null。
+   * `transcript-tail` を名乗らない器へは、呼び手が名乗りを確かめて呼ばない。試験の偽の既定（`fakeRunnerClient`）は `null`。
    */
-  transcriptTail?(managerId: string, maxChars: number): Promise<string | null>;
+  transcriptTail(managerId: string, maxChars: number): Promise<string | null>;
   /**
    * 無ければ `undefined`（404・退避先が消えた）。取れなかった（接続断・期限切れ・非2xx）ときは投げる。
    * 読む側が大きさを数えて途中で打ち切る。取り出しの口を名乗らない器（`capabilities` に無い）へは、呼び出し側が取りに行かず、取れたことにしない。
@@ -1612,9 +1613,9 @@ export interface RunnerClient {
    * 委譲のターンが報告で終わったときにも1回呼ばれ、観測が台帳に残る（`manager.ts` の `case 'report'`。失敗しても報告の配達は止めない）。
    * `manager_list` と `force: true` の経路からは呼ばない: 一覧の側から自動で往復を足さず、決めた後に往復を払う意味も無い。
    * ネットワークを一切使わない（`fetch` も `git ls-remote` もしない）: 費用の性質を変えないため。
-   * 省略した実装に「0件でした」という嘘を書かせない: `undefined` は「確かめられなかった」で、0 とは混ぜない。
+   * 「0件でした」という嘘を書かない: `undefined` は「確かめられなかった」で、0 とは混ぜない。試験の偽の既定（`fakeRunnerClient`）は `undefined`。
    */
-  unpushedWork?(
+  unpushedWork(
     managerId: string,
     options?: { signal?: AbortSignal },
   ): Promise<UnpushedWorkResult | undefined>;
@@ -2454,7 +2455,7 @@ class Registry implements RunnerRegistry {
       open.map(async (client) => {
         try {
           const resources = await withDeadline(
-            (signal) => client.resources?.({ signal }) ?? Promise.resolve(undefined),
+            (signal) => client.resources({ signal }),
             PLACEMENT_PROBE_MS,
             '資源の報告',
           );

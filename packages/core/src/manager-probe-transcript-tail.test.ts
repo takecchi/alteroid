@@ -34,7 +34,7 @@ class EventfulRunner implements RunnerClient {
   readonly transcriptCalls: string[] = [];
   readonly transcriptTailCalls: { managerId: string; maxChars: number }[] = [];
   liveTranscript: string | null = null;
-  // 口そのものを持たない旧い runner を作る（`transcriptTail` を省略できる型）
+  // false なら、名乗っていても末尾を返さない（null）runner を作る（口は必須なので、口そのものが無い runner は作れない）
   hasTailMouth = true;
   #emit: ((event: RunnerEvent) => unknown) | null = null;
 
@@ -68,12 +68,9 @@ class EventfulRunner implements RunnerClient {
     this.transcriptCalls.push(managerId);
     return this.liveTranscript;
   }
-  get transcriptTail(): RunnerClient['transcriptTail'] {
-    if (!this.hasTailMouth) return undefined;
-    return async (managerId: string, maxChars: number) => {
-      this.transcriptTailCalls.push({ managerId, maxChars });
-      return this.liveTranscript;
-    };
+  async transcriptTail(managerId: string, maxChars: number): Promise<string | null> {
+    this.transcriptTailCalls.push({ managerId, maxChars });
+    return this.hasTailMouth ? this.liveTranscript : null;
   }
   async credentials() {
     return [];
@@ -119,6 +116,12 @@ class EventfulRunner implements RunnerClient {
   async setCodexAuth(): Promise<void> {}
   async takeCodexAuthWriteBack(): Promise<null> {
     return null;
+  }
+  async resources(): Promise<undefined> {
+    return undefined;
+  }
+  async unpushedWork(): Promise<undefined> {
+    return undefined;
   }
   async close(): Promise<void> {}
 }
@@ -364,7 +367,7 @@ describe('見回りの2の段: runner の末尾の口（transcript-tail）だけ
     await h.close();
   });
 
-  it('名乗っていても口そのものを持たない runner は、全文へ落ちず unreadable を返す', async () => {
+  it('名乗っていても末尾を返さない（null）runner は、全文へ落ちず missing を返す', async () => {
     const h = await harnessOf(null, {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
       hasTailMouth: false,
@@ -373,7 +376,7 @@ describe('見回りの2の段: runner の末尾の口（transcript-tail）だけ
 
     const result = await tailOf(h);
 
-    expect(result.kind).toBe('unreadable');
+    expect(result.kind).toBe('missing');
     expect(h.runner.transcriptCalls).toEqual([]);
     await h.close();
   });

@@ -267,10 +267,11 @@ export class TurnEndWatch {
       const runner = await this.#deps.runnerOf(record);
       if (runner !== null) {
         // 末尾の口を名乗らない runner には `transcript()`（全文）へ落ちない: 全文を文字へ直すだけでループを塞ぐため（#5160）
-        const tailOf = runner.transcriptTail?.bind(runner);
-        const claimsTail =
-          tailOf !== undefined &&
-          this.#deps.runnerHasCapability(runner.runnerId, RUNNER_CAPABILITY_TRANSCRIPT_TAIL);
+        const tailOf = runner.transcriptTail.bind(runner);
+        const claimsTail = this.#deps.runnerHasCapability(
+          runner.runnerId,
+          RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
+        );
         await this.#journalTranscriptTailStage(job.id, runner.runnerId, claimsTail);
         if (claimsTail) {
           const live = await tailOf(job.id, maxChars).catch(() => null);

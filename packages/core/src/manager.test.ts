@@ -2006,7 +2006,7 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
     expect(stored?.cwd).toBe(dir);
   });
 
-  it('取れなかった回は unavailable + reason を残し、一度も呼んでいない回（欄が丸ごと無い）と区別できる', async () => {
+  it('runner が答えなかった回は unavailable + reason を残し、一度も呼んでいない回（欄が丸ごと無い）と区別できる', async () => {
     const fake = swappableRunner('runner-primary');
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -2021,7 +2021,7 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
     const after = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
     expect(after?.lastUnpushedWorkObservation).toMatchObject({
       kind: 'unavailable',
-      reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+      reason: 'runner が答えなかった（セッションが無い・期限切れ・古い版のいずれか）。',
     });
     if (after?.lastUnpushedWorkObservation?.kind !== 'unavailable') {
       throw new Error('unreachable');
@@ -5242,7 +5242,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     await s.pool.stop();
   });
 
-  it('runner がこの口を持たないときは unavailable + reason が残り、報告の処理は進む', async () => {
+  it('runner が答えなかった（undefined）ときは unavailable + reason が残り、報告の処理は進む', async () => {
     const fake = swappableRunner('runner-primary');
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -5256,7 +5256,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       })
       .toMatchObject({
         kind: 'unavailable',
-        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+        reason: 'runner が答えなかった（セッションが無い・期限切れ・古い版のいずれか）。',
       });
 
     const job = await jobOf(s, managerId);
@@ -7353,7 +7353,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   describe('resourcesProbe（Issue #2426）', () => {
-    it('繋がっていない・失敗した・口を持たない・取れた を別の状態で返し、失敗は理由つき', async () => {
+    it('繋がっていない・失敗した・報告しない・取れた を別の状態で返し、失敗は理由つき', async () => {
       const stores = createMemoryStores();
       const registry = createRunnerRegistry();
       await registry.register({
@@ -7364,7 +7364,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
       failing.resourcesError = 'resources RPC failed (test)';
       await registry.register({ label: 'runner-failing', open: () => Promise.resolve(failing) });
       const old = new FakePoolRunner('runner-old', { managers: 0 });
-      (old as { resources?: unknown }).resources = undefined;
+      old.report = undefined;
       await registry.register({ label: 'runner-old', open: () => Promise.resolve(old) });
       const ok = new FakePoolRunner('runner-ok', { managers: 0, pids: { current: 5, max: 10 } });
       await registry.register({ label: 'runner-ok', open: () => Promise.resolve(ok) });
@@ -7378,7 +7378,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
         status: 'failed',
         error: expect.stringContaining('resources RPC failed (test)'),
       });
-      expect(byLabel.get('runner-old')?.resourcesProbe).toEqual({ status: 'unsupported' });
+      expect(byLabel.get('runner-old')?.resourcesProbe).toEqual({ status: 'asked' });
       expect(byLabel.get('runner-ok')?.resourcesProbe).toEqual({ status: 'asked' });
       expect(byLabel.get('runner-ok')?.resources?.pids).toEqual({ current: 5, max: 10 });
       for (const label of ['runner-unreachable', 'runner-failing', 'runner-old']) {

@@ -325,7 +325,7 @@ export class AutoFold {
         if (this.#deps.stopped()) return;
         const runnerId = runner.runnerId;
         try {
-          const resources = await runner.resources?.({ signal: AbortSignal.timeout(5_000) });
+          const resources = await runner.resources({ signal: AbortSignal.timeout(5_000) });
           const pids = resources?.pids;
           if (pids === undefined) continue;
           if (!this.#runnerUnderPidsPressure(runnerId, pids)) continue;
@@ -375,7 +375,7 @@ export class AutoFold {
       for (const runnerId of runnerIds) {
         if (this.#deps.stopped()) return;
         const runner = await this.#deps.runners.get(runnerId);
-        const resources = await runner?.resources?.({ signal: AbortSignal.timeout(5_000) });
+        const resources = await runner?.resources({ signal: AbortSignal.timeout(5_000) });
         if (resources?.pids === undefined) continue;
         const outcomes = await this.foldIdleOnRunnerIfUnderPressure(
           runnerId,
