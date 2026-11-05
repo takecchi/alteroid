@@ -269,7 +269,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'reopen-setstatus-fails',
     covers:
-      '開き直しの setStatus が落ちる: 読めない形は打ち消しの行（行が読めない形になった）を書いて断りの文・ほかの例外は打ち消さずにそのまま投げる（先の行が日誌に残る）。閉じる呼び・開いている状態への呼びは打ち消す行が無い',
+      '開き直しの setStatus が落ちる: 読めない形は打ち消しの行（行が読めない形になった）を書いて断りの文・ほかの例外も打ち消しの行（書き換えが例外で終わった）を書いてから投げる（#6424。先の行だけが日誌に残らない）。閉じる呼び・開いている状態への呼びは打ち消す行が無い',
     seed: [
       t('d-1', 1, { status: 'done' }),
       t('d-2', 2, { status: 'done' }),
@@ -383,7 +383,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'reopen-reclosed-same-time',
     covers:
-      '別の手が開き直して、同じ closedAt・別の理由で閉じ直した: 比べるのは closedAt だけなので注の日誌は足されない（実際に外した記録は先の行の記録と理由が違うのに残らない）',
+      '別の手が開き直して、同じ closedAt・別の理由で閉じ直した: 閉じた記録の全体（時刻・主体・理由）で比べるので、注の日誌（実際に外した記録）を足す（#6424）',
     seed: [t('d-1', 1, { status: 'done' })],
     steps: [
       {
@@ -396,7 +396,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'reopen-other-moved',
     covers:
-      '別の手が開き直して waiting へ動かした（setStatus が changed で before に閉じた記録が無い）: 注の日誌（実際に外した記録は「閉じた記録なし」）を足し、「閉じた記録は日誌に残してある」の注は付かない（before が閉じていないため）。日誌には先の行と注の行が残り、行は queued になる',
+      '別の手が開き直して waiting へ動かした（setStatus が changed で before に閉じた記録が無い）: この呼びは開き直していないので、先の開き直しの行を打ち消し、ふつうの移動（waiting → queued）の行を書く（#6424）。「閉じた記録は日誌に残してある」の注は付かない。行は queued になる',
     seed: [t('d-1', 1, { status: 'done' })],
     steps: [
       {
@@ -855,7 +855,11 @@ describe('task_set_status の出力と呼んだあとの状態の固定（場面
     expect(decisionOf('reopen-setstatus-fails#1', 1)).toBe(
       `${RETRACT}開き直す直前に行が読めない形になった`,
     );
-    expect(journal('reopen-setstatus-fails#2')).toHaveLength(1);
+    // 読めない以外の例外でも、先の行を打ち消してから投げる（#6424）
+    expect(journal('reopen-setstatus-fails#2')).toHaveLength(2);
+    expect(decisionOf('reopen-setstatus-fails#2', 1)).toContain(
+      `${RETRACT}開き直す途中で行の書き換えが例外で終わった`,
+    );
     expect(text('reopen-setstatus-fails#2')).toBe('ストアが落ちた（setStatus）');
     expect(ops('reopen-setstatus-fails#3')).toEqual(['tasks.setStatus']);
     expect(journal('reopen-retract-fails-setstatus')).toHaveLength(1);
@@ -870,8 +874,15 @@ describe('task_set_status の出力と呼んだあとの状態の固定（場面
     expect(decisionOf('reopen-reclosed#1', 1)).toContain('の間に閉じ直されていた');
     expect(text('reopen-reclosed#1')).toContain('（閉じた記録は日誌に残してある）');
     expect(journal('reopen-reclosed#2')).toHaveLength(1);
-    expect(journal('reopen-reclosed-same-time')).toHaveLength(1);
-    expect(decisionOf('reopen-other-moved', 1)).toContain('（閉じた記録なし）');
+    // 同じ時刻でも主体・理由が違えば、実際に外した記録を注に残す（#6424）
+    expect(journal('reopen-reclosed-same-time')).toHaveLength(2);
+    expect(decisionOf('reopen-reclosed-same-time', 1)).toContain('の間に閉じ直されていた');
+    // 別の手が先に開き直していた回は、先の行を打ち消してふつうの移動の行を書く（#6424）
+    expect(journal('reopen-other-moved')).toHaveLength(3);
+    expect(decisionOf('reopen-other-moved', 1)).toContain(
+      `${RETRACT}開き直す直前に別の手が先に開き直していた`,
+    );
+    expect(decisionOf('reopen-other-moved', 2)).not.toContain('（閉じた記録なし）');
     expect(text('reopen-other-moved')).toBe('task d-1 を waiting から queued へ移した。');
     // 日誌が書けない
     expect(ops('journal-fails#1')).toEqual(['tasks.get', 'journal.append']);

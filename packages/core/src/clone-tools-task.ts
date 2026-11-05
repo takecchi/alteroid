@@ -934,8 +934,9 @@ function describeTaskListViolation(offset: number): string | null {
   return describeIntRangeViolation('offset', offset, { min: 0 });
 }
 
+// task を1件読み、見つかった / 無い / 読めないの3通りにする（task_list の全文読みと task_set_status の開き直しで使う）。
 // `UnreadableTaskError` だけを3値目として返す: 器の障害まで飲み込むと「壊れている」に化けて見えなくなるため
-async function readTaskForFullText(
+async function readTaskLookup(
   tasks: TaskListStores['tasks'],
   id: string,
 ): Promise<TaskReadOutcome> {
@@ -1166,7 +1167,8 @@ async function journalReopenFirst(
   return read;
 }
 
-// `setStatus` だけを包む。`UnreadableTaskError` のときだけ（先に書いた行があれば）打ち消して null を返す
+// `setStatus` だけを包む。先に開き直しの行を書いた回は、どんな例外でも打ち消してから返す / 投げ直す（#6424）。
+// `UnreadableTaskError` は null（読めない）にし、ほかは投げ直す
 async function runTaskSetStatus(
   stores: TaskSetStatusStores,
   taskId: string,
@@ -1182,28 +1184,31 @@ async function runTaskSetStatus(
       at: new Date().toISOString(),
     });
   } catch (error) {
-    if (error instanceof UnreadableTaskError) {
-      if (journaledFirst !== undefined) {
-        await retractTaskReopenEntry(
-          stores.journal,
-          taskId,
-          '開き直す直前に行が読めない形になった',
-        );
-      }
-      return null;
+    const unreadable = error instanceof UnreadableTaskError;
+    // 読めない以外の例外でも打ち消す: 投げ直すだけだと、行は閉じたままなのに「開き直した」の日誌だけが残るため
+    if (journaledFirst !== undefined) {
+      await retractTaskReopenEntry(
+        stores.journal,
+        taskId,
+        unreadable
+          ? '開き直す直前に行が読めない形になった'
+          : `開き直す途中で行の書き換えが例外で終わった（${collapseErrorCause(error)}）`,
+      );
     }
+    if (unreadable) return null;
     throw error;
   }
   return result;
 }
 
-// 先に書いた開き直しの行の後始末: 変わらなかったなら打ち消し、閉じ直されていたなら注を残す
+// 先に書いた開き直しの行の後始末: 変わらなかったなら打ち消し、閉じ直されていたなら注を残す。
+// 別の手が先に開き直していた（この呼びは閉じた記録を外していない）なら打ち消して 'retracted' を返す
 async function settleReopenJournal(
   stores: TaskSetStatusStores,
   taskId: string,
   journaledFirst: Task,
   result: TaskSetStatusResult,
-): Promise<void> {
+): Promise<'kept' | 'retracted'> {
   if (result.kind !== 'changed') {
     // 先に書いた行を打ち消す: 日誌に「開き直した」だけが残ると事実と食い違う
     await retractTaskReopenEntry(
@@ -1213,7 +1218,19 @@ async function settleReopenJournal(
         ? '開き直す直前に task が消えていた'
         : '開き直す直前に別の手で状態が変わっていた',
     );
-  } else if (result.before.closedAt !== journaledFirst.closedAt) {
+    return 'retracted';
+  }
+  if (result.before.closedAt === undefined) {
+    // 別の手が先に開き直して動かしていた: この呼びが移したのは開いている状態どうしで、閉じた記録は外していない（#6424）
+    await retractTaskReopenEntry(
+      stores.journal,
+      taskId,
+      `開き直す直前に別の手が先に開き直していた（この呼びは ${result.before.status} から移しただけで、閉じた記録は外していない）`,
+    );
+    return 'retracted';
+  }
+  // 時刻だけで比べない: 別の手が同じ時刻に別の主体・理由で閉じ直すと、実際に外した記録が日誌に残らないため（#6424）
+  if (describeTaskClosedRecord(result.before) !== describeTaskClosedRecord(journaledFirst)) {
     // 行から実際に外れた記録が日誌に無い状態を作らない
     await appendJournalOrDrop('task_set_status', stores.journal, {
       type: 'decision',
@@ -1222,6 +1239,7 @@ async function settleReopenJournal(
       grounds: `先の行の記録: ${describeTaskClosedRecord(journaledFirst)}`,
     });
   }
+  return 'kept';
 }
 
 // 開き直しの先の日誌 → setStatus → 打ち消し / 注、の流れ
@@ -1233,7 +1251,7 @@ async function moveTaskStatus(
 ): Promise<TaskSetStatusOutcome> {
   let journaledFirst: Task | undefined;
   if (status === 'queued') {
-    const read = await readTaskForFullText(stores.tasks, taskId);
+    const read = await readTaskLookup(stores.tasks, taskId);
     if (read.kind === 'unreadable') return { kind: 'unreadable' };
     journaledFirst = await journalReopenFirst(
       stores,
@@ -1246,7 +1264,9 @@ async function moveTaskStatus(
   const result = await runTaskSetStatus(stores, taskId, status, reason, journaledFirst);
   if (result === null) return { kind: 'unreadable' };
   if (journaledFirst !== undefined) {
-    await settleReopenJournal(stores, taskId, journaledFirst, result);
+    const settled = await settleReopenJournal(stores, taskId, journaledFirst, result);
+    // 打ち消した回は「開き直しの行を先に書いた」ことにしない: 移せていれば、ふつうの移動の行を書くため
+    if (settled === 'retracted') journaledFirst = undefined;
   }
   return { kind: 'moved', result, journaledFirst };
 }
@@ -1311,7 +1331,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
         const offsetError = describeTaskListViolation(offset);
         if (offsetError !== null) return text(offsetError);
         if (id !== undefined) {
-          const read = await readTaskForFullText(stores.tasks, id);
+          const read = await readTaskLookup(stores.tasks, id);
           if (read.kind === 'unreadable') return text(renderTaskListUnreadableOne(id));
           if (read.kind === 'missing') return text(renderTaskListMissing(id));
           return text(renderTaskFull(id, read.task, offset));
@@ -1516,7 +1536,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
       'task_set_status',
       [
         'task の状態を変える。queued / waiting / needs_decision（開いている3つ）は互いに行き来できる。',
-        'done / cancelled（閉じる）へはどの状態からも行ける。**閉じるときは reason が要る**（何をもって終わりとしたか、なぜ取りやめたか。人間が読んで後から否定する）。',
+        '開いている件からは done / cancelled（閉じる）へ行ける（閉じた件どうし、done と cancelled の間は移せない）。**閉じるときは reason が要る**（何をもって終わりとしたか、なぜ取りやめたか。人間が読んで後から否定する）。',
         '閉じた件から戻せるのは queued だけ（開き直し。閉じた記録は行から外れ、日誌へ逐語で残る）。同じ状態への変更は何もしない。',
       ].join(' '),
       {

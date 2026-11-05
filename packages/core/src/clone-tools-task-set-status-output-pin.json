@@ -3022,6 +3022,17 @@
             "kind": "task",
             "id": "d-2"
           }
+        },
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す途中で行の書き換えが例外で終わった（Error: ストアが落ちた（setStatus））",
+          "grounds": "d-2 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す",
+          "target": {
+            "kind": "task",
+            "id": "d-2"
+          }
         }
       ],
       "calls": [
@@ -3057,6 +3068,19 @@
             }
           },
           "outcome": "threw Error: ストアが落ちた（setStatus）"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-2"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す途中で行の書き換えが例外で終わった（Error: ストアが落ちた（setStatus））",
+            "grounds": "d-2 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "ok id-4"
         }
       ]
     },
@@ -3975,80 +3999,12 @@
             "kind": "task",
             "id": "d-1"
           }
-        }
-      ],
-      "calls": [
-        {
-          "op": "tasks.get",
-          "args": {
-            "id": "d-1"
-          },
-          "outcome": "found done"
-        },
-        {
-          "op": "journal.append",
-          "args": {
-            "type": "decision",
-            "target": {
-              "kind": "task",
-              "id": "d-1"
-            },
-            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
-            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
-          },
-          "outcome": "ok id-1"
-        },
-        {
-          "op": "tasks.setStatus",
-          "args": {
-            "id": "d-1",
-            "status": "queued",
-            "options": {
-              "reason": "やり直す",
-              "by": "clone",
-              "at": "2026-10-29T00:01:00.000Z"
-            }
-          },
-          "outcome": "changed"
-        }
-      ]
-    },
-    "reopen-other-moved": {
-      "output": {
-        "length": 34,
-        "text": "task d-1 を waiting から queued へ移した。",
-        "isError": false,
-        "thrown": false
-      },
-      "wrote": true,
-      "tasks": [
-        {
-          "id": "d-1",
-          "createdAt": "2026-10-01T00:01:00.000Z",
-          "updatedAt": "2026-10-29T00:01:00.000Z",
-          "status": "queued",
-          "origin": "external",
-          "title": "仕事 d-1",
-          "body": "本文 d-1"
-        }
-      ],
-      "journal": [
-        {
-          "type": "decision",
-          "id": "id-1",
-          "at": "2026-10-29T00:01:00.000Z",
-          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
-          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
-          "target": {
-            "kind": "task",
-            "id": "d-1"
-          }
         },
         {
           "type": "decision",
           "id": "id-2",
           "at": "2026-10-29T00:01:00.000Z",
-          "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: （閉じた記録なし）",
+          "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=別の手が閉じ直した",
           "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
           "target": {
             "kind": "task",
@@ -4098,10 +4054,126 @@
               "kind": "task",
               "id": "d-1"
             },
-            "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: （閉じた記録なし）",
+            "decision": "開き直し（d-1）の間に閉じ直されていた。実際に行から外した記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=別の手が閉じ直した",
             "grounds": "先の行の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
           },
           "outcome": "ok id-2"
+        }
+      ]
+    },
+    "reopen-other-moved": {
+      "output": {
+        "length": 34,
+        "text": "task d-1 を waiting から queued へ移した。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "d-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d-1",
+          "body": "本文 d-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+          "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に別の手が先に開き直していた（この呼びは waiting から移しただけで、閉じた記録は外していない）",
+          "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d-1）: waiting → queued（やり直す）",
+          "grounds": "自分で task_set_status した",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "calls": [
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d-1"
+          },
+          "outcome": "found done"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: done → queued（やり直す）",
+            "grounds": "自分で task_set_status した。開き直す前の記録: 閉じた時刻=2026-10-03T00:00:00.000Z / 閉じた主体=human / 理由=先に閉じた"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d-1",
+            "status": "queued",
+            "options": {
+              "reason": "やり直す",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "直前の task の開き直しの行は効いていない（開き直していない）。理由: 開き直す直前に別の手が先に開き直していた（この呼びは waiting から移しただけで、閉じた記録は外していない）",
+            "grounds": "d-1 の開き直し。日誌を先に書いたが、開き直しが実行されなかったため打ち消す"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の状態を変えた（d-1）: waiting → queued（やり直す）",
+            "grounds": "自分で task_set_status した"
+          },
+          "outcome": "ok id-3"
         }
       ]
     },
