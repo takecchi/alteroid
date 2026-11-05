@@ -16,9 +16,6 @@ import { createMemoryStores } from './testing.js';
 /** 全文にだけ在る説明の文（畳まれる側）。 */
 const INSTRUCTION_HEAD = '記憶にある目的と価値観に照らして、何をするか決めよ';
 const INSTRUCTION_TAIL = '判断の根拠が記憶に無く、しかも放っておけないことなら';
-/** 短い形にも残す要点。 */
-const KEEP_ASK_HUMAN = '`ask_human`';
-const KEEP_JOURNAL_WRITE = '`journal_write`';
 
 interface SdkScript {
   contextTotals?: readonly number[];
@@ -134,44 +131,7 @@ function instructionOf(input: string): string {
   return rest.slice(0, end < 0 ? undefined : end).trim();
 }
 
-const compactBoundary = {
-  type: 'system',
-  subtype: 'compact_boundary',
-  compact_metadata: { trigger: 'auto', pre_tokens: 100_000 },
-  session_id: 'sess-fake',
-  uuid: 'uuid-compact',
-} as unknown as SDKMessage;
-
 describe('外部イベントの2行の指示は、同じ会話の2回目から短い形になる（#5301）', () => {
-  it('⭐ 初回は全文。2回目以降は字数が減り、ask_human / journal_write の要点は残る。枠付けの安全の文は毎回出る', async () => {
-    const s = boot();
-    const firstInput = await deliver(s, externalEvent(1));
-    const secondInput = await deliver(s, externalEvent(2));
-    const thirdInput = await deliver(s, externalEvent(3));
-    const first = instructionOf(firstInput);
-
-    // (d) 初回は全文
-    expect(first).toContain(INSTRUCTION_HEAD);
-    expect(first).toContain(INSTRUCTION_TAIL);
-
-    for (const input of [secondInput, thirdInput]) {
-      const text = instructionOf(input);
-      // (a) 字数が減る
-      expect(text).not.toContain(INSTRUCTION_HEAD);
-      expect(text).not.toContain(INSTRUCTION_TAIL);
-      expect(text.length).toBeLessThan(first.length * 0.7);
-      // (b) 要点は短い形にも残る
-      expect(text).toContain(KEEP_ASK_HUMAN);
-      expect(text).toContain(KEEP_JOURNAL_WRITE);
-      // 安全の文は毎回出る
-      expect(input).toContain(EXTERNAL_EVENT_FRAMING);
-    }
-    process.stderr.write(
-      `[#5301 測定] 外部イベントの2行の指示 1回目 ${String(first.length)} 字 → 2回目 ${String(instructionOf(secondInput).length)} 字\n`,
-    );
-    await s.clone.stop();
-  });
-
   it('⭐ 畳みが切り（既定）なら、単発も束ねた入力も、2回目以降も2行の指示が全文のまま', async () => {
     const s = boot({ env: {} });
     const inputs = [
@@ -203,93 +163,5 @@ describe('外部イベントの2行の指示は、同じ会話の2回目から�
     expect(plain).toContain(INSTRUCTION_HEAD);
     expect(plain).toContain(INSTRUCTION_TAIL);
     expect(plain).toContain(EXTERNAL_EVENT_FRAMING);
-  });
-
-  it('⭐ 束ねた入力（まとめて渡す）も、2回目以降は短い形。枠付けは毎回出る。単発で出した全文と控えを共有する', async () => {
-    const s = boot();
-    const first = await deliver(s, externalEvent(1));
-    expect(first).toContain(INSTRUCTION_HEAD);
-
-    const before = s.inputs.length;
-    s.clone.post(externalEvent(2) as never);
-    s.clone.post(externalEvent(2) as never);
-    await waitFor(() => s.inputs.length > before, '束の入力');
-    const merged = s.inputs[before] ?? '';
-    expect(merged, '同じ tick に積んだ2件は束の入力になる').toContain('まとめて渡す');
-    expect(merged).not.toContain(INSTRUCTION_HEAD);
-    expect(merged).toContain(KEEP_ASK_HUMAN);
-    expect(merged).toContain(KEEP_JOURNAL_WRITE);
-    expect(merged).toContain(EXTERNAL_EVENT_FRAMING);
-    await s.clone.stop();
-  });
-
-  it('⭐ 他の控えの全文表示に影響されない: 担当の報告の応じ方を先に全文で出しても、外部イベントの初回は全文', async () => {
-    const s = boot();
-    await deliver(s, {
-      type: 'manager_message',
-      id: 'evt-report-1',
-      at: new Date().toISOString(),
-      managerId: 'mgr-x',
-      kind: 'report',
-      text: '報告',
-    });
-    const first = instructionOf(await deliver(s, externalEvent(1)));
-    expect(first).toContain(INSTRUCTION_HEAD);
-    const second = instructionOf(await deliver(s, externalEvent(2)));
-    expect(second).not.toContain(INSTRUCTION_HEAD);
-    await s.clone.stop();
-  });
-
-  it('⭐ 自動の要約が走った（compact_boundary）あとの入力は全文へ戻る', async () => {
-    const s = boot({ after: (n) => (n === 2 ? [compactBoundary] : []) });
-    await deliver(s, externalEvent(1));
-    const second = instructionOf(await deliver(s, externalEvent(2)));
-    const third = instructionOf(await deliver(s, externalEvent(3)));
-    expect(second).not.toContain(INSTRUCTION_HEAD);
-    expect(third).toContain(INSTRUCTION_HEAD);
-    await s.clone.stop();
-  });
-
-  it('⭐ 自動の要約が走りうる入力（前の量に伸びを足すと閾値に届く）は全文を出す', async () => {
-    const s = boot({ contextTotals: [150_000, 180_000, 185_000] });
-    await deliver(s, externalEvent(1));
-    const second = instructionOf(await deliver(s, externalEvent(2)));
-    const third = instructionOf(await deliver(s, externalEvent(3)));
-    expect(second).not.toContain(INSTRUCTION_HEAD);
-    expect(third).toContain(INSTRUCTION_HEAD);
-    await s.clone.stop();
-  });
-
-  it('⭐ 会話が変わった（init の session_id が変わった）あとの入力は全文へ戻る', async () => {
-    const changedSession = {
-      type: 'system',
-      subtype: 'init',
-      session_id: 'sess-other',
-      uuid: 'uuid-init-2',
-    } as unknown as SDKMessage;
-    const s = boot({ after: (n) => (n === 2 ? [changedSession] : []) });
-    await deliver(s, externalEvent(1));
-    const second = instructionOf(await deliver(s, externalEvent(2)));
-    const third = instructionOf(await deliver(s, externalEvent(3)));
-    expect(second).not.toContain(INSTRUCTION_HEAD);
-    expect(third).toContain(INSTRUCTION_HEAD);
-    await s.clone.stop();
-  });
-
-  it('⭐ 使用量の観測が取れない入力は全文', async () => {
-    const s = boot({ noUsage: true });
-    await deliver(s, externalEvent(1));
-    const second = instructionOf(await deliver(s, externalEvent(2)));
-    expect(second).toContain(INSTRUCTION_HEAD);
-    await s.clone.stop();
-  });
-
-  it('⭐ 失敗したターンの次の入力は全文。成功したターンの次は短い形のまま', async () => {
-    const s = boot({ failResultAt: 2 });
-    await deliver(s, externalEvent(1));
-    expect(instructionOf(await deliver(s, externalEvent(2)))).not.toContain(INSTRUCTION_HEAD);
-    expect(instructionOf(await deliver(s, externalEvent(3)))).toContain(INSTRUCTION_HEAD);
-    expect(instructionOf(await deliver(s, externalEvent(4)))).not.toContain(INSTRUCTION_HEAD);
-    await s.clone.stop();
   });
 });

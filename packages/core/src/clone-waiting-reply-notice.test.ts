@@ -2,7 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { createClone } from './clone.js';
-import { TOKEN_SAVING_ENABLED_ENV, waitFor } from './clone-test-harness.js';
+import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
@@ -232,20 +232,21 @@ describe('人間の返事が来た会話の返事待ち（waiting）の task を
     await s.clone.stop();
   });
 
-  it('固定の案内文は、同じ会話の2回目から短い参照に畳む（畳みを有効にした環境）', async () => {
+  it('固定の案内文は、同じ会話の2回目も全文のまま', async () => {
     const stores = createMemoryStores();
     await stores.tasks.add(waitingTask('w1'));
-    const s = boot(stores, TOKEN_SAVING_ENABLED_ENV);
+    const s = boot(stores);
     const first = await turn(s, human('evt-e1', '1回目'));
     const second = await turn(s, human('evt-e2', '2回目'));
     const lineOf = (input: string): string =>
       noticeLines(input).find((entry) => entry.includes(WAITING_MARK))!;
-    expect(lineOf(first)).toContain(
-      '返事が来たなら `task_set_status` で閉じるか queued に戻すこと',
-    );
-    expect(lineOf(second)).toContain('（返事待ちの扱いは会話の上と同じ）');
-    expect(lineOf(second)).not.toContain('器は状態を変えない');
-    expect(lineOf(second)).toContain('`w1`');
+    for (const input of [first, second]) {
+      expect(lineOf(input)).toContain(
+        '返事が来たなら `task_set_status` で閉じるか queued に戻すこと',
+      );
+      expect(lineOf(input)).not.toContain('（返事待ちの扱いは会話の上と同じ）');
+      expect(lineOf(input)).toContain('`w1`');
+    }
     await s.clone.stop();
   });
 });

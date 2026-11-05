@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildActivityDigest, DIGEST_COUNTS_LINE_HEAD, foldDigestCountsLine } from './digest.js';
-import { DigestSessionDelta } from './digest-session-delta.js';
+import { buildActivityDigest, DIGEST_COUNTS_LINE_HEAD } from './digest.js';
 import { SELF_INITIATIVE_INSTRUCTIONS } from './prompt.js';
 import type { Task } from './schema.js';
 import type { Stores, TaskList } from './store.js';
@@ -284,20 +283,12 @@ describe('counts 形（定期の依頼の tick・日報以外の件数の形）�
   });
 });
 
-// 件数の行は位置（`countItem(0..9)`）と表（`COUNT_ITEMS`）で対応する。台帳の4項目（10〜13）を消すとき、表と行の組み立てのどちらかだけを直すと、
-// `foldDigestCountsLine` が「項目数が違う」と判定して null を返し、2回目以降の畳みが静かに効かなくなる（落ちずに全文のまま出る）。それを測る
-describe('件数の行の位置の対応（#4937 の畳みが項目を消しても壊れない）', () => {
+// 件数の行は位置（`countItem(0..9)`）と表（`COUNT_ITEMS`）で対応する。台帳の4項目（10〜13）を消すとき、表と行の組み立てのどちらかだけを直すと項目の数や並びがずれる。それを測る
+describe('件数の行の位置の対応', () => {
   const countsLineOf = (digest: string): string =>
     digest.split('\n').find((line) => line.startsWith(DIGEST_COUNTS_LINE_HEAD)) ?? '';
 
-  it('⭐ buildActivityDigest が組んだ件数の行は、foldDigestCountsLine が畳める（表と行の項目数・並びが合っている）', async () => {
-    const digest = await buildActivityDigest(createMemoryStores(), { since: since() });
-    const line = countsLineOf(digest);
-    expect(line.split(' / ')).toHaveLength(10);
-    expect(foldDigestCountsLine(line)).toBe('- 件数: すべて 0（項目は会話の上の件数の行と同じ）');
-  });
-
-  it('⭐ 0 でない項目は、位置がずれずに正しい項目名で残る（継続中の依頼は末尾の項目）', async () => {
+  it('⭐ buildActivityDigest が組んだ件数の行は10項目で、継続中の依頼は末尾の項目', async () => {
     const stores = createMemoryStores();
     await stores.schedules.put({
       kind: 'k',
@@ -307,31 +298,10 @@ describe('件数の行の位置の対応（#4937 の畳みが項目を消して�
       updatedAt: '2026-01-01T00:00:00.000Z',
     });
     await stores.jobs.putApproval({ id: 'ap', createdAt: new Date().toISOString(), question: 'q' });
-    const line = countsLineOf(await buildActivityDigest(stores, { since: since() }));
-    expect(foldDigestCountsLine(line)).toBe(
-      '- 件数（項目は会話の上の件数の行と同じ。載せていない項目は 0）: 回答待ち 1 / 継続中の依頼 1',
-    );
-  });
-
-  it('⭐ 同じ会話の2回目の digest は、件数の行が項目名の参照になり、待ち行列の先頭は毎回全文のまま', async () => {
-    const stores = createMemoryStores();
-    await seedTasks(stores, [makeTask('t1'), makeTask('t2')]);
-    const delta = new DigestSessionDelta();
-
-    const first = await buildActivityDigest(stores, { since: since() });
-    expect(delta.renderDigest(first, new Date()).text).toContain(countsLineOf(first));
-    delta.commit();
-
-    await stores.tasks.move('t2', { kind: 'front' });
-    const second = await buildActivityDigest(stores, { since: since() });
-    const rendered = delta.renderDigest(second, new Date()).text;
-
-    expect(rendered).toContain('- 件数: すべて 0（項目は会話の上の件数の行と同じ）');
-    expect(rendered).not.toContain(countsLineOf(second));
-    // 先頭が入れ替わったことが、畳まれずに出る
-    const rows = rendered.split('\n').filter((line) => /^- t\d（/u.test(line));
-    expect(rows.map((line) => line.slice(0, 5))).toEqual(['- t2（', '- t1（']);
-    expect(rendered).not.toMatch(/変わらない節: .*待ち行列/u);
+    const parts = countsLineOf(await buildActivityDigest(stores, { since: since() })).split(' / ');
+    expect(parts).toHaveLength(10);
+    expect(parts[1]).toBe('回答待ち 1');
+    expect(parts[9]).toBe('継続中の依頼 1');
   });
 
   it('台帳の4項目の消し忘れを、表の側から測る: 件数の行の項目名に台帳の語が無い', async () => {

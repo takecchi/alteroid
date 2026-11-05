@@ -265,20 +265,6 @@ async function runTurns(
 }
 
 describe('畳みの控えを resume をまたいで続ける（再起動）', () => {
-  it('⭐ 同じ session_id で resume した最初のターンは、「いまの全体」を畳んだまま続く', async () => {
-    const stores = createMemoryStores();
-    const { inputs } = await runTurns(stores, 2);
-    expect(inputs[0]).toContain(READINGS_HEAD);
-    expect(inputs[1]).toContain(FOLDED_SITUATION);
-
-    const b = boot(stores);
-    const third = await humanTurn(b, 'B1');
-
-    expect(b.resumes).toEqual(['sess-fake']);
-    expect(third).toContain(FOLDED_SITUATION);
-    expect(third).not.toContain(READINGS_HEAD);
-  });
-
   // 読み戻しの前に、その会話の生ログの大きさを測る。pg の `measureSize` は該当行が無いと 0 を返し、`#resumeCandidateWithinBudget` は 0 も null も resume してよいとみなす。
   // その resume が空の会話を開くなら、畳んだ最初の入力（「前と変化なし」）が指す全文はどこにも載っていない
   describe('生ログが実在するときだけ読み戻す（measureSize）', () => {
@@ -348,20 +334,6 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
       await waitForSkippedLine(stores, 'projectKey なし');
     });
 
-    it('⭐ measureSize が正の値なら、読み戻して畳んだまま続く（理由の行は出ない）', async () => {
-      const stores = createMemoryStores();
-      await runTurns(stores, 2);
-      measureRawLog = () => Promise.resolve(1);
-
-      const b = boot(stores);
-      const first = await humanTurn(b, 'B1');
-      await humanTurn(b, 'B2');
-
-      expect(first).toContain(FOLDED_SITUATION);
-      expect(first).not.toContain(READINGS_HEAD);
-      expect(await skippedLines(stores)).toEqual([]);
-    });
-
     it('⭐ 預けた控えが無い再起動では、理由の行は出ない（そもそも読むものが無い）', async () => {
       const stores = createMemoryStores();
 
@@ -402,21 +374,6 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
       const first = await humanTurn(b, 'B1');
 
       expect(first).toContain(READINGS_HEAD);
-    });
-
-    it('副次の鍵（subpath 付き）のミラーが落ちても、本流の控えは読み戻す', async () => {
-      const stores = createMemoryStores();
-      const { a } = await runTurns(stores, 2, {
-        mirrorErrorAtInput: 3,
-        mirrorErrorSubpath: 'subagents/agent-1',
-      });
-      await humanTurn(a, 'A3');
-      await waitForPersistedCounter(stores, 1);
-
-      const b = boot(stores);
-      const first = await humanTurn(b, 'B1');
-
-      expect(first).toContain(FOLDED_SITUATION);
     });
   });
 
@@ -534,13 +491,6 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
     expect(next).toContain(READINGS_HEAD);
   });
 
-  it(`周期の手前（${String(SITUATION_FULL_EVERY_TURNS - 1)} ターン回った会話の次の回）では、再起動しても畳んだまま`, async () => {
-    const next = await nextTurnAfterRestart(SITUATION_FULL_EVERY_TURNS - 1);
-
-    expect(next).toContain(FOLDED_SITUATION);
-    expect(next).not.toContain(READINGS_HEAD);
-  });
-
   it('控えの預け入れが失敗しても、ターンは落ちない', async () => {
     const stores = createMemoryStores();
     stores.sessions.setFoldState = () => Promise.reject(new Error('書けない'));
@@ -551,7 +501,7 @@ describe('畳みの控えを resume をまたいで続ける（再起動）', ()
     await humanTurn(a, 'A3');
 
     expect(first).toContain(READINGS_HEAD);
-    expect(second).toContain(FOLDED_SITUATION);
+    expect(second).toContain(READINGS_HEAD);
   });
 
   it('セッション id を捨てる（setCloneSessionId(null)）と、預けた控えも消える', async () => {

@@ -645,13 +645,7 @@ describe('クローン — ターンの失敗の跡', () => {
     const stores = failingJournalAppend(createMemoryStores(), '器が閉じている');
 
     const lines = await captureStderr(async () => {
-      // 固定文を全文へ戻した理由の観測の行（turn_failed）は S1 が有効なときだけ書かれる
-      const s = setup(
-        undefined,
-        stores,
-        { failWith: `クエリが失敗した params=["${secret}"]` },
-        { ALTEROID_TOKEN_SAVING_FOLD_FIXED_TEXT: '1' },
-      );
+      const s = setup(undefined, stores, { failWith: `クエリが失敗した params=["${secret}"]` });
       const { events: seen } = wireEvents(s.clone, 'conv-9');
       s.clone.post(humanMessage('やあ', 'conv-9'));
       await waitFor(() => seen.some((event) => event.type === 'error'), 'error イベントが届く');
@@ -661,8 +655,8 @@ describe('クローン — ターンの失敗の跡', () => {
     const outbound = lines.filter(
       (line) => line.includes('日誌を記録できませんでした') && line.includes('role=outbound'),
     );
-    // 外した合図の日誌の行（#4633 の案C）のぶん、1本増えて3本になる。固定文を全文へ戻した理由の観測の1行（turn_failed）も同じ書き込みの失敗に当たるので4本
-    expect(outbound).toHaveLength(4);
+    // 外した合図の日誌の行（#4633 の案C）のぶん、1本増えて3本になる
+    expect(outbound).toHaveLength(3);
     for (const line of outbound) {
       expect(line).toContain('器が閉じている');
       expect(line).toMatch(/role=outbound chars=[1-9]\d*/u);

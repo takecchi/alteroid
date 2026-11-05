@@ -24,39 +24,19 @@ import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
 const SITUATION_HEAD = '[system] いまの全体';
 
 /**
- * 同じ会話で全文を一度出した説明文の控え（鍵 → 出した本文）。
- * 本文が1バイトでも違えば全文を出し直す。同じなら要点の1文だけを残して畳む: 毎ターン同じ説明が約5千字ずつ会話に積もり、文脈を食うため（2026-10-11、#4476）。
- * 数の行は畳まない。控えを空にするのは呼び手（会話の始まり・文脈の要約・一定ターンごと）: 会話の中に全文が1つも残っていない状態で参照だけを出さないため。
+ * 預けた畳みの控え（fold-state）の situation 側の型（鍵 → 出した本文）。situation と待ち行列の先頭の畳みは撤去済みで、
+ * 説明文の組み立ては読み書きしない。控えの保存（clone.ts の `#captureFold`・読み戻し）を次の撤去まで変えないために型だけ残してある。
  */
 export type SituationExplained = Map<
-  SituationExplanationKey | typeof MATERIALS_KEY | typeof TASK_QUEUE_HEAD_KEY,
+  SituationExplanationKey | 'materials' | typeof TASK_QUEUE_HEAD_KEY,
   string
 >;
 
-// 断り書きの待ち行列の先頭を前回出した形のまま控える鍵。`describeSituation` は読み書きしない（断り書き側 `#taskQueueNotice` が使う）。
-// 同じ控えに同居させる理由は `MATERIALS_KEY` と同じ: 空にする条件・入力が SDK へ入った後にだけ確定する仕組みを、別の控えを作らず使うため
+// 預けた控えの鍵（以前は断り書きの待ち行列の先頭を前回出した形のまま控えていた）。clone.ts が待ち行列を読めなかった回に消す。
 export const TASK_QUEUE_HEAD_KEY = 'taskQueueHead';
 
 type SituationExplanationKey =
   'lost' | 'lastFailure' | 'usageStopped' | 'runnerVanished' | 'readings' | 'tokenInvariant';
-
-// 材料の行（委譲・器・受信箱・鍵）を前回出した形のまま控える鍵（#5295）。説明文ではないので `SituationExplanationKey`（要点の表を持つ型）には混ぜず、同じ控えに同居させる:
-// 空にする条件・入力が SDK へ入った後にだけ確定する仕組み（#4484）を、別の控えを作らず丸ごと使うため
-const MATERIALS_KEY = 'materials';
-
-// 要点は畳んでも残す: 注意書きの趣旨（読み替えを防ぐ）は、参照だけでは毎ターンの判断に効かないため
-const EXPLANATION_GIST: Record<SituationExplanationKey, string> = {
-  lost: '**lost は「終わった」ではない**（成果を確かめるまで終われない）。',
-  lastFailure: '**失敗で終わった委譲も「手が空いている」に座る。**',
-  usageStopped: '**枠で止まった委譲も「手が空いている」に座る。**',
-  runnerVanished:
-    '**宛先の runner が消えた委譲は lost の絞りでは見えず、「走行中」の内側に座る。**',
-  readings:
-    '**「手が空いている」は空き枠でも「終わった」でも「枠が空いた」でもない。' +
-    '「走行中」は「進んでいる」ではない。**',
-  tokenInvariant:
-    '**⚠️ 枠を理由に仕事を見送らないこと**（書けているなら枠は全面的には閉じていない）。',
-};
 
 // 数えた時刻を名乗る: 節は会話履歴に溜まり、数が変わらなければ古い節と新しい節が1バイトも違わず、どれが最新か判定できないため。
 // 秒までしか出さず日付を出さない: 毎ターンの文字数を増やさないことを優先したため。
@@ -249,16 +229,13 @@ export function describeTokenSituation(input: {
   readonly tokens: readonly TokenSituationRow[] | undefined;
   readonly active: { readonly tokenId: string } | null | undefined;
   readonly at: number;
-  /** `false` は呼び手が不変条件を要点に畳んだ回だけ（`describeSituation` の `explained`）。 */
-  readonly withInvariant?: boolean;
 }): string {
-  const invariant = input.withInvariant === false ? '' : TOKEN_INVARIANT;
   // 読めなかったことを 0 や「無し」で埋めない。それでも不変条件の行は落とさない: プールの状態に依存しないので、読めなくても真のため。
   // tokens と active を1つの「プールを読めなかった」に潰さない: tokens が読めていた回にも「読めなかった」という嘘が出るため
   if (input.tokens === undefined) {
     return (
       '認証トークン: **プールを読めなかった**（塞がっているかどうかは、ここからは言えない）。' +
-      invariant
+      TOKEN_INVARIANT
     );
   }
 
@@ -314,7 +291,7 @@ export function describeTokenSituation(input: {
     ' ' +
     String(invalidated.length) +
     '。' +
-    invariant
+    TOKEN_INVARIANT
   );
 }
 
@@ -430,19 +407,7 @@ export function describeSituation(input: {
     | 'unreadable'
     | undefined;
   readonly queuedInMemory?: number | undefined;
-  /** 渡せば、控えと同じ本文の説明文を要点に畳み、全文を出した分を控えへ書き足す。渡さなければ毎回全文（`SituationExplained` の doc）。 */
-  readonly explained?: SituationExplained;
 }): string {
-  const folded: SituationExplanationKey[] = [];
-  // 控えと同じなら畳み、違えば全文を出して控えを書き換える
-  const explain = (key: SituationExplanationKey, text: string): string[] => {
-    if (input.explained?.get(key) === text) {
-      folded.push(key);
-      return [];
-    }
-    input.explained?.set(key, text);
-    return [text];
-  };
   const counts = countManagerSituation(input.managers);
   const byState = countRunnerStates(input.runners);
   const runnerBreakdown = [...byState.entries()]
@@ -483,62 +448,24 @@ export function describeSituation(input: {
     // 0 本でも出す: 0 が合図で、閾値も ⚠ も持たないため
     `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に起こした ${recentStarts} 本${startClause}。`;
   const runnerLine = `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`;
-  // 鍵の行は不変条件を除いて比べる: 不変条件は固定の説明文で、畳むかどうかは `tokenInvariant` の控えが決めるため
-  const tokenMaterialLine = showTokens
-    ? describeTokenSituation({
-        tokens: input.tokens,
-        active: input.active,
-        at,
-        withInvariant: false,
-      })
+  const tokenLine = showTokens
+    ? describeTokenSituation({ tokens: input.tokens, active: input.active, at })
     : null;
-  // 材料の行（見出しの時刻・説明文・要点を除く）が前回出した形と1文字も違わなければ、全体を1行にする（#5295）。
-  // 比べるのは数を含む行の文字列そのもの（数が変わった行を落とさない）。最後の起動の時刻は経過の代わりに入れる: 経過は動くが起動そのものが変わったかは見たいため。
-  // 控えへの書き込みは `explain` と同じ写しへ行い、確定は呼び手（入力を SDK へ入れた後）。同じなら何も書かない: 全文は会話に在るため
-  const materials = [
-    delegationLineWith(`@${String(latestStart)}`),
-    runnerLine,
-    inboxBacklogLine,
-    inboxQueuedLine,
-    tokenMaterialLine,
-  ]
-    .filter((line) => line !== null)
-    .join('\n');
-  if (input.explained?.get(MATERIALS_KEY) === materials) {
-    return sectionBlock([
-      `${SITUATION_HEAD}: 前のターンと変化なし（${readAtLabel(at)} に数え直した）。`,
-    ]);
-  }
-  input.explained?.set(MATERIALS_KEY, materials);
-  // 鍵の行の不変条件も同じ控えで畳む: 鍵の行そのもの（数）は毎回出す
-  const tokenInvariantShown = showTokens && explain('tokenInvariant', TOKEN_INVARIANT).length > 0;
-  const lines = [
+  return sectionBlock([
     `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。何をするかは決めない）。`,
     delegationLineWith(lastStartClause),
     // 断りは本数の直後に並べる: 数と、そこから何を確かめるかを離すと数だけが読まれるため。0 のときは1文字も出さない
-    ...(counts.lost === 0 ? [] : explain('lost', LOST_NOTICE)),
-    ...(counts.lastTurnFailed === 0 ? [] : explain('lastFailure', LAST_FAILURE_NOTICE)),
-    ...(counts.usageStopped === 0 ? [] : explain('usageStopped', USAGE_STOPPED_NOTICE)),
-    ...(counts.runnerVanished === 0 ? [] : explain('runnerVanished', RUNNER_VANISHED_NOTICE)),
+    ...(counts.lost === 0 ? [] : [LOST_NOTICE]),
+    ...(counts.lastTurnFailed === 0 ? [] : [LAST_FAILURE_NOTICE]),
+    ...(counts.usageStopped === 0 ? [] : [USAGE_STOPPED_NOTICE]),
+    ...(counts.runnerVanished === 0 ? [] : [RUNNER_VANISHED_NOTICE]),
     runnerLine,
-    ...explain('readings', READINGS_NOTICE),
-  ];
-  // 畳んだ説明文は要点だけを1行にまとめ、元の場所（器の行の直後）に置く: 参照だけでは毎ターンの判断に効かないため
-  if (folded.length > 0) {
-    lines.push(
-      `（読み方の注意書きは会話に出した全文と同じなので要点だけにした: ` +
-        `${folded.map((key) => EXPLANATION_GIST[key]).join(' ')}）`,
-    );
-  }
-  return sectionBlock([
-    ...lines,
+    READINGS_NOTICE,
     ...(inboxBacklogLine === null ? [] : [inboxBacklogLine]),
     // メモリの配達待ち行列は器の行数の直後に置く: 離すと器の行数の1行だけが「受信箱の全部」に見えるため
     ...(inboxQueuedLine === null ? [] : [inboxQueuedLine]),
     // 鍵の行は最後に置く: 数えた材料の後に、判断を縛る不変条件が来る順にするため
-    ...(tokenMaterialLine === null
-      ? []
-      : [tokenInvariantShown ? tokenMaterialLine + TOKEN_INVARIANT : tokenMaterialLine]),
+    ...(tokenLine === null ? [] : [tokenLine]),
   ]);
 }
 
