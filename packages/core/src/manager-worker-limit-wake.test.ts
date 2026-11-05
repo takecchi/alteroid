@@ -2,13 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -40,11 +38,8 @@ function fakeRunner() {
   const alive: RunnerManagerState[] = [];
   const delivered: string[] = [];
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
     },
@@ -76,9 +71,6 @@ function fakeRunner() {
       delivered.push(text);
       return true;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       const at = alive.findIndex((state) => state.managerId === managerId);
       if (at >= 0) alive.splice(at, 1);
@@ -86,25 +78,10 @@ function fakeRunner() {
     async list() {
       return alive.map((state) => ({ ...state, waiting: [] }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
     async setProfile(): Promise<RunnerProfileResult> {
       return { ok: false, error: 'この検証では使わない' };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
 
   return {
     runner,

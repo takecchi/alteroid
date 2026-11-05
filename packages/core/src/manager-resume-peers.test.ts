@@ -3,59 +3,25 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { RESUME_PEER_BUDGET_CHARS } from './resume-peers.js';
-import {
-  createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
-  type RunnerResumeCommand,
-} from './runner-protocol.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
+import { createRunnerRegistry, type RunnerResumeCommand } from './runner-protocol.js';
 import type { Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 // 担当を resume で起こし直すとき、預かってある peer（peers/<peerId>）の記録も resume の要求に載せる（#5257）
 
-class RecordingRunner implements RunnerClient {
+class RecordingRunner extends FakeRunnerClientBase {
   readonly runnerId = 'runner-primary';
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly resumes: RunnerResumeCommand[] = [];
 
-  async connect(): Promise<void> {}
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
   async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
     this.resumes.push(command);
     return { cwd: command.cwd };
   }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
-  async list() {
-    return [];
-  }
-  async transcript(): Promise<string | null> {
-    return null;
-  }
-  async credentials() {
-    return [];
-  }
-  async setCredentials() {
-    return [];
-  }
-  async profile() {
-    return undefined;
-  }
   async setProfile() {
     return { ok: true as const };
   }
-  async close(): Promise<void> {}
 }
 
 const MAIN = [{ type: 'user', message: { role: 'user', content: '調べて' } }];

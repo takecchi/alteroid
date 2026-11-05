@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   runnerEventSchema,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
@@ -30,25 +30,10 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   const alive: RunnerManagerState[] = [];
   let unpushedWorkResult: UnpushedWorkResult | undefined;
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
     },
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
@@ -57,28 +42,13 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async list() {
       return [...alive];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
-    },
-    async close() {
-      /* 使わない */
     },
     async unpushedWork() {
       return unpushedWorkResult;
     },
-  };
+  });
 
   function send(raw: RunnerEvent): void {
     // 境界のスキーマを通す: 無い欄は黙って落ちるので、emit した中身だけでは消えたことに気づけない。

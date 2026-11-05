@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { FakeRunnerClientBase } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
   type RunnerResumeCommand,
@@ -30,11 +29,8 @@ function endTurnLine(text: string, timestamp: string): string {
   });
 }
 
-class Runner implements RunnerClient {
+class Runner extends FakeRunnerClientBase {
   readonly runnerId = 'runner-5';
-  readonly runnerIdKnown = true;
-  readonly workspacePathKnown = true;
-  readonly workspacePath = '/work/project';
   readonly resumes: RunnerResumeCommand[] = [];
   alive: RunnerManagerState[] = [];
   liveTranscript: string | null = null;
@@ -54,9 +50,6 @@ class Runner implements RunnerClient {
       capabilities: [RUNNER_CAPABILITY_TRANSCRIPT_TAIL],
     });
   }
-  async start(command: Parameters<RunnerClient['start']>[0]): Promise<{ cwd: string }> {
-    return { cwd: command.cwd };
-  }
   async resume(command: RunnerResumeCommand): Promise<{ cwd: string; sessionGeneration?: string }> {
     this.resumes.push(command);
     this.alive = [
@@ -72,13 +65,6 @@ class Runner implements RunnerClient {
     ];
     return { cwd: command.cwd, sessionGeneration: NEW };
   }
-  async send(): Promise<boolean> {
-    return true;
-  }
-  async answer(): Promise<RunnerAnswerOutcome> {
-    return { delivered: false };
-  }
-  async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {
     return this.alive;
   }
@@ -88,19 +74,9 @@ class Runner implements RunnerClient {
   async transcriptTail(): Promise<string | null> {
     return this.liveTranscript;
   }
-  async credentials() {
-    return [];
-  }
-  async setCredentials() {
-    return [];
-  }
-  async profile() {
-    return undefined;
-  }
   async setProfile() {
     return { ok: true as const };
   }
-  async close(): Promise<void> {}
 }
 
 const JOB: Job = {

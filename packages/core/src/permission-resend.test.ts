@@ -9,10 +9,10 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
 } from './runner-protocol.js';
@@ -110,10 +110,8 @@ describe('解決済みの許可確認が再送されたとき', () => {
   it('デーモンは同じ requestId の ask を二度積まない（解けた後に来ても）', async () => {
     let emit: ((event: RunnerEvent) => void) | null = null;
     const alive: RunnerManagerState[] = [];
-    const runner: RunnerClient = {
+    const runner = fakeRunnerClient({
       runnerId: 'runner-primary',
-      runnerIdKnown: true,
-      workspacePathKnown: true,
       workspacePath: '/work',
       async connect(onEvent) {
         emit = onEvent;
@@ -129,42 +127,13 @@ describe('解決済みの許可確認が再送されたとき', () => {
         });
         return { cwd: command.cwd };
       },
-      async resume(command): Promise<{ cwd: string }> {
-        /* この検証では使わない */
-        return { cwd: command.cwd };
-      },
-      async send() {
-        /* この検証では使わない */
-        return true;
-      },
       async answer() {
         return { delivered: true };
-      },
-      async stop() {
-        /* この検証では使わない */
       },
       async list() {
         return [...alive];
       },
-      async transcript() {
-        return null;
-      },
-      async credentials() {
-        return [];
-      },
-      async setCredentials() {
-        return [];
-      },
-      async profile() {
-        return undefined;
-      },
-      async setProfile() {
-        return { ok: true };
-      },
-      async close() {
-        /* この検証では使わない */
-      },
-    };
+    });
 
     const stores = createMemoryStores();
     const inbox: InboxEvent[] = [];

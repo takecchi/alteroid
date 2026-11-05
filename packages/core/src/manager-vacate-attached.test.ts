@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerLiveness,
   RunnerManagerState,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
@@ -85,14 +82,9 @@ function fakeRunner(
 ): { client: RunnerClient; stopped: string[] } {
   const sessions = new Map<string, RunnerManagerState>();
   const stopped: string[] = [];
-  const client: RunnerClient = {
+  const client = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
     workspacePath,
-    async connect() {
-      /* この試験群は hello イベントの配送経路を使わない。 */
-    },
     async start(command): Promise<{ cwd: string }> {
       // 起こした瞬間にセッションを載せる: 空だと `sessionGone` 判定が「最初から居ない」で `true` になり、
       // 「確かめた停止」を試験したことにならない。
@@ -118,12 +110,6 @@ function fakeRunner(
       });
       return { cwd: command.cwd };
     },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       stopped.push(managerId);
       sessions.delete(managerId);
@@ -131,25 +117,7 @@ function fakeRunner(
     async list() {
       return [...sessions.values()];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
-    async setProfile(): Promise<RunnerProfileResult> {
-      return { ok: true };
-    },
-    async close() {
-      /* この試験群では使わない。 */
-    },
-  };
+  });
   return { client, stopped };
 }
 

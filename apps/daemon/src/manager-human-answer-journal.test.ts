@@ -1,5 +1,10 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
-import type { CloneHost, JournalEntry, RunnerClient, RunnerEvent, Stores } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  fakeRunnerClient,
+} from '@alteroid/core';
+import type { CloneHost, JournalEntry, RunnerEvent, Stores } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -27,45 +32,13 @@ function setup(answer: (managerId: string) => Promise<{ delivered: boolean; deci
     },
   };
   const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-legacy',
-    runnerIdKnown: true,
-    workspacePathKnown: true,
-    workspacePath: '/work/project',
     async connect(onEvent) {
       wired.emit = onEvent;
     },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
     answer,
-    async stop() {},
-    async list() {
-      return [];
-    },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
-    async setProfile() {
-      return { ok: true };
-    },
-    async close() {},
-  };
+  });
   const pool = createManagerPool({
     stores,
     post: () => {},

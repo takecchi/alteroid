@@ -2,13 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPoolOptions } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
-  type RunnerAnswerOutcome,
-  type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
-  type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
@@ -43,16 +41,10 @@ function fakeRunner(log: string[]) {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const control = { failDelivery: false, background: 0 };
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       emit = onEvent;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       log.push(`resume:${command.message ?? ''}`);
@@ -74,9 +66,6 @@ function fakeRunner(log: string[]) {
       sends.push({ managerId, text });
       return !control.failDelivery;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       const at = alive.findIndex((state) => state.managerId === managerId);
       if (at >= 0) alive.splice(at, 1);
@@ -89,25 +78,10 @@ function fakeRunner(log: string[]) {
         liveBackgroundTasks: control.background,
       }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
     async setProfile(): Promise<RunnerProfileResult> {
       return { ok: false, error: 'この検証では使わない' };
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return {
     runner,
     sends,

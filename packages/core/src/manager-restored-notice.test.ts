@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   RunnerHttpError,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
@@ -39,16 +39,10 @@ function fakeRunner(): FakeRunner {
   const resumes: string[] = [];
   const failResume = { value: false };
   let onEvent: ((event: RunnerEvent) => void) | undefined;
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: 'runner-primary',
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(listener) {
       onEvent = listener;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       // 400 は投げ直しても同じ答えが返る失敗（再試行の梯子へ載らず、戻せなかったものとして知らされる）。
@@ -56,37 +50,13 @@ function fakeRunner(): FakeRunner {
       resumes.push(command.managerId);
       return { cwd: command.cwd };
     },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
-    async stop() {
-      /* 使わない */
-    },
     async list() {
       return [...alive];
-    },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
     },
     async setProfile() {
       return { ok: true as const };
     },
-    async close() {
-      /* 使わない */
-    },
-  };
+  });
   return {
     runner,
     alive,

@@ -11,11 +11,11 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import {
   createRunnerRegistry,
   runnerEventSchema,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
 } from './runner-protocol.js';
@@ -113,25 +113,10 @@ function hostBackedRunner(options: {
   });
   hosts.push(host);
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId: options.runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(handler) {
       onEvent = handler;
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
     },
     async stop(managerId) {
       await host.stop(managerId);
@@ -139,23 +124,8 @@ function hostBackedRunner(options: {
     async list() {
       return host.list();
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
-    },
-    async close() {
-      /* この検証では使わない */
     },
     async unpushedWork() {
       return undefined;
@@ -175,7 +145,7 @@ function hostBackedRunner(options: {
             return streamEnd;
           },
         }),
-  };
+  });
 
   return {
     runner,

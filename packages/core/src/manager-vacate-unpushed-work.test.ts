@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import type {
-  RunnerAnswerOutcome,
   RunnerClient,
-  RunnerCredentialFingerprint,
   RunnerEntry,
   RunnerLiveness,
-  RunnerProfileFingerprint,
-  RunnerProfileResult,
   RunnerRegistry,
   RunnerResumeCommand,
   UnpushedWorkResult,
@@ -79,27 +76,13 @@ function fakeRunner(
 ): { client: RunnerClient; resumes: RunnerResumeCommand[] } {
   const resumes: RunnerResumeCommand[] = [];
   const sessions = new Map<string, { managerId: string }>();
-  const client: RunnerClient = {
+  const client = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
     workspacePath,
-    async connect() {
-      /* この試験群では使わない。 */
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
     async resume(command): Promise<{ cwd: string }> {
       resumes.push(command);
       sessions.set(command.managerId, { managerId: command.managerId });
       return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
     },
     async stop(managerId) {
       sessions.delete(managerId);
@@ -114,25 +97,7 @@ function fakeRunner(
         liveBackgroundTasks: 0,
       }));
     },
-    async transcript() {
-      return null;
-    },
-    async credentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
-      return [];
-    },
-    async profile(): Promise<RunnerProfileFingerprint | undefined> {
-      return undefined;
-    },
-    async setProfile(): Promise<RunnerProfileResult> {
-      return { ok: true };
-    },
-    async close() {
-      /* この試験群では使わない。 */
-    },
-  };
+  });
   sessions.set('__seed__', { managerId: '__seed__' });
   sessions.delete('__seed__');
   return { client, resumes };

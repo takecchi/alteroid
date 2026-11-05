@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
-  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
@@ -70,11 +70,8 @@ function fakeRunner(options: FakeOptions = {}): Fake {
   const resumeMessages: string[] = [];
   const stages: string[] = [];
 
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePath: '/work/project',
-    workspacePathKnown: true,
     async connect(onEvent) {
       if (options.hello !== undefined) {
         onEvent({
@@ -84,9 +81,6 @@ function fakeRunner(options: FakeOptions = {}): Fake {
           attachmentStageLimit: options.hello.stageLimit,
         } satisfies RunnerEvent);
       }
-    },
-    async start(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
     },
     async resume(command): Promise<{ cwd: string }> {
       resumes.push(command.managerId);
@@ -105,9 +99,6 @@ function fakeRunner(options: FakeOptions = {}): Fake {
       }
       return true;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
-    },
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
@@ -115,28 +106,13 @@ function fakeRunner(options: FakeOptions = {}): Fake {
     async list() {
       return [...alive];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
     async setProfile() {
       return { ok: true as const };
     },
     async stageAttachment(managerId: string, meta: RunnerStagedAttachmentMeta) {
       stages.push(`${managerId}:${meta.id}`);
     },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return { runner, alive, sends, resumes, resumeMessages, stages };
 }
 

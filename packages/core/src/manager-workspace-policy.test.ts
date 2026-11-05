@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   type RunnerClient,
@@ -138,14 +139,9 @@ describe('resolveWorkspacePolicy', () => {
 function fakeRunner(runnerId: string, workspacePath: string) {
   const alive: RunnerManagerState[] = [];
   const started: RunnerStartCommand[] = [];
-  const runner: RunnerClient = {
+  const runner = fakeRunnerClient({
     runnerId,
-    runnerIdKnown: true,
-    workspacePathKnown: true,
     workspacePath,
-    async connect() {
-      /* この検証では使わない */
-    },
     async start(command): Promise<{ cwd: string }> {
       started.push(command);
       alive.push({
@@ -158,40 +154,10 @@ function fakeRunner(runnerId: string, workspacePath: string) {
       });
       return { cwd: command.cwd };
     },
-    async resume(command): Promise<{ cwd: string }> {
-      return { cwd: command.cwd };
-    },
-    async send() {
-      return true;
-    },
-    async answer() {
-      return { delivered: false };
-    },
-    async stop() {
-      /* この検証では使わない */
-    },
     async list() {
       return [...alive];
     },
-    async transcript() {
-      return null;
-    },
-    async credentials() {
-      return [];
-    },
-    async setCredentials() {
-      return [];
-    },
-    async profile() {
-      return undefined;
-    },
-    async setProfile() {
-      return { ok: true };
-    },
-    async close() {
-      /* この検証では使わない */
-    },
-  };
+  });
   return { runner, started };
 }
 
