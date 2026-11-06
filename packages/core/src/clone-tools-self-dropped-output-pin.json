@@ -1,0 +1,902 @@
+{
+  "lengths": {
+    "limit-invalid#1": 29,
+    "limit-invalid#2": 30,
+    "limit-invalid#3": 31,
+    "limit-invalid#4": 31,
+    "limit-invalid#5": 31,
+    "limit-invalid#6": 36,
+    "limit-invalid#7": 333,
+    "limit-invalid#8": 394,
+    "offset-invalid#1": 31,
+    "offset-invalid#2": 32,
+    "offset-invalid#3": 32,
+    "offset-invalid#4": 32,
+    "offset-invalid#5": 29,
+    "offset-invalid#6": 157,
+    "ledger-empty#1": 200,
+    "ledger-empty#2": 200,
+    "ledger-empty#3": 200,
+    "ledger-empty#4": 200,
+    "single#1": 245,
+    "single#2": 245,
+    "single#3": 245,
+    "few#1": 604,
+    "few#2": 604,
+    "few#3": 604,
+    "few#4": 488,
+    "few#5": 392,
+    "limit-cut#1": 484,
+    "limit-cut#2": 934,
+    "limit-cut#3": 919,
+    "limit-cut#4": 334,
+    "limit-cut#5": 484,
+    "budget-cut#1": 7750,
+    "budget-cut#2": 7750,
+    "budget-cut#3": 7750,
+    "budget-cut#4": 3140,
+    "budget-follow#1": 8139,
+    "budget-follow#2": 8140,
+    "budget-follow#3": 3321,
+    "limit-follow#1": 559,
+    "limit-follow#2": 559,
+    "limit-follow#3": 319,
+    "offset-skip#1": 694,
+    "offset-skip#2": 244,
+    "offset-skip#3": 544,
+    "offset-skip#4": 484,
+    "offset-skip#5": 334,
+    "offset-ge-count#1": 155,
+    "offset-ge-count#2": 155,
+    "offset-ge-count#3": 157,
+    "offset-ge-count#4": 244,
+    "offset-ge-count#5": 29,
+    "offset-ge-count-single": 155,
+    "ledger-full#1": 4014,
+    "ledger-full#2": 8365,
+    "ledger-full#3": 3919,
+    "ledger-full#4": 244,
+    "ledger-full#5": 161,
+    "ledger-overflow#1": 244,
+    "ledger-overflow#2": 3919,
+    "trace-with-value": 555
+  },
+  "scenarios": {
+    "limit-invalid#1": {
+      "output": {
+        "length": 29,
+        "text": "limit 0 は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 0
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#2": {
+      "output": {
+        "length": 30,
+        "text": "limit -1 は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": -1
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#3": {
+      "output": {
+        "length": 31,
+        "text": "limit 1.5 は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 1.5
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#4": {
+      "output": {
+        "length": 31,
+        "text": "limit 201 は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 201
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#5": {
+      "output": {
+        "length": 31,
+        "text": "limit NaN は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": "NaN"
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#6": {
+      "output": {
+        "length": 36,
+        "text": "limit Infinity は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": "Infinity"
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#7": {
+      "output": {
+        "length": 333,
+        "text": "…ほか古い 2 件は省略（帳面には全 3 件あり、直近から 1 件だけ出した）。続きは self_dropped offset=1 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 1
+      },
+      "ledgerSize": 3
+    },
+    "limit-invalid#8": {
+      "output": {
+        "length": 394,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 200
+      },
+      "ledgerSize": 3
+    },
+    "offset-invalid#1": {
+      "output": {
+        "length": 31,
+        "text": "offset -1 は使えない（0以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": -1
+      },
+      "ledgerSize": 3
+    },
+    "offset-invalid#2": {
+      "output": {
+        "length": 32,
+        "text": "offset 1.5 は使えない（0以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 1.5
+      },
+      "ledgerSize": 3
+    },
+    "offset-invalid#3": {
+      "output": {
+        "length": 32,
+        "text": "offset 201 は使えない（0以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 201
+      },
+      "ledgerSize": 3
+    },
+    "offset-invalid#4": {
+      "output": {
+        "length": 32,
+        "text": "offset NaN は使えない（0以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": "NaN"
+      },
+      "ledgerSize": 3
+    },
+    "offset-invalid#5": {
+      "output": {
+        "length": 29,
+        "text": "limit 0 は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 0,
+        "offset": -1
+      },
+      "ledgerSize": 3
+    },
+    "offset-invalid#6": {
+      "output": {
+        "length": 157,
+        "text": "offset（200）が帳面の件数（3）以上なので、これより古い分は無い。offset を 2 以下にして呼び直すこと。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 200
+      },
+      "ledgerSize": 3
+    },
+    "ledger-empty#1": {
+      "output": {
+        "length": 200,
+        "text": "このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。0件は「握り潰しが1件も無かった」ことを意味しない —— この帳面はプロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 0
+    },
+    "ledger-empty#2": {
+      "output": {
+        "length": 200,
+        "text": "このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。0件は「握り潰しが1件も無かった」ことを意味しない —— この帳面はプロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 1
+      },
+      "ledgerSize": 0
+    },
+    "ledger-empty#3": {
+      "output": {
+        "length": 200,
+        "text": "このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。0件は「握り潰しが1件も無かった」ことを意味しない —— この帳面はプロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 5
+      },
+      "ledgerSize": 0
+    },
+    "ledger-empty#4": {
+      "output": {
+        "length": 200,
+        "text": "このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。0件は「握り潰しが1件も無かった」ことを意味しない —— この帳面はプロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 10,
+        "offset": 200
+      },
+      "ledgerSize": 0
+    },
+    "single#1": {
+      "output": {
+        "length": 245,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（id=one）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 1
+    },
+    "single#2": {
+      "output": {
+        "length": 245,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（id=one）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 1
+      },
+      "ledgerSize": 1
+    },
+    "single#3": {
+      "output": {
+        "length": 245,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（id=one）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 0
+      },
+      "ledgerSize": 1
+    },
+    "few#1": {
+      "output": {
+        "length": 604,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 一つ目の失敗\nalteroid: 2026-10-01T00:00:02.000Z 添付を記録できませんでした（id=att-1）: Error: 二つ目の失敗\nalteroid: 2026-10-01T00:00:03.000Z を記録できませんでした: Error: 詳細が空\nalteroid: 2026-10-01T00:00:04.000Z 記憶を記録できませんでした（slug=a）: Error: 改行を含む\nalteroid: 2026-10-01T00:00:05.000Z 未読の合図をストアへ書けませんでした（id=ev-1）: Error: 合図の失敗。ただし失ってはいない —— メモリの待ち行列には残っており、このプロセスが生きているあいだは配達される。器が入れ替われば（再起動・デプロイ）、この合図は失われる。\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 5
+    },
+    "few#2": {
+      "output": {
+        "length": 604,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 一つ目の失敗\nalteroid: 2026-10-01T00:00:02.000Z 添付を記録できませんでした（id=att-1）: Error: 二つ目の失敗\nalteroid: 2026-10-01T00:00:03.000Z を記録できませんでした: Error: 詳細が空\nalteroid: 2026-10-01T00:00:04.000Z 記憶を記録できませんでした（slug=a）: Error: 改行を含む\nalteroid: 2026-10-01T00:00:05.000Z 未読の合図をストアへ書けませんでした（id=ev-1）: Error: 合図の失敗。ただし失ってはいない —— メモリの待ち行列には残っており、このプロセスが生きているあいだは配達される。器が入れ替われば（再起動・デプロイ）、この合図は失われる。\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 5
+      },
+      "ledgerSize": 5
+    },
+    "few#3": {
+      "output": {
+        "length": 604,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 一つ目の失敗\nalteroid: 2026-10-01T00:00:02.000Z 添付を記録できませんでした（id=att-1）: Error: 二つ目の失敗\nalteroid: 2026-10-01T00:00:03.000Z を記録できませんでした: Error: 詳細が空\nalteroid: 2026-10-01T00:00:04.000Z 記憶を記録できませんでした（slug=a）: Error: 改行を含む\nalteroid: 2026-10-01T00:00:05.000Z 未読の合図をストアへ書けませんでした（id=ev-1）: Error: 合図の失敗。ただし失ってはいない —— メモリの待ち行列には残っており、このプロセスが生きているあいだは配達される。器が入れ替われば（再起動・デプロイ）、この合図は失われる。\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 100
+      },
+      "ledgerSize": 5
+    },
+    "few#4": {
+      "output": {
+        "length": 488,
+        "text": "…ほか古い 3 件は省略（帳面には全 5 件あり、直近から 2 件だけ出した）。続きは self_dropped offset=2 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:04.000Z 記憶を記録できませんでした（slug=a）: Error: 改行を含む\nalteroid: 2026-10-01T00:00:05.000Z 未読の合図をストアへ書けませんでした（id=ev-1）: Error: 合図の失敗。ただし失ってはいない —— メモリの待ち行列には残っており、このプロセスが生きているあいだは配達される。器が入れ替われば（再起動・デプロイ）、この合図は失われる。\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 2
+      },
+      "ledgerSize": 5
+    },
+    "few#5": {
+      "output": {
+        "length": 392,
+        "text": "…ほか古い 1 件は省略（帳面には全 5 件あり、直近から 2 件だけ出した）。続きは self_dropped offset=4 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:02.000Z 添付を記録できませんでした（id=att-1）: Error: 二つ目の失敗\nalteroid: 2026-10-01T00:00:03.000Z を記録できませんでした: Error: 詳細が空\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 2,
+        "offset": 2
+      },
+      "ledgerSize": 5
+    },
+    "limit-cut#1": {
+      "output": {
+        "length": 484,
+        "text": "…ほか古い 7 件は省略（帳面には全 10 件あり、直近から 3 件だけ出した）。続きは self_dropped offset=3 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 3
+      },
+      "ledgerSize": 10
+    },
+    "limit-cut#2": {
+      "output": {
+        "length": 934,
+        "text": "…ほか古い 1 件は省略（帳面には全 10 件あり、直近から 9 件だけ出した）。続きは self_dropped offset=9 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 9
+      },
+      "ledgerSize": 10
+    },
+    "limit-cut#3": {
+      "output": {
+        "length": 919,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 10
+      },
+      "ledgerSize": 10
+    },
+    "limit-cut#4": {
+      "output": {
+        "length": 334,
+        "text": "…ほか古い 9 件は省略（帳面には全 10 件あり、直近から 1 件だけ出した）。続きは self_dropped offset=1 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 1
+      },
+      "ledgerSize": 10
+    },
+    "limit-cut#5": {
+      "output": {
+        "length": 484,
+        "text": "…ほか古い 3 件は省略（帳面には全 10 件あり、直近から 3 件だけ出した）。続きは self_dropped offset=7 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 3,
+        "offset": 4
+      },
+      "ledgerSize": 10
+    },
+    "budget-cut#1": {
+      "output": {
+        "length": 7750,
+        "text": "…ほか古い 17 件は省略（帳面には全 30 件あり、直近から 13 件だけ出した）。続きは self_dropped offset=13 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:18.000Z 日誌を記録できませんでした（n=018 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:19.000Z 日誌を記録できませんでした（n=019 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:20.000Z 日誌を記録できませんでした（n=020 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:21.000Z 日誌を記録できませんでした（n=021 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:22.000Z 日誌を記録できませんでした（n=022 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:23.000Z 日誌を記録できませんでした（n=023 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:24.000Z 日誌を記録できませんでした（n=024 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:25.000Z 日誌を記録できませんでした（n=025 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:26.000Z 日誌を記録できませんでした（n=026 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:27.000Z 日誌を記録できませんでした（n=027 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:28.000Z 日誌を記録できませんでした（n=028 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:29.000Z 日誌を記録できませんでした（n=029 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:30.000Z 日誌を記録できませんでした（n=030 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 30
+    },
+    "budget-cut#2": {
+      "output": {
+        "length": 7750,
+        "text": "…ほか古い 17 件は省略（帳面には全 30 件あり、直近から 13 件だけ出した）。続きは self_dropped offset=13 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:18.000Z 日誌を記録できませんでした（n=018 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:19.000Z 日誌を記録できませんでした（n=019 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:20.000Z 日誌を記録できませんでした（n=020 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:21.000Z 日誌を記録できませんでした（n=021 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:22.000Z 日誌を記録できませんでした（n=022 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:23.000Z 日誌を記録できませんでした（n=023 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:24.000Z 日誌を記録できませんでした（n=024 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:25.000Z 日誌を記録できませんでした（n=025 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:26.000Z 日誌を記録できませんでした（n=026 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:27.000Z 日誌を記録できませんでした（n=027 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:28.000Z 日誌を記録できませんでした（n=028 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:29.000Z 日誌を記録できませんでした（n=029 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:30.000Z 日誌を記録できませんでした（n=030 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 200
+      },
+      "ledgerSize": 30
+    },
+    "budget-cut#3": {
+      "output": {
+        "length": 7750,
+        "text": "…ほか古い 17 件は省略（帳面には全 30 件あり、直近から 13 件だけ出した）。続きは self_dropped offset=13 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:18.000Z 日誌を記録できませんでした（n=018 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:19.000Z 日誌を記録できませんでした（n=019 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:20.000Z 日誌を記録できませんでした（n=020 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:21.000Z 日誌を記録できませんでした（n=021 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:22.000Z 日誌を記録できませんでした（n=022 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:23.000Z 日誌を記録できませんでした（n=023 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:24.000Z 日誌を記録できませんでした（n=024 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:25.000Z 日誌を記録できませんでした（n=025 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:26.000Z 日誌を記録できませんでした（n=026 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:27.000Z 日誌を記録できませんでした（n=027 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:28.000Z 日誌を記録できませんでした（n=028 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:29.000Z 日誌を記録できませんでした（n=029 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:30.000Z 日誌を記録できませんでした（n=030 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 30
+      },
+      "ledgerSize": 30
+    },
+    "budget-cut#4": {
+      "output": {
+        "length": 3140,
+        "text": "…ほか古い 25 件は省略（帳面には全 30 件あり、直近から 5 件だけ出した）。続きは self_dropped offset=5 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:26.000Z 日誌を記録できませんでした（n=026 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:27.000Z 日誌を記録できませんでした（n=027 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:28.000Z 日誌を記録できませんでした（n=028 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:29.000Z 日誌を記録できませんでした（n=029 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:30.000Z 日誌を記録できませんでした（n=030 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 5
+      },
+      "ledgerSize": 30
+    },
+    "budget-follow#1": {
+      "output": {
+        "length": 8139,
+        "text": "…ほか古い 7 件は省略（帳面には全 12 件あり、直近から 5 件だけ出した）。続きは self_dropped offset=5 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:11.000Z 日誌を記録できませんでした（n=011 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:12.000Z 日誌を記録できませんでした（n=012 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 12
+    },
+    "budget-follow#2": {
+      "output": {
+        "length": 8140,
+        "text": "…ほか古い 2 件は省略（帳面には全 12 件あり、直近から 5 件だけ出した）。続きは self_dropped offset=10 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 5
+      },
+      "ledgerSize": 12
+    },
+    "budget-follow#3": {
+      "output": {
+        "length": 3321,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002 long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 10
+      },
+      "ledgerSize": 12
+    },
+    "limit-follow#1": {
+      "output": {
+        "length": 559,
+        "text": "…ほか古い 6 件は省略（帳面には全 10 件あり、直近から 4 件だけ出した）。続きは self_dropped offset=4 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 4
+      },
+      "ledgerSize": 10
+    },
+    "limit-follow#2": {
+      "output": {
+        "length": 559,
+        "text": "…ほか古い 2 件は省略（帳面には全 10 件あり、直近から 4 件だけ出した）。続きは self_dropped offset=8 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 4,
+        "offset": 4
+      },
+      "ledgerSize": 10
+    },
+    "limit-follow#3": {
+      "output": {
+        "length": 319,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 4,
+        "offset": 8
+      },
+      "ledgerSize": 10
+    },
+    "offset-skip#1": {
+      "output": {
+        "length": 694,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 3
+      },
+      "ledgerSize": 10
+    },
+    "offset-skip#2": {
+      "output": {
+        "length": 244,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 9
+      },
+      "ledgerSize": 10
+    },
+    "offset-skip#3": {
+      "output": {
+        "length": 544,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 5,
+        "limit": 100
+      },
+      "ledgerSize": 10
+    },
+    "offset-skip#4": {
+      "output": {
+        "length": 484,
+        "text": "…ほか古い 5 件は省略（帳面には全 10 件あり、直近から 3 件だけ出した）。続きは self_dropped offset=5 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 2,
+        "limit": 3
+      },
+      "ledgerSize": 10
+    },
+    "offset-skip#5": {
+      "output": {
+        "length": 334,
+        "text": "…ほか古い 1 件は省略（帳面には全 10 件あり、直近から 1 件だけ出した）。続きは self_dropped offset=9 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 8,
+        "limit": 1
+      },
+      "ledgerSize": 10
+    },
+    "offset-ge-count#1": {
+      "output": {
+        "length": 155,
+        "text": "offset（4）が帳面の件数（4）以上なので、これより古い分は無い。offset を 3 以下にして呼び直すこと。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 4
+      },
+      "ledgerSize": 4
+    },
+    "offset-ge-count#2": {
+      "output": {
+        "length": 155,
+        "text": "offset（5）が帳面の件数（4）以上なので、これより古い分は無い。offset を 3 以下にして呼び直すこと。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 5
+      },
+      "ledgerSize": 4
+    },
+    "offset-ge-count#3": {
+      "output": {
+        "length": 157,
+        "text": "offset（200）が帳面の件数（4）以上なので、これより古い分は無い。offset を 3 以下にして呼び直すこと。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 200
+      },
+      "ledgerSize": 4
+    },
+    "offset-ge-count#4": {
+      "output": {
+        "length": 244,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 3
+      },
+      "ledgerSize": 4
+    },
+    "offset-ge-count#5": {
+      "output": {
+        "length": 29,
+        "text": "limit 0 は使えない（1以上200以下の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 0,
+        "offset": 9
+      },
+      "ledgerSize": 4
+    },
+    "offset-ge-count-single": {
+      "output": {
+        "length": 155,
+        "text": "offset（1）が帳面の件数（1）以上なので、これより古い分は無い。offset を 0 以下にして呼び直すこと。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 1
+      },
+      "ledgerSize": 1
+    },
+    "ledger-full#1": {
+      "output": {
+        "length": 4014,
+        "text": "…ほか古い 150 件は省略（帳面には全 200 件あり、直近から 50 件だけ出した）。続きは self_dropped offset=50 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:02:31.000Z 日誌を記録できませんでした（n=151）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:32.000Z 日誌を記録できませんでした（n=152）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:33.000Z 日誌を記録できませんでした（n=153）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:34.000Z 日誌を記録できませんでした（n=154）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:35.000Z 日誌を記録できませんでした（n=155）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:36.000Z 日誌を記録できませんでした（n=156）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:37.000Z 日誌を記録できませんでした（n=157）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:38.000Z 日誌を記録できませんでした（n=158）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:39.000Z 日誌を記録できませんでした（n=159）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:40.000Z 日誌を記録できませんでした（n=160）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:41.000Z 日誌を記録できませんでした（n=161）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:42.000Z 日誌を記録できませんでした（n=162）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:43.000Z 日誌を記録できませんでした（n=163）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:44.000Z 日誌を記録できませんでした（n=164）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:45.000Z 日誌を記録できませんでした（n=165）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:46.000Z 日誌を記録できませんでした（n=166）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:47.000Z 日誌を記録できませんでした（n=167）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:48.000Z 日誌を記録できませんでした（n=168）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:49.000Z 日誌を記録できませんでした（n=169）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:50.000Z 日誌を記録できませんでした（n=170）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:51.000Z 日誌を記録できませんでした（n=171）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:52.000Z 日誌を記録できませんでした（n=172）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:53.000Z 日誌を記録できませんでした（n=173）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:54.000Z 日誌を記録できませんでした（n=174）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:55.000Z 日誌を記録できませんでした（n=175）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:56.000Z 日誌を記録できませんでした（n=176）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:57.000Z 日誌を記録できませんでした（n=177）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:58.000Z 日誌を記録できませんでした（n=178）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:59.000Z 日誌を記録できませんでした（n=179）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:00.000Z 日誌を記録できませんでした（n=180）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:01.000Z 日誌を記録できませんでした（n=181）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:02.000Z 日誌を記録できませんでした（n=182）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:03.000Z 日誌を記録できませんでした（n=183）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:04.000Z 日誌を記録できませんでした（n=184）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:05.000Z 日誌を記録できませんでした（n=185）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:06.000Z 日誌を記録できませんでした（n=186）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:07.000Z 日誌を記録できませんでした（n=187）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:08.000Z 日誌を記録できませんでした（n=188）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:09.000Z 日誌を記録できませんでした（n=189）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:10.000Z 日誌を記録できませんでした（n=190）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:11.000Z 日誌を記録できませんでした（n=191）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:12.000Z 日誌を記録できませんでした（n=192）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:13.000Z 日誌を記録できませんでした（n=193）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:14.000Z 日誌を記録できませんでした（n=194）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:15.000Z 日誌を記録できませんでした（n=195）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:16.000Z 日誌を記録できませんでした（n=196）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:17.000Z 日誌を記録できませんでした（n=197）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:18.000Z 日誌を記録できませんでした（n=198）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:19.000Z 日誌を記録できませんでした（n=199）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:20.000Z 日誌を記録できませんでした（n=200）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 200
+    },
+    "ledger-full#2": {
+      "output": {
+        "length": 8365,
+        "text": "…ほか古い 92 件は省略（帳面には全 200 件あり、直近から 108 件だけ出した）。続きは self_dropped offset=108 で取れる（limit を上げても動かない）。\nalteroid: 2026-10-01T00:01:33.000Z 日誌を記録できませんでした（n=093）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:34.000Z 日誌を記録できませんでした（n=094）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:35.000Z 日誌を記録できませんでした（n=095）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:36.000Z 日誌を記録できませんでした（n=096）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:37.000Z 日誌を記録できませんでした（n=097）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:38.000Z 日誌を記録できませんでした（n=098）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:39.000Z 日誌を記録できませんでした（n=099）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:40.000Z 日誌を記録できませんでした（n=100）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:41.000Z 日誌を記録できませんでした（n=101）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:42.000Z 日誌を記録できませんでした（n=102）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:43.000Z 日誌を記録できませんでした（n=103）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:44.000Z 日誌を記録できませんでした（n=104）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:45.000Z 日誌を記録できませんでした（n=105）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:46.000Z 日誌を記録できませんでした（n=106）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:47.000Z 日誌を記録できませんでした（n=107）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:48.000Z 日誌を記録できませんでした（n=108）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:49.000Z 日誌を記録できませんでした（n=109）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:50.000Z 日誌を記録できませんでした（n=110）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:51.000Z 日誌を記録できませんでした（n=111）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:52.000Z 日誌を記録できませんでした（n=112）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:53.000Z 日誌を記録できませんでした（n=113）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:54.000Z 日誌を記録できませんでした（n=114）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:55.000Z 日誌を記録できませんでした（n=115）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:56.000Z 日誌を記録できませんでした（n=116）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:57.000Z 日誌を記録できませんでした（n=117）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:58.000Z 日誌を記録できませんでした（n=118）: Error: 書けない（test）\nalteroid: 2026-10-01T00:01:59.000Z 日誌を記録できませんでした（n=119）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:00.000Z 日誌を記録できませんでした（n=120）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:01.000Z 日誌を記録できませんでした（n=121）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:02.000Z 日誌を記録できませんでした（n=122）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:03.000Z 日誌を記録できませんでした（n=123）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:04.000Z 日誌を記録できませんでした（n=124）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:05.000Z 日誌を記録できませんでした（n=125）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:06.000Z 日誌を記録できませんでした（n=126）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:07.000Z 日誌を記録できませんでした（n=127）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:08.000Z 日誌を記録できませんでした（n=128）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:09.000Z 日誌を記録できませんでした（n=129）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:10.000Z 日誌を記録できませんでした（n=130）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:11.000Z 日誌を記録できませんでした（n=131）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:12.000Z 日誌を記録できませんでした（n=132）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:13.000Z 日誌を記録できませんでした（n=133）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:14.000Z 日誌を記録できませんでした（n=134）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:15.000Z 日誌を記録できませんでした（n=135）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:16.000Z 日誌を記録できませんでした（n=136）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:17.000Z 日誌を記録できませんでした（n=137）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:18.000Z 日誌を記録できませんでした（n=138）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:19.000Z 日誌を記録できませんでした（n=139）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:20.000Z 日誌を記録できませんでした（n=140）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:21.000Z 日誌を記録できませんでした（n=141）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:22.000Z 日誌を記録できませんでした（n=142）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:23.000Z 日誌を記録できませんでした（n=143）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:24.000Z 日誌を記録できませんでした（n=144）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:25.000Z 日誌を記録できませんでした（n=145）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:26.000Z 日誌を記録できませんでした（n=146）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:27.000Z 日誌を記録できませんでした（n=147）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:28.000Z 日誌を記録できませんでした（n=148）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:29.000Z 日誌を記録できませんでした（n=149）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:30.000Z 日誌を記録できませんでした（n=150）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:31.000Z 日誌を記録できませんでした（n=151）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:32.000Z 日誌を記録できませんでした（n=152）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:33.000Z 日誌を記録できませんでした（n=153）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:34.000Z 日誌を記録できませんでした（n=154）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:35.000Z 日誌を記録できませんでした（n=155）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:36.000Z 日誌を記録できませんでした（n=156）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:37.000Z 日誌を記録できませんでした（n=157）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:38.000Z 日誌を記録できませんでした（n=158）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:39.000Z 日誌を記録できませんでした（n=159）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:40.000Z 日誌を記録できませんでした（n=160）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:41.000Z 日誌を記録できませんでした（n=161）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:42.000Z 日誌を記録できませんでした（n=162）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:43.000Z 日誌を記録できませんでした（n=163）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:44.000Z 日誌を記録できませんでした（n=164）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:45.000Z 日誌を記録できませんでした（n=165）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:46.000Z 日誌を記録できませんでした（n=166）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:47.000Z 日誌を記録できませんでした（n=167）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:48.000Z 日誌を記録できませんでした（n=168）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:49.000Z 日誌を記録できませんでした（n=169）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:50.000Z 日誌を記録できませんでした（n=170）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:51.000Z 日誌を記録できませんでした（n=171）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:52.000Z 日誌を記録できませんでした（n=172）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:53.000Z 日誌を記録できませんでした（n=173）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:54.000Z 日誌を記録できませんでした（n=174）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:55.000Z 日誌を記録できませんでした（n=175）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:56.000Z 日誌を記録できませんでした（n=176）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:57.000Z 日誌を記録できませんでした（n=177）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:58.000Z 日誌を記録できませんでした（n=178）: Error: 書けない（test）\nalteroid: 2026-10-01T00:02:59.000Z 日誌を記録できませんでした（n=179）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:00.000Z 日誌を記録できませんでした（n=180）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:01.000Z 日誌を記録できませんでした（n=181）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:02.000Z 日誌を記録できませんでした（n=182）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:03.000Z 日誌を記録できませんでした（n=183）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:04.000Z 日誌を記録できませんでした（n=184）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:05.000Z 日誌を記録できませんでした（n=185）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:06.000Z 日誌を記録できませんでした（n=186）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:07.000Z 日誌を記録できませんでした（n=187）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:08.000Z 日誌を記録できませんでした（n=188）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:09.000Z 日誌を記録できませんでした（n=189）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:10.000Z 日誌を記録できませんでした（n=190）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:11.000Z 日誌を記録できませんでした（n=191）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:12.000Z 日誌を記録できませんでした（n=192）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:13.000Z 日誌を記録できませんでした（n=193）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:14.000Z 日誌を記録できませんでした（n=194）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:15.000Z 日誌を記録できませんでした（n=195）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:16.000Z 日誌を記録できませんでした（n=196）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:17.000Z 日誌を記録できませんでした（n=197）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:18.000Z 日誌を記録できませんでした（n=198）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:19.000Z 日誌を記録できませんでした（n=199）: Error: 書けない（test）\nalteroid: 2026-10-01T00:03:20.000Z 日誌を記録できませんでした（n=200）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "limit": 200
+      },
+      "ledgerSize": 200
+    },
+    "ledger-full#3": {
+      "output": {
+        "length": 3919,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:11.000Z 日誌を記録できませんでした（n=011）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:12.000Z 日誌を記録できませんでした（n=012）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:13.000Z 日誌を記録できませんでした（n=013）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:14.000Z 日誌を記録できませんでした（n=014）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:15.000Z 日誌を記録できませんでした（n=015）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:16.000Z 日誌を記録できませんでした（n=016）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:17.000Z 日誌を記録できませんでした（n=017）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:18.000Z 日誌を記録できませんでした（n=018）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:19.000Z 日誌を記録できませんでした（n=019）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:20.000Z 日誌を記録できませんでした（n=020）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:21.000Z 日誌を記録できませんでした（n=021）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:22.000Z 日誌を記録できませんでした（n=022）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:23.000Z 日誌を記録できませんでした（n=023）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:24.000Z 日誌を記録できませんでした（n=024）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:25.000Z 日誌を記録できませんでした（n=025）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:26.000Z 日誌を記録できませんでした（n=026）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:27.000Z 日誌を記録できませんでした（n=027）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:28.000Z 日誌を記録できませんでした（n=028）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:29.000Z 日誌を記録できませんでした（n=029）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:30.000Z 日誌を記録できませんでした（n=030）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:31.000Z 日誌を記録できませんでした（n=031）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:32.000Z 日誌を記録できませんでした（n=032）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:33.000Z 日誌を記録できませんでした（n=033）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:34.000Z 日誌を記録できませんでした（n=034）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:35.000Z 日誌を記録できませんでした（n=035）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:36.000Z 日誌を記録できませんでした（n=036）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:37.000Z 日誌を記録できませんでした（n=037）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:38.000Z 日誌を記録できませんでした（n=038）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:39.000Z 日誌を記録できませんでした（n=039）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:40.000Z 日誌を記録できませんでした（n=040）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:41.000Z 日誌を記録できませんでした（n=041）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:42.000Z 日誌を記録できませんでした（n=042）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:43.000Z 日誌を記録できませんでした（n=043）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:44.000Z 日誌を記録できませんでした（n=044）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:45.000Z 日誌を記録できませんでした（n=045）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:46.000Z 日誌を記録できませんでした（n=046）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:47.000Z 日誌を記録できませんでした（n=047）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:48.000Z 日誌を記録できませんでした（n=048）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:49.000Z 日誌を記録できませんでした（n=049）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:50.000Z 日誌を記録できませんでした（n=050）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 150
+      },
+      "ledgerSize": 200
+    },
+    "ledger-full#4": {
+      "output": {
+        "length": 244,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（n=001）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 199
+      },
+      "ledgerSize": 200
+    },
+    "ledger-full#5": {
+      "output": {
+        "length": 161,
+        "text": "offset（200）が帳面の件数（200）以上なので、これより古い分は無い。offset を 199 以下にして呼び直すこと。 デーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 200
+      },
+      "ledgerSize": 200
+    },
+    "ledger-overflow#1": {
+      "output": {
+        "length": 244,
+        "text": "alteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 199
+      },
+      "ledgerSize": 200
+    },
+    "ledger-overflow#2": {
+      "output": {
+        "length": 3919,
+        "text": "alteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=002）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=003）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（n=004）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:05.000Z 日誌を記録できませんでした（n=005）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:06.000Z 日誌を記録できませんでした（n=006）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:07.000Z 日誌を記録できませんでした（n=007）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:08.000Z 日誌を記録できませんでした（n=008）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:09.000Z 日誌を記録できませんでした（n=009）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:10.000Z 日誌を記録できませんでした（n=010）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:11.000Z 日誌を記録できませんでした（n=011）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:12.000Z 日誌を記録できませんでした（n=012）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:13.000Z 日誌を記録できませんでした（n=013）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:14.000Z 日誌を記録できませんでした（n=014）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:15.000Z 日誌を記録できませんでした（n=015）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:16.000Z 日誌を記録できませんでした（n=016）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:17.000Z 日誌を記録できませんでした（n=017）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:18.000Z 日誌を記録できませんでした（n=018）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:19.000Z 日誌を記録できませんでした（n=019）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:20.000Z 日誌を記録できませんでした（n=020）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:21.000Z 日誌を記録できませんでした（n=021）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:22.000Z 日誌を記録できませんでした（n=022）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:23.000Z 日誌を記録できませんでした（n=023）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:24.000Z 日誌を記録できませんでした（n=024）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:25.000Z 日誌を記録できませんでした（n=025）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:26.000Z 日誌を記録できませんでした（n=026）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:27.000Z 日誌を記録できませんでした（n=027）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:28.000Z 日誌を記録できませんでした（n=028）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:29.000Z 日誌を記録できませんでした（n=029）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:30.000Z 日誌を記録できませんでした（n=030）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:31.000Z 日誌を記録できませんでした（n=031）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:32.000Z 日誌を記録できませんでした（n=032）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:33.000Z 日誌を記録できませんでした（n=033）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:34.000Z 日誌を記録できませんでした（n=034）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:35.000Z 日誌を記録できませんでした（n=035）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:36.000Z 日誌を記録できませんでした（n=036）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:37.000Z 日誌を記録できませんでした（n=037）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:38.000Z 日誌を記録できませんでした（n=038）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:39.000Z 日誌を記録できませんでした（n=039）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:40.000Z 日誌を記録できませんでした（n=040）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:41.000Z 日誌を記録できませんでした（n=041）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:42.000Z 日誌を記録できませんでした（n=042）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:43.000Z 日誌を記録できませんでした（n=043）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:44.000Z 日誌を記録できませんでした（n=044）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:45.000Z 日誌を記録できませんでした（n=045）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:46.000Z 日誌を記録できませんでした（n=046）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:47.000Z 日誌を記録できませんでした（n=047）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:48.000Z 日誌を記録できませんでした（n=048）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:49.000Z 日誌を記録できませんでした（n=049）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:50.000Z 日誌を記録できませんでした（n=050）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:51.000Z 日誌を記録できませんでした（n=051）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {
+        "offset": 150
+      },
+      "ledgerSize": 200
+    },
+    "trace-with-value": {
+      "output": {
+        "length": 555,
+        "text": "alteroid: 2026-10-01T00:00:01.000Z 日誌を記録できませんでした（id=FAKE_NOT_A_REAL_VALUE_0123456789）: Error: 書けない（test）\nalteroid: 2026-10-01T00:00:02.000Z 日誌を記録できませんでした（n=2）: Error: 接続できない [REDACTED]\nalteroid: 2026-10-01T00:00:03.000Z 日誌を記録できませんでした（n=3）: Error: 接続できない TOKEN=[REDACTED]\nalteroid: 2026-10-01T00:00:04.000Z 日誌を記録できませんでした（export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789）: Error: 書けない（test）\nデーモンのプロセス（クローンを含む）が残した跡だけである。別プロセスの runner が残した跡はここには出ない。\n（直近 200 件までしか持たず、溢れた古い側から押し出される。それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。 この帳面が数え始めたのは 2026-10-01T00:00:00.000Z。）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "args": {},
+      "ledgerSize": 4
+    }
+  }
+}
