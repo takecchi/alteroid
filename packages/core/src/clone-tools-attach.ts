@@ -12,6 +12,7 @@ import { putLocalFile } from './file-put.js';
 import {
   deleteFile,
   describeAttachmentAlreadyGoneRetraction,
+  describeAttachmentRemoveFailedRetraction,
   describeAttachmentForJournal,
   keepFile,
   listFiles,
@@ -388,6 +389,18 @@ async function journalFileDeleteAlreadyGone(stores: Stores, meta: AttachmentMeta
   });
 }
 
+// `remove` が置き場の断り以外の例外で落ちた回: 置き場によっては途中まで消えているので、「消せなかった」と言い切らない。書けなくても元の例外は変えない
+async function journalFileDeleteFailed(
+  stores: Stores,
+  meta: AttachmentMeta,
+  reason: string,
+): Promise<void> {
+  await appendJournalOrDrop('file_delete', stores.journal, {
+    type: 'decision',
+    ...describeAttachmentRemoveFailedRetraction(meta, reason),
+  });
+}
+
 export function attachTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId } = shared;
   return [
@@ -607,6 +620,7 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
               (meta) => journalFileDeleteBefore(stores, meta),
               (meta, reason) => journalFileDeleteRefused(stores, id, meta, reason),
               (meta) => journalFileDeleteAlreadyGone(stores, meta),
+              (meta, reason) => journalFileDeleteFailed(stores, meta, reason),
             ),
           );
         } catch (error) {

@@ -11,7 +11,9 @@ import {
   AttachmentRejectedError,
   describeAttachmentAlreadyGoneRetraction,
   describeAttachmentForJournal,
+  describeAttachmentRemoveFailedRetraction,
   noteDroppedRecord,
+  reasonOf,
   redactErrorText,
   removeAttachmentCopy,
 } from '@alteroid/core';
@@ -407,7 +409,21 @@ export function attachmentsRoutes(ctx: AppContext, deps: AppDeps) {
           try {
             removed = await stores.attachments.remove(id);
           } catch (error) {
-            if (!(error instanceof AttachmentContentRemoveError)) throw error;
+            if (!(error instanceof AttachmentContentRemoveError)) {
+              // 「消す」の行を書いた回だけ、途中で失敗したと足す（置き場によっては途中まで消えている）。書けなくても元の例外を投げる
+              if (meta !== undefined) {
+                await appendJournalOrDrop(
+                  stores,
+                  {
+                    type: 'decision',
+                    ...describeAttachmentRemoveFailedRetraction(meta, reasonOf(error), actor),
+                  },
+                  '添付の削除の失敗の日誌',
+                  `id=${id}`,
+                );
+              }
+              throw error;
+            }
             // 断ったことを日誌に残す（先に書いた「消す」の行だけでは、消したように読まれるため）。書けなくても断りは変えない。
             await appendJournalOrDrop(
               stores,

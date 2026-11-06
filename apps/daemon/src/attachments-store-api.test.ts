@@ -543,6 +543,39 @@ describe('DELETE /attachments/:id: 中身を置き場から消せなかったと
   });
 });
 
+describe('DELETE /attachments/:id: 置き場の断り以外の例外で落ちたとき（#6516）', () => {
+  it('500 のまま投げ直し、日誌に「消す」の行のあと途中で失敗した旨の打ち消しの行を残す（理由は伏せる）', async () => {
+    vi.stubEnv('PIN_FAKE_DEPLOY_SECRET', 'pinfake-env-value-0123456789');
+    const meta = await uploadOk('a.txt');
+    vi.spyOn(stores.attachments, 'remove').mockRejectedValue(
+      new Error('行を消せない pinfake-env-value-0123456789'),
+    );
+
+    const response = await del(meta.id);
+
+    expect(response.status).toBe(500);
+    const decisions = await stores.journal.list({ types: ['decision'], order: 'asc' });
+    expect(decisions).toHaveLength(2);
+    expect(JSON.stringify(decisions[0])).toContain('添付の中身と控えを消す');
+    const retraction = decisions[1] as { decision: string; grounds: string };
+    expect(retraction.decision).toBe(
+      `直前の添付の削除は途中で失敗した（消し終えたか確かめられない）: a.txt（id=${meta.id}）`,
+    );
+    expect(retraction.grounds).toContain('実行環境の持ち主による操作');
+    expect(retraction.grounds).toContain('理由: Error: 行を消せない [REDACTED]');
+    expect(retraction.grounds).toContain('中身や控えの一部が残っているかもしれない');
+    expect(JSON.stringify(decisions)).not.toContain('pinfake-env-value-0123456789');
+    vi.unstubAllEnvs();
+  });
+
+  it('控えが無い id（「消す」の行を書かない回）は 404 のまま、打ち消しの行を足さない', async () => {
+    const response = await del('no-such-id');
+
+    expect(response.status).toBe(404);
+    expect(await stores.journal.list({ types: ['decision'] })).toEqual([]);
+  });
+});
+
 describe('POST /reset: 添付の中身を置き場から消せなかったとき（#4814）', () => {
   it('500 に隠さず 503 で理由を返し、添付と写しは残し、日誌に断りの行を残す', async () => {
     const meta = await uploadOk('a.txt');

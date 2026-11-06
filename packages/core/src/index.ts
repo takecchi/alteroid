@@ -956,6 +956,7 @@ export {
 export {
   describeAttachmentAlreadyGoneRetraction,
   describeAttachmentForJournal,
+  describeAttachmentRemoveFailedRetraction,
 } from './file-tools.js';
 export {
   runnerAttachmentBodyLimit,

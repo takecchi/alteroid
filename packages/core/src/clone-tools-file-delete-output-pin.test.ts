@@ -303,7 +303,7 @@ const SCENARIOS: Scenario[] = [
     name: 'remove-throws',
     group: 'ほかの例外',
     covers:
-      '`remove` がほかの例外（ストアの失敗）を投げる: 断りの行も打ち消しの行も足さない（先の行だけが残る）。写しも消さない。出力は「消せなかった（もう一度試すと直る場合がある）」（isError ではない）。Error の message（reasonOf）・文字列を投げた場合',
+      '`remove` がほかの例外（ストアの失敗）を投げる: 先の行のあとに「途中で失敗した（消し終えたか確かめられない）」の打ち消しの行を足す（#6516）。写しは消さない。出力は「消せなかった（もう一度試すと直る場合がある）」（isError ではない）。Error の message（reasonOf）・文字列を投げた場合',
     seed: [{ name: 'a.txt', id: 'att-a', copy: true, size: 1 }],
     steps: [
       w(d('att-a'), 'journal', {
@@ -996,9 +996,21 @@ describe('file_delete の出力と呼んだあとの状態の固定（場面ご�
     expect(text('remove-throws#2')).toBe(FAILED('att-a', 'raw string failure'));
     for (const key of ['remove-throws#1', 'remove-throws#2']) {
       expect(step(key).output.thrown, key).toBe(false);
-      expect(step(key).journal, key).toHaveLength(1);
+      // 先の「消す」の行のあとに、途中で失敗した旨の打ち消しの行が足される（#6516）
+      expect(step(key).journal, key).toHaveLength(2);
+      expect(decisions(key)[1], key).toBe(
+        '直前の添付の削除は途中で失敗した（消し終えたか確かめられない）: a.txt（id=att-a）',
+      );
       expect(step(key).copies, key).toEqual(['att-a/a.txt']);
     }
+    expect(groundsOf('remove-throws#1')[1]).toBe(
+      '理由: Error: 行を消せない（test）。中身や控えの一部が残っているかもしれない。もう一度消すと再試行する。',
+    );
+    expect(groundsOf('remove-throws#2')[1]).toBe(
+      '理由: raw string failure。中身や控えの一部が残っているかもしれない。もう一度消すと再試行する。',
+    );
+    // 無い id（「消す」の行を書かない回）では足さない
+    expect(step('get-meta-throws').journal).toEqual([]);
     expect(text('remove-throws#3')).toContain('の中身を消した');
     expect(text('remove-throws-multiline')).toBe(FAILED('att-a', 'Error: 一行目'));
 
