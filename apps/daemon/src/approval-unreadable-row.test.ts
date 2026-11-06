@@ -5,6 +5,7 @@ import {
   captureStderr,
   createManagerPool,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
   UnreadableApprovalError,
 } from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
@@ -41,24 +42,13 @@ const json = (body: unknown) => ({
 function fakeCloneHost(stores: Stores): CloneHost & { answered: string[] } {
   const answered: string[] = [];
   return {
-    postPersisted: async () => 'persisted',
+    ...fakeCloneHostBase({
+      async answerApproval(approvalId: string) {
+        answered.push(approvalId);
+      },
+      managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
+    }),
     answered,
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval(approvalId: string) {
-      answered.push(approvalId);
-    },
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
-    managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
   };
 }
 

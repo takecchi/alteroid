@@ -830,22 +830,6 @@ describe('HTTP API', () => {
       }
     });
 
-    it('attach を持たない器では 503（黙って空を返さない）', async () => {
-      const bare = createApp({
-        clone: { ...fake.clone, attach: undefined },
-        stores,
-        token: 'test-token',
-        shutdown: () => (shutdowns += 1),
-        scheduler: schedule.scheduler,
-        journalEvents: journalBus,
-      });
-      const response = await bare.request('/chat/conv-a/stream');
-      expect(response.status).toBe(503);
-      expect(await response.json()).toEqual({
-        error: 'この器は進行中のターンの途中経過を持たない',
-      });
-    });
-
     it('OpenAPI に載っている', async () => {
       const spec = (await (await app.request('/openapi.json')).json()) as {
         paths: Record<string, Record<string, unknown>>;
@@ -936,13 +920,6 @@ describe('HTTP API', () => {
 
     expect(response.status).toBe(200);
     expect(fake.ended).toEqual(['conv-x']);
-  });
-
-  it('走っているターンを止める口（#1398 c23-1）: 口を持たないクローンは unsupported と申告する', async () => {
-    const response = await app.request('/clone/interrupt', post);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ outcome: 'unsupported' });
   });
 
   it('走っているターンを止める口（#1398 c23-1）: クローンの答え（interrupted / idle）をそのまま返す', async () => {
@@ -1039,13 +1016,6 @@ describe('HTTP API', () => {
     });
     expect(response.status).toBe(400);
     expect(calls).toBe(0);
-  });
-
-  it('セッションの開き直し（#4173）: 口を持たないクローンは unsupported と申告する', async () => {
-    const response = await app.request('/clone/session/reopen', json({ confirm: true }));
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ outcome: 'unsupported' });
   });
 
   it('セッションの開き直し（#4173）: 既定は蒸留しない・理由は既定文。クローンの答え（deferred / now）をそのまま返す', async () => {

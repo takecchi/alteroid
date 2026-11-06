@@ -7,6 +7,7 @@ import {
   createMcpServerService,
   createMemoryStores,
   DEFAULT_SSE_HEARTBEAT_MS,
+  fakeCloneHost,
   fakeManagerPool,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,7 +37,7 @@ function stubClone(): CloneHost {
     relocateFrom: () => undefined,
     vacate: () => Promise.resolve({}),
   });
-  return {
+  return fakeCloneHost({
     managers,
     post: () => 'conversation-1',
     postPersisted: () => Promise.resolve('persisted' as const),
@@ -49,7 +50,7 @@ function stubClone(): CloneHost {
     endConversation: () => Promise.resolve(),
     answerApproval: () => Promise.resolve(true),
     stop: () => Promise.resolve(),
-  } as unknown as CloneHost;
+  } as unknown as Partial<CloneHost>);
 }
 
 let nextSubject = 'sub-1';

@@ -1,5 +1,5 @@
 import type { CloneHost, ManagerSummary } from '@alteroid/core';
-import { createMemoryStores, DEFAULT_SSE_HEARTBEAT_MS } from '@alteroid/core';
+import { createMemoryStores, DEFAULT_SSE_HEARTBEAT_MS, fakeCloneHost } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
@@ -8,11 +8,11 @@ import { createWorkerToolBus } from './topology-activity.js';
 import { topologyResponseSchema } from './openapi.js';
 
 function fakeCloneFor(managers: ManagerSummary[], overrides: Partial<CloneHost> = {}) {
-  return {
+  return fakeCloneHost({
     usageBlocked: false,
-    managers: { list: async () => managers },
+    managers: { list: async () => managers } as unknown as CloneHost['managers'],
     ...overrides,
-  } as unknown as CloneHost;
+  });
 }
 
 function runningManager(id: string): ManagerSummary {

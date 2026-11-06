@@ -4,6 +4,7 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   createMemoryStores,
+  fakeCloneHost,
   sha256Hex,
 } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -22,7 +23,7 @@ let posted: InboxEvent[] = [];
 let persistOutcome: 'persisted' | 'unavailable' | 'throws' = 'persisted';
 
 function fakeClone(): CloneHost {
-  return {
+  return fakeCloneHost({
     post: (event: InboxEvent) => {
       posted.push(event);
       return 'conversation-1';
@@ -37,7 +38,7 @@ function fakeClone(): CloneHost {
     stop: () => Promise.resolve(),
     usageBlocked: false,
     managers: { list: () => Promise.resolve([]) },
-  } as unknown as CloneHost;
+  } as unknown as Partial<CloneHost>);
 }
 
 function planOf(enabled: boolean): AuthPlan {

@@ -342,7 +342,7 @@ describe('読めなかった委譲の行（#2705）', () => {
   it('サービスは unreadableJobs の口から読んで載せる。0件なら載せない', async () => {
     const make = (rows: typeof bad) =>
       createTopologyService({
-        clone: { usageBlocked: false, managers: { list: async () => [] } },
+        clone: { usageBlocked: false, activeTurn: () => null, managers: { list: async () => [] } },
         unreadableJobs: async () => rows,
         modelsOf: () => ({}),
         activity: createTopologyActivityTracker(),
@@ -357,7 +357,7 @@ describe('読めなかった委譲の行（#2705）', () => {
 describe('createTopologyService', () => {
   function service(list: () => Promise<ManagerSummary[]>, now: () => number) {
     return createTopologyService({
-      clone: { usageBlocked: false, managers: { list } },
+      clone: { usageBlocked: false, activeTurn: () => null, managers: { list } },
       unreadableJobs: () => Promise.resolve([]),
       modelsOf: () => ({}),
       activity: createTopologyActivityTracker(),
@@ -381,12 +381,12 @@ describe('createTopologyService', () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
-  it('activeTurn を実装していない clone は unknown、runners 未配線は空', async () => {
+  it('走っているターンが無い clone は idle、runners 未配線は空', async () => {
     const snapshot = await service(
       async () => [],
       () => NOW,
     ).snapshot();
-    expect(snapshot.clone.state).toBe('unknown');
+    expect(snapshot.clone.state).toBe('idle');
     expect(snapshot.runners).toEqual([]);
     expect(snapshot.storage).toEqual({ state: 'unknown' });
   });
