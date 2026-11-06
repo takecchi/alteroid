@@ -9,9 +9,8 @@ import {
   type RunnerPermissionRulesResult,
   type RunnerRegistry,
 } from './runner-protocol.js';
-import { pushToRunners } from './push-channel.js';
+import { createPushChannel, pushToRunners } from './push-channel.js';
 import type { PermissionGrant } from './schema.js';
-import { createSerialQueue } from './serial-queue.js';
 import { sessionAllowRuleShapeOf } from './session-allow-rules.js';
 import type { Stores } from './store.js';
 
@@ -144,12 +143,12 @@ export function createDelegatedPermissionRuleService(
   options: DelegatedPermissionRuleServiceOptions,
 ): DelegatedPermissionRuleService {
   const { stores, runners } = options;
-  const pushListeners = new Set<
-    (results: readonly PermissionRulesRunnerResult[], scope?: { unnamed: true }) => void
-  >();
-
-  // 前の失敗で列が止まらないように、常に解決する形で繋ぐ。
-  const { run: serial } = createSerialQueue();
+  // 列は前の失敗で止まらない（常に解決する形で繋ぐ）。2つめの引数 `unnamed` は名簿を引けず runner を名指せなかった回の印。
+  const {
+    serial,
+    onPushed,
+    notify: notifyListeners,
+  } = createPushChannel<PermissionRulesRunnerResult, { unnamed: true }>();
 
   async function journal(decision: string, grounds: string): Promise<void> {
     try {
@@ -182,14 +181,8 @@ export function createDelegatedPermissionRuleService(
   }
 
   function notify(results: readonly PermissionRulesRunnerResult[], unnamed?: true): void {
-    for (const listener of pushListeners) {
-      try {
-        if (unnamed === true) listener(results, { unnamed: true });
-        else listener(results);
-      } catch {
-        // 帳面に積めなかっただけで、配布の結果そのものは返す。
-      }
-    }
+    // 購読者の例外は握られる（帳面に積めなかっただけで、配布の結果そのものは返す）。
+    notifyListeners(results, unnamed === true ? { unnamed: true } : undefined);
   }
 
   // 読めなかった回の失敗を、配る先の runner ごとに知らせる。名簿も引けず配る先が分からないときは、名指しなしで知らせる（受け取る側が知っている runner 全部へ記録する）。
@@ -278,9 +271,6 @@ export function createDelegatedPermissionRuleService(
         return results;
       }),
 
-    onPushed: (listener) => {
-      pushListeners.add(listener);
-      return () => pushListeners.delete(listener);
-    },
+    onPushed,
   };
 }

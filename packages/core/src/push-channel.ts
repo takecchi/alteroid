@@ -2,16 +2,20 @@ import { reasonOf } from './dropped-record.js';
 import type { RunnerClient, RunnerRegistry } from './runner-protocol.js';
 import { createSerialQueue, type SerialQueue } from './serial-queue.js';
 
-interface PushChannel<R> {
+interface PushChannel<R, S> {
   serial: SerialQueue['run'];
-  onPushed(listener: (results: readonly R[]) => void): () => void;
+  onPushed(listener: (results: readonly R[], scope?: S) => void): () => void;
   // 購読者の例外は握る: 帳面に積めなかっただけで、配布の結果そのものは呼び手が返す。
-  notify(results: readonly R[]): void;
+  // `scope` は省略できる2つめの引数（委譲の許可の「名指しなし」の印）。省略したときは購読者へ渡さない。
+  notify(results: readonly R[], scope?: S): void;
 }
 
-/** 配布サービスが持つ「直列の列」と「配った結果の購読」（`ManagerPool` が購読して押し込みの帳面に積む）。 */
-export function createPushChannel<R>(): PushChannel<R> {
-  const listeners = new Set<(results: readonly R[]) => void>();
+/**
+ * 配布サービスが持つ「直列の列」と「配った結果の購読」（`ManagerPool` が購読して押し込みの帳面に積む）。
+ * `S` は購読者へ添える2つめの引数の型（既定は無し: 使わないサービスの型と振る舞いは変わらない）。
+ */
+export function createPushChannel<R, S = never>(): PushChannel<R, S> {
+  const listeners = new Set<(results: readonly R[], scope?: S) => void>();
   const { run: serial } = createSerialQueue();
   return {
     serial,
@@ -19,10 +23,11 @@ export function createPushChannel<R>(): PushChannel<R> {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    notify: (results) => {
+    notify: (results, scope) => {
       for (const listener of listeners) {
         try {
-          listener(results);
+          if (scope === undefined) listener(results);
+          else listener(results, scope);
         } catch {
           // 帳面に積めなかっただけ。
         }
