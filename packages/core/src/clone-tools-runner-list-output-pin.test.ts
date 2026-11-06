@@ -179,7 +179,6 @@ const fingerprintFleet = (): RunnerFleetOverview =>
       profileProbe: { status: 'failed', error: 'profile 500' },
       mcpServersProbe: { status: 'failed', error: 'mcp 502' },
     }),
-    rn(5, { mcpServersProbe: { status: 'unsupported' } }),
     rn(6, {
       credentials: Array.from({ length: 12 }, (_, i) => ({
         name: `SECRET_NUMBER_${String(i)}`,
@@ -345,10 +344,9 @@ const resourceFleet = (): RunnerFleetOverview =>
     rn(6, {
       resources: { pidOwnerRecords: { remembered: 0, cap: 10, forgottenTotal: 0 } },
     }),
-    // 資源が無い理由の4つ + 理由の欄すら無い
+    // 資源が無い理由の3つ + 理由の欄すら無い
     rn(7, { state: 'unreachable', resourcesProbe: { status: 'unheard' } }),
     rn(8, { resourcesProbe: { status: 'failed', error: 'resources() が落ちた' } }),
-    rn(9, { resourcesProbe: { status: 'unsupported' } }),
     rn(10, { resourcesProbe: { status: 'asked' } }),
     rn(11),
   ]);
@@ -589,7 +587,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'fingerprints',
     covers:
-      'fingerprints 無し（出さない）と有り: 鍵・プロファイル・MCP の 聞いていない／失敗／0件／在る／口が無い／長くて切れる／欄が無い',
+      'fingerprints 無し（出さない）と有り: 鍵・プロファイル・MCP の 聞いていない／失敗／0件／在る／長くて切れる／欄が無い',
     fleet: fingerprintFleet,
     steps: [{}, { args: { fingerprints: true } }, { args: { fingerprints: false } }],
   },
@@ -904,7 +902,6 @@ describe('runner_list の出力の固定（場面ごとの全文と字数）', (
     expect(text('fingerprints#2')).toContain('プロファイルを確かめられなかった: profile 500');
     expect(text('fingerprints#2')).toContain('MCP の登録: github, linear（指紋');
     expect(text('fingerprints#2')).toContain('MCP の登録: 確かめていない');
-    expect(text('fingerprints#2')).toContain('MCP の登録: 確かめられない');
     expect(text('fingerprints#2')).toContain('MCP の登録を確かめられなかった: mcp 502');
     expect(text('fingerprints#3')).toBe(text('fingerprints#1'));
     expect(text('push-health')).toContain('プロファイル ok（');
@@ -936,7 +933,6 @@ describe('runner_list の出力の固定（場面ごとの全文と字数）', (
     expect(text('resources#2')).toContain('pids: 訊けたが読めない器だった');
     expect(text('resources#2')).toContain('pids: 確かめていない');
     expect(text('resources#2')).toContain('pids: 訊いたが失敗した: resources() が落ちた');
-    expect(text('resources#2')).toContain('pids: 確かめられない');
     expect(text('resources#2')).toContain('pids: 訊けたが、応答に資源が無かった');
     expect(text('resources#2')).toContain('pids: runner に訊けなかった');
     expect(text('resources#2')).toContain('pids について:');

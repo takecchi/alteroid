@@ -149,8 +149,6 @@ import {
   probeRunnerMcpServersFingerprint,
   probeRunnerResources,
   type RunnerFingerprintProbe,
-  type RunnerMcpServersProbe,
-  type RunnerResourcesProbe,
 } from './runner-probe.js';
 import { brief } from './runner.js';
 import type {
@@ -654,19 +652,19 @@ export interface RunnerOverview {
   profile?: RunnerProfileFingerprint;
   profileProbe?: RunnerFingerprintProbe;
   /**
-   * 値は運ばない。無いことだけを見ない: `asked` かつ無しなら「置いていない」、`unsupported` なら
-   * 「口を持たない（古い runner）」、`unheard`/`failed` なら「訊けなかった」。
+   * 値は運ばない。無いことだけを見ない: `asked` かつ無しなら「置いていない」、`unheard`/`failed` なら
+   * 「訊けなかった」。
    */
   mcpServers?: RunnerMcpServersFingerprint;
-  mcpServersProbe?: RunnerMcpServersProbe;
+  mcpServersProbe?: RunnerFingerprintProbe;
   /**
    * 潰さない3状態: 読めた／runner に訊けなかった（`resources` 自体が `undefined`。理由は
    * `resourcesProbe` が持つ）／訊けたが pids が読めなかった（cgroup を持たない器。欄ごと省略）。
    * 2 と 3 を同じ文言に倒さない: 疑う先が違う（2 は接続・器の生死、3 は cgroup 構成）。
    */
   resources?: RunnerExecutionResources;
-  /** `resources` が無い理由（`unheard` / `failed` / `unsupported`）を持つ。 */
-  resourcesProbe?: RunnerResourcesProbe;
+  /** `resources` が無い理由（`unheard` / `failed`。`asked` で無しなら、runner が資源を名乗らなかった）を持つ。 */
+  resourcesProbe?: RunnerFingerprintProbe;
   /**
    * 無ければ欄ごと無い: 「飽和ではない」とは言わない（材料が無いだけ）。窓の内側の印は
    * デーモンのメモリにあるので `resources` の要否に関わらず載り、`at-limit` は現在値が取れたときだけ足される。

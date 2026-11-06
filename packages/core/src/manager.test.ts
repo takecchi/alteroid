@@ -7231,7 +7231,7 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   describe('runner_list の MCP の登録の指紋（mcpServersProbe、Issue #1949）', () => {
-    it('何も置いていない runner は asked になり、指紋は載らない（口は必須なので unsupported にはならない）', async () => {
+    it('何も置いていない runner は asked になり、指紋は載らない', async () => {
       const a = new FakePoolRunner('runner-a');
       const stores = createMemoryStores();
       const registry = createRunnerRegistry([a]);

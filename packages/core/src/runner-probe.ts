@@ -15,20 +15,6 @@ export type RunnerFingerprintProbe =
   { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
 
 /**
- * `unsupported`（呼べる口が無い）を `failed`（呼んだが RPC が落ちた）と潰さない:
- * 鍵を配り直せば直る故障と、runner を上げないと直らない故障が同じ文言に見える。
- * `mcpServers` と `resources` の探りは、口が必須になったので `unsupported` を返さない。
- * 型に残すのは、`RunnerOverview` の `mcpServersProbe` / `resourcesProbe` を読む側（`clone-tools-ops.ts` の文言）が `unsupported` を場合分けしているため。
- */
-export type RunnerMcpServersProbe = RunnerFingerprintProbe | { status: 'unsupported' };
-
-/**
- * 疑う先が違うので潰さない: `unheard` は接続、`failed` は器の RPC、`unsupported` は runner の版。
- * `asked` で `resources` が `undefined` のままでも、応答が資源を名乗らなかっただけで失敗ではない。
- */
-export type RunnerResourcesProbe = RunnerMcpServersProbe;
-
-/**
  * **`.catch(() => undefined)` で握り潰さない。** 「頼まれていない」「聞けなかった」「聞いたが失敗した」を
  * 同じ `undefined` へ潰さないよう `probe` を必ず併せて返し、呼び出し側が判断を省略できないようにする。
  */
@@ -46,16 +32,13 @@ export async function probeRunnerFingerprint<T>(
   }
 }
 
-/**
- * **`probeRunnerFingerprint` と分けたのは、返す型が `unsupported` を含む型のまま（`RunnerMcpServersProbe`）で、
- * `GET /runners` の応答の形と揃えているから。**
- */
+/** `probeRunnerFingerprint` と同じ3状態（`asked` / `unheard` / `failed`）を返す、MCP の登録の指紋の探り。 */
 export async function probeRunnerMcpServersFingerprint(
   client: RunnerClient | undefined,
   fingerprints: boolean | undefined,
 ): Promise<{
   value: RunnerMcpServersFingerprint | undefined;
-  probe: RunnerMcpServersProbe | undefined;
+  probe: RunnerFingerprintProbe | undefined;
 }> {
   if (!fingerprints) return { value: undefined, probe: undefined };
   if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
@@ -66,13 +49,16 @@ export async function probeRunnerMcpServersFingerprint(
   }
 }
 
-/** `.catch(() => undefined)` で「繋がっていない」「失敗した」を同じ `undefined` に潰さない。 */
+/**
+ * `.catch(() => undefined)` で「繋がっていない」「失敗した」を同じ `undefined` に潰さない。
+ * `asked` で `resources` が `undefined` のままでも、応答が資源を名乗らなかっただけで失敗ではない。
+ */
 export async function probeRunnerResources(
   client: RunnerClient | undefined,
   resources: boolean | undefined,
 ): Promise<{
   value: RunnerPlacementResources | undefined;
-  probe: RunnerResourcesProbe | undefined;
+  probe: RunnerFingerprintProbe | undefined;
 }> {
   if (!resources) return { value: undefined, probe: undefined };
   if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };

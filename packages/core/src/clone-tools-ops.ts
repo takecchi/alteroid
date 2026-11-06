@@ -323,11 +323,8 @@ function runnerFingerprintLines(runner: RunnerOverview): string[] {
   } else if (runner.profile !== undefined) {
     lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
   }
-  // `unsupported` は `failed` とは別の文言で言う: 鍵を配り直せば直る故障と、runner を上げないと直らない故障を混ぜないため
   if (runner.mcpServersProbe?.status === 'unheard') {
     lines.push('  MCP の登録: 確かめていない（繋がっていないので聞いていない）');
-  } else if (runner.mcpServersProbe?.status === 'unsupported') {
-    lines.push('  MCP の登録: 確かめられない（この runner は口を持たない。古い版）');
   } else if (runner.mcpServersProbe?.status === 'failed') {
     lines.push(`  MCP の登録を確かめられなかった: ${runner.mcpServersProbe.error}`);
   } else if (runner.mcpServers !== undefined) {
@@ -490,8 +487,6 @@ function runnerPidsLines(runner: RunnerOverview): string[] {
       lines.push('  pids: 確かめていない（繋がっていないので聞いていない）');
     } else if (probe?.status === 'failed') {
       lines.push(`  pids: 訊いたが失敗した: ${probe.error}`);
-    } else if (probe?.status === 'unsupported') {
-      lines.push('  pids: 確かめられない（この runner は口を持たない。古い版）');
     } else if (probe?.status === 'asked') {
       lines.push('  pids: 訊けたが、応答に資源が無かった');
     } else {

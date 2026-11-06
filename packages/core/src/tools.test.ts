@@ -9146,7 +9146,7 @@ describe('runner_list（器の一覧）', () => {
           managers: [],
           credentialsProbe: { status: 'failed', error: 'Error: credentials RPC failed (test)' },
           profileProbe: { status: 'unheard' },
-          mcpServersProbe: { status: 'unsupported' },
+          mcpServersProbe: { status: 'asked' },
         },
       ],
       unassigned: [],
@@ -9157,7 +9157,7 @@ describe('runner_list（器の一覧）', () => {
 
     expect(reply).not.toContain('鍵を確かめられなかった');
     expect(reply).not.toContain('プロファイル: 確かめていない');
-    expect(reply).not.toContain('MCP の登録: 確かめられない');
+    expect(reply).not.toContain('MCP の登録');
     expect(h.runnersCalls).toEqual([{}]);
   });
 
@@ -9337,30 +9337,6 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { fingerprints: true });
 
     expect(reply).toContain('MCP の登録: 確かめていない（繋がっていないので聞いていない）');
-  });
-
-  it('MCP の登録は、口を持たない古い runner（unsupported）だと専用の文言で出る（failed とは別）', async () => {
-    const h = harness();
-    h.setRunnersOverview({
-      runners: [
-        {
-          label: 'runner-a',
-          revision: { status: 'unheard' },
-          state: 'connected',
-          since: '2026-01-01T00:00:00.000Z',
-          runnerId: 'runner-a',
-          managers: [],
-          mcpServersProbe: { status: 'unsupported' },
-        },
-      ],
-      unassigned: [],
-      daemonRevision: { status: 'unknown' },
-    });
-
-    const reply = await h.call('runner_list', { fingerprints: true });
-
-    expect(reply).toContain('MCP の登録: 確かめられない（この runner は口を持たない。古い版）');
-    expect(reply).not.toContain('MCP の登録を確かめられなかった');
   });
 
   it('MCP の登録を聞いて失敗した（failed）ときは理由付きで「確かめられなかった」と出る', async () => {
@@ -9570,7 +9546,7 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('pids: unknown');
   });
 
-  it('pids が出ない理由を、繋がっていない・失敗した・古い runner で別の文言にし、失敗は理由を載せる', async () => {
+  it('pids が出ない理由を、繋がっていない・失敗したで別の文言にし、失敗は理由を載せる', async () => {
     const base = {
       revision: { status: 'unheard' as const },
       since: '2026-01-01T00:00:00.000Z',
@@ -9594,13 +9570,6 @@ describe('runner_list（器の一覧）', () => {
         },
         {
           ...base,
-          label: 'runner-c',
-          state: 'connected',
-          runnerId: 'runner-c',
-          resourcesProbe: { status: 'unsupported' },
-        },
-        {
-          ...base,
           label: 'runner-d',
           state: 'connected',
           runnerId: 'runner-d',
@@ -9616,7 +9585,6 @@ describe('runner_list（器の一覧）', () => {
 
     expect(reply).toContain('pids: 確かめていない（繋がっていないので聞いていない）');
     expect(reply).toContain('pids: 訊いたが失敗した: Error: resources RPC failed (test)');
-    expect(reply).toContain('pids: 確かめられない（この runner は口を持たない。古い版）');
     expect(reply).toContain('pids: 12 / 100');
     expect(reply).not.toContain('器が開いていない、または応答が無い');
   });
