@@ -64,6 +64,8 @@ async function seed(stores: Stores): Promise<void> {
       updatedAt: new Date(Date.parse('2026-01-01T00:00:00.000Z') + i * 1000).toISOString(),
       status: 'queued',
       origin: 'self',
+      // 起点の会話を持たせる: 持たない自分のメモだけでは発意 tick の門が開かず、2回目の tick が回らないため
+      originConversationId: `conv-task-${i}`,
       title: `待ち行列の仕事 ${i}`,
       body: `待ち行列の本文 ${i}`,
     });
