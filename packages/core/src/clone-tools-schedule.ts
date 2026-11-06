@@ -509,6 +509,30 @@ async function renderScheduleListAll(args: {
   return lines.join('\n');
 }
 
+// 外す前に書く先の行。読めなかった行は本文（`request`）を取り出せない
+function buildScheduleRemoveEntry(args: {
+  kind: string;
+  before: ScheduledRequest | 'unreadable';
+}): JournalEntryInput {
+  const { kind, before } = args;
+  return {
+    type: 'decision',
+    decision:
+      before === 'unreadable'
+        ? `読めない形で入っていた依頼を外す: ${kind}`
+        : `定期の依頼を外す: ${kind}: ${before.request}`,
+    grounds: 'この依頼はもう要らないという判断',
+  };
+}
+
+function renderScheduleRemoveMissing(kind: string): string {
+  return `継続中の依頼 ${kind} は無い。`;
+}
+
+function renderScheduleRemoveDone(kind: string): string {
+  return `${kind} を外した。`;
+}
+
 export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -630,15 +654,7 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
       async ({ kind }) => {
         // 外した行の本文は行から消えるので、日誌へ残してから外す（`removeScheduleJournalFirst`）。壊れた行は `get` が投げるので、読めない形で入っていた依頼として扱い、外す目的まで届かせる。
         const result = await removeScheduleJournalFirst(stores, kind, {
-          buildEntry: (before) => ({
-            type: 'decision',
-            decision:
-              before === 'unreadable'
-                ? // 読めなかった行なので本文（`request`）は取り出せない
-                  `読めない形で入っていた依頼を外す: ${kind}`
-                : `定期の依頼を外す: ${kind}: ${before.request}`,
-            grounds: 'この依頼はもう要らないという判断',
-          }),
+          buildEntry: (before) => buildScheduleRemoveEntry({ kind, before }),
         });
         if (result.kind === 'journal-failed') {
           // 外す前に落ちたので何も起きていない（`act-not-performed`）
@@ -651,7 +667,7 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
           );
         }
         // 外せなかった（先に読んだ後で消えていた）: 打ち消しの行は helper が足してある
-        if (result.kind !== 'removed') return text(`継続中の依頼 ${kind} は無い。`);
+        if (result.kind !== 'removed') return text(renderScheduleRemoveMissing(kind));
         // 口が渡されない器は消さない: 配達だけが続く半端な状態を作らない（本番の `ToolContext` は2箇所とも渡している）
         if (context.dropQueuedInboxEvents !== undefined) {
           await dropUnreadTimersOfKind(
@@ -660,7 +676,7 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
             kind,
           );
         }
-        return text(`${kind} を外した。`);
+        return text(renderScheduleRemoveDone(kind));
       },
     ),
   ];
