@@ -1,0 +1,2353 @@
+{
+  "counts": {
+    "credential/apply-no-runners": 10,
+    "credential/apply-two-runners": 16,
+    "credential/apply-one-runner-fails": 16,
+    "credential/apply-removal": 14,
+    "credential/apply-narrowed-scope": 14,
+    "credential/apply-rejections": 18,
+    "credential/apply-overlong-stderr": 26,
+    "credential/apply-on-applied-throws": 14,
+    "credential/apply-store-failures": 12,
+    "credential/apply-roster-fails": 10,
+    "credential/sync-nothing": 6,
+    "credential/sync-match": 8,
+    "credential/sync-behind": 10,
+    "credential/sync-unreadable": 10,
+    "credential/sync-pending-removals": 16,
+    "profile/set-bare": 7,
+    "profile/set-two-runners": 13,
+    "profile/set-runner-failures": 13,
+    "profile/set-with-applier": 13,
+    "profile/set-prepare-rejects": 4,
+    "profile/set-write-fails": 8,
+    "profile/set-commit-fails": 9,
+    "profile/set-commit-fails-rollback-fails": 9,
+    "profile/set-input-rejections": 4,
+    "profile/remove-and-clear": 33,
+    "profile/apply-whole-script": 24,
+    "profile/roster-fails": 8,
+    "profile/read-after-write-fails": 7,
+    "profile/restore": 7,
+    "profile/sync-nothing": 4,
+    "profile/sync-match": 4,
+    "profile/sync-different-and-removed": 12,
+    "profile/sync-unreadable": 6,
+    "mcp/apply-no-runners": 3,
+    "mcp/apply-two-runners": 9,
+    "mcp/apply-one-runner-fails": 9,
+    "mcp/apply-empty-removes": 7,
+    "mcp/apply-no-fingerprint-back": 7,
+    "mcp/apply-store-rejects": 4,
+    "mcp/apply-roster-fails": 4,
+    "mcp/sync-nothing": 4,
+    "mcp/sync-match": 4,
+    "mcp/sync-different-and-removed": 12,
+    "mcp/sync-unreadable-and-set-fails": 12,
+    "plugin/apply-no-runners": 3,
+    "plugin/apply-no-plugins": 9,
+    "plugin/apply-two-runners": 25,
+    "plugin/apply-already-matching": 15,
+    "plugin/apply-differing-and-extra": 15,
+    "plugin/apply-one-plugin-fails": 19,
+    "plugin/apply-unreadable": 15,
+    "plugin/apply-roster-fails": 4,
+    "plugin/apply-list-fails": 2,
+    "plugin/sync-runner": 30,
+    "permission-rules/push-no-registry": 0,
+    "permission-rules/push-two-runners-changed": 17,
+    "permission-rules/push-unchanged": 9,
+    "permission-rules/push-one-runner-fails": 13,
+    "permission-rules/push-grants-unreadable": 7,
+    "permission-rules/push-roster-unreadable": 5,
+    "permission-rules/push-both-unreadable": 7,
+    "permission-rules/push-journal-fails": 9,
+    "permission-rules/sync-runner": 16
+  },
+  "scenarios": {
+    "credential/apply-no-runners": {
+      "out": {
+        "ok": {
+          "fingerprints": [
+            {
+              "name": "GH_TOKEN",
+              "sha256": "12f3f4781861",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "all",
+              "secret": true
+            }
+          ],
+          "runners": [],
+          "restartRequired": []
+        }
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "3 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true}]]",
+        "6 < credentials.put [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"GH_TOKEN\"]}]",
+        "8 < credentials.updatePendingRemovals \"<undefined>\"",
+        "10 onPushed []",
+        "10 onApplied [\"GH_TOKEN\"]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-two-runners": {
+      "out": {
+        "ok": {
+          "fingerprints": [
+            {
+              "name": "APP_ONLY",
+              "sha256": "de2784ca5358",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "app",
+              "secret": true
+            },
+            {
+              "name": "GH_TOKEN",
+              "sha256": "12f3f4781861",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "all",
+              "secret": true
+            },
+            {
+              "name": "PLAIN_NAME",
+              "sha256": "a116c9ed46d6",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "all",
+              "secret": false,
+              "value": "plain"
+            }
+          ],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "credentials": [
+                {
+                  "name": "GH_TOKEN",
+                  "sha256": "sha-a",
+                  "updatedAt": "2026-11-08T00:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": true,
+              "credentials": [
+                {
+                  "name": "GH_TOKEN",
+                  "sha256": "sha-b",
+                  "updatedAt": "2026-11-08T00:00:00.000Z"
+                }
+              ]
+            }
+          ],
+          "restartRequired": []
+        }
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "3 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true},{\"name\":\"APP_ONLY\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"scope\":\"app\",\"secret\":true},{\"name\":\"PLAIN_NAME\",\"value\":\"plain\",\"scope\":\"all\",\"secret\":false}]]",
+        "6 < credentials.put [{\"name\":\"APP_ONLY\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"app\",\"secret\":true},{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true},{\"name\":\"PLAIN_NAME\",\"value\":\"plain\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":false}]",
+        "7 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"GH_TOKEN\",\"PLAIN_NAME\"]}]",
+        "8 < credentials.updatePendingRemovals \"<undefined>\"",
+        "9 > registry.list",
+        "9 < registry.list 2 runners",
+        "10 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"},{\"name\":\"PLAIN_NAME\",\"value\":\"plain\"}]]",
+        "10 > runner-b.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"},{\"name\":\"PLAIN_NAME\",\"value\":\"plain\"}]]",
+        "11 < runner-a.setCredentials [{\"name\":\"GH_TOKEN\",\"sha256\":\"sha-a\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "11 < runner-b.setCredentials [{\"name\":\"GH_TOKEN\",\"sha256\":\"sha-b\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "16 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"credentials\":[{\"name\":\"GH_TOKEN\",\"sha256\":\"sha-a\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]},{\"runnerId\":\"runner-b\",\"ok\":true,\"credentials\":[{\"name\":\"GH_TOKEN\",\"sha256\":\"sha-b\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]}]",
+        "16 onApplied [\"APP_ONLY\",\"GH_TOKEN\",\"PLAIN_NAME\"]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-one-runner-fails": {
+      "out": {
+        "ok": {
+          "fingerprints": [
+            {
+              "name": "GH_TOKEN",
+              "sha256": "12f3f4781861",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "all",
+              "secret": true
+            }
+          ],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "credentials": [
+                {
+                  "name": "GH_TOKEN",
+                  "sha256": "sha-a",
+                  "updatedAt": "2026-11-08T00:00:00.000Z"
+                }
+              ]
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": false,
+              "error": "Error: runner b is down"
+            }
+          ],
+          "restartRequired": []
+        }
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "3 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true}]]",
+        "6 < credentials.put [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"GH_TOKEN\"]}]",
+        "8 < credentials.updatePendingRemovals \"<undefined>\"",
+        "9 > registry.list",
+        "9 < registry.list 2 runners",
+        "10 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"}]]",
+        "10 > runner-b.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"}]]",
+        "11 < runner-a.setCredentials [{\"name\":\"GH_TOKEN\",\"sha256\":\"sha-a\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "11 < runner-b.setCredentials threw Error: runner b is down",
+        "16 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"credentials\":[{\"name\":\"GH_TOKEN\",\"sha256\":\"sha-a\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: runner b is down\"}]",
+        "16 onApplied [\"GH_TOKEN\"]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-removal": {
+      "out": {
+        "ok": {
+          "fingerprints": [],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "credentials": []
+            }
+          ],
+          "restartRequired": []
+        }
+      },
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "6 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"\"}]]",
+        "9 < credentials.put []",
+        "10 > credentials.updatePendingRemovals [{\"add\":[\"GH_TOKEN\"],\"forget\":[]}]",
+        "11 < credentials.updatePendingRemovals \"<undefined>\"",
+        "12 > registry.list",
+        "12 < registry.list 1 runners",
+        "13 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"\"}]]",
+        "14 < runner-a.setCredentials []",
+        "19 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"credentials\":[]}]",
+        "19 onApplied [\"GH_TOKEN\"]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-narrowed-scope": {
+      "out": {
+        "ok": {
+          "fingerprints": [
+            {
+              "name": "GH_TOKEN",
+              "sha256": "de2784ca5358",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "app",
+              "secret": true
+            }
+          ],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "credentials": []
+            }
+          ],
+          "restartRequired": []
+        }
+      },
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "6 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"scope\":\"app\",\"secret\":true}]]",
+        "9 < credentials.put [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"app\",\"secret\":true}]",
+        "10 > credentials.updatePendingRemovals [{\"add\":[\"GH_TOKEN\"],\"forget\":[]}]",
+        "11 < credentials.updatePendingRemovals \"<undefined>\"",
+        "12 > registry.list",
+        "12 < registry.list 1 runners",
+        "13 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"\"}]]",
+        "14 < runner-a.setCredentials []",
+        "19 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"credentials\":[]}]",
+        "19 onApplied [\"GH_TOKEN\"]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-rejections": {
+      "out": [
+        {
+          "name": "empty",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "鍵が1つも渡されていない（置くものが無い）"
+          }
+        },
+        {
+          "name": "bad-name",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "鍵の名前として認められない: \"lower\"（英大文字・数字・_ のみ）"
+          }
+        },
+        {
+          "name": "withheld",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "WITHHELD_KEY は子プロセスへ伏せる鍵なので、鍵として配れない（伏せる仕組みを鍵の仕組みで越えさせない）"
+          }
+        },
+        {
+          "name": "pool-owned",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "<str 129 chars>"
+          }
+        },
+        {
+          "name": "env-file-owned",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "<str 142 chars>"
+          }
+        },
+        {
+          "name": "duplicate",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "DUP_NAME が2回渡されている（どちらが残るかを決めない）"
+          }
+        },
+        {
+          "name": "too-long",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "鍵の名前が長すぎる（129 文字。上限は 128 文字——runner の受け口と同じ上限）"
+          }
+        },
+        {
+          "name": "secret-change",
+          "threw": {
+            "name": "CredentialEntryRejectedError",
+            "message": "SECRETISH の secret（シークレット可否）は作成時に決まり、後から変更できない（いまは シークレット）。値を変えたいだけなら secret を省略すること"
+          }
+        }
+      ],
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "10 > credentials.list []",
+        "11 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "16 > credentials.list []",
+        "17 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "22 > credentials.list []",
+        "23 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "28 > credentials.list []",
+        "29 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "34 > credentials.list []",
+        "35 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "40 > credentials.list []",
+        "41 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "46 > credentials.list []",
+        "47 < credentials.list [{\"name\":\"SECRETISH\",\"value\":\"FAKE_NOT_A_REAL_VALUE_S\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-overlong-stderr": {
+      "out": {
+        "first": {
+          "ok": {
+            "fingerprints": [
+              {
+                "name": "<str 129 chars>",
+                "sha256": "c2308acd48e3",
+                "updatedAt": "2026-11-08T00:00:00.000Z",
+                "scope": "all",
+                "secret": true
+              },
+              {
+                "name": "GH_TOKEN",
+                "sha256": "12f3f4781861",
+                "updatedAt": "2026-11-08T00:00:00.000Z",
+                "scope": "all",
+                "secret": true
+              }
+            ],
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true,
+                "credentials": []
+              }
+            ],
+            "restartRequired": []
+          }
+        },
+        "second": {
+          "ok": {
+            "fingerprints": [
+              {
+                "name": "<str 129 chars>",
+                "sha256": "c2308acd48e3",
+                "updatedAt": "2026-11-08T00:00:00.000Z",
+                "scope": "all",
+                "secret": true
+              },
+              {
+                "name": "GH_TOKEN",
+                "sha256": "de2784ca5358",
+                "updatedAt": "2026-11-08T00:00:00.000Z",
+                "scope": "all",
+                "secret": true
+              }
+            ],
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true,
+                "credentials": []
+              }
+            ],
+            "restartRequired": []
+          }
+        }
+      },
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"<str 129 chars>\",\"value\":\"FAKE_NOT_A_REAL_VALUE_L\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"<str 129 chars>\",\"value\":\"FAKE_NOT_A_REAL_VALUE_L\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "6 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true}]]",
+        "9 < credentials.put [{\"name\":\"<str 129 chars>\",\"value\":\"FAKE_NOT_A_REAL_VALUE_L\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true},{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "10 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"<str 129 chars>\",\"GH_TOKEN\"]}]",
+        "11 < credentials.updatePendingRemovals \"<undefined>\"",
+        "12 > registry.list",
+        "12 < registry.list 1 runners",
+        "13 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"}]]",
+        "14 < runner-a.setCredentials []",
+        "19 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"credentials\":[]}]",
+        "19 onApplied [\"GH_TOKEN\"]",
+        "23 > credentials.list []",
+        "24 < credentials.list [{\"name\":\"<str 129 chars>\",\"value\":\"FAKE_NOT_A_REAL_VALUE_L\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true},{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "25 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"scope\":\"all\",\"secret\":true}]]",
+        "28 < credentials.put [{\"name\":\"<str 129 chars>\",\"value\":\"FAKE_NOT_A_REAL_VALUE_L\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true},{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "29 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"<str 129 chars>\",\"GH_TOKEN\"]}]",
+        "30 < credentials.updatePendingRemovals \"<undefined>\"",
+        "31 > registry.list",
+        "31 < registry.list 1 runners",
+        "32 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\"}]]",
+        "33 < runner-a.setCredentials []",
+        "38 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"credentials\":[]}]",
+        "38 onApplied [\"GH_TOKEN\"]"
+      ],
+      "journal": [],
+      "stderr": [
+        "alteroidd: 名前が 128 文字を超える鍵の行が正本に残っており、**配っていません**（runner の受け口が配列ごと弾くため）。消すには PUT /credentials に { name, value: \"\" } を送る: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB…（129 文字）\n"
+      ]
+    },
+    "credential/apply-on-applied-throws": {
+      "out": {
+        "ok": {
+          "fingerprints": [
+            {
+              "name": "GH_TOKEN",
+              "sha256": "12f3f4781861",
+              "updatedAt": "2026-11-08T00:00:00.000Z",
+              "scope": "all",
+              "secret": true
+            }
+          ],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": false,
+              "error": "Error: runner a is down"
+            }
+          ],
+          "restartRequired": []
+        }
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "3 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true}]]",
+        "6 < credentials.put [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"GH_TOKEN\"]}]",
+        "8 < credentials.updatePendingRemovals \"<undefined>\"",
+        "9 > registry.list",
+        "9 < registry.list 1 runners",
+        "10 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"}]]",
+        "11 < runner-a.setCredentials threw Error: runner a is down",
+        "16 onPushed [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: runner a is down\"}]",
+        "16 onApplied [\"GH_TOKEN\"]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-store-failures": {
+      "out": {
+        "putFails": {
+          "threw": {
+            "name": "Error",
+            "message": "put が落ちた（test）"
+          }
+        },
+        "pendingFails": {
+          "threw": {
+            "name": "Error",
+            "message": "pending が書けない（test）"
+          }
+        }
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "3 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true}]]",
+        "3 < credentials.put threw Error: put が落ちた（test）",
+        "8 > credentials.list []",
+        "9 < credentials.list []",
+        "10 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"scope\":\"all\",\"secret\":true}]]",
+        "13 < credentials.put [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_B\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "14 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"GH_TOKEN\"]}]",
+        "14 < credentials.updatePendingRemovals threw Error: pending が書けない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/apply-roster-fails": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "名簿が引けない（test）"
+        }
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "3 > credentials.put [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"scope\":\"all\",\"secret\":true}]]",
+        "6 < credentials.put [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.updatePendingRemovals [{\"add\":[],\"forget\":[\"GH_TOKEN\"]}]",
+        "8 < credentials.updatePendingRemovals \"<undefined>\"",
+        "9 > registry.list",
+        "9 < registry.list threw Error: 名簿が引けない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/sync-nothing": {
+      "out": {
+        "ok": null
+      },
+      "events": [
+        "0 > credentials.list []",
+        "1 < credentials.list []",
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "4 > credentials.listPendingRemovals []",
+        "5 < credentials.listPendingRemovals []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/sync-match": {
+      "out": {
+        "ok": null
+      },
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.listPendingRemovals []",
+        "8 < credentials.listPendingRemovals []",
+        "9 > runner-a.credentials []",
+        "10 < runner-a.credentials [{\"name\":\"GH_TOKEN\",\"sha256\":\"12f3f4781861\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/sync-behind": {
+      "out": {
+        "ok": [
+          {
+            "name": "GH_TOKEN",
+            "sha256": "new-sha",
+            "updatedAt": "2026-11-08T00:00:00.000Z"
+          }
+        ]
+      },
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true},{\"name\":\"NPM_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_N\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true},{\"name\":\"NPM_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_N\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.listPendingRemovals []",
+        "8 < credentials.listPendingRemovals []",
+        "9 > runner-a.credentials []",
+        "10 < runner-a.credentials [{\"name\":\"GH_TOKEN\",\"sha256\":\"old-sha\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "12 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"},{\"name\":\"NPM_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_N\"}]]",
+        "13 < runner-a.setCredentials [{\"name\":\"GH_TOKEN\",\"sha256\":\"new-sha\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/sync-unreadable": {
+      "out": {
+        "ok": []
+      },
+      "events": [
+        "3 > credentials.list []",
+        "4 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "4 > credentials.list []",
+        "5 < credentials.list [{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\",\"scope\":\"all\",\"secret\":true}]",
+        "7 > credentials.listPendingRemovals []",
+        "8 < credentials.listPendingRemovals []",
+        "9 > runner-a.credentials []",
+        "10 < runner-a.credentials threw Error: 指紋が読めない（test）",
+        "12 > runner-a.setCredentials [[{\"name\":\"GH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE_A\"}]]",
+        "13 < runner-a.setCredentials []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "credential/sync-pending-removals": {
+      "out": {
+        "first": {
+          "ok": []
+        },
+        "second": {
+          "ok": null
+        }
+      },
+      "events": [
+        "1 > credentials.list []",
+        "2 < credentials.list []",
+        "2 > credentials.list []",
+        "3 < credentials.list []",
+        "5 > credentials.listPendingRemovals []",
+        "6 < credentials.listPendingRemovals [\"OLD_TOKEN\"]",
+        "7 > runner-holds.credentials []",
+        "8 < runner-holds.credentials [{\"name\":\"OLD_TOKEN\",\"sha256\":\"sha-old\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "10 > runner-holds.setCredentials [[{\"name\":\"OLD_TOKEN\",\"value\":\"\"}]]",
+        "11 < runner-holds.setCredentials []",
+        "16 > credentials.list []",
+        "17 < credentials.list []",
+        "19 > credentials.listPendingRemovals []",
+        "20 < credentials.listPendingRemovals [\"OLD_TOKEN\"]",
+        "21 > runner-empty.credentials []",
+        "22 < runner-empty.credentials []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-bare": {
+      "out": {
+        "ok": {
+          "stored": true,
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "entries": [
+            {
+              "name": "base",
+              "script": "export FAKE_A=1\n",
+              "scope": "all",
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          ],
+          "composed": {
+            "clone": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            },
+            "runner": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            }
+          },
+          "clone": {
+            "ok": true
+          },
+          "runners": []
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "4 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "8 onPushed []",
+        "8 > profile.list []",
+        "9 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-two-runners": {
+      "out": {
+        "ok": {
+          "stored": true,
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "entries": [
+            {
+              "name": "base",
+              "script": "export FAKE_A=1\n",
+              "scope": "all",
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          ],
+          "composed": {
+            "clone": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            },
+            "runner": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            }
+          },
+          "clone": {
+            "ok": true
+          },
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "profile": {
+                "sha256": "pa",
+                "bytes": 10,
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": true,
+              "profile": {
+                "sha256": "pb",
+                "bytes": 10,
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              },
+              "names": ["FAKE_A"]
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "4 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "7 > registry.list",
+        "7 < registry.list 2 runners",
+        "8 > runner-a.setProfile [\"export FAKE_A=1\\n\"]",
+        "8 > runner-b.setProfile [\"export FAKE_A=1\\n\"]",
+        "9 < runner-a.setProfile {\"ok\":true,\"profile\":{\"sha256\":\"pa\",\"bytes\":10,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}}",
+        "9 < runner-b.setProfile {\"ok\":true,\"profile\":{\"sha256\":\"pb\",\"bytes\":10,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"},\"names\":[\"FAKE_A\"]}",
+        "13 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"profile\":{\"sha256\":\"pa\",\"bytes\":10,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}},{\"runnerId\":\"runner-b\",\"ok\":true,\"profile\":{\"sha256\":\"pb\",\"bytes\":10,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"},\"names\":[\"FAKE_A\"]}]",
+        "13 > profile.list []",
+        "14 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-runner-failures": {
+      "out": {
+        "ok": {
+          "stored": true,
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "entries": [
+            {
+              "name": "base",
+              "script": "export FAKE_A=1\n",
+              "scope": "all",
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          ],
+          "composed": {
+            "clone": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            },
+            "runner": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            }
+          },
+          "clone": {
+            "ok": true
+          },
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": false,
+              "error": "Error: runner a is down"
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": false,
+              "error": "評価に落ちた（test）",
+              "output": "line 1"
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "4 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "7 > registry.list",
+        "7 < registry.list 2 runners",
+        "8 > runner-a.setProfile [\"export FAKE_A=1\\n\"]",
+        "8 > runner-b.setProfile [\"export FAKE_A=1\\n\"]",
+        "9 < runner-a.setProfile threw Error: runner a is down",
+        "9 < runner-b.setProfile {\"ok\":false,\"error\":\"評価に落ちた（test）\",\"output\":\"line 1\"}",
+        "13 onPushed [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: runner a is down\"},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"評価に落ちた（test）\",\"output\":\"line 1\"}]",
+        "13 > profile.list []",
+        "14 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-with-applier": {
+      "out": {
+        "ok": {
+          "stored": true,
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "entries": [
+            {
+              "name": "base",
+              "script": "export FAKE_A=1\n",
+              "scope": "all",
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          ],
+          "composed": {
+            "clone": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            },
+            "runner": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            }
+          },
+          "clone": {
+            "ok": true
+          },
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > applier.prepare \"export FAKE_A=1\\n\"",
+        "5 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "6 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "8 > applier.commit \"export FAKE_A=1\\n\"",
+        "9 > registry.list",
+        "9 < registry.list 1 runners",
+        "10 > runner-a.setProfile [\"export FAKE_A=1\\n\"]",
+        "11 < runner-a.setProfile {\"ok\":true}",
+        "15 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "15 > profile.list []",
+        "16 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-prepare-rejects": {
+      "out": {
+        "ok": {
+          "stored": false,
+          "clone": {
+            "ok": false,
+            "error": "構文が壊れている（test）"
+          },
+          "runners": []
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > applier.prepare \"export FAKE_A=((\\n\"",
+        "5 > applier.discard"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-write-fails": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "正本へ書けない（test）"
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > applier.prepare \"export FAKE_A=1\\n\"",
+        "5 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "5 < profile.set threw Error: 正本へ書けない（test）",
+        "7 > applier.discard",
+        "8 > profile.replaceAll [[]]",
+        "9 < profile.replaceAll \"<undefined>\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-commit-fails": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "プロファイルをクローンへ反映できなかったので、正本も元へ戻した: Error: クローンへ反映できない（test）"
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > applier.prepare \"export FAKE_A=1\\n\"",
+        "5 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "6 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "8 > applier.commit \"export FAKE_A=1\\n\"",
+        "9 > applier.discard",
+        "10 > profile.replaceAll [[]]",
+        "11 < profile.replaceAll \"<undefined>\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-commit-fails-rollback-fails": {
+      "out": {
+        "threw": {
+          "name": "ProfileRollbackFailedError",
+          "message": "<str 104 chars>"
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > applier.prepare \"export FAKE_A=1\\n\"",
+        "5 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "6 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "8 > applier.commit \"export FAKE_A=1\\n\"",
+        "9 > applier.discard",
+        "10 > profile.replaceAll [[]]",
+        "10 < profile.replaceAll threw Error: 戻せない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/set-input-rejections": {
+      "out": [
+        {
+          "name": "bad-name",
+          "threw": {
+            "name": "ProfileInputError",
+            "message": "プロファイルの行の名前の形が不正である（^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$）"
+          }
+        },
+        {
+          "name": "empty",
+          "threw": {
+            "name": "ProfileInputError",
+            "message": "空の本文は行として置けない（外すなら remove / clearAll）"
+          }
+        },
+        {
+          "name": "if-match-stale",
+          "threw": {
+            "name": "ProfileVersionMismatchError",
+            "message": "プロファイルの行 existing は読んだ後に変わっている・作られている（変えていない）"
+          }
+        },
+        {
+          "name": "case-clash",
+          "threw": {
+            "name": "ProfileInputError",
+            "message": "大文字小文字だけが違う行 existing が既にある（別の行としては置けない）"
+          }
+        }
+      ],
+      "events": [
+        "8 > profile.list []",
+        "9 < profile.list [{\"name\":\"existing\",\"script\":\"export FAKE_E=1\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "14 > profile.list []",
+        "15 < profile.list [{\"name\":\"existing\",\"script\":\"export FAKE_E=1\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/remove-and-clear": {
+      "out": {
+        "removed": {
+          "ok": {
+            "stored": true,
+            "updatedAt": "2026-11-08T00:00:00.000Z",
+            "entries": [
+              {
+                "name": "two",
+                "script": "export FAKE_2=2",
+                "scope": "runner",
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            ],
+            "composed": {
+              "clone": {},
+              "runner": {
+                "sha256": "29b4726d6532",
+                "bytes": 16
+              }
+            },
+            "clone": {
+              "ok": true
+            },
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true
+              }
+            ],
+            "removed": true
+          }
+        },
+        "missing": {
+          "ok": {
+            "stored": true,
+            "updatedAt": "2026-11-08T00:00:00.000Z",
+            "entries": [
+              {
+                "name": "two",
+                "script": "export FAKE_2=2",
+                "scope": "runner",
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            ],
+            "composed": {
+              "clone": {},
+              "runner": {
+                "sha256": "29b4726d6532",
+                "bytes": 16
+              }
+            },
+            "clone": {
+              "ok": true
+            },
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true
+              }
+            ],
+            "removed": false
+          }
+        },
+        "cleared": {
+          "ok": {
+            "stored": true,
+            "updatedAt": "2026-11-08T00:00:00.000Z",
+            "entries": [],
+            "composed": {
+              "clone": {},
+              "runner": {}
+            },
+            "clone": {
+              "ok": true
+            },
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true
+              }
+            ]
+          }
+        }
+      },
+      "events": [
+        "3 > profile.list []",
+        "4 < profile.list [{\"name\":\"one\",\"script\":\"export FAKE_1=1\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"},{\"name\":\"two\",\"script\":\"export FAKE_2=2\",\"scope\":\"runner\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "5 > profile.remove [\"one\"]",
+        "6 < profile.remove true",
+        "9 > registry.list",
+        "9 < registry.list 1 runners",
+        "10 > runner-a.setProfile [\"export FAKE_2=2\\n\"]",
+        "11 < runner-a.setProfile {\"ok\":true}",
+        "15 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "15 > profile.list []",
+        "16 < profile.list [{\"name\":\"two\",\"script\":\"export FAKE_2=2\",\"scope\":\"runner\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "22 > profile.list []",
+        "23 < profile.list [{\"name\":\"two\",\"script\":\"export FAKE_2=2\",\"scope\":\"runner\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "24 > profile.remove [\"ghost\"]",
+        "25 < profile.remove false",
+        "28 > registry.list",
+        "28 < registry.list 1 runners",
+        "29 > runner-a.setProfile [\"export FAKE_2=2\\n\"]",
+        "30 < runner-a.setProfile {\"ok\":true}",
+        "34 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "34 > profile.list []",
+        "35 < profile.list [{\"name\":\"two\",\"script\":\"export FAKE_2=2\",\"scope\":\"runner\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "41 > profile.list []",
+        "42 < profile.list [{\"name\":\"two\",\"script\":\"export FAKE_2=2\",\"scope\":\"runner\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "43 > profile.clear []",
+        "44 < profile.clear 1",
+        "47 > registry.list",
+        "47 < registry.list 1 runners",
+        "48 > runner-a.setProfile [\"\"]",
+        "49 < runner-a.setProfile {\"ok\":true}",
+        "53 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "53 > profile.list []",
+        "54 < profile.list []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/apply-whole-script": {
+      "out": {
+        "filled": {
+          "ok": {
+            "stored": true,
+            "updatedAt": "2026-11-08T00:00:00.000Z",
+            "entries": [
+              {
+                "name": "default",
+                "script": "export FAKE_A=1\n",
+                "scope": "all",
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            ],
+            "composed": {
+              "clone": {
+                "sha256": "d42b9c1fb562",
+                "bytes": 16
+              },
+              "runner": {
+                "sha256": "d42b9c1fb562",
+                "bytes": 16
+              }
+            },
+            "clone": {
+              "ok": true
+            },
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true
+              }
+            ]
+          }
+        },
+        "emptied": {
+          "ok": {
+            "stored": true,
+            "updatedAt": "2026-11-08T00:00:00.000Z",
+            "entries": [],
+            "composed": {
+              "clone": {},
+              "runner": {}
+            },
+            "clone": {
+              "ok": true
+            },
+            "runners": [
+              {
+                "runnerId": "runner-a",
+                "ok": true
+              }
+            ]
+          }
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > profile.clear []",
+        "4 < profile.clear 0",
+        "5 > profile.set [\"default\",\"export FAKE_A=1\\n\",\"all\"]",
+        "6 < profile.set {\"name\":\"default\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "9 > registry.list",
+        "9 < registry.list 1 runners",
+        "10 > runner-a.setProfile [\"export FAKE_A=1\\n\"]",
+        "11 < runner-a.setProfile {\"ok\":true}",
+        "15 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "15 > profile.list []",
+        "16 < profile.list [{\"name\":\"default\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "21 > profile.list []",
+        "22 < profile.list [{\"name\":\"default\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "23 > profile.clear []",
+        "24 < profile.clear 1",
+        "27 > registry.list",
+        "27 < registry.list 1 runners",
+        "28 > runner-a.setProfile [\"\"]",
+        "29 < runner-a.setProfile {\"ok\":true}",
+        "33 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "33 > profile.list []",
+        "34 < profile.list []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/roster-fails": {
+      "out": {
+        "ok": {
+          "stored": true,
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "entries": [
+            {
+              "name": "base",
+              "script": "export FAKE_A=1\n",
+              "scope": "all",
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          ],
+          "composed": {
+            "clone": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            },
+            "runner": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            }
+          },
+          "clone": {
+            "ok": true
+          },
+          "runners": [],
+          "runnersUnconfirmed": "Error: 名簿が引けない（test）"
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "4 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "7 > registry.list",
+        "7 < registry.list threw Error: 名簿が引けない（test）",
+        "9 > profile.list []",
+        "10 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/read-after-write-fails": {
+      "out": {
+        "ok": {
+          "stored": true,
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "entries": [
+            {
+              "name": "base",
+              "script": "export FAKE_A=1\n",
+              "scope": "all",
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          ],
+          "composed": {
+            "clone": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            },
+            "runner": {
+              "sha256": "d42b9c1fb562",
+              "bytes": 16
+            }
+          },
+          "clone": {
+            "ok": true
+          },
+          "runners": []
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > profile.set [\"base\",\"export FAKE_A=1\\n\",\"all\"]",
+        "4 < profile.set {\"name\":\"base\",\"script\":\"export FAKE_A=1\\n\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "8 onPushed []",
+        "8 > profile.list []",
+        "8 < profile.list threw Error: 読み直せない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/restore": {
+      "out": {
+        "noApplier": {
+          "ok": null
+        },
+        "nothing": {
+          "ok": null
+        },
+        "filled": {
+          "ok": {
+            "ok": true
+          }
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "7 > profile.list []",
+        "8 < profile.list []",
+        "14 > profile.list []",
+        "15 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "16 > applier.apply \"export FAKE_A=1\\n\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/sync-nothing": {
+      "out": {
+        "ok": null
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > runner-a.profile []",
+        "4 < runner-a.profile \"<undefined>\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/sync-match": {
+      "out": {
+        "ok": null
+      },
+      "events": [
+        "3 > profile.list []",
+        "4 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "5 > runner-a.profile []",
+        "6 < runner-a.profile {\"sha256\":\"d42b9c1fb562\",\"bytes\":16,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/sync-different-and-removed": {
+      "out": {
+        "diff": {
+          "ok": {
+            "ok": true
+          }
+        },
+        "removed": {
+          "ok": {
+            "ok": true
+          }
+        }
+      },
+      "events": [
+        "2 > profile.list []",
+        "3 < profile.list [{\"name\":\"base\",\"script\":\"export FAKE_A=1\",\"scope\":\"all\",\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}]",
+        "4 > runner-differs.profile []",
+        "5 < runner-differs.profile {\"sha256\":\"old-sha\",\"bytes\":10,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "6 > runner-differs.setProfile [\"export FAKE_A=1\\n\"]",
+        "7 < runner-differs.setProfile {\"ok\":true}",
+        "13 > profile.list []",
+        "14 < profile.list []",
+        "15 > runner-stale.profile []",
+        "16 < runner-stale.profile {\"sha256\":\"left-over\",\"bytes\":10,\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "17 > runner-stale.setProfile [\"\"]",
+        "18 < runner-stale.setProfile {\"ok\":true}"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "profile/sync-unreadable": {
+      "out": {
+        "ok": {
+          "ok": true
+        }
+      },
+      "events": [
+        "1 > profile.list []",
+        "2 < profile.list []",
+        "3 > runner-a.profile []",
+        "4 < runner-a.profile threw Error: 指紋が読めない（test）",
+        "5 > runner-a.setProfile [\"\"]",
+        "6 < runner-a.setProfile {\"ok\":true}"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-no-runners": {
+      "out": {
+        "ok": {
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "version": "e6c3eb93fd9c18e80bc8ac933b1c03f1cad9a6a2b4696623bc04a08e104681c4",
+          "names": ["github"],
+          "sha256": "e6c3eb93fd9c",
+          "runners": []
+        }
+      },
+      "events": [
+        "1 > mcpServers.write [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"<undefined>\"]",
+        "2 < mcpServers.write {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "4 onPushed []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-two-runners": {
+      "out": {
+        "ok": {
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "version": "e6c3eb93fd9c18e80bc8ac933b1c03f1cad9a6a2b4696623bc04a08e104681c4",
+          "names": ["github"],
+          "sha256": "e6c3eb93fd9c",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "mcpServers": {
+                "sha256": "ma",
+                "names": ["github"],
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": true,
+              "mcpServers": {
+                "sha256": "mb",
+                "names": ["github"],
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > mcpServers.write [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"<undefined>\"]",
+        "2 < mcpServers.write {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "3 > registry.list",
+        "3 < registry.list 2 runners",
+        "4 > runner-a.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "4 > runner-b.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "5 < runner-a.setMcpServers {\"sha256\":\"ma\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "5 < runner-b.setMcpServers {\"sha256\":\"mb\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "10 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"mcpServers\":{\"sha256\":\"ma\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}},{\"runnerId\":\"runner-b\",\"ok\":true,\"mcpServers\":{\"sha256\":\"mb\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-one-runner-fails": {
+      "out": {
+        "ok": {
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "version": "e6c3eb93fd9c18e80bc8ac933b1c03f1cad9a6a2b4696623bc04a08e104681c4",
+          "names": ["github"],
+          "sha256": "e6c3eb93fd9c",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "mcpServers": {
+                "sha256": "ma",
+                "names": ["github"],
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": false,
+              "error": "Error: runner b is down"
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > mcpServers.write [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"<undefined>\"]",
+        "2 < mcpServers.write {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "3 > registry.list",
+        "3 < registry.list 2 runners",
+        "4 > runner-a.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "4 > runner-b.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "5 < runner-a.setMcpServers {\"sha256\":\"ma\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "5 < runner-b.setMcpServers threw Error: runner b is down",
+        "10 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"mcpServers\":{\"sha256\":\"ma\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: runner b is down\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-empty-removes": {
+      "out": {
+        "ok": {
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "names": [],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "2 > mcpServers.write [{},\"<undefined>\"]",
+        "3 < mcpServers.write {\"mcpServers\":{},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "4 > registry.list",
+        "4 < registry.list 1 runners",
+        "5 > runner-a.setMcpServers [{}]",
+        "6 < runner-a.setMcpServers \"<undefined>\"",
+        "11 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-no-fingerprint-back": {
+      "out": {
+        "ok": {
+          "updatedAt": "2026-11-08T00:00:00.000Z",
+          "version": "e6c3eb93fd9c18e80bc8ac933b1c03f1cad9a6a2b4696623bc04a08e104681c4",
+          "names": ["github"],
+          "sha256": "e6c3eb93fd9c",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > mcpServers.write [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"<undefined>\"]",
+        "2 < mcpServers.write {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "4 > runner-a.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "5 < runner-a.setMcpServers \"<undefined>\"",
+        "10 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-store-rejects": {
+      "out": {
+        "rejected": {
+          "threw": {
+            "name": "Error",
+            "message": "書き込みが断られた（test）"
+          }
+        },
+        "stale": {
+          "threw": {
+            "name": "McpServersConflictError",
+            "message": "MCP サーバの登録が読んだ後に変わっています"
+          }
+        }
+      },
+      "events": [
+        "2 > mcpServers.write [{\"linear\":{\"command\":\"linear-mcp\",\"env\":{\"LINEAR_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"<undefined>\"]",
+        "2 < mcpServers.write threw Error: 書き込みが断られた（test）",
+        "7 > mcpServers.write [{\"linear\":{\"command\":\"linear-mcp\",\"env\":{\"LINEAR_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},{\"ifMatch\":\"stale-version\"}]",
+        "8 < mcpServers.write threw McpServersConflictError: MCP サーバの登録が読んだ後に変わっています"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/apply-roster-fails": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "名簿が引けない（test）"
+        }
+      },
+      "events": [
+        "1 > mcpServers.write [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"<undefined>\"]",
+        "2 < mcpServers.write {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "3 > registry.list",
+        "3 < registry.list threw Error: 名簿が引けない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/sync-nothing": {
+      "out": {
+        "ok": null
+      },
+      "events": [
+        "1 > mcpServers.read []",
+        "2 < mcpServers.read null",
+        "3 > runner-a.mcpServers []",
+        "4 < runner-a.mcpServers \"<undefined>\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/sync-match": {
+      "out": {
+        "ok": null
+      },
+      "events": [
+        "18 > mcpServers.read []",
+        "19 < mcpServers.read {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "20 > runner-a.mcpServers []",
+        "21 < runner-a.mcpServers {\"sha256\":\"e6c3eb93fd9c\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/sync-different-and-removed": {
+      "out": {
+        "diff": {
+          "ok": {
+            "mcpServers": {
+              "sha256": "new-sha",
+              "names": ["github"],
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          }
+        },
+        "removed": {
+          "ok": {}
+        }
+      },
+      "events": [
+        "2 > mcpServers.read []",
+        "3 < mcpServers.read {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "4 > runner-differs.mcpServers []",
+        "5 < runner-differs.mcpServers {\"sha256\":\"old-sha\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "6 > runner-differs.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "7 < runner-differs.setMcpServers {\"sha256\":\"new-sha\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "13 > mcpServers.read []",
+        "14 < mcpServers.read null",
+        "15 > runner-stale.mcpServers []",
+        "16 < runner-stale.mcpServers {\"sha256\":\"left-over\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "17 > runner-stale.setMcpServers [{}]",
+        "18 < runner-stale.setMcpServers \"<undefined>\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "mcp/sync-unreadable-and-set-fails": {
+      "out": {
+        "unreadable": {
+          "ok": {
+            "mcpServers": {
+              "sha256": "sha",
+              "names": ["github"],
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          }
+        },
+        "setFails": {
+          "threw": {
+            "name": "Error",
+            "message": "降ろせない（test）"
+          }
+        }
+      },
+      "events": [
+        "2 > mcpServers.read []",
+        "3 < mcpServers.read {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "4 > runner-reads.mcpServers []",
+        "5 < runner-reads.mcpServers threw Error: 指紋が読めない（test）",
+        "6 > runner-reads.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "7 < runner-reads.setMcpServers {\"sha256\":\"sha\",\"names\":[\"github\"],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "12 > mcpServers.read []",
+        "13 < mcpServers.read {\"mcpServers\":{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}},\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "14 > runner-breaks.mcpServers []",
+        "15 < runner-breaks.mcpServers \"<undefined>\"",
+        "16 > runner-breaks.setMcpServers [{\"github\":{\"command\":\"gh-mcp\",\"env\":{\"GITHUB_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"}}}]",
+        "17 < runner-breaks.setMcpServers threw Error: 降ろせない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-no-runners": {
+      "out": {
+        "ok": {
+          "names": ["p-one"],
+          "sha256": "bef14322ec2748df6462f514d382c49aeda394209a2c4136115a5eb42e809469",
+          "runners": []
+        }
+      },
+      "events": [
+        "2 > plugins.list []",
+        "3 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "6 onPushed []"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-no-plugins": {
+      "out": {
+        "ok": {
+          "names": [],
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "1 > plugins.list []",
+        "2 < plugins.list []",
+        "4 > registry.list",
+        "4 < registry.list 1 runners",
+        "5 > plugins.list []",
+        "6 < plugins.list []",
+        "8 > runner-a.plugins []",
+        "9 < runner-a.plugins \"<undefined>\"",
+        "15 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-two-runners": {
+      "out": {
+        "ok": {
+          "names": ["p-one"],
+          "sha256": "bef14322ec2748df6462f514d382c49aeda394209a2c4136115a5eb42e809469",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "plugins": {
+                "sha256": "ra",
+                "plugins": [
+                  {
+                    "name": "p-one",
+                    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "contentSha256": "c1",
+                    "enableHooks": true,
+                    "enableMcp": true
+                  }
+                ],
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            },
+            {
+              "runnerId": "runner-b",
+              "ok": true,
+              "plugins": {
+                "sha256": "rb",
+                "plugins": [
+                  {
+                    "name": "p-one",
+                    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "contentSha256": "c1",
+                    "enableHooks": true,
+                    "enableMcp": true
+                  }
+                ],
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            }
+          ]
+        }
+      },
+      "events": [
+        "3 > plugins.list []",
+        "4 < plugins.list [{\"name\":\"p-app\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"app\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13},{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sc…(727)",
+        "6 > registry.list",
+        "6 < registry.list 2 runners",
+        "7 > plugins.list []",
+        "7 > plugins.list []",
+        "8 < plugins.list [{\"name\":\"p-app\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"app\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13},{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sc…(727)",
+        "8 < plugins.list [{\"name\":\"p-app\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"app\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13},{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sc…(727)",
+        "10 > runner-a.plugins []",
+        "10 > runner-b.plugins []",
+        "11 < runner-a.plugins \"<undefined>\"",
+        "11 < runner-b.plugins \"<undefined>\"",
+        "12 > plugins.get [\"p-one\"]",
+        "12 > plugins.get [\"p-one\"]",
+        "13 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "13 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "14 > runner-a.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "14 > runner-b.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "15 < runner-a.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "15 < runner-b.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "16 > runner-a.retainPlugins [[\"p-one\"]]",
+        "16 > runner-b.retainPlugins [[\"p-one\"]]",
+        "17 < runner-a.retainPlugins {\"sha256\":\"ra\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "17 < runner-b.retainPlugins {\"sha256\":\"rb\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "23 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"plugins\":{\"sha256\":\"ra\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}},{\"runnerId\":\"runner-b\",\"ok\":true,\"plugins\":{\"sha256\":\"rb\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-already-matching": {
+      "out": {
+        "ok": {
+          "names": ["p-one"],
+          "sha256": "bef14322ec2748df6462f514d382c49aeda394209a2c4136115a5eb42e809469",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "2 > plugins.list []",
+        "3 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "5 > registry.list",
+        "5 < registry.list 1 runners",
+        "6 > plugins.list []",
+        "7 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "9 > runner-a.plugins []",
+        "10 < runner-a.plugins {\"sha256\":\"x\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "11 > plugins.get [\"p-one\"]",
+        "12 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "13 > runner-a.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "14 < runner-a.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":false,\"enableMcp\":false}",
+        "15 > runner-a.retainPlugins [[\"p-one\"]]",
+        "16 < runner-a.retainPlugins \"<undefined>\"",
+        "22 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-differing-and-extra": {
+      "out": {
+        "ok": {
+          "names": ["p-one"],
+          "sha256": "bef14322ec2748df6462f514d382c49aeda394209a2c4136115a5eb42e809469",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true,
+              "plugins": {
+                "sha256": "r",
+                "plugins": [
+                  {
+                    "name": "p-one",
+                    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "contentSha256": "c1",
+                    "enableHooks": true,
+                    "enableMcp": true
+                  }
+                ],
+                "updatedAt": "2026-11-08T00:00:00.000Z"
+              }
+            }
+          ]
+        }
+      },
+      "events": [
+        "2 > plugins.list []",
+        "3 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "5 > registry.list",
+        "5 < registry.list 1 runners",
+        "6 > plugins.list []",
+        "7 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "9 > runner-a.plugins []",
+        "10 < runner-a.plugins {\"sha256\":\"x\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"contentSha256\":\"old-content\",\"enableHooks\":true,\"enableMcp\":true},{\"name\":\"p-old\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "11 > plugins.get [\"p-one\"]",
+        "12 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "13 > runner-a.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "14 < runner-a.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "15 > runner-a.retainPlugins [[\"p-one\"]]",
+        "16 < runner-a.retainPlugins {\"sha256\":\"r\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "22 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"plugins\":{\"sha256\":\"r\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-one-plugin-fails": {
+      "out": {
+        "ok": {
+          "names": ["p-a", "p-b"],
+          "sha256": "df1d8be9b19ae144cd72b9fdb45931ae653ebfa975cf62a6f835eeae1504a2e9",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": false,
+              "error": "Error: p-a を置けない（test）"
+            }
+          ]
+        }
+      },
+      "events": [
+        "3 > plugins.list []",
+        "4 < plugins.list [{\"name\":\"p-a\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13},{\"name\":\"p-b\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\"…(723)",
+        "6 > registry.list",
+        "6 < registry.list 1 runners",
+        "7 > plugins.list []",
+        "8 < plugins.list [{\"name\":\"p-a\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13},{\"name\":\"p-b\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\"…(723)",
+        "10 > runner-a.plugins []",
+        "11 < runner-a.plugins {\"sha256\":\"x\",\"plugins\":[{\"name\":\"p-a\",\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"contentSha256\":\"old-content\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "12 > plugins.get [\"p-a\"]",
+        "13 < plugins.get {\"name\":\"p-a\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "14 > runner-a.setPlugin [{\"name\":\"p-a\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "14 < runner-a.setPlugin threw Error: p-a を置けない（test）",
+        "15 > plugins.get [\"p-b\"]",
+        "16 < plugins.get {\"name\":\"p-b\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "17 > runner-a.setPlugin [{\"name\":\"p-b\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "18 < runner-a.setPlugin {\"name\":\"p-b\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "19 > runner-a.retainPlugins [[\"p-a\",\"p-b\"]]",
+        "20 < runner-a.retainPlugins \"<undefined>\"",
+        "26 onPushed [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: p-a を置けない（test）\"}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-unreadable": {
+      "out": {
+        "ok": {
+          "names": ["p-one"],
+          "sha256": "bef14322ec2748df6462f514d382c49aeda394209a2c4136115a5eb42e809469",
+          "runners": [
+            {
+              "runnerId": "runner-a",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "2 > plugins.list []",
+        "3 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "5 > registry.list",
+        "5 < registry.list 1 runners",
+        "6 > plugins.list []",
+        "7 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "9 > runner-a.plugins []",
+        "10 < runner-a.plugins threw Error: 一覧が読めない（test）",
+        "11 > plugins.get [\"p-one\"]",
+        "12 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "13 > runner-a.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "14 < runner-a.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "15 > runner-a.retainPlugins [[\"p-one\"]]",
+        "16 < runner-a.retainPlugins \"<undefined>\"",
+        "22 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-roster-fails": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "名簿が引けない（test）"
+        }
+      },
+      "events": [
+        "1 > plugins.list []",
+        "2 < plugins.list []",
+        "4 > registry.list",
+        "4 < registry.list threw Error: 名簿が引けない（test）"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/apply-list-fails": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "一覧が読めない（test）"
+        }
+      },
+      "events": ["1 > plugins.list []", "1 < plugins.list threw Error: 一覧が読めない（test）"],
+      "journal": [],
+      "stderr": []
+    },
+    "plugin/sync-runner": {
+      "out": {
+        "same": {
+          "ok": {}
+        },
+        "fresh": {
+          "ok": {
+            "plugins": {
+              "sha256": "r",
+              "plugins": [
+                {
+                  "name": "p-one",
+                  "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "contentSha256": "c1",
+                  "enableHooks": true,
+                  "enableMcp": true
+                }
+              ],
+              "updatedAt": "2026-11-08T00:00:00.000Z"
+            }
+          }
+        },
+        "noFp": {
+          "ok": {}
+        }
+      },
+      "events": [
+        "2 > plugins.list []",
+        "3 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "5 > runner-same.plugins []",
+        "6 < runner-same.plugins {\"sha256\":\"x\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "7 > plugins.get [\"p-one\"]",
+        "8 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "9 > runner-same.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "10 < runner-same.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":false,\"enableMcp\":false}",
+        "11 > runner-same.retainPlugins [[\"p-one\"]]",
+        "12 < runner-same.retainPlugins \"<undefined>\"",
+        "17 > plugins.list []",
+        "18 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "20 > runner-fresh.plugins []",
+        "21 < runner-fresh.plugins \"<undefined>\"",
+        "22 > plugins.get [\"p-one\"]",
+        "23 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "24 > runner-fresh.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "25 < runner-fresh.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "26 > runner-fresh.retainPlugins [[\"p-one\"]]",
+        "27 < runner-fresh.retainPlugins {\"sha256\":\"r\",\"plugins\":[{\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c1\",\"enableHooks\":true,\"enableMcp\":true}],\"updatedAt\":\"2026-11-08T00:00:00.000Z\"}",
+        "32 > plugins.list []",
+        "33 < plugins.list [{\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"fileCount\":1,\"totalBytes\":13}]",
+        "35 > runner-nofp.plugins []",
+        "36 < runner-nofp.plugins \"<undefined>\"",
+        "37 > plugins.get [\"p-one\"]",
+        "38 < plugins.get {\"name\":\"p-one\",\"source\":{\"kind\":\"url\",\"url\":\"https://example.invalid/plugins.git\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}],\"installedAt\":\"2026-11-08T00:00:00.000Z\",\"installedBy\":\"tester\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\"}",
+        "39 > runner-nofp.setPlugin [{\"name\":\"p-one\",\"sourceSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":\"all\",\"enableHooks\":false,\"enableMcp\":false,\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"files\":[{\"path\":\".claude-plugin/plugin.json\",\"executable\":false,\"content\":\"<bytes 13>\"}]}]",
+        "40 < runner-nofp.setPlugin {\"name\":\"p-one\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contentSha256\":\"c4b6a47f9a3eaaa74cea73936478a9914652296f761a3652d634df4d29bb709d\",\"enableHooks\":true,\"enableMcp\":true}",
+        "41 > runner-nofp.retainPlugins [[\"p-one\"]]",
+        "42 < runner-nofp.retainPlugins \"<undefined>\""
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "permission-rules/push-no-registry": {
+      "out": {
+        "ok": []
+      },
+      "events": [],
+      "journal": [],
+      "stderr": []
+    },
+    "permission-rules/push-two-runners-changed": {
+      "out": {
+        "ok": [
+          {
+            "runnerId": "runner-a",
+            "ok": true,
+            "count": 2,
+            "changed": true
+          },
+          {
+            "runnerId": "runner-b",
+            "ok": true,
+            "count": 2,
+            "changed": true
+          }
+        ]
+      },
+      "events": [
+        "5 > permissionGrants.list []",
+        "6 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}},{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}},{\"id\":\"g3\",\"rule\":\"Bash(git status)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g3\",\"answer\"…(836)",
+        "8 > registry.list",
+        "8 < registry.list 2 runners",
+        "10 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\",\"Bash(python:*)\"]]",
+        "10 > runner-b.setPermissionRules [[\"Bash(gh pr view 12)\",\"Bash(python:*)\"]]",
+        "11 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
+        "11 < runner-b.setPermissionRules {\"count\":2,\"changed\":true}",
+        "14 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "15 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
+        "17 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}]",
+        "18 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}",
+        "21 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "22 < journal.append {\"type\":\"decision\",\"id\":\"id-3\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
+        "24 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}]",
+        "25 < journal.append {\"type\":\"decision\",\"id\":\"id-4\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}",
+        "28 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true},{\"runnerId\":\"runner-b\",\"ok\":true,\"count\":2,\"changed\":true}]"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）",
+          "grounds": "許可が足された（#4952。前方一致も載せる: #5435）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "<str 138 chars>",
+          "grounds": "許可が足された（#5435）"
+        },
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）",
+          "grounds": "許可が足された（#4952。前方一致も載せる: #5435）"
+        },
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "<str 138 chars>",
+          "grounds": "許可が足された（#5435）"
+        }
+      ],
+      "stderr": []
+    },
+    "permission-rules/push-unchanged": {
+      "out": {
+        "ok": [
+          {
+            "runnerId": "runner-a",
+            "ok": true,
+            "count": 1,
+            "changed": false
+          }
+        ]
+      },
+      "events": [
+        "2 > permissionGrants.list []",
+        "3 < permissionGrants.list [{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "5 > registry.list",
+        "5 < registry.list 1 runners",
+        "7 > runner-a.setPermissionRules [[\"Bash(python:*)\"]]",
+        "8 < runner-a.setPermissionRules {\"count\":1,\"changed\":false}",
+        "11 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）\",\"grounds\":\"名乗り直し（#4952。前方一致も載せる: #5435）\"}]",
+        "12 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）\",\"grounds\":\"名乗り直し（#4952。前方一致も載せる: #5435）\"}",
+        "14 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":1,\"changed\":false}]"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）",
+          "grounds": "名乗り直し（#4952。前方一致も載せる: #5435）"
+        }
+      ],
+      "stderr": []
+    },
+    "permission-rules/push-one-runner-fails": {
+      "out": {
+        "ok": [
+          {
+            "runnerId": "runner-a",
+            "ok": true,
+            "count": 2,
+            "changed": true
+          },
+          {
+            "runnerId": "runner-b",
+            "ok": false,
+            "error": "Error: runner b is down"
+          }
+        ]
+      },
+      "events": [
+        "2 > permissionGrants.list []",
+        "3 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "5 > registry.list",
+        "5 < registry.list 2 runners",
+        "7 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
+        "7 > runner-b.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
+        "8 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
+        "8 < runner-b.setPermissionRules threw Error: runner b is down",
+        "11 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "12 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
+        "15 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）\",\"grounds\":\"許可が足された。理由: Error: runner b is down（#4952）\"}]",
+        "16 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）\",\"grounds\":\"許可が足された。理由: Error: runner b is down（#4952）\"}",
+        "18 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: runner b is down\"}]"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）",
+          "grounds": "許可が足された（#4952。前方一致も載せる: #5435）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）",
+          "grounds": "許可が足された。理由: Error: runner b is down（#4952）"
+        }
+      ],
+      "stderr": []
+    },
+    "permission-rules/push-grants-unreadable": {
+      "out": {
+        "ok": []
+      },
+      "events": [
+        "1 > permissionGrants.list []",
+        "1 < permissionGrants.list threw Error: 許可の一覧が読めない（test）",
+        "3 > journal.append [{\"type\":\"decision\",\"decision\":\"委譲先の許可規則を配れなかった（許可の一覧を読めなかった）\",\"grounds\":\"許可が足された。理由: Error: 許可の一覧が読めない（test）（#4952。各 runner には前の一覧が残っている）\"}]",
+        "4 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"委譲先の許可規則を配れなかった（許可の一覧を読めなかった）\",\"grounds\":\"許可が足された。理由: Error: 許可の一覧が読めない（test）（#4952。各 runner には前の一覧が残っている）\"}",
+        "6 > registry.list",
+        "6 < registry.list 2 runners",
+        "8 onPushed [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: 許可の一覧が読めない（test）\"},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: 許可の一覧が読めない（test）\"}]"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "委譲先の許可規則を配れなかった（許可の一覧を読めなかった）",
+          "grounds": "許可が足された。理由: Error: 許可の一覧が読めない（test）（#4952。各 runner には前の一覧が残っている）"
+        }
+      ],
+      "stderr": []
+    },
+    "permission-rules/push-roster-unreadable": {
+      "out": {
+        "ok": []
+      },
+      "events": [
+        "2 > permissionGrants.list []",
+        "3 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "5 > registry.list",
+        "5 < registry.list threw Error: 名簿が引けない（test）",
+        "7 onPushed [{\"runnerId\":\"\",\"ok\":false,\"error\":\"登録済みの runner の名簿を引けなかった\"}] scope={\"unnamed\":true}"
+      ],
+      "journal": [],
+      "stderr": []
+    },
+    "permission-rules/push-both-unreadable": {
+      "out": {
+        "ok": []
+      },
+      "events": [
+        "1 > permissionGrants.list []",
+        "1 < permissionGrants.list threw Error: 許可の一覧が読めない（test）",
+        "3 > journal.append [{\"type\":\"decision\",\"decision\":\"委譲先の許可規則を配れなかった（許可の一覧を読めなかった）\",\"grounds\":\"許可が足された。理由: Error: 許可の一覧が読めない（test）（#4952。各 runner には前の一覧が残っている）\"}]",
+        "4 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"委譲先の許可規則を配れなかった（許可の一覧を読めなかった）\",\"grounds\":\"許可が足された。理由: Error: 許可の一覧が読めない（test）（#4952。各 runner には前の一覧が残っている）\"}",
+        "6 > registry.list",
+        "6 < registry.list threw Error: 名簿が引けない（test）",
+        "8 onPushed [{\"runnerId\":\"\",\"ok\":false,\"error\":\"Error: 許可の一覧が読めない（test）\"}] scope={\"unnamed\":true}"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "委譲先の許可規則を配れなかった（許可の一覧を読めなかった）",
+          "grounds": "許可が足された。理由: Error: 許可の一覧が読めない（test）（#4952。各 runner には前の一覧が残っている）"
+        }
+      ],
+      "stderr": []
+    },
+    "permission-rules/push-journal-fails": {
+      "out": {
+        "ok": [
+          {
+            "runnerId": "runner-a",
+            "ok": true,
+            "count": 2,
+            "changed": true
+          }
+        ]
+      },
+      "events": [
+        "2 > permissionGrants.list []",
+        "3 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "5 > registry.list",
+        "5 < registry.list 1 runners",
+        "7 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
+        "8 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
+        "11 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "11 < journal.append threw Error: 日誌が落ちた（test）",
+        "14 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true}]"
+      ],
+      "journal": [],
+      "stderr": [
+        "alteroid: 2026-11-08T00:00:00.000Z 委譲先の許可規則の配布の日誌を記録できませんでした（runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1））: Error: 日誌が落ちた（test）\n"
+      ]
+    },
+    "permission-rules/sync-runner": {
+      "out": {
+        "changed": {
+          "ok": {
+            "count": 2,
+            "changed": true
+          }
+        },
+        "same": {
+          "ok": {
+            "count": 1,
+            "changed": false
+          }
+        },
+        "fails": {
+          "threw": {
+            "name": "Error",
+            "message": "runner is down"
+          }
+        }
+      },
+      "events": [
+        "2 > permissionGrants.list []",
+        "3 < permissionGrants.list [{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "5 > runner-changed.setPermissionRules [[\"Bash(python:*)\"]]",
+        "6 < runner-changed.setPermissionRules {\"count\":2,\"changed\":true}",
+        "7 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-changed へ委譲先の許可規則を 2 件配った（許可 id: g2）\",\"grounds\":\"runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#4952。前方一致も載せる: #5435）\"}]",
+        "8 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-changed へ委譲先の許可規則を 2 件配った（許可 id: g2）\",\"grounds\":\"runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#4952。前方一致も載せる: #5435）\"}",
+        "10 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 144 chars>\",\"grounds\":\"runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#5435）\"}]",
+        "11 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 144 chars>\",\"grounds\":\"runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#5435）\"}",
+        "18 > permissionGrants.list []",
+        "19 < permissionGrants.list [{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "21 > runner-same.setPermissionRules [[\"Bash(python:*)\"]]",
+        "22 < runner-same.setPermissionRules {\"count\":1,\"changed\":false}",
+        "27 > permissionGrants.list []",
+        "28 < permissionGrants.list [{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
+        "30 > runner-fails.setPermissionRules [[\"Bash(python:*)\"]]",
+        "31 < runner-fails.setPermissionRules threw Error: runner is down"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "runner-changed へ委譲先の許可規則を 2 件配った（許可 id: g2）",
+          "grounds": "runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#4952。前方一致も載せる: #5435）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-11-08T00:00:00.000Z",
+          "decision": "<str 144 chars>",
+          "grounds": "runner が名乗った（繋がった・繋ぎ直した）ので、委譲先の許可規則を降ろした（#5435）"
+        }
+      ],
+      "stderr": []
+    }
+  }
+}

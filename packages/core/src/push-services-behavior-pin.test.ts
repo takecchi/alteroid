@@ -61,6 +61,8 @@ function show(value: unknown): string {
   const text = JSON.stringify(value, (_key, item: unknown) => {
     if (item === undefined) return '<undefined>';
     if (typeof item === 'function') return '<fn>';
+    // 長い文字列は長さに畳む（json に長い連続を作らない）
+    if (typeof item === 'string' && item.length > 100) return `<str ${String(item.length)} chars>`;
     if (item instanceof Uint8Array) return `<bytes ${String(item.byteLength)}>`;
     if (
       typeof item === 'object' &&
@@ -107,7 +109,7 @@ class Ctx {
 
   /** `prefix.name` の名前で、呼び始めと戻りを events に並べる。`fail` で指した呼びは呼び始めの後に落とす */
   trace<T extends object>(prefix: string, target: T, names: readonly string[]): T {
-    const out: Record<string, unknown> = { ...target };
+    const out = { ...target } as Record<string, unknown>;
     for (const name of names) {
       const fn = (target as Record<string, (...args: unknown[]) => unknown>)[name];
       if (typeof fn !== 'function') throw new Error(`${prefix}.${name} が無い`);
@@ -118,7 +120,8 @@ class Ctx {
         this.log(`> ${op} ${show(args)}`);
         try {
           const rule = this.fails.get(op);
-          if (rule !== undefined && (rule.nth === undefined || rule.nth === count)) throw rule.error;
+          if (rule !== undefined && (rule.nth === undefined || rule.nth === count))
+            throw rule.error;
           const result = await fn.apply(target, args);
           this.log(`< ${op} ${show(result)}`);
           return result;
@@ -327,9 +330,7 @@ const CRED_SCENARIOS: Scenario[] = [
       await c.base.credentials.put([{ name: 'GH_TOKEN', value: `${FAKE}_A`, scope: 'all' }]);
       const a = c.runner('runner-a', { setCredentials: async () => [] });
       const service = credService(c, [a]);
-      return settle(() =>
-        service.apply([{ name: 'GH_TOKEN', value: `${FAKE}_B`, scope: 'app' }]),
-      );
+      return settle(() => service.apply([{ name: 'GH_TOKEN', value: `${FAKE}_B`, scope: 'app' }]));
     },
   },
   {
@@ -341,25 +342,30 @@ const CRED_SCENARIOS: Scenario[] = [
       const a = c.runner('runner-a');
       const service = credService(c, [a]);
       const out: unknown[] = [];
-      const attempts: { name: string; entries: { name: string; value: string; secret?: boolean }[] }[] =
-        [
-          { name: 'empty', entries: [] },
-          { name: 'bad-name', entries: [{ name: 'lower', value: 'x' }] },
-          { name: 'withheld', entries: [{ name: 'WITHHELD_KEY', value: 'x' }] },
-          { name: 'pool-owned', entries: [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'x' }] },
-          { name: 'env-file-owned', entries: [{ name: 'ALTEROID_PUBLIC_URL', value: 'x' }] },
-          {
-            name: 'duplicate',
-            entries: [
-              { name: 'DUP_NAME', value: 'x' },
-              { name: 'DUP_NAME', value: 'y' },
-            ],
-          },
-          { name: 'too-long', entries: [{ name: 'A'.repeat(129), value: 'x' }] },
-          { name: 'secret-change', entries: [{ name: 'SECRETISH', value: 'x', secret: false }] },
-        ];
+      const attempts: {
+        name: string;
+        entries: { name: string; value: string; secret?: boolean }[];
+      }[] = [
+        { name: 'empty', entries: [] },
+        { name: 'bad-name', entries: [{ name: 'lower', value: 'x' }] },
+        { name: 'withheld', entries: [{ name: 'WITHHELD_KEY', value: 'x' }] },
+        { name: 'pool-owned', entries: [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'x' }] },
+        { name: 'env-file-owned', entries: [{ name: 'ALTEROID_PUBLIC_URL', value: 'x' }] },
+        {
+          name: 'duplicate',
+          entries: [
+            { name: 'DUP_NAME', value: 'x' },
+            { name: 'DUP_NAME', value: 'y' },
+          ],
+        },
+        { name: 'too-long', entries: [{ name: 'A'.repeat(129), value: 'x' }] },
+        { name: 'secret-change', entries: [{ name: 'SECRETISH', value: 'x', secret: false }] },
+      ];
       for (const attempt of attempts) {
-        out.push({ name: attempt.name, ...(await settle(() => service.apply(attempt.entries)) as object) });
+        out.push({
+          name: attempt.name,
+          ...((await settle(() => service.apply(attempt.entries))) as object),
+        });
       }
       return out;
     },
@@ -399,7 +405,9 @@ const CRED_SCENARIOS: Scenario[] = [
       const a = c.runner('runner-a', { setCredentials: async () => [] });
       const service = credService(c, [a]);
       c.fail('credentials.put', 'put が落ちた（test）');
-      const putFails = await settle(() => service.apply([{ name: 'GH_TOKEN', value: `${FAKE}_A` }]));
+      const putFails = await settle(() =>
+        service.apply([{ name: 'GH_TOKEN', value: `${FAKE}_A` }]),
+      );
       c.fails.delete('credentials.put');
       c.fail('credentials.updatePendingRemovals', 'pending が書けない（test）');
       const pendingFails = await settle(() =>
@@ -410,7 +418,8 @@ const CRED_SCENARIOS: Scenario[] = [
   },
   {
     name: 'credential/apply-roster-fails',
-    covers: '名簿（runners.list）が落ちる: 保存は済み、配る段で投げる（apply が失敗する）。onPushed には何も知らせない',
+    covers:
+      '名簿（runners.list）が落ちる: 保存は済み、配る段で投げる（apply が失敗する）。onPushed には何も知らせない',
     run: async (c) => {
       const service = credService(c, [c.runner('runner-a')]);
       c.fail('registry.list', '名簿が引けない（test）');
@@ -518,11 +527,7 @@ function fakeApplier(
   } as unknown as ProfileApplier;
 }
 
-function profileService(
-  c: Ctx,
-  runners: readonly RunnerClient[] | null,
-  applier?: ProfileApplier,
-) {
+function profileService(c: Ctx, runners: readonly RunnerClient[] | null, applier?: ProfileApplier) {
   const service = createProfileService({
     stores: c.stores(),
     ...(runners === null ? {} : { runners: c.registry(runners) }),
@@ -543,9 +548,12 @@ const PROFILE_SCENARIOS: Scenario[] = [
   },
   {
     name: 'profile/set-two-runners',
-    covers: '2台へ配る（本文は runner 向けに合成）。結果の runner ごとの欄（指紋・ok）と composed の指紋',
+    covers:
+      '2台へ配る（本文は runner 向けに合成）。結果の runner ごとの欄（指紋・ok）と composed の指紋',
     run: async (c) => {
-      const a = c.runner('runner-a', { setProfile: async () => ({ ok: true, profile: pfp('pa') }) });
+      const a = c.runner('runner-a', {
+        setProfile: async () => ({ ok: true, profile: pfp('pa') }),
+      });
       const b = c.runner('runner-b', {
         setProfile: async () => ({ ok: true, profile: pfp('pb'), names: ['FAKE_A'] }),
       });
@@ -582,7 +590,8 @@ const PROFILE_SCENARIOS: Scenario[] = [
   },
   {
     name: 'profile/set-prepare-rejects',
-    covers: '適用器の評価に落ちる（prepare が ok:false）: discard して stored:false を返す。保存も配布もしない',
+    covers:
+      '適用器の評価に落ちる（prepare が ok:false）: discard して stored:false を返す。保存も配布もしない',
     run: async (c) => {
       const a = c.runner('runner-a');
       const service = profileService(c, [a], fakeApplier(c, { prepareOk: false }));
@@ -591,7 +600,8 @@ const PROFILE_SCENARIOS: Scenario[] = [
   },
   {
     name: 'profile/set-write-fails',
-    covers: '正本へ書けない（set が落ちる）: discard → replaceAll(previous) で戻して投げる。配らない',
+    covers:
+      '正本へ書けない（set が落ちる）: discard → replaceAll(previous) で戻して投げる。配らない',
     run: async (c) => {
       const a = c.runner('runner-a');
       const service = profileService(c, [a], fakeApplier(c));
@@ -611,7 +621,8 @@ const PROFILE_SCENARIOS: Scenario[] = [
   },
   {
     name: 'profile/set-commit-fails-rollback-fails',
-    covers: 'commit が落ち、正本を戻すことも落ちる: ProfileRollbackFailedError（両方の理由）を投げる',
+    covers:
+      'commit が落ち、正本を戻すことも落ちる: ProfileRollbackFailedError（両方の理由）を投げる',
     run: async (c) => {
       const a = c.runner('runner-a');
       const service = profileService(c, [a], fakeApplier(c, { commitFails: true }));
@@ -628,8 +639,14 @@ const PROFILE_SCENARIOS: Scenario[] = [
       const a = c.runner('runner-a');
       const service = profileService(c, [a]);
       const out: unknown[] = [];
-      out.push({ name: 'bad-name', ...((await settle(() => service.set('bad name!', 'x'))) as object) });
-      out.push({ name: 'empty', ...((await settle(() => service.set('base', '  \n '))) as object) });
+      out.push({
+        name: 'bad-name',
+        ...((await settle(() => service.set('bad name!', 'x'))) as object),
+      });
+      out.push({
+        name: 'empty',
+        ...((await settle(() => service.set('base', '  \n '))) as object),
+      });
       out.push({
         name: 'if-match-stale',
         ...((await settle(() =>
@@ -690,7 +707,8 @@ const PROFILE_SCENARIOS: Scenario[] = [
   },
   {
     name: 'profile/restore',
-    covers: 'restore: 適用器が無ければ null。あれば合成した clone 向けの本文を適用器へ。行も本文も無ければ null',
+    covers:
+      'restore: 適用器が無ければ null。あれば合成した clone 向けの本文を適用器へ。行も本文も無ければ null',
     run: async (c) => {
       const bare = profileService(c, null);
       const noApplier = await settle(() => bare.restore());
@@ -813,7 +831,8 @@ const MCP_SCENARIOS: Scenario[] = [
   },
   {
     name: 'mcp/apply-no-fingerprint-back',
-    covers: 'runner の置いた結果が指紋を返さない（undefined）: ok:true で mcpServers の欄は付かない',
+    covers:
+      'runner の置いた結果が指紋を返さない（undefined）: ok:true で mcpServers の欄は付かない',
     run: async (c) => {
       const a = c.runner('runner-a', { setMcpServers: async () => undefined });
       return settle(() => mcpService(c, [a]).apply(SERVERS));
@@ -948,14 +967,17 @@ const PLUGIN_SCENARIOS: Scenario[] = [
       const make = (id: string, sha: string) =>
         c.runner(id, {
           plugins: async () => undefined,
-          setPlugin: async (plugin) => pluginFp(plugin.name, plugin.sourceSha, plugin.contentSha256),
+          setPlugin: async (plugin) =>
+            pluginFp(plugin.name, plugin.sourceSha, plugin.contentSha256),
           retainPlugins: async () => ({
             sha256: sha,
             plugins: [pluginFp('p-one', SHA_A)],
             updatedAt: BASE_ISO,
           }),
         });
-      return settle(() => pluginService(c, [make('runner-a', 'ra'), make('runner-b', 'rb')]).apply());
+      return settle(() =>
+        pluginService(c, [make('runner-a', 'ra'), make('runner-b', 'rb')]).apply(),
+      );
     },
   },
   {
@@ -1112,9 +1134,7 @@ const PERMISSION_SCENARIOS: Scenario[] = [
     run: async (c) => {
       await c.base.permissionGrants.put(grant('g1', 'Bash(gh pr view 12)'));
       await c.base.permissionGrants.put(grant('g2', 'Bash(python:*)'));
-      await c.base.permissionGrants.put(
-        grant('g3', 'Bash(git status)', { revokedAt: BASE_ISO }),
-      );
+      await c.base.permissionGrants.put(grant('g3', 'Bash(git status)', { revokedAt: BASE_ISO }));
       await c.base.permissionGrants.put(grant('g4', 'Bash(*)'));
       const a = c.runner('runner-a', { setPermissionRules: placedRule });
       const b = c.runner('runner-b', { setPermissionRules: placedRule });
@@ -1123,16 +1143,20 @@ const PERMISSION_SCENARIOS: Scenario[] = [
   },
   {
     name: 'permission-rules/push-unchanged',
-    covers: '一覧が変わっていない（changed:false）: 「配った」の行は残すが、auto mode の行は積まない',
+    covers:
+      '一覧が変わっていない（changed:false）: 「配った」の行は残すが、auto mode の行は積まない',
     run: async (c) => {
       await c.base.permissionGrants.put(grant('g2', 'Bash(python:*)'));
-      const a = c.runner('runner-a', { setPermissionRules: async () => ({ count: 1, changed: false }) });
+      const a = c.runner('runner-a', {
+        setPermissionRules: async () => ({ count: 1, changed: false }),
+      });
       return settle(() => permissionService(c, [a]).pushAll('名乗り直し'));
     },
   },
   {
     name: 'permission-rules/push-one-runner-fails',
-    covers: '1台が落ちる: ok:false。日誌には「配れなかった（前の一覧が残っている）」の行。もう1台は成功の行',
+    covers:
+      '1台が落ちる: ok:false。日誌には「配れなかった（前の一覧が残っている）」の行。もう1台は成功の行',
     run: async (c) => {
       await c.base.permissionGrants.put(grant('g1', 'Bash(gh pr view 12)'));
       const a = c.runner('runner-a', { setPermissionRules: placedRule });
@@ -1237,7 +1261,11 @@ interface PinFile {
 }
 
 function plain<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  return JSON.parse(
+    JSON.stringify(value, (_key, item: unknown) =>
+      typeof item === 'string' && item.length > 100 ? `<str ${String(item.length)} chars>` : item,
+    ),
+  ) as T;
 }
 
 async function runScenario(scenario: Scenario): Promise<Pinned> {
@@ -1303,18 +1331,23 @@ describe('配布サービス5つの呼びの並び・返り値・日誌・stderr
   });
 
   it('空振りでない（場面が在り、固定値と実際の場面の名前の並びが同じ）', () => {
-    expect(Object.keys(pinned.scenarios).length, '固定値が空である。この歯は何も測っていない').toBeGreaterThan(
-      0,
-    );
+    expect(
+      Object.keys(pinned.scenarios).length,
+      '固定値が空である。この歯は何も測っていない',
+    ).toBeGreaterThan(0);
     expect(Object.keys(actual)).toEqual(ALL_KEYS);
     expect(Object.keys(pinned.scenarios)).toEqual(ALL_KEYS);
     for (const key of ALL_KEYS) {
+      // 名簿が無い構成の pushAll は何も呼ばない（返り値だけを縛る）
+      if (key === 'permission-rules/push-no-registry') continue;
       expect(actual[key]?.events.length, `${key} が呼びを1つも記録していない`).toBeGreaterThan(0);
     }
   });
 
   it('場面ごとの呼びの数の一覧が固定値と同じ', () => {
-    const counts = Object.fromEntries(ALL_KEYS.map((key) => [key, actual[key]?.events.length ?? -1]));
+    const counts = Object.fromEntries(
+      ALL_KEYS.map((key) => [key, actual[key]?.events.length ?? -1]),
+    );
     expect(counts).toEqual(pinned.counts);
   });
 
@@ -1333,18 +1366,20 @@ describe('配布サービス5つの呼びの並び・返り値・日誌・stderr
       const got = actual[key];
       expect(want, `${key} が固定値に無い`).toBeDefined();
       expect(got?.events.length, `場面 ${key} の呼びの数が変わった`).toBe(want?.events.length);
-      expect(got?.events, `場面 ${key} の呼びの並び（世代・口・引数・結果）が固定値からずれた`).toEqual(
-        want?.events,
-      );
+      expect(
+        got?.events,
+        `場面 ${key} の呼びの並び（世代・口・引数・結果）が固定値からずれた`,
+      ).toEqual(want?.events);
     });
 
     it('日誌に書いた行と stderr に出た行が固定値と同じ', () => {
       const want = pinned.scenarios[key];
       const got = actual[key];
       expect(want, `${key} が固定値に無い`).toBeDefined();
-      expect(got?.journal, `場面 ${key} の日誌の行（種類・本文・grounds・id・at）が変わった`).toEqual(
-        want?.journal,
-      );
+      expect(
+        got?.journal,
+        `場面 ${key} の日誌の行（種類・本文・grounds・id・at）が変わった`,
+      ).toEqual(want?.journal);
       expect(got?.stderr, `場面 ${key} の stderr の行が変わった`).toEqual(want?.stderr);
     });
   });
