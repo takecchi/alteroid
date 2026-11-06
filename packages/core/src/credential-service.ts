@@ -23,7 +23,7 @@ export interface CredentialService {
   fingerprints(): Promise<CredentialFingerprint[]>;
   // 外す指示も配る: 配らないと runner の器に古い鍵が残り続けるため
   apply(entries: readonly CredentialEntry[]): Promise<ApplyCredentialsResult>;
-  onPushed?(listener: (results: Readonly<ApplyCredentialsResult['runners']>) => void): () => void;
+  onPushed(listener: (results: Readonly<ApplyCredentialsResult['runners']>) => void): () => void;
   // 差があるものだけを降ろす: 全部だと再接続のたびに `recycleForToken` を無意味に叩きうるため
   syncRunner(runner: RunnerClient): Promise<RunnerCredentialFingerprint[] | null>;
   vaultSnapshot(): readonly StoredCredential[];

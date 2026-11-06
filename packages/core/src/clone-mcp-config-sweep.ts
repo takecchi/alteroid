@@ -1,7 +1,7 @@
 import { CLONE_MCP_CONFIG_DIR_PREFIX } from './clone-mcp-config-file.js';
 import { type RunnerMcpConfigSweepResult, sweepMcpConfigDirs } from './runner-mcp-config-sweep.js';
 
-// minAgeMs の既定は runner の掃きと同じ下限（5 分）を共有する（sweepMcpConfigDirs の既定をそのまま使う）: 起こす側が mkdtemp してから生きた集合へ入れるまでの隙間が同じ形のため。
+// 消してよくなるまでの古さは、runner の掃きと同じ下限（5 分）を共有する（sweepMcpConfigDirs がそのまま使う）: 起こす側が mkdtemp してから生きた集合へ入れるまでの隙間が同じ形のため。
 // 別の値にすると片方だけ競合の窓が開くので、ここに別名の定数を置かず runner の定数（RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS）だけを持ち主にする
 
 export type CloneMcpConfigSweepResult = RunnerMcpConfigSweepResult;
@@ -11,7 +11,6 @@ export interface CloneMcpConfigSweepOptions {
   // このプロセスが作っていて、まだ remove していないディレクトリ（絶対パス）
   liveDirs: ReadonlySet<string>;
   now: number;
-  minAgeMs?: number;
   ownPid: number;
   isPidAlive?: (pid: number) => boolean;
   rmFn?: (target: string) => Promise<void>;

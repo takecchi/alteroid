@@ -82,7 +82,7 @@ describe('正本に書いた後の失敗は、書けた側を正にして置け�
       runners: runnersWhoseListThrows(`一覧が取れない ${FAKE_ENV_VALUE}`),
     });
     const pushed: unknown[] = [];
-    service.onPushed?.((results) => pushed.push(results));
+    service.onPushed((results) => pushed.push(results));
 
     const result = await service.set('rust', 'export R=1');
 
@@ -102,7 +102,7 @@ describe('正本に書いた後の失敗は、書けた側を正にして置け�
     const { stores, discards } = storesWhoseListFailsAt([2]);
     const service = createProfileService({ stores, runners: okRunners(calls) });
     const pushed: unknown[] = [];
-    service.onPushed?.((results) => pushed.push(results));
+    service.onPushed((results) => pushed.push(results));
 
     const result = await service.set('rust', 'export R=1', 'app');
 
@@ -146,7 +146,7 @@ describe('正本に書いた後の失敗は、書けた側を正にして置け�
       runners: runnersWhoseListThrows(`一覧が取れない ${FAKE_ENV_VALUE}`),
     });
     const pushed: unknown[] = [];
-    service.onPushed?.((results) => pushed.push(results));
+    service.onPushed((results) => pushed.push(results));
 
     const result = await service.set('rust', 'export R=1');
 

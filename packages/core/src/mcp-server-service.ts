@@ -23,8 +23,8 @@ export interface McpServerService {
   apply(servers: McpServers, options?: WriteMcpServersOptions): Promise<ApplyMcpServersResult>;
   /** 指紋が一致していれば `null`（押し込みを試みたことにしない）。 */
   syncRunner(runner: RunnerClient): Promise<{ mcpServers?: RunnerMcpServersFingerprint } | null>;
-  // 任意の口: `apply()` の即時の配布は `ManagerPool` の押し込みの帳面と挑み直しを通らないので、`ManagerPool` が購読して同じ帳面に積む。
-  onPushed?(listener: (results: readonly McpServersRunnerResult[]) => void): () => void;
+  // `apply()` の即時の配布は `ManagerPool` の押し込みの帳面と挑み直しを通らないので、`ManagerPool` が購読して同じ帳面に積む。
+  onPushed(listener: (results: readonly McpServersRunnerResult[]) => void): () => void;
 }
 
 interface McpServerServiceOptions {

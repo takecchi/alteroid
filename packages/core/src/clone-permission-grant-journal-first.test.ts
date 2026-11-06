@@ -70,6 +70,7 @@ function fakeService() {
       triggers.push(trigger);
       return [];
     },
+    onPushed: () => () => undefined,
   };
   return { service, triggers };
 }
