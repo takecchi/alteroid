@@ -241,7 +241,7 @@ export async function profileEditCommand(
         ? edited === TEMPLATE
         : edited === current.script && !scopeChanged;
     },
-    emptyMessage: () => EMPTY_BODY_MESSAGE,
+    // 空の断りは骨格に渡さない: `put()` がデーモンへ送る前に同じ文で断る（下書きを残す囲みの中で投げるので扱いも同じ）
     save: async (edited) => {
       await put(name, edited, target, scope, readVersionOf(profile, name));
     },
