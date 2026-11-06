@@ -1,0 +1,2585 @@
+{
+  "lengths": {
+    "keep-on#1": 41,
+    "keep-on#2": 27,
+    "keep-on#3": 41,
+    "keep-off#1": 19,
+    "keep-off#2": 22,
+    "keep-off#3": 22,
+    "keep-off#4": 19,
+    "toggle-sequence#1": 41,
+    "toggle-sequence#2": 19,
+    "toggle-sequence#3": 41,
+    "toggle-sequence#4": 19,
+    "open-states#1": 43,
+    "open-states#2": 43,
+    "open-states#3": 43,
+    "open-states#4": 21,
+    "open-states#5": 21,
+    "open-states#6": 21,
+    "closed#1": 43,
+    "closed#2": 43,
+    "closed#3": 29,
+    "closed#4": 21,
+    "closed#5": 21,
+    "closed#6": 24,
+    "origins-and-titles#1": 47,
+    "origins-and-titles#2": 49,
+    "origins-and-titles#3": 50,
+    "origins-and-titles#4": 46,
+    "origins-and-titles#5": 46,
+    "origins-and-titles#6": 47,
+    "origins-and-titles#7": 47,
+    "origins-and-titles#8": 47,
+    "not-found#1": 53,
+    "not-found#2": 53,
+    "not-found#3": 46,
+    "not-found#4": 47,
+    "not-found#5": 48,
+    "unreadable#1": 46,
+    "unreadable#2": 46,
+    "set-keep-throws#1": 16,
+    "set-keep-throws#2": 16,
+    "journal-fails#1": 185,
+    "journal-fails#2": 27,
+    "journal-fails#3": 186,
+    "journal-fails#4": 41,
+    "id-forms#1": 240,
+    "id-forms#2": 42,
+    "id-forms#3": 50,
+    "id-forms#4": 45,
+    "id-forms#5": 45,
+    "id-forms#6": 42,
+    "id-forms#7": 247
+  },
+  "scenarios": {
+    "keep-on#1": {
+      "output": {
+        "length": 41,
+        "text": "task a の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a",
+        "keep": true
+      },
+      "keptIds": ["a"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "keep-on#2": {
+      "output": {
+        "length": 27,
+        "text": "task a は既に「続く」の印つき。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a",
+        "keep": true
+      },
+      "keptIds": ["a"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "keep-on#3": {
+      "output": {
+        "length": 41,
+        "text": "task b の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b",
+        "keep": true
+      },
+      "keptIds": ["a", "b"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の「続く」の印を立てた（b: 仕事 b）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "b",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の「続く」の印を立てた（b: 仕事 b）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "keep-off#1": {
+      "output": {
+        "length": 19,
+        "text": "task a の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": ["b"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を外した（a: 仕事 a）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を外した（a: 仕事 a）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "keep-off#2": {
+      "output": {
+        "length": 22,
+        "text": "task a は既に印なし。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": ["b"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": false
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "keep-off#3": {
+      "output": {
+        "length": 22,
+        "text": "task c は既に印なし。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "keptIds": ["b"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "c",
+            "keep": false
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "keep-off#4": {
+      "output": {
+        "length": 19,
+        "text": "task b の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "keptIds": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を外した（b: 仕事 b）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "b",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の「続く」の印を外した（b: 仕事 b）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "toggle-sequence#1": {
+      "output": {
+        "length": 41,
+        "text": "task a の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a",
+        "keep": true
+      },
+      "keptIds": ["a"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "toggle-sequence#2": {
+      "output": {
+        "length": 19,
+        "text": "task a の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の「続く」の印を外した（a: 仕事 a）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を外した（a: 仕事 a）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "toggle-sequence#3": {
+      "output": {
+        "length": 41,
+        "text": "task a の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a",
+        "keep": true
+      },
+      "keptIds": ["a"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "toggle-sequence#4": {
+      "output": {
+        "length": 19,
+        "text": "task a の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を外した（a: 仕事 a）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を外した（a: 仕事 a）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "open-states#1": {
+      "output": {
+        "length": 43,
+        "text": "task q-1 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "q-1",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 q-1",
+        "body": "本文 q-1",
+        "keep": true
+      },
+      "keptIds": ["q-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を立てた（q-1: 仕事 q-1）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "q-1",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の「続く」の印を立てた（q-1: 仕事 q-1）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "open-states#2": {
+      "output": {
+        "length": 43,
+        "text": "task w-1 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "w-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-02T00:00:00.000Z",
+        "status": "waiting",
+        "origin": "external",
+        "title": "仕事 w-1",
+        "body": "本文 w-1",
+        "keep": true
+      },
+      "keptIds": ["q-1", "w-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の「続く」の印を立てた（w-1: 仕事 w-1）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "w-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "w-1",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "w-1"
+            },
+            "decision": "task の「続く」の印を立てた（w-1: 仕事 w-1）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "open-states#3": {
+      "output": {
+        "length": 43,
+        "text": "task n-1 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "n-1",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-02T00:00:00.000Z",
+        "status": "needs_decision",
+        "origin": "external",
+        "title": "仕事 n-1",
+        "body": "本文 n-1",
+        "keep": true
+      },
+      "keptIds": ["q-1", "w-1", "n-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の「続く」の印を立てた（n-1: 仕事 n-1）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "n-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "n-1",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "n-1"
+            },
+            "decision": "task の「続く」の印を立てた（n-1: 仕事 n-1）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "open-states#4": {
+      "output": {
+        "length": 21,
+        "text": "task q-1 の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "q-1",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 q-1",
+        "body": "本文 q-1"
+      },
+      "keptIds": ["w-1", "n-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を外した（q-1: 仕事 q-1）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "q-1",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の「続く」の印を外した（q-1: 仕事 q-1）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "open-states#5": {
+      "output": {
+        "length": 21,
+        "text": "task w-1 の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "w-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-02T00:00:00.000Z",
+        "status": "waiting",
+        "origin": "external",
+        "title": "仕事 w-1",
+        "body": "本文 w-1"
+      },
+      "keptIds": ["n-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の「続く」の印を外した（w-1: 仕事 w-1）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "w-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "w-1",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "w-1"
+            },
+            "decision": "task の「続く」の印を外した（w-1: 仕事 w-1）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "open-states#6": {
+      "output": {
+        "length": 21,
+        "text": "task n-1 の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "n-1",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-02T00:00:00.000Z",
+        "status": "needs_decision",
+        "origin": "external",
+        "title": "仕事 n-1",
+        "body": "本文 n-1"
+      },
+      "keptIds": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "task の「続く」の印を外した（n-1: 仕事 n-1）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "n-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "n-1",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "n-1"
+            },
+            "decision": "task の「続く」の印を外した（n-1: 仕事 n-1）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "closed#1": {
+      "output": {
+        "length": 43,
+        "text": "task d-1 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた",
+        "keep": true
+      },
+      "keptIds": ["d-1", "d-2"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を立てた（d-1: 仕事 d-1）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "d-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "d-1",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-1"
+            },
+            "decision": "task の「続く」の印を立てた（d-1: 仕事 d-1）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "closed#2": {
+      "output": {
+        "length": 43,
+        "text": "task x-1 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "x-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "cancelled",
+        "origin": "external",
+        "title": "仕事 x-1",
+        "body": "本文 x-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた",
+        "keep": true
+      },
+      "keptIds": ["d-1", "d-2", "x-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の「続く」の印を立てた（x-1: 仕事 x-1）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "x-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "x-1",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "x-1"
+            },
+            "decision": "task の「続く」の印を立てた（x-1: 仕事 x-1）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closed#3": {
+      "output": {
+        "length": 29,
+        "text": "task d-1 は既に「続く」の印つき。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた",
+        "keep": true
+      },
+      "keptIds": ["d-1", "d-2", "x-1"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "d-1",
+            "keep": true
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "closed#4": {
+      "output": {
+        "length": 21,
+        "text": "task d-2 の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "d-2",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-2",
+        "body": "本文 d-2",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "keptIds": ["d-1", "x-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を外した（d-2: 仕事 d-2）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "d-2"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "d-2",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d-2"
+            },
+            "decision": "task の「続く」の印を外した（d-2: 仕事 d-2）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "closed#5": {
+      "output": {
+        "length": 21,
+        "text": "task x-1 の「続く」の印を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "x-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "cancelled",
+        "origin": "external",
+        "title": "仕事 x-1",
+        "body": "本文 x-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "keptIds": ["d-1"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の「続く」の印を外した（x-1: 仕事 x-1）",
+          "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）",
+          "target": {
+            "kind": "task",
+            "id": "x-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "x-1",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "x-1"
+            },
+            "decision": "task の「続く」の印を外した（x-1: 仕事 x-1）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "closed#6": {
+      "output": {
+        "length": 24,
+        "text": "task x-1 は既に印なし。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "x-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "cancelled",
+        "origin": "external",
+        "title": "仕事 x-1",
+        "body": "本文 x-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "keptIds": ["d-1"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "x-1",
+            "keep": false
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "origins-and-titles#1": {
+      "output": {
+        "length": 47,
+        "text": "task o-human の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "o-human",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "human",
+        "title": "仕事 o-human",
+        "body": "本文 o-human",
+        "keep": true
+      },
+      "keptIds": ["o-human"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を立てた（o-human: 仕事 o-human）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "o-human"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "o-human",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "o-human"
+            },
+            "decision": "task の「続く」の印を立てた（o-human: 仕事 o-human）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "origins-and-titles#2": {
+      "output": {
+        "length": 49,
+        "text": "task o-manager の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "o-manager",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "manager",
+        "title": "仕事 o-manager",
+        "body": "本文 o-manager",
+        "keep": true
+      },
+      "keptIds": ["o-human", "o-manager"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の「続く」の印を立てた（o-manager: 仕事 o-manager）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "o-manager"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "o-manager",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "o-manager"
+            },
+            "decision": "task の「続く」の印を立てた（o-manager: 仕事 o-manager）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "origins-and-titles#3": {
+      "output": {
+        "length": 50,
+        "text": "task o-external の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "o-external",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 o-external",
+        "body": "本文 o-external",
+        "keep": true
+      },
+      "keptIds": ["o-human", "o-manager", "o-external"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の「続く」の印を立てた（o-external: 仕事 o-external）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "o-external"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "o-external",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "o-external"
+            },
+            "decision": "task の「続く」の印を立てた（o-external: 仕事 o-external）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "origins-and-titles#4": {
+      "output": {
+        "length": 46,
+        "text": "task o-self の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "o-self",
+        "createdAt": "2026-10-01T00:04:00.000Z",
+        "updatedAt": "2026-10-01T00:04:00.000Z",
+        "status": "queued",
+        "origin": "self",
+        "title": "仕事 o-self",
+        "body": "本文 o-self",
+        "keep": true
+      },
+      "keptIds": ["o-human", "o-manager", "o-external", "o-self"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を立てた（o-self: 仕事 o-self）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "o-self"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "o-self",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "o-self"
+            },
+            "decision": "task の「続く」の印を立てた（o-self: 仕事 o-self）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "origins-and-titles#5": {
+      "output": {
+        "length": 46,
+        "text": "task t-long の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "t-long",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title ti",
+        "body": "本文 t-long",
+        "keep": true
+      },
+      "keptIds": ["o-human", "o-manager", "o-external", "o-self", "t-long"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の「続く」の印を立てた（t-long: title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title ti）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "t-long"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "t-long",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "t-long"
+            },
+            "decision": "task の「続く」の印を立てた（t-long: title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title title ti）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "origins-and-titles#6": {
+      "output": {
+        "length": 47,
+        "text": "task t-lines の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "t-lines",
+        "createdAt": "2026-10-01T00:06:00.000Z",
+        "updatedAt": "2026-10-01T00:06:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "一行目\n二行目",
+        "body": "本文 t-lines",
+        "keep": true
+      },
+      "keptIds": ["o-human", "o-manager", "o-external", "o-self", "t-long", "t-lines"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "task の「続く」の印を立てた（t-lines: 一行目\n二行目）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "t-lines"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "t-lines",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "t-lines"
+            },
+            "decision": "task の「続く」の印を立てた（t-lines: 一行目\n二行目）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "origins-and-titles#7": {
+      "output": {
+        "length": 47,
+        "text": "task t-emoji の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "t-emoji",
+        "createdAt": "2026-10-01T00:07:00.000Z",
+        "updatedAt": "2026-10-01T00:07:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "😀 題",
+        "body": "本文 t-emoji",
+        "keep": true
+      },
+      "keptIds": ["o-human", "o-manager", "o-external", "o-self", "t-long", "t-lines", "t-emoji"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-7",
+          "at": "2026-10-29T00:07:00.000Z",
+          "decision": "task の「続く」の印を立てた（t-emoji: 😀 題）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "t-emoji"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "t-emoji",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "t-emoji"
+            },
+            "decision": "task の「続く」の印を立てた（t-emoji: 😀 題）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-7"
+        }
+      ]
+    },
+    "origins-and-titles#8": {
+      "output": {
+        "length": 47,
+        "text": "task t-short の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "t-short",
+        "createdAt": "2026-10-01T00:08:00.000Z",
+        "updatedAt": "2026-10-01T00:08:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "x",
+        "body": "本文 t-short",
+        "keep": true
+      },
+      "keptIds": [
+        "o-human",
+        "o-manager",
+        "o-external",
+        "o-self",
+        "t-long",
+        "t-lines",
+        "t-emoji",
+        "t-short"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-8",
+          "at": "2026-10-29T00:08:00.000Z",
+          "decision": "task の「続く」の印を立てた（t-short: x）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "t-short"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "t-short",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "t-short"
+            },
+            "decision": "task の「続く」の印を立てた（t-short: x）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-8"
+        }
+      ]
+    },
+    "not-found#1": {
+      "output": {
+        "length": 53,
+        "text": "task no-such は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": null,
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "no-such",
+            "keep": true
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#2": {
+      "output": {
+        "length": 53,
+        "text": "task no-such は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": null,
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "no-such",
+            "keep": false
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#3": {
+      "output": {
+        "length": 46,
+        "text": "task  は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": null,
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "",
+            "keep": true
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#4": {
+      "output": {
+        "length": 47,
+        "text": "task A は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": null,
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "A",
+            "keep": true
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#5": {
+      "output": {
+        "length": 48,
+        "text": "task  a は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": null,
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": " a",
+            "keep": false
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "unreadable#1": {
+      "output": {
+        "length": 46,
+        "text": "task a は読めない形で入っている。読めない形のまま書き直さないので、印を変えていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "unreadable#2": {
+      "output": {
+        "length": 46,
+        "text": "task a は読めない形で入っている。読めない形のまま書き直さないので、印を変えていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": false
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "set-keep-throws#1": {
+      "output": {
+        "length": 16,
+        "text": "ストアが落ちた（setKeep）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "threw Error: ストアが落ちた（setKeep）"
+        }
+      ]
+    },
+    "set-keep-throws#2": {
+      "output": {
+        "length": 16,
+        "text": "ストアが落ちた（setKeep）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "keptIds": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": false
+          },
+          "outcome": "threw Error: ストアが落ちた（setKeep）"
+        }
+      ]
+    },
+    "journal-fails#1": {
+      "output": {
+        "length": 185,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\ntask_keep は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=25 grounds.chars=77\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "task",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a",
+        "keep": true
+      },
+      "keptIds": ["a", "b"],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（decision decision.chars=25 grounds.chars=77）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の「続く」の印を立てた（a: 仕事 a）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#2": {
+      "output": {
+        "length": 27,
+        "text": "task a は既に「続く」の印つき。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a",
+        "keep": true
+      },
+      "keptIds": ["a", "b"],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a",
+            "keep": true
+          },
+          "outcome": "unchanged"
+        }
+      ]
+    },
+    "journal-fails#3": {
+      "output": {
+        "length": 186,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\ntask_keep は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=25 grounds.chars=196\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "task",
+      "row": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "keptIds": ["a"],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:03:00.000Z 日誌を記録できませんでした（decision decision.chars=25 grounds.chars=196）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "b",
+            "keep": false
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の「続く」の印を外した（b: 仕事 b）",
+            "grounds": "自分で task_keep した。印を外したので、queued のままなら、その発言を読んで起点の会話へ返答したターンの終わりに、器が自動で done にしうる（後から来た別の発言への turn_reply では閉じない。印を外した後の task_say と、回答のターンの返答では、受信箱に残っていない限り閉じうる。終えるときは task_set_status で done にしてもよい）"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#4": {
+      "output": {
+        "length": 41,
+        "text": "task b の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b",
+        "keep": true
+      },
+      "keptIds": ["a", "b"],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を立てた（b: 仕事 b）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "b",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の「続く」の印を立てた（b: 仕事 b）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "id-forms#1": {
+      "output": {
+        "length": 240,
+        "text": "task longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "body": "本文 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "keep": true
+      },
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の「続く」の印を立てた（longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long: 仕事 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+            },
+            "decision": "task の「続く」の印を立てた（longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long: 仕事 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "id-forms#2": {
+      "output": {
+        "length": 42,
+        "text": "task 仕事 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "仕事",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 仕事",
+        "body": "本文 仕事",
+        "keep": true
+      },
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "仕事"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の「続く」の印を立てた（仕事: 仕事 仕事）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "仕事"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "仕事",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "仕事"
+            },
+            "decision": "task の「続く」の印を立てた（仕事: 仕事 仕事）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "id-forms#3": {
+      "output": {
+        "length": 50,
+        "text": "task with space の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "with space",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 with space",
+        "body": "本文 with space",
+        "keep": true
+      },
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "仕事",
+        "with space"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の「続く」の印を立てた（with space: 仕事 with space）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "with space"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "with space",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "with space"
+            },
+            "decision": "task の「続く」の印を立てた（with space: 仕事 with space）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "id-forms#4": {
+      "output": {
+        "length": 45,
+        "text": "task a/b:c の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "a/b:c",
+        "createdAt": "2026-10-01T00:04:00.000Z",
+        "updatedAt": "2026-10-01T00:04:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a/b:c",
+        "body": "本文 a/b:c",
+        "keep": true
+      },
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "仕事",
+        "with space",
+        "a/b:c"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の「続く」の印を立てた（a/b:c: 仕事 a/b:c）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "a/b:c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "a/b:c",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a/b:c"
+            },
+            "decision": "task の「続く」の印を立てた（a/b:c: 仕事 a/b:c）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "id-forms#5": {
+      "output": {
+        "length": 45,
+        "text": "task 12345 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "12345",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 12345",
+        "body": "本文 12345",
+        "keep": true
+      },
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "仕事",
+        "with space",
+        "a/b:c",
+        "12345"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の「続く」の印を立てた（12345: 仕事 12345）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "12345"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "12345",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "12345"
+            },
+            "decision": "task の「続く」の印を立てた（12345: 仕事 12345）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "id-forms#6": {
+      "output": {
+        "length": 42,
+        "text": "task 😀 の「続く」の印を立てた。返答しても器は自動では done にしない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "row": {
+        "id": "😀",
+        "createdAt": "2026-10-01T00:06:00.000Z",
+        "updatedAt": "2026-10-01T00:06:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 😀",
+        "body": "本文 😀",
+        "keep": true
+      },
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "仕事",
+        "with space",
+        "a/b:c",
+        "12345",
+        "😀"
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "task の「続く」の印を立てた（😀: 仕事 😀）",
+          "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）",
+          "target": {
+            "kind": "task",
+            "id": "😀"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "😀",
+            "keep": true
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "😀"
+            },
+            "decision": "task の「続く」の印を立てた（😀: 仕事 😀）",
+            "grounds": "自分で task_keep した。起点の会話へ返答しても、この task は器が自動では done にしない（閉じるのは task_set_status）"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "id-forms#7": {
+      "output": {
+        "length": 247,
+        "text": "task longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long! は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "row": null,
+      "keptIds": [
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "仕事",
+        "with space",
+        "a/b:c",
+        "12345",
+        "😀"
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.setKeep",
+          "args": {
+            "taskId": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long!",
+            "keep": true
+          },
+          "outcome": "not-found"
+        }
+      ]
+    }
+  }
+}
