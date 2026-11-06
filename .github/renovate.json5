@@ -153,9 +153,16 @@
     // スキーマの差分を読む必要があり、Renovate はこれを1つの PR で保証しない。
     // 実例（#6558）: catalog の版だけが上がって他の3か所が動かず、
     // `scripts/codex-version-sync.test.ts` と `codex-protocol.test.ts` が落ちて CI が赤になった。
+    //
+    // 外す（`enabled: false`）のではなく、Dependency Dashboard の承認待ちに置く: 外すと新しい版が出ても
+    // 何も知らせが来ないため。承認待ちの版は Dashboard の Issue に載るだけで、PR は作られない。
+    // **Dashboard の承認の印は付けないこと**——付けると Renovate は catalog だけを上げる PR を作り、
+    // #6558 と同じ赤になる。載ったら知らせとして読み、上の4か所を手で揃える PR を立てる。
+    // `groupName` を別にする: 上の `non-major dependencies` の束に入ったままだと、承認待ちが束ごと掛かりうるため。
     {
       matchPackageNames: ['@openai/codex'],
-      enabled: false,
+      groupName: 'codex',
+      dependencyDashboardApproval: true,
     },
     // **`pnpm-workspace.yaml` の `overrides` はメジャーを上げない。** あそこに在るのは
     // 推移的依存を脆弱性の修正版へ寄せるための上書きで、**上書きは親の宣言範囲の
