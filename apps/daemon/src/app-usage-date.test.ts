@@ -2,6 +2,7 @@ import {
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
   usageDate,
 } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
@@ -10,23 +11,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 function appWith(now?: () => Date): ReturnType<typeof createApp> {

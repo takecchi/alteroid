@@ -1,5 +1,6 @@
 import {
   createMemoryStores,
+  fakeCloneHost,
   type CloneHost,
   type DelegatedPermissionRuleService,
   type PermissionGrant,
@@ -12,21 +13,9 @@ import { createApp } from './app.js';
 // 許可が取り消されたら、委譲先の許可規則の一覧を runner へ配り直す（#4952）
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 function grant(id: string, rule: string): PermissionGrant {

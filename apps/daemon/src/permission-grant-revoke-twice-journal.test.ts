@@ -1,5 +1,6 @@
 import {
   createMemoryStores,
+  fakeCloneHost,
   type CloneHost,
   type PermissionGrant,
   type Stores,
@@ -13,21 +14,9 @@ import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 const GRANT: PermissionGrant = {

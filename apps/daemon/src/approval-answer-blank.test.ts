@@ -1,5 +1,9 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
-import type { CloneHost } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  fakeCloneHost,
+} from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -7,25 +11,12 @@ import { createApp } from './app.js';
 function setup() {
   const stores = createMemoryStores();
   const answered: string[] = [];
-  const clone: CloneHost = {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
+  const clone = fakeCloneHost({
     async answerApproval(_id: string, answer: string) {
       answered.push(answer);
     },
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
   const app = createApp({ clone, stores, token: 'test-token', shutdown: () => {} });
   return { app, stores, answered };
 }

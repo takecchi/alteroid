@@ -6,6 +6,7 @@ import {
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  fakeCloneHost,
   UnreadableJobError,
 } from '@alteroid/core';
 import type { CloneHost, Job, ManagerPool, Stores } from '@alteroid/core';
@@ -90,21 +91,9 @@ async function seedMemory(): Promise<Seeded> {
 }
 
 function cloneOver(managers: ManagerPool): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers,
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 /** `listJobs` を呼んだ回数を数える（読む口は素通し） */

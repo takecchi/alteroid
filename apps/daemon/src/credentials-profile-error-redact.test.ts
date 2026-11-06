@@ -5,6 +5,7 @@ import {
   createMcpServerService,
   createProfileService,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
 } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
@@ -25,23 +26,9 @@ async function breakProfileTable(db: Db): Promise<void> {
 }
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 async function journalText(stores: Stores): Promise<string> {

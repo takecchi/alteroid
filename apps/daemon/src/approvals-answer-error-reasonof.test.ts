@@ -1,5 +1,9 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
-import type { CloneHost } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  fakeCloneHost,
+} from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -14,25 +18,12 @@ describe('POST /approvals/answer の results[].error（#2509）', () => {
       createdAt: '2026-09-02T00:00:00.000Z',
       question: '進めてよいか',
     });
-    const clone: CloneHost = {
-      postPersisted: async () => 'persisted',
-      post: () => {},
-      recycleSessionForToken: () => {},
-      subscribe: () => () => {},
-      async endConversation() {},
+    const clone = fakeCloneHost({
       async answerApproval() {
         throw new Error(`Failed query: update approvals set answer = $1\nparams: ${FAKE_SECRET}`);
       },
-      async dropQueuedInboxEvents() {
-        return 0;
-      },
       managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-      usageBlocked: false,
-      usageReleasePending: false,
-      usageBlockedResetsAt: undefined,
-      usageBlockedTokenId: undefined,
-      async stop() {},
-    };
+    });
     const app = createApp({ clone, stores, token: 'test-token', shutdown: () => {} });
 
     const response = await app.request('/approvals/answer', {

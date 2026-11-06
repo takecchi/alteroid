@@ -3,6 +3,7 @@ import {
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
   reasonOf,
 } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
@@ -13,23 +14,9 @@ import { createApp } from './app.js';
 
 // `managers` は手で書かず実物（`createManagerPool`）を使う: 手書きの `ManagerPool` は本物の実装が増やした分岐に追随しないため。
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 describe('.onError（Issue #249: Hono の既定エラーハンドラの console.error(err) を、本文を出さない形に置き換える）', () => {

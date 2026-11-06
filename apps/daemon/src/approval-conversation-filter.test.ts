@@ -6,6 +6,7 @@ import {
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
 } from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
@@ -51,23 +52,9 @@ const BAD_NUM_CONV = { ...BAD_RAW, id: 'ap-bad-num', conversationId: 5 };
 const BAD_ROWS = [BAD_RAW, BAD_OTHER_CONV, BAD_NO_CONV, BAD_NUM_CONV];
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 type Body = {

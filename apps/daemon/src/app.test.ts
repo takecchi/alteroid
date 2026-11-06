@@ -8,7 +8,6 @@ import type {
   ApprovalSelection,
   ChatStreamEvent,
   ClonePluginLoadObservation,
-  CloneHost,
   InboxBacklogBreakdown,
   InboxEvent,
   Job,
@@ -45,6 +44,7 @@ import {
   createTokenPoolService,
   DEFAULT_SSE_HEARTBEAT_MS,
   droppedTraceLedgerSince,
+  fakeCloneHost,
   fakeManagerPool,
   fingerprintOf,
   JOURNAL_ENTRY_TYPES,
@@ -221,7 +221,7 @@ function fakeClone() {
     async stop() {},
   });
 
-  const clone: CloneHost = {
+  const clone = fakeCloneHost({
     // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）
     async postPersisted(event) {
       if (persistOutcome === 'unavailable') return 'unavailable';
@@ -229,14 +229,9 @@ function fakeClone() {
       return 'persisted';
     },
     managers,
-    recycleSessionForToken() {},
     pluginLoad() {
       return clonePluginLoad;
     },
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
     post(event) {
       posted.push(event);
       if (event.type !== 'human_message') return;
@@ -278,8 +273,7 @@ function fakeClone() {
       droppedFromDelivery.push([...ids]);
       return ids.length;
     },
-    async stop() {},
-  };
+  });
 
   return {
     clone,

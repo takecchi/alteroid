@@ -1,6 +1,7 @@
 import {
   createManagerPool,
   createRunnerRegistry,
+  fakeCloneHost,
   listApprovalsSettledAroundFromApprovals,
   listApprovalSettledAtsFromApprovals,
 } from '@alteroid/core';
@@ -30,23 +31,9 @@ beforeAll(async () => {
 }, 30_000);
 
 function cloneOver(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHost({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 // DB の側の2つの口を、全部読んで答える写し（fs・メモリと同じ作り）に差し替える

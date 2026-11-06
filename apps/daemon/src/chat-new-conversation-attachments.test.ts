@@ -1,4 +1,4 @@
-import { createMemoryStores, createTokenPoolService } from '@alteroid/core';
+import { createMemoryStores, createTokenPoolService, fakeCloneHost } from '@alteroid/core';
 import type { CloneHost, InboxEvent, Stores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -10,26 +10,15 @@ let outcome: 'persisted' | 'unavailable' | 'throws' = 'persisted';
 let posted: InboxEvent[] = [];
 
 function stubCloneHost(): CloneHost {
-  return {
+  return fakeCloneHost({
     postPersisted: async (event: InboxEvent) => {
       if (outcome === 'unavailable') return 'unavailable';
       if (outcome === 'throws') throw new Error('inbox write blew up (test)');
       posted.push(event);
       return 'persisted';
     },
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 const send = (body: unknown) => ({

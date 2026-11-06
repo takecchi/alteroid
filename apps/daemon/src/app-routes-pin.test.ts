@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  fakeCloneHost,
+} from '@alteroid/core';
 import type { CloneHost } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
@@ -24,23 +29,9 @@ const PIN = JSON.parse(
 
 function cloneHost(): CloneHost {
   const stores = createMemoryStores();
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHost({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 function routesOf(allowedOrigins?: readonly string[]): Entry[] {

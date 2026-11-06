@@ -5,8 +5,9 @@ import {
   createMemoryStores,
   createRunnerRegistry,
   decisionUnusedNote,
+  fakeCloneHost,
 } from '@alteroid/core';
-import type { CloneHost, RunnerClient, RunnerEvent } from '@alteroid/core';
+import type { RunnerClient, RunnerEvent } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -45,23 +46,9 @@ async function setup() {
   });
   const registry = createRunnerRegistry([runner]);
   const pool = createManagerPool({ stores, post: () => {}, runners: registry });
-  const clone: CloneHost = {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  const clone = fakeCloneHost({
     managers: pool,
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
   const app = createApp({ clone, stores, token: 'test-token', shutdown: () => {} });
   const post = async (managerId: string, body: unknown) => {
     const res = await app.request(`/managers/${managerId}/messages`, {

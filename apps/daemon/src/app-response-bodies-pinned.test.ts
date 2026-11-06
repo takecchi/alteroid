@@ -7,6 +7,7 @@ import {
   createMemoryStores,
   createProfileService,
   createRunnerRegistry,
+  fakeCloneHost,
   UnreadableTaskError,
 } from '@alteroid/core';
 import type {
@@ -32,23 +33,9 @@ const AUTH = { authorization: 'Bearer test-token', 'content-type': 'application/
 let stores: Stores;
 
 function cloneHost(over: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHost({
     managers: createManagerPool({ stores: over, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 function build(over: Stores = stores, extra: Partial<Parameters<typeof createApp>[0]> = {}) {

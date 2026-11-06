@@ -4,15 +4,10 @@ import {
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  fakeCloneHost,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
 } from '@alteroid/core';
-import type {
-  AttachmentLimits,
-  CloneHost,
-  RunnerAttachment,
-  RunnerClient,
-  RunnerEvent,
-} from '@alteroid/core';
+import type { AttachmentLimits, RunnerAttachment, RunnerClient, RunnerEvent } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -61,23 +56,9 @@ async function setup(attachmentLimits?: AttachmentLimits) {
   });
   const registry = createRunnerRegistry([runner]);
   const pool = createManagerPool({ stores, post: () => {}, runners: registry });
-  const clone: CloneHost = {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  const clone = fakeCloneHost({
     managers: pool,
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
   const app = createApp({
     clone,
     stores,

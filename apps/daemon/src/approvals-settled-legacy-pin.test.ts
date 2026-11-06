@@ -1,4 +1,4 @@
-import { createManagerPool, createRunnerRegistry } from '@alteroid/core';
+import { createManagerPool, createRunnerRegistry, fakeCloneHost } from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
 import { createPgStoresFromDb, migrate } from '@alteroid/storage-pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -27,23 +27,9 @@ beforeAll(async () => {
 }, 30_000);
 
 function cloneOver(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHost({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 async function getJson(stores: Stores, path: string): Promise<unknown> {

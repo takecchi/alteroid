@@ -1,6 +1,7 @@
 import {
   createCodexChatgptAuthService,
   createMemoryStores,
+  fakeCloneHost,
   type CloneHost,
   type CodexDeviceLogin,
   type CodexDeviceLoginOutcome,
@@ -13,21 +14,9 @@ import { createApp } from './app.js';
 const LOGIN_VALUE = '{"tokens":{"refresh_token":"rt-http-fake-not-real"}}';
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 function setup(options: { startFails?: boolean } = {}) {

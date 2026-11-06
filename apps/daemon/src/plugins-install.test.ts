@@ -1,6 +1,7 @@
 import {
   createMemoryStores,
   failingJournalAppend,
+  fakeCloneHost,
   PluginFetchError,
   type ApplyPluginsResult,
   type CloneHost,
@@ -14,21 +15,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { createApp } from './app.js';
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 const SHA = 'a'.repeat(40);

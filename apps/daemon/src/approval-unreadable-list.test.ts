@@ -6,6 +6,7 @@ import {
   createManagerPool,
   createRunnerRegistry,
   describeUnreadableApprovals,
+  fakeCloneHost as fakeCloneHostBase,
 } from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
@@ -40,23 +41,9 @@ const GOOD_APPROVAL: PendingApproval = {
 };
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 function appOver(stores: Stores) {

@@ -2,9 +2,10 @@ import {
   createManagerPool,
   createMemoryStores,
   createRunnerRegistry,
+  fakeCloneHost,
   fakeRunnerClient,
 } from '@alteroid/core';
-import type { CloneHost, JournalEntry, RunnerEvent, Stores } from '@alteroid/core';
+import type { JournalEntry, RunnerEvent, Stores } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -44,23 +45,9 @@ function setup(answer: (managerId: string) => Promise<{ delivered: boolean; deci
     post: () => {},
     runners: createRunnerRegistry([runner]),
   });
-  const clone: CloneHost = {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  const clone = fakeCloneHost({
     managers: pool,
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
   const app = createApp({ clone, stores, token: 'test-token', shutdown: () => {} });
   const post = (managerId: string, body: unknown) =>
     app.request(`/managers/${managerId}/messages`, {

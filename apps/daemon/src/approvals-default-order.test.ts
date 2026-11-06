@@ -1,4 +1,9 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
+} from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, type Db } from '@alteroid/storage-pg';
@@ -17,23 +22,9 @@ function approval(id: string, n: number, extra: Partial<PendingApproval> = {}): 
 }
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 async function defaultIds(stores: Stores, query: string): Promise<string[]> {

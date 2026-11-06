@@ -6,6 +6,7 @@ import {
   createCloneTools,
   createManagerPool,
   createRunnerRegistry,
+  fakeCloneHost,
 } from '@alteroid/core';
 import type { CloneHost, Job, ManagerPool, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
@@ -90,21 +91,9 @@ function poolOver(stores: Stores): ManagerPool {
 }
 
 function stubCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: poolOver(stores),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 interface HttpResult {
