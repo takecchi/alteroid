@@ -844,9 +844,8 @@ export async function main(): Promise<void> {
 
   // 写しを読み直してから見る: 非同期で読むため、空のまま見ると正本に置かれた接続先を見落とす。
   await credentialService.fingerprints().catch(() => undefined);
-  for (const line of clone.anthropicRoute?.() ?? []) process.stdout.write(`alteroidd: ${line}\n`);
-  const toolSearchLine = clone.toolSearchRoute?.();
-  if (toolSearchLine !== undefined) await reportBootToolSearch(stores, toolSearchLine);
+  for (const line of clone.anthropicRoute()) process.stdout.write(`alteroidd: ${line}\n`);
+  await reportBootToolSearch(stores, clone.toolSearchRoute());
 
   const managerPoller = startManagerPolling({
     managers: clone.managers,

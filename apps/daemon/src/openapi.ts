@@ -1850,6 +1850,33 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     subscribe() {
       throw new Error('spec 生成専用のスタブ: 購読は無い');
     },
+    attach() {
+      throw new Error('spec 生成専用のスタブ: 購読は無い');
+    },
+    interruptTurn() {
+      throw new Error('spec 生成専用のスタブ: ターンは無い');
+    },
+    reopenSession() {
+      throw new Error('spec 生成専用のスタブ: セッションは作らない');
+    },
+    sessionRefusal() {
+      throw new Error('spec 生成専用のスタブ');
+    },
+    activeTurn() {
+      throw new Error('spec 生成専用のスタブ: ターンは無い');
+    },
+    forgetConversation() {
+      throw new Error('spec 生成専用のスタブ');
+    },
+    anthropicRoute() {
+      throw new Error('spec 生成専用のスタブ');
+    },
+    toolSearchRoute() {
+      throw new Error('spec 生成専用のスタブ');
+    },
+    pluginLoad() {
+      throw new Error('spec 生成専用のスタブ');
+    },
     endConversation() {
       throw new Error('spec 生成専用のスタブ');
     },

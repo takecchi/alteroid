@@ -28,8 +28,8 @@ interface DeleteConversationDeps {
   >;
   /** 受信箱の待ち行列から落とす口（`CloneHost.dropQueuedInboxEvents`）。 */
   dropQueuedInboxEvents: (ids: readonly string[]) => Promise<number>;
-  /** 進行中の購読・途中経過を落とす口（`CloneHost.forgetConversation`）。無い器では落とせなかったと言う。 */
-  forgetConversation?: (conversationId: string) => void;
+  /** 進行中の購読・途中経過を落とす口（`CloneHost.forgetConversation`）。 */
+  forgetConversation: (conversationId: string) => void;
 }
 
 type DeleteConversationResult =
@@ -176,12 +176,8 @@ export async function deleteConversation(
     0,
   );
 
-  if (deps.forgetConversation === undefined) {
-    incomplete.push('進行中の購読と途中経過を落とす（この器には落とす口が無い）');
-  } else {
-    const forget = deps.forgetConversation;
-    await attempt('進行中の購読と途中経過を落とす', async () => forget(conversationId), undefined);
-  }
+  const forget = deps.forgetConversation;
+  await attempt('進行中の購読と途中経過を落とす', async () => forget(conversationId), undefined);
 
   // 1件ずつ消す: `remove` は生きていた（期限内の）ものを消したときだけ true を返し、期限切れの残骸も消す
   const attachmentsRemoved = await attempt(

@@ -444,9 +444,6 @@ export function chatRoutes(ctx: AppContext) {
         },
       }),
       async (c) => {
-        if (clone.attach === undefined) {
-          return c.json({ error: 'この器は進行中のターンの途中経過を持たない' as const }, 503);
-        }
         const attach = clone.attach.bind(clone);
         const conversationId = c.req.param('conversationId');
         if (await isConversationDeleted(stores.journal, conversationId)) {
@@ -559,9 +556,6 @@ export function chatRoutes(ctx: AppContext) {
             400,
           );
         }
-        if (clone.interruptTurn === undefined) {
-          return c.json(cloneInterruptResponseSchema.parse({ outcome: 'unsupported' }));
-        }
         const outcome =
           conversationId === undefined || clientMessageId === undefined
             ? await clone.interruptTurn()
@@ -611,9 +605,6 @@ export function chatRoutes(ctx: AppContext) {
         ),
       ),
       async (c) => {
-        if (clone.reopenSession === undefined) {
-          return c.json(cloneSessionReopenResponseSchema.parse({ outcome: 'unsupported' }));
-        }
         const body = c.req.valid('json');
         const result = await clone.reopenSession({
           reason: body.reason ?? '人間の操作',

@@ -111,11 +111,8 @@ export interface CloneHost {
    * `null`。`pending` はその会話でいま答えを待っている発言（`clientMessageId` を持つものだけ。
    * 取り出し済み→保持→順番待ちの順）。写しを取ることと購読を張ることは同じ同期区間で行われ、
    * 継ぎ目で取りこぼしも二重渡しも起きない。
-   *
-   * **省略可能にしてある** —— この面を実装する偽物（テスト）が多く、足していない
-   * 実装では HTTP の口が 503 で「この器では途中経過を持たない」と答える。
    */
-  attach?(
+  attach(
     conversationId: string,
     listener: (event: ChatStreamEvent) => void,
   ): {
@@ -128,38 +125,30 @@ export interface CloneHost {
    * **いま走っているクローンのターンを止める**（#1398 c23-1）。止めるものが
    * 無ければ `'idle'`。`target` を渡したときは、その発言のターンだけを止め、順番待ちなら
    * 取り下げる（`Clone#interruptTurn` の doc）。
-   *
-   * **省略可能にしてある** —— この面を実装する偽物（テスト）が多く、足していない
-   * 実装では HTTP の口が「この器では止められない」と答える。
    */
-  interruptTurn?(target?: InterruptTarget): Promise<InterruptOutcome>;
+  interruptTurn(target?: InterruptTarget): Promise<InterruptOutcome>;
 
   /**
    * **人間の操作で、クローンのセッションを resume せずに開き直す**。
    * `Clone#reopenSession` の doc を見よ（生ログは消さない・走っているターンは最後まで走る・
    * マネージャーは止めない）。
-   *
-   * **省略可能にしてある**（`interruptTurn?` と同じ形）——持たない実装では HTTP の口が
-   * `unsupported` と答える。
    */
-  reopenSession?(options: ReopenSessionOptions): Promise<ReopenSessionResult>;
+  reopenSession(options: ReopenSessionOptions): Promise<ReopenSessionResult>;
 
   /**
    * **クローンのセッションが安全分類器（safeguards）に弾かれ続けている状況**（`GET /status` の `cloneSessionRefusal`）。
    * 連続数が 0 で、自動の開き直しの止めも立っていなければ
    * `null`（欄を出さない）。
-   *
-   * **省略可能にしてある**（`activeTurn?` と同じ形）——実装していない器は「分からない」で、「弾かれていない」ではない。
    */
-  sessionRefusal?(): SessionRefusalWindow | null;
+  sessionRefusal(): SessionRefusalWindow | null;
 
-  // 実装していない器は「分からない」であって「止まっている」ではない: 呼び手は `idle` を作らない
-  activeTurn?(): { conversationId?: string; kind: 'normal' | 'distill' } | null;
+  // 走っているターンが無ければ `null`: 呼び手は「分からない」を `idle` にしない
+  activeTurn(): { conversationId?: string; kind: 'normal' | 'distill' } | null;
 
   endConversation(conversationId: string): Promise<void>;
 
-  // 削除した会話をメモリから落とす。省略可能にする: 実装していない器では、削除の結果が「進行中の購読と途中経過を落とせなかった」と言う（黙って落としたことにしない）
-  forgetConversation?(conversationId: string): void;
+  // 削除した会話をメモリから落とす
+  forgetConversation(conversationId: string): void;
 
   answerApproval(
     approvalId: string,
@@ -184,13 +173,12 @@ export interface CloneHost {
   recycleSessionForToken(): void;
 
   // セッションを起こさない読み（身元を捕まえない）。値は返さない: 鍵は在るか無いかと出所だけ。
-  // 省略可能なのは、この口を持たない偽のクローンのテストが多数あるため
-  anthropicRoute?(): string[];
+  anthropicRoute(): string[];
   // `anthropicRoute` と同じ重ねを読む。値は返さない（名前と出所だけ）
-  toolSearchRoute?(): string;
+  toolSearchRoute(): string;
 
-  // 省略可能: 実装しないテスト用ホストは「観測なし」に倒す。init 未受信・開き直し直後・init に `plugins` が無いときは `undefined`（「0件」とも「失敗」とも読まない）。蒸留のサイドクエリの init は含まない
-  pluginLoad?(): ClonePluginLoadObservation | undefined;
+  // init 未受信・開き直し直後・init に `plugins` が無いときは `undefined`（「0件」とも「失敗」とも読まない）。蒸留のサイドクエリの init は含まない
+  pluginLoad(): ClonePluginLoadObservation | undefined;
 
   stop(options?: { farewellDeadlineAt?: number }): Promise<void>;
 }

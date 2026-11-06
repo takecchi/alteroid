@@ -383,8 +383,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
     notePhase(`topology:build:${String(managers.length)}`);
     const value = buildTopologySnapshot({
       nowMs,
-      // 実装していない器は `undefined`（分からない）: `null`（走っていない）と区別するため。
-      turn: deps.clone.activeTurn === undefined ? undefined : deps.clone.activeTurn(),
+      turn: deps.clone.activeTurn(),
       usageBlocked: deps.clone.usageBlocked,
       storage: deps.storage.current(),
       runners: deps.runners === undefined ? [] : deps.runners.entries(),

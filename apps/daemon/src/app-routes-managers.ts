@@ -621,8 +621,8 @@ export function managersRoutes(ctx: AppContext, deps: AppDeps) {
         async (c) => {
           // runner の一覧が空でもこの値だけは常に出す: 自分がどの版で走っているかは runner の登録有無と無関係な事実。
           const daemonRevision = reportRunnerRevision(resolveBuildRevision());
-          // runner が0台・名簿が無いときも出す（クローン自身の init の事実）。読み口を持たないホストでは欄ごと省く: 「0件」と埋めない。
-          const clonePluginLoad = clone.pluginLoad?.();
+          // runner が0台・名簿が無いときも出す（クローン自身の init の事実）。観測が無い（init 未受信など）ときは欄ごと省く: 「0件」と埋めない。
+          const clonePluginLoad = clone.pluginLoad();
           const clonePluginLoadField = clonePluginLoad === undefined ? {} : { clonePluginLoad };
           const registry = deps.runners;
           if (registry === undefined) {

@@ -54,7 +54,7 @@ export function systemRoutes(ctx: AppContext, deps: AppDeps) {
           },
         }),
         (c) => {
-          const refusal = clone.sessionRefusal?.() ?? null;
+          const refusal = clone.sessionRefusal();
           return c.json(
             statusResponseSchema.parse({
               storage: deps.storage ?? '',

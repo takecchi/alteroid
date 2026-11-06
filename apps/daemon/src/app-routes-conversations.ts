@@ -368,12 +368,7 @@ export function conversationsRoutes(ctx: AppContext) {
             {
               stores,
               dropQueuedInboxEvents: (ids) => clone.dropQueuedInboxEvents(ids),
-              ...(clone.forgetConversation === undefined
-                ? {}
-                : {
-                    forgetConversation: (conversationId) =>
-                      clone.forgetConversation?.(conversationId),
-                  }),
+              forgetConversation: (conversationId) => clone.forgetConversation(conversationId),
             },
             { conversationId: id, deletedBy: principalRefOf(c.get('principal')) },
           );

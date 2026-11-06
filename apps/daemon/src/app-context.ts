@@ -237,18 +237,18 @@ export function createAppContext(deps: AppDeps) {
   ) {
     return streamSSE(c, async (stream) => {
       const pump = chatEventPump();
-      const attached = clone.attach?.(conversationId, (event) => pump.push(event));
-      if (attached === undefined || attached.inProgress === null) pump.finish();
+      const attached = clone.attach(conversationId, (event) => pump.push(event));
+      if (attached.inProgress === null) pump.finish();
       await pump.serve(
         stream,
         { principal: c.get('principal'), authorization: c.req.header('authorization') },
-        attached?.unsubscribe ?? (() => {}),
+        attached.unsubscribe,
         async () => {
           await stream.writeSSE({
             event: 'open',
             data: JSON.stringify({ conversationId, clientMessageId, duplicate: true }),
           });
-          for (const event of attached?.inProgress ?? []) {
+          for (const event of attached.inProgress ?? []) {
             await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
           }
         },
