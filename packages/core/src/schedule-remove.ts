@@ -107,21 +107,24 @@ export async function removeScheduleJournalFirst(
  * 消さないと、受信箱の行が依頼の無い kind として届き、本文なしの素のターンで走る（取り消した仕事が走る）。
  * 「依頼が無い」を断る側で見分けない: 手で仕込んだ依頼の無い kind の起動は判断させる作りで、外した依頼と見分ける印がどこにも残らないため。
  * 外すこと自体は済んでいるので、消せなくても例外は上げず跡だけ残す。
+ * 消しきれたか（未読の起動が無かった回を含む）を返す: 呼び手が「外した」だけを言うと、取り消した依頼の起動が走りうることを知らせられないため（#6544）。
  */
 export async function dropUnreadTimersOfKind(
   stores: Pick<Stores, 'inbox'>,
   delivery: InboxDeliveryStopper,
   kind: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const peek = await stores.inbox.peekPending();
     const ids = peek.entries.flatMap(({ event }) =>
       event.type === 'timer' && event.kind === kind ? [event.id] : [],
     );
-    if (ids.length === 0) return;
+    if (ids.length === 0) return true;
     await removeInboxEventsAndStopDelivery(stores.inbox, delivery, ids);
+    return true;
   } catch (error) {
     noteDroppedRecord('取り消した定期の依頼の未読の起動の消し込み', `kind=${kind}`, error);
+    return false;
   }
 }
 

@@ -529,8 +529,13 @@ function renderScheduleRemoveMissing(kind: string): string {
   return `継続中の依頼 ${kind} は無い。`;
 }
 
-function renderScheduleRemoveDone(kind: string): string {
-  return `${kind} を外した。`;
+// 未読の起動を消しきれなかったら、そう添える（#6544）: 外すこと自体は済んでいるので断りにはしないが、取り消した依頼の起動が走りうることは知らせる
+function renderScheduleRemoveDone(kind: string, timersCleared: boolean): string {
+  if (timersCleared) return `${kind} を外した。`;
+  return (
+    `${kind} を外した。ただし、この依頼の未読の起動を受信箱から消しきれなかった` +
+    '（取り消した依頼の起動が、本文なしのターンで走りうる）。'
+  );
 }
 
 export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
@@ -669,14 +674,15 @@ export function scheduleTools(context: ToolContext, shared: CloneToolsShared) {
         // 外せなかった（先に読んだ後で消えていた）: 打ち消しの行は helper が足してある
         if (result.kind !== 'removed') return text(renderScheduleRemoveMissing(kind));
         // 口が渡されない器は消さない: 配達だけが続く半端な状態を作らない（本番の `ToolContext` は2箇所とも渡している）
-        if (context.dropQueuedInboxEvents !== undefined) {
-          await dropUnreadTimersOfKind(
-            stores,
-            { dropQueuedInboxEvents: context.dropQueuedInboxEvents },
-            kind,
-          );
-        }
-        return text(renderScheduleRemoveDone(kind));
+        const timersCleared =
+          context.dropQueuedInboxEvents === undefined
+            ? true
+            : await dropUnreadTimersOfKind(
+                stores,
+                { dropQueuedInboxEvents: context.dropQueuedInboxEvents },
+                kind,
+              );
+        return text(renderScheduleRemoveDone(kind, timersCleared));
       },
     ),
   ];

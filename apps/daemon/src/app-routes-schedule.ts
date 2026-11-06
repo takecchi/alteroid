@@ -337,20 +337,24 @@ export function scheduleRoutes(ctx: AppContext, deps: AppDeps) {
           if (result.kind === 'not-found') return c.json({ error: 'not found' as const }, 404);
           const removed = result.removed;
           // 取り消した依頼の未読の起動は走らせない: 残すと依頼の無い kind として本文なしのターンが走る
-          await dropUnreadTimersOfKind(
+          const timersCleared = await dropUnreadTimersOfKind(
             stores,
             { dropQueuedInboxEvents: (ids) => clone.dropQueuedInboxEvents(ids) },
             kind,
           );
+          // 消しきれなかったら日誌の行に添える（#6544）: 外すこと自体は済んでいるので 200 のまま、取り消した依頼の起動が走りうることを残す
+          const timersNote = timersCleared
+            ? ''
+            : '（ただし、この依頼の未読の起動を受信箱から消しきれなかった。取り消した依頼の起動が、本文なしのターンで走りうる）';
           // 外せた回だけ印つきの行を足す（先の行と中身が重なるのは、印のある行を効いた回だけに置くため）。外すこと自体は効いているので、落ちても 500 を返さない（`appendJournalOrDrop`）。
           await appendJournalOrDrop(
             stores,
             {
               type: 'decision',
               decision:
-                removed === 'unreadable'
+                (removed === 'unreadable'
                   ? `人間が読めない形で入っていた依頼を外した: ${kind}`
-                  : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
+                  : `人間が定期の依頼を外した: ${kind}: ${removed.request}`) + timersNote,
               grounds: '人間が直接 API から外した',
               ...humanActionOf(c.get('principal'), 'schedule_remove', kind),
             },
