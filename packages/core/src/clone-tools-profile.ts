@@ -25,6 +25,7 @@ import {
   type ProfileService,
 } from './profile-service.js';
 import {
+  type EnvProfileEntry,
   UnreadableActiveTokenError,
   UnreadableTokenSettingsError,
   describeUnreadableTokens,
@@ -291,6 +292,70 @@ function renderProfileRemoveMissing(name: string): string {
   return `プロファイルに行 ${name} は無い。何も変えていない。`;
 }
 
+function renderProfileReadEmpty(): string {
+  return '実行環境プロファイルは置かれていない。';
+}
+
+// 一覧の1行（本文は載せず、バイト数だけ）
+function renderProfileReadListLine(row: EnvProfileEntry): string {
+  return `- ${row.name} / 撒く先 ${row.scope} / ${String(Buffer.byteLength(row.script))} バイト / 更新 ${row.updatedAt}`;
+}
+
+function renderProfileReadListOmitted(args: {
+  rest: number;
+  shown: number;
+  total: number;
+}): string {
+  const { rest, shown, total } = args;
+  return `…ほか ${rest} 件は省略（全 ${total} 件のうち ${shown} 件だけ出した。名前が分かっていれば profile_read name=<名前> で取れる）。`;
+}
+
+function renderProfileReadListFootnotes(): string[] {
+  return [
+    '（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。',
+    '更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）',
+  ];
+}
+
+function renderProfileReadListing(rows: readonly EnvProfileEntry[]): string {
+  return [
+    renderListing(rows.map(renderProfileReadListLine), {
+      budget: PROFILE_LIST_BUDGET,
+      omitted: renderProfileReadListOmitted,
+    }),
+    ...renderProfileReadListFootnotes(),
+  ].join('\n');
+}
+
+function renderProfileReadMissing(name: string): string {
+  return `プロファイルに行 ${name} は無い。行の一覧は profile_read（name を省略）で取れる。`;
+}
+
+function renderProfileReadHeading(row: EnvProfileEntry, part: ReturnType<typeof page>): string {
+  return `（行 ${row.name} / 撒く先 ${row.scope} / 最終更新 ${row.updatedAt} / ${describePage(part)}）`;
+}
+
+// 「切れている」だけで終えず、書き戻す前に何をすべきかまで言う: 切れたものを `profile_write` へ渡すと、全文置換で検証を通ってしまい行が縮むため
+function renderProfileReadCutNotice(row: EnvProfileEntry, part: ReturnType<typeof page>): string {
+  if (!part.more) return '';
+  return (
+    `\n…（ここで切れている。続きは profile_read name=${row.name} offset=${part.to}。` +
+    '**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて' +
+    '最後まで取ること** — ここまでの分だけを渡すと残りが消える）'
+  );
+}
+
+function renderProfileReadVersion(row: EnvProfileEntry): string {
+  return `\n（版 base_version=${profileEntryVersionOf(row)} ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）`;
+}
+
+function renderProfileReadBody(row: EnvProfileEntry, part: ReturnType<typeof page>): string {
+  return (
+    `${renderProfileReadHeading(row, part)}\n${part.body}${renderProfileReadCutNotice(row, part)}` +
+    renderProfileReadVersion(row)
+  );
+}
+
 export function profileTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
 
@@ -440,45 +505,12 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         const rows = await stores.profile.list();
-        if (rows.length === 0) {
-          return text('実行環境プロファイルは置かれていない。');
-        }
-        if (name === undefined) {
-          return text(
-            [
-              renderListing(
-                rows.map(
-                  (row) =>
-                    `- ${row.name} / 撒く先 ${row.scope} / ${String(Buffer.byteLength(row.script))} バイト / 更新 ${row.updatedAt}`,
-                ),
-                {
-                  budget: PROFILE_LIST_BUDGET,
-                  omitted: ({ rest, shown, total }) =>
-                    `…ほか ${rest} 件は省略（全 ${total} 件のうち ${shown} 件だけ出した。名前が分かっていれば profile_read name=<名前> で取れる）。`,
-                },
-              ),
-              '（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。',
-              '更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）',
-            ].join('\n'),
-          );
-        }
+        if (rows.length === 0) return text(renderProfileReadEmpty());
+        if (name === undefined) return text(renderProfileReadListing(rows));
         const row = rows.find((entry) => entry.name === name);
-        if (row === undefined) {
-          return text(
-            `プロファイルに行 ${name} は無い。行の一覧は profile_read（name を省略）で取れる。`,
-          );
-        }
+        if (row === undefined) return text(renderProfileReadMissing(name));
         const part = page(row.script, offset, PROFILE_PAGE);
-        // 「切れている」だけで終えず、書き戻す前に何をすべきかまで言う: 切れたものを `profile_write` へ渡すと、全文置換で検証を通ってしまい行が縮むため
-        const tail = part.more
-          ? `\n…（ここで切れている。続きは profile_read name=${row.name} offset=${part.to}。` +
-            '**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて' +
-            '最後まで取ること** — ここまでの分だけを渡すと残りが消える）'
-          : '';
-        return text(
-          `（行 ${row.name} / 撒く先 ${row.scope} / 最終更新 ${row.updatedAt} / ${describePage(part)}）\n${part.body}${tail}` +
-            `\n（版 base_version=${profileEntryVersionOf(row)} ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）`,
-        );
+        return text(renderProfileReadBody(row, part));
       },
     ),
 
