@@ -1,0 +1,1504 @@
+{
+  "lengths": {
+    "empty#1": 31,
+    "empty#2": 31,
+    "empty#3": 31,
+    "few": 1812,
+    "usage#1": 1119,
+    "usage#2": 561,
+    "usage#3": 114,
+    "filters-kept#1": 377,
+    "filters-kept#2": 1656,
+    "filters-from#1": 561,
+    "filters-from#2": 429,
+    "filters-from#3": 402,
+    "filters-from#4": 411,
+    "filters-from#5": 893,
+    "filters-query#1": 405,
+    "filters-query#2": 405,
+    "filters-query#3": 377,
+    "filters-query#4": 377,
+    "filters-query#5": 503,
+    "filters-query#6": 148,
+    "filters-query#7": 148,
+    "filters-combined#1": 405,
+    "filters-combined#2": 411,
+    "filters-combined#3": 396,
+    "filters-combined#4": 148,
+    "conversation#1": 580,
+    "conversation#2": 657,
+    "conversation#3": 662,
+    "conversation#4": 140,
+    "conversation#5": 592,
+    "conversation#6": 148,
+    "conversation#7": 148,
+    "conversation#8": 148,
+    "conversation#9": 139,
+    "conversation-prefix-with-filters#1": 482,
+    "conversation-prefix-with-filters#2": 225,
+    "budget-and-cursor#1": 6208,
+    "budget-and-cursor#2": 6040,
+    "budget-and-cursor-filters#1": 6224,
+    "budget-and-cursor-filters#2": 6224,
+    "budget-and-cursor-filters#3": 2116,
+    "cursor-refused#1": 62,
+    "cursor-refused#2": 62,
+    "cursor-refused#3": 62,
+    "expired#1": 654,
+    "expired#2": 272,
+    "expired#3": 49,
+    "read-fails#1": 51,
+    "read-fails#2": 52,
+    "read-fails#3": 54,
+    "read-fails#4": 311,
+    "read-fails#5": 311
+  },
+  "scenarios": {
+    "empty#1": {
+      "output": {
+        "length": 31,
+        "text": "置き場の使用量: 0 件 0 B\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "0 件"
+        }
+      ]
+    },
+    "empty#2": {
+      "output": {
+        "length": 31,
+        "text": "置き場の使用量: 0 件 0 B\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": true
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "0 件"
+        }
+      ]
+    },
+    "empty#3": {
+      "output": {
+        "length": 31,
+        "text": "置き場の使用量: 0 件 0 B\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human",
+            "q": "x"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "0 件"
+        }
+      ]
+    },
+    "few": {
+      "output": {
+        "length": 1812,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000008 abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi …（40 文字省略。全 120 文字）\n  作成: 2026-10-01T00:07:00.000Z / 更新: 2026-10-01T00:07:00.000Z\n  text/plain | 7 B | 出所:不明 | 未結び付け（2026-10-01T01:07:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z\n- 00000000-0000-4000-8000-000000000006 unknown-origin.bin\n  作成: 2026-10-01T00:05:00.000Z / 更新: 2026-10-01T00:05:00.000Z\n  application/octet-stream | 1 B | 出所:不明 | 未結び付け（2026-10-01T01:05:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000005 integration-dump.json\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  application/json | 1.0 KiB | 出所:連携 | 期限 2026-10-31T00:04:00.000Z\n- 00000000-0000-4000-8000-000000000004 manager-log.txt\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 1023 B | 出所:マネージャー | 期限 2026-10-31T00:03:00.000Z\n- 00000000-0000-4000-8000-000000000003 clone-output.zip\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  application/zip | 900 B | 出所:クローン | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000002 レポート 😀.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 1.5 KiB | 出所:人間 | 保存中（期限なし）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "8 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "usage#1": {
+      "output": {
+        "length": 1119,
+        "text": "置き場の使用量: 5 件 3.0 MiB\n出所別: 人間 2 件 2.1 KiB / 連携 3 件 3.0 MiB\n連携の鍵別: key-a 1 件 3.0 MiB / key-b 2 件 30 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000005 e\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  text/plain | 20 B | 出所:連携 | 未結び付け（2026-10-01T01:04:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000004 d\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 10 B | 出所:連携 | 未結び付け（2026-10-01T01:03:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000003 c\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  text/plain | 3.0 MiB | 出所:連携 | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000002 b\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 2.0 KiB | 出所:人間 | 未結び付け（2026-10-01T01:01:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000001 a\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 100 B | 出所:人間 | 未結び付け（2026-10-01T01:00:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "5 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "5 件"
+        }
+      ]
+    },
+    "usage#2": {
+      "output": {
+        "length": 561,
+        "text": "置き場の使用量: 5 件 3.0 MiB\n出所別: 人間 2 件 2.1 KiB / 連携 3 件 3.0 MiB\n連携の鍵別: key-a 1 件 3.0 MiB / key-b 2 件 30 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000002 b\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 2.0 KiB | 出所:人間 | 未結び付け（2026-10-01T01:01:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000001 a\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 100 B | 出所:人間 | 未結び付け（2026-10-01T01:00:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human"
+          },
+          "outcome": "2 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "5 件"
+        }
+      ]
+    },
+    "usage#3": {
+      "output": {
+        "length": 114,
+        "text": "置き場の使用量: 5 件 3.0 MiB\n出所別: 人間 2 件 2.1 KiB / 連携 3 件 3.0 MiB\n連携の鍵別: key-a 1 件 3.0 MiB / key-b 2 件 30 B\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "clone"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "5 件"
+        }
+      ]
+    },
+    "filters-kept#1": {
+      "output": {
+        "length": 377,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000002 レポート 😀.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 1.5 KiB | 出所:人間 | 保存中（期限なし）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": true
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-kept#2": {
+      "output": {
+        "length": 1656,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000008 abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi …（40 文字省略。全 120 文字）\n  作成: 2026-10-01T00:07:00.000Z / 更新: 2026-10-01T00:07:00.000Z\n  text/plain | 7 B | 出所:不明 | 未結び付け（2026-10-01T01:07:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z\n- 00000000-0000-4000-8000-000000000006 unknown-origin.bin\n  作成: 2026-10-01T00:05:00.000Z / 更新: 2026-10-01T00:05:00.000Z\n  application/octet-stream | 1 B | 出所:不明 | 未結び付け（2026-10-01T01:05:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000005 integration-dump.json\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  application/json | 1.0 KiB | 出所:連携 | 期限 2026-10-31T00:04:00.000Z\n- 00000000-0000-4000-8000-000000000004 manager-log.txt\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 1023 B | 出所:マネージャー | 期限 2026-10-31T00:03:00.000Z\n- 00000000-0000-4000-8000-000000000003 clone-output.zip\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  application/zip | 900 B | 出所:クローン | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": false
+          },
+          "outcome": "7 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-from#1": {
+      "output": {
+        "length": 561,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000002 レポート 😀.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 1.5 KiB | 出所:人間 | 保存中（期限なし）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human"
+          },
+          "outcome": "2 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-from#2": {
+      "output": {
+        "length": 429,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000003 clone-output.zip\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  application/zip | 900 B | 出所:クローン | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "clone"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-from#3": {
+      "output": {
+        "length": 402,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000004 manager-log.txt\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 1023 B | 出所:マネージャー | 期限 2026-10-31T00:03:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "manager"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-from#4": {
+      "output": {
+        "length": 411,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000005 integration-dump.json\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  application/json | 1.0 KiB | 出所:連携 | 期限 2026-10-31T00:04:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "integration"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-from#5": {
+      "output": {
+        "length": 893,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000008 abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi …（40 文字省略。全 120 文字）\n  作成: 2026-10-01T00:07:00.000Z / 更新: 2026-10-01T00:07:00.000Z\n  text/plain | 7 B | 出所:不明 | 未結び付け（2026-10-01T01:07:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z\n- 00000000-0000-4000-8000-000000000006 unknown-origin.bin\n  作成: 2026-10-01T00:05:00.000Z / 更新: 2026-10-01T00:05:00.000Z\n  application/octet-stream | 1 B | 出所:不明 | 未結び付け（2026-10-01T01:05:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "unknown"
+          },
+          "outcome": "3 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#1": {
+      "output": {
+        "length": 405,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "report"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#2": {
+      "output": {
+        "length": 405,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "REPORT"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#3": {
+      "output": {
+        "length": 377,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000002 レポート 😀.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 1.5 KiB | 出所:人間 | 保存中（期限なし）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "レポート"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#4": {
+      "output": {
+        "length": 377,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000002 レポート 😀.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 1.5 KiB | 出所:人間 | 保存中（期限なし）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "😀"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#5": {
+      "output": {
+        "length": 503,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000008 abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi …（40 文字省略。全 120 文字）\n  作成: 2026-10-01T00:07:00.000Z / 更新: 2026-10-01T00:07:00.000Z\n  text/plain | 7 B | 出所:不明 | 未結び付け（2026-10-01T01:07:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "abcdefghi abcdefghi"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#6": {
+      "output": {
+        "length": 148,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "no-such-name"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-query#7": {
+      "output": {
+        "length": 148,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "q": "application"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-combined#1": {
+      "output": {
+        "length": 405,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": false,
+            "from": "human"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-combined#2": {
+      "output": {
+        "length": 411,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000005 integration-dump.json\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  application/json | 1.0 KiB | 出所:連携 | 期限 2026-10-31T00:04:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "integration",
+            "q": "dump"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-combined#3": {
+      "output": {
+        "length": 396,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "1 entries"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": false,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001",
+            "q": "txt"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "filters-combined#4": {
+      "output": {
+        "length": 148,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": true,
+            "from": "clone"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#1": {
+      "output": {
+        "length": 580,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "1 entries"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001"
+          },
+          "outcome": "2 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#2": {
+      "output": {
+        "length": 657,
+        "text": "（会話 id の先頭 c1a2b3c4 を、それで始まる唯一の会話 c1a2b3c4-0000-4000-8000-000000000001 と読んだ）\n置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "c1a2b3c4",
+            "limit": 6
+          },
+          "outcome": "1 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001"
+          },
+          "outcome": "2 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#3": {
+      "output": {
+        "length": 662,
+        "text": "（会話 id の先頭 c1a2b3c4-0000 を、それで始まる唯一の会話 c1a2b3c4-0000-4000-8000-000000000001 と読んだ）\n置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000007 other-origin.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 5 B | 出所:不明 | 期限 2026-10-31T00:06:00.000Z\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4-0000",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "c1a2b3c4-0000",
+            "limit": 6
+          },
+          "outcome": "1 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001"
+          },
+          "outcome": "2 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#4": {
+      "output": {
+        "length": 140,
+        "text": "置き場の一覧は読んでいない。d5e6f7a8 で始まる会話が複数在るので、どれか決められない: d5e6f7a8-0000-4000-8000-000000000002, d5e6f7a8-0000-4000-8000-000000000001。どれかの完全な id を渡すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "d5e6f7a8",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "d5e6f7a8",
+            "limit": 6
+          },
+          "outcome": "2 ids"
+        }
+      ]
+    },
+    "conversation#5": {
+      "output": {
+        "length": 592,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000005 integration-dump.json\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  application/json | 1.0 KiB | 出所:連携 | 期限 2026-10-31T00:04:00.000Z\n- 00000000-0000-4000-8000-000000000004 manager-log.txt\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 1023 B | 出所:マネージャー | 期限 2026-10-31T00:03:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "d5e6f7a8-0000-4000-8000-000000000001",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "1 entries"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "d5e6f7a8-0000-4000-8000-000000000001"
+          },
+          "outcome": "2 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#6": {
+      "output": {
+        "length": 148,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "zzzzzzzz",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "zzzzzzzz",
+            "limit": 6
+          },
+          "outcome": "0 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "zzzzzzzz"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#7": {
+      "output": {
+        "length": 148,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "no-such-conversation",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "no-such-conversation",
+            "limit": 6
+          },
+          "outcome": "0 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "no-such-conversation"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#8": {
+      "output": {
+        "length": 148,
+        "text": "置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "c1a2b3c",
+            "limit": 6
+          },
+          "outcome": "1 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "c1a2b3c"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation#9": {
+      "output": {
+        "length": 139,
+        "text": "置き場の一覧は読んでいない。d5e6f7a で始まる会話が複数在るので、どれか決められない: d5e6f7a8-0000-4000-8000-000000000002, d5e6f7a8-0000-4000-8000-000000000001。どれかの完全な id を渡すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "d5e6f7a",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "d5e6f7a",
+            "limit": 6
+          },
+          "outcome": "2 ids"
+        }
+      ]
+    },
+    "conversation-prefix-with-filters#1": {
+      "output": {
+        "length": 482,
+        "text": "（会話 id の先頭 c1a2b3c4 を、それで始まる唯一の会話 c1a2b3c4-0000-4000-8000-000000000001 と読んだ）\n置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 human-report.pdf\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  application/pdf | 2.0 MiB | 出所:人間 | 期限 2026-10-31T00:00:00.000Z",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "c1a2b3c4",
+            "limit": 6
+          },
+          "outcome": "1 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human",
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001"
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "conversation-prefix-with-filters#2": {
+      "output": {
+        "length": 225,
+        "text": "（会話 id の先頭 c1a2b3c4 を、それで始まる唯一の会話 c1a2b3c4-0000-4000-8000-000000000001 と読んだ）\n置き場の使用量: 8 件 2.1 MiB\n出所別: 人間 2 件 2.1 MiB / クローン 1 件 900 B / マネージャー 1 件 1023 B / 連携 1 件 1.0 KiB / 不明 3 件 13 B\n連携の鍵別: key-a 1 件 1.0 KiB\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "0 entries"
+        },
+        {
+          "op": "journal.conversationIdsWithPrefix",
+          "args": {
+            "prefix": "c1a2b3c4",
+            "limit": 6
+          },
+          "outcome": "1 ids"
+        },
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001",
+            "q": "no-such"
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "8 件"
+        }
+      ]
+    },
+    "budget-and-cursor#1": {
+      "output": {
+        "length": 6208,
+        "text": "置き場の使用量: 60 件 7.6 KiB\n出所別: 人間 60 件 7.6 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000060 bulk-060.txt\n  作成: 2026-10-01T00:59:00.000Z / 更新: 2026-10-01T00:59:00.000Z\n  text/plain | 159 B | 出所:人間 | 未結び付け（2026-10-01T01:59:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000059 bulk-059.txt\n  作成: 2026-10-01T00:58:00.000Z / 更新: 2026-10-01T00:58:00.000Z\n  text/plain | 158 B | 出所:人間 | 未結び付け（2026-10-01T01:58:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000058 bulk-058.txt\n  作成: 2026-10-01T00:57:00.000Z / 更新: 2026-10-01T00:57:00.000Z\n  text/plain | 157 B | 出所:人間 | 未結び付け（2026-10-01T01:57:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000057 bulk-057.txt\n  作成: 2026-10-01T00:56:00.000Z / 更新: 2026-10-01T00:56:00.000Z\n  text/plain | 156 B | 出所:人間 | 未結び付け（2026-10-01T01:56:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000056 bulk-056.txt\n  作成: 2026-10-01T00:55:00.000Z / 更新: 2026-10-01T00:55:00.000Z\n  text/plain | 155 B | 出所:人間 | 未結び付け（2026-10-01T01:55:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000055 bulk-055.txt\n  作成: 2026-10-01T00:54:00.000Z / 更新: 2026-10-01T00:54:00.000Z\n  text/plain | 154 B | 出所:人間 | 未結び付け（2026-10-01T01:54:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000054 bulk-054.txt\n  作成: 2026-10-01T00:53:00.000Z / 更新: 2026-10-01T00:53:00.000Z\n  text/plain | 153 B | 出所:人間 | 未結び付け（2026-10-01T01:53:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000053 bulk-053.txt\n  作成: 2026-10-01T00:52:00.000Z / 更新: 2026-10-01T00:52:00.000Z\n  text/plain | 152 B | 出所:人間 | 未結び付け（2026-10-01T01:52:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000052 bulk-052.txt\n  作成: 2026-10-01T00:51:00.000Z / 更新: 2026-10-01T00:51:00.000Z\n  text/plain | 151 B | 出所:人間 | 未結び付け（2026-10-01T01:51:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000051 bulk-051.txt\n  作成: 2026-10-01T00:50:00.000Z / 更新: 2026-10-01T00:50:00.000Z\n  text/plain | 150 B | 出所:人間 | 未結び付け（2026-10-01T01:50:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000050 bulk-050.txt\n  作成: 2026-10-01T00:49:00.000Z / 更新: 2026-10-01T00:49:00.000Z\n  text/plain | 149 B | 出所:人間 | 未結び付け（2026-10-01T01:49:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000049 bulk-049.txt\n  作成: 2026-10-01T00:48:00.000Z / 更新: 2026-10-01T00:48:00.000Z\n  text/plain | 148 B | 出所:人間 | 未結び付け（2026-10-01T01:48:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000048 bulk-048.txt\n  作成: 2026-10-01T00:47:00.000Z / 更新: 2026-10-01T00:47:00.000Z\n  text/plain | 147 B | 出所:人間 | 未結び付け（2026-10-01T01:47:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000047 bulk-047.txt\n  作成: 2026-10-01T00:46:00.000Z / 更新: 2026-10-01T00:46:00.000Z\n  text/plain | 146 B | 出所:人間 | 未結び付け（2026-10-01T01:46:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000046 bulk-046.txt\n  作成: 2026-10-01T00:45:00.000Z / 更新: 2026-10-01T00:45:00.000Z\n  text/plain | 145 B | 出所:人間 | 未結び付け（2026-10-01T01:45:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000045 bulk-045.txt\n  作成: 2026-10-01T00:44:00.000Z / 更新: 2026-10-01T00:44:00.000Z\n  text/plain | 144 B | 出所:人間 | 未結び付け（2026-10-01T01:44:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000044 bulk-044.txt\n  作成: 2026-10-01T00:43:00.000Z / 更新: 2026-10-01T00:43:00.000Z\n  text/plain | 143 B | 出所:人間 | 未結び付け（2026-10-01T01:43:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000043 bulk-043.txt\n  作成: 2026-10-01T00:42:00.000Z / 更新: 2026-10-01T00:42:00.000Z\n  text/plain | 142 B | 出所:人間 | 未結び付け（2026-10-01T01:42:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000042 bulk-042.txt\n  作成: 2026-10-01T00:41:00.000Z / 更新: 2026-10-01T00:41:00.000Z\n  text/plain | 141 B | 出所:人間 | 未結び付け（2026-10-01T01:41:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000041 bulk-041.txt\n  作成: 2026-10-01T00:40:00.000Z / 更新: 2026-10-01T00:40:00.000Z\n  text/plain | 140 B | 出所:人間 | 未結び付け（2026-10-01T01:40:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000040 bulk-040.txt\n  作成: 2026-10-01T00:39:00.000Z / 更新: 2026-10-01T00:39:00.000Z\n  text/plain | 139 B | 出所:人間 | 未結び付け（2026-10-01T01:39:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000039 bulk-039.txt\n  作成: 2026-10-01T00:38:00.000Z / 更新: 2026-10-01T00:38:00.000Z\n  text/plain | 138 B | 出所:人間 | 未結び付け（2026-10-01T01:38:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000038 bulk-038.txt\n  作成: 2026-10-01T00:37:00.000Z / 更新: 2026-10-01T00:37:00.000Z\n  text/plain | 137 B | 出所:人間 | 未結び付け（2026-10-01T01:37:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000037 bulk-037.txt\n  作成: 2026-10-01T00:36:00.000Z / 更新: 2026-10-01T00:36:00.000Z\n  text/plain | 136 B | 出所:人間 | 未結び付け（2026-10-01T01:36:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000036 bulk-036.txt\n  作成: 2026-10-01T00:35:00.000Z / 更新: 2026-10-01T00:35:00.000Z\n  text/plain | 135 B | 出所:人間 | 未結び付け（2026-10-01T01:35:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000035 bulk-035.txt\n  作成: 2026-10-01T00:34:00.000Z / 更新: 2026-10-01T00:34:00.000Z\n  text/plain | 134 B | 出所:人間 | 未結び付け（2026-10-01T01:34:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000034 bulk-034.txt\n  作成: 2026-10-01T00:33:00.000Z / 更新: 2026-10-01T00:33:00.000Z\n  text/plain | 133 B | 出所:人間 | 未結び付け（2026-10-01T01:33:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000033 bulk-033.txt\n  作成: 2026-10-01T00:32:00.000Z / 更新: 2026-10-01T00:32:00.000Z\n  text/plain | 132 B | 出所:人間 | 未結び付け（2026-10-01T01:32:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000032 bulk-032.txt\n  作成: 2026-10-01T00:31:00.000Z / 更新: 2026-10-01T00:31:00.000Z\n  text/plain | 131 B | 出所:人間 | 未結び付け（2026-10-01T01:31:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000031 bulk-031.txt\n  作成: 2026-10-01T00:30:00.000Z / 更新: 2026-10-01T00:30:00.000Z\n  text/plain | 130 B | 出所:人間 | 未結び付け（2026-10-01T01:30:00.000Z に消える。会話へ添えるか保存すれば残る）\n…ほか 20 件は省略（この呼び出しで 50 件取り、新しい順に 30 件だけ出した）。続きは file_list cursor=WyIyMDI2LTEwLTAxVDAwOjMwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMzEiXQ （同じ絞り込みで渡す）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "50 items / nextCursor あり"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "60 件"
+        }
+      ]
+    },
+    "budget-and-cursor#2": {
+      "output": {
+        "length": 6040,
+        "text": "置き場の使用量: 60 件 7.6 KiB\n出所別: 人間 60 件 7.6 KiB\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000030 bulk-030.txt\n  作成: 2026-10-01T00:29:00.000Z / 更新: 2026-10-01T00:29:00.000Z\n  text/plain | 129 B | 出所:人間 | 未結び付け（2026-10-01T01:29:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000029 bulk-029.txt\n  作成: 2026-10-01T00:28:00.000Z / 更新: 2026-10-01T00:28:00.000Z\n  text/plain | 128 B | 出所:人間 | 未結び付け（2026-10-01T01:28:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000028 bulk-028.txt\n  作成: 2026-10-01T00:27:00.000Z / 更新: 2026-10-01T00:27:00.000Z\n  text/plain | 127 B | 出所:人間 | 未結び付け（2026-10-01T01:27:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000027 bulk-027.txt\n  作成: 2026-10-01T00:26:00.000Z / 更新: 2026-10-01T00:26:00.000Z\n  text/plain | 126 B | 出所:人間 | 未結び付け（2026-10-01T01:26:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000026 bulk-026.txt\n  作成: 2026-10-01T00:25:00.000Z / 更新: 2026-10-01T00:25:00.000Z\n  text/plain | 125 B | 出所:人間 | 未結び付け（2026-10-01T01:25:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000025 bulk-025.txt\n  作成: 2026-10-01T00:24:00.000Z / 更新: 2026-10-01T00:24:00.000Z\n  text/plain | 124 B | 出所:人間 | 未結び付け（2026-10-01T01:24:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000024 bulk-024.txt\n  作成: 2026-10-01T00:23:00.000Z / 更新: 2026-10-01T00:23:00.000Z\n  text/plain | 123 B | 出所:人間 | 未結び付け（2026-10-01T01:23:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000023 bulk-023.txt\n  作成: 2026-10-01T00:22:00.000Z / 更新: 2026-10-01T00:22:00.000Z\n  text/plain | 122 B | 出所:人間 | 未結び付け（2026-10-01T01:22:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000022 bulk-022.txt\n  作成: 2026-10-01T00:21:00.000Z / 更新: 2026-10-01T00:21:00.000Z\n  text/plain | 121 B | 出所:人間 | 未結び付け（2026-10-01T01:21:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000021 bulk-021.txt\n  作成: 2026-10-01T00:20:00.000Z / 更新: 2026-10-01T00:20:00.000Z\n  text/plain | 120 B | 出所:人間 | 未結び付け（2026-10-01T01:20:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000020 bulk-020.txt\n  作成: 2026-10-01T00:19:00.000Z / 更新: 2026-10-01T00:19:00.000Z\n  text/plain | 119 B | 出所:人間 | 未結び付け（2026-10-01T01:19:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000019 bulk-019.txt\n  作成: 2026-10-01T00:18:00.000Z / 更新: 2026-10-01T00:18:00.000Z\n  text/plain | 118 B | 出所:人間 | 未結び付け（2026-10-01T01:18:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000018 bulk-018.txt\n  作成: 2026-10-01T00:17:00.000Z / 更新: 2026-10-01T00:17:00.000Z\n  text/plain | 117 B | 出所:人間 | 未結び付け（2026-10-01T01:17:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000017 bulk-017.txt\n  作成: 2026-10-01T00:16:00.000Z / 更新: 2026-10-01T00:16:00.000Z\n  text/plain | 116 B | 出所:人間 | 未結び付け（2026-10-01T01:16:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000016 bulk-016.txt\n  作成: 2026-10-01T00:15:00.000Z / 更新: 2026-10-01T00:15:00.000Z\n  text/plain | 115 B | 出所:人間 | 未結び付け（2026-10-01T01:15:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000015 bulk-015.txt\n  作成: 2026-10-01T00:14:00.000Z / 更新: 2026-10-01T00:14:00.000Z\n  text/plain | 114 B | 出所:人間 | 未結び付け（2026-10-01T01:14:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000014 bulk-014.txt\n  作成: 2026-10-01T00:13:00.000Z / 更新: 2026-10-01T00:13:00.000Z\n  text/plain | 113 B | 出所:人間 | 未結び付け（2026-10-01T01:13:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000013 bulk-013.txt\n  作成: 2026-10-01T00:12:00.000Z / 更新: 2026-10-01T00:12:00.000Z\n  text/plain | 112 B | 出所:人間 | 未結び付け（2026-10-01T01:12:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000012 bulk-012.txt\n  作成: 2026-10-01T00:11:00.000Z / 更新: 2026-10-01T00:11:00.000Z\n  text/plain | 111 B | 出所:人間 | 未結び付け（2026-10-01T01:11:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000011 bulk-011.txt\n  作成: 2026-10-01T00:10:00.000Z / 更新: 2026-10-01T00:10:00.000Z\n  text/plain | 110 B | 出所:人間 | 未結び付け（2026-10-01T01:10:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000010 bulk-010.txt\n  作成: 2026-10-01T00:09:00.000Z / 更新: 2026-10-01T00:09:00.000Z\n  text/plain | 109 B | 出所:人間 | 未結び付け（2026-10-01T01:09:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000009 bulk-009.txt\n  作成: 2026-10-01T00:08:00.000Z / 更新: 2026-10-01T00:08:00.000Z\n  text/plain | 108 B | 出所:人間 | 未結び付け（2026-10-01T01:08:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000008 bulk-008.txt\n  作成: 2026-10-01T00:07:00.000Z / 更新: 2026-10-01T00:07:00.000Z\n  text/plain | 107 B | 出所:人間 | 未結び付け（2026-10-01T01:07:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000007 bulk-007.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 106 B | 出所:人間 | 未結び付け（2026-10-01T01:06:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000006 bulk-006.txt\n  作成: 2026-10-01T00:05:00.000Z / 更新: 2026-10-01T00:05:00.000Z\n  text/plain | 105 B | 出所:人間 | 未結び付け（2026-10-01T01:05:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000005 bulk-005.txt\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  text/plain | 104 B | 出所:人間 | 未結び付け（2026-10-01T01:04:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000004 bulk-004.txt\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 103 B | 出所:人間 | 未結び付け（2026-10-01T01:03:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000003 bulk-003.txt\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  text/plain | 102 B | 出所:人間 | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000002 bulk-002.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 101 B | 出所:人間 | 未結び付け（2026-10-01T01:01:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000001 bulk-001.txt\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 100 B | 出所:人間 | 未結び付け（2026-10-01T01:00:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "cursor": "WyIyMDI2LTEwLTAxVDAwOjMwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMzEiXQ"
+          },
+          "outcome": "30 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "60 件"
+        }
+      ]
+    },
+    "budget-and-cursor-filters#1": {
+      "output": {
+        "length": 6224,
+        "text": "置き場の使用量: 71 件 9.2 KiB\n出所別: 人間 70 件 9.2 KiB / クローン 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000070 bulk-070.txt\n  作成: 2026-10-01T01:09:00.000Z / 更新: 2026-10-01T01:09:00.000Z\n  text/plain | 169 B | 出所:人間 | 未結び付け（2026-10-01T02:09:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000069 bulk-069.txt\n  作成: 2026-10-01T01:08:00.000Z / 更新: 2026-10-01T01:08:00.000Z\n  text/plain | 168 B | 出所:人間 | 未結び付け（2026-10-01T02:08:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000068 bulk-068.txt\n  作成: 2026-10-01T01:07:00.000Z / 更新: 2026-10-01T01:07:00.000Z\n  text/plain | 167 B | 出所:人間 | 未結び付け（2026-10-01T02:07:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000067 bulk-067.txt\n  作成: 2026-10-01T01:06:00.000Z / 更新: 2026-10-01T01:06:00.000Z\n  text/plain | 166 B | 出所:人間 | 未結び付け（2026-10-01T02:06:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000066 bulk-066.txt\n  作成: 2026-10-01T01:05:00.000Z / 更新: 2026-10-01T01:05:00.000Z\n  text/plain | 165 B | 出所:人間 | 未結び付け（2026-10-01T02:05:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000065 bulk-065.txt\n  作成: 2026-10-01T01:04:00.000Z / 更新: 2026-10-01T01:04:00.000Z\n  text/plain | 164 B | 出所:人間 | 未結び付け（2026-10-01T02:04:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000064 bulk-064.txt\n  作成: 2026-10-01T01:03:00.000Z / 更新: 2026-10-01T01:03:00.000Z\n  text/plain | 163 B | 出所:人間 | 未結び付け（2026-10-01T02:03:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000063 bulk-063.txt\n  作成: 2026-10-01T01:02:00.000Z / 更新: 2026-10-01T01:02:00.000Z\n  text/plain | 162 B | 出所:人間 | 未結び付け（2026-10-01T02:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000062 bulk-062.txt\n  作成: 2026-10-01T01:01:00.000Z / 更新: 2026-10-01T01:01:00.000Z\n  text/plain | 161 B | 出所:人間 | 未結び付け（2026-10-01T02:01:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000061 bulk-061.txt\n  作成: 2026-10-01T01:00:00.000Z / 更新: 2026-10-01T01:00:00.000Z\n  text/plain | 160 B | 出所:人間 | 未結び付け（2026-10-01T02:00:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000060 bulk-060.txt\n  作成: 2026-10-01T00:59:00.000Z / 更新: 2026-10-01T00:59:00.000Z\n  text/plain | 159 B | 出所:人間 | 未結び付け（2026-10-01T01:59:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000059 bulk-059.txt\n  作成: 2026-10-01T00:58:00.000Z / 更新: 2026-10-01T00:58:00.000Z\n  text/plain | 158 B | 出所:人間 | 未結び付け（2026-10-01T01:58:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000058 bulk-058.txt\n  作成: 2026-10-01T00:57:00.000Z / 更新: 2026-10-01T00:57:00.000Z\n  text/plain | 157 B | 出所:人間 | 未結び付け（2026-10-01T01:57:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000057 bulk-057.txt\n  作成: 2026-10-01T00:56:00.000Z / 更新: 2026-10-01T00:56:00.000Z\n  text/plain | 156 B | 出所:人間 | 未結び付け（2026-10-01T01:56:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000056 bulk-056.txt\n  作成: 2026-10-01T00:55:00.000Z / 更新: 2026-10-01T00:55:00.000Z\n  text/plain | 155 B | 出所:人間 | 未結び付け（2026-10-01T01:55:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000055 bulk-055.txt\n  作成: 2026-10-01T00:54:00.000Z / 更新: 2026-10-01T00:54:00.000Z\n  text/plain | 154 B | 出所:人間 | 未結び付け（2026-10-01T01:54:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000054 bulk-054.txt\n  作成: 2026-10-01T00:53:00.000Z / 更新: 2026-10-01T00:53:00.000Z\n  text/plain | 153 B | 出所:人間 | 未結び付け（2026-10-01T01:53:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000053 bulk-053.txt\n  作成: 2026-10-01T00:52:00.000Z / 更新: 2026-10-01T00:52:00.000Z\n  text/plain | 152 B | 出所:人間 | 未結び付け（2026-10-01T01:52:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000052 bulk-052.txt\n  作成: 2026-10-01T00:51:00.000Z / 更新: 2026-10-01T00:51:00.000Z\n  text/plain | 151 B | 出所:人間 | 未結び付け（2026-10-01T01:51:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000051 bulk-051.txt\n  作成: 2026-10-01T00:50:00.000Z / 更新: 2026-10-01T00:50:00.000Z\n  text/plain | 150 B | 出所:人間 | 未結び付け（2026-10-01T01:50:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000050 bulk-050.txt\n  作成: 2026-10-01T00:49:00.000Z / 更新: 2026-10-01T00:49:00.000Z\n  text/plain | 149 B | 出所:人間 | 未結び付け（2026-10-01T01:49:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000049 bulk-049.txt\n  作成: 2026-10-01T00:48:00.000Z / 更新: 2026-10-01T00:48:00.000Z\n  text/plain | 148 B | 出所:人間 | 未結び付け（2026-10-01T01:48:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000048 bulk-048.txt\n  作成: 2026-10-01T00:47:00.000Z / 更新: 2026-10-01T00:47:00.000Z\n  text/plain | 147 B | 出所:人間 | 未結び付け（2026-10-01T01:47:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000047 bulk-047.txt\n  作成: 2026-10-01T00:46:00.000Z / 更新: 2026-10-01T00:46:00.000Z\n  text/plain | 146 B | 出所:人間 | 未結び付け（2026-10-01T01:46:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000046 bulk-046.txt\n  作成: 2026-10-01T00:45:00.000Z / 更新: 2026-10-01T00:45:00.000Z\n  text/plain | 145 B | 出所:人間 | 未結び付け（2026-10-01T01:45:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000045 bulk-045.txt\n  作成: 2026-10-01T00:44:00.000Z / 更新: 2026-10-01T00:44:00.000Z\n  text/plain | 144 B | 出所:人間 | 未結び付け（2026-10-01T01:44:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000044 bulk-044.txt\n  作成: 2026-10-01T00:43:00.000Z / 更新: 2026-10-01T00:43:00.000Z\n  text/plain | 143 B | 出所:人間 | 未結び付け（2026-10-01T01:43:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000043 bulk-043.txt\n  作成: 2026-10-01T00:42:00.000Z / 更新: 2026-10-01T00:42:00.000Z\n  text/plain | 142 B | 出所:人間 | 未結び付け（2026-10-01T01:42:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000042 bulk-042.txt\n  作成: 2026-10-01T00:41:00.000Z / 更新: 2026-10-01T00:41:00.000Z\n  text/plain | 141 B | 出所:人間 | 未結び付け（2026-10-01T01:41:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000041 bulk-041.txt\n  作成: 2026-10-01T00:40:00.000Z / 更新: 2026-10-01T00:40:00.000Z\n  text/plain | 140 B | 出所:人間 | 未結び付け（2026-10-01T01:40:00.000Z に消える。会話へ添えるか保存すれば残る）\n…ほか 20 件は省略（この呼び出しで 50 件取り、新しい順に 30 件だけ出した）。続きは file_list cursor=WyIyMDI2LTEwLTAxVDAwOjQwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwNDEiXQ （同じ絞り込みで渡す）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human",
+            "q": "bulk"
+          },
+          "outcome": "50 items / nextCursor あり"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "71 件"
+        }
+      ]
+    },
+    "budget-and-cursor-filters#2": {
+      "output": {
+        "length": 6224,
+        "text": "置き場の使用量: 71 件 9.2 KiB\n出所別: 人間 70 件 9.2 KiB / クローン 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000040 bulk-040.txt\n  作成: 2026-10-01T00:39:00.000Z / 更新: 2026-10-01T00:39:00.000Z\n  text/plain | 139 B | 出所:人間 | 未結び付け（2026-10-01T01:39:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000039 bulk-039.txt\n  作成: 2026-10-01T00:38:00.000Z / 更新: 2026-10-01T00:38:00.000Z\n  text/plain | 138 B | 出所:人間 | 未結び付け（2026-10-01T01:38:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000038 bulk-038.txt\n  作成: 2026-10-01T00:37:00.000Z / 更新: 2026-10-01T00:37:00.000Z\n  text/plain | 137 B | 出所:人間 | 未結び付け（2026-10-01T01:37:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000037 bulk-037.txt\n  作成: 2026-10-01T00:36:00.000Z / 更新: 2026-10-01T00:36:00.000Z\n  text/plain | 136 B | 出所:人間 | 未結び付け（2026-10-01T01:36:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000036 bulk-036.txt\n  作成: 2026-10-01T00:35:00.000Z / 更新: 2026-10-01T00:35:00.000Z\n  text/plain | 135 B | 出所:人間 | 未結び付け（2026-10-01T01:35:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000035 bulk-035.txt\n  作成: 2026-10-01T00:34:00.000Z / 更新: 2026-10-01T00:34:00.000Z\n  text/plain | 134 B | 出所:人間 | 未結び付け（2026-10-01T01:34:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000034 bulk-034.txt\n  作成: 2026-10-01T00:33:00.000Z / 更新: 2026-10-01T00:33:00.000Z\n  text/plain | 133 B | 出所:人間 | 未結び付け（2026-10-01T01:33:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000033 bulk-033.txt\n  作成: 2026-10-01T00:32:00.000Z / 更新: 2026-10-01T00:32:00.000Z\n  text/plain | 132 B | 出所:人間 | 未結び付け（2026-10-01T01:32:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000032 bulk-032.txt\n  作成: 2026-10-01T00:31:00.000Z / 更新: 2026-10-01T00:31:00.000Z\n  text/plain | 131 B | 出所:人間 | 未結び付け（2026-10-01T01:31:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000031 bulk-031.txt\n  作成: 2026-10-01T00:30:00.000Z / 更新: 2026-10-01T00:30:00.000Z\n  text/plain | 130 B | 出所:人間 | 未結び付け（2026-10-01T01:30:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000030 bulk-030.txt\n  作成: 2026-10-01T00:29:00.000Z / 更新: 2026-10-01T00:29:00.000Z\n  text/plain | 129 B | 出所:人間 | 未結び付け（2026-10-01T01:29:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000029 bulk-029.txt\n  作成: 2026-10-01T00:28:00.000Z / 更新: 2026-10-01T00:28:00.000Z\n  text/plain | 128 B | 出所:人間 | 未結び付け（2026-10-01T01:28:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000028 bulk-028.txt\n  作成: 2026-10-01T00:27:00.000Z / 更新: 2026-10-01T00:27:00.000Z\n  text/plain | 127 B | 出所:人間 | 未結び付け（2026-10-01T01:27:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000027 bulk-027.txt\n  作成: 2026-10-01T00:26:00.000Z / 更新: 2026-10-01T00:26:00.000Z\n  text/plain | 126 B | 出所:人間 | 未結び付け（2026-10-01T01:26:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000026 bulk-026.txt\n  作成: 2026-10-01T00:25:00.000Z / 更新: 2026-10-01T00:25:00.000Z\n  text/plain | 125 B | 出所:人間 | 未結び付け（2026-10-01T01:25:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000025 bulk-025.txt\n  作成: 2026-10-01T00:24:00.000Z / 更新: 2026-10-01T00:24:00.000Z\n  text/plain | 124 B | 出所:人間 | 未結び付け（2026-10-01T01:24:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000024 bulk-024.txt\n  作成: 2026-10-01T00:23:00.000Z / 更新: 2026-10-01T00:23:00.000Z\n  text/plain | 123 B | 出所:人間 | 未結び付け（2026-10-01T01:23:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000023 bulk-023.txt\n  作成: 2026-10-01T00:22:00.000Z / 更新: 2026-10-01T00:22:00.000Z\n  text/plain | 122 B | 出所:人間 | 未結び付け（2026-10-01T01:22:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000022 bulk-022.txt\n  作成: 2026-10-01T00:21:00.000Z / 更新: 2026-10-01T00:21:00.000Z\n  text/plain | 121 B | 出所:人間 | 未結び付け（2026-10-01T01:21:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000021 bulk-021.txt\n  作成: 2026-10-01T00:20:00.000Z / 更新: 2026-10-01T00:20:00.000Z\n  text/plain | 120 B | 出所:人間 | 未結び付け（2026-10-01T01:20:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000020 bulk-020.txt\n  作成: 2026-10-01T00:19:00.000Z / 更新: 2026-10-01T00:19:00.000Z\n  text/plain | 119 B | 出所:人間 | 未結び付け（2026-10-01T01:19:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000019 bulk-019.txt\n  作成: 2026-10-01T00:18:00.000Z / 更新: 2026-10-01T00:18:00.000Z\n  text/plain | 118 B | 出所:人間 | 未結び付け（2026-10-01T01:18:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000018 bulk-018.txt\n  作成: 2026-10-01T00:17:00.000Z / 更新: 2026-10-01T00:17:00.000Z\n  text/plain | 117 B | 出所:人間 | 未結び付け（2026-10-01T01:17:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000017 bulk-017.txt\n  作成: 2026-10-01T00:16:00.000Z / 更新: 2026-10-01T00:16:00.000Z\n  text/plain | 116 B | 出所:人間 | 未結び付け（2026-10-01T01:16:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000016 bulk-016.txt\n  作成: 2026-10-01T00:15:00.000Z / 更新: 2026-10-01T00:15:00.000Z\n  text/plain | 115 B | 出所:人間 | 未結び付け（2026-10-01T01:15:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000015 bulk-015.txt\n  作成: 2026-10-01T00:14:00.000Z / 更新: 2026-10-01T00:14:00.000Z\n  text/plain | 114 B | 出所:人間 | 未結び付け（2026-10-01T01:14:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000014 bulk-014.txt\n  作成: 2026-10-01T00:13:00.000Z / 更新: 2026-10-01T00:13:00.000Z\n  text/plain | 113 B | 出所:人間 | 未結び付け（2026-10-01T01:13:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000013 bulk-013.txt\n  作成: 2026-10-01T00:12:00.000Z / 更新: 2026-10-01T00:12:00.000Z\n  text/plain | 112 B | 出所:人間 | 未結び付け（2026-10-01T01:12:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000012 bulk-012.txt\n  作成: 2026-10-01T00:11:00.000Z / 更新: 2026-10-01T00:11:00.000Z\n  text/plain | 111 B | 出所:人間 | 未結び付け（2026-10-01T01:11:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000011 bulk-011.txt\n  作成: 2026-10-01T00:10:00.000Z / 更新: 2026-10-01T00:10:00.000Z\n  text/plain | 110 B | 出所:人間 | 未結び付け（2026-10-01T01:10:00.000Z に消える。会話へ添えるか保存すれば残る）\n…ほか 10 件は省略（この呼び出しで 40 件取り、新しい順に 30 件だけ出した）。続きは file_list cursor=WyIyMDI2LTEwLTAxVDAwOjEwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTEiXQ （同じ絞り込みで渡す）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human",
+            "q": "bulk",
+            "cursor": "WyIyMDI2LTEwLTAxVDAwOjQwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwNDEiXQ"
+          },
+          "outcome": "40 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "71 件"
+        }
+      ]
+    },
+    "budget-and-cursor-filters#3": {
+      "output": {
+        "length": 2116,
+        "text": "置き場の使用量: 71 件 9.2 KiB\n出所別: 人間 70 件 9.2 KiB / クローン 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000010 bulk-010.txt\n  作成: 2026-10-01T00:09:00.000Z / 更新: 2026-10-01T00:09:00.000Z\n  text/plain | 109 B | 出所:人間 | 未結び付け（2026-10-01T01:09:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000009 bulk-009.txt\n  作成: 2026-10-01T00:08:00.000Z / 更新: 2026-10-01T00:08:00.000Z\n  text/plain | 108 B | 出所:人間 | 未結び付け（2026-10-01T01:08:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000008 bulk-008.txt\n  作成: 2026-10-01T00:07:00.000Z / 更新: 2026-10-01T00:07:00.000Z\n  text/plain | 107 B | 出所:人間 | 未結び付け（2026-10-01T01:07:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000007 bulk-007.txt\n  作成: 2026-10-01T00:06:00.000Z / 更新: 2026-10-01T00:06:00.000Z\n  text/plain | 106 B | 出所:人間 | 未結び付け（2026-10-01T01:06:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000006 bulk-006.txt\n  作成: 2026-10-01T00:05:00.000Z / 更新: 2026-10-01T00:05:00.000Z\n  text/plain | 105 B | 出所:人間 | 未結び付け（2026-10-01T01:05:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000005 bulk-005.txt\n  作成: 2026-10-01T00:04:00.000Z / 更新: 2026-10-01T00:04:00.000Z\n  text/plain | 104 B | 出所:人間 | 未結び付け（2026-10-01T01:04:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000004 bulk-004.txt\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  text/plain | 103 B | 出所:人間 | 未結び付け（2026-10-01T01:03:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000003 bulk-003.txt\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  text/plain | 102 B | 出所:人間 | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000002 bulk-002.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 101 B | 出所:人間 | 未結び付け（2026-10-01T01:01:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000001 bulk-001.txt\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 100 B | 出所:人間 | 未結び付け（2026-10-01T01:00:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "from": "human",
+            "q": "bulk",
+            "cursor": "WyIyMDI2LTEwLTAxVDAwOjEwOjAwLjAwMFoiLCIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMTEiXQ"
+          },
+          "outcome": "10 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "71 件"
+        }
+      ]
+    },
+    "cursor-refused#1": {
+      "output": {
+        "length": 62,
+        "text": "cursor が読めない。前回の応答の「続きは file_list cursor=…」をそのまま渡す（自分で組み立てない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "cursor": "garbage"
+          },
+          "outcome": "threw AttachmentCursorError: cursor が読めない"
+        }
+      ]
+    },
+    "cursor-refused#2": {
+      "output": {
+        "length": 62,
+        "text": "cursor が読めない。前回の応答の「続きは file_list cursor=…」をそのまま渡す（自分で組み立てない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "cursor": "!!!"
+          },
+          "outcome": "threw AttachmentCursorError: cursor が読めない"
+        }
+      ]
+    },
+    "cursor-refused#3": {
+      "output": {
+        "length": 62,
+        "text": "cursor が読めない。前回の応答の「続きは file_list cursor=…」をそのまま渡す（自分で組み立てない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "cursor": "bm90IGpzb24"
+          },
+          "outcome": "threw AttachmentCursorError: cursor が読めない"
+        }
+      ]
+    },
+    "expired#1": {
+      "output": {
+        "length": 654,
+        "text": "置き場の使用量: 3 件 30 B\n出所別: 人間 2 件 20 B / クローン 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000003 unbound.txt\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  text/plain | 10 B | 出所:クローン | 未結び付け（2026-10-01T01:02:00.000Z に消える。会話へ添えるか保存すれば残る）\n- 00000000-0000-4000-8000-000000000002 bound.txt\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  text/plain | 10 B | 出所:人間 | 期限 2026-10-31T00:01:00.000Z\n- 00000000-0000-4000-8000-000000000001 kept.txt\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 10 B | 出所:人間 | 保存中（期限なし）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "3 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "3 件"
+        }
+      ]
+    },
+    "expired#2": {
+      "output": {
+        "length": 272,
+        "text": "置き場の使用量: 1 件 10 B\n出所別: 人間 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 kept.txt\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 10 B | 出所:人間 | 保存中（期限なし）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "1 件"
+        }
+      ]
+    },
+    "expired#3": {
+      "output": {
+        "length": 49,
+        "text": "置き場の使用量: 1 件 10 B\n出所別: 人間 1 件 10 B\n（この条件に合う添付は無い）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50,
+            "kept": false
+          },
+          "outcome": "0 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "1 件"
+        }
+      ]
+    },
+    "read-fails#1": {
+      "output": {
+        "length": 51,
+        "text": "置き場の一覧を読めなかった: Error: 置き場が落ちた（list）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "threw Error: 置き場が落ちた（list）"
+        }
+      ]
+    },
+    "read-fails#2": {
+      "output": {
+        "length": 52,
+        "text": "置き場の一覧を読めなかった: Error: 置き場が落ちた（usage）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "threw Error: 置き場が落ちた（usage）"
+        }
+      ]
+    },
+    "read-fails#3": {
+      "output": {
+        "length": 54,
+        "text": "置き場の一覧を読めなかった: Error: 日誌が落ちた（listPage）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "journal.listPage",
+          "args": {
+            "limit": 1,
+            "conversationId": "c1a2b3c4-0000-4000-8000-000000000001",
+            "types": ["exchange"],
+            "with": ["human"]
+          },
+          "outcome": "threw Error: 日誌が落ちた（listPage）"
+        }
+      ]
+    },
+    "read-fails#4": {
+      "output": {
+        "length": 311,
+        "text": "置き場の使用量: 1 件 10 B\n出所別: 人間 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 a.txt\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 10 B | 出所:人間 | 未結び付け（2026-10-01T01:00:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "1 件"
+        }
+      ]
+    },
+    "read-fails#5": {
+      "output": {
+        "length": 311,
+        "text": "置き場の使用量: 1 件 10 B\n出所別: 人間 1 件 10 B\n（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）\n- 00000000-0000-4000-8000-000000000001 a.txt\n  作成: 2026-10-01T00:00:00.000Z / 更新: 2026-10-01T00:00:00.000Z\n  text/plain | 10 B | 出所:人間 | 未結び付け（2026-10-01T01:00:00.000Z に消える。会話へ添えるか保存すれば残る）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "attachments.list",
+          "args": {
+            "limit": 50
+          },
+          "outcome": "1 items / nextCursor なし"
+        },
+        {
+          "op": "attachments.usage",
+          "args": {},
+          "outcome": "1 件"
+        }
+      ]
+    }
+  }
+}

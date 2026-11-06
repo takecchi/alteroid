@@ -6,7 +6,12 @@ import { LoadError } from '~/components/load-error';
 import { StaleNote } from '~/components/stale-note';
 import { ApprovalConversation, Button, Spinner } from '@alteroid/ui';
 import { useApprovalTrace, useConversation } from '@alteroid/swr';
-import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
+import {
+  describeAttachmentList,
+  formatDateTime,
+  journalTypeLabel,
+  redactBody,
+} from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
 import type { ApprovalQuestionsDraft } from '@alteroid/ui';
 
@@ -340,13 +345,13 @@ function SameConversationNote({ conversationId }: { conversationId: string }) {
  * 推測で埋めず無いと分かる形で出す。名前の扱いはチャット（`MessageAttachments`）に合わせ、そのまま出す。
  */
 function attachmentNote(attachments: readonly { name?: unknown }[]): string {
-  // 先頭の数件だけ名前を出し、残りは件数にする: 添付の多い1発言が引用を伸ばし続けないため（日誌・台帳の一行表示と揃える）
-  const shown = attachments.slice(0, ATTACHMENT_NOTE_NAMES).map(attachmentLabel);
-  const rest = attachments.length - shown.length;
-  return `［添付 ${attachments.length}件: ${shown.join('、')}${rest > 0 ? `、ほか ${rest} 件` : ''}］`;
+  // 先頭の数件だけ名前を出し、残りは件数にする規則は、日誌の1行表示と同じ1本（logic の `describeAttachmentList`）を使う。
+  // web にだけ要る「名前の無い添付」の補いは、ここで名前に当てはめてから渡す
+  return describeAttachmentList(
+    '添付',
+    attachments.map((attachment) => ({ name: attachmentLabel(attachment) })),
+  );
 }
-
-const ATTACHMENT_NOTE_NAMES = 3;
 
 function attachmentLabel(attachment: { name?: unknown }): string {
   return typeof attachment.name === 'string' && attachment.name.trim() !== ''

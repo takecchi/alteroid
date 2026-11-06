@@ -950,6 +950,57 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(screen.getAllByText(/［添付/)).toHaveLength(3);
   });
 
+  it('④ 添付の注記の境目: ちょうど3件は「ほか」を付けず、4件で「ほか 1 件」。名前の有る無いが混ざっても、空白だけの名前も補う', async () => {
+    const ref = (id: string, name: string) => ({
+      id,
+      name,
+      mediaType: 'text/plain',
+      size: 3,
+      sha256: 'x',
+    });
+    const at = (minute: number) => `2026-08-19T09:0${String(minute)}:00.000Z`;
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [
+            { id: 'm0', at: at(0), role: 'outbound', text: '添付なし' },
+            {
+              id: 'm1',
+              at: at(1),
+              role: 'inbound',
+              text: '3件',
+              attachments: ['a', 'b', 'c'].map((n) => ref(`h-${n}`, `${n}.txt`)),
+            },
+            {
+              id: 'm2',
+              at: at(2),
+              role: 'inbound',
+              text: '4件',
+              attachments: ['a', 'b', 'c', 'd'].map((n) => ref(`i-${n}`, `${n}.txt`)),
+            },
+            {
+              id: 'm3',
+              at: at(3),
+              role: 'inbound',
+              text: '名前が混ざる',
+              attachments: [ref('j1', 'a.png'), ref('j2', ''), ref('j3', '   ')],
+            },
+          ],
+          scanned: 4,
+          reachedStart: true,
+        }),
+    });
+    renderPage();
+
+    // 既定は直近の3件だけなので、4件すべてを見るために開く
+    fireEvent.click(await screen.findByRole('button', { name: '全部を見る（4 件）' }));
+    expect(await screen.findByText('［添付 3件: a.txt、b.txt、c.txt］')).toBeTruthy();
+    expect(screen.getByText('［添付 4件: a.txt、b.txt、c.txt、ほか 1 件］')).toBeTruthy();
+    expect(screen.getByText('［添付 3件: a.png、名前の無い添付、名前の無い添付］')).toBeTruthy();
+    expect(screen.getAllByText(/［添付/)).toHaveLength(3);
+  });
+
   it('チャットで開く導線は ① と ②（読み込み中・失敗）には出ない', async () => {
     stubApprovals(
       [

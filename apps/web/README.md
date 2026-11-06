@@ -4,7 +4,7 @@ CLI（`alteroid chat`）と同じことを画面からできるようにする�
 デーモンに独自の経路を持たない（要件は [docs/PRD.md](../../docs/PRD.md)「インターフェース」、
 設計判断は [docs/architecture.md](../../docs/architecture.md)「Web UI」）。
 
-React Router v7 の **SPA**（`ssr: false`）。成果物は静的ファイルだけなので、置き場所を選ばない。
+React Router v8 の **SPA**（`ssr: false`）。成果物は静的ファイルだけなので、置き場所を選ばない。
 
 ## 動かす
 

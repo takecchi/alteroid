@@ -1,6 +1,3 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
 
@@ -11,12 +8,8 @@ import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
-import {
-  keepDraftOnFailure,
-  openEditorKeepingEdits,
-  readAllText,
-  readInputFile,
-} from './input-errors.js';
+import { runEditSession } from './edit-session.js';
+import { readAllText, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 interface McpServerEntry {
@@ -143,27 +136,20 @@ export async function mcpEditCommand(): Promise<void> {
   const current = await read(target);
   const original = `${JSON.stringify({ mcpServers: current.mcpServers }, null, 2)}\n`;
 
-  const dir = await mkdtemp(join(tmpdir(), 'alteroid-mcp-'));
-  const path = join(dir, 'mcp.json');
-  const resume = `alteroid mcp set ${shellQuote(path)}`;
-  await openEditorKeepingEdits({
-    dir,
-    path,
+  await runEditSession({
+    dirPrefix: 'alteroid-mcp-',
+    fileName: 'mcp.json',
     initial: original,
     // 一時ファイルでも 0600 にする: 中身は人間が置いた鍵そのものになりうるため
     mode: 0o600,
-    resume,
+    resume: (path) => `alteroid mcp set ${shellQuote(path)}`,
     alternative: 'alteroid mcp set <file>',
-  });
-  await keepDraftOnFailure(dir, path, resume, async () => {
-    const edited = await readFile(path, 'utf8');
-
-    if (edited === original) {
-      stdout.write('変更はありません。\n');
-      return;
-    }
-    // エディタを開く前に読んだ版を送る: 開いている間にクローンや Web が書いた登録を、黙って消さないため
-    await put(target, parseMcpJson(edited), Object.keys(current.mcpServers), current.version);
+    isUnchanged: (edited) => edited === original,
+    // 空の断りは付けない: 空のファイルは JSON の形の検査（`parseMcpJson`）が断る
+    save: async (edited) => {
+      // エディタを開く前に読んだ版を送る: 開いている間にクローンや Web が書いた登録を、黙って消さないため
+      await put(target, parseMcpJson(edited), Object.keys(current.mcpServers), current.version);
+    },
   });
 }
 

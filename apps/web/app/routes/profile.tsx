@@ -31,9 +31,9 @@ import {
 } from '@alteroid/swr';
 import { formatDateTime, hasRunnerPushFailure, redactError } from '@alteroid/logic';
 import type {
-  NormalizedProfile,
   ProfileEntryView,
   ProfileScope,
+  ProfileState,
   ProfileUpdateResult,
 } from '@alteroid/logic';
 
@@ -188,7 +188,7 @@ function ProfileList({
   onEdit,
   onRemoved,
 }: {
-  profile: NormalizedProfile;
+  profile: ProfileState;
   onEdit: (entry: ProfileEntryView) => void;
   onRemoved: (name: string, update: ProfileUpdateResult | null) => void;
 }) {

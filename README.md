@@ -280,7 +280,7 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
-apps/web             公式の画面。React Router v7 の SPA
+apps/web             公式の画面。React Router v8 の SPA
 packages/api-client  生成 spec から起こした外部向けクライアント
 ```
 
