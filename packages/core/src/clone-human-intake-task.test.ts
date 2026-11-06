@@ -832,3 +832,140 @@ describe('その task に結び付いた委譲（Job.taskId）が走っている
     await s.clone.stop();
   });
 });
+
+describe('taskId を渡さない manager_start は、そのターンで読んだ人間の task が1件だけなら、器がその task に結ぶ', () => {
+  function runningJob(id: string, conversationId: string, taskId: string): Job {
+    return {
+      id,
+      createdAt: AT,
+      updatedAt: AT,
+      status: 'running',
+      conversationId,
+      summary: 's',
+      taskId,
+    };
+  }
+
+  it('(a) 人間の task が1件のターン: 委譲が task に結ばれ、返答しても task は自動 done にならない', async () => {
+    const started: ManagerStartInput[] = [];
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('委譲した'),
+        { run: () => tool('manager_start')({ request: '重い調査' }) },
+      ],
+      { managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-a1', '重い調査を頼みたい'));
+    await waitForTerminal(s.events);
+
+    expect(started[0]?.taskId).toBe('evt-a1');
+    expect(await statusOf(s.stores, 'evt-a1')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('(b) 同じターンで読んだ人間の task が2件のとき: 結ばない（どちらの task か決められない）', async () => {
+    const started: ManagerStartInput[] = [];
+    const s = boot(
+      (_turn, input, tool) =>
+        withoutQueueNotice(input).includes('B2-BODY')
+          ? [...say('委譲した'), { run: () => tool('manager_start')({ request: '重い調査' }) }]
+          : say('返答'),
+      { managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-b1', 'B1-BODY'));
+    s.clone.post(human('evt-b2', 'B2-BODY'));
+    await waitFor(
+      async () =>
+        (await statusOf(s.stores, 'evt-b1')) === 'done' &&
+        (await statusOf(s.stores, 'evt-b2')) === 'done',
+      '2件が閉じる',
+    );
+
+    expect(started).toHaveLength(1);
+    expect(started[0]?.taskId).toBeUndefined();
+    await s.clone.stop();
+  });
+
+  it('(c) 人間の発言を読んでいないターン（報告の読み）: 結ばない', async () => {
+    const started: ManagerStartInput[] = [];
+    const stores = createMemoryStores();
+    await stores.tasks.add(seeded('t-open'));
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('続きを頼む'),
+        { run: () => tool('manager_start')({ request: '続きの調査' }) },
+      ],
+      { stores, managers: stubPool(started) },
+    );
+    s.clone.post(managerReport('rep-c', '途中の報告'));
+    await waitFor(() => Promise.resolve(started.length > 0), '委譲が起きる');
+
+    expect(started[0]?.taskId).toBeUndefined();
+    expect(await statusOf(stores, 't-open')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('(d) 読んだ1件に走っている委譲があるとき: 断らず、結ばずに起こす（task は走っている委譲が守る）', async () => {
+    const started: ManagerStartInput[] = [];
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob('m-run', 'conv-1', 'evt-d1'));
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('別の委譲も起こした'),
+        { run: () => tool('manager_start')({ request: '別の調査' }) },
+      ],
+      { stores, managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-d1', '走っている委譲がある task'));
+    await waitForTerminal(s.events);
+
+    expect(started).toHaveLength(1);
+    expect(started[0]?.taskId).toBeUndefined();
+    expect(await statusOf(stores, 'evt-d1')).toBe('queued');
+    await s.clone.stop();
+  });
+
+  it('(d2) 読んだ1件が閉じている（読んだ後に誰かが閉じた）とき: 断らず、結ばずに起こす', async () => {
+    const started: ManagerStartInput[] = [];
+    const s = boot(
+      (_turn, _input, tool) => [
+        {
+          run: async () => {
+            await s.stores.tasks.setStatus('evt-d2', 'cancelled', {
+              by: 'human',
+              at: new Date().toISOString(),
+            });
+          },
+        },
+        ...say('委譲した'),
+        { run: () => tool('manager_start')({ request: '調査' }) },
+      ],
+      { managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-d2', '閉じられる task'));
+    await waitForTerminal(s.events);
+
+    expect(started).toHaveLength(1);
+    expect(started[0]?.taskId).toBeUndefined();
+    await s.clone.stop();
+  });
+
+  it('(e) taskId を明示したときは今のまま: 明示した task に結ぶ（読んだ task と違っても上書きしない）', async () => {
+    const started: ManagerStartInput[] = [];
+    const stores = createMemoryStores();
+    await stores.tasks.add(seeded('t-other'));
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('委譲した'),
+        { run: () => tool('manager_start')({ request: '別の task の調査', taskId: 't-other' }) },
+      ],
+      { stores, managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-e1', '別の task のために委譲する'));
+    await waitForTerminal(s.events);
+
+    expect(started[0]?.taskId).toBe('t-other');
+    expect(await statusOf(stores, 'evt-e1')).toBe('done');
+    await s.clone.stop();
+  });
+});
