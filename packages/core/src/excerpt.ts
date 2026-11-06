@@ -184,7 +184,10 @@ export function renderListingFromEnd(
 }
 
 export function page(text: string, offset: number, limit: number): Page {
-  const from = Math.max(0, Math.min(Math.trunc(offset), text.length));
+  const requested = Math.max(0, Math.min(Math.trunc(offset), text.length));
+  // offset がサロゲートペアの後半に当たったら、その文字の頭から読む（単独の低サロゲートから始めない）。
+  // limit が1のときは戻さない: 戻すと同じ位置へ戻り続け、続きを読む側が先へ進めなくなるため
+  const from = limit >= 2 ? codePointStartBoundary(text, requested) : requested;
   // 1文字も進めなくなるとき（`limit` が1で先頭が補助面の文字）は戻さない
   const cut = codePointBoundary(text, Math.min(from + limit, text.length));
   const body = text.slice(from, cut > from ? cut : from + limit);
