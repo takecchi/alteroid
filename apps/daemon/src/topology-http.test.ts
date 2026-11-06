@@ -104,12 +104,12 @@ afterEach(() => {
 });
 
 describe('GET /topology', () => {
-  it('応答のスキーマを通り、配線されていない軸は unknown になる', async () => {
+  it('応答のスキーマを通り、走っているターンが無いクローンは idle、配線されていない軸は unknown になる', async () => {
     const { app } = setup({ managers: [runningManager('m1')] });
     const response = await app.request('/topology');
     expect(response.status).toBe(200);
     const body = topologyResponseSchema.parse(await response.json());
-    expect(body.clone).toEqual({ state: 'unknown' });
+    expect(body.clone).toEqual({ state: 'idle' });
     expect(body.storage.state).toBe('unknown');
     expect(body.runners).toEqual([]);
     expect(body.managers.map((m) => m.managerId)).toEqual(['m1']);
@@ -280,7 +280,7 @@ describe('GET /topology/stream', () => {
     let listCalls = 0;
     const stores = createMemoryStores();
     const app = createApp({
-      clone: {
+      clone: fakeCloneHost({
         usageBlocked: false,
         managers: {
           list: async () => {
@@ -288,8 +288,8 @@ describe('GET /topology/stream', () => {
             if (failing) throw new Error('boom');
             return [];
           },
-        },
-      } as unknown as CloneHost,
+        } as unknown as CloneHost['managers'],
+      }),
       stores,
       token: 'test-token',
       shutdown: () => undefined,
