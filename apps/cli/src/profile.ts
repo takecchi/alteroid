@@ -1,6 +1,3 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
 
@@ -17,7 +14,8 @@ import {
   resolveTarget,
   type Target,
 } from './target.js';
-import { keepDraftOnFailure, openEditorKeepingEdits, readBodyArg } from './input-errors.js';
+import { runEditSession } from './edit-session.js';
+import { readBodyArg } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 const ERROR_LIMIT = 512;
@@ -227,28 +225,26 @@ export async function profileEditCommand(
   const profile = await fetchProfile(target);
   const current = profile.entries.find((row) => row.name === name);
 
-  const dir = await mkdtemp(join(tmpdir(), 'alteroid-profile-'));
-  const path = join(dir, `${name}.sh`);
-  const resume = `alteroid profile set ${name} --file ${shellQuote(path)}${scope === undefined ? '' : ` --scope ${scope}`}`;
-  await openEditorKeepingEdits({
-    dir,
-    path,
+  await runEditSession({
+    dirPrefix: 'alteroid-profile-',
+    fileName: `${name}.sh`,
     initial: current !== undefined ? current.script : TEMPLATE,
     // 中身は人間が置いた鍵そのものになりうるので、一時ファイルでも絞る。
     mode: 0o600,
-    resume,
+    resume: (path) =>
+      `alteroid profile set ${name} --file ${shellQuote(path)}${scope === undefined ? '' : ` --scope ${scope}`}`,
     alternative: 'alteroid profile set <name> --file <path>',
-  });
-  await keepDraftOnFailure(dir, path, resume, async () => {
-    const edited = await readFile(path, 'utf8');
-
     // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
-    const scopeChanged = current !== undefined && scope !== undefined && scope !== current.scope;
-    if (current === undefined ? edited === TEMPLATE : edited === current.script && !scopeChanged) {
-      stdout.write('変更はありません。\n');
-      return;
-    }
-    await put(name, edited, target, scope, readVersionOf(profile, name));
+    isUnchanged: (edited) => {
+      const scopeChanged = current !== undefined && scope !== undefined && scope !== current.scope;
+      return current === undefined
+        ? edited === TEMPLATE
+        : edited === current.script && !scopeChanged;
+    },
+    emptyMessage: () => EMPTY_BODY_MESSAGE,
+    save: async (edited) => {
+      await put(name, edited, target, scope, readVersionOf(profile, name));
+    },
   });
 }
 
