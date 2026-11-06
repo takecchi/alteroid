@@ -17,7 +17,7 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
-import { createPushChannel } from './push-channel.js';
+import { createPushChannel, pushToRunners } from './push-channel.js';
 import {
   PROFILE_ENTRY_NAME,
   type EnvProfileEntry,
@@ -447,24 +447,15 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
       }),
   };
 
-  async function pushAll(script: string): Promise<(RunnerProfileResult & { runnerId: string })[]> {
-    if (runners === undefined) return [];
-    return Promise.all(
-      (await runners.list()).map(async (runner) => {
-        try {
-          return {
-            runnerId: runner.runnerId,
-            ...redactRunnerResult(await runner.setProfile(script)),
-          };
-        } catch (error) {
-          return redactRunnerResult({
-            runnerId: runner.runnerId,
-            ok: false,
-            error: reasonOf(error),
-          });
-        }
-      }),
-    );
+  function pushAll(script: string): Promise<(RunnerProfileResult & { runnerId: string })[]> {
+    // 失敗の `error` も出口で伏せるので、投げる失敗は `send` の中で伏せた結果に直す（`pushToRunners` の握りには落とさない）。
+    return pushToRunners<RunnerProfileResult & { runnerId: string }>(runners, async (runner) => {
+      try {
+        return redactRunnerResult(await runner.setProfile(script));
+      } catch (error) {
+        return redactRunnerResult({ ok: false, error: reasonOf(error) });
+      }
+    });
   }
 }
 
