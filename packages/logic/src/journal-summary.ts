@@ -23,6 +23,14 @@ function attachmentNames(items: readonly { name: string }[]): string {
   return shown.join('、') + (rest > 0 ? `、ほか ${rest} 件` : '');
 }
 
+/**
+ * 添付の注記1つ（`［添付 3件: a.png、b.log、c.txt］`）。先頭3件の名前を出し、超えた分は「ほか n 件」にする。
+ * 日誌の1行表示と、承認の画面の引用が同じ規則で出すための1本（片方だけ変えると食い違う）。`items` は1件以上で渡すこと。
+ */
+export function describeAttachmentList(label: string, items: readonly { name: string }[]): string {
+  return `［${label} ${items.length}件: ${attachmentNames(items)}］`;
+}
+
 function attachmentNote(
   attachments: readonly { name: string }[] | undefined,
   rejected?: readonly { name: string }[],
@@ -30,11 +38,11 @@ function attachmentNote(
   const kept =
     attachments === undefined || attachments.length === 0
       ? ''
-      : `［添付 ${attachments.length}件: ${attachmentNames(attachments)}］`;
+      : describeAttachmentList('添付', attachments);
   const refused =
     rejected === undefined || rejected.length === 0
       ? ''
-      : `［受け取れず ${rejected.length}件: ${attachmentNames(rejected)}］`;
+      : describeAttachmentList('受け取れず', rejected);
   return kept + refused;
 }
 
