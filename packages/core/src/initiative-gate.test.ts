@@ -48,7 +48,7 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
   it('(a) 待ち行列に queued が1件あれば回す', async () => {
     const stores = createMemoryStores();
     await recordTickTurn(stores);
-    await stores.tasks.add(makeTask({ status: 'queued' }));
+    await stores.tasks.add(makeTask({ status: 'queued', originConversationId: 'conv-a' }));
     expect(await decideInitiativeTick(stores, schedule())).toEqual({
       run: true,
       because: 'movable_task',
@@ -85,6 +85,68 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
     await stores.tasks.add(makeTask({ status: 'done', closedAt: new Date().toISOString() }));
     expect((await decideInitiativeTick(stores, schedule())).run).toBe(false);
   });
+
+  describe('起点の会話が無い自分のメモ（台帳から移した行）', () => {
+    it('それだけが queued で残っているなら門を開けず、畳んだ跡に件数が載る', async () => {
+      const stores = createMemoryStores();
+      const lastTickAt = await recordTickTurn(stores);
+      await stores.tasks.add(makeTask({ status: 'queued', origin: 'self' }));
+      await stores.tasks.add(makeTask({ status: 'queued', origin: 'self' }));
+      await stores.tasks.add(makeTask({ status: 'waiting', origin: 'self' }));
+      expect(await decideInitiativeTick(stores, schedule())).toEqual({
+        run: false,
+        queued: 2,
+        needsDecision: 0,
+        waiting: 1,
+        unanchoredSelfMemos: 2,
+        lastTickAt,
+      });
+    });
+
+    it('それだけが残っていても、1日1回の点検は回す', async () => {
+      const stores = createMemoryStores();
+      await stores.tasks.add(makeTask({ status: 'queued', origin: 'self' }));
+      expect(await decideInitiativeTick(stores, schedule())).toEqual({
+        run: true,
+        because: 'daily_check',
+      });
+    });
+
+    it('起点の会話を持つ自分の task が queued なら回す', async () => {
+      const stores = createMemoryStores();
+      await recordTickTurn(stores);
+      await stores.tasks.add(makeTask({ status: 'queued', origin: 'self' }));
+      await stores.tasks.add(
+        makeTask({ status: 'queued', origin: 'self', originConversationId: 'conv-1' }),
+      );
+      expect(await decideInitiativeTick(stores, schedule())).toEqual({
+        run: true,
+        because: 'movable_task',
+      });
+    });
+
+    it('人間の task は起点の会話が無くても、queued なら回す', async () => {
+      const stores = createMemoryStores();
+      await recordTickTurn(stores);
+      await stores.tasks.add(makeTask({ status: 'queued', origin: 'self' }));
+      await stores.tasks.add(makeTask({ status: 'queued', origin: 'human' }));
+      expect(await decideInitiativeTick(stores, schedule())).toEqual({
+        run: true,
+        because: 'movable_task',
+      });
+    });
+
+    it('起点の会話が無い自分のメモでも、needs_decision なら回す', async () => {
+      const stores = createMemoryStores();
+      await recordTickTurn(stores);
+      await stores.tasks.add(makeTask({ status: 'needs_decision', origin: 'self' }));
+      expect(await decideInitiativeTick(stores, schedule())).toEqual({
+        run: true,
+        because: 'movable_task',
+      });
+    });
+  });
+
   it('(c) 直近24時間に発意 tick のターンが無ければ、動ける仕事が無くても回す', async () => {
     const stores = createMemoryStores();
     expect(await decideInitiativeTick(stores, schedule())).toEqual({
@@ -181,6 +243,7 @@ describe('クローン — 発意 tick の門', () => {
     const stores = createMemoryStores();
     const lastTickAt = await recordTickTurn(stores);
     await stores.tasks.add(makeTask({ status: 'waiting' }));
+    await stores.tasks.add(makeTask({ status: 'queued', origin: 'self' }));
     const s = setup(() => '呼ばれてはいけない', stores);
 
     s.clone.post(tickEvent('evt-gated'));
@@ -198,7 +261,8 @@ describe('クローン — 発意 tick の門', () => {
       '畳んだ跡が日誌に1行残る',
     );
     const [line] = await skipLine();
-    expect(line).toContain('queued=0 needs_decision=0 waiting=1');
+    expect(line).toContain('queued=1 needs_decision=0 waiting=1');
+    expect(line).toContain('うち起点の会話が無い自分のメモ（門を開けない）: 1件');
     expect(line).toContain(`直近に発意 tick のターンを回した時刻: ${lastTickAt}`);
     expect(line).toContain('モデルへは1文字も渡していない');
 
@@ -214,7 +278,7 @@ describe('クローン — 発意 tick の門', () => {
   it('動ける task が在る定期 tick は、モデルのターンとして回る', async () => {
     const stores = createMemoryStores();
     await recordTickTurn(stores);
-    await stores.tasks.add(makeTask({ status: 'queued' }));
+    await stores.tasks.add(makeTask({ status: 'queued', originConversationId: 'conv-open' }));
     const s = setup(() => '動く', stores);
 
     s.clone.post(tickEvent('evt-open'));
