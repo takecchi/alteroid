@@ -1451,6 +1451,49 @@ async function addTaskVerifyingJournaling(
   return { kind: 'added' };
 }
 
+type TaskMovePlacement = NonNullable<Parameters<typeof describeTaskPlacement>[0]>;
+type TaskMoveOutcome = Awaited<ReturnType<TaskStore['move']>>;
+
+function renderTaskMoveUnreadable(taskId: string): string {
+  return `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、動かしていない。`;
+}
+
+// move の結果が断りなら、その文を返す（動かせたなら null）
+function describeTaskMoveRefusal(args: {
+  moved: TaskMoveOutcome;
+  taskId: string;
+  anchorId: string | undefined;
+}): string | null {
+  const { moved, taskId, anchorId } = args;
+  if (moved.kind === 'not-found') {
+    return `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`;
+  }
+  if (moved.kind === 'closed') {
+    return `task ${taskId} は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。`;
+  }
+  if (moved.kind === 'anchor-is-self') {
+    return 'anchorId に動かす task 自身は指せない。何もしていない。';
+  }
+  if (moved.kind === 'anchor-not-found') {
+    return `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。`;
+  }
+  return null;
+}
+
+function buildTaskMoveJournalEntry(args: { taskId: string; placement: TaskMovePlacement }) {
+  const { taskId, placement } = args;
+  return {
+    type: 'decision' as const,
+    target: { kind: 'task' as const, id: taskId },
+    decision: `task の並びを変えた（${taskId}）: ${describeTaskPlacement(placement)}へ`,
+    grounds: '自分で task_move した',
+  };
+}
+
+function renderTaskMoveDone(taskId: string, placement: TaskMovePlacement): string {
+  return `task ${taskId} を${describeTaskPlacement(placement)}へ動かした。`;
+}
+
 export function taskTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getWorkConversationId } = shared;
   return [
@@ -1599,42 +1642,19 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           moved = await stores.tasks.move(taskId, placement);
         } catch (error) {
           if (error instanceof UnreadableTaskError) {
-            return text(
-              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、動かしていない。`,
-            );
+            return text(renderTaskMoveUnreadable(taskId));
           }
           throw error;
         }
-        if (moved.kind === 'not-found') {
-          return text(
-            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
-          );
-        }
-        if (moved.kind === 'closed') {
-          return text(
-            `task ${taskId} は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。`,
-          );
-        }
-        if (moved.kind === 'anchor-is-self') {
-          return text('anchorId に動かす task 自身は指せない。何もしていない。');
-        }
-        if (moved.kind === 'anchor-not-found') {
-          return text(
-            `anchorId ${anchorId} は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。`,
-          );
-        }
+        const refusal = describeTaskMoveRefusal({ moved, taskId, anchorId });
+        if (refusal !== null) return text(refusal);
         await appendJournalOrThrow(
           'task_move',
           stores.journal,
-          {
-            type: 'decision',
-            target: { kind: 'task', id: taskId },
-            decision: `task の並びを変えた（${taskId}）: ${describeTaskPlacement(placement)}へ`,
-            grounds: '自分で task_move した',
-          },
+          buildTaskMoveJournalEntry({ taskId, placement }),
           'act-completed',
         );
-        return text(`task ${taskId} を${describeTaskPlacement(placement)}へ動かした。`);
+        return text(renderTaskMoveDone(taskId, placement));
       },
     ),
 
