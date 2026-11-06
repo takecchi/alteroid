@@ -1,9 +1,5 @@
 import { reasonOf } from './dropped-record.js';
-import type {
-  RunnerClient,
-  RunnerMcpServersFingerprint,
-  RunnerPlacementResources,
-} from './runner-protocol.js';
+import type { RunnerClient } from './runner-protocol.js';
 
 /**
  * `status` から `state` を逆算しない: `unheard`（繋がっていないので聞いていない）は
@@ -15,6 +11,7 @@ export type RunnerFingerprintProbe =
   { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
 
 /**
+ * runner に聞きに行く探り。鍵・プロファイル・MCP の登録の指紋と、資源は、どれもこの1本を通す。
  * **`.catch(() => undefined)` で握り潰さない。** 「頼まれていない」「聞けなかった」「聞いたが失敗した」を
  * 同じ `undefined` へ潰さないよう `probe` を必ず併せて返し、呼び出し側が判断を省略できないようにする。
  */
@@ -27,43 +24,6 @@ export async function probeRunnerFingerprint<T>(
   if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
   try {
     return { value: await fetch(client), probe: { status: 'asked' } };
-  } catch (error) {
-    return { value: undefined, probe: { status: 'failed', error: reasonOf(error) } };
-  }
-}
-
-/** `probeRunnerFingerprint` と同じ3状態（`asked` / `unheard` / `failed`）を返す、MCP の登録の指紋の探り。 */
-export async function probeRunnerMcpServersFingerprint(
-  client: RunnerClient | undefined,
-  fingerprints: boolean | undefined,
-): Promise<{
-  value: RunnerMcpServersFingerprint | undefined;
-  probe: RunnerFingerprintProbe | undefined;
-}> {
-  if (!fingerprints) return { value: undefined, probe: undefined };
-  if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
-  try {
-    return { value: await client.mcpServers(), probe: { status: 'asked' } };
-  } catch (error) {
-    return { value: undefined, probe: { status: 'failed', error: reasonOf(error) } };
-  }
-}
-
-/**
- * `.catch(() => undefined)` で「繋がっていない」「失敗した」を同じ `undefined` に潰さない。
- * `asked` で `resources` が `undefined` のままでも、応答が資源を名乗らなかっただけで失敗ではない。
- */
-export async function probeRunnerResources(
-  client: RunnerClient | undefined,
-  resources: boolean | undefined,
-): Promise<{
-  value: RunnerPlacementResources | undefined;
-  probe: RunnerFingerprintProbe | undefined;
-}> {
-  if (!resources) return { value: undefined, probe: undefined };
-  if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
-  try {
-    return { value: (await client.resources()) ?? undefined, probe: { status: 'asked' } };
   } catch (error) {
     return { value: undefined, probe: { status: 'failed', error: reasonOf(error) } };
   }

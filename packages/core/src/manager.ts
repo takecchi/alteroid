@@ -144,12 +144,7 @@ import type {
   RunnerWaiting,
 } from './runner-protocol.js';
 import { definedProps } from './defined-props.js';
-import {
-  probeRunnerFingerprint,
-  probeRunnerMcpServersFingerprint,
-  probeRunnerResources,
-  type RunnerFingerprintProbe,
-} from './runner-probe.js';
+import { probeRunnerFingerprint, type RunnerFingerprintProbe } from './runner-probe.js';
 import { brief } from './runner.js';
 import type {
   InboxEvent,
@@ -3432,14 +3427,18 @@ class Pool implements ManagerPool {
         const [credentialsProbed, profileProbed, mcpServersProbed] = await Promise.all([
           probeRunnerFingerprint(client, options.fingerprints, (c) => c.credentials()),
           probeRunnerFingerprint(client, options.fingerprints, (c) => c.profile()),
-          probeRunnerMcpServersFingerprint(client, options.fingerprints),
+          probeRunnerFingerprint(client, options.fingerprints, (c) => c.mcpServers()),
         ]);
         const credentials = credentialsProbed.value;
         const profile = profileProbed.value;
         const mcpServers = mcpServersProbed.value;
-        // 訊けなかった理由は `resourcesProbe` が持つ（失敗・「繋がっていない」・「口を持たない」を `undefined` に潰さない）。
-        const resourcesProbed = await probeRunnerResources(client, options.resources);
-        const resources = resourcesProbed.value;
+        // 訊けなかった理由は `resourcesProbe` が持つ（失敗・「繋がっていない」を `undefined` に潰さない）。
+        // `asked` で `value` が `undefined` のままでも、応答が資源を名乗らなかっただけで失敗ではない。
+        const resourcesProbed = await probeRunnerFingerprint(client, options.resources, (c) =>
+          c.resources(),
+        );
+        // `null` を返す偽物も `undefined` にそろえる（「資源を名乗らなかった」を1つの形にする）
+        const resources = resourcesProbed.value ?? undefined;
 
         // `pendingEvents` が `undefined`（古い runner・応答の形が壊れていた）のときは書かない: 0 で埋めない。
         if (entry.runnerId !== undefined && resources?.pendingEvents !== undefined) {
