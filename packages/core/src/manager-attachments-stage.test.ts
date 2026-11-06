@@ -102,8 +102,6 @@ function fakeRunner(options: {
         staged.push({ managerId, meta, bytes });
       },
     });
-  } else {
-    (runner as { stageAttachment?: undefined }).stageAttachment = undefined;
   }
   return { runner, log, starts, sends, staged };
 }
@@ -291,11 +289,11 @@ describe('大きいファイルを下ろせない相手には、理由を言っ�
     await stop();
   });
 
-  it('押す口（stageAttachment）が無い接続には、送らず理由を言う', async () => {
+  it('押す口（stageAttachment）が受け取れず投げる接続（偽の既定）には、送らず理由を言う', async () => {
     const fake = fakeRunner({ capabilities: CAPABLE, stageLimit: 1000, withStage: false });
     const { big, call, stop } = await harness(fake);
     const out = await call('manager_start', { request: '調べて', attachments: [big.id] });
-    expect(out).toContain('押す口');
+    expect(out).toContain('下ろせなかった');
     expect(fake.log).toEqual([]);
     await stop();
   });

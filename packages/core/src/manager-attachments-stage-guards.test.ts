@@ -129,8 +129,6 @@ function fakeRunner(options: FakeOptions): Fake {
         log.push(`stage:${index}:end`);
       },
     });
-  } else {
-    (runner as { stageAttachment?: undefined }).stageAttachment = undefined;
   }
   return {
     runner,
@@ -486,9 +484,9 @@ describe('manager_send でも、大きいファイルを下ろせなければ理
       expected: '上限を名乗っていない',
     },
     {
-      name: '押す口（stageAttachment）が無い接続',
+      name: '押す口（stageAttachment）が受け取れず投げる接続（偽の既定）',
       options: { capabilities: CAPABLE, stageLimit: 1000, withStage: false },
-      expected: '押す口',
+      expected: '下ろせなかった',
     },
     {
       name: '押すのに失敗する runner',

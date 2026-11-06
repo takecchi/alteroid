@@ -7,14 +7,18 @@ import type {
   RunnerMcpServersFingerprint,
   RunnerOutboxContent,
   RunnerPluginFingerprintEntry,
+  RunnerPermissionRulesResult,
   RunnerPlacementResources,
   RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
+  RunnerRescueRefDeleteResult,
   RunnerResumeCommand,
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
+
+const STAGE_ATTACHMENT_UNSUPPORTED = 'この偽は大きいファイルを受け取らない';
 
 function pluginFingerprintEntryOf(plugin: RunnerPluginPush): RunnerPluginFingerprintEntry {
   return {
@@ -36,6 +40,7 @@ function pluginFingerprintEntryOf(plugin: RunnerPluginPush): RunnerPluginFingerp
  * plugin の口は、`plugins` が何も持っていない（`undefined`）、`setPlugin` が受け取った plugin の指紋をそのまま返し、`retainPlugins` が何も外さず指紋も返さない（`undefined`）。
  * Codex の認証の口は、`setCodexAuth` が何もせず、`takeCodexAuthWriteBack` が書き戻し無し（`null`）。
  * 読む・探る口は、`resources` が資源を報告せず（`undefined`）、`transcriptTail` が末尾無し（`null`）、`unpushedWork` が確かめられない（`undefined`）。
+ * 置く・消す口は、`stageAttachment` が受け取れず投げ（呼び手は理由つきで断る）、`deleteRescueRef` が消せなかった（`failed`・`other`）、`setPermissionRules` が何も置かない（`count: 0`・`changed: false`）。
  * 置くと「口が無いとき」の道を通っていた試験の道が変わるため（持たない偽は、呼ぶ側がその口が無い場合の道へ倒す）。
  * クラスの偽は {@link FakeRunnerClientBase} を継ぐ（既定は同じ）。
  */
@@ -71,6 +76,9 @@ export function fakeRunnerClient(overrides: Partial<RunnerClient> = {}): RunnerC
     resources: () => Promise.resolve(undefined),
     transcriptTail: () => Promise.resolve(null),
     unpushedWork: () => Promise.resolve(undefined),
+    stageAttachment: () => Promise.reject(new Error(STAGE_ATTACHMENT_UNSUPPORTED)),
+    deleteRescueRef: () => Promise.resolve({ outcome: 'failed', kind: 'other' }),
+    setPermissionRules: () => Promise.resolve({ count: 0, changed: false }),
     close: () => Promise.resolve(),
     ...overrides,
   };
@@ -156,6 +164,15 @@ export const FakeRunnerClientBase: abstract new () => RunnerClient = class imple
   }
   async unpushedWork(): Promise<UnpushedWorkResult | undefined> {
     return undefined;
+  }
+  async stageAttachment(): Promise<void> {
+    throw new Error(STAGE_ATTACHMENT_UNSUPPORTED);
+  }
+  async deleteRescueRef(): Promise<RunnerRescueRefDeleteResult> {
+    return { outcome: 'failed', kind: 'other' };
+  }
+  async setPermissionRules(): Promise<RunnerPermissionRulesResult> {
+    return { count: 0, changed: false };
   }
   async close(): Promise<void> {}
 };

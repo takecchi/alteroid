@@ -201,11 +201,7 @@ export function createDelegatedPermissionRuleService(
       notify([{ runnerId: '', ok: false, error }], true);
       return;
     }
-    notify(
-      open
-        .filter((runner) => runner.setPermissionRules !== undefined)
-        .map((runner) => ({ runnerId: runner.runnerId, ok: false, error })),
-    );
+    notify(open.map((runner) => ({ runnerId: runner.runnerId, ok: false, error })));
   }
 
   // 一覧を読む: 載せる許可が読めなければ投げる（空の一覧へ倒さない: 倒すと読めなかった回に全部の規則を外してしまう）。
@@ -216,7 +212,6 @@ export function createDelegatedPermissionRuleService(
   return {
     syncRunner: (runner) =>
       serial(async () => {
-        if (runner.setPermissionRules === undefined) return null;
         const set = await currentSet();
         const placed = await runner.setPermissionRules(set.rules);
         if (placed.changed) {
@@ -260,26 +255,23 @@ export function createDelegatedPermissionRuleService(
           return [];
         }
         const results = await Promise.all(
-          open
-            .filter((runner) => runner.setPermissionRules !== undefined)
-            .map(async (runner): Promise<PermissionRulesRunnerResult> => {
-              try {
-                const placed = await runner.setPermissionRules?.(set.rules);
-                if (placed === undefined) return { runnerId: runner.runnerId, ok: true };
-                return {
-                  runnerId: runner.runnerId,
-                  ok: true,
-                  count: placed.count,
-                  changed: placed.changed,
-                };
-              } catch (error) {
-                return {
-                  runnerId: runner.runnerId,
-                  ok: false,
-                  error: reasonOf(error),
-                };
-              }
-            }),
+          open.map(async (runner): Promise<PermissionRulesRunnerResult> => {
+            try {
+              const placed = await runner.setPermissionRules(set.rules);
+              return {
+                runnerId: runner.runnerId,
+                ok: true,
+                count: placed.count,
+                changed: placed.changed,
+              };
+            } catch (error) {
+              return {
+                runnerId: runner.runnerId,
+                ok: false,
+                error: reasonOf(error),
+              };
+            }
+          }),
         );
         for (const result of results) {
           if (result.ok) {

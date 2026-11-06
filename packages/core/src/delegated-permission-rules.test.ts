@@ -5,6 +5,7 @@ import {
   delegatedPermissionRulesOf,
   parseDelegatedPermissionRules,
 } from './delegated-permission-rules.js';
+import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
   type RunnerClient,
@@ -285,8 +286,11 @@ describe('配るサービス（#4952）', () => {
     expect(JSON.stringify(stripped)).toContain('g-env `Bash(env:*)`');
   });
 
-  it('syncRunner は口を持たない runner へは null を返す', async () => {
+  it('syncRunner は何も置かない runner（偽の既定）の答えをそのまま返す（口は必須なので null にはならない）', async () => {
     const service = createDelegatedPermissionRuleService({ stores: createMemoryStores() });
-    expect(await service.syncRunner({ runnerId: 'r' } as unknown as RunnerClient)).toBeNull();
+    expect(await service.syncRunner(fakeRunnerClient({ runnerId: 'r' }))).toEqual({
+      count: 0,
+      changed: false,
+    });
   });
 });

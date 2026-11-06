@@ -1601,9 +1601,9 @@ export interface RunnerClient {
   ): Promise<void>;
   /**
    * 置けなかったら投げる: 呼び手は理由つきで命令を送らずに断る（#4128 段3a）。押す向きだけで、runner から取りに行く経路は作らない。
-   * 省略した実装へは、呼び手が大きいファイルを送らずに断る。
+   * 試験の偽の既定（`fakeRunnerClient`）は、受け取れずに投げる（呼び手は理由つきで断る）。
    */
-  stageAttachment?(
+  stageAttachment(
     managerId: string,
     meta: RunnerStagedAttachmentMeta,
     body: AsyncIterable<Uint8Array>,
@@ -1621,9 +1621,10 @@ export interface RunnerClient {
   ): Promise<UnpushedWorkResult | undefined>;
   /**
    * push の資格は runner の子の環境にしか無いので、消すのは runner。`commit` は lease（remote の ref がそれと違えば消さない）。
-   * 口が無い実装は呼び出し側が `no-runner` として残し、消したことにしない。応答が読めない・期限切れは `failed` を返し、消えたとは言わない。
+   * 応答が読めない・期限切れ・古い runner は `failed` を返し、消えたとは言わない。試験の偽の既定（`fakeRunnerClient`）は `failed`（`other`）。
+   * 呼び出し側の `no-runner` は、宛先の runner が居ないときの答え。
    */
-  deleteRescueRef?(
+  deleteRescueRef(
     request: RunnerRescueRefDeleteRequest,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerRescueRefDeleteResult>;
@@ -1651,9 +1652,9 @@ export interface RunnerClient {
   /**
    * 委譲先の許可規則の一覧を丸ごと置き直す（#4952）。空の配列は全部外す。runner が繋ぎ直すたびに降ろし直す（一覧はプロセスのメモリにしか無い）。
    * 走行中のセッションへも置き直す（`setMcpServers` と違い、次に開くセッションを待たない）。
-   * 省略した実装へは降ろさない。
+   * 試験の偽の既定（`fakeRunnerClient`）は、何も置かない（`count: 0`・`changed: false`）。
    */
-  setPermissionRules?(rules: readonly string[]): Promise<RunnerPermissionRulesResult>;
+  setPermissionRules(rules: readonly string[]): Promise<RunnerPermissionRulesResult>;
   /**
    * 持っていなければ `undefined`（`/health` に欄が無い runner も同じ）。
    * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。試験の偽の既定（`fakeRunnerClient`）は `undefined`。

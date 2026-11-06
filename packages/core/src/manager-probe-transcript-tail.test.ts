@@ -123,6 +123,15 @@ class EventfulRunner implements RunnerClient {
   async unpushedWork(): Promise<undefined> {
     return undefined;
   }
+  async stageAttachment(): Promise<void> {
+    throw new Error('受け取らない');
+  }
+  async deleteRescueRef(): Promise<{ outcome: 'failed'; kind: 'other' }> {
+    return { outcome: 'failed', kind: 'other' };
+  }
+  async setPermissionRules(): Promise<{ count: number; changed: boolean }> {
+    return { count: 0, changed: false };
+  }
   async close(): Promise<void> {}
 }
 

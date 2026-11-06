@@ -287,7 +287,7 @@ export class RescueSweeper {
   /**
    * runner の `deleteRescueRef` で撃つ。宛先は委譲の runner、無ければ（器が入れ替わった・
    * 古い）名簿に開いている別の runner——資格は器ごとに降りているので、どれも消せる。
-   * **口を持たない・答えない・投げる runner に「消した」を書かせない**（`failed` へ倒す）。
+   * **答えない・投げる runner に「消した」を書かせない**（`failed` へ倒す）。
    */
   async #deleteRefVia(
     job: Job,
@@ -298,7 +298,7 @@ export class RescueSweeper {
     const open = await this.#deps.runnersOrEmpty();
     const seen = new Set<string>();
     const candidates = [primary, ...open].filter((candidate): candidate is RunnerClient => {
-      if (candidate === null || candidate.deleteRescueRef === undefined) return false;
+      if (candidate === null) return false;
       if (seen.has(candidate.runnerId)) return false;
       seen.add(candidate.runnerId);
       return true;
@@ -310,11 +310,10 @@ export class RescueSweeper {
     let last: RescueRemovalFailureKind = 'no-runner';
     for (const runner of candidates) {
       try {
-        const result = await runner.deleteRescueRef?.(
+        const result = await runner.deleteRescueRef(
           { remote: pushed.remote, ref: pushed.ref, commit: pushed.commit },
           { signal: AbortSignal.timeout(RESCUE_DELETE_DEADLINE_MS) },
         );
-        if (result === undefined) continue;
         if (result.outcome === 'removed') return { ok: true, alreadyGone: result.alreadyGone };
         last = result.kind;
         if (result.kind !== 'other') break;

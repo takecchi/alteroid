@@ -230,11 +230,20 @@ describe('退避 ref の後始末の走査（#1266）', () => {
     await pool.stop();
   });
 
-  it('後始末の口を持つ runner が1台も無ければ no-runner（消したことにしない）', async () => {
+  it('消せなかった（failed・other）と答える runner（偽の既定）だけなら other（消したことにしない）', async () => {
     const { pool, jobOfId } = await setup(
       [jobOf('mgr-x', 'done', 8, [wt(pushedOf())])],
       [fakeRunner('runner-primary', false)],
     );
+    await pool.sweepRescueRefs?.();
+    expect((await jobOfId('mgr-x')).lastRescue?.worktrees[0]?.pushed?.removal).toMatchObject({
+      failureKind: 'other',
+    });
+    await pool.stop();
+  });
+
+  it('開いている runner が1台も無ければ no-runner（消したことにしない）', async () => {
+    const { pool, jobOfId } = await setup([jobOf('mgr-x', 'done', 8, [wt(pushedOf())])], []);
     await pool.sweepRescueRefs?.();
     expect((await jobOfId('mgr-x')).lastRescue?.worktrees[0]?.pushed?.removal).toMatchObject({
       failureKind: 'no-runner',

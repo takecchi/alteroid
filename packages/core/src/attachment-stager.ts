@@ -56,7 +56,7 @@ export class AttachmentStager {
   ): Promise<string | undefined> {
     await this.#ports.awaitHello(runner.runnerId);
     if (this.#ports.hasCapability(runner.runnerId, RUNNER_CAPABILITY_MANAGER_ATTACHMENTS)) {
-      // 大きいファイルを黙って落とさない: 受け手が名乗っていない・上限を超える・押す口が無いときは、理由を言って何も送らない。
+      // 大きいファイルを黙って落とさない: 受け手が名乗っていない・上限を超えるときは、理由を言って何も送らない。
       for (const item of attachments) {
         if (item.staged !== true) continue;
         const label = `${item.id}（${item.name}, ${item.size} バイト）`;
@@ -74,9 +74,6 @@ export class AttachmentStager {
             `大きいファイル ${label} は、runner（runnerId=${runner.runnerId}）が受けられる大きさ` +
             `（${stageLimit === undefined ? '上限を名乗っていない' : `上限 ${stageLimit} バイト`}）を超えるので下ろせない`
           );
-        }
-        if (runner.stageAttachment === undefined) {
-          return `大きいファイル ${label} を押す口を、この runner への接続（runnerId=${runner.runnerId}）が持っていない`;
         }
       }
       const named = this.#bodyLimits.get(runner.runnerId);
@@ -106,8 +103,7 @@ export class AttachmentStager {
     for (const item of attachments) {
       if (item.staged !== true) continue;
       const label = `${item.id}（${item.name}, ${item.size} バイト）`;
-      const stage = runner.stageAttachment?.bind(runner);
-      if (stage === undefined) return `大きいファイル ${label} を押す口が無い`;
+      const stage = runner.stageAttachment.bind(runner);
       // 期限は1つずつのファイルに掛ける。応答しない runner を最長1時間（runner 側の持ち時間）待たない
       const deadlineMs = outboxFetchDeadlineMs(item.size);
       const signal = AbortSignal.timeout(deadlineMs);
