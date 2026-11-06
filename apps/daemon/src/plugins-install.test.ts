@@ -106,6 +106,7 @@ function recordingDistribution(stores: Stores) {
       return { names, runners: [{ runnerId: 'r1', ok: true }] };
     },
     syncRunner: async () => null,
+    onPushed: () => () => undefined,
   };
   return { log, service };
 }

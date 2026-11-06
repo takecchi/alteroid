@@ -123,6 +123,7 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     const { fn, calls } = fakeSdk();
     const fakeCredentialService = {
       vaultSnapshot: () => input.vault ?? [],
+      onPushed: () => () => undefined,
     } as unknown as Parameters<typeof createClone>[0]['credentialService'];
     const clone = createClone({
       stores: createMemoryStores(),
@@ -322,6 +323,7 @@ describe('childEnvBase（子の env の土台は、書き写す前のスナッ�
       ...(input.childEnvBase === undefined ? {} : { childEnvBase: input.childEnvBase }),
       credentialService: {
         vaultSnapshot: () => vault,
+        onPushed: () => () => undefined,
       } as unknown as Parameters<typeof createClone>[0]['credentialService'],
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),

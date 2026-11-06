@@ -443,6 +443,47 @@ function renderPracticeRemoveUnreadableDeleted(slug: string): string {
   return `読めない形で入っていたやり方 ${slug} を消した。`;
 }
 
+function renderPracticeListOnlyUnreadable(unreadableNote: string): string {
+  return (
+    `（読めたやり方は無い）${unreadableNote}` +
+    '**やり方が無いとも、正常だとも言えない。**' +
+    'slug が分かる行は、practice_write で同じ slug を書き直すか practice_remove で外せる。'
+  );
+}
+
+function renderPracticeListEmpty(): string {
+  return (
+    'やり方はまだ1件も無い。**これは正常な状態である**——やり方が書かれていない' +
+    '仕事も普通に進む。書くなら practice_write slug=<slug> kind=<種類> title=<題> content=<本文>。'
+  );
+}
+
+// 一覧の1件（本文は載せず、文字数だけ）
+function renderPracticeListEntry(
+  entry: Awaited<ReturnType<Stores['practices']['list']>>['entries'][number],
+): string {
+  return renderListingEntry({
+    id: entry.slug,
+    title: `[${entry.kind}] ${entry.title}`,
+    summary: `${String(entry.chars)} 文字`,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  });
+}
+
+// 続きを取る口が無いので、無いと正直に言う: 口が無いまま断り書きだけ出すと、落ちた分へ呼び手が到達できないため
+function renderPracticeListOmitted(args: { rest: number; shown: number; total: number }): string {
+  const { rest, shown, total } = args;
+  return (
+    `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち slug の昇順に ${String(shown)} 件だけ出した）。` +
+    'この一覧に続きを取る口はまだ無い——個別に読むには practice_read slug=<slug> を使うこと。'
+  );
+}
+
+function withPracticeListUnreadableNote(listing: string, unreadableNote: string | null): string {
+  return unreadableNote === null ? listing : `${listing}\n\n${unreadableNote}`;
+}
+
 export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -465,35 +506,15 @@ export function practiceTools(_context: ToolContext, shared: CloneToolsShared) {
         const unreadableNote = describeUnreadablePractices(unreadable);
         // 空は正常と言う: 異常や未設定であるかのような文言を出さない。ただし「無い」と言えるのは読めない行が0件のときだけ
         if (entries.length === 0) {
-          if (unreadableNote !== null) {
-            return text(
-              `（読めたやり方は無い）${unreadableNote}` +
-                '**やり方が無いとも、正常だとも言えない。**' +
-                'slug が分かる行は、practice_write で同じ slug を書き直すか practice_remove で外せる。',
-            );
-          }
-          return text(
-            'やり方はまだ1件も無い。**これは正常な状態である**——やり方が書かれていない' +
-              '仕事も普通に進む。書くなら practice_write slug=<slug> kind=<種類> title=<題> content=<本文>。',
-          );
+          if (unreadableNote !== null)
+            return text(renderPracticeListOnlyUnreadable(unreadableNote));
+          return text(renderPracticeListEmpty());
         }
-        const items = entries.map((entry) =>
-          renderListingEntry({
-            id: entry.slug,
-            title: `[${entry.kind}] ${entry.title}`,
-            summary: `${String(entry.chars)} 文字`,
-            createdAt: entry.createdAt,
-            updatedAt: entry.updatedAt,
-          }),
-        );
-        const listing = renderListing(items, {
+        const listing = renderListing(entries.map(renderPracticeListEntry), {
           budget: PRACTICE_LIST_BUDGET,
-          omitted: ({ rest, shown, total }) =>
-            // 続きを取る口が無いので、無いと正直に言う: 口が無いまま断り書きだけ出すと、落ちた分へ呼び手が到達できないため
-            `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち slug の昇順に ${String(shown)} 件だけ出した）。` +
-            'この一覧に続きを取る口はまだ無い——個別に読むには practice_read slug=<slug> を使うこと。',
+          omitted: renderPracticeListOmitted,
         });
-        return text(unreadableNote === null ? listing : `${listing}\n\n${unreadableNote}`);
+        return text(withPracticeListUnreadableNote(listing, unreadableNote));
       },
     ),
 

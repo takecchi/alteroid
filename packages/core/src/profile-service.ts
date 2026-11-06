@@ -126,7 +126,7 @@ export interface ProfileService {
   restore(): Promise<ProfileApplyResult | null>;
   syncRunner(runner: RunnerClient): Promise<RunnerProfileResult | null>;
   /** 即時の配布は `ManagerPool` の押し込みの帳面と挑み直しを通らないので、ここを購読して同じ帳面に積む。 */
-  onPushed?(
+  onPushed(
     listener: (results: readonly (RunnerProfileResult & { runnerId: string })[]) => void,
   ): () => void;
 }
