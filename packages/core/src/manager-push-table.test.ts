@@ -79,11 +79,14 @@ function setup(failing: ReadonlySet<Kind> = new Set()) {
     stores,
     post: () => undefined,
     runners: registry,
-    credentials: { syncRunner: sync('credentials') } as never,
-    profile: { syncRunner: sync('profile', null) } as never,
-    mcpServers: { syncRunner: sync('mcpServers') } as never,
-    plugins: { syncRunner: sync('plugins') } as never,
-    permissionRules: { syncRunner: sync('permissionRules') } as never,
+    credentials: { syncRunner: sync('credentials'), onPushed: () => () => undefined } as never,
+    profile: { syncRunner: sync('profile', null), onPushed: () => () => undefined } as never,
+    mcpServers: { syncRunner: sync('mcpServers'), onPushed: () => () => undefined } as never,
+    plugins: { syncRunner: sync('plugins'), onPushed: () => () => undefined } as never,
+    permissionRules: {
+      syncRunner: sync('permissionRules'),
+      onPushed: () => () => undefined,
+    } as never,
     codexAuth: { syncRunner: sync('codexAuth') } as never,
     syncRunnerToken: async () => {
       await sync('agentToken')();
