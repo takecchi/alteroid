@@ -1,0 +1,1263 @@
+{
+  "counts": {
+    "mcp/unchanged-existing": 1,
+    "mcp/changed-existing": 2,
+    "mcp/changed-runner-push-failure": 2,
+    "mcp/empty-registry-unchanged": 1,
+    "mcp/empty-registry-filled": 2,
+    "mcp/emptied-file": 1,
+    "mcp/invalid-json": 1,
+    "mcp/wrong-shape": 1,
+    "mcp/editor-exit-after-edit": 1,
+    "mcp/editor-exit-unchanged": 1,
+    "mcp/editor-missing": 1,
+    "mcp/conflict-409": 2,
+    "mcp/conflict-409-no-body": 2,
+    "mcp/save-400": 2,
+    "mcp/save-500": 2,
+    "mcp/save-500-no-error": 2,
+    "mcp/read-500": 1,
+    "mcp/read-403": 1,
+    "mcp/target-note": 0,
+    "profile/unchanged-existing": 1,
+    "profile/changed-existing": 2,
+    "profile/changed-named-with-scope": 2,
+    "profile/scope-only-change": 2,
+    "profile/scope-same-unchanged": 1,
+    "profile/new-created": 2,
+    "profile/new-template-closed": 1,
+    "profile/emptied": 1,
+    "profile/whitespace-only": 1,
+    "profile/new-emptied": 1,
+    "profile/changed-partial-push-failure": 2,
+    "profile/editor-exit-after-edit": 1,
+    "profile/editor-exit-unchanged": 1,
+    "profile/editor-missing": 1,
+    "profile/conflict-409": 2,
+    "profile/save-400-with-detail": 2,
+    "profile/save-500-no-error": 2,
+    "profile/read-500": 1,
+    "profile/invalid-name": 0,
+    "profile/invalid-scope": 0,
+    "profile/target-note": 0
+  },
+  "scenarios": {
+    "mcp/unchanged-existing": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "mcp/changed-existing": {
+      "stdout": "MCP サーバの登録を差し替えました (sha256 sha-new)\n  足した: linear\n  外した: github\n  runner-a: 届きました（sha256 sha-new）\nいつから効くか: 次に起こす仕事から\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "mcp/changed-runner-push-failure": {
+      "stdout": "警告: MCP サーバの登録を保存しましたが、一部の runner へ反映できていません (sha256 sha-new)\n  足した: linear\n  外した: github\n  runner-a: 届けられませんでした — runner が応答しない\nいつから効くか: 次に起こす仕事から\n",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "runner への反映が一部失敗しました（MCP 連携の登録の保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）",
+        "failureLine": "alteroid: runner への反映が一部失敗しました（MCP 連携の登録の保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/empty-registry-unchanged": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {}\n}\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "mcp/empty-registry-filled": {
+      "stdout": "MCP サーバの登録を差し替えました (sha256 sha-new)\n  足した: linear\n  runner-a: 届きました（sha256 sha-new）\nいつから効くか: 次に起こす仕事から\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v0"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {}\n}\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "mcp/emptied-file": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "JSON として読めませんでした（何も保存していません）: Unexpected end of JSON input",
+        "failureLine": "alteroid: JSON として読めませんでした（何も保存していません）: Unexpected end of JSON input"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": ""
+        }
+      ]
+    },
+    "mcp/invalid-json": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "JSON として読めませんでした（何も保存していません）: Unexpected end of JSON input",
+        "failureLine": "alteroid: JSON として読めませんでした（何も保存していません）: Unexpected end of JSON input"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{ \"mcpServers\": "
+        }
+      ]
+    },
+    "mcp/wrong-shape": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "`{ \"mcpServers\": { … } }` の形で書いてください（.mcp.json と同じ形。何も保存していません）",
+        "failureLine": "alteroid: `{ \"mcpServers\": { … } }` の形で書いてください（.mcp.json と同じ形。何も保存していません）"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "[]\n"
+        }
+      ]
+    },
+    "mcp/editor-exit-after-edit": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid mcp set <file>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid mcp set <file>"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/editor-exit-unchanged": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid mcp set <file>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid mcp set <file>"
+      },
+      "drafts": []
+    },
+    "mcp/editor-missing": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid mcp set <file> で渡す",
+        "failureLine": "alteroid: エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid mcp set <file> で渡す"
+      },
+      "drafts": []
+    },
+    "mcp/conflict-409": {
+      "stdout": "置き換えていません: あなたが読んだ後に、ほかで MCP の登録が変わっています（クローンや Web などの別の書き手）。\n  いまの登録: alpha・zeta\n  続けるには: `alteroid mcp show` でいまの登録を確かめてから、もう一度 `alteroid mcp set <file>` / `alteroid mcp edit` をやり直してください。\n",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "MCP の登録が読んだ後に変わっていたので置き換えませんでした",
+        "failureLine": "alteroid: MCP の登録が読んだ後に変わっていたので置き換えませんでした"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/conflict-409-no-body": {
+      "stdout": "置き換えていません: あなたが読んだ後に、ほかで MCP の登録が変わっています（クローンや Web などの別の書き手）。\n  いまの登録: （無し）\n  続けるには: `alteroid mcp show` でいまの登録を確かめてから、もう一度 `alteroid mcp set <file>` / `alteroid mcp edit` をやり直してください。\n",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "MCP の登録が読んだ後に変わっていたので置き換えませんでした",
+        "failureLine": "alteroid: MCP の登録が読んだ後に変わっていたので置き換えませんでした"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/save-400": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "形が不正（pin 用）\n（前の登録がそのまま残っています）",
+        "failureLine": "alteroid: 形が不正（pin 用）\n（前の登録がそのまま残っています）"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/save-500": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "boom",
+        "failureLine": "alteroid: boom"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/save-500-no-error": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-mcp-<RAND>/mcp.json\n  直したら `alteroid mcp set '<TMPDIR>/alteroid-mcp-<RAND>/mcp.json'` で渡し直せます。いらなければ <TMPDIR>/alteroid-mcp-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": {
+            "mcpServers": {
+              "linear": {
+                "command": "linear-mcp"
+              }
+            },
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-mcp-<RAND>/mcp.json",
+        "mode": "600",
+        "initial": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"gh-mcp\",\n      \"env\": {\n        \"GITHUB_TOKEN\": \"FAKE_NOT_A_REAL_VALUE\"\n      }\n    }\n  }\n}\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "/mcp-servers が失敗しました (500)",
+        "failureLine": "alteroid: /mcp-servers が失敗しました (500)"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-mcp-<RAND>/mcp.json",
+          "mode": "600",
+          "content": "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"command\": \"linear-mcp\"\n    }\n  }\n}\n"
+        }
+      ]
+    },
+    "mcp/read-500": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "登録が読めない（pin 用）",
+        "failureLine": "alteroid: 登録が読めない（pin 用）"
+      },
+      "drafts": []
+    },
+    "mcp/read-403": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/mcp-servers",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "MCP サーバの登録へのアクセスが拒否されました（403）。理由を判別できなかったため、次にすべきことは案内しません。",
+        "failureLine": "alteroid: MCP サーバの登録へのアクセスが拒否されました（403）。理由を判別できなかったため、次にすべきことは案内しません。"
+      },
+      "drafts": []
+    },
+    "mcp/target-note": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "未ログイン（pin 用の注記）",
+        "failureLine": "alteroid: 未ログイン（pin 用の注記）"
+      },
+      "drafts": []
+    },
+    "profile/unchanged-existing": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/changed-existing": {
+      "stdout": "プロファイルの行 default を更新しました (sha256 sha-row)\n  撒く先: all（共通）\n  合成後の指紋: クローン用 c1 / runner 用 r1\n  クローン: 反映しました\n  runner-a: 反映しました\n（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n  次の呼び出しから拾います — それ以外は次の仕事から）\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/default",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/changed-named-with-scope": {
+      "stdout": "プロファイルの行 work を更新しました (sha256 sha-row)\n  撒く先: runner（manager だけ）\n  合成後の指紋: クローン用 c1 / runner 用 r1\n  クローン: 反映しました\n  runner-a: 反映しました\n（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n  次の呼び出しから拾います — それ以外は次の仕事から）\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/work",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "scope": "runner",
+            "ifMatch": "v-work"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/work.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/scope-only-change": {
+      "stdout": "プロファイルの行 work を更新しました (sha256 sha-row)\n  撒く先: all（共通）\n  合成後の指紋: クローン用 c1 / runner 用 r1\n  クローン: 反映しました\n  runner-a: 反映しました\n（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n  次の呼び出しから拾います — それ以外は次の仕事から）\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/work",
+          "body": {
+            "script": "export FAKE_A=1\n",
+            "scope": "app",
+            "ifMatch": "v-work"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/work.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/scope-same-unchanged": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/work.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/new-created": {
+      "stdout": "プロファイルの行 fresh を更新しました (sha256 sha-row)\n  撒く先: all（共通）\n  合成後の指紋: クローン用 c1 / runner 用 r1\n  クローン: 反映しました\n  runner-a: 反映しました\n（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n  次の呼び出しから拾います — それ以外は次の仕事から）\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/fresh",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "ifMatch": null
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/fresh.sh",
+        "mode": "600",
+        "initial": "# alteroid 実行環境プロファイル（人間の ~/.zprofile に当たるもの）\n#\n# ここに書いたものは、既定ではクローン・マネージャー・作業者のすべてに効きます\n# （プロファイルは名前付きの行の集まりで、名前のコード単位順につなげて効きます）\n# （alteroid profile edit --scope runner のように撒く先を絞れます。\n#  all=両方 / app=クローンだけ / runner=マネージャー・作業者だけ）。\n# 器（コンテナ）を作り直す必要はありません。\n#\n# 例:\n#   export SOME_API_TOKEN=xxxx\n#   export PATH=\"$HOME/.local/bin:$PATH\"\n#   eval \"$(some-tool env)\"\n#\n# 注意:\n# - 重い処理や、返ってこないコマンドを書かないでください（仕事を起こすたびに\n#   1度評価されるので、そのぶん遅くなります）\n# - 差し替えは**これから起こす仕事**に効きます。既に走っている仕事のうち、\n#   次の呼び出しから拾うのは gh / git だけです\n# - 記憶（人格）ではありません。価値観や「何を任せてよいか」は alteroid chat で\n#   伝えてください\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/new-template-closed": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/fresh.sh",
+        "mode": "600",
+        "initial": "# alteroid 実行環境プロファイル（人間の ~/.zprofile に当たるもの）\n#\n# ここに書いたものは、既定ではクローン・マネージャー・作業者のすべてに効きます\n# （プロファイルは名前付きの行の集まりで、名前のコード単位順につなげて効きます）\n# （alteroid profile edit --scope runner のように撒く先を絞れます。\n#  all=両方 / app=クローンだけ / runner=マネージャー・作業者だけ）。\n# 器（コンテナ）を作り直す必要はありません。\n#\n# 例:\n#   export SOME_API_TOKEN=xxxx\n#   export PATH=\"$HOME/.local/bin:$PATH\"\n#   eval \"$(some-tool env)\"\n#\n# 注意:\n# - 重い処理や、返ってこないコマンドを書かないでください（仕事を起こすたびに\n#   1度評価されるので、そのぶん遅くなります）\n# - 差し替えは**これから起こす仕事**に効きます。既に走っている仕事のうち、\n#   次の呼び出しから拾うのは gh / git だけです\n# - 記憶（人格）ではありません。価値観や「何を任せてよいか」は alteroid chat で\n#   伝えてください\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "profile/emptied": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/default.sh\n  直したら `alteroid profile set default --file '<TMPDIR>/alteroid-profile-<RAND>/default.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。",
+        "failureLine": "alteroid: 本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/default.sh",
+          "mode": "600",
+          "content": ""
+        }
+      ]
+    },
+    "profile/whitespace-only": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/default.sh\n  直したら `alteroid profile set default --file '<TMPDIR>/alteroid-profile-<RAND>/default.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。",
+        "failureLine": "alteroid: 本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/default.sh",
+          "mode": "600",
+          "content": " \n\t\n"
+        }
+      ]
+    },
+    "profile/new-emptied": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/fresh.sh\n  直したら `alteroid profile set fresh --file '<TMPDIR>/alteroid-profile-<RAND>/fresh.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/fresh.sh",
+        "mode": "600",
+        "initial": "# alteroid 実行環境プロファイル（人間の ~/.zprofile に当たるもの）\n#\n# ここに書いたものは、既定ではクローン・マネージャー・作業者のすべてに効きます\n# （プロファイルは名前付きの行の集まりで、名前のコード単位順につなげて効きます）\n# （alteroid profile edit --scope runner のように撒く先を絞れます。\n#  all=両方 / app=クローンだけ / runner=マネージャー・作業者だけ）。\n# 器（コンテナ）を作り直す必要はありません。\n#\n# 例:\n#   export SOME_API_TOKEN=xxxx\n#   export PATH=\"$HOME/.local/bin:$PATH\"\n#   eval \"$(some-tool env)\"\n#\n# 注意:\n# - 重い処理や、返ってこないコマンドを書かないでください（仕事を起こすたびに\n#   1度評価されるので、そのぶん遅くなります）\n# - 差し替えは**これから起こす仕事**に効きます。既に走っている仕事のうち、\n#   次の呼び出しから拾うのは gh / git だけです\n# - 記憶（人格）ではありません。価値観や「何を任せてよいか」は alteroid chat で\n#   伝えてください\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。",
+        "failureLine": "alteroid: 本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/fresh.sh",
+          "mode": "600",
+          "content": ""
+        }
+      ]
+    },
+    "profile/changed-partial-push-failure": {
+      "stdout": "警告: プロファイルの行 default は保存しましたが、一部の runner へ反映できていません (sha256 sha-row)\n  撒く先: all（共通）\n  合成後の指紋: クローン用 c1 / runner 用 r1\n  クローン: 反映しました\n  runner-a: 反映できませんでした — 評価に落ちた（pin 用）\n    | line 1\n    | line 2\n（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n  次の呼び出しから拾います — それ以外は次の仕事から）\n",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/default.sh\n  直したら `alteroid profile set default --file '<TMPDIR>/alteroid-profile-<RAND>/default.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/default",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "runner への反映が一部失敗しました（プロファイルの保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）",
+        "failureLine": "alteroid: runner への反映が一部失敗しました（プロファイルの保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/default.sh",
+          "mode": "600",
+          "content": "export FAKE_A=2\n"
+        }
+      ]
+    },
+    "profile/editor-exit-after-edit": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/work.sh\n  直したら `alteroid profile set work --file '<TMPDIR>/alteroid-profile-<RAND>/work.sh' --scope runner` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/work.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid profile set <name> --file <path>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid profile set <name> --file <path>"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/work.sh",
+          "mode": "600",
+          "content": "export FAKE_A=2\n"
+        }
+      ]
+    },
+    "profile/editor-exit-unchanged": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid profile set <name> --file <path>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid profile set <name> --file <path>"
+      },
+      "drafts": []
+    },
+    "profile/editor-missing": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid profile set <name> --file <path> で渡す",
+        "failureLine": "alteroid: エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid profile set <name> --file <path> で渡す"
+      },
+      "drafts": []
+    },
+    "profile/conflict-409": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/default.sh\n  直したら `alteroid profile set default --file '<TMPDIR>/alteroid-profile-<RAND>/default.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/default",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "読んだ後に、プロファイルの行がほかで変わっていた（作られた・消された）ので、変えていません。\nalteroid profile show でいまの中身を確かめてから、もう一度実行してください。",
+        "failureLine": "alteroid: 読んだ後に、プロファイルの行がほかで変わっていた（作られた・消された）ので、変えていません。\nalteroid profile show でいまの中身を確かめてから、もう一度実行してください。"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/default.sh",
+          "mode": "600",
+          "content": "export FAKE_A=2\n"
+        }
+      ]
+    },
+    "profile/save-400-with-detail": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/default.sh\n  直したら `alteroid profile set default --file '<TMPDIR>/alteroid-profile-<RAND>/default.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/default",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "評価に落ちた（pin 用）\nline 1: syntax error",
+        "failureLine": "alteroid: 評価に落ちた（pin 用）\nline 1: syntax error"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/default.sh",
+          "mode": "600",
+          "content": "export FAKE_A=2\n"
+        }
+      ]
+    },
+    "profile/save-500-no-error": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-profile-<RAND>/default.sh\n  直したら `alteroid profile set default --file '<TMPDIR>/alteroid-profile-<RAND>/default.sh'` で渡し直せます。いらなければ <TMPDIR>/alteroid-profile-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/profile/default",
+          "body": {
+            "script": "export FAKE_A=2\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-profile-<RAND>/default.sh",
+        "mode": "600",
+        "initial": "export FAKE_A=1\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "/profile/default が失敗しました (500)",
+        "failureLine": "alteroid: /profile/default が失敗しました (500)"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-profile-<RAND>/default.sh",
+          "mode": "600",
+          "content": "export FAKE_A=2\n"
+        }
+      ]
+    },
+    "profile/read-500": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/profile",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "プロファイルが読めない（pin 用）",
+        "failureLine": "alteroid: プロファイルが読めない（pin 用）"
+      },
+      "drafts": []
+    },
+    "profile/invalid-name": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "行の名前の形が不正である（^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$。渡されたのは bad name!）",
+        "failureLine": "alteroid: 行の名前の形が不正である（^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$。渡されたのは bad name!）"
+      },
+      "drafts": []
+    },
+    "profile/invalid-scope": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "--scope は all / app / runner のいずれかである（渡されたのは everywhere）",
+        "failureLine": "alteroid: --scope は all / app / runner のいずれかである（渡されたのは everywhere）"
+      },
+      "drafts": []
+    },
+    "profile/target-note": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "未ログイン（pin 用の注記）",
+        "failureLine": "alteroid: 未ログイン（pin 用の注記）"
+      },
+      "drafts": []
+    }
+  }
+}
