@@ -1,0 +1,1530 @@
+{
+  "lengths": {
+    "offset-refused#1": 26,
+    "offset-refused#2": 28,
+    "offset-refused#3": 27,
+    "offset-refused#4": 27,
+    "offset-refused#5": 32,
+    "offset-refused#6": 33,
+    "offset-refused#7": 30,
+    "offset-refused#8": 26,
+    "offset-refused#9": 27,
+    "offset-refused-empty#1": 26,
+    "offset-refused-empty#2": 27,
+    "offset-accepted-edge#1": 240,
+    "offset-accepted-edge#2": 240,
+    "offset-accepted-edge#3": 240,
+    "offset-accepted-edge#4": 240,
+    "offset-accepted-edge#5": 262,
+    "offset-accepted-edge#6": 149,
+    "empty-profile#1": 19,
+    "empty-profile#2": 19,
+    "empty-profile#3": 19,
+    "empty-profile#4": 19,
+    "list-one": 149,
+    "list-scopes": 281,
+    "list-order": 596,
+    "list-bytes": 503,
+    "list-budget-exact": 6159,
+    "list-budget-under": 6158,
+    "list-budget-over": 6145,
+    "list-budget-many#1": 6228,
+    "list-budget-many#2": 242,
+    "list-budget-first-over": 6188,
+    "name-missing#1": 51,
+    "name-missing#2": 52,
+    "name-missing#3": 53,
+    "name-missing#4": 53,
+    "name-missing#5": 51,
+    "name-missing#6": 47,
+    "name-missing#7": 51,
+    "body-short#1": 241,
+    "body-short#2": 240,
+    "body-short#3": 254,
+    "body-short#4": 247,
+    "body-short#5": 240,
+    "body-short#6": 227,
+    "body-short#7": 237,
+    "body-only-named-row": 237,
+    "body-boundary#1": 8229,
+    "body-boundary#2": 8230,
+    "body-boundary#3": 8379,
+    "body-boundary#4": 8251,
+    "body-boundary#5": 8388,
+    "body-long-continue#1": 8376,
+    "body-long-continue#2": 8382,
+    "body-long-continue#3": 4249,
+    "body-offset#1": 338,
+    "body-offset#2": 242,
+    "body-offset#3": 264,
+    "body-offset#4": 264,
+    "body-offset#5": 264,
+    "body-offset#6": 7907,
+    "body-offset#7": 253,
+    "body-offset#8": 269,
+    "body-multibyte#1": 8233,
+    "body-multibyte#2": 8385,
+    "body-multibyte#3": 3233,
+    "body-multibyte#4": 8388,
+    "body-multibyte#5": 255,
+    "body-multibyte#6": 8389,
+    "body-offset-in-pair#1": 228,
+    "body-offset-in-pair#2": 237,
+    "body-offset-in-pair#3": 236,
+    "body-offset-in-pair#4": 235,
+    "body-offset-in-pair#5": 261,
+    "body-offset-in-pair#6": 252,
+    "version-vary#1": 237,
+    "version-vary#2": 237,
+    "version-vary#3": 240,
+    "version-vary#4": 240,
+    "version-vary#5": 240,
+    "version-vary#6": 240,
+    "version-whole-body#1": 8373,
+    "version-whole-body#2": 255,
+    "version-whole-body#3": 8373,
+    "list-throws#1": 20,
+    "list-throws#2": 20,
+    "list-throws#3": 20,
+    "list-throws#4": 26,
+    "list-throws#5": 240
+  },
+  "scenarios": {
+    "offset-refused#1": {
+      "output": {
+        "length": 26,
+        "text": "offset -1 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#2": {
+      "output": {
+        "length": 28,
+        "text": "offset -0.5 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#3": {
+      "output": {
+        "length": 27,
+        "text": "offset 0.5 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#4": {
+      "output": {
+        "length": 27,
+        "text": "offset NaN は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#5": {
+      "output": {
+        "length": 32,
+        "text": "offset Infinity は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#6": {
+      "output": {
+        "length": 33,
+        "text": "offset -Infinity は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#7": {
+      "output": {
+        "length": 30,
+        "text": "offset -1e+21 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#8": {
+      "output": {
+        "length": 26,
+        "text": "offset -1 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused#9": {
+      "output": {
+        "length": 27,
+        "text": "offset 1.5 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused-empty#1": {
+      "output": {
+        "length": 26,
+        "text": "offset -1 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-refused-empty#2": {
+      "output": {
+        "length": 27,
+        "text": "offset NaN は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "offset-accepted-edge#1": {
+      "output": {
+        "length": 240,
+        "text": "（行 rust / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "offset-accepted-edge#2": {
+      "output": {
+        "length": 240,
+        "text": "（行 rust / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "offset-accepted-edge#3": {
+      "output": {
+        "length": 240,
+        "text": "（行 rust / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "offset-accepted-edge#4": {
+      "output": {
+        "length": 240,
+        "text": "（行 rust / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "offset-accepted-edge#5": {
+      "output": {
+        "length": 262,
+        "text": "（行 rust / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い）\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "offset-accepted-edge#6": {
+      "output": {
+        "length": 149,
+        "text": "- rust / 撒く先 all / 15 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "empty-profile#1": {
+      "output": {
+        "length": 19,
+        "text": "実行環境プロファイルは置かれていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 0
+        }
+      ]
+    },
+    "empty-profile#2": {
+      "output": {
+        "length": 19,
+        "text": "実行環境プロファイルは置かれていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 0
+        }
+      ]
+    },
+    "empty-profile#3": {
+      "output": {
+        "length": 19,
+        "text": "実行環境プロファイルは置かれていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 0
+        }
+      ]
+    },
+    "empty-profile#4": {
+      "output": {
+        "length": 19,
+        "text": "実行環境プロファイルは置かれていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 0
+        }
+      ]
+    },
+    "list-one": {
+      "output": {
+        "length": 149,
+        "text": "- rust / 撒く先 all / 15 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "list-scopes": {
+      "output": {
+        "length": 281,
+        "text": "- everywhere / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- only-app / 撒く先 app / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- only-runner / 撒く先 runner / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 3
+        }
+      ]
+    },
+    "list-order": {
+      "output": {
+        "length": 596,
+        "text": "- 10 / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- Alpha / 撒く先 app / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- B1 / 撒く先 runner / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- a-b / 撒く先 app / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- a.b / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- a_b / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- alpha / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- b2 / 撒く先 app / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- zeta / 撒く先 runner / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 9
+        }
+      ]
+    },
+    "list-bytes": {
+      "output": {
+        "length": 503,
+        "text": "- b-ascii / 撒く先 all / 3 バイト / 更新 2026-10-01T00:00:00.000Z\n- b-eacute / 撒く先 all / 2 バイト / 更新 2026-10-01T00:00:00.000Z\n- b-emoji / 撒く先 all / 4 バイト / 更新 2026-10-01T00:00:00.000Z\n- b-empty / 撒く先 all / 0 バイト / 更新 2026-10-01T00:00:00.000Z\n- b-hira / 撒く先 all / 3 バイト / 更新 2026-10-01T00:00:00.000Z\n- b-mixed / 撒く先 all / 29 バイト / 更新 2026-10-01T00:00:00.000Z\n- b-newline / 撒く先 all / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "list-budget-exact": {
+      "output": {
+        "length": 6159,
+        "text": "- cal-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-11-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-12-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-13-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-14-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-15-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-16-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-17-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-18-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-19-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-20-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-21-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-22-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-23-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-24-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-25-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-26-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-27-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-28-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-29-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-30-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-31-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-32-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-33-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-34-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-35-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-36-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-37-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-38-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-39-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-40-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-41-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-42-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-43-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-44-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-45-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-46-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-47-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-48-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-49-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-50-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-51-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-52-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-53-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-54-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-55-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-56-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-57-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-58-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-59-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-60-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-61-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-62-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-63-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-64-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-65-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-66-xxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 66
+        }
+      ]
+    },
+    "list-budget-under": {
+      "output": {
+        "length": 6158,
+        "text": "- cal-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-11-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-12-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-13-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-14-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-15-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-16-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-17-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-18-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-19-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-20-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-21-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-22-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-23-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-24-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-25-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-26-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-27-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-28-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-29-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-30-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-31-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-32-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-33-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-34-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-35-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-36-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-37-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-38-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-39-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-40-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-41-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-42-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-43-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-44-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-45-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-46-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-47-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-48-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-49-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-50-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-51-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-52-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-53-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-54-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-55-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-56-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-57-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-58-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-59-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-60-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-61-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-62-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-63-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-64-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-65-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-66-xxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 66
+        }
+      ]
+    },
+    "list-budget-over": {
+      "output": {
+        "length": 6145,
+        "text": "- cal-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-11-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-12-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-13-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-14-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-15-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-16-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-17-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-18-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-19-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-20-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-21-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-22-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-23-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-24-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-25-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-26-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-27-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-28-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-29-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-30-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-31-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-32-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-33-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-34-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-35-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-36-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-37-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-38-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-39-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-40-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-41-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-42-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-43-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-44-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-45-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-46-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-47-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-48-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-49-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-50-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-51-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-52-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-53-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-54-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-55-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-56-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-57-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-58-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-59-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-60-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-61-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-62-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-63-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-64-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n- cal-65-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / 撒く先 all / 10 バイト / 更新 2026-10-01T00:00:00.000Z\n…ほか 1 件は省略（全 66 件のうち 65 件だけ出した。名前が分かっていれば profile_read name=<名前> で取れる）。\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 66
+        }
+      ]
+    },
+    "list-budget-many#1": {
+      "output": {
+        "length": 6228,
+        "text": "- many-001 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-002 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-003 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-004 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-005 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-006 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-007 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-008 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-009 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-010 / 撒く先 app / 11 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-011 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-012 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-013 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-014 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-015 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-016 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-017 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-018 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-019 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-020 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-021 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-022 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-023 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-024 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-025 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-026 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-027 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-028 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-029 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-030 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-031 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-032 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-033 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-034 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-035 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-036 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-037 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-038 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-039 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-040 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-041 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-042 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-043 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-044 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-045 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-046 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-047 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-048 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-049 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-050 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-051 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-052 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-053 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-054 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-055 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-056 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-057 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-058 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-059 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-060 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-061 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-062 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-063 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-064 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-065 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-066 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-067 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-068 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-069 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-070 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-071 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-072 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-073 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-074 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-075 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-076 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-077 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-078 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-079 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-080 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-081 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-082 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-083 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-084 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-085 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-086 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-087 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-088 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-089 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-090 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-091 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-092 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-093 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-094 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-095 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-096 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-097 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-098 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-099 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-100 / 撒く先 app / 12 バイト / 更新 2026-10-01T00:00:00.000Z\n- many-101 / 撒く先 app / 13 バイト / 更新 2026-10-01T00:00:00.000Z\n…ほか 19 件は省略（全 120 件のうち 101 件だけ出した。名前が分かっていれば profile_read name=<名前> で取れる）。\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 120
+        }
+      ]
+    },
+    "list-budget-many#2": {
+      "output": {
+        "length": 242,
+        "text": "（行 many-120 / 撒く先 app / 最終更新 2026-10-01T00:00:00.000Z / 全 13 文字）\nexport V119=1\n（版 base_version=fa19f39a50ff2fbd672b66fda3a43b0c10e1179fb2162ff1720146392f573039 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 120
+        }
+      ]
+    },
+    "list-budget-first-over": {
+      "output": {
+        "length": 6188,
+        "text": "- huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge huge hug…（1,051 文字省略。全 7,051 文字）\n…ほか 1 件は省略（全 2 件のうち 1 件だけ出した。名前が分かっていれば profile_read name=<名前> で取れる）。\n（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。\n更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#1": {
+      "output": {
+        "length": 51,
+        "text": "プロファイルに行 nope は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#2": {
+      "output": {
+        "length": 52,
+        "text": "プロファイルに行 Alpha は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#3": {
+      "output": {
+        "length": 53,
+        "text": "プロファイルに行  alpha は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#4": {
+      "output": {
+        "length": 53,
+        "text": "プロファイルに行 alpha  は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#5": {
+      "output": {
+        "length": 51,
+        "text": "プロファイルに行 alph は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#6": {
+      "output": {
+        "length": 47,
+        "text": "プロファイルに行  は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "name-missing#7": {
+      "output": {
+        "length": 51,
+        "text": "プロファイルに行 nope は無い。行の一覧は profile_read（name を省略）で取れる。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-short#1": {
+      "output": {
+        "length": 241,
+        "text": "（行 s-all / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-short#2": {
+      "output": {
+        "length": 240,
+        "text": "（行 s-app / 撒く先 app / 最終更新 2026-10-01T00:00:00.000Z / 全 14 文字）\nexport FOO=bar\n（版 base_version=9f38c20e885dcdc4febc6538ef474c0899cce5ccfd313c0f690a39c8db0f4723 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-short#3": {
+      "output": {
+        "length": 254,
+        "text": "（行 s-runner / 撒く先 runner / 最終更新 2026-10-01T00:00:00.000Z / 全 22 文字）\nexport A=1\nexport B=2\n\n（版 base_version=0675ca58e0bf48ca884acb83fbdea19b0521050626a48ef9ed3b54bc3f0002f0 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-short#4": {
+      "output": {
+        "length": 247,
+        "text": "（行 s-ja / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 22 文字）\nexport GREETING=こんにちは\n\n（版 base_version=2ff894b28988c42d194f36aa7ce6846db2c092d00c6c3422d76be34f53bbfc90 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-short#5": {
+      "output": {
+        "length": 240,
+        "text": "（行 s-emoji / 撒く先 app / 最終更新 2026-10-01T00:00:00.000Z / 全 12 文字）\nexport E=😀\n\n（版 base_version=9e5831e55c71f1a7a468622cf34162750057e54e4157f02927302c5529367822 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-short#6": {
+      "output": {
+        "length": 227,
+        "text": "（行 s-empty / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 0 文字）\n\n（版 base_version=6084fc392be7831bd520ab1598906b8d5f9db0139cdba2e6afc1e007bd00d9d3 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-short#7": {
+      "output": {
+        "length": 237,
+        "text": "（行 s-comment / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 8 文字）\n# コメントだけ\n（版 base_version=e916344ab7e4ee9f556fd52b361d0e3926e65267e50831d300798f53de93eb28 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 7
+        }
+      ]
+    },
+    "body-only-named-row": {
+      "output": {
+        "length": 237,
+        "text": "（行 second / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 10 文字）\nexport S=2\n（版 base_version=a71467e140c3ae25946a09ee0d280d875cbed40aeac23015216efd8194a3ce28 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 3
+        }
+      ]
+    },
+    "body-boundary#1": {
+      "output": {
+        "length": 8229,
+        "text": "（行 p-7999 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 7,999 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefg\n（版 base_version=db6d9667917889e998a1adbf9a214d599f5870e438ce56a4477e44e8511e760c ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-boundary#2": {
+      "output": {
+        "length": 8230,
+        "text": "（行 p-8000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 8,000 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n（版 base_version=850902e1e16d34f0e56b3e5f85637bf95b4cf68cf683a1925c51ba4cda44938e ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-boundary#3": {
+      "output": {
+        "length": 8379,
+        "text": "（行 p-8001 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜8,000 文字目 / 全 8,001 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n…（ここで切れている。続きは profile_read name=p-8001 offset=8000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=96b1c207f956b5f4428f8dacde5a68a1be7db16c849f192ea3c406819f83b528 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-boundary#4": {
+      "output": {
+        "length": 8251,
+        "text": "（行 p-16000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,001〜16,000 文字目 / 全 16,000 文字）\ni abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n（版 base_version=7bf9f62cb5b4ceeee9258069b0180f049a46037d26c4340bffcd64d603c55218 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-boundary#5": {
+      "output": {
+        "length": 8388,
+        "text": "（行 p-16001 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,001〜16,000 文字目 / 全 16,001 文字）\ni abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n…（ここで切れている。続きは profile_read name=p-16001 offset=16000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=fdd5e8a6356ac9c0a51e813ac2e831e86534fb4a21e70bfd377e1f483655315c ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-long-continue#1": {
+      "output": {
+        "length": 8376,
+        "text": "（行 long / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜8,000 文字目 / 全 20,000 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n…（ここで切れている。続きは profile_read name=long offset=8000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=14111c8eac1abdeea27317a7cffb322234b6050272dfa23ef7c70d1516b623c6 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "body-long-continue#2": {
+      "output": {
+        "length": 8382,
+        "text": "（行 long / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,001〜16,000 文字目 / 全 20,000 文字）\ni abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n…（ここで切れている。続きは profile_read name=long offset=16000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=14111c8eac1abdeea27317a7cffb322234b6050272dfa23ef7c70d1516b623c6 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "body-long-continue#3": {
+      "output": {
+        "length": 4249,
+        "text": "（行 long / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 16,001〜20,000 文字目 / 全 20,000 文字）\ni abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n（版 base_version=14111c8eac1abdeea27317a7cffb322234b6050272dfa23ef7c70d1516b623c6 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "body-offset#1": {
+      "output": {
+        "length": 338,
+        "text": "（行 o-100 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 2〜100 文字目 / 全 100 文字）\n abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n（版 base_version=a3f902ebf83e97d7ff198fb11a72a0c9976e93540a7a66b785a25940c15b62c0 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#2": {
+      "output": {
+        "length": 242,
+        "text": "（行 o-100 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 100〜100 文字目 / 全 100 文字）\nh\n（版 base_version=a3f902ebf83e97d7ff198fb11a72a0c9976e93540a7a66b785a25940c15b62c0 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#3": {
+      "output": {
+        "length": 264,
+        "text": "（行 o-100 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 100 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い）\n\n（版 base_version=a3f902ebf83e97d7ff198fb11a72a0c9976e93540a7a66b785a25940c15b62c0 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#4": {
+      "output": {
+        "length": 264,
+        "text": "（行 o-100 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 100 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い）\n\n（版 base_version=a3f902ebf83e97d7ff198fb11a72a0c9976e93540a7a66b785a25940c15b62c0 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#5": {
+      "output": {
+        "length": 264,
+        "text": "（行 o-100 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 100 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い）\n\n（版 base_version=a3f902ebf83e97d7ff198fb11a72a0c9976e93540a7a66b785a25940c15b62c0 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#6": {
+      "output": {
+        "length": 7907,
+        "text": "（行 o-20000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 12,346〜20,000 文字目 / 全 20,000 文字）\ndefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n（版 base_version=14111c8eac1abdeea27317a7cffb322234b6050272dfa23ef7c70d1516b623c6 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#7": {
+      "output": {
+        "length": 253,
+        "text": "（行 o-20000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 20,000〜20,000 文字目 / 全 20,000 文字）\nh\n（版 base_version=14111c8eac1abdeea27317a7cffb322234b6050272dfa23ef7c70d1516b623c6 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset#8": {
+      "output": {
+        "length": 269,
+        "text": "（行 o-20000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 20,000 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い）\n\n（版 base_version=14111c8eac1abdeea27317a7cffb322234b6050272dfa23ef7c70d1516b623c6 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-multibyte#1": {
+      "output": {
+        "length": 8233,
+        "text": "（行 m-ja-8000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 8,000 文字）\nああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\n（版 base_version=d424ad5b671dee727682b9b337bef524d22674a20b3bce0c31c069502ce41d9e ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-multibyte#2": {
+      "output": {
+        "length": 8385,
+        "text": "（行 m-ja-8001 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜8,000 文字目 / 全 8,001 文字）\nああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\n…（ここで切れている。続きは profile_read name=m-ja-8001 offset=8000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=7de0fb47f996cab1e330607245425f04b45362778cb321722c03cde059c4dc06 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-multibyte#3": {
+      "output": {
+        "length": 3233,
+        "text": "（行 m-ja-3000 / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 3,000 文字）\nああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\n（版 base_version=28cba35e09e79cf458be019d6b3fc7e7753e4478a1ab6fec2cf4ff8a7d36844e ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-multibyte#4": {
+      "output": {
+        "length": 8388,
+        "text": "（行 m-pair-edge / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜7,999 文字目 / 全 8,001 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefg\n…（ここで切れている。続きは profile_read name=m-pair-edge offset=7999。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=90bf0cc976860ab3bb03bda7ecf98145092717b96ed2bdf965d3e740b69480bc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-multibyte#5": {
+      "output": {
+        "length": 255,
+        "text": "（行 m-pair-edge / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,000〜8,001 文字目 / 全 8,001 文字）\n😀\n（版 base_version=90bf0cc976860ab3bb03bda7ecf98145092717b96ed2bdf965d3e740b69480bc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-multibyte#6": {
+      "output": {
+        "length": 8389,
+        "text": "（行 m-pair-ends / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜8,000 文字目 / 全 8,001 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdef😀\n…（ここで切れている。続きは profile_read name=m-pair-ends offset=8000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=826dc625b7fb05018389515d0caa7a993efe0d665b3ddc0e9076cfed530bd4dc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 5
+        }
+      ]
+    },
+    "body-offset-in-pair#1": {
+      "output": {
+        "length": 228,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 4 文字）\n😀😀\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset-in-pair#2": {
+      "output": {
+        "length": 237,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 2〜4 文字目 / 全 4 文字）\n\ude00😀\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset-in-pair#3": {
+      "output": {
+        "length": 236,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 3〜4 文字目 / 全 4 文字）\n😀\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset-in-pair#4": {
+      "output": {
+        "length": 235,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 4〜4 文字目 / 全 4 文字）\n\ude00\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset-in-pair#5": {
+      "output": {
+        "length": 261,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 4 文字の末尾を越えている（offset が全体の長さ以上）。この位置に本文は無い）\n\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "body-offset-in-pair#6": {
+      "output": {
+        "length": 252,
+        "text": "（行 pair-edge / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,001〜8,001 文字目 / 全 8,001 文字）\n\ude00\n（版 base_version=90bf0cc976860ab3bb03bda7ecf98145092717b96ed2bdf965d3e740b69480bc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "version-vary#1": {
+      "output": {
+        "length": 237,
+        "text": "（行 v / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "version-vary#2": {
+      "output": {
+        "length": 237,
+        "text": "（行 v / 撒く先 app / 最終更新 2026-10-01T00:02:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=e80e3cc182531b60ed5817675f8eda2cff4ffbf738be0ac26c550fd0eddc1a34 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "version-vary#3": {
+      "output": {
+        "length": 240,
+        "text": "（行 v / 撒く先 runner / 最終更新 2026-10-01T00:03:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=8a31b602249567ec75ea46c6b53f03b9561d4d1d2d3cf964d93250647747dad1 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "version-vary#4": {
+      "output": {
+        "length": 240,
+        "text": "（行 v / 撒く先 runner / 最終更新 2026-10-01T00:04:00.000Z / 全 15 文字）\nexport FOO=baz\n\n（版 base_version=8cff50f264737c5dffc76527fda7b3da292c35ebf98cdfa927aaa2e7ddcd44fc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    },
+    "version-vary#5": {
+      "output": {
+        "length": 240,
+        "text": "（行 w / 撒く先 runner / 最終更新 2026-10-01T00:05:00.000Z / 全 15 文字）\nexport FOO=baz\n\n（版 base_version=8cff50f264737c5dffc76527fda7b3da292c35ebf98cdfa927aaa2e7ddcd44fc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "version-vary#6": {
+      "output": {
+        "length": 240,
+        "text": "（行 v / 撒く先 runner / 最終更新 2026-10-01T00:06:00.000Z / 全 15 文字）\nexport FOO=baz\n\n（版 base_version=8cff50f264737c5dffc76527fda7b3da292c35ebf98cdfa927aaa2e7ddcd44fc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "version-whole-body#1": {
+      "output": {
+        "length": 8373,
+        "text": "（行 w-a / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜8,000 文字目 / 全 8,010 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n…（ここで切れている。続きは profile_read name=w-a offset=8000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=75d02f0d9269bb729f6795291a9cd022f632856fb4b958b05cb6ae1767853509 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "version-whole-body#2": {
+      "output": {
+        "length": 255,
+        "text": "（行 w-a / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,001〜8,010 文字目 / 全 8,010 文字）\ni abcdefgh\n（版 base_version=75d02f0d9269bb729f6795291a9cd022f632856fb4b958b05cb6ae1767853509 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "version-whole-body#3": {
+      "output": {
+        "length": 8373,
+        "text": "（行 w-b / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 1〜8,000 文字目 / 全 8,010 文字）\n# abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh\n…（ここで切れている。続きは profile_read name=w-b offset=8000。**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて最後まで取ること** — ここまでの分だけを渡すと残りが消える）\n（版 base_version=b527c19dfde3133d9f3caf1d256439aae8cb93423dc539c8c021119574bf9cfe ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 2
+        }
+      ]
+    },
+    "list-throws#1": {
+      "output": {
+        "length": 20,
+        "text": "プロファイルの一覧が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "threw": "プロファイルの一覧が読めない（テスト用）"
+        }
+      ]
+    },
+    "list-throws#2": {
+      "output": {
+        "length": 20,
+        "text": "プロファイルの一覧が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "threw": "プロファイルの一覧が読めない（テスト用）"
+        }
+      ]
+    },
+    "list-throws#3": {
+      "output": {
+        "length": 20,
+        "text": "プロファイルの一覧が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "threw": "プロファイルの一覧が読めない（テスト用）"
+        }
+      ]
+    },
+    "list-throws#4": {
+      "output": {
+        "length": 26,
+        "text": "offset -1 は使えない（0以上の整数のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "list-throws#5": {
+      "output": {
+        "length": 240,
+        "text": "（行 rust / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 15 文字）\nexport FOO=bar\n\n（版 base_version=ea02d5d0caadc5254005d844b65fb2b6022799cbe1228cae5b69fcf6e4c19062 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "profile.list",
+          "rows": 1
+        }
+      ]
+    }
+  }
+}
