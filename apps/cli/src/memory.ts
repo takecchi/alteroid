@@ -1,6 +1,3 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { stdin } from 'node:process';
 import {
   MEMORY_SLUG_RULE,
@@ -15,12 +12,8 @@ import { formatElapsedAgo, withErrorReason, describeFailedResponse } from './for
 import { redactBody } from './redact.js';
 import { type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import {
-  describeEditConflict,
-  keepDraftOnFailure,
-  openEditorKeepingEdits,
-  readBodyArg,
-} from './input-errors.js';
+import { failEditConflict, runEditSession } from './edit-session.js';
+import { readBodyArg } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 export type MemoryDescriptionDrift =
@@ -126,57 +119,35 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   const ifMatch = doc === null ? null : doc.version;
 
   const initial = template(slug);
-  const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
-  const path = join(dir, `${slug}.md`);
-  // 引用符で包む: TMPDIR に空白などが入っていると、案内のコマンドをそのまま打っても別のファイルを指すため
-  const resume = `alteroid memory set ${slug} --file ${shellQuote(path)}`;
-  await openEditorKeepingEdits({
-    dir,
-    path,
+  await runEditSession({
+    dirPrefix: 'alteroid-memory-',
+    fileName: `${slug}.md`,
     initial: current ?? initial,
-    resume,
+    // 引用符で包む: TMPDIR に空白などが入っていると、案内のコマンドをそのまま打っても別のファイルを指すため
+    resume: (path) => `alteroid memory set ${slug} --file ${shellQuote(path)}`,
     alternative: 'alteroid memory set <slug> --file <path>',
-  });
-  await keepDraftOnFailure(dir, path, resume, async (keep) => {
-    const edited = await readFile(path, 'utf8');
-
     // 雛形のまま閉じたら書かない: 案内文が記憶（システムプロンプトに載る）として保存されるため
-    if ((current !== null && edited === current) || (current === null && edited === initial)) {
-      // 書き換えていないなら書き込まない: 同じ本文でも `PUT` は日誌へ `memory_update` を積むため
-      stdout.write('変更はありません。\n');
-      return;
-    }
-    // 「変更なし」の判定より後に置く: 元から空の記憶を触らずに閉じたのは、変更なしのため
-    if (edited.trim().length === 0) {
-      // edit に --allow-empty を足さない案内にする: edit は本文を残す口で、空にする意思は set --allow-empty に集めるため
-      // 引用符で包む: TMPDIR に空白などが入っていると、案内のコマンドをそのまま打っても別のファイルを指すため
-      throw new Error(
-        `記憶 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
-          `空にしたいときだけ: alteroid memory set ${slug} --allow-empty --file ${shellQuote(path)}`,
-      );
-    }
-    try {
-      await write(client, target, slug, edited, ifMatch);
-    } catch (error) {
-      if (!(error instanceof MemoryConflictCliError)) throw error;
-      keep();
-      const theirs = join(dir, `${slug}.current.md`);
-      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
-      stdout.write(
-        describeEditConflict({
+    isUnchanged: (edited) =>
+      (current !== null && edited === current) || (current === null && edited === initial),
+    // edit に --allow-empty を足さない案内にする: edit は本文を残す口で、空にする意思は set --allow-empty に集めるため
+    emptyMessage: (path) =>
+      `記憶 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+      `空にしたいときだけ: alteroid memory set ${slug} --allow-empty --file ${shellQuote(path)}`,
+    save: async (edited, draft) => {
+      try {
+        await write(client, target, slug, edited, ifMatch);
+      } catch (error) {
+        if (!(error instanceof MemoryConflictCliError)) throw error;
+        await failEditConflict(draft, {
           command: 'memory',
           noun: '記憶',
           slug,
-          path,
-          theirs,
-          currentMissing: error.current === null,
+          current: error.current,
           replaceNote: '（クローンの書き込みを消します）',
-        }),
-      );
-      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
-        cause: error,
-      });
-    }
+          cause: error,
+        });
+      }
+    },
   });
 }
 

@@ -1,6 +1,3 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { stdin } from 'node:process';
 import { PRACTICE_SLUG_RULE, describeSlugViolation } from '@alteroid/core/cli-light';
 import { stderr, stdout, writeShownBody } from './terminal-out.js';
@@ -10,12 +7,8 @@ import { connect } from './connect.js';
 import { withErrorReason, describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
 import { type Target } from './target.js';
-import {
-  describeEditConflict,
-  keepDraftOnFailure,
-  openEditorKeepingEdits,
-  readBodyArg,
-} from './input-errors.js';
+import { failEditConflict, runEditSession } from './edit-session.js';
+import { readBodyArg } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 // `kind` を固定の選択肢にしない: `practiceKindSchema` が自由文字列で、列挙ではないため
@@ -182,57 +175,39 @@ export async function practiceEditCommand(
     );
   }
   const initial = template(slug);
-  const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
-  const path = join(dir, `${slug}.md`);
-  const resume = [
-    `alteroid practice set ${slug} --file ${shellQuote(path)}`,
-    ...(kind === current?.kind ? [] : [`--kind ${shellQuote(kind)}`]),
-    ...(title === current?.title ? [] : [`--title ${shellQuote(title)}`]),
-  ].join(' ');
-  await openEditorKeepingEdits({
-    dir,
-    path,
+  await runEditSession({
+    dirPrefix: 'alteroid-practice-',
+    fileName: `${slug}.md`,
     initial: current?.content ?? initial,
-    resume,
+    resume: (path) =>
+      [
+        `alteroid practice set ${slug} --file ${shellQuote(path)}`,
+        ...(kind === current?.kind ? [] : [`--kind ${shellQuote(kind)}`]),
+        ...(title === current?.title ? [] : [`--title ${shellQuote(title)}`]),
+      ].join(' '),
     alternative: 'alteroid practice set <slug> --file <path>',
-  });
-  await keepDraftOnFailure(dir, path, resume, async (keep) => {
-    const edited = await readFile(path, 'utf8');
-
     // 雛形のまま閉じたら書かない: 雛形は案内文で、そのまま書くとやり方として保存されるため
-    if (
+    isUnchanged: (edited) =>
       current === null
         ? edited === initial
-        : edited === current.content && kind === current.kind && title === current.title
-    ) {
-      // 書き換えていないなら書き込まない: 同じ内容でも `PUT` は日誌へ `decision` を積むため
-      stdout.write('変更はありません。\n');
-      return;
-    }
+        : edited === current.content && kind === current.kind && title === current.title,
     // edit に --allow-empty を足さない案内にする: edit は本文を残す口で、空にする意思は set --allow-empty に集めるため
-    if (edited.trim().length === 0) throw new Error(emptyEditMessage(slug, resume));
-    try {
-      await write(client, target, slug, kind, title, edited, ifMatch);
-    } catch (error) {
-      if (!(error instanceof PracticeConflictCliError)) throw error;
-      keep();
-      const theirs = join(dir, `${slug}.current.md`);
-      if (error.current !== null) await writeFile(theirs, error.current.content, 'utf8');
-      stdout.write(
-        describeEditConflict({
+    emptyMessage: (_path, resume) => emptyEditMessage(slug, resume),
+    save: async (edited, draft) => {
+      try {
+        await write(client, target, slug, kind, title, edited, ifMatch);
+      } catch (error) {
+        if (!(error instanceof PracticeConflictCliError)) throw error;
+        await failEditConflict(draft, {
           command: 'practice',
           noun: 'やり方',
           slug,
-          path,
-          theirs,
-          currentMissing: error.current === null,
+          current: error.current === null ? null : error.current.content,
           replaceNote: '（先の書き込みを消します）',
-        }),
-      );
-      throw new Error(`やり方が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
-        cause: error,
-      });
-    }
+          cause: error,
+        });
+      }
+    },
   });
 }
 
