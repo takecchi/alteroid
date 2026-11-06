@@ -423,7 +423,7 @@ function describeUsageDateViolation(
   return null;
 }
 
-// 渡した絞り込みだけを載せる: 欠けた欄を `undefined` で載せると、店が欄の有無で分ける絞り込みが変わるため
+// 渡された絞り込みの欄だけを載せる（渡されていない欄は載せない）
 function buildUsageQuery(args: {
   from: string | undefined;
   to: string | undefined;
