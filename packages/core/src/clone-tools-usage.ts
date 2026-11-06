@@ -23,7 +23,9 @@ import {
   usageSiteSchema,
   type UsageAggregate,
   type UsageBreakdown,
+  type UsageLayer,
   type UsageRow,
+  type UsageSite,
   type UsageTotals,
 } from './usage.js';
 import { describeStringLengthViolation, formatStringLengthJa } from './tool-arg-checks.js';
@@ -399,6 +401,66 @@ function renderUsage(
   return lines.join('\n');
 }
 
+function renderUsageDateRefusal(name: 'from' | 'to', value: string): string {
+  return (
+    `\`${name}\` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: ${JSON.stringify(value)}）。` +
+    '形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。'
+  );
+}
+
+// `from` / `to` は形を確かめてから店へ渡す: 店は日付を文字列の大小で比べるだけで、`2026-02-30` などが黙って絞り込みになるため
+// `from` を先に見て、最初に断った方の文を返す（どちらも通れば null）
+function describeUsageDateViolation(
+  from: string | undefined,
+  to: string | undefined,
+): string | null {
+  for (const [name, value] of [
+    ['from', from],
+    ['to', to],
+  ] as const) {
+    if (value !== undefined && !isRealUsageDate(value)) return renderUsageDateRefusal(name, value);
+  }
+  return null;
+}
+
+// 渡した絞り込みだけを載せる: 欠けた欄を `undefined` で載せると、店が欄の有無で分ける絞り込みが変わるため
+function buildUsageQuery(args: {
+  from: string | undefined;
+  to: string | undefined;
+  managerId: string | undefined;
+  layer: UsageLayer | undefined;
+  site: UsageSite | undefined;
+  tokenId: string | undefined;
+}): Parameters<Stores['usage']['aggregate']>[0] {
+  const { from, to, managerId, layer, site, tokenId } = args;
+  return {
+    ...(from === undefined ? {} : { from }),
+    ...(to === undefined ? {} : { to }),
+    ...(managerId === undefined ? {} : { managerId }),
+    ...(layer === undefined ? {} : { layer }),
+    ...(site === undefined ? {} : { site }),
+    ...(tokenId === undefined ? {} : { tokenId }),
+  };
+}
+
+// `to` が `from` より前の注記を応答の先頭へ添える: 0件が「期間の指定が逆」と「記録が無い」で区別できないため
+function withUsageDateOrderNotice(notice: string | null, body: string): string {
+  return notice === null ? body : `${notice}\n${body}`;
+}
+
+function renderUsageSummary(
+  account: AccountUsageState,
+  aggregate: UsageAggregate,
+  unrecordedManagers: readonly string[],
+): string {
+  return [
+    renderAccountUsage(account),
+    '',
+    '## alteroid が使った分（台帳）',
+    renderUsage(aggregate, { unrecordedManagers }),
+  ].join('\n');
+}
+
 export function usageTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -476,43 +538,27 @@ export function usageTools(context: ToolContext, shared: CloneToolsShared) {
       async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
-        // `from` / `to` は形を確かめてから店へ渡す: 店は日付を文字列の大小で比べるだけで、`2026-02-30` などが黙って絞り込みになるため
-        for (const [name, value] of [
-          ['from', from],
-          ['to', to],
-        ] as const) {
-          if (value !== undefined && !isRealUsageDate(value)) {
-            return text(
-              `\`${name}\` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: ${JSON.stringify(value)}）。` +
-                '形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。',
-            );
-          }
-        }
-        const aggregate = await stores.usage.aggregate({
-          ...(from === undefined ? {} : { from }),
-          ...(to === undefined ? {} : { to }),
-          ...(managerId === undefined ? {} : { managerId }),
-          ...(layer === undefined ? {} : { layer }),
-          ...(site === undefined ? {} : { site }),
-          ...(tokenId === undefined ? {} : { tokenId }),
-        });
-        // `to` が `from` より前の注記を応答の先頭へ添える: 0件が「期間の指定が逆」と「記録が無い」で区別できないため
+        const dateViolation = describeUsageDateViolation(from, to);
+        if (dateViolation !== null) return text(dateViolation);
+        const aggregate = await stores.usage.aggregate(
+          buildUsageQuery({ from, to, managerId, layer, site, tokenId }),
+        );
         const dateOrderNotice = describeUsageDateOrder(from, to);
-        const withNotice = (body: string): string =>
-          dateOrderNotice === null ? body : `${dateOrderNotice}\n${body}`;
         // 軸モードでは続きの1軸だけを返す: 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるため
         if (axis !== undefined) {
-          return text(withNotice(renderUsage(aggregate, { axis, cursor })));
+          return text(
+            withUsageDateOrderNotice(dateOrderNotice, renderUsage(aggregate, { axis, cursor })),
+          );
         }
         const unrecordedManagers = await unrecordedManagersLines(context, stores, aggregate.since);
         return text(
-          withNotice(
-            [
-              renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
-              '',
-              '## alteroid が使った分（台帳）',
-              renderUsage(aggregate, { unrecordedManagers }),
-            ].join('\n'),
+          withUsageDateOrderNotice(
+            dateOrderNotice,
+            renderUsageSummary(
+              context.accountUsage?.() ?? { state: 'unknown' },
+              aggregate,
+              unrecordedManagers,
+            ),
           ),
         );
       },
