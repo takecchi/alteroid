@@ -1,0 +1,506 @@
+{
+  "counts": {
+    "no-runners-empty-roster": 6,
+    "roster-fails": 6,
+    "one-runner-ok-no-listener": 8,
+    "one-runner-ok-one-listener": 9,
+    "two-runners-in-order": 11,
+    "one-fails-one-ok": 11,
+    "fail-reason-empty": 11,
+    "all-runners-fail": 11,
+    "listeners-two-one-throws": 10,
+    "unsubscribed-listener": 9,
+    "spread-twice": 18,
+    "shadowed-runner-profile": 10,
+    "shadowed-clone-profile": 11,
+    "shadowed-both-no-callback": 8,
+    "profile-names-fail": 11,
+    "clone-box-set-throws": 7
+  },
+  "scenarios": {
+    "no-runners-empty-roster": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner",
+            "ok": false,
+            "error": "繋がっている runner が1台も無い（これから起こすマネージャーには届かない）",
+            "selfHealing": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 0 runners",
+        "5 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "5 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}"
+      ],
+      "stderr": []
+    },
+    "roster-fails": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner",
+            "ok": false,
+            "error": "繋がっている runner が1台も無い（これから起こすマネージャーには届かない）",
+            "selfHealing": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list threw 名簿が引けない（test）",
+        "5 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "5 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}"
+      ],
+      "stderr": []
+    },
+    "one-runner-ok-no-listener": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "6 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}"
+      ],
+      "stderr": []
+    },
+    "one-runner-ok-one-listener": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "6 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "6 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "two-runners-in-order": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "runner-b",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 2 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "9 < runner-a.setCredentials []",
+        "10 > runner-b.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "10 < runner-b.setCredentials []",
+        "11 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "11 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "11 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":true},{\"runnerId\":\"runner-b\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "one-fails-one-ok": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": false,
+            "error": "Error: runner が応答しない"
+          },
+          {
+            "target": "runner-b",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 2 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials threw runner が応答しない\nstack: 値が混ざりうる行",
+        "6 > runner-b.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "6 < runner-b.setCredentials []",
+        "7 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "7 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "7 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: runner が応答しない\"},{\"runnerId\":\"runner-b\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "fail-reason-empty": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": false,
+            "error": "Error: "
+          },
+          {
+            "target": "runner-b",
+            "ok": false,
+            "error": "理由不明"
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 2 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials threw ",
+        "6 > runner-b.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "6 < runner-b.setCredentials threw undefined",
+        "7 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "7 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "7 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: \"},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"理由不明\"}]"
+      ],
+      "stderr": []
+    },
+    "all-runners-fail": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": false,
+            "error": "Error: runner が落ちている（test）"
+          },
+          {
+            "target": "runner-b",
+            "ok": false,
+            "error": "Error: runner が落ちている（test）"
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 2 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials threw runner が落ちている（test）",
+        "6 > runner-b.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "6 < runner-b.setCredentials threw runner が落ちている（test）",
+        "7 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "7 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "7 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":false,\"error\":\"Error: runner が落ちている（test）\"},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: runner が落ちている（test）\"}]"
+      ],
+      "stderr": []
+    },
+    "listeners-two-one-throws": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "6 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "6 onPushed[first] [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "6 onPushed[second] [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "unsubscribed-listener": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "6 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "6 onPushed[kept] [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "spread-twice": {
+      "out": {
+        "first": {
+          "ok": [
+            {
+              "target": "runner-a",
+              "ok": true
+            },
+            {
+              "target": "clone",
+              "ok": true
+            }
+          ]
+        },
+        "second": {
+          "ok": [
+            {
+              "target": "runner-a",
+              "ok": true
+            },
+            {
+              "target": "clone",
+              "ok": true
+            }
+          ]
+        }
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "6 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "6 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":true}]",
+        "8 > profileEnvNames",
+        "8 < profileEnvNames []",
+        "11 > registry.list",
+        "11 < registry.list 1 runners",
+        "13 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "13 < runner-a.setCredentials []",
+        "14 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-b\",\"generation\":3}]",
+        "14 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-b\",\"generation\":3,\"fingerprint\":\"65242dd5cbe3\"}",
+        "14 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "shadowed-runner-profile": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          },
+          {
+            "target": "profile-shadow",
+            "ok": false,
+            "error": "runner へ渡る実行環境プロファイルが同じ名前を宣言しているので、runner では撒いた鍵が上書きされる: CLAUDE_CODE_OAUTH_TOKEN"
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames [\"CLAUDE_CODE_OAUTH_TOKEN\",\"UNRELATED_NAME\"]",
+        "3 onShadowed [\"CLAUDE_CODE_OAUTH_TOKEN\"] \"runner\"",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "6 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "6 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "shadowed-clone-profile": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          },
+          {
+            "target": "profile-shadow-clone",
+            "ok": false,
+            "error": "クローンの実行環境プロファイルが同じ名前を宣言しているので、クローンでは撒いた鍵が上書きされる: GH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN"
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > cloneProfileEnvNames",
+        "3 < cloneProfileEnvNames [\"GH_TOKEN\",\"CLAUDE_CODE_OAUTH_TOKEN\"]",
+        "6 onShadowed [\"GH_TOKEN\",\"CLAUDE_CODE_OAUTH_TOKEN\"] \"clone\"",
+        "6 > registry.list",
+        "6 < registry.list 1 runners",
+        "8 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "8 < runner-a.setCredentials []",
+        "9 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "9 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}"
+      ],
+      "stderr": []
+    },
+    "shadowed-both-no-callback": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner",
+            "ok": false,
+            "error": "繋がっている runner が1台も無い（これから起こすマネージャーには届かない）",
+            "selfHealing": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          },
+          {
+            "target": "profile-shadow",
+            "ok": false,
+            "error": "runner へ渡る実行環境プロファイルが同じ名前を宣言しているので、runner では撒いた鍵が上書きされる: CLAUDE_CODE_OAUTH_TOKEN"
+          },
+          {
+            "target": "profile-shadow-clone",
+            "ok": false,
+            "error": "クローンの実行環境プロファイルが同じ名前を宣言しているので、クローンでは撒いた鍵が上書きされる: CLAUDE_CODE_OAUTH_TOKEN"
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames [\"CLAUDE_CODE_OAUTH_TOKEN\"]",
+        "3 > cloneProfileEnvNames",
+        "3 < cloneProfileEnvNames [\"CLAUDE_CODE_OAUTH_TOKEN\"]",
+        "6 > registry.list",
+        "6 < registry.list 0 runners",
+        "8 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "8 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}"
+      ],
+      "stderr": []
+    },
+    "profile-names-fail": {
+      "out": {
+        "ok": [
+          {
+            "target": "runner-a",
+            "ok": true
+          },
+          {
+            "target": "clone",
+            "ok": true
+          }
+        ]
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames threw 読めない（test）",
+        "3 > cloneProfileEnvNames",
+        "3 < cloneProfileEnvNames threw 読めない（test）",
+        "6 > registry.list",
+        "6 < registry.list 1 runners",
+        "8 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "8 < runner-a.setCredentials []",
+        "9 > clone.set [\"FAKE_NOT_A_REAL_VALUE\",{\"tokenId\":\"tok-a\",\"generation\":2}]",
+        "9 < clone.set values={\"CLAUDE_CODE_OAUTH_TOKEN\":\"FAKE_NOT_A_REAL_VALUE\"} identity={\"tokenId\":\"tok-a\",\"generation\":2,\"fingerprint\":\"65242dd5cbe3\"}",
+        "9 onPushed[a] [{\"runnerId\":\"runner-a\",\"ok\":true}]"
+      ],
+      "stderr": []
+    },
+    "clone-box-set-throws": {
+      "out": {
+        "threw": {
+          "name": "Error",
+          "message": "箱に置けない（test）"
+        }
+      },
+      "events": [
+        "0 > profileEnvNames",
+        "0 < profileEnvNames []",
+        "3 > registry.list",
+        "3 < registry.list 1 runners",
+        "5 > runner-a.setCredentials [{\"name\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"value\":\"FAKE_NOT_A_REAL_VALUE\"}]",
+        "5 < runner-a.setCredentials []",
+        "6 > clone.set (throws)"
+      ],
+      "stderr": []
+    }
+  }
+}
