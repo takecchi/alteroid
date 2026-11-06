@@ -453,7 +453,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
       try {
         return redactRunnerResult(await runner.setProfile(script));
       } catch (error) {
-        return redactRunnerResult({ ok: false, error: reasonOf(error) });
+        return redactRunnerResult<RunnerProfileResult>({ ok: false, error: reasonOf(error) });
       }
     });
   }
