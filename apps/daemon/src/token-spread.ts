@@ -1,4 +1,5 @@
 import {
+  createPushChannel,
   credentialNamesShadowedByProfile,
   fingerprintOf,
   reasonOf,
@@ -74,15 +75,11 @@ interface TokenSpread extends TokenSpreadPort {
 
 export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
   const { runners, clone, profileEnvNames, cloneProfileEnvNames, onShadowed } = options;
-  const listeners = new Set<(results: readonly RunnerTokenPushResult[]) => void>();
+  // 列（`serial`）は使わない: 撒く処理を直列にしない（今までどおり）。購読者の例外は `notify` が握る
+  const { onPushed, notify } = createPushChannel<RunnerTokenPushResult>();
 
   return {
-    onPushed(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    onPushed,
     async spread(
       token: { id: string; generation: number } & TokenCredential,
     ): Promise<TokenSpreadResult[]> {
@@ -131,15 +128,7 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpread {
       const identity = { tokenId: token.id, generation: token.generation };
       clone.set(token.value, identity);
       // クローンへ置いた後に知らせる: 撒き直しはクローンの箱の値（`createRunnerTokenSync`）を降ろすので、置く前だと古い鍵を撒き直すため
-      if (pushed.length > 0) {
-        for (const listener of listeners) {
-          try {
-            listener(pushed);
-          } catch {
-            // 受け手の不調で撒く処理を止めない
-          }
-        }
-      }
+      if (pushed.length > 0) notify(pushed);
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {
