@@ -1,0 +1,674 @@
+{
+  "lengths": {
+    "slug-refused#1": 32,
+    "slug-refused#2": 37,
+    "slug-refused#3": 35,
+    "slug-refused#4": 35,
+    "slug-refused#5": 35,
+    "slug-refused#6": 35,
+    "slug-refused#7": 35,
+    "slug-refused#8": 37,
+    "slug-refused#9": 37,
+    "slug-refused#10": 37,
+    "slug-refused#11": 38,
+    "slug-refused#12": 34,
+    "slug-refused#13": 161,
+    "slug-accepted-forms#1": 50,
+    "slug-accepted-forms#2": 54,
+    "slug-accepted-forms#3": 56,
+    "slug-accepted-forms#4": 53,
+    "no-versions#1": 69,
+    "no-versions#2": 68,
+    "no-versions#3": 71,
+    "no-versions#4": 67,
+    "no-versions-empty-store": 72,
+    "single": 54,
+    "few#1": 625,
+    "few#2": 53,
+    "versions-ten-plus": 617,
+    "after-remove#1": 153,
+    "after-remove#2": 107,
+    "after-remove-twice": 203,
+    "budget-exact": 8031,
+    "budget-under": 7780,
+    "budget-over-by-one": 8123,
+    "budget-many": 8124,
+    "budget-slug-in-omitted": 8247,
+    "budget-first-too-long": 8113,
+    "list-versions-fails#1": 21,
+    "list-versions-fails#2": 15,
+    "list-versions-fails#3": 40,
+    "list-versions-fails#4": 51
+  },
+  "scenarios": {
+    "slug-refused#1": {
+      "output": {
+        "length": 32,
+        "text": "やり方のスラッグが不正: （英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#2": {
+      "output": {
+        "length": 37,
+        "text": "やり方のスラッグが不正: Upper（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#3": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: a b（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#4": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: 日本語（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#5": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: ａｂｃ（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#6": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: a😀（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#7": {
+      "output": {
+        "length": 35,
+        "text": "やり方のスラッグが不正: a/b（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#8": {
+      "output": {
+        "length": 37,
+        "text": "やり方のスラッグが不正: -lead（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#9": {
+      "output": {
+        "length": 37,
+        "text": "やり方のスラッグが不正: .lead（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#10": {
+      "output": {
+        "length": 37,
+        "text": "やり方のスラッグが不正: _lead（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#11": {
+      "output": {
+        "length": 38,
+        "text": "やり方のスラッグが不正: trail （英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#12": {
+      "output": {
+        "length": 34,
+        "text": "やり方のスラッグが不正: a\n（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-refused#13": {
+      "output": {
+        "length": 161,
+        "text": "やり方のスラッグが不正: abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "slug-accepted-forms#1": {
+      "output": {
+        "length": 50,
+        "text": "- 版1 [x] 題 a\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "a"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    },
+    "slug-accepted-forms#2": {
+      "output": {
+        "length": 54,
+        "text": "- 版1 [x] 題 0lead\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "0lead"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    },
+    "slug-accepted-forms#3": {
+      "output": {
+        "length": 56,
+        "text": "- 版1 [x] 題 a.b_c-d\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "a.b_c-d"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    },
+    "slug-accepted-forms#4": {
+      "output": {
+        "length": 53,
+        "text": "- 版1 [x] 題 long\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    },
+    "no-versions#1": {
+      "output": {
+        "length": 69,
+        "text": "やり方 never の版は無い。practice_write で一度も書かれていない（または slug を打ち間違えている）可能性がある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "never"
+          },
+          "outcome": "0 versions"
+        }
+      ]
+    },
+    "no-versions#2": {
+      "output": {
+        "length": 68,
+        "text": "やり方 othe の版は無い。practice_write で一度も書かれていない（または slug を打ち間違えている）可能性がある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "othe"
+          },
+          "outcome": "0 versions"
+        }
+      ]
+    },
+    "no-versions#3": {
+      "output": {
+        "length": 71,
+        "text": "やり方 other-2 の版は無い。practice_write で一度も書かれていない（または slug を打ち間違えている）可能性がある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "other-2"
+          },
+          "outcome": "0 versions"
+        }
+      ]
+    },
+    "no-versions#4": {
+      "output": {
+        "length": 67,
+        "text": "やり方 a.b の版は無い。practice_write で一度も書かれていない（または slug を打ち間違えている）可能性がある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "a.b"
+          },
+          "outcome": "0 versions"
+        }
+      ]
+    },
+    "no-versions-empty-store": {
+      "output": {
+        "length": 72,
+        "text": "やり方 anything の版は無い。practice_write で一度も書かれていない（または slug を打ち間違えている）可能性がある。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "anything"
+          },
+          "outcome": "0 versions"
+        }
+      ]
+    },
+    "single": {
+      "output": {
+        "length": 54,
+        "text": "- 版1 [調査] ひとつだけ\n  作成: 2026-10-01T00:00:00.000Z\n  11 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "only"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    },
+    "few#1": {
+      "output": {
+        "length": 625,
+        "text": "- 版1 [実装] 最初の題\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [実装] 最初の題（書き直し）\n  作成: 2026-10-01T02:00:00.000Z\n  7 文字\n- 版3 [レビュー] 日本語 😀 の題\n  作成: 2026-10-01T03:00:00.000Z\n  8 文字\n- 版4 [日報😀] \n  作成: 2026-10-01T04:00:00.000Z\n  1 文字\n- 版5 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghix\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版6 [x] 一行目\n二行目\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "alpha"
+          },
+          "outcome": "6 versions"
+        }
+      ]
+    },
+    "few#2": {
+      "output": {
+        "length": 53,
+        "text": "- 版1 [調査] 別のやり方\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "other"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    },
+    "versions-ten-plus": {
+      "output": {
+        "length": 617,
+        "text": "- 版1 [x] 題 1\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] 題 2\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [x] 題 3\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版4 [x] 題 4\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字\n- 版5 [x] 題 5\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版6 [x] 題 6\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版7 [x] 題 7\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字\n- 版8 [x] 題 8\n  作成: 2026-10-01T07:00:00.000Z\n  4 文字\n- 版9 [x] 題 9\n  作成: 2026-10-01T08:00:00.000Z\n  4 文字\n- 版10 [x] 題 10\n  作成: 2026-10-01T09:00:00.000Z\n  4 文字\n- 版11 [x] 題 11\n  作成: 2026-10-01T10:00:00.000Z\n  4 文字\n- 版12 [x] 題 12\n  作成: 2026-10-01T11:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "many"
+          },
+          "outcome": "12 versions"
+        }
+      ]
+    },
+    "after-remove#1": {
+      "output": {
+        "length": 153,
+        "text": "- 版1 [x] 一回目\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] 二回目\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [y] 作り直し\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "again"
+          },
+          "outcome": "3 versions"
+        }
+      ]
+    },
+    "after-remove#2": {
+      "output": {
+        "length": 107,
+        "text": "- 版1 [x] 消える\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版2 [x] 消える（書き直し）\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "gone"
+          },
+          "outcome": "2 versions"
+        }
+      ]
+    },
+    "after-remove-twice": {
+      "output": {
+        "length": 203,
+        "text": "- 版1 [x] 一回目\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] 二回目\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版3 [x] 三回目\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版4 [x] 四回目\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "cycle"
+          },
+          "outcome": "4 versions"
+        }
+      ]
+    },
+    "budget-exact": {
+      "output": {
+        "length": 8031,
+        "text": "- 版1 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版4 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字\n- 版5 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版6 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版7 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字\n- 版8 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T07:00:00.000Z\n  4 文字\n- 版9 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T08:00:00.000Z\n  4 文字\n- 版10 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T09:00:00.000Z\n  4 文字\n- 版11 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T10:00:00.000Z\n  4 文字\n- 版12 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T11:00:00.000Z\n  4 文字\n- 版13 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T12:00:00.000Z\n  4 文字\n- 版14 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T13:00:00.000Z\n  4 文字\n- 版15 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T14:00:00.000Z\n  4 文字\n- 版16 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T15:00:00.000Z\n  4 文字\n- 版17 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T16:00:00.000Z\n  4 文字\n- 版18 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T17:00:00.000Z\n  4 文字\n- 版19 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T18:00:00.000Z\n  4 文字\n- 版20 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T19:00:00.000Z\n  4 文字\n- 版21 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T20:00:00.000Z\n  4 文字\n- 版22 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T21:00:00.000Z\n  4 文字\n- 版23 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T22:00:00.000Z\n  4 文字\n- 版24 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T23:00:00.000Z\n  4 文字\n- 版25 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T00:00:00.000Z\n  4 文字\n- 版26 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T01:00:00.000Z\n  4 文字\n- 版27 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T02:00:00.000Z\n  4 文字\n- 版28 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T03:00:00.000Z\n  4 文字\n- 版29 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T04:00:00.000Z\n  4 文字\n- 版30 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T05:00:00.000Z\n  4 文字\n- 版31 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T06:00:00.000Z\n  4 文字\n- 版32 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T07:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "hist"
+          },
+          "outcome": "32 versions"
+        }
+      ]
+    },
+    "budget-under": {
+      "output": {
+        "length": 7780,
+        "text": "- 版1 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版4 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字\n- 版5 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版6 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版7 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字\n- 版8 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T07:00:00.000Z\n  4 文字\n- 版9 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T08:00:00.000Z\n  4 文字\n- 版10 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T09:00:00.000Z\n  4 文字\n- 版11 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T10:00:00.000Z\n  4 文字\n- 版12 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T11:00:00.000Z\n  4 文字\n- 版13 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T12:00:00.000Z\n  4 文字\n- 版14 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T13:00:00.000Z\n  4 文字\n- 版15 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T14:00:00.000Z\n  4 文字\n- 版16 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T15:00:00.000Z\n  4 文字\n- 版17 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T16:00:00.000Z\n  4 文字\n- 版18 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T17:00:00.000Z\n  4 文字\n- 版19 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T18:00:00.000Z\n  4 文字\n- 版20 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T19:00:00.000Z\n  4 文字\n- 版21 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T20:00:00.000Z\n  4 文字\n- 版22 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T21:00:00.000Z\n  4 文字\n- 版23 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T22:00:00.000Z\n  4 文字\n- 版24 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T23:00:00.000Z\n  4 文字\n- 版25 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T00:00:00.000Z\n  4 文字\n- 版26 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T01:00:00.000Z\n  4 文字\n- 版27 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T02:00:00.000Z\n  4 文字\n- 版28 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T03:00:00.000Z\n  4 文字\n- 版29 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T04:00:00.000Z\n  4 文字\n- 版30 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T05:00:00.000Z\n  4 文字\n- 版31 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T06:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "hist"
+          },
+          "outcome": "31 versions"
+        }
+      ]
+    },
+    "budget-over-by-one": {
+      "output": {
+        "length": 8123,
+        "text": "- 版1 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版4 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字\n- 版5 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版6 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版7 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字\n- 版8 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T07:00:00.000Z\n  4 文字\n- 版9 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T08:00:00.000Z\n  4 文字\n- 版10 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T09:00:00.000Z\n  4 文字\n- 版11 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T10:00:00.000Z\n  4 文字\n- 版12 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T11:00:00.000Z\n  4 文字\n- 版13 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T12:00:00.000Z\n  4 文字\n- 版14 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T13:00:00.000Z\n  4 文字\n- 版15 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T14:00:00.000Z\n  4 文字\n- 版16 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T15:00:00.000Z\n  4 文字\n- 版17 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T16:00:00.000Z\n  4 文字\n- 版18 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T17:00:00.000Z\n  4 文字\n- 版19 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T18:00:00.000Z\n  4 文字\n- 版20 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T19:00:00.000Z\n  4 文字\n- 版21 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T20:00:00.000Z\n  4 文字\n- 版22 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T21:00:00.000Z\n  4 文字\n- 版23 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T22:00:00.000Z\n  4 文字\n- 版24 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T23:00:00.000Z\n  4 文字\n- 版25 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T00:00:00.000Z\n  4 文字\n- 版26 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T01:00:00.000Z\n  4 文字\n- 版27 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T02:00:00.000Z\n  4 文字\n- 版28 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T03:00:00.000Z\n  4 文字\n- 版29 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T04:00:00.000Z\n  4 文字\n- 版30 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T05:00:00.000Z\n  4 文字\n- 版31 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T06:00:00.000Z\n  4 文字\n- 版32 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T07:00:00.000Z\n  4 文字\n…ほか 1 件は省略（全 33 件のうち版番号の昇順に 32 件だけ出した）。個別に読むには practice_read slug=hist version=<版番号> を使うこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "hist"
+          },
+          "outcome": "33 versions"
+        }
+      ]
+    },
+    "budget-many": {
+      "output": {
+        "length": 8124,
+        "text": "- 版1 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版4 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字\n- 版5 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版6 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版7 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字\n- 版8 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T07:00:00.000Z\n  4 文字\n- 版9 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T08:00:00.000Z\n  4 文字\n- 版10 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T09:00:00.000Z\n  4 文字\n- 版11 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T10:00:00.000Z\n  4 文字\n- 版12 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T11:00:00.000Z\n  4 文字\n- 版13 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T12:00:00.000Z\n  4 文字\n- 版14 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T13:00:00.000Z\n  4 文字\n- 版15 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T14:00:00.000Z\n  4 文字\n- 版16 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T15:00:00.000Z\n  4 文字\n- 版17 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T16:00:00.000Z\n  4 文字\n- 版18 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T17:00:00.000Z\n  4 文字\n- 版19 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T18:00:00.000Z\n  4 文字\n- 版20 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T19:00:00.000Z\n  4 文字\n- 版21 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T20:00:00.000Z\n  4 文字\n- 版22 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T21:00:00.000Z\n  4 文字\n- 版23 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T22:00:00.000Z\n  4 文字\n- 版24 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T23:00:00.000Z\n  4 文字\n- 版25 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T00:00:00.000Z\n  4 文字\n- 版26 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T01:00:00.000Z\n  4 文字\n- 版27 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T02:00:00.000Z\n  4 文字\n- 版28 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T03:00:00.000Z\n  4 文字\n- 版29 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T04:00:00.000Z\n  4 文字\n- 版30 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T05:00:00.000Z\n  4 文字\n- 版31 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T06:00:00.000Z\n  4 文字\n- 版32 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T07:00:00.000Z\n  4 文字\n…ほか 18 件は省略（全 50 件のうち版番号の昇順に 32 件だけ出した）。個別に読むには practice_read slug=hist version=<版番号> を使うこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "hist"
+          },
+          "outcome": "50 versions"
+        }
+      ]
+    },
+    "budget-slug-in-omitted": {
+      "output": {
+        "length": 8247,
+        "text": "- 版1 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字\n- 版2 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T01:00:00.000Z\n  4 文字\n- 版3 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T02:00:00.000Z\n  4 文字\n- 版4 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T03:00:00.000Z\n  4 文字\n- 版5 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T04:00:00.000Z\n  4 文字\n- 版6 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T05:00:00.000Z\n  4 文字\n- 版7 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T06:00:00.000Z\n  4 文字\n- 版8 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T07:00:00.000Z\n  4 文字\n- 版9 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abc\n  作成: 2026-10-01T08:00:00.000Z\n  4 文字\n- 版10 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T09:00:00.000Z\n  4 文字\n- 版11 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T10:00:00.000Z\n  4 文字\n- 版12 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T11:00:00.000Z\n  4 文字\n- 版13 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T12:00:00.000Z\n  4 文字\n- 版14 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T13:00:00.000Z\n  4 文字\n- 版15 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T14:00:00.000Z\n  4 文字\n- 版16 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T15:00:00.000Z\n  4 文字\n- 版17 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T16:00:00.000Z\n  4 文字\n- 版18 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T17:00:00.000Z\n  4 文字\n- 版19 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T18:00:00.000Z\n  4 文字\n- 版20 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T19:00:00.000Z\n  4 文字\n- 版21 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T20:00:00.000Z\n  4 文字\n- 版22 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T21:00:00.000Z\n  4 文字\n- 版23 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T22:00:00.000Z\n  4 文字\n- 版24 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-01T23:00:00.000Z\n  4 文字\n- 版25 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T00:00:00.000Z\n  4 文字\n- 版26 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T01:00:00.000Z\n  4 文字\n- 版27 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T02:00:00.000Z\n  4 文字\n- 版28 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T03:00:00.000Z\n  4 文字\n- 版29 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T04:00:00.000Z\n  4 文字\n- 版30 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T05:00:00.000Z\n  4 文字\n- 版31 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T06:00:00.000Z\n  4 文字\n- 版32 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi ab\n  作成: 2026-10-02T07:00:00.000Z\n  4 文字\n…ほか 1 件は省略（全 33 件のうち版番号の昇順に 32 件だけ出した）。個別に読むには practice_read slug=abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb version=<版番号> を使うこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "outcome": "33 versions"
+        }
+      ]
+    },
+    "budget-first-too-long": {
+      "output": {
+        "length": 8113,
+        "text": "- 版1 [x] abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi a…（1,047 文字省略。全 9,047 文字）\n…ほか 2 件は省略（全 3 件のうち版番号の昇順に 1 件だけ出した）。個別に読むには practice_read slug=big version=<版番号> を使うこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "big"
+          },
+          "outcome": "3 versions"
+        }
+      ]
+    },
+    "list-versions-fails#1": {
+      "output": {
+        "length": 21,
+        "text": "ストアが落ちた（listVersions）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "threw Error: ストアが落ちた（listVersions）"
+        }
+      ]
+    },
+    "list-versions-fails#2": {
+      "output": {
+        "length": 15,
+        "text": "版の一覧が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "UnreadablePracticeError"
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "threw UnreadablePracticeError: 版の一覧が読めない（テスト用）"
+        }
+      ]
+    },
+    "list-versions-fails#3": {
+      "output": {
+        "length": 40,
+        "text": "やり方のスラッグが不正: Bad Slug（英小文字・数字・. _ - のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": []
+    },
+    "list-versions-fails#4": {
+      "output": {
+        "length": 51,
+        "text": "- 版1 [レビュー] 題\n  作成: 2026-10-01T00:00:00.000Z\n  4 文字",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": false,
+      "calls": [
+        {
+          "op": "practices.listVersions",
+          "args": {
+            "slug": "review"
+          },
+          "outcome": "1 versions"
+        }
+      ]
+    }
+  }
+}
